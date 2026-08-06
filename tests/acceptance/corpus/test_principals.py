@@ -22,13 +22,16 @@ producing green results for the wrong principal. That is a worse failure
 than the one B5 is fixing.
 
 So the runner does the one thing that produces an authentically-scoped
-token: the superuser sets a password on the target world-fixture user
-(``POST /api/v1/admin/users/{id}/password``, which requires the caller's own
-password) and then performs a real ``POST /api/v1/auth/login`` as that user.
-This is necessary because ``fixtures/world.py``'s ``_build_auth_fixture``
-seeds every world user with ``password_hash=None``, and ``login.py`` refuses
-password login for such an account -- there is no password to use until one
-is set.
+token: a real ``POST /api/v1/auth/login`` as that user. The credential comes
+from the world seed -- ``fixtures/world.py``'s ``_build_auth_fixture`` hashes
+``password_for_alias(alias)`` for every world user at generation time
+(CHAOS-3463) -- and the runner imports that same function rather than
+keeping a password of its own, so the two sides cannot drift.
+
+An earlier revision had to set a password first (``POST
+/api/v1/admin/users/{id}/password``) because world users were seeded with
+``password_hash=None`` and could not log in at all. That bridge wrote to a
+digest-covered column and is gone.
 
 Everything here runs against test doubles: no stack, no network.
 """
@@ -41,11 +44,9 @@ from typing import Any
 
 import pytest
 
-from dev_health_ops.api.utils.password_policy import validate_password
+from dev_health_ops.fixtures.world import password_for_alias
 from scripts.acceptance.corpus.case_schema import load_corpus_case
 from scripts.acceptance.corpus.principals import (
-    BRIDGED_PROVISIONING_MARKER,
-    PRINCIPAL_PASSWORD,
     SEEDED_PROVISIONING_MARKER,
     CasePrincipal,
     PrincipalDirectory,
@@ -111,15 +112,16 @@ def _login_response(user_id: str, org_id: str, email: str) -> dict[str, Any]:
     }
 
 
-class TestPrincipalPasswordMeetsProductionPolicy:
-    """Rule 1: assert the state the system must reach, not that we wrote a
-    plausible-looking constant. A password that fails ``validate_password``
-    would make every principal provisioning call 422 at runtime -- and the
-    runner would then fail every case for a reason that has nothing to do
-    with the case."""
-
-    def test_password_passes_the_real_policy(self) -> None:
-        assert validate_password(PRINCIPAL_PASSWORD) == []
+# The old ``TestPrincipalPasswordMeetsProductionPolicy`` lived here. It
+# asserted the runner's own password constant satisfied production's
+# ``validate_password``, because a non-compliant value would have 422'd the
+# admin set-password call the runner used to make. That call is gone -- the
+# credential is seeded at world generation and only ever LOGGED IN with, and
+# login does not re-run the policy -- so the test now guards nothing. The
+# derivation's own properties (length, determinism, uniqueness per alias)
+# are asserted where they belong, against ``password_for_alias`` itself, in
+# ``tests/test_fixtures_world_runner.py``. Keeping a copy here would have
+# read as coverage of a rule this module no longer depends on.
 
 
 class TestPrincipalDirectoryAgainstTheRealWorldManifest:
@@ -270,15 +272,8 @@ class TestPrincipalSessions:
         directory = PrincipalDirectory.from_world(_REAL_MANIFEST)
         return directory.principal_by_alias("primary.ordinary")
 
-    def test_provisions_a_password_then_logs_in_as_that_user(self) -> None:
+    def test_logs_in_as_that_user_and_writes_nothing(self) -> None:
         principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
-        )
         principal_api = _FakeApi(
             {
                 ("POST", "/api/v1/auth/login"): _login_response(
@@ -287,11 +282,8 @@ class TestPrincipalSessions:
             }
         )
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="devhealth123",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         session = sessions.session_for_alias("primary.ordinary")
 
@@ -299,26 +291,21 @@ class TestPrincipalSessions:
         assert principal_api.token == f"token-for-{principal.email}"
         assert session.org_id == str(principal.org_id)
 
-        set_password = admin.calls[0]
-        assert set_password[0] == "POST"
-        assert str(principal.user_id) in set_password[1]
-        assert set_password[2]["admin_password"] == "devhealth123"
-        assert set_password[2]["password"] == PRINCIPAL_PASSWORD
+        # Login is the ONLY call. The set-password bridge that used to run
+        # first mutated `password_hash`, a digest-covered column, so a second
+        # armed run against the same stack reported drift. Asserting the call
+        # list exactly -- rather than just that login happened -- is what
+        # would catch a re-introduced write.
+        assert [(c[0], c[1]) for c in principal_api.calls] == [
+            ("POST", "/api/v1/auth/login")
+        ], "the runner made a call other than the login -- it must only read"
 
         login = principal_api.calls[0]
-        assert login[1] == "/api/v1/auth/login"
         assert login[2]["email"] == principal.email
-        assert login[2]["password"] == PRINCIPAL_PASSWORD
+        assert login[2]["password"] == password_for_alias("primary.ordinary")
 
     def test_sessions_are_cached_per_alias(self) -> None:
         principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
-        )
         principal_api = _FakeApi(
             {
                 ("POST", "/api/v1/auth/login"): _login_response(
@@ -327,16 +314,12 @@ class TestPrincipalSessions:
             }
         )
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         first = sessions.session_for_alias("primary.ordinary")
         second = sessions.session_for_alias("primary.ordinary")
         assert first is second
-        assert len(admin.calls) == 1, "password was re-provisioned per case"
         assert len(principal_api.calls) == 1, "logged in again per case"
 
     def test_a_login_returning_the_wrong_org_fails_loud(self) -> None:
@@ -346,13 +329,6 @@ class TestPrincipalSessions:
         pass while proving nothing."""
 
         principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
-        )
         principal_api = _FakeApi(
             {
                 ("POST", "/api/v1/auth/login"): _login_response(
@@ -363,24 +339,14 @@ class TestPrincipalSessions:
             }
         )
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="org"):
             sessions.session_for_alias("primary.ordinary")
 
     def test_a_login_returning_a_different_user_fails_loud(self) -> None:
         principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
-        )
         principal_api = _FakeApi(
             {
                 ("POST", "/api/v1/auth/login"): _login_response(
@@ -391,57 +357,42 @@ class TestPrincipalSessions:
             }
         )
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="user"):
             sessions.session_for_alias("primary.ordinary")
 
     def test_a_login_with_no_token_fails_loud(self) -> None:
-        principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
-        )
         principal_api = _FakeApi({("POST", "/api/v1/auth/login"): {"user": {}}})
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="access_token"):
             sessions.session_for_alias("primary.ordinary")
 
-    def test_a_failed_provisioning_never_falls_back_to_the_admin_session(self) -> None:
-        """Rule 2, the guard observed failing: if principal provisioning
-        breaks, the run must STOP. Falling back to the superuser session
-        would restore the exact B5 defect while reporting green."""
+    def test_a_failed_login_never_falls_back_to_another_session(self) -> None:
+        """Rule 2, the guard observed failing: if authenticating a principal
+        breaks, the run must STOP. Falling back to the superuser session --
+        or handing back a session whose token was never installed -- would
+        restore the exact B5 defect while reporting green.
 
-        principal = self._principal()
-        boom = RuntimeError("admin set-password returned HTTP 403")
-        admin = _FakeApi(
-            {("POST", f"/api/v1/admin/users/{principal.user_id}/password"): boom}
+        Retargeted from the admin set-password path, which no longer exists:
+        login is now the only way this can fail.
+        """
+
+        principal_api = _FakeApi(
+            {("POST", "/api/v1/auth/login"): RuntimeError("login returned HTTP 403")}
         )
-        principal_api = _FakeApi({})
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         with pytest.raises(RuntimeError, match="403"):
             sessions.session_for_alias("primary.ordinary")
-        assert principal_api.calls == [], (
-            "attempted a login despite provisioning failing"
+        assert principal_api.token is None, (
+            "a token was installed despite the login failing"
         )
 
     def test_a_login_with_no_user_id_fails_loud(self) -> None:
@@ -452,13 +403,6 @@ class TestPrincipalSessions:
         the wrong identity in the right org and reported success."""
 
         principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
-        )
         principal_api = _FakeApi(
             {
                 ("POST", "/api/v1/auth/login"): {
@@ -468,11 +412,8 @@ class TestPrincipalSessions:
             }
         )
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="no.*'id'"):
             sessions.session_for_alias("primary.ordinary")
@@ -480,28 +421,16 @@ class TestPrincipalSessions:
 
     def test_a_failed_alias_is_not_retried_for_every_later_case(self) -> None:
         """Codex adversarial round-1, MEDIUM: only successes were cached, so
-        a set-password that succeeded followed by a failing login made every
-        subsequent case using that alias re-run the admin password mutation.
-        With 137 cases on one alias and a per-hour rate limit, one blip
+        a failing login was retried by every subsequent case using that
+        alias. With 137 cases on one alias and a rate-limited login, one blip
         became a storm of 429s that buried the real error."""
 
-        principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
-        )
         principal_api = _FakeApi(
             {("POST", "/api/v1/auth/login"): RuntimeError("login 503")}
         )
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: principal_api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         with pytest.raises(RuntimeError, match="login 503"):
             sessions.session_for_alias("primary.ordinary")
@@ -512,34 +441,45 @@ class TestPrincipalSessions:
             with pytest.raises(PrincipalError, match="already failed") as caught:
                 sessions.session_for_alias("primary.ordinary")
             assert isinstance(caught.value.__cause__, RuntimeError)
-        assert len(admin.calls) == 1, (
-            "the admin password endpoint was called again after the first "
-            f"failure ({len(admin.calls)} times) -- shared state keeps being "
-            "mutated and the rate limit will bury the original error"
+        assert len(principal_api.calls) == 1, (
+            "the login endpoint was called again after the first failure "
+            f"({len(principal_api.calls)} times) -- the rate limiter will "
+            "bury the original error"
         )
 
     def test_an_unknown_alias_never_reaches_the_network(self) -> None:
-        admin = _FakeApi({})
+        built: list[_FakeApi] = []
+
+        def api_factory() -> _FakeApi:
+            api = _FakeApi({})
+            built.append(api)
+            return api
+
         sessions = PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
-            api_factory=lambda: _FakeApi({}),
+            api_factory=api_factory,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=True,
         )
         with pytest.raises(PrincipalError, match="nobody"):
             sessions.session_for_alias("primary.nobody")
-        assert admin.calls == []
+        assert built == [], (
+            "an unresolvable alias built an API client -- resolution must "
+            "fail before anything touches the network"
+        )
 
 
-class TestPasswordBridgeIsOptIn:
-    """Team-lead ruling 2026-08-06: credentials are seeded at world-generation
-    time and ``password_hash`` STAYS in the world digest.
+class TestSeededCredentialsAreTheOnlyPath:
+    """Replaces ``TestPasswordBridgeIsOptIn``, whose subject no longer exists.
 
-    Setting a password at run time therefore MUTATES a digest-covered column.
-    That is a real cost, so it is opt-in and it marks the receipts: a bridged
-    run is not a clean run and must not be mistaken for one. The bridge is
-    temporary -- it goes away when CHAOS-3463 lands seeded credentials.
+    That class asserted the opt-in semantics of the temporary
+    admin-set-password bridge. CHAOS-3463 seeds credentials at world
+    generation, so the bridge, its env flag, and the runner-local password
+    constant are all gone -- there is nothing left to opt into, and tests of
+    an absent flag would be theatre.
+
+    What carries over is the property that actually mattered and CAN still
+    regress: authenticating a principal must not write to the world.
+    ``password_hash`` is inside the world digest, so a re-introduced write
+    would make a second armed run report drift against the same stack.
     """
 
     def _principal(self) -> CasePrincipal:
@@ -547,18 +487,19 @@ class TestPasswordBridgeIsOptIn:
             "primary.ordinary"
         )
 
-    def _sessions(self, *, bridge: bool, admin: Any, api: Any) -> PrincipalSessions:
+    def _sessions(self, api: Any) -> PrincipalSessions:
         return PrincipalSessions(
-            admin_api=admin,
-            admin_password="pw",
             api_factory=lambda: api,
             directory=PrincipalDirectory.from_world(_REAL_MANIFEST),
-            allow_password_bridge=bridge,
         )
 
-    def test_without_the_opt_in_no_password_is_ever_set(self) -> None:
+    def test_authenticating_writes_nothing_to_the_world(self) -> None:
+        """``_FakeApi`` raises on any call it has no canned response for, so
+        the login response being the ONLY one registered is what makes an
+        admin set-password (or any other write) fail this test rather than
+        pass unnoticed."""
+
         principal = self._principal()
-        admin = _FakeApi({})  # any call raises AssertionError
         api = _FakeApi(
             {
                 ("POST", "/api/v1/auth/login"): _login_response(
@@ -566,59 +507,39 @@ class TestPasswordBridgeIsOptIn:
                 )
             }
         )
-        session = self._sessions(bridge=False, admin=admin, api=api).session_for_alias(
-            "primary.ordinary"
-        )
-        assert admin.calls == [], "a digest-covered column was mutated without opt-in"
+        session = self._sessions(api).session_for_alias("primary.ordinary")
+
         assert session.api is api
-
-    def test_with_the_opt_in_the_password_is_set(self) -> None:
-        principal = self._principal()
-        admin = _FakeApi(
-            {
-                ("POST", f"/api/v1/admin/users/{principal.user_id}/password"): {
-                    "ok": True
-                }
-            }
+        assert [(c[0], c[1]) for c in api.calls] == [("POST", "/api/v1/auth/login")], (
+            "the runner issued a call beyond the login -- a write here "
+            "mutates a digest-covered column and drifts the world"
         )
-        api = _FakeApi(
-            {
-                ("POST", "/api/v1/auth/login"): _login_response(
-                    str(principal.user_id), str(principal.org_id), principal.email
-                )
-            }
-        )
-        self._sessions(bridge=True, admin=admin, api=api).session_for_alias(
-            "primary.ordinary"
-        )
-        assert len(admin.calls) == 1
 
-    def test_the_provisioning_mode_distinguishes_the_two(self) -> None:
-        """The receipt marker is the whole point: without it, artifacts from a
-        bridged run are indistinguishable from artifacts produced against
-        properly seeded credentials."""
+    def test_the_provisioning_mode_reports_seeded_credentials(self) -> None:
+        """The receipt marker is stamped into every artifact. There is one
+        credential path now, and the receipts must say WHICH one -- a receipt
+        that omits it cannot later be told apart from one produced while the
+        bridge still existed."""
 
-        fake = _FakeApi({})
         assert (
-            self._sessions(bridge=True, admin=fake, api=fake).provisioning_mode
-            == BRIDGED_PROVISIONING_MARKER
+            self._sessions(_FakeApi({})).provisioning_mode == SEEDED_PROVISIONING_MARKER
         )
-        assert (
-            self._sessions(bridge=False, admin=fake, api=fake).provisioning_mode
-            == SEEDED_PROVISIONING_MARKER
-        )
-        assert BRIDGED_PROVISIONING_MARKER != SEEDED_PROVISIONING_MARKER
+        assert SEEDED_PROVISIONING_MARKER == "world-seeded-credentials"
 
-    def test_an_unseeded_credential_without_the_bridge_names_the_remedy(self) -> None:
+    def test_an_unseeded_world_names_the_remedy(self) -> None:
         """The remedy must reach the operator on the path a REAL unseeded
         account takes.
 
         Adversarial round 3: this test used to feed ``{"user": {}}`` -- a 200
         body the login route never returns for a bad credential -- so it
-        passed while the remedy text sat on an unreachable branch. An
-        unseeded world user has ``password_hash=None``, ``login.py`` answers
-        401, and the API client RAISES before any response-body branch runs.
-        The double is now that raise.
+        passed while the remedy text sat on an unreachable branch. A world
+        snapshot minted before seeded credentials has ``password_hash=None``,
+        ``login.py`` answers 401, and the API client RAISES before any
+        response-body branch runs. The double is that raise.
+
+        The remedy itself changed with the bridge's removal: the operator is
+        now told to re-mint the world snapshot, because provisioning a
+        password at run time is no longer an option the runner offers.
         """
 
         api = _FakeApi(
@@ -630,31 +551,144 @@ class TestPasswordBridgeIsOptIn:
             }
         )
         with pytest.raises(
-            PrincipalError, match="ASK_DEV_ACCEPTANCE_ALLOW_PASSWORD_BRIDGE"
+            PrincipalError, match="mint_ask_dev_world_snapshot"
         ) as caught:
-            self._sessions(bridge=False, admin=_FakeApi({}), api=api).session_for_alias(
-                "primary.ordinary"
-            )
+            self._sessions(api).session_for_alias("primary.ordinary")
         assert "401" in str(caught.value), "the underlying cause must survive"
+        assert "CHAOS-3463" in str(caught.value)
 
-    def test_a_bridged_run_does_not_swallow_the_real_login_error(self) -> None:
-        """With the bridge ON, a 401 means something else is wrong and the
-        original error must propagate unmasked -- the remedy text would be
-        actively misleading there."""
+    def test_a_non_credential_login_failure_is_not_reframed(self) -> None:
+        """Retargets ``test_a_bridged_run_does_not_swallow_the_real_login_
+        error``, which used the bridge flag as its discriminator.
 
-        principal = self._principal()
-        admin = _FakeApi(
+        A 503 is not a credential problem. Reframing it as one would send an
+        operator off to re-mint a world that is perfectly fine, while the
+        real fault -- an unwell API -- goes unmentioned. Without this, the
+        remedy branch would swallow every login failure indiscriminately.
+        """
+
+        api = _FakeApi(
             {
-                (
-                    "POST",
-                    f"/api/v1/admin/users/{principal.user_id}/password",
-                ): {"ok": True}
+                ("POST", "/api/v1/auth/login"): AcceptanceFailure(
+                    "POST /api/v1/auth/login returned HTTP 503: upstream down"
+                )
             }
         )
-        api = _FakeApi(
-            {("POST", "/api/v1/auth/login"): AcceptanceFailure("HTTP 401 boom")}
+        with pytest.raises(AcceptanceFailure, match="503") as caught:
+            self._sessions(api).session_for_alias("primary.ordinary")
+        assert "mint_ask_dev_world_snapshot" not in str(caught.value), (
+            "a 503 was reframed as an unseeded-credential problem"
         )
-        with pytest.raises(AcceptanceFailure, match="boom"):
-            self._sessions(bridge=True, admin=admin, api=api).session_for_alias(
-                "primary.ordinary"
+
+
+class TestTheRunnerAuthenticatesWithSeededWorldCredentials:
+    """CHAOS-3462 follow-up: log in with the credential the SEEDER wrote.
+
+    A differential oracle across the two sides of the credential contract,
+    because no type checker or code index can answer whether they agree.
+    The seeding side hashes ``password_for_alias(alias)``
+    (``fixtures/world.py::_build_auth_fixture``, CHAOS-3463). This asserts
+    the LOGIN side sends a password that verifies against exactly that
+    hash -- through the API's OWN ``_verify_password``, and against hashes
+    produced by the REAL fixture builder rather than hand-authored ones.
+
+    A runner-local shared constant cannot satisfy this: it is one value for
+    every alias, while the seeded hashes are per-alias. That is what makes
+    this fail RED before the swap rather than merely sit beside it.
+    """
+
+    def _login_password_for(self, alias: str) -> str:
+        """Drive the real ``PrincipalSessions`` and capture what it sends."""
+
+        directory = PrincipalDirectory.from_world(_REAL_MANIFEST)
+        principal = directory.principal_by_alias(alias)
+        api = _FakeApi(
+            {
+                ("POST", "/api/v1/auth/login"): _login_response(
+                    str(principal.user_id), str(principal.org_id), principal.email
+                )
+            }
+        )
+        sessions = PrincipalSessions(
+            api_factory=lambda: api,
+            directory=directory,
+        )
+        sessions.session_for_alias(alias)
+        login = api.calls[0]
+        assert login[1] == "/api/v1/auth/login"
+        return login[2]["password"]
+
+    def test_the_login_password_verifies_against_the_seeded_hash(self) -> None:
+        from dev_health_ops.api.services.users import _verify_password
+        from dev_health_ops.fixtures.world import (
+            CORPUS_CONTRACT_USER_ALIASES,
+            _build_auth_fixture,
+            load_world_manifest,
+        )
+
+        manifest = load_world_manifest(_REAL_MANIFEST)
+        by_alias = {u["alias"]: u for u in manifest.world["users"]}
+        seeded = {u.email: u for u in _build_auth_fixture(manifest)["users"]}
+
+        for alias in CORPUS_CONTRACT_USER_ALIASES:
+            sent = self._login_password_for(alias)
+            hashed = seeded[by_alias[alias]["email"]].password_hash
+            assert _verify_password(sent, hashed), (
+                f"the runner logs in as {alias!r} with a password the world "
+                "seed's own hash rejects -- every case for that principal "
+                "would 401 against a correctly seeded world"
             )
+
+    def test_each_alias_gets_its_own_distinct_credential(self) -> None:
+        """Rule 2: without this, a single constant that happened to verify
+        for one alias would satisfy the oracle above for that alias alone.
+        Credentials are per-alias by derivation, so a shared value is a
+        detectable defect rather than a stylistic one."""
+
+        from dev_health_ops.fixtures.world import CORPUS_CONTRACT_USER_ALIASES
+
+        sent = {a: self._login_password_for(a) for a in CORPUS_CONTRACT_USER_ALIASES}
+        assert len(set(sent.values())) == len(sent), (
+            f"aliases share a login credential: {sent!r} -- the runner is not "
+            "deriving per principal"
+        )
+
+    def test_the_credential_matches_productions_derivation(self) -> None:
+        """The value contract, stated plainly.
+
+        NOTE what this does NOT prove: a runner that hardcoded a copy of
+        today's derived string would pass it. That gap is closed by the test
+        below, not by this one -- claiming otherwise here would be worse than
+        the gap, because a reader who sees "pinned to the function" stops
+        checking.
+        """
+
+        assert self._login_password_for("primary.ordinary") == password_for_alias(
+            "primary.ordinary"
+        )
+
+    def test_the_runner_calls_productions_derivation_rather_than_a_copy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Rule 2 applied to the import itself.
+
+        Equality against ``password_for_alias(...)`` cannot distinguish "the
+        runner calls production's function" from "someone pasted its current
+        output into a constant" -- both agree until the derivation changes,
+        which is exactly when the difference would start mattering and
+        exactly when nobody would be looking. Rebinding the name the runner
+        resolves at call time does distinguish them: only a real call picks
+        up the sentinel.
+        """
+
+        import scripts.acceptance.corpus.principals as principals_mod
+
+        monkeypatch.setattr(
+            principals_mod,
+            "password_for_alias",
+            lambda alias: f"sentinel-for-{alias}",
+        )
+        assert (
+            self._login_password_for("primary.ordinary")
+            == "sentinel-for-primary.ordinary"
+        ), "the runner did not go through production's derivation function"

@@ -301,10 +301,19 @@ def _resolve_total_unit_cap(session: Session, org_id: str) -> int:
     ``RELEASE SAVEPOINT`` itself then fails with ``InFailedSqlTransaction``.
     Rolling back unconditionally is safe because the probe is read-only.
 
-    ``no_autoflush`` guards the rollback: without it, the query inside the
-    savepoint would autoflush the planner's pending SyncRun/SyncRunUnit rows
-    into that savepoint, and the rollback would silently discard them while the
-    identity map still believed they were persisted.
+    ``session.begin_nested()`` already flushes the planner's pending
+    SyncRun/SyncRunUnit rows into the savepoint before it returns -- that is
+    unavoidable and exactly what makes rolling the savepoint back later safe
+    for those rows (they were never released outside it). ``no_autoflush``
+    around the probe query below is a second, narrower guard: it stops that
+    query from triggering a *further* autoflush of anything that became
+    pending between the savepoint opening and the query running, which would
+    otherwise also get silently discarded by the unconditional rollback.
+
+    A malformed ``tier_cap`` (e.g. a non-numeric value from a corrupted row)
+    must fall back to ``default_cap`` the same as a missing table or a lookup
+    error -- so the ``int()`` coercion stays inside the ``try`` block below,
+    not after it.
     """
     default_cap = _env_int("SYNC_RUN_MAX_UNITS", 1000)
     try:
@@ -318,14 +327,13 @@ def _resolve_total_unit_cap(session: Session, org_id: str) -> int:
     try:
         with session.no_autoflush:
             tier_cap = TierLimitService(session).get_limit(org_uuid, "max_sync_units")
+        if tier_cap is None:
+            return default_cap
+        return int(tier_cap)
     except Exception:
-        nested.rollback()
         return default_cap
-    else:
+    finally:
         nested.rollback()
-    if tier_cap is None:
-        return default_cap
-    return int(tier_cap)
 
 
 def _env_int(name: str, default: int) -> int:

@@ -213,6 +213,75 @@ lowercase repo slug like `meridian/web-app` extracts **zero** mentions and
 silently degrades to org-wide behavior. Every case's `question` must be
 checked against this before assuming `resolution_path` is non-null.
 
+### The null-profile-value rule, generalized (CHAOS-3462 B4)
+
+The rule §1 states for `scope_resolution_outcome_in` applies to **every**
+`*_in` checker, and is now enforced mechanically rather than by review:
+
+> **Never wire an `*_in` invariant onto a case whose profile value for the
+> cited `from_profile` key is `null`.**
+
+`invariants._resolve_allowed` turns a null profile value into
+`allowed=[None]`, and every `*_in` checker independently and deliberately
+refuses to match an unobserved `None` — so the check fails by construction,
+on every run, on every stack. The Phase 2 exit evidence run found 26 active
+cases in exactly that state via `resolution_path_in`, which made
+"invariant floor green on 93" unreachable as authored.
+
+`tests/acceptance/corpus/test_corpus_invariants_are_satisfiable.py` now
+fails the unit gate if any active case reintroduces it, and also fails if
+`invariants.py` grows a new `*_in` checker the guard does not yet know
+about. Note the guard correctly permits a null profile value **beside a
+literal non-null `allowed` entry** — `_resolve_allowed` is additive, so that
+combination is still satisfiable.
+
+**Deciding between the two remedies is a code question, not a judgment
+call.** Run production's own `extract_mentions` against the case's exact
+`question` text, and check where the terminal fires relative to the ledger
+write:
+
+| Observation | `resolution_path` | Remedy |
+| --- | --- | --- |
+| zero extractable mentions | genuinely `null` | REMOVE the invariant |
+| terminal fires before `orchestrator.run()` (e.g. the org/model capability gate, which rejects in a FastAPI **dependency**) | genuinely `null` | REMOVE the invariant |
+| terminal fires after extraction but before ledger construction (e.g. the oversized `> MAX_MENTIONS` rejection, `_terminate(ledger=None)`) | genuinely `null` | REMOVE the invariant |
+| mention extracted AND preflight reaches PROCEED | real, non-null | DEFINE the value in the profile |
+
+A mention-bearing question is **not** on its own evidence of a written
+ledger — the second and third rows above both have extractable mentions and
+still write nothing. Record the disposition and its evidence on the case in
+a `$comment_resolution_path_invariant` field.
+
+**Removing the last invariant is not allowed.** If the unpassable check was
+a case's ONLY invariant, replace it rather than deleting it: prefer
+`public_outcome_in` wired to the profile's own non-null
+`expected_public_outcome` (a real terminal assertion), and fall back to the
+bare `no_internal_error` floor only when no non-null profile value exists.
+An active case with zero invariants is rejected by the loader, and would be
+a silent coverage hole even if it were not.
+
+## `org_alias` / `user_alias` are load-bearing (CHAOS-3462 B5)
+
+These are not documentation. The runner resolves both through `world.json`
+and **authenticates as that principal** for the case
+(`scripts/acceptance/corpus/principals.py`). A missing, unknown, or
+incoherent pair (e.g. `user_alias: sibling.ordinary` with
+`org_alias: primary`) fails the case loudly — it never silently falls back
+to the acceptance superuser, which is what previously made the cross-tenant
+and entitlement families assert nothing about the identities they name.
+
+Two consequences for case authoring:
+
+* the pair must agree with `world.json` — the user's own `org_alias` there
+  is authoritative, and a case cannot reassign a user to another org;
+* because world users are seeded with `password_hash=None`, the runner sets
+  a password via `POST /api/v1/admin/users/{id}/password` and then performs
+  a real login. Impersonation is deliberately NOT used: the
+  `/api/v1/dev/**` routers read the raw JWT claims and ignore the
+  impersonation context, so an impersonated case would evaluate entitlement
+  and readiness against the superuser's org and go green for the wrong
+  principal.
+
 ## `status: "declared-blocked"` cases
 
 Mirrors the `world.json` / `sources.json` precedent (`DECLARED_BLOCKED_STATUS`,

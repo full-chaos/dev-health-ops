@@ -112,7 +112,11 @@ from dev_health_ops.api.dev.contracts import (
 )
 from dev_health_ops.api.dev.terminal_frames import PUBLIC_OUTCOME_BY_ERROR_CODE
 from dev_health_ops.llm.agent.provider_scripts import current_role, load_role_script
-from scripts.acceptance.corpus.arming import NotArmedError, require_armed
+from scripts.acceptance.corpus.arming import (
+    ArmedButScrubbedError,
+    NotArmedError,
+    require_armed,
+)
 from scripts.acceptance.corpus.case_schema import (
     CorpusCase,
     load_corpus_cases,
@@ -127,6 +131,11 @@ from scripts.acceptance.corpus.db_verify import (
     verify_world_digest_via_exec,
 )
 from scripts.acceptance.corpus.invariants import InvariantContext, evaluate_invariant
+from scripts.acceptance.corpus.principals import (
+    PrincipalDirectory,
+    PrincipalSession,
+    PrincipalSessions,
+)
 from scripts.acceptance.corpus.quota import QuotaBudget, estimate_run_cost_microusd
 from scripts.acceptance.corpus.receipt import (
     Wave4CaseRecorder,
@@ -190,8 +199,8 @@ def _load_resolution_profiles() -> dict[str, Any]:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _armed_or_throw() -> None:
-    """Skip (never fail) when nobody asked for this run at all.
+def _armed_or_throw(scrubbed_ambient_env_names: tuple[str, ...]) -> None:
+    """Skip when nobody asked for this run at all -- FAIL when they did.
 
     This module IS collected by the standard, always-on unit-tier gate
     (``ci/local_validate.sh`` runs the whole ``tests/`` directory
@@ -206,10 +215,27 @@ def _armed_or_throw() -> None:
     here"). "Armed-or-THROW" still holds for everything downstream of this
     check: once armed, the script-inventory/world-digest/quota guards below
     never skip, only fail loud.
+
+    CHAOS-3462 B1 -- THE THIRD STATE: the paragraph above was written as if
+    there were only two ("armed" and "nobody asked"). The Phase 2 exit
+    evidence run found a third and it was silently taking the skip branch.
+    CHAOS-3402's ``tests/_env_isolation.py`` scrub deletes
+    ``ASK_DEV_LIVE_ACCEPTANCE`` in ``pytest_configure``, before this fixture
+    (or this module) exists, so a correctly-armed operator run reported
+    ``144 skipped``, exit 0 -- a green session for a run that touched
+    nothing. ``scrubbed_ambient_env_names`` (tests/conftest.py) is the
+    scrub's own record of what it REMOVED, which is evidence of arming that
+    survives the deletion of the arming variable itself; an
+    ``ArmedButScrubbedError`` from that evidence is a hard FAIL, never a
+    skip. ``scripts/acceptance/run_wave4_corpus.sh`` is the standing fix
+    (it exports the ``DEV_HEALTH_TEST_ENV_ALLOW`` exemption); this branch is
+    the belt to that braces, for a run invoked some other way.
     """
 
     try:
-        require_armed()
+        require_armed(scrubbed_names=scrubbed_ambient_env_names)
+    except ArmedButScrubbedError as exc:
+        pytest.fail(str(exc), pytrace=False)
     except NotArmedError as exc:
         pytest.skip(str(exc))
 
@@ -266,13 +292,27 @@ def quota_budget() -> QuotaBudget:
     return QuotaBudget.from_env()
 
 
+def _api_base_url() -> str:
+    return os.getenv("ASK_DEV_ACCEPTANCE_API_URL", "http://127.0.0.1:18080")
+
+
+def _superuser_password() -> str:
+    return os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+
+
 @pytest.fixture(scope="session")
 def acceptance_api() -> tuple[AcceptanceApi, str]:
-    api = AcceptanceApi(
-        os.getenv("ASK_DEV_ACCEPTANCE_API_URL", "http://127.0.0.1:18080")
-    )
+    """The ADMIN session -- used only to provision per-case principals.
+
+    CHAOS-3462 B5: this is no longer the session cases execute under. It
+    logs in as the acceptance superuser because that is the identity allowed
+    to call ``POST /api/v1/admin/users/{id}/password``; the cases themselves
+    run under ``principal_sessions`` below.
+    """
+
+    api = AcceptanceApi(_api_base_url())
     email = os.getenv("TEST_SUPERUSER_EMAIL", "admin@devhealth.example")
-    password = os.getenv("TEST_SUPERUSER_PASSWORD", "devhealth123")
+    password = _superuser_password()
     login = api.request(
         "POST", "/api/v1/auth/login", {"email": email, "password": password}
     )
@@ -285,6 +325,31 @@ def acceptance_api() -> tuple[AcceptanceApi, str]:
     if not org_id:
         raise AcceptanceFailure("login returned no user.org_id")
     return api, org_id
+
+
+@pytest.fixture(scope="session")
+def principal_sessions(
+    acceptance_api: tuple[AcceptanceApi, str],
+) -> PrincipalSessions:
+    """Per-case principal selection (CHAOS-3462 B5).
+
+    Before this existed, all 93 active cases ran as the acceptance superuser
+    in one org, so the cross-tenant and entitlement families asserted
+    nothing about the identities they name. Each case's ``org_alias`` /
+    ``user_alias`` now resolves through ``world.json`` to a real principal,
+    which the runner authenticates as. See ``principals.py`` for why this is
+    a genuine login rather than ``/api/v1/admin/impersonate`` (the dev
+    routers do not honor impersonation, and would silently evaluate
+    entitlement and readiness against the superuser's org instead).
+    """
+
+    admin_api, _ = acceptance_api
+    return PrincipalSessions(
+        admin_api=admin_api,
+        admin_password=_superuser_password(),
+        api_factory=lambda: AcceptanceApi(_api_base_url()),
+        directory=PrincipalDirectory.from_world(_WORLD_DIR / "world.json"),
+    )
 
 
 def _scope(org_id: str) -> dict[str, Any]:
@@ -420,12 +485,20 @@ def test_declared_blocked_case(case: CorpusCase) -> None:
 def test_corpus_case(
     case: CorpusCase,
     acceptance_api: tuple[AcceptanceApi, str],
+    principal_sessions: PrincipalSessions,
     resolution_profiles: dict[str, Any],
     quota_budget: QuotaBudget,
     compose_context: ComposeContext,
     _world_digest_pin: str,
 ) -> None:
-    api, org_id = acceptance_api
+    admin_api, _admin_org_id = acceptance_api
+    # CHAOS-3462 B5: resolved BEFORE the quota reservation and any HTTP
+    # traffic, so an unresolvable principal costs nothing and fails at the
+    # earliest honest point. `session_for` never falls back to the admin
+    # session -- an unknown/missing/incoherent alias raises.
+    session: PrincipalSession = principal_sessions.session_for(case)
+    api = session.api
+    org_id = session.org_id
     expectations = resolve_case_expectations(case, resolution_profiles)
     cost = estimate_run_cost_microusd(input_tokens=8_000, output_tokens=3_000)
     quota_budget.reserve(case_id=case.id, requests=1, cost_microusd=cost)
@@ -556,6 +629,25 @@ def test_corpus_case(
         question=case.question,
         subject_class=case.subject_class,
         resolution_profile_ref=case.resolution_profile_ref,
+    )
+    # CHAOS-3462 B5, recorded as a real checked assertion rather than left
+    # implicit: this case executed under its OWN declared principal's token,
+    # not the admin token used to provision it. Without this, a future
+    # refactor that reintroduced the superuser fallback would leave every
+    # receipt looking exactly the same as one from a correctly-scoped run.
+    recorder.check(
+        category="declared-principal",
+        name="ran_as_declared_principal",
+        condition=(
+            api is not admin_api
+            and api.token is not None
+            and api.token != admin_api.token
+        ),
+        detail=(
+            f"org_alias={session.principal.org_alias!r} "
+            f"user_alias={session.principal.user_alias!r} "
+            f"email={session.principal.email!r} org_id={org_id!r}"
+        ),
     )
     if ledger_classification_error is not None:
         recorder.check(

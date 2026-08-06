@@ -143,6 +143,31 @@ def pytest_configure(config):
     _SCRUB_RAN = True
 
 
+def scrubbed_env_names() -> tuple[str, ...]:
+    """Names the CHAOS-3402 scrub actually REMOVED this session.
+
+    A name appears here only if it was PRESENT in the environment and then
+    deleted, which makes this list positive evidence about what the shell
+    was carrying -- evidence that survives the deletion of the variables
+    themselves. CHAOS-3462 B1 needs exactly that: the live corpus runner's
+    arming flag is in ``SCRUB_ENV_NAMES``, so a correctly-armed run has no
+    way to know it was armed except by asking what the scrub took.
+
+    Public (unlike the ``_SCRUBBED_ENV_NAMES`` list it copies) because it is
+    a supported read for test modules, and returns a tuple so a caller
+    cannot mutate the record.
+    """
+
+    return tuple(_SCRUBBED_ENV_NAMES)
+
+
+@pytest.fixture(scope="session")
+def scrubbed_ambient_env_names() -> tuple[str, ...]:
+    """Fixture form of :func:`scrubbed_env_names`."""
+
+    return scrubbed_env_names()
+
+
 def pytest_report_header(config):
     """Say out loud what the shell was carrying.
 

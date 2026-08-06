@@ -478,7 +478,7 @@
           "integration",
           "-count=1",
           "-run",
-          "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+          "^TestGitHubEstimateCoverageReadbackFencesTeamID$|^TestGitHubWorkItemTeamAttributionsReadbackFencesTeamID$|^TestGitHubWorkItemStateDurationsReadbackFencesDay$",
           "./internal/providersync/"
         ]
       ]
@@ -497,7 +497,7 @@
           "integration",
           "-count=1",
           "-run",
-          "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+          "^TestGitHubEstimateCoverageReadbackFencesTeamID$|^TestGitHubWorkItemTeamAttributionsReadbackFencesTeamID$|^TestGitHubWorkItemStateDurationsReadbackFencesDay$",
           "./internal/providersync/"
         ]
       ]
@@ -516,7 +516,7 @@
           "integration",
           "-count=1",
           "-run",
-          "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
+          "^TestGitHubEstimateCoverageReadbackFencesTeamID$|^TestGitHubWorkItemTeamAttributionsReadbackFencesTeamID$|^TestGitHubWorkItemStateDurationsReadbackFencesDay$",
           "./internal/providersync/"
         ]
       ]
@@ -538,7 +538,8 @@
           "^TestGitHubEstimateCoverageReadbackAgainstRealClickHouse$|^TestGitHubWorkItemStateDurationsReadbackAgainstRealClickHouse$|^TestGitHubWorkItemTeamAttributionsReadbackAgainstRealClickHouse$",
           "./internal/providersync/"
         ]
-      ]
+      ],
+      "expected_survivor_reason": "UNREACHABLE while the fences hold, and measured as such rather than assumed. This readback's WHERE pins the COMPLETE sorting key (org_id, day, provider, work_scope_id, ifNull(team_id,'')), so FINAL can return at most one row and found>1 is not producible by any input -- which is why moving the duplicate check below the comparison changes nothing observable. The branch is defensive depth for the case where a fence regresses, and every fence that would make it reachable has its OWN mutation: E2 (partition/day), E10 (team_id), and for the sibling tables E11 and E12. Input class: a batch whose expected row shares its full sorting key with a second stored row -- unconstructible against this schema, verified by the sibling-row tests, which write exactly such a sibling differing in one fenced column and still read found=1."
     },
     {
       "id": "E14-batch-verdict-conflict-outranks-absent",

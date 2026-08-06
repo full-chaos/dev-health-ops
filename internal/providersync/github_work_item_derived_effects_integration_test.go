@@ -602,3 +602,120 @@ WHERE org_id = ? AND work_item_id = ?`, githubDerivedIntegrationOrg, "acme/api#3
 		t.Fatalf("foreign tenant: inspection = %v, err = %v, want EffectAbsent", inspection, err)
 	}
 }
+
+// Each readback fences the FULL sorting key, and until now every readback test
+// wrote a single row per natural key -- so dropping any one fence still
+// selected exactly that row, `found` stayed 1, and the verdict stayed Exact.
+// Four mutations that neutralise a fence therefore SURVIVED while reading as
+// covered.
+//
+// The missing ingredient is a SIBLING row: one that differs from the expected
+// row only in the fenced column, so it is a distinct sorting key that the
+// fence is the only thing excluding. With the fence intact both rows read back
+// Exact; with it dropped the query matches both, found becomes 2, and the
+// comparator answers Conflict.
+//
+// These are written as separate top-level tests per table because the three
+// tables do not share an engine and each fence fails for its own reason.
+func TestGitHubEstimateCoverageReadbackFencesTeamID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+	sink := GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: githubDerivedIntegrationLease()}
+
+	stamp := time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC)
+	ratio := 0.5
+	row := func(teamID, teamName string) githubEstimateCoverageMetricsDailyRow {
+		id, name := teamID, teamName
+		return githubEstimateCoverageMetricsDailyRow{
+			Day: "2026-08-04", Provider: "github", WorkScopeID: "acme/api",
+			TeamID: &id, TeamName: &name,
+			EstimatedCount: 1, UnestimatedCount: 1, BacklogSize: 2, Ratio: &ratio,
+			ComputedAt: stamp, OrgID: githubDerivedIntegrationOrg,
+		}
+	}
+	// Same day, provider and work_scope_id; ONLY team_id differs, which is the
+	// last component of this table's sorting key.
+	rows := []githubEstimateCoverageMetricsDailyRow{row("t1", "Team One"), row("t2", "Team Two")}
+	effect := githubDerivedIntegrationEffect(t, githubEstimateCoverageDestination, rows)
+	identity := githubDerivedIntegrationIdentity(githubEstimateCoverageDestination, len(rows))
+
+	if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil ||
+		inspection != EffectExact {
+		t.Fatalf("two teams on one (day, provider, work_scope_id): inspection = %v, err = %v, "+
+			"want EffectExact -- a readback that does not fence ifNull(team_id,'') sees both "+
+			"rows and answers found=2", inspection, err)
+	}
+}
+
+func TestGitHubWorkItemTeamAttributionsReadbackFencesTeamID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: githubDerivedIntegrationLease()}
+
+	repoID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	stamp := time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC)
+	row := func(teamID, teamName string) githubWorkItemTeamAttributionRow {
+		id, name := teamID, teamName
+		return githubWorkItemTeamAttributionRow{
+			WorkItemID: "acme/api#1", Provider: "github", Source: "assignee_membership",
+			IsPrimary: 1, Confidence: "high", Evidence: "assignee_membership=" + teamID,
+			ComputedAt: stamp, RepoID: &repoID, TeamID: &id, TeamName: &name,
+			OrgID: githubDerivedIntegrationOrg,
+		}
+	}
+	// One work item legitimately carries several attribution candidates that
+	// differ only in team_id -- two members of different teams assigned to it.
+	rows := []githubWorkItemTeamAttributionRow{row("t1", "Team One"), row("t2", "Team Two")}
+	effect := githubDerivedIntegrationEffect(t, githubTeamAttributionsDestination, rows)
+	identity := githubDerivedIntegrationIdentity(githubTeamAttributionsDestination, len(rows))
+
+	if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil ||
+		inspection != EffectExact {
+		t.Fatalf("two teams on one (repo_id, work_item_id, source): inspection = %v, err = %v, "+
+			"want EffectExact -- a readback that does not fence ifNull(team_id,'') compares "+
+			"against a sibling candidate's row", inspection, err)
+	}
+}
+
+func TestGitHubWorkItemStateDurationsReadbackFencesDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+	sink := GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: githubDerivedIntegrationLease()}
+
+	stamp := time.Date(2026, 8, 5, 0, 30, 0, 0, time.UTC)
+	row := func(day githubWorkItemDerivedDay, hours float64) githubWorkItemStateDurationDailyRow {
+		return githubWorkItemStateDurationDailyRow{
+			Day: day, Provider: "github", WorkScopeID: "acme/api",
+			TeamID: "t1", TeamName: "Team One", Status: "in_progress",
+			DurationHours: hours, ItemsTouched: 1, ComputedAt: stamp,
+			AvgWIP: hours / 24.0, OrgID: githubDerivedIntegrationOrg,
+		}
+	}
+	// `day` is in this table's GROUP BY, so without the day fence the query
+	// returns one group PER DAY for the same natural key. Two days inside ONE
+	// month, so this is about the grouping and not about partition pruning.
+	rows := []githubWorkItemStateDurationDailyRow{
+		row("2026-08-04", 3), row("2026-08-05", 5),
+	}
+	effect := githubDerivedIntegrationEffect(t, githubStateDurationsDestination, rows)
+	identity := githubDerivedIntegrationIdentity(githubStateDurationsDestination, len(rows))
+
+	if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil ||
+		inspection != EffectExact {
+		t.Fatalf("two days on one natural key: inspection = %v, err = %v, want EffectExact -- "+
+			"a readback that does not fence `day` groups both days and answers found=2",
+			inspection, err)
+	}
+}

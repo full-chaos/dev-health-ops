@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "github/work-items prepared-manifest recovery",
   "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
-  "$limitation": "The raw sidecar is intentionally not compressed, so decompression-bomb behavior has no production branch to mutate. The 64 MiB encoded cap is mutated directly. Postgres transaction, tenant, cleanup, and rollback mutations use the integration-tagged proof.",
+  "$limitation": "The raw sidecar is intentionally not compressed, so decompression-bomb behavior has no production branch to mutate. The 64 MiB encoded cap is mutated directly. Postgres transaction, tenant, lease, cleanup, and rollback mutations use the integration-tagged proof.",
   "mutations": [
     {
       "id": "R1-descriptor-requires-prepared-recovery",
@@ -24,7 +24,8 @@
       "id": "R3-snapshot-digest-detects-benign-json-tamper",
       "file": "internal/providersync/prepared_route_snapshot.go",
       "find": "if hex.EncodeToString(digest[:]) != state.PreparedSnapshot.ContentDigest {",
-      "replace": "if false {",
+      "replace": "if hex.EncodeToString(digest[:]) == \"\" {",
+      "$note": "The replacement keeps `digest` referenced on purpose. The previous form (`if false`) orphaned the variable, so the mutated source did not build and the mutation measured NOTHING while reading as a plan entry.",
       "rationale": "changing a syntactically valid non-identity result field must still be rejected by the ledger-bound snapshot digest",
       "proof": [["go", "test", "-count=1", "-run", "^TestPreparedRouteSnapshotRejectsTamperTenantGenerationAndSensitiveResult$", "./internal/providersync/"]]
     },
@@ -68,7 +69,135 @@
       "file": "internal/providersync/repository_postgres.go",
       "find": "WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`",
       "replace": "WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation != $3`",
+      "$note": "The harness warns that this anchor text also appears in the integration test. That is the intended shape here and not a self-referential assertion: the test's copy is an independently written SELECT used as the oracle, in a different file, while `find` is applied only to repository_postgres.go. If the two were ever collapsed into one shared constant this mutation would stop measuring anything.",
       "rationale": "successful Complete must delete exactly the current unit generation snapshot and no other recovery payload",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
+    },
+
+    {
+      "id": "R9-ledger-schema-version-allowlist",
+      "file": "internal/providersync/effect_ledger.go",
+      "find": "if (state.SchemaVersion != \"v1\" && state.SchemaVersion != \"v2\") || state.Generation == \"\" ||",
+      "replace": "if false || state.Generation == \"\" ||",
+      "rationale": "the ledger document is shared with workers running older and newer binaries, so an unrecognized schema version must be refused rather than partially interpreted",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R10-v1-must-not-carry-a-snapshot-reference",
+      "file": "internal/providersync/effect_ledger.go",
+      "find": "if state.SchemaVersion == \"v1\" && state.PreparedSnapshot != nil {",
+      "replace": "if false {",
+      "rationale": "a document that declares v1 while carrying a v2 payload is exactly what an older worker would misread during a rolling deployment; it must be refused, not tolerated",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R11-v2-requires-a-snapshot-reference",
+      "file": "internal/providersync/effect_ledger.go",
+      "find": "(state.PreparedSnapshot == nil || state.PreparedSnapshot.validate() != nil) {",
+      "replace": "(state.PreparedSnapshot != nil && state.PreparedSnapshot.validate() != nil) {",
+      "$note": "Clause mutation, not a whole-condition mutation: it disables only the nil check while leaving the validity check live, so a kill can only come from the missing-reference case.",
+      "rationale": "a v2 ledger with no snapshot reference names a recovery payload that does not exist and must never be treated as recoverable",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R12-v2-snapshot-reference-must-be-well-formed",
+      "file": "internal/providersync/effect_ledger.go",
+      "find": "(state.PreparedSnapshot == nil || state.PreparedSnapshot.validate() != nil) {",
+      "replace": "(state.PreparedSnapshot == nil) {",
+      "rationale": "the sibling clause of R11: a present but malformed reference must be refused, otherwise the digest and size bounds are never consulted",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R13-reference-payload-schema-version",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "if reference.SchemaVersion != preparedRouteSnapshotSchemaVersion ||",
+      "replace": "if false ||",
+      "rationale": "a reference naming a payload schema this binary does not implement must fail closed rather than be decoded on the assumption the shape is unchanged",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R14-reference-digest-must-be-a-sha256",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "!validDigest(reference.ContentDigest) || reference.PayloadBytes < 1 ||",
+      "replace": "reference.PayloadBytes < 1 ||",
+      "rationale": "an unparseable digest can never match the payload, so accepting one turns the integrity check into an unconditional failure at load time instead of a refusal at write time",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R15-reference-lower-size-bound",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "!validDigest(reference.ContentDigest) || reference.PayloadBytes < 1 ||",
+      "replace": "!validDigest(reference.ContentDigest) ||",
+      "rationale": "the sibling clause of R14: a zero-length payload reference describes no manifest at all",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R16-reference-upper-size-bound",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "reference.PayloadBytes > maxPreparedRouteSnapshotBytes {",
+      "replace": "reference.PayloadBytes > maxPreparedRouteSnapshotBytes*2 {",
+      "rationale": "the ledger-side size bound is a separate guard from the encode-side cap in R4; a reference may arrive from a peer that never ran the encoder",
+      "proof": [["go", "test", "-count=1", "-run", "^TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R17-prepared-recovery-is-github-only",
+      "file": "internal/providersync/complete_route.go",
+      "find": "(descriptor.Provider != \"github\" || descriptor.RouteDataset != \"work-items\") {",
+      "replace": "(descriptor.RouteDataset != \"work-items\") {",
+      "rationale": "prepared-manifest recovery is a github/work-items contract; another provider's work-items route carrying the flag is a wiring mistake that must fail before credentials are resolved",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R18-prepared-recovery-is-work-items-only",
+      "file": "internal/providersync/complete_route.go",
+      "find": "(descriptor.Provider != \"github\" || descriptor.RouteDataset != \"work-items\") {",
+      "replace": "(descriptor.Provider != \"github\") {",
+      "rationale": "the sibling clause of R17: a different GitHub dataset carrying the flag has no 16-effect manifest contract to recover",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R19-recovery-route-requires-a-snapshot-store",
+      "file": "internal/providersync/complete_route.go",
+      "find": "if descriptor.RouteEnabled && descriptor.PreparedManifestRecovery && !preparedRecovery {",
+      "replace": "if descriptor.RouteEnabled && descriptor.PreparedManifestRecovery && !preparedRecovery && false {",
+      "$note": "`&& false` rather than `if false` so `preparedRecovery` stays referenced and the mutated source still builds.",
+      "rationale": "the deploy-time half of fail-closed: a binary wired to a ledger with no snapshot sidecar must refuse to start the route rather than discover the gap after the first ClickHouse write",
+      "proof": [["go", "test", "-count=1", "-run", "^TestRouteRequiringPreparedRecoveryRefusesALedgerWithoutASnapshotStore$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R20-recovery-refuses-a-legacy-v1-ledger",
+      "file": "internal/providersync/complete_route.go",
+      "find": "if recoveredEffects.SchemaVersion != \"v2\" ||\n\t\t\t\trecoveredEffects.PreparedSnapshot == nil {",
+      "replace": "if false {",
+      "$note": "Deliberately a whole-condition mutation, which is normally the wrong shape. The two clauses are mutually redundant for any state that survives EffectLedgerState.validate(): validate() already makes SchemaVersion != \"v2\" imply PreparedSnapshot == nil, so no reachable state distinguishes them and neither clause can be killed alone. The clause-level guarantee is measured instead by R9-R12 on validate() itself. Recorded here rather than left implicit, because a reader who sees only a passing whole-condition mutation would over-read what it proves.",
+      "rationale": "contract point 7: a route requiring prepared recovery must never resume from a v1 ledger written before the recovery contract existed, even though the downstream decoders would also refuse it",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R21-load-is-fenced-on-the-lease-owner",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "  AND unit.lease_owner = $6",
+      "replace": "  AND (unit.lease_owner = $6 OR TRUE)",
+      "rationale": "a worker holding a superseded lease must not read the snapshot the current owner is responsible for; ReleaseForRetry clears owner, expiry and status together, so only an isolated fixture can measure this fence alone",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R22-load-is-fenced-on-lease-expiry",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "  AND unit.lease_expires_at > $7",
+      "replace": "  AND (unit.lease_expires_at > $7 OR TRUE)",
+      "rationale": "a process that stalled long enough to lose its lease must not resume from the snapshot on the assumption it is still the writer",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R23-load-is-fenced-on-running-status",
+      "file": "internal/providersync/prepared_route_snapshot.go",
+      "find": "  AND unit.status = 'running'",
+      "replace": "  AND (unit.status = 'running' OR TRUE)",
+      "rationale": "a unit that is no longer running has no in-flight batch to recover, and its retained snapshot must stay unreadable until a fresh claim makes it running again",
       "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
       "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPostgresPreparedRouteSnapshotLifecycleAndFences$", "./internal/providersync/"]]
     }

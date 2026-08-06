@@ -177,6 +177,17 @@ func (executor CompleteRouteExecutor) Execute(
 			}
 		}
 		if recoveredEffects != nil && descriptor.PreparedManifestRecovery {
+			// Contract point 7. New workers may continue an existing route from
+			// a legacy v1 ledger, but a route that requires prepared recovery
+			// must never resume from a document written before that contract
+			// existed. Both decoders below also refuse it; the policy belongs
+			// here, where the route declares the requirement, rather than
+			// surviving only as a side effect of two independent decoders that
+			// a later change could relax one at a time.
+			if recoveredEffects.SchemaVersion != "v2" ||
+				recoveredEffects.PreparedSnapshot == nil {
+				return ErrEffectRecoveryUnsafe
+			}
 			manifest, err := preparedLedger.LoadRouteSnapshot(
 				workContext, session.Claim, *recoveredEffects, executor.now(),
 			)

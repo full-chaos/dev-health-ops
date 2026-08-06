@@ -437,6 +437,20 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
         "DELETE ON ALL TABLES",
     ):
         assert forbidden not in domain_script
+    # The domain role holds exactly one DELETE privilege. Recovery snapshots are
+    # transient state the worker clears on terminal completion; every other
+    # domain table is append/update-only. Assert the exact set rather than
+    # banning one spelling: admitting the snapshot grant meant relaxing a
+    # blanket "DELETE ON TABLE" ban, and a relaxed ban admits every future
+    # DELETE grant too. A templated `public.%I` DELETE block surfaces here as
+    # the literal "%I" and so cannot slip through this equality either.
+    assert _tables_for_delete_grants(domain_script) == {
+        "sync_run_unit_effect_snapshots"
+    }
+
+
+def _tables_for_delete_grants(domain_script: str) -> set[str]:
+    return set(re.findall(r"DELETE ON TABLE public\.([A-Za-z0-9_%]+)", domain_script))
 
 
 def _tables_for_formatted_grant(domain_script: str, grant: str) -> set[str]:

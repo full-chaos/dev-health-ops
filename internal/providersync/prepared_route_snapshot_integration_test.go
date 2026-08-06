@@ -109,6 +109,15 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 		t.Fatal(err)
 	}
 	assertPreparedSnapshotCount(t, ctx, pool, claim, 1)
+	// The snapshot is retained across the release, but it is not readable
+	// without a live lease. The unit is `dispatching` here, so the status
+	// fence alone must refuse the load even though the row is still present
+	// and the tenant/unit/generation key still matches exactly.
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, claim, state, now.Add(2*time.Second),
+	); !errors.Is(err, ErrPreparedRouteSnapshotNotFound) {
+		t.Fatalf("released-lease load error=%v", err)
+	}
 	reclaimed, err := repository.Claim(ctx, ClaimRequest{
 		UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now.Add(3 * time.Second),
 		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
@@ -116,6 +125,29 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Positive control first: the generation survives the reclaim, so the new
+	// owner inside its lease window CAN load the same snapshot. Without this
+	// the two refusals below would also pass if the row had simply become
+	// unreadable for some unrelated reason.
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, reclaimed, state, now.Add(4*time.Second),
+	); err != nil {
+		t.Fatalf("reclaimed owner load error=%v", err)
+	}
+	// A worker holding the superseded lease must not be able to read the
+	// snapshot the new owner is now responsible for.
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, claim, state, now.Add(4*time.Second),
+	); !errors.Is(err, ErrPreparedRouteSnapshotNotFound) {
+		t.Fatalf("stale owner load error=%v", err)
+	}
+	// Now isolate the three lease fences one at a time. ReleaseForRetry clears
+	// owner, expiry and status together, so the release above can never say
+	// WHICH fence refused -- and a single missing fence would hide behind the
+	// other two. Each iteration breaks exactly one column, proves the refusal,
+	// restores it, and re-proves the load succeeds again, so no refusal can be
+	// left over from the previous iteration.
+	assertLeaseFencesIsolateTheSnapshotLoad(t, ctx, pool, repository, reclaimed, state, now)
 	if err := repository.Complete(
 		ctx, reclaimed, map[string]any{"records": 16}, nil,
 		now.Add(3*time.Second), now.Add(4*time.Second),
@@ -215,5 +247,74 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 	}
 	if got != want {
 		t.Fatalf("snapshot count=%d want=%d", got, want)
+	}
+}
+
+// assertLeaseFencesIsolateTheSnapshotLoad breaks one lease column at a time so
+// each fence in loadPreparedRouteSnapshotSQL is measured on its own. A test
+// that only releases the lease exercises all three at once, which is exactly
+// the shape that lets one of them be silently absent.
+func assertLeaseFencesIsolateTheSnapshotLoad(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	repository *PostgresRepository,
+	claim Claim,
+	state EffectLedgerState,
+	now time.Time,
+) {
+	t.Helper()
+	var (
+		liveOwner   string
+		liveExpires time.Time
+		liveStatus  string
+	)
+	if err := pool.QueryRow(ctx, `
+SELECT lease_owner, lease_expires_at, status
+FROM public.sync_run_units WHERE id = $1`, claim.ID,
+	).Scan(&liveOwner, &liveExpires, &liveStatus); err != nil {
+		t.Fatal(err)
+	}
+	at := now.Add(4 * time.Second)
+	for _, fence := range []struct {
+		name      string
+		statement string
+		argument  any
+	}{
+		{
+			"lease owner",
+			"UPDATE public.sync_run_units SET lease_owner = $2 WHERE id = $1",
+			uuid.NewString(),
+		},
+		{
+			"lease expiry",
+			"UPDATE public.sync_run_units SET lease_expires_at = $2 WHERE id = $1",
+			at.Add(-time.Second),
+		},
+		{
+			"unit status",
+			"UPDATE public.sync_run_units SET status = $2 WHERE id = $1",
+			"dispatching",
+		},
+	} {
+		if _, err := pool.Exec(ctx, fence.statement, claim.ID, fence.argument); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repository.LoadRouteSnapshot(ctx, claim, state, at); !errors.Is(
+			err, ErrPreparedRouteSnapshotNotFound,
+		) {
+			t.Fatalf("%s fence did not refuse the load: error=%v", fence.name, err)
+		}
+		if _, err := pool.Exec(ctx, `
+UPDATE public.sync_run_units
+SET lease_owner = $2, lease_expires_at = $3, status = $4
+WHERE id = $1`, claim.ID, liveOwner, liveExpires, liveStatus); err != nil {
+			t.Fatal(err)
+		}
+		// The restore has to be proven, not assumed: without this the next
+		// iteration's refusal could be left over from this one.
+		if _, err := repository.LoadRouteSnapshot(ctx, claim, state, at); err != nil {
+			t.Fatalf("%s fence restore left the load refused: error=%v", fence.name, err)
+		}
 	}
 }

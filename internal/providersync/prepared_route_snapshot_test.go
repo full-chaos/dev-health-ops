@@ -284,3 +284,203 @@ func preparedGitHubWorkItemsSession(
 		Deadline: now.Add(time.Hour), Now: func() time.Time { return now },
 	}
 }
+
+// The rolling-deployment boundary, stated in one place. An older worker
+// validates only schema "v1", so the shared ledger document has to be
+// self-describing enough that neither side can silently accept the other's
+// shape: a v1 document must never carry a snapshot reference, and a v2 one is
+// meaningless without a well-formed reference. The legacy round-trip test
+// above only proves v1 still decodes; every direction below is a refusal no
+// other test exercises.
+func TestEffectLedgerStateBindsSchemaVersionToSnapshotPresence(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	_, reference, err := encodePreparedRouteManifest(
+		claim, batch, ShadowComparison{Match: true}, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := NewEffectLedgerState(claim, batch.Effects, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.SchemaVersion != "v1" || base.PreparedSnapshot != nil {
+		t.Fatalf("baseline state=%+v", base)
+	}
+	nonHexDigest, emptyPayload := reference, reference
+	nonHexDigest.ContentDigest = strings.Repeat("z", 64)
+	emptyPayload.PayloadBytes = 0
+	overCap, futurePayloadSchema := reference, reference
+	overCap.PayloadBytes = maxPreparedRouteSnapshotBytes + 1
+	futurePayloadSchema.SchemaVersion = "v2"
+
+	for name, mutate := range map[string]func(*EffectLedgerState){
+		"v1 carrying a snapshot reference": func(state *EffectLedgerState) {
+			state.PreparedSnapshot = &reference
+		},
+		"v2 without a snapshot reference": func(state *EffectLedgerState) {
+			state.SchemaVersion = "v2"
+		},
+		"v2 with a non-hex digest": func(state *EffectLedgerState) {
+			state.SchemaVersion, state.PreparedSnapshot = "v2", &nonHexDigest
+		},
+		"v2 with an empty payload": func(state *EffectLedgerState) {
+			state.SchemaVersion, state.PreparedSnapshot = "v2", &emptyPayload
+		},
+		"v2 above the payload cap": func(state *EffectLedgerState) {
+			state.SchemaVersion, state.PreparedSnapshot = "v2", &overCap
+		},
+		"v2 naming a future payload schema": func(state *EffectLedgerState) {
+			state.SchemaVersion, state.PreparedSnapshot = "v2", &futurePayloadSchema
+		},
+		"an unknown future ledger schema": func(state *EffectLedgerState) {
+			state.SchemaVersion, state.PreparedSnapshot = "v3", &reference
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := base
+			state.Effects = append([]EffectLedgerEntry(nil), base.Effects...)
+			mutate(&state)
+			if err := state.validate(); !errors.Is(err, ErrEffectLedgerConflict) {
+				t.Fatalf("validate error=%v", err)
+			}
+			if encoded := encodeEffectLedgerState(state); encoded != nil {
+				t.Fatalf("encoded a state validate rejected: %s", encoded)
+			}
+			raw, err := json.Marshal(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeEffectLedgerState(raw); !errors.Is(err, ErrEffectLedgerConflict) {
+				t.Fatalf("decode error=%v", err)
+			}
+		})
+	}
+}
+
+// Contract point 7: new workers may continue an existing route from a legacy
+// v1 ledger, but github/work-items must require v2 plus a valid snapshot. The
+// ledger here holds a well-formed v1 state AND a decodable payload, so a
+// refusal cannot be attributed to a missing sidecar -- only to the route
+// refusing to recover from a document that predates its recovery contract.
+func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	claim, session := preparedGitHubWorkItemsSession(t, now)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	payload, _, err := encodePreparedRouteManifest(
+		claim, batch, ShadowComparison{Match: true}, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := NewEffectLedgerState(claim, batch.Effects, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := &memoryEffectLedger{state: legacy, preparedSnapshot: payload}
+	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	handler := &staticCompleteRouteHandler{batch: batch}
+	_, err = completeRouteExecutor(
+		now.Add(time.Hour), handler, ledger, &memoryEffectSink{},
+	).Execute(context.Background(), session, descriptor)
+	if !errors.Is(err, ErrEffectRecoveryUnsafe) || !handler.normalizedAt.IsZero() {
+		t.Fatalf("legacy ledger error=%v handler_at=%s", err, handler.normalizedAt)
+	}
+}
+
+// PreparedManifestRecovery is a github/work-items contract, not a general
+// capability. A descriptor carrying it for any other pair is a wiring mistake
+// that must fail before the route touches credentials, not a route that
+// quietly runs without its snapshot.
+func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	claim, session := preparedGitHubWorkItemsSession(t, now)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	for name, retarget := range map[string]func(*CompleteRouteDescriptor){
+		"another provider": func(descriptor *CompleteRouteDescriptor) {
+			descriptor.Provider = "linear"
+		},
+		"another dataset": func(descriptor *CompleteRouteDescriptor) {
+			descriptor.RouteDataset = "work-item-labels"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+			descriptor.Destinations = workItemRouteDestinations()
+			descriptor.RouteReady, descriptor.RouteEnabled = true, true
+			retarget(&descriptor)
+			handler := &staticCompleteRouteHandler{batch: batch}
+			_, err := completeRouteExecutor(
+				now.Add(time.Hour), handler, &memoryEffectLedger{}, &memoryEffectSink{},
+			).Execute(context.Background(), session, descriptor)
+			if !errors.Is(err, ErrInvalidConfiguration) || !handler.normalizedAt.IsZero() {
+				t.Fatalf("error=%v handler_at=%s", err, handler.normalizedAt)
+			}
+			_ = claim
+		})
+	}
+}
+
+// ledgerWithoutPreparedRecovery satisfies EffectLedger and nothing more, which
+// is exactly the shape of a binary wired to a store that has no snapshot
+// sidecar. Embedding the interface rather than the concrete ledger is what
+// withholds the two PreparedEffectLedger methods.
+type ledgerWithoutPreparedRecovery struct{ EffectLedger }
+
+// The deploy-time half of fail-closed: a route that requires prepared recovery
+// must refuse to run at all against a ledger with nowhere to put the snapshot,
+// rather than discovering it after the first ClickHouse write.
+func TestRouteRequiringPreparedRecoveryRefusesALedgerWithoutASnapshotStore(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	_, session := preparedGitHubWorkItemsSession(t, now)
+	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	handler := &staticCompleteRouteHandler{}
+	sink := &memoryEffectSink{}
+	_, err := completeRouteExecutor(
+		now.Add(time.Hour), handler,
+		ledgerWithoutPreparedRecovery{EffectLedger: &memoryEffectLedger{}}, sink,
+	).Execute(context.Background(), session, descriptor)
+	if !errors.Is(err, ErrInvalidConfiguration) || !handler.normalizedAt.IsZero() ||
+		len(sink.destinations) != 0 {
+		t.Fatalf("error=%v handler_at=%s writes=%v", err, handler.normalizedAt, sink.destinations)
+	}
+}
+
+// A snapshot proves what the batch WAS; the descriptor says what the route may
+// write now. Recovery must re-check the manifest against the live descriptor,
+// because a destination set that changed between prepare and recovery means the
+// stored effects no longer describe this route.
+func TestPreparedRecoveryRevalidatesTheManifestAgainstTheLiveDescriptor(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	claim, session := preparedGitHubWorkItemsSession(t, now)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	ledger := &memoryEffectLedger{}
+	if _, err := ledger.PrepareRouteSnapshot(
+		context.Background(), claim, batch, ShadowComparison{Match: true}, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	full := workItemRouteDestinations()
+	descriptor.Destinations = full[:len(full)-1]
+	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	handler := &staticCompleteRouteHandler{batch: batch}
+	sink := &memoryEffectSink{}
+	_, err := completeRouteExecutor(
+		now.Add(time.Hour), handler, ledger, sink,
+	).Execute(context.Background(), session, descriptor)
+	if !errors.Is(err, ErrEffectLedgerConflict) || len(sink.destinations) != 0 {
+		t.Fatalf("error=%v writes=%v", err, sink.destinations)
+	}
+}

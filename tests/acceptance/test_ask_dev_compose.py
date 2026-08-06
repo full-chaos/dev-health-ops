@@ -1351,3 +1351,76 @@ def test_snapshot_manifest_records_a_schema_fingerprint_for_both_stores() -> Non
     assert re.fullmatch(r"[0-9a-f]{64}", clickhouse["catalog_sha256"])
     assert postgres["alembic_heads"], "no alembic heads recorded"
     assert re.fullmatch(r"[0-9a-f]{64}", postgres["catalog_sha256"])
+
+
+def test_snapshot_manifest_alembic_heads_are_current_for_this_checkout() -> None:
+    """CHAOS-3488: the committed snapshot must be minted against THIS
+    checkout's migration heads, not merely carry some well-formed heads.
+
+    The sibling test above checks the fingerprint EXISTS and is well-formed.
+    That is not the same property, and the difference cost a full Phase 2 exit
+    evidence run: #1536 minted its snapshot on a branch that had not picked up
+    #1525's ``0087_add_dev_qua_shadow_budget_reservations``, then merged the
+    0086-fingerprinted artifact onto a 0087 main. Every existence assertion
+    above still passed. The first and only signal was
+    ``dev-hops fixtures world-restore`` refusing to boot the acceptance stack
+    -- correctly, but at the most expensive possible moment, and with zero
+    corpus cases executed.
+
+    Any migration merged AFTER a mint silently invalidates the committed
+    artifact, and no CI lane boots this stack (CHAOS-3488), so nothing else
+    catches it. This check needs no database and no container: alembic's own
+    ``ScriptDirectory`` resolves heads from the versions directory offline, so
+    it runs at unit tier and fails RED the moment the pair drifts.
+
+    Heads are compared SORTED because the recorded value comes from
+    ``SELECT version_num FROM alembic_version ORDER BY 1``
+    (``_postgres_schema_fingerprint``), which is ordering-normalized already;
+    sorting both sides keeps this comparing head SETS rather than incidental
+    row order.
+
+    DELIBERATELY NOT EXTENDED TO CLICKHOUSE, stated rather than left as a
+    silent gap. The same staleness class applies there, but the ClickHouse
+    fingerprint records ``schema_migrations.version`` -- the APPLIED ledger --
+    and a deferred Python migration is legitimately on disk while never
+    appearing in it (``067_operational_ordering_contract.py`` is exactly this
+    today). A naive on-disk-equals-recorded check would therefore fail RED
+    against a perfectly fresh mint. Encoding the deferral rule here would
+    couple this test to migration-runner internals; the honest statement is
+    that ClickHouse migration currency is NOT covered by this test and is
+    still caught only at boot.
+    """
+
+    import sys
+
+    if str(_ROOT / "src") not in sys.path:
+        sys.path.insert(0, str(_ROOT / "src"))
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    manifest = json.loads(
+        (
+            _ROOT
+            / "tests"
+            / "acceptance"
+            / "world"
+            / "ask-dev-world.v1"
+            / "snapshot"
+            / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    recorded = sorted(manifest["postgres"]["schema_fingerprint"]["alembic_heads"])
+
+    script_directory = ScriptDirectory.from_config(Config(str(_ROOT / "alembic.ini")))
+    current = sorted(script_directory.get_heads())
+
+    assert recorded == current, (
+        f"the committed snapshot was minted against alembic heads {recorded}, "
+        f"but this checkout's heads are {current}. The snapshot's bytes are "
+        f"only valid against the schema they were taken from, so "
+        f"`dev-hops fixtures world-restore` will refuse to boot the acceptance "
+        f"stack and no corpus case can execute. A migration landed after the "
+        f"mint -- re-mint the snapshot AND WORLD_DIGEST together with "
+        f"scripts/acceptance/mint_ask_dev_world_snapshot.sh (they are only "
+        f"ever valid as a pair). See CHAOS-3488."
+    )

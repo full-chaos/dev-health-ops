@@ -985,3 +985,95 @@ def test_long_running_unit_counts_against_cap_and_is_not_re_enqueued(
     assert units[1].status == SyncRunUnitStatus.PLANNED.value, (
         "PLANNED unit must remain PLANNED when cap is consumed by RUNNING"
     )
+
+
+# ---------------------------------------------------------------------------
+# slot_headroom (CHAOS-3465): the only sanctioned way another admission path
+# may add work this guard did not see.
+# ---------------------------------------------------------------------------
+
+
+def test_slot_headroom_reports_slots_left_after_this_pass_candidates(
+    db_session, monkeypatch
+):
+    """Headroom is the cap minus consumers minus THIS pass's candidates.
+
+    Deliberately conservative: every candidate is counted as if it will
+    dispatch, even though some are about to be budget-deferred, so headroom
+    can only ever under-admit. Cap 5, two PLANNED candidates, no consumers
+    -> 3.
+    """
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "5")
+    run, units, _, _ = _seed_run(db_session, unit_count=2)
+
+    decision = DispatchGuard.authorize_run(db_session, str(run.id))
+
+    org_id = str(units[0].org_id)
+    assert decision.allowed is True
+    assert decision.slot_headroom == {(org_id, "github", "medium"): 3}
+
+
+def test_slot_headroom_is_zero_when_candidates_fill_the_cap(db_session, monkeypatch):
+    """The boundary that actually gates a surplus admission: a full bucket
+    must report 0, never a negative number that would read as capacity."""
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
+    run, units, _, _ = _seed_run(db_session, unit_count=3)
+
+    decision = DispatchGuard.authorize_run(db_session, str(run.id))
+
+    org_id = str(units[0].org_id)
+    assert decision.slot_headroom[(org_id, "github", "medium")] == 0
+
+
+def test_slot_headroom_counts_live_consumers_not_just_candidates(
+    db_session, monkeypatch
+):
+    """Work already running consumes the slots a surplus admission would
+    otherwise be told are free."""
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "4")
+    run, units, _, _ = _seed_run(db_session, unit_count=2)
+    units[0].status = SyncRunUnitStatus.RUNNING.value
+    units[0].lease_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    db_session.flush()
+
+    decision = DispatchGuard.authorize_run(db_session, str(run.id))
+
+    org_id = str(units[0].org_id)
+    # 4 cap - 1 live RUNNING consumer - 1 remaining PLANNED candidate = 2.
+    assert decision.slot_headroom[(org_id, "github", "medium")] == 2
+
+
+def test_slot_headroom_covers_a_bucket_holding_only_not_yet_due_units(
+    db_session, monkeypatch
+):
+    """CHAOS-3465: a bucket whose only unit is a not-yet-due RETRYING deferral
+    has NO candidate this pass, so the candidate-driven loop never visited it
+    and the map had no entry at all.
+
+    An absent entry reads as "no slots" to the budget guard's surplus phase,
+    which made the one unit alone in its bucket -- the case surplus most
+    obviously exists to rescue -- the one case it could never reach.
+    """
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "10")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "4")
+    run, units, _, _ = _seed_run(db_session, unit_count=2)
+    deferred = units[1]
+    deferred.cost_class = "heavy"  # a bucket of its own
+    deferred.status = SyncRunUnitStatus.RETRYING.value
+    deferred.available_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    db_session.flush()
+
+    decision = DispatchGuard.authorize_run(db_session, str(run.id))
+
+    org_id = str(units[0].org_id)
+    assert (org_id, "github", "heavy") in decision.slot_headroom, (
+        "the deferred-only bucket has no headroom entry, so surplus retry "
+        "can never rescue a unit that is alone in its bucket"
+    )
+    # A future RETRYING unit is neither a consumer nor a candidate, so the
+    # whole cap is free.
+    assert decision.slot_headroom[(org_id, "github", "heavy")] == 4
+    assert decision.slot_headroom[(org_id, "github", "medium")] == 3

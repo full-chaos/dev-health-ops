@@ -26,6 +26,16 @@ Covers:
   * surplus relaxes budget admission and nothing else: the per-bucket
     concurrency cap, an active provider cooldown, and the terminal outcome of
     budget exhaustion each still bind.
+  * eligibility is budget deferrals ONLY -- a cooldown-deferred unit is
+    waiting on the provider, not on the budget, and is never pulled forward.
+  * a deferred unit ALONE in its concurrency bucket is still reachable (the
+    DispatchGuard half: a bucket with no candidate this pass still gets a
+    headroom entry).
+  * the surplus offer, WITHDRAWN: a cooldown landing in the enforce_run ->
+    reconfirm TOCTOU window puts the unit back on its original countdown with
+    its budget episode intact, rather than deferral-stamping it and wiping the
+    CHAOS-3412 exhaustion evidence -- while an ordinary due candidate caught
+    the same way still takes the full cooldown deferral.
   * fail-closed: without DispatchGuard's slot headroom there is no surplus
     retry at all.
   * the candidate cap is logged, never silently applied.
@@ -595,6 +605,221 @@ def test_surplus_is_disabled_without_concurrency_headroom(db_session, monkeypatc
     db_session.refresh(beta)
     assert result.surplus_admitted_unit_ids == frozenset()
     assert beta.available_at == deferred_until
+
+
+def test_only_budget_deferred_units_are_surplus_eligible(db_session, monkeypatch):
+    """The third eligibility filter, which nothing else covers.
+
+    A unit deferred by the COOLDOWN gate is waiting on the provider, not on
+    the budget, and a `rate_limit_cooldown_deferred` backoff routinely
+    outlives ``_active_cooldowns``' lookback window -- so the in-pass cooldown
+    check does NOT double-cover this. Without the category filter such a unit
+    (and any `worker_lost` / `provider_unit_retryable` retry) would be pulled
+    forward by spare budget it was never waiting for.
+    """
+    from dev_health_ops.sync.budget_guard import _surplus_retry_candidates
+
+    run, alpha, beta = _two_unit_run(
+        db_session, monkeypatch, costs={"alpha": 1, "beta": 1}, limit=10
+    )
+    now = datetime.now(timezone.utc)
+    # Same shape as a budget deferral -- RETRYING, not yet due -- differing
+    # ONLY in why it is waiting. Producible: this is what
+    # _apply_cooldown_deferral leaves behind.
+    beta.result = {
+        "error_category": "rate_limit_cooldown_deferred",
+        "not_before": (now + timedelta(minutes=30)).isoformat(),
+        "rate_limit_deferrals": 1,
+    }
+    beta.available_at = now + timedelta(minutes=30)
+    beta.rate_limit_deferrals = 1
+    beta.rate_limit_first_seen_at = now - timedelta(minutes=5)
+    beta.budget_deferrals = 0
+    beta.budget_first_deferred_at = None
+    db_session.flush()
+
+    candidates = _surplus_retry_candidates(
+        db_session,
+        str(run.id),
+        ignored_unit_ids=set(),
+        slot_headroom={(str(run.org_id), "github", "medium"): 4},
+        now=now,
+    )
+
+    assert [str(unit.id) for unit in candidates] == [], (
+        "a cooldown-deferred unit was offered to the surplus phase; it is "
+        "waiting on the provider, not on the budget"
+    )
+
+
+def test_surplus_rescues_a_deferred_unit_alone_in_its_bucket(db_session, monkeypatch):
+    """Covers the DispatchGuard half of this change.
+
+    The deferred unit sits in its OWN (org, provider, cost_class) bucket, so
+    that bucket has no candidate this pass. Before the guard was taught to
+    compute headroom for deferred-only buckets, `slot_headroom` simply had no
+    entry for it, the surplus phase read that as "no slots", and the one unit
+    surplus most obviously exists to rescue was the one case it could never
+    reach. Every other fixture here co-buckets the deferred unit with a
+    PLANNED candidate, which hides that entirely.
+    """
+    from dev_health_ops.workers import sync_units
+
+    run, alpha, beta = _two_unit_run(
+        db_session, monkeypatch, costs={"alpha": 1, "beta": 1}, limit=10
+    )
+    # A different cost_class is a different concurrency bucket; alpha stays in
+    # 'medium', so 'heavy' contains beta and nothing else.
+    beta.cost_class = "heavy"
+    db_session.flush()
+
+    result = sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(beta)
+    assert beta.status == SyncRunUnitStatus.DISPATCHING.value, (
+        "a deferred unit alone in its bucket was never offered a slot, so "
+        "the surplus could not reach it"
+    )
+    assert result["queued_units"] == 2
+
+
+# ---------------------------------------------------------------------------
+# The surplus offer, withdrawn (review CRITICAL)
+# ---------------------------------------------------------------------------
+
+
+def test_cooldown_landing_after_promotion_withdraws_it_without_ending_the_episode(
+    db_session, monkeypatch
+):
+    """CRITICAL: the guard's own offer, taken back, must not cost the unit its
+    budget episode.
+
+    Drives the real TOCTOU chain. No observation exists while `enforce_run`
+    runs, so beta is genuinely surplus-admitted and joins `candidate_units`; a
+    429 is then committed at the `reconfirm_cooldowns` seam — exactly where a
+    concurrent transaction's commit lands. `reconfirm_cooldowns` matches it.
+
+    Routing that match through the ordinary cooldown deferral (which is what
+    happened before this fix) calls `_apply_cooldown_deferral`, zeroing
+    `budget_deferrals`, nulling `budget_first_deferred_at` and rewriting the
+    category to `rate_limit_cooldown_deferred`. A unit at 9/10 deferrals
+    promoted and caught on every pass would then never reach CHAOS-3412's
+    specific budget verdict at all — only the much later aggregate backstop,
+    under the wrong category.
+
+    Absent the surplus phase this unit would have sat out the pass with its
+    episode intact, so the only correct outcome is that it still does.
+    """
+    from dev_health_ops.sync.budget_guard import BudgetGuard
+    from dev_health_ops.workers import sync_units
+
+    run, alpha, beta = _two_unit_run(
+        db_session, monkeypatch, costs={"alpha": 1, "beta": 1}, limit=10
+    )
+    deferred_until = beta.available_at
+    first_deferred_at = beta.budget_first_deferred_at
+    blocked_at = beta.first_blocked_at
+
+    reset_at = datetime.now(timezone.utc) + timedelta(seconds=180)
+    real_reconfirm = BudgetGuard.reconfirm_cooldowns
+
+    def _reconfirm_after_concurrent_commit(*args, **kwargs):
+        # Lands strictly AFTER enforce_run's cooldown snapshot (and after the
+        # promotion), strictly BEFORE the claim.
+        db_session.add(
+            _observation(
+                run,
+                alpha,
+                route_family="git",
+                dimension="rest_core",
+                reset_at=reset_at,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db_session.flush()
+        return real_reconfirm(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BudgetGuard,
+        "reconfirm_cooldowns",
+        staticmethod(_reconfirm_after_concurrent_commit),
+    )
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(beta)
+    # Not dispatched — the cooldown is real and must be honoured.
+    assert beta.status == SyncRunUnitStatus.RETRYING.value
+    # THE finding, asserted first so it is the assertion that reports: the
+    # episode survived the round trip. This is what the defect wiped.
+    assert beta.budget_deferrals == 2, (
+        "the withdrawn surplus promotion reset the budget episode; a unit "
+        "near its deferral cap would never reach the budget exhaustion verdict"
+    )
+    assert beta.budget_first_deferred_at == first_deferred_at
+    assert beta.first_blocked_at == blocked_at
+    assert (beta.result or {})["error_category"] == "budget_deferred", (
+        "the withdrawn promotion rewrote the unit's cause to a rate-limit "
+        "one, which also disarms _budget_deferral_exhausted's evidence gate"
+    )
+    # The offer was withdrawn: back on its ORIGINAL countdown, not a fresh
+    # cooldown backoff.
+    assert beta.available_at == deferred_until
+
+
+def test_withdrawal_does_not_apply_to_an_ordinary_due_candidate(
+    db_session, monkeypatch
+):
+    """The withdrawal is scoped to surplus promotions only.
+
+    An ordinary DUE retrying unit caught by the same late cooldown check must
+    still take the full cooldown deferral — episode change included — because
+    it genuinely was about to dispatch. Without this, "don't end the episode"
+    would quietly become a blanket rule and CHAOS-2760's binding decision
+    (cooldown deferrals count against the shared rate-limit budget) would be
+    lost for every budget-deferred unit.
+    """
+    from dev_health_ops.sync.budget_guard import BudgetGuard
+    from dev_health_ops.workers import sync_units
+
+    run, alpha, beta = _two_unit_run(
+        db_session, monkeypatch, costs={"alpha": 1, "beta": 1}, limit=10
+    )
+    # Due, so it is an ordinary candidate -- never a surplus promotion.
+    beta.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db_session.flush()
+
+    real_reconfirm = BudgetGuard.reconfirm_cooldowns
+
+    def _reconfirm_after_concurrent_commit(*args, **kwargs):
+        db_session.add(
+            _observation(
+                run,
+                alpha,
+                route_family="git",
+                dimension="rest_core",
+                reset_at=datetime.now(timezone.utc) + timedelta(seconds=180),
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db_session.flush()
+        return real_reconfirm(*args, **kwargs)
+
+    monkeypatch.setattr(
+        BudgetGuard,
+        "reconfirm_cooldowns",
+        staticmethod(_reconfirm_after_concurrent_commit),
+    )
+
+    sync_units.dispatch_sync_run(str(run.id))
+
+    db_session.refresh(beta)
+    assert beta.status == SyncRunUnitStatus.RETRYING.value
+    assert (beta.result or {})["error_category"] == "rate_limit_cooldown_deferred"
+    assert beta.rate_limit_deferrals == 1
+    # The budget episode ends here, by design: this unit really was about to
+    # run and was stopped by the provider, not by the guard changing its mind.
+    assert beta.budget_deferrals == 0
 
 
 # ---------------------------------------------------------------------------

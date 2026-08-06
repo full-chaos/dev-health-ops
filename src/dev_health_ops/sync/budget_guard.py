@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy import func, or_, text, update
@@ -148,6 +149,12 @@ class BudgetGuardResult:
     #: deferral) but were pulled forward into it by the surplus phase
     #: (CHAOS-3465). They are claimable by ``_claim_units`` on this same pass.
     surplus_admitted_unit_ids: frozenset[str] = frozenset()
+    #: Each surplus-admitted unit's ``available_at`` from BEFORE the promotion,
+    #: so a later stage that must withdraw the promotion can put the unit back
+    #: exactly where it was instead of leaving it due (CHAOS-3465 review). The
+    #: keys are ``surplus_admitted_unit_ids``; kept as a separate mapping
+    #: because the restore VALUE is what makes the withdrawal a no-op.
+    surplus_prior_available_at: Mapping[str, datetime] = field(default_factory=dict)
     # CHAOS-2760 TOCTOU closure: the candidate units and their (already
     # loaded, credential-decryption-free-to-reuse) estimates from THIS pass,
     # so the caller can run one more cheap cooldown re-check
@@ -514,7 +521,7 @@ class BudgetGuard:
         # taken its share. consumed_by_bucket now holds durable consumption
         # plus this pass's own admissions, which is exactly the baseline a
         # surplus admission must fit on top of.
-        surplus_admitted_ids = _admit_surplus_retries(
+        surplus_prior_available_at = _admit_surplus_retries(
             session,
             sync_run_id,
             candidates=surplus_candidates,
@@ -536,18 +543,21 @@ class BudgetGuard:
             # Surplus-admitted units join the candidate set the caller hands to
             # reconfirm_cooldowns: they are about to be claimed on this pass,
             # so they need the same last-read-before-the-claim cooldown check
-            # every other dispatched unit gets.
+            # every other dispatched unit gets. The caller MUST also pass
+            # surplus_prior_available_at, or that check will end their budget
+            # episode -- see reconfirm_cooldowns.
             candidate_units=(
                 *units,
                 *(
                     unit
                     for unit in surplus_candidates
-                    if str(unit.id) in surplus_admitted_ids
+                    if str(unit.id) in surplus_prior_available_at
                 ),
             ),
             estimates_by_unit=estimates_by_unit,
             jitter_seconds=jitter_seconds,
-            surplus_admitted_unit_ids=frozenset(surplus_admitted_ids),
+            surplus_admitted_unit_ids=frozenset(surplus_prior_available_at),
+            surplus_prior_available_at=dict(surplus_prior_available_at),
         )
 
     @staticmethod
@@ -559,6 +569,7 @@ class BudgetGuard:
         estimates_by_unit: Mapping[str, tuple[BudgetEstimate, ...]],
         already_excluded_ids: frozenset[str],
         jitter_seconds: int,
+        surplus_prior_available_at: Mapping[str, datetime] = MappingProxyType({}),
         now: datetime | None = None,
     ) -> CooldownReconfirmResult:
         """Close the TOCTOU window between ``enforce_run``'s cooldown
@@ -601,6 +612,35 @@ class BudgetGuard:
         the earliest new ``available_at``, so the caller can fold it into
         ``next_deferred_at`` for the ``_schedule_redispatch`` re-arm.
 
+        SURPLUS-ADMITTED UNITS ARE WITHDRAWN, NOT DEFERRED (CHAOS-3465 review,
+        CRITICAL). A unit the surplus phase pulled forward is here only
+        because this pass OFFERED it a slot it was not otherwise going to get.
+        Running the normal cooldown deferral on it would send it through
+        ``_apply_cooldown_deferral``, which -- correctly, for a unit that was
+        genuinely about to dispatch -- ends the budget episode:
+        ``budget_deferrals=0``, ``budget_first_deferred_at=None``, and a
+        ``rate_limit_cooldown_deferred`` category. For a surplus unit that is
+        a fabricated episode change: absent the surplus phase it would have
+        kept counting down with its episode intact, so "the guard tried to
+        help" would silently reset the CHAOS-3412 exhaustion evidence. A unit
+        at 9/10 deferrals, promoted and caught each pass, would never reach
+        the specific budget verdict at all.
+
+        So the offer is simply WITHDRAWN: ``available_at`` goes back to the
+        value it had before promotion and nothing else is touched -- the same
+        rule the surplus phase already follows for a candidate that does not
+        fit. This is the ONLY correct reading of "a surplus attempt that does
+        not end in dispatch is a no-op".
+
+        Two consequences, both deliberate. The withdrawn unit is not folded
+        into ``next_deferred_at``: it is back on its ORIGINAL countdown, whose
+        wakeup was armed when it was originally deferred, and re-arming from
+        here would claim this pass deferred something it did not. And an
+        exhaustion verdict that ``_resolve_cooldown_blocked_unit`` might have
+        reached for it is not lost, only postponed to the pass where the unit
+        is genuinely due -- which is exactly where it would have been reached
+        had the surplus phase never looked at it.
+
         This does not achieve full serializability (a commit landing in the
         few-microsecond gap between this query and the claim's own
         ``UPDATE`` could still slip through), but it collapses the window
@@ -640,6 +680,21 @@ class BudgetGuard:
                     cooldown_by_dimension=cooldown_by_dimension,
                 )
             log_ctx = _unit_log_context(sync_run_id, unit)
+            prior_available_at = surplus_prior_available_at.get(str(unit.id))
+            if cooldown_expiry is not None and prior_available_at is not None:
+                # Withdraw the surplus offer instead of deferring (see the
+                # docstring): this unit was never going to dispatch this pass
+                # without the promotion, so the promotion is undone and its
+                # budget episode is left exactly as it was.
+                if _withdraw_surplus_admission(
+                    session,
+                    unit,
+                    prior_available_at=prior_available_at,
+                    now=checked_at,
+                    log_ctx=log_ctx,
+                ):
+                    excluded.add(str(unit.id))
+                continue
             if cooldown_expiry is not None:
                 # Same helper enforce_run uses (review round 2, R2-F2): this
                 # path previously had its own copy of the ordering that also
@@ -840,9 +895,15 @@ def _admit_surplus_retries(
     cooldown_by_dimension: Mapping[tuple[str, str, uuid.UUID, str], datetime],
     observations: list[dict[str, Any]],
     now: datetime,
-) -> set[str]:
+) -> dict[str, datetime]:
     """Spend this pass's leftover budget on deferred units, in
-    longest-deferred-first order, and return the ids actually admitted.
+    longest-deferred-first order.
+
+    Returns ``{unit_id: available_at BEFORE the promotion}`` for each unit
+    admitted. The prior value is returned, not merely the id, because a later
+    stage may have to WITHDRAW the promotion (see
+    ``reconfirm_cooldowns``), and putting the unit back exactly where it was
+    is what keeps the whole surplus attempt a no-op.
 
     COUNTER SEMANTICS -- the decision this phase turns on:
 
@@ -885,7 +946,7 @@ def _admit_surplus_retries(
       admission loop does not ask about a fitting candidate either (R2-F1:
       a unit that would be admitted now must be admitted, not killed).
     """
-    admitted: set[str] = set()
+    admitted: dict[str, datetime] = {}
     for unit in candidates:
         log_ctx = _unit_log_context(sync_run_id, unit)
         estimates = estimates_by_unit.get(str(unit.id), ())
@@ -953,9 +1014,20 @@ def _admit_surplus_retries(
             )
             continue
 
+        # Captured BEFORE the promotion overwrites it: this is what a later
+        # withdrawal restores. A candidate always has one (the selection query
+        # requires ``available_at > now``), but if that ever stops holding,
+        # skip rather than promote a unit we could not put back.
+        prior_available_at = unit.available_at
+        if prior_available_at is None:
+            logger.warning(
+                "dispatch_sync_run.budget_surplus_skipped",
+                extra={**log_ctx, "reason": "no_prior_available_at"},
+            )
+            continue
         if not _admit_unit_from_surplus(session, unit, now=now, log_ctx=log_ctx):
-            # CAS lost: the unit moved on concurrently (claimed, reconciled,
-            # re-deferred). Its budget stays unspent for the next candidate.
+            # CAS lost: the unit moved on concurrently. Its budget stays
+            # unspent and is offered to the next candidate.
             continue
 
         for estimate in estimates:
@@ -964,7 +1036,7 @@ def _admit_surplus_retries(
             )
             consumed_by_bucket[budget_key] += estimate.estimated_units
         slot_headroom[slot_key] -= 1
-        admitted.add(str(unit.id))
+        admitted[str(unit.id)] = _as_aware(prior_available_at)
         observations.extend(surplus_observations)
         for observation in surplus_observations:
             logger.info(
@@ -992,8 +1064,16 @@ def _admit_unit_from_surplus(
     lifecycle contract, which is precisely the semantics this must not have.
 
     The CAS re-asserts the exact predicate that made the unit a surplus
-    candidate (retrying, and still not due), so a concurrent pass that claimed
-    or re-deferred it in the meantime wins and this returns ``False``.
+    candidate (retrying, and still not due), so a concurrent pass that already
+    promoted or terminalized it wins and this returns ``False``. It is
+    deliberately NOT claimed here as protection against a concurrent
+    re-deferral: no write path in the tree can re-defer a unit that is not yet
+    due -- ``_defer_unit_for_budget`` and ``_apply_cooldown_deferral`` both
+    require the claim predicate (planned / due-retrying / stale-dispatching),
+    and the reconciler's retry stamp targets expired-lease RUNNING units. The
+    single-winner property for the dispatch that follows is owned by
+    ``_claim_units``' atomic UPDATE under the bucket advisory locks, not by
+    this statement.
     """
     result: Any = session.execute(
         update(SyncRunUnit)
@@ -1015,6 +1095,69 @@ def _admit_unit_from_surplus(
             **log_ctx,
             "budget_deferrals": int(unit.budget_deferrals or 0),
             "available_at": now.isoformat(),
+        },
+    )
+    return True
+
+
+def _withdraw_surplus_admission(
+    session: Any,
+    unit: SyncRunUnit,
+    *,
+    prior_available_at: datetime,
+    now: datetime,
+    log_ctx: dict[str, Any],
+) -> bool:
+    """Undo a surplus promotion, putting the unit back on its ORIGINAL
+    countdown (CHAOS-3465 review, CRITICAL).
+
+    The exact inverse of :func:`_admit_unit_from_surplus` and nothing more:
+    ``available_at`` returns to its pre-promotion value, and every column any
+    exhaustion predicate reads -- ``budget_deferrals``,
+    ``budget_first_deferred_at``, ``first_blocked_at``, ``result`` -- is left
+    untouched, because from the unit's point of view this pass never happened.
+
+    That is the whole point. The alternative, routing a withdrawn unit through
+    the ordinary cooldown deferral, resets the budget episode and rewrites the
+    error category, so a promotion the guard offered and then took back would
+    destroy the evidence CHAOS-3412's exhaustion verdict is built on.
+
+    ``updated_at`` does move, and that is intended: the row WAS written twice,
+    and an operator reading it deserves to see that rather than a row that
+    silently rewound. Nothing keys off ``updated_at`` for a RETRYING unit (the
+    staleness cutoff applies only to DISPATCHING).
+
+    The CAS pins ``available_at`` to the promoted value, so if anything else
+    moved the unit between the promotion and here, this leaves it alone and
+    returns ``False``.
+    """
+    promoted_available_at = unit.available_at
+    result: Any = session.execute(
+        update(SyncRunUnit)
+        .where(
+            SyncRunUnit.id == unit.id,
+            SyncRunUnit.status == SyncRunUnitStatus.RETRYING.value,
+            SyncRunUnit.available_at == promoted_available_at,
+        )
+        .values(available_at=prior_available_at, updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if int(result.rowcount or 0) == 0:
+        logger.warning(
+            "dispatch_sync_run.budget_surplus_withdrawal_lost_race",
+            extra={**log_ctx, "prior_available_at": prior_available_at.isoformat()},
+        )
+        return False
+    unit.available_at = prior_available_at
+    logger.info(
+        "dispatch_sync_run.budget_surplus_withdrawn",
+        extra={
+            **log_ctx,
+            "reason": "cooldown_landed_after_admission",
+            "restored_available_at": prior_available_at.isoformat(),
+            # Proof, in the log line itself, that the episode survived the
+            # round trip -- this is the value the CRITICAL finding zeroed.
+            "budget_deferrals": int(unit.budget_deferrals or 0),
         },
     )
     return True

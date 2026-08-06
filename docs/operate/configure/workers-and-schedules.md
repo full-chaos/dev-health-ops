@@ -80,7 +80,21 @@ The Ask Dev expiry repair (`prune_ask_dev_conversations`) was built in Go
 first, with no Celery predecessor. CHAOS-3404 has since added the Beat entry
 `ask-dev-retention-sweep` for the same work at the same cadence, so it is now a
 migrated schedule like the rest: the Go schedule owns that Beat entry in the
-legacy inventory, and the two must not both run. Its staged v3 contract uses
+legacy inventory.
+
+**Do not delete the Beat entry yet, and do not read "owned by Go" as "running
+in Go".** `prune_ask_dev_conversations` pins contract version 3, while
+`migration-state.json` declares `system.retention_cleanup` at
+`producer_version` 2. The producer therefore skips every occurrence with
+`consumer_version_incompatible`, and the scheduler records that as an ordinary
+skipped occurrence rather than a failure -- so the Go side currently publishes
+no retention job at all and looks healthy doing it. Until `producer_version`
+reaches 3, the Celery sweep is the only thing purging expired conversations.
+Once it does, the two must not both run. A second gap closes with the same
+work: Go's drain treats a short batch as a completed drain, where Python runs a
+non-locking `count_expired()` and reports `partial` -- a `SKIP LOCKED` short
+read cannot distinguish a drained backlog from a contended one. Both are
+tracked as CHAOS-3481. Its staged v3 contract uses
 the table-scoped `ask_dev_conversations` policy at 05:30 UTC. Its cutoff is the occurrence time
 because each conversation already persists its exact expiry; adding an
 environment retention horizon would incorrectly extend or shorten the user's

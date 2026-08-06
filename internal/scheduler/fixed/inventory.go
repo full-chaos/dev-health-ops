@@ -211,11 +211,46 @@ func checkedInSchedules() []Schedule {
 			// that landed: it now has a legacy predecessor, and leaving Native
 			// set would have kept it out of the bidirectional inventory check
 			// -- the exact bypass the Native field's own comment warns about.
-			// The two implementations agree on the predicate, the ordering,
-			// the FOR UPDATE SKIP LOCKED selection, the tombstone reason
-			// mapping and the chunked commits; see AskDevConversationStore in
-			// internal/jobs/system/retention_postgres.go against
-			// DevPersistenceService.cleanup_expired/_purge_conversation.
+			//
+			// WHAT THIS OWNERSHIP CLAIM DOES *NOT* SAY, because both halves
+			// were overstated once and are load-bearing for whoever decides
+			// the Celery cutover (CHAOS-3481):
+			//
+			// 1. THIS SCHEDULE EMITS NOTHING TODAY. producers.go pins
+			//    prune_ask_dev_conversations to ContractVersionV3, while
+			//    contracts/jobs/v1/migration-state.json declares
+			//    system.retention_cleanup at producer_version 2. Produce()
+			//    therefore returns SkipReason "consumer_version_incompatible"
+			//    on every occurrence, and engine.go records that as a normal
+			//    skipped occurrence -- deliberately NOT promoted to a failure.
+			//    So a nightly run that publishes no job reads as healthy. The
+			//    Beat entry is the ONLY thing purging expired conversations
+			//    until producer_version reaches 3, and must not be deleted on
+			//    cadence evidence alone. The machine-checkable bar in
+			//    contracts/jobs/v1/transitional-inventory.json's
+			//    deletion_evidence_requirement for `ask-dev-retention-sweep`
+			//    names that precondition so this cannot be missed by reading
+			//    cadences alone.
+			//
+			// 2. THE GO DRAIN-COMPLETION CONTRACT IS STRICTLY WEAKER than
+			//    Python's. The two agree on the selection predicate, the
+			//    ordering, the FOR UPDATE SKIP LOCKED selection, the tombstone
+			//    reason mapping and the chunked commits -- see
+			//    AskDevConversationStore in
+			//    internal/jobs/system/retention_postgres.go against
+			//    DevPersistenceService.cleanup_expired/_purge_conversation.
+			//    They do NOT agree on how a drain ENDS. Python runs a
+			//    non-locking count_expired() after its batch loop and reports
+			//    "partial" unless the backlog is confirmed empty, precisely
+			//    because SKIP LOCKED makes a short read indistinguishable from
+			//    a contended one (ask_dev_retention.py's module docstring
+			//    records this as a confirmed HIGH review finding). Go has no
+			//    equivalent: deleteInChunks treats a short chunk as done, and
+			//    the handler discards DeleteBefore's count entirely, so a
+			//    contended pass reports success. Porting that is CHAOS-3481's,
+			//    not this PR's -- but the earlier version of this comment
+			//    listed the five matching properties and omitted this one,
+			//    which reads as full parity. It is not full parity.
 			LegacyBeatEntry: "ask-dev-retention-sweep",
 			Cadence:         DailyAt(5, 30),
 			Timezone:        inventoryTimezone,

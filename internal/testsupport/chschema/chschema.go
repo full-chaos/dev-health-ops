@@ -18,6 +18,12 @@
 // upgrade` CLI makes -- which covers BOTH the .sql migrations and the .py ones
 // (027 and 055 rebuild tables through a shadow-table swap that no static SQL
 // extractor could reproduce).
+//
+// SHARED, and table-agnostic by construction: Apply takes no table list and
+// migrates the database to the chain's head, so any package needing real
+// tables gets all of them at once. It was written for three derived work-item
+// destinations, but nothing about it is specific to them -- adopters need only
+// call Apply instead of executing their own CREATE TABLE text.
 package chschema
 
 import (

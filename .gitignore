@@ -44,3 +44,14 @@ index.txt
 # per-run artifacts and must never enter a commit.
 .playwright-mcp/
 .remember/
+
+# Local dev/CI-parity byproducts (CHAOS-3403). `uv sync --all-extras --dev` (the
+# documented worktree setup step) leaves untracked interpreter binaries/symlinks
+# under .venv/bin/ (python, pip, pip3, pip3.12, activate*, Activate.ps1,
+# pyvenv.cfg); a `git add -A` in that state commits interpreter symlinks into a PR
+# (caught only by manual inspection during CHAOS-3401). ci/local_validate.sh's
+# lint/typecheck stages likewise leave .mypy_cache/ and .ruff_cache/ untracked —
+# same class of local-run byproduct, same accidental-commit risk under `git add -A`.
+.venv/
+.mypy_cache/
+.ruff_cache/

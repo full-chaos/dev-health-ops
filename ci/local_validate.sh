@@ -111,7 +111,109 @@ DEVHOPS="${ROOT}/.venv/bin/dev-hops"
 # Neutralize the local socks5h proxy for every pytest/python invocation. Without
 # this, httpx-based tests fail with 'socksio not installed' — false negatives, not
 # real defects.
-PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy)
+#
+# Also neutralize two operator-shell env vars (CHAOS-3439 interim; the durable fix
+# is CHAOS-3402's tests/conftest.py scrubbing in the suite itself — this is
+# belt-and-braces at the gate):
+#   - LOG_LEVEL: if an operator's shell exports LOG_LEVEL=debug, configure_logging()
+#     takes the root level from it, and aiosqlite (not in logging_config.py's quiet
+#     list) logs the raw SQL INSERT with bind parameters at DEBUG. Two
+#     log-sanitization tests sweep ALL caplog records, so the planted malicious
+#     string in that SQL statement gets captured and the sanitization assertion
+#     goes red on unmodified code — false negative, not a real defect. Deterministic
+#     both directions: LOG_LEVEL=debug fails, unset/info passes.
+#   - GITHUB_APP_PRIVATE_KEY_PATH: an operator's shell may export this as a RELATIVE
+#     path (./github-app-local.pem) that only resolves from the primary checkout's
+#     CWD; resolver.py opens it directly, so any gate run from a worktree (the
+#     team's standing practice) resolves it to a directory that never contains the
+#     file and goes red on clean main with no code change.
+#   - GITHUB_APP_ID: measured empirically (CHAOS-3439), not just inferred, and
+#     the base matters — this was bisected by SUBTRACTING from an already
+#     fully-populated ops/.env shell (GITHUB_APP_ID/CLIENT_ID/CLIENT_SECRET/
+#     SLUG/CALLBACK_URL all live throughout, matching the operational case a
+#     gate actually runs in), not by adding one var at a time to a clean
+#     `env -i` base. From that populated base: unsetting ONLY
+#     GITHUB_APP_PRIVATE_KEY_PATH left 3 of 4 known-false-red tests in
+#     tests/test_credential_resolver.py still failing; unsetting ONLY
+#     GITHUB_APP_ID (path still live) fixed NONE of the 4; only unsetting BOTH
+#     cleared all 4. A live GITHUB_APP_ID with the path absent makes the
+#     env-fallback path attempt github-app auth with a partial credential
+#     instead of falling through to GITHUB_TOKEN, which is what those tests
+#     actually exercise. (A clean-base bisection that adds only
+#     GITHUB_APP_PRIVATE_KEY_PATH to `env -i` may reproduce all 4 failures from
+#     that var alone — the two experiments start from different bases and are
+#     not in tension; CLIENT_ID/CLIENT_SECRET/SLUG being simultaneously live
+#     here plausibly changes which partial-credential branch is reached. Both
+#     vars are neutralized here regardless of which base is authoritative.)
+#
+# The three below were found by an actual end-to-end gate run (CHAOS-3403), not
+# inferred — 10 unit-suite failures on an unmodified checkout, all traced to
+# ops/.env's ambient values and confirmed with a red/green pair each:
+#   - AUTH_AUTO_CREATE_ORG_ON_REGISTER: dev/.env sets this "false" (a real
+#     product feature flag — auth/config.py's auth_auto_create_org_on_register()
+#     — for local guided-onboarding testing). The default is True, and
+#     tests/api/auth/test_register.py + tests/api/test_new_user_journey.py
+#     assert the True (auto-create) behavior. With "false" live, registration
+#     silently skips org/membership creation ("registered without organization
+#     for first-run onboarding") and every org_id-shaped assertion in those
+#     tests fails — 8 of the 10 observed failures.
+#   - LICENSE_PRIVATE_KEY: dev/.env sets this to a real dev signing key.
+#     tests/test_cli_preflight.py::test_admin_license_create_is_not_a_postgres_preflight_false_positive
+#     expects the CLI to fail with "LICENSE_PRIVATE_KEY" in stdout (i.e. the var
+#     absent); the test's own _run_cli() already scrubs CLICKHOUSE_URI/
+#     POSTGRES_URI/DATABASE_URI/DATABASE_URL/ORG_ID for exactly this reason but
+#     LICENSE_PRIVATE_KEY was missing from that list, so the live key reaches
+#     the subprocess and the CLI fails on "seed must be exactly 32 bytes" instead.
+#   - REDIS_URL: dev/.env points this at the real shared valkey container. Unlike
+#     the other two, this is a cross-TEST pollution mechanism, not a single
+#     wrong-branch call: tests/test_linear_provider.py::test_429_backoff_grows_exponentially
+#     passes in total isolation but fails when run with its sibling tests in the
+#     same file/worker, because a live Redis carries rate-limit state between
+#     tests that an isolated/fake backend would not. Confirmed red running the
+#     whole file with REDIS_URL live, green with it unset — matches the same
+#     class already fixed for web/ci/run_tests.sh's rate-limit.test.ts.
+#     CHECKED, not assumed, before unsetting this unconditionally:
+#     tests/test_external_ingest_customer_push_live.py reads REDIS_URL at
+#     import and skipif's its WHOLE MODULE when absent (it needs live
+#     CLICKHOUSE_URI + POSTGRES_URI + REDIS_URL together — the only module in
+#     the repo that does), so an unconditional unset here could silently
+#     convert "runs" into "skips" if this gate ever selected it. It does not:
+#     that module is pytest.mark.clickhouse-marked, gate_unit_suite() below
+#     runs only `-m "not benchmark and not clickhouse"`, and ch_tests() below
+#     never runs a broader `-m clickhouse` pytest pass (only the direct
+#     ch_argmax_proof script) — confirmed with --collect-only against this
+#     gate's exact invocation (zero matches) and absent from full gate run
+#     logs entirely (no pass/fail/skip line, meaning never collected, not
+#     silently skipped). The module's own skip message says as much: "run via
+#     ci/run_live_backend_e2e.sh, not ci/local_validate.sh". If this gate ever
+#     starts selecting clickhouse-marked tests, this unset needs the
+#     conditional-keep shape used elsewhere for the live-e2e lane (scrub by
+#     default, retain when LIVE_E2E_BASE_URL is also set) instead of staying
+#     unconditional.
+#
+#     A SEPARATE Codex-review concern on this same var was investigated and
+#     REFUTED (recorded here, not silently dropped, so it isn't re-raised):
+#     that unsetting REDIS_URL might remove distributed/Redis-backed rate-limit
+#     coverage, leaving the suite green while a real Redis-backed code path is
+#     broken. It does not. .github/workflows/test.yml's unit-tier `env:` block
+#     (CLICKHOUSE_URI/POSTGRES_URI/DATABASE_URI/SECONDARY_DATABASE_URI/
+#     OTEL_ENABLED/PYTEST_XDIST_WORKERS/PYTEST_ADDOPTS) sets no REDIS_URL —
+#     CI's unit tier has ALWAYS run the rate limiter on memory://, never on a
+#     live Redis backend. The tests that actually assert the Redis-backend
+#     contract (tests/api/test_rate_limit_config.py's `_reload_rate_limit()`
+#     helper, tests/test_distributed_rate_limit.py) build their OWN
+#     REDIS_URL via monkeypatch/patch.dict and importlib.reload the module
+#     under it, independent of whatever the ambient shell provides — so they
+#     assert real Redis-backend behavior with or without this unset, and pass
+#     55/55 under `env -i` with no REDIS_URL anywhere in the process
+#     (confirmed independently, including a mutation kill: forcing
+#     rate_limit.py's backend selection to unconditional memory:// makes two
+#     of those assertions fail). Unsetting REDIS_URL here does not remove
+#     coverage; it removes a DIVERGENCE — a developer's local run silently
+#     exercising a real shared Redis that CI's unit tier never did, which is
+#     exactly what made test_429_backoff_grows_exponentially fail locally and
+#     pass in CI in the first place.
+PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL)
 
 # --- Result tracking. --------------------------------------------------------------
 declare -a RESULTS=()

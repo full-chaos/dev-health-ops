@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -31,6 +32,15 @@ type GitHubWorkItemsRequestUsage struct {
 
 // GitHubWorkItemsIncomplete preserves optional degradation as typed data.
 // Cause is a stable local/provider class and never provider response text.
+//
+// UNMET OBLIGATION — the activation layer must read these. Today nothing does:
+// Collect is the only producer of the `incomplete` result key and the tree has
+// no consumer. The degraded run is safe purely because this route is
+// unregistered and hardcodes Watermark: nil on every path. Whoever registers
+// the five-alias family must make alias watermark fan-out refuse to advance for
+// a run carrying entries here, and must ship the test that proves a degraded
+// run advances no alias watermark. Do not give this route a real watermark
+// before that reader exists.
 type GitHubWorkItemsIncomplete struct {
 	Component string `json:"component"`
 	SubjectID string `json:"subject_id,omitempty"`
@@ -38,34 +48,69 @@ type GitHubWorkItemsIncomplete struct {
 }
 
 // githubWorkItemsOptionalIncompleteComponents are the collection phases that
-// carry the ratified optional-data contract (owner ruling 2026-08-06, which
-// also resolves CHAOS-3188): an optional-data fetch failure must emit durable
-// incompleteness evidence — never a silent omission, and never a whole-batch
-// failure. The three phases are milestones, per-issue comments, and the PR
-// social batch; Python reaches the same continuation by logging and dropping
-// (provider.py:202-217, :293-301, :369-402), which is the half of the contract
-// Python does not yet satisfy and is tracked separately for it.
+// carry the ratified optional-data contract (D17, owner ruling 2026-08-06,
+// which also resolves CHAOS-3188): an optional-data fetch failure must emit
+// durable incompleteness evidence — never a silent omission, and never a
+// whole-batch failure.
 //
-// Both halves are load-bearing:
-//   - Continue, so a persistently failing optional endpoint cannot block the
-//     whole five-alias family for a repository forever with nothing landing.
-//   - Record, so the omission is queryable. Every entry stays in the typed
-//     `incomplete` result, which PostgresRepository.Complete JSON-encodes into
-//     the durable unit row, and which the activation layer reads to withhold
-//     all alias watermarks for the run — continuation is only a fail-open if
-//     state advances, and the withheld watermark is what stops that.
+// The set is the complete list of sites `providers/github/provider.py` logs
+// and continues past, so a persistently failing optional endpoint cannot block
+// the five-alias family for a repository forever:
 //
-// This governs non-rate-limit failures only. Rate limits, lease loss,
-// cancellation, required-phase failures, and pagination caps still abort the
-// unit before any effect is built (githubWorkItemsRESTOptionalFailure and
-// GitHubWorkItemPRSocialFetcher.finishFailure classify them). Components absent
-// for reasons that are not a fetch failure at all — projects_v2
-// policy_pending, an unported policy seam — are not listed here and still fail
-// the unit closed.
+//	milestones               provider.py:202-217
+//	issue_comments           provider.py:293-301
+//	pull_requests            provider.py:339-343  (the /pulls listing itself)
+//	pr_social                provider.py:369-402
+//	pull_request_processing  provider.py:503-507  (the whole per-PR loop)
+//
+// provider.py:495-500 (the per-PR comment -> interaction conversion) has no
+// entry because its failure mode does not exist in Go — see the note at the
+// normalizeGitHubPullRequestBundle call site.
+//
+// Python satisfies only the continuing half — it logs and drops — which is the
+// half of D17 it does not yet meet and is tracked separately for it. Do not
+// "restore parity" by removing the recording; for this class the port is
+// deliberately ahead of its source and D16's mirror rule does not apply.
+//
+// Components absent for a reason that is not an optional-data fetch failure at
+// all — projects_v2 policy_pending, an unported policy seam — are not listed
+// here and still fail the unit closed.
 var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
-	"milestones":     true,
-	"issue_comments": true,
-	"pr_social":      true,
+	"milestones":              true,
+	"issue_comments":          true,
+	"pull_requests":           true,
+	"pr_social":               true,
+	"pull_request_processing": true,
+}
+
+// githubWorkItemsBlockingIncompleteCauses are failure classes that block the
+// unit whatever component reports them, because they are not the provider
+// declining to serve optional data:
+//
+//   - pagination_cap: the traversal bound was hit, so the collected set is
+//     deterministically truncated. Landing it would bank a subset that every
+//     later run reproduces identically — the recipe's "never both capped and
+//     successful" rule, and what the REST side already does by returning
+//     ErrPaginationCapExceeded rather than typed incompleteness.
+//   - invalid_pagination: a missing or stalled cursor. That is a defect in our
+//     own traversal, not a provider condition Python has any analogue for, and
+//     it must surface as a failure rather than as a routine degradation entry.
+//
+// Both are produced only by the Go GraphQL social fetcher
+// (gitHubWorkItemPRSocialFailureCause); no Python site can emit them.
+var githubWorkItemsBlockingIncompleteCauses = map[string]bool{
+	"pagination_cap":     true,
+	"invalid_pagination": true,
+}
+
+// githubWorkItemsIncompleteIsOptional decides one entry. Cause is checked
+// first: a blocking cause is blocking even on an optional component, which is
+// the whole reason classification cannot key on Component alone.
+func githubWorkItemsIncompleteIsOptional(partial GitHubWorkItemsIncomplete) bool {
+	if githubWorkItemsBlockingIncompleteCauses[partial.Cause] {
+		return false
+	}
+	return githubWorkItemsOptionalIncompleteComponents[partial.Component]
 }
 
 // GitHubWorkItemsRouteError retains physical request actuals and typed fetch
@@ -223,20 +268,45 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		// request is still normalized, read with `.get(number, ())`
 		// (provider.py:369-402).
 		for _, pull := range restResult.PullRequests {
+			subject := strconv.Itoa(pull.Number)
 			payload, exists := socialResult.Payloads[pull.Number]
 			if !exists && socialComplete {
 				return CompleteRouteBatch{}, usage.wrap(providerfoundation.ErrGraphQLResponse)
 			}
 			adapted, adaptErr := adaptGitHubWorkItemPRSocialPayload(payload)
 			if adaptErr != nil {
-				return CompleteRouteBatch{}, usage.wrap(adaptErr)
+				// provider.py:503-507 wraps the WHOLE per-PR loop, so a failure
+				// here stops the remaining pull requests and keeps every row
+				// already collected — it does not fail the unit.
+				incomplete = append(incomplete, GitHubWorkItemsIncomplete{
+					Component: "pull_request_processing", SubjectID: subject,
+					Cause: githubWorkItemsRESTFailureCause(adaptErr),
+				})
+				break
 			}
+			// provider.py:495-500 wraps the per-PR comment -> interaction
+			// conversion in its own best-effort try. There is deliberately no
+			// Go analogue here: the comments reaching this call were produced
+			// by adaptGitHubWorkItemPRSocialPayload, which has already decoded
+			// and re-marshalled every node, and neither
+			// normalizeGitHubWorkItemComments nor the comment half of
+			// extractGitHubWorkItemDependencies can fail on that input (the
+			// only failure modes are a JSON decode error and a row that fails
+			// validate, and adapter output can produce neither). A
+			// retry-without-comments branch would be unreachable, so it is not
+			// written rather than written and left unprovable. If a fallible
+			// comment -> row step is ever added, this needs the same
+			// continue-and-record treatment as the issue path.
 			bundle, normalizeErr := normalizeGitHubPullRequestBundle(
 				claim, restResult.RepoFullName, restResult.RepoID, pull.Payload,
 				adapted.Events, adapted.Comments, handler.ResolveIdentity, normalizedAt,
 			)
 			if normalizeErr != nil {
-				return CompleteRouteBatch{}, usage.wrap(normalizeErr)
+				incomplete = append(incomplete, GitHubWorkItemsIncomplete{
+					Component: "pull_request_processing", SubjectID: subject,
+					Cause: githubWorkItemsRESTFailureCause(normalizeErr),
+				})
+				break
 			}
 			appendGitHubWorkItemRows(&rows, bundle)
 		}
@@ -269,8 +339,11 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		}
 	}
 	finishGitHubWorkItemsEvidence(&evidence, rows)
+	// EVERY entry decides, not the first: a batch can mix optional degradation
+	// with a blocking entry, and projects_v2 is appended last, so a check that
+	// stops early reads clean on exactly the ordering production produces.
 	for _, partial := range incomplete {
-		if !githubWorkItemsOptionalIncompleteComponents[partial.Component] {
+		if !githubWorkItemsIncompleteIsOptional(partial) {
 			return CompleteRouteBatch{}, usage.wrapRoute(
 				ErrGitHubWorkItemsIncomplete, evidence, incomplete,
 			)

@@ -45,6 +45,22 @@
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorMarksOptionalDegradationIncomplete$", "./internal/providersync/"]]
     },
     {
+      "id": "R26-pull-request-listing-failure-degrades-not-blocks",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\t\tresult.addIncomplete(\"pull_requests\", \"\", err)",
+      "replace": "\t\t\treturn result, err",
+      "rationale": "provider.py:339-343 continues with the issues it already has when the /pulls traversal fails, so a persistently failing listing must not block the five-alias family for this repository forever",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R27-pull-request-pagination-cap-stays-fatal",
+      "file": "internal/providersync/github_work_items_rest_collect.go",
+      "find": "\t\t\tif errors.Is(err, ErrPaginationCapExceeded) {\n\t\t\t\treturn result, err\n\t\t\t}",
+      "replace": "",
+      "rationale": "a capped /pulls traversal is deterministically truncated; degrading it would bank a subset every later run reproduces identically",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure$/pagination_cap_stays_fatal$", "./internal/providersync/"]]
+    },
+    {
       "id": "R6-required-event-fetch-failure-propagates",
       "file": "internal/providersync/github_work_items_rest_collect.go",
       "find": "\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif eventPage.CapReached {",

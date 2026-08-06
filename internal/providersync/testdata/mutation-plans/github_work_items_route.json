@@ -33,7 +33,7 @@
       "find": "for _, partial := range restResult.Incomplete {",
       "replace": "for _, partial := range []GitHubWorkItemsRESTIncomplete{} {",
       "rationale": "REST optional failures remain typed at the composite boundary and prevent any derivation or effect construction",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects$", "./internal/providersync/"]]
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$", "./internal/providersync/"]]
     },
     {
       "id": "social-incomplete-remains-typed",
@@ -94,7 +94,7 @@
     {
       "id": "blocking-incomplete-fails-before-derivation",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "if !githubWorkItemsOptionalIncompleteComponents[partial.Component] {",
+      "find": "if !githubWorkItemsIncompleteIsOptional(partial) {",
       "replace": "if partial.Component == \"\" {",
       "rationale": "an incomplete component Python never degrades past (projects_v2 policy_pending) must still fail with zero effects before the deriver runs",
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteDefaultsProjectsToTypedPendingWithoutFetching$", "./internal/providersync/"]]
@@ -102,26 +102,66 @@
     {
       "id": "optional-social-incomplete-mirrors-python-continuation",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "\t\"pr_social\":      true,",
-      "replace": "\t\"pr_social\":      false,",
+      "find": "\t\"pr_social\":               true,",
+      "replace": "\t\"pr_social\":               false,",
       "rationale": "provider.py:369-402 logs a failed optional PR-social batch and keeps every already-collected row; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$", "./internal/providersync/"]]
     },
     {
       "id": "optional-rest-incomplete-mirrors-python-continuation",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "\t\"issue_comments\": true,",
-      "replace": "\t\"issue_comments\": false,",
+      "find": "\t\"issue_comments\":          true,",
+      "replace": "\t\"issue_comments\":          false,",
       "rationale": "provider.py:293-301 logs a failed per-issue comment fetch and keeps the issue; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects$", "./internal/providersync/"]]
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$", "./internal/providersync/"]]
     },
     {
       "id": "optional-milestone-incomplete-mirrors-python-continuation",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "\t\"milestones\":     true,",
-      "replace": "\t\"milestones\":     false,",
+      "find": "\t\"milestones\":              true,",
+      "replace": "\t\"milestones\":              false,",
       "rationale": "provider.py:202-217 logs a failed milestone fetch and keeps the issues; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects$", "./internal/providersync/"]]
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "every-incomplete-entry-decides-not-just-the-first",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\tfor _, partial := range incomplete {",
+      "replace": "\tfor _, partial := range incomplete[:min(1, len(incomplete))] {",
+      "rationale": "projects_v2 is appended last, so a classification loop that stops after the first entry reads clean on exactly the ordering production produces",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete$", "./internal/providersync/"]]
+    },
+    {
+      "id": "blocking-cause-outranks-an-optional-component",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\tif githubWorkItemsBlockingIncompleteCauses[partial.Cause] {\n\t\treturn false\n\t}\n",
+      "replace": "",
+      "rationale": "pagination_cap and invalid_pagination arrive on the optional pr_social component; classifying on Component alone would land a deterministically truncated batch as a clean success",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$", "./internal/providersync/"]]
+    },
+    {
+      "id": "pagination-cap-is-a-blocking-cause",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\t\"pagination_cap\":     true,",
+      "replace": "\t\"pagination_cap\":     false,",
+      "rationale": "a capped social traversal is deterministically truncated, so landing it banks a subset every later run reproduces -- the recipe's never-both-capped-and-successful rule",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$/pagination_cap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "invalid-pagination-is-a-blocking-cause",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\t\"invalid_pagination\": true,",
+      "replace": "\t\"invalid_pagination\": false,",
+      "rationale": "a missing or stalled cursor is a defect in our own traversal with no Python analogue, and must surface as a failure rather than a routine degradation entry",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$/invalid_pagination$", "./internal/providersync/"]]
+    },
+    {
+      "id": "unprocessable-pull-request-does-not-fail-the-unit",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\t\t\t\tincomplete = append(incomplete, GitHubWorkItemsIncomplete{\n\t\t\t\t\tComponent: \"pull_request_processing\", SubjectID: subject,\n\t\t\t\t\tCause: githubWorkItemsRESTFailureCause(adaptErr),\n\t\t\t\t})\n\t\t\t\tbreak",
+      "replace": "\t\t\t\treturn CompleteRouteBatch{}, usage.wrap(adaptErr)",
+      "rationale": "provider.py:503-507 warns and continues on a pull request it cannot process, keeping the issues and sprints already collected",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest$", "./internal/providersync/"]]
     },
     {
       "id": "degradation-reaches-the-durable-unit-row",

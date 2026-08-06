@@ -321,7 +321,7 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 	}
 }
 
-func TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects(t *testing.T) {
+func TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects(t *testing.T) {
 	claim := githubWorkItemsRESTClaim()
 	claim.DatasetOptions["include_pull_requests"] = false
 	doer := &githubWorkItemsRouteDoer{
@@ -371,6 +371,160 @@ func TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects(t *
 			Transport: "rest", RouteFamily: "work_items", Dimension: BudgetRESTCore, RequestCount: 5,
 		}}) {
 		t.Fatalf("batch=%+v incomplete=%+v", batch, githubWorkItemsRouteIncomplete(t, batch))
+	}
+}
+
+// provider.py:503-507 wraps the WHOLE per-PR processing loop in a
+// warn-and-continue, so a pull request we cannot turn into rows costs us that
+// pull request -- not the issues, sprints and dependencies already collected,
+// and not the unit.
+func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T) {
+	claim := githubWorkItemsRESTClaim()
+	claim.DatasetOptions["fetch_milestones"] = false
+	fixtures := githubWorkItemsRESTFixtures()
+	delete(fixtures, "/repos/acme/api/milestones")
+	doer := &githubWorkItemsRouteDoer{
+		t:    t,
+		rest: &githubWorkItemsRESTDoer{t: t, replies: fixtures},
+		// createdAt is typed *string in the adapter's node contract; an object
+		// there fails the decode that adaptGitHubWorkItemPRSocialPayload runs.
+		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":1,"body":"c","createdAt":{"bad":true},"author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
+	}
+	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("an unprocessable pull request zeroed the batch: %v", err)
+	}
+	if deriver.calls != 1 {
+		t.Fatalf("deriver calls=%d", deriver.calls)
+	}
+	for _, item := range deriver.got.WorkItems {
+		if strings.HasPrefix(item.WorkItemID, "ghpr:") {
+			t.Fatalf("unprocessable pull request became a row: %+v", item)
+		}
+	}
+	if len(deriver.got.WorkItems) == 0 {
+		t.Fatal("issues collected before the failing pull request were discarded")
+	}
+	if incomplete := githubWorkItemsRouteIncomplete(t, batch); !reflect.DeepEqual(
+		incomplete, []GitHubWorkItemsIncomplete{
+			{Component: "pull_request_processing", SubjectID: "52", Cause: "invalid_response"},
+		},
+	) {
+		t.Fatalf("incomplete=%+v", incomplete)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("degraded run advanced watermark: %v", batch.Watermark)
+	}
+}
+
+// A batch can mix optional degradation with a blocking entry, and projects_v2
+// is appended LAST -- the worst ordering for a classification loop that stops
+// early. Without this case a check-first loop reads clean on exactly the
+// ordering production produces.
+func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *testing.T) {
+	claim := githubWorkItemsRESTClaim()
+	claim.DatasetOptions["include_pull_requests"] = false
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+		map[string]any{"org_login": "acme", "project_number": 3},
+	}}
+	doer := &githubWorkItemsRouteDoer{
+		t: t,
+		rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
+			"/repos/acme/api":                    {{body: `{"id":4567,"full_name":"Acme/API"}`}},
+			"/repos/acme/api/milestones":         {{status: http.StatusInternalServerError, body: `{"message":"down"}`}},
+			"/repos/acme/api/issues":             {{body: `[{"number":42,"title":"Issue","state":"open","created_at":"2026-07-02T00:00:00Z","updated_at":"2026-07-20T00:00:00Z"}]`}},
+			"/repos/acme/api/issues/42/events":   {{body: `[]`}},
+			"/repos/acme/api/issues/42/comments": {{body: `[]`}},
+		}},
+	}
+	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+	)
+	if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
+		t.Fatalf("blocking entry after an optional one did not fail the unit: %v", err)
+	}
+	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
+		t.Fatalf("mixed-incomplete route returned batch=%+v or derived %d times", batch, deriver.calls)
+	}
+	routeErr := githubWorkItemsIncompleteError(t, err)
+	if !reflect.DeepEqual(routeErr.Incomplete, []GitHubWorkItemsIncomplete{
+		{Component: "milestones", Cause: "transient"},
+		{Component: "projects_v2", Cause: "policy_pending"},
+	}) {
+		t.Fatalf("incomplete=%+v (the optional entry must precede the blocking one)", routeErr.Incomplete)
+	}
+}
+
+// Classification cannot key on Component alone. pagination_cap and
+// invalid_pagination arrive on the OPTIONAL pr_social component but are not the
+// provider declining optional data: one is a deterministically truncated
+// traversal, the other a defect in our own paging. Both must block -- which is
+// what the REST side already does by returning ErrPaginationCapExceeded.
+func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		fetcher   GitHubWorkItemPRSocialFetcher
+		reply     string
+		wantCause string
+	}{
+		{
+			name:      "invalid_pagination",
+			reply:     `{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+			wantCause: "invalid_pagination",
+		},
+		{
+			name:      "pagination_cap",
+			fetcher:   GitHubWorkItemPRSocialFetcher{MaxRequests: 1},
+			reply:     `{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+			wantCause: "pagination_cap",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			claim := githubWorkItemsRESTClaim()
+			claim.DatasetOptions = map[string]any{
+				"include_issues": false, "include_pull_requests": true,
+				"fetch_comments": true, "fetch_milestones": false, "comments_limit": 500,
+			}
+			fixtures := githubWorkItemsRESTFixtures()
+			for path := range fixtures {
+				if path != "/repos/acme/api" && path != "/repos/acme/api/pulls" && path != "/repos/acme/api/pulls/52" {
+					delete(fixtures, path)
+				}
+			}
+			doer := &githubWorkItemsRouteDoer{
+				t:              t,
+				rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
+				graphqlReplies: []string{test.reply, test.reply},
+			}
+			deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+			batch, err := (GitHubWorkItemsRouteHandler{
+				Social: test.fetcher, Deriver: deriver,
+			}).Collect(
+				context.Background(), claim,
+				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+				gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+			)
+			if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
+				t.Fatalf("%s landed a batch instead of failing the unit: %v", test.wantCause, err)
+			}
+			if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
+				t.Fatalf("blocking cause returned batch=%+v or derived %d times", batch, deriver.calls)
+			}
+			routeErr := githubWorkItemsIncompleteError(t, err)
+			if !reflect.DeepEqual(routeErr.Incomplete, []GitHubWorkItemsIncomplete{
+				{Component: "pr_social", Cause: test.wantCause},
+			}) {
+				t.Fatalf("incomplete=%+v", routeErr.Incomplete)
+			}
+		})
 	}
 }
 

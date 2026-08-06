@@ -543,15 +543,35 @@ question.
       **silent omission** (CHAOS-3188).
     - `github/work-items` shipped the mirror-image error, which Codex
       caught: the composite route turned every typed incompleteness —
-      including the three phases `providers/github/provider.py` logs and
-      continues past (milestones `:202-217`, per-issue comments `:293-301`,
-      the PR-social GraphQL batch `:369-402`) — into a whole-unit failure
-      with **zero** effects. Executing the real Python producer against
-      those same three failures returns the work items every time (a
-      milestone failure degrades sprints 1 → 0 and nothing else); the Go
-      route wrote nothing at all. A persistently failing optional endpoint
-      would block the entire five-alias family for that repository
-      **forever**, with no row ever landing.
+      including the phases `providers/github/provider.py` logs and
+      continues past — into a whole-unit failure with **zero** effects.
+      Executing the real Python producer against those failures returns the
+      work items every time (a milestone failure degrades sprints 1 → 0 and
+      nothing else); the Go route wrote nothing at all. A persistently
+      failing optional endpoint would block the entire five-alias family for
+      that repository **forever**, with no row ever landing.
+
+    **Enumerate the producer's continue sites; do not stop at the obvious
+    ones.** The first fix here mirrored three and the review found three
+    more, because they are scattered across ~300 lines and two of them are
+    `except` blocks wrapping whole loops rather than a single call. Grep the
+    producer for every `except`/`catch` that logs and falls through, and
+    write the list down next to the classification:
+
+    | site | phase |
+    |---|---|
+    | `provider.py:202-217` | milestones |
+    | `provider.py:293-301` | per-issue comments |
+    | `provider.py:339-343` | the `/pulls` listing itself |
+    | `provider.py:369-402` | the PR-social batch |
+    | `provider.py:495-500` | per-PR comment → interaction |
+    | `provider.py:503-507` | the whole per-PR processing loop |
+
+    A site with no reachable Go analogue (here `:495-500`: the comments have
+    already been decoded and re-marshalled by the adapter, so nothing
+    downstream can fail on them) gets a **written note saying so**, not a
+    branch. An unreachable mirror is dead code that a mutation harness
+    reports as SURVIVED and a reader mistakes for coverage.
 
     Defect classes 1 and 5 and the fail-open precondition above are about
     the FIRST failure — a fetch that loses records and still reports clean
@@ -559,9 +579,21 @@ question.
     - **Continue and record** when an optional-data fetch fails: build the
       effects from what you collected, and put a typed entry (component,
       subject, stable cause class — never provider response text) in the
-      unit `Result`. Continuation is only a fail-open if state advances, so
-      the withheld watermark is what makes it safe — not throwing the
-      collected rows away.
+      unit `Result`.
+    - **Continuation is only a fail-open if state advances, so whatever
+      holds the watermark back is load-bearing — name it, and check it
+      exists.** In `github/work-items` today that is nothing but a
+      hardcoded `Watermark: nil` on every return path of an unregistered
+      route. Nothing reads the `incomplete` entries: the route is their only
+      producer and there is no consumer anywhere in the tree. **This is an
+      unmet obligation on the activation layer, not a mechanism that
+      exists.** Whoever registers the family MUST make it read `incomplete`
+      and refuse to advance the alias watermarks for a degraded run, and
+      must ship the test that proves a degraded run does not advance them.
+      Until then, "the watermark is withheld" is true only because no
+      watermark is ever emitted — do not cite it as a safety property of the
+      degradation path, and do not let a future change hand this route a
+      real watermark without building the reader first.
     - **Durable, or it did not happen.** The evidence has to survive the
       encoding the durable write performs (for the Go worker,
       `workItemAliasCompletionMetadata` + `json.Marshal` into the unit row).
@@ -574,6 +606,21 @@ question.
       to serve. Make that boundary a test at the composed route, not only at
       the collector — after this rule lands, widening the classification by
       one clause silently converts a rate limit into a landed batch.
+    - **Classify on (component, cause), never component alone, and check
+      EVERY entry.** Both halves failed review here. A cap or a broken
+      cursor arrives on an *optional* component — `pr_social` carries
+      `pagination_cap` and `invalid_pagination` — so a component-keyed test
+      lands a deterministically truncated batch as a clean success, and it
+      is asymmetric with the REST side that already returns
+      `ErrPaginationCapExceeded`. Causes with no producer analogue at all
+      (`invalid_pagination` means *our* paging is broken) must never read as
+      routine degradation. Separately, the entries are a LIST: a loop that
+      decides on the first one passes every single-entry test while the
+      blocking entry sits at position two — and in this route the blocking
+      `projects_v2` entry is appended **last**, i.e. the exact ordering
+      production emits is the one a check-first loop gets wrong. Test a
+      **mixed** batch with the blocking entry last, and mutate the loop to
+      inspect only `incomplete[:1]` to prove the test sees it.
     - **A component absent for a reason the producer does not share** (an
       unported seam, an unresolved policy — `projects_v2` `policy_pending`)
       is not an optional-data fetch failure. It still fails the unit closed.

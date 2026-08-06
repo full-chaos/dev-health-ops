@@ -1,6 +1,6 @@
 """Add bounded prepared effect snapshots for exact Go worker recovery.
 
-Revision ID: 0086
+Revision ID: 0088
 Revises: 0085
 Create Date: 2026-08-04 00:00:00
 
@@ -8,6 +8,20 @@ The payload is an opaque, normalized, sink-ready manifest owned by the Go
 provider worker. It deliberately does not reuse provider credential storage
 or its encryption key. Tenant, unit, and generation form the durable identity;
 the unit foreign key provides lifecycle cleanup if the owning run is deleted.
+
+NOTE ON THE ID: this is 0088, and its parent is 0085 rather than 0087. Main
+independently took 0086 (dev_run_qua_shadow) and 0087
+(dev_qua_shadow_budget_reservations) while this lane was in flight, and neither
+exists on this feature branch yet -- pointing down_revision at 0087 today is a
+hard KeyError at ScriptDirectory load, verified rather than assumed.
+
+So 0088 reserves the id and the parent stays 0085 for now. THE SYNC THAT BRINGS
+MAIN'S 0086/0087 ONTO THIS BRANCH MUST RE-POINT down_revision TO 0087 (or to
+whatever the merged head is by then). Until it does, that sync yields three
+heads -- 0066, 0087, 0088 -- instead of two. That failure is loud rather than
+silent: get_revision("application_schema@head") raises CommandError, and all
+five migration-head pin tests exercise exactly that call. Confirmed by
+simulating the merged versions directory before choosing this shape.
 """
 
 from __future__ import annotations
@@ -18,7 +32,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "0086"
+revision: str = "0088"
 down_revision: str | None = "0085"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

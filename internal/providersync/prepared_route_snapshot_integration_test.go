@@ -97,6 +97,36 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 	if _, err := repository.LoadRouteSnapshot(ctx, claim, state, now.Add(time.Second)); !errors.Is(err, ErrEffectLedgerConflict) {
 		t.Fatalf("tamper error=%v", err)
 	}
+	// The case above grows the payload, so payload_bytes stops matching and the
+	// LENGTH comparison rejects it -- the digest never gets consulted. A
+	// length-preserving edit is the one that isolates the digest fence, and it
+	// is also the realistic corruption: a flipped byte, not an appended one.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_run_unit_effect_snapshots
+SET payload = decode('00', 'hex') || substring(payload from 2)
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var storedBytes, actualLength int
+	if err := pool.QueryRow(ctx, `
+SELECT payload_bytes, length(payload) FROM public.sync_run_unit_effect_snapshots
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	).Scan(&storedBytes, &actualLength); err != nil {
+		t.Fatal(err)
+	}
+	if storedBytes != actualLength {
+		t.Fatalf(
+			"fixture is not length-preserving: payload_bytes=%d length=%d -- the length "+
+				"fence would fire and the digest fence would go unexercised",
+			storedBytes, actualLength,
+		)
+	}
+	if _, err := repository.LoadRouteSnapshot(ctx, claim, state, now.Add(time.Second)); !errors.Is(err, ErrEffectLedgerConflict) {
+		t.Fatalf("length-preserving tamper error=%v", err)
+	}
 	if _, err := pool.Exec(ctx, `
 UPDATE public.sync_run_unit_effect_snapshots
 SET payload = $4, payload_bytes = $5
@@ -594,5 +624,102 @@ FROM public.sync_run_units AS unit WHERE unit.id = $1`, claim.ID,
 	if survived.SchemaVersion != "v2" || survived.PreparedSnapshot == nil ||
 		!samePreparedRouteSnapshotReference(survived.PreparedSnapshot, state.PreparedSnapshot) {
 		t.Fatalf("surviving ledger lost the snapshot reference: %+v", survived)
+	}
+}
+
+// TestPostgresSnapshotTenancyIsEnforcedByReadsNotByStructure pins a KNOWN and
+// currently accepted gap, so it is a measured fact rather than an assumption.
+//
+// The table's FK is (sync_run_unit_id) -> sync_run_units(id), which says
+// nothing about org_id. So a row can be INSERTED claiming an org that does not
+// own the unit. Nothing in production can write one -- the route is
+// unregistered and the only writer derives org_id from the claim -- but the
+// schema does not prevent it.
+//
+// Reads are safe, and that is what this test proves rather than asserts: the
+// load joins on BOTH unit.id and unit.org_id, so a mismatched row is
+// unreachable no matter how it got there.
+//
+// Making it structural needs a composite FK to sync_run_units(org_id, id) and
+// therefore a UNIQUE index on that pair -- a CONCURRENTLY build plus a
+// NOT VALID/VALIDATE FK against a hot table. That is deliberately NOT done in
+// this PR, which activates nothing; it is recorded as pre-activation debt.
+func TestPostgresSnapshotTenancyIsEnforcedByReadsNotByStructure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	unitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, unitID, "incremental", `{
+		"sync_prs":true,"family_dataset_work_items":true
+	}`)
+	claim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := repository.PrepareRouteSnapshot(
+		ctx, claim, preparedGitHubWorkItemsFixture(t, claim),
+		ShadowComparison{Match: true}, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The gap, executed: a second row for the SAME unit under a DIFFERENT org.
+	// If a future migration makes this structural, this INSERT starts failing
+	// and this test is the thing that tells you the debt was paid.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_unit_effect_snapshots (
+    org_id, sync_run_unit_id, generation, provider, dataset_key,
+    schema_version, content_digest, payload_bytes, payload, created_at)
+SELECT 'org-intruder', sync_run_unit_id, generation, provider, dataset_key,
+       schema_version, content_digest, payload_bytes, payload, created_at
+FROM public.sync_run_unit_effect_snapshots
+WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	); err != nil {
+		t.Fatalf(
+			"cross-tenant insert was refused: %v -- if a composite FK landed, "+
+				"delete this test and the debt note in the PR body", err,
+		)
+	}
+
+	// Reads stay correct: the owning tenant still loads its own row...
+	if _, err := repository.LoadRouteSnapshot(ctx, claim, state, now.Add(time.Second)); err != nil {
+		t.Fatalf("owning tenant load: %v", err)
+	}
+	// ...and the intruder's row is unreachable, because the join requires the
+	// unit's org_id to match the snapshot's.
+	intruder := claim
+	intruder.OrgID = "org-intruder"
+	if _, err := repository.LoadRouteSnapshot(
+		ctx, intruder, state, now.Add(time.Second),
+	); !errors.Is(err, ErrPreparedRouteSnapshotNotFound) {
+		t.Fatalf("intruder load error=%v, want not-found", err)
 	}
 }

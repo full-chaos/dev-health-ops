@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from sqlalchemy.engine import make_url
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,9 +19,9 @@ def _run(migration, connection: sa.Connection, operation: str) -> None:
         getattr(migration, operation)()
 
 
-def test_0086_creates_bounded_tenant_generation_snapshot_with_cascade() -> None:
+def test_0088_creates_bounded_tenant_generation_snapshot_with_cascade() -> None:
     migration = importlib.import_module(
-        "dev_health_ops.alembic.versions.0086_add_sync_unit_effect_snapshots"
+        "dev_health_ops.alembic.versions.0088_add_sync_unit_effect_snapshots"
     )
     engine = sa.create_engine("sqlite:///:memory:")
     unit_id = "11111111-1111-4111-8111-111111111111"
@@ -121,8 +123,8 @@ _CHECK_VIOLATIONS = {
 
 
 @pytest.mark.parametrize("case", sorted(_CHECK_VIOLATIONS))
-def test_0086_check_constraints_reject_out_of_contract_rows(case: str) -> None:
-    """Each CHECK on 0086 must reject something.
+def test_0088_check_constraints_reject_out_of_contract_rows(case: str) -> None:
+    """Each CHECK on 0088 must reject something.
 
     The original test inserted only well-formed rows, so deleting the
     schema_version or payload_bytes CHECK from the migration left it green --
@@ -131,7 +133,7 @@ def test_0086_check_constraints_reject_out_of_contract_rows(case: str) -> None:
     """
     schema_version, payload_bytes, payload = _CHECK_VIOLATIONS[case]
     migration = importlib.import_module(
-        "dev_health_ops.alembic.versions.0086_add_sync_unit_effect_snapshots"
+        "dev_health_ops.alembic.versions.0088_add_sync_unit_effect_snapshots"
     )
     engine = sa.create_engine("sqlite:///:memory:")
     unit_id = "11111111-1111-4111-8111-111111111111"
@@ -172,8 +174,8 @@ def test_0086_check_constraints_reject_out_of_contract_rows(case: str) -> None:
         engine.dispose()
 
 
-def test_integration_fixture_ddl_matches_migration_0086() -> None:
-    """The Go integration fixture and migration 0086 must describe one schema.
+def test_integration_fixture_ddl_matches_migration_0088() -> None:
+    """The Go integration fixture and migration 0088 must describe one schema.
 
     The fixture hand-rolls the table because the Go suite cannot run alembic.
     It previously dropped all three CHECK constraints and widened
@@ -188,7 +190,7 @@ def test_integration_fixture_ddl_matches_migration_0086() -> None:
         / "dev_health_ops"
         / "alembic"
         / "versions"
-        / "0086_add_sync_unit_effect_snapshots.py"
+        / "0088_add_sync_unit_effect_snapshots.py"
     ).read_text(encoding="utf-8")
     fixture_source = (
         _REPO_ROOT
@@ -206,7 +208,7 @@ def test_integration_fixture_ddl_matches_migration_0086() -> None:
     ):
         assert constraint in migration_source, constraint
         assert constraint in fixture_ddl, (
-            f"{constraint} is in migration 0086 but missing from the Go "
+            f"{constraint} is in migration 0088 but missing from the Go "
             f"integration fixture -- the fixture is more permissive than "
             f"production"
         )
@@ -227,3 +229,90 @@ def test_integration_fixture_ddl_matches_migration_0086() -> None:
     # accepts digests production would reject.
     assert "varchar(64)" in fixture_ddl
     assert "ON DELETE CASCADE" in fixture_ddl
+
+
+_POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
+
+
+@pytest.mark.parametrize("case", sorted(_CHECK_VIOLATIONS))
+def test_0088_check_constraints_reject_on_real_postgres(case: str) -> None:
+    """The same CHECKs, enforced by the database production actually runs.
+
+    The SQLite cases above execute the migration's Python, not PostgreSQL's
+    constraint machinery: SQLite's CHECK semantics, its typing and its
+    ``length()`` on a BLOB are all near-enough-but-not-identical. A constraint
+    that only ever fires on SQLite is not evidence about production.
+    """
+    uri = os.getenv(_POSTGRES_URI_ENV)
+    if not uri:
+        if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+            pytest.fail(f"{_POSTGRES_URI_ENV} must be configured in CI")
+        pytest.skip(f"requires {_POSTGRES_URI_ENV}")
+
+    schema_version, payload_bytes, payload = _CHECK_VIOLATIONS[case]
+    migration = importlib.import_module(
+        "dev_health_ops.alembic.versions.0088_add_sync_unit_effect_snapshots"
+    )
+    # Coerce to the sync driver: the env var carries whatever the caller
+    # configured (often an async driver), and create_engine here needs a
+    # blocking one. Mirrors test_ask_dev_v2_persistence_startup_gate.
+    engine = sa.create_engine(make_url(uri).set(drivername="postgresql+psycopg2"))
+    schema = f"snapshot_check_{case}"
+    unit_id = "11111111-1111-4111-8111-111111111111"
+    try:
+        with engine.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+            connection.execute(sa.text(f'SET search_path TO "{schema}"'))
+            connection.execute(
+                sa.text("CREATE TABLE sync_run_units (id uuid PRIMARY KEY)")
+            )
+            _run(migration, connection, "upgrade")
+            connection.execute(
+                sa.text("INSERT INTO sync_run_units (id) VALUES (:id)"),
+                {"id": unit_id},
+            )
+            # Control: a well-formed row is accepted, so a rejection below is
+            # attributable to the violated constraint and not to the fixture.
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO sync_run_unit_effect_snapshots (
+                        org_id, sync_run_unit_id, generation, provider,
+                        dataset_key, schema_version, content_digest,
+                        payload_bytes, payload, created_at
+                    ) VALUES (
+                        'org-acme', :unit_id, 'control', 'github', 'work-items',
+                        'v1', :digest, 2, '\\x7b7d'::bytea, now()
+                    )
+                    """
+                ),
+                {"unit_id": unit_id, "digest": "a" * 64},
+            )
+            with pytest.raises(sa.exc.IntegrityError):
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO sync_run_unit_effect_snapshots (
+                            org_id, sync_run_unit_id, generation, provider,
+                            dataset_key, schema_version, content_digest,
+                            payload_bytes, payload, created_at
+                        ) VALUES (
+                            'org-acme', :unit_id, 'violating', 'github',
+                            'work-items', :schema_version, :digest,
+                            :payload_bytes, :payload, now()
+                        )
+                        """
+                    ),
+                    {
+                        "unit_id": unit_id,
+                        "schema_version": schema_version,
+                        "digest": "a" * 64,
+                        "payload_bytes": payload_bytes,
+                        "payload": payload,
+                    },
+                )
+        with engine.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    finally:
+        engine.dispose()

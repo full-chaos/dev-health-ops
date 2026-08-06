@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -158,13 +159,19 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	// preparedPrepares stays at the single setup call: recovery LOADS the
+	// snapshot and must never re-prepare one. The counter existed and was
+	// never asserted, so nothing would have noticed a recovery path that
+	// quietly rewrote the manifest it was supposed to be replaying.
 	if !handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
+		ledger.preparedPrepares != 1 ||
 		result.Effects.Skipped != 1 || result.Effects.MarkedCommitted != 1 ||
 		result.Effects.Written != len(workItemRouteDestinations())-2 ||
 		result.Result["records"] != float64(16) {
 		t.Fatalf(
-			"handler_at=%s loads=%d result=%+v stored_result=%v",
-			handler.normalizedAt, ledger.preparedLoads, result, result.Result,
+			"handler_at=%s loads=%d prepares=%d result=%+v stored_result=%v",
+			handler.normalizedAt, ledger.preparedLoads, ledger.preparedPrepares,
+			result, result.Result,
 		)
 	}
 	secondSink := &memoryEffectSink{}
@@ -175,7 +182,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	}
 	if secondResult.Effects.Skipped != len(workItemRouteDestinations()) ||
 		secondResult.Effects.Written != 0 || len(secondSink.destinations) != 0 ||
-		!handler.normalizedAt.IsZero() {
+		ledger.preparedPrepares != 1 || !handler.normalizedAt.IsZero() {
 		t.Fatalf("all-committed recovery result=%+v writes=%v", secondResult, secondSink.destinations)
 	}
 }
@@ -205,8 +212,12 @@ func TestCompleteRouteExecutorRecoversCrashImmediatelyAfterPrepare(t *testing.T)
 		t.Fatal(err)
 	}
 	if result.Effects.Written != len(workItemRouteDestinations()) ||
-		!handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 {
-		t.Fatalf("result=%+v handler_at=%s loads=%d", result, handler.normalizedAt, ledger.preparedLoads)
+		!handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
+		ledger.preparedPrepares != 1 {
+		t.Fatalf(
+			"result=%+v handler_at=%s loads=%d prepares=%d",
+			result, handler.normalizedAt, ledger.preparedLoads, ledger.preparedPrepares,
+		)
 	}
 }
 
@@ -629,10 +640,13 @@ func TestCommitPreparedPairsEachEffectWithItsOwnLedgerEntry(t *testing.T) {
 	}
 }
 
-// The decode-side size cap is a separate guard from the encode-side cap in
-// R4: a payload can reach decode from a peer that never ran this binary's
-// encoder, or from a row written before the cap existed. Nothing exercised it,
-// so the clause was free to be deleted.
+// An oversized payload must never reach the JSON decoder. Note WHICH guard
+// does that work: the reference's own PayloadBytes bound, reached through
+// state.validate(), not the len(raw) cap further down decode -- that one is
+// unreachable, because len(raw) must equal PayloadBytes and a reference over
+// the cap never validates. An earlier version of this comment claimed to cover
+// the decode-side cap; the mutation harness disproved it by leaving that
+// clause's mutation alive while this test passed.
 func TestPreparedRouteSnapshotDecodeRejectsAnOversizedPayload(t *testing.T) {
 	t.Parallel()
 	claim := githubWorkItemOracleClaim()
@@ -690,4 +704,62 @@ func TestPreparedRouteSnapshotRefusesEverySensitiveKey(t *testing.T) {
 			t.Fatalf("nested result key %q was accepted: error=%v", key, err)
 		}
 	}
+}
+
+// Completion is withheld until every effect commits. Only the converse was
+// proven -- that a fully committed batch completes -- and the converse is the
+// easy half.
+//
+// The ordering is enforced by the caller's control flow, not by a guard inside
+// Complete: internal/jobs/providerunit calls Repository.Complete ONLY on the
+// `err == nil` arm of executor.Execute. So the property that actually protects
+// the watermark is that Execute returns an error when a sink refuses
+// mid-batch. This pins that, and pins that the snapshot survives for the next
+// attempt -- a failure that both errored AND discarded the manifest would
+// satisfy a naive "did it error" assertion while leaving the unit unable to
+// recover.
+func TestPreparedRecoveryWithholdsSuccessWhenASinkRefusesMidBatch(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	claim, session := preparedGitHubWorkItemsSession(t, now)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	ledger := &memoryEffectLedger{}
+	if _, err := ledger.PrepareRouteSnapshot(
+		context.Background(), claim, batch, ShadowComparison{Match: true}, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	destinations := workItemRouteDestinations()
+	sortStrings(destinations)
+	refused := destinations[len(destinations)/2]
+	sinkFailure := errors.New("sink refused the write")
+	sink := &memoryEffectSink{failAfterWrite: refused, failure: sinkFailure}
+
+	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	handler := &staticCompleteRouteHandler{batch: batch}
+	_, err := completeRouteExecutor(
+		now.Add(time.Hour), handler, ledger, sink,
+	).Execute(context.Background(), session, descriptor)
+	if err == nil {
+		t.Fatal("Execute reported success while a sink refused a write; the caller would then complete the unit and advance the watermark")
+	}
+	if !errors.Is(err, sinkFailure) {
+		t.Fatalf("error=%v, want the sink's own failure", err)
+	}
+	// The manifest must still be there for the next attempt.
+	recovered, loadErr := ledger.LoadRouteSnapshot(
+		context.Background(), claim, ledger.state, now.Add(time.Hour),
+	)
+	if loadErr != nil {
+		t.Fatalf("snapshot unusable after a withheld completion: %v", loadErr)
+	}
+	if len(recovered.Batch.Effects) != len(workItemRouteDestinations()) {
+		t.Fatalf("recovered manifest is incomplete: %d effects", len(recovered.Batch.Effects))
+	}
+}
+
+func sortStrings(values []string) {
+	sort.Strings(values)
 }

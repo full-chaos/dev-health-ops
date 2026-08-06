@@ -618,7 +618,7 @@
       "file": "internal/providersync/prepared_route_snapshot.go",
       "find": "\t\tlen(raw) > maxPreparedRouteSnapshotBytes ||",
       "replace": "",
-      "rationale": "a separate guard from R4's encode-side cap: a payload can reach decode from a peer that never ran this encoder, or from a row written before the cap existed",
+      "rationale": "belt-and-braces second bound on the decoded payload; the load-bearing bound is the reference's own PayloadBytes check, mutated by R16",
       "proof": [
         [
           "go",
@@ -628,7 +628,8 @@
           "^TestPreparedRouteSnapshotDecodeRejectsAnOversizedPayload$",
           "./internal/providersync/"
         ]
-      ]
+      ],
+      "expected_survivor_reason": "UNREACHABLE, and measured rather than argued. decodePreparedRouteManifest requires len(raw) == state.PreparedSnapshot.PayloadBytes, and state.validate() runs PreparedRouteSnapshotReference.validate() first, which already rejects PayloadBytes > maxPreparedRouteSnapshotBytes (R16 covers that clause). So len(raw) > max implies a reference that never survives validation, and no input reaches this clause. It stays as belt-and-braces should the two ever be decoupled. Recorded here rather than deleted, and NOT counted as covered: the test that appeared to cover it was passing on state.validate()'s rejection."
     },
     {
       "id": "R30-sensitive-key-refusal-covers-every-name",

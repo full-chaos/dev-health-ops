@@ -3,21 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
+import io
 import pathlib
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.metrics.compute_work_items import (
-    build_linked_issue_team_resolver,
-    resolve_team_attribution,
-)
-from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
-from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
-from dev_health_ops.providers.teams import build_project_key_resolver
 from internal.providersync.testdata import oracle_registry
 from internal.providersync.testdata.field_reflection import dataclass_field_names
+from internal.providersync.testdata.oracle_pairs._github_work_items_helpers import (
+    install_minimal_oracle_imports,
+)
+
+install_minimal_oracle_imports()
+
+with (
+    contextlib.redirect_stdout(io.StringIO()),
+    contextlib.redirect_stderr(io.StringIO()),
+):
+    from dev_health_ops.metrics.compute_work_items import (
+        build_linked_issue_team_resolver,
+        resolve_team_attribution,
+    )
+    from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
+    from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
+    from dev_health_ops.providers.teams import build_project_key_resolver
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _COMPUTE_SOURCE = REPO_ROOT / "src/dev_health_ops/metrics/compute_work_items.py"

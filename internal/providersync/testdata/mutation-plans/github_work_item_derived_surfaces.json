@@ -179,6 +179,125 @@
      "./internal/providersync/"
     ]
    ]
+  },
+  {
+   "id": "E1-coverage-duplicates-are-a-conflict-not-an-absence",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "expected, actual githubEstimateCoverageMetricsDailyRow, found int, orgID string,\n) EffectInspection {\n\tif found != 1 {\n\t\tif found == 0 {\n\t\t\treturn EffectAbsent\n\t\t}",
+   "replace": "expected, actual githubEstimateCoverageMetricsDailyRow, found int, orgID string,\n) EffectInspection {\n\tif found != 1 {\n\t\tif found >= 0 {\n\t\t\treturn EffectAbsent\n\t\t}",
+   "rationale": "duplicates must CONFLICT, never read as absent: answering absent makes the committer rewrite, and the rewrite adds another duplicate -- the infinite rewrite loop that was the second blocking finding on #1535. This collapses the duplicate arm into the absent arm for ONE comparator at a time.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E1-attribution-duplicates-are-a-conflict-not-an-absence",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "expected, actual githubWorkItemTeamAttributionRow, found int, orgID string,\n) EffectInspection {\n\tif found != 1 {\n\t\tif found == 0 {\n\t\t\treturn EffectAbsent\n\t\t}",
+   "replace": "expected, actual githubWorkItemTeamAttributionRow, found int, orgID string,\n) EffectInspection {\n\tif found != 1 {\n\t\tif found >= 0 {\n\t\t\treturn EffectAbsent\n\t\t}",
+   "rationale": "duplicates must CONFLICT, never read as absent: answering absent makes the committer rewrite, and the rewrite adds another duplicate -- the infinite rewrite loop that was the second blocking finding on #1535. This collapses the duplicate arm into the absent arm for ONE comparator at a time.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E1-state-durations-duplicates-are-a-conflict-not-an-absence",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "expected, actual githubWorkItemStateDurationDailyRow, found int, orgID string,\n) EffectInspection {\n\tif found != 1 {\n\t\tif found == 0 {\n\t\t\treturn EffectAbsent\n\t\t}",
+   "replace": "expected, actual githubWorkItemStateDurationDailyRow, found int, orgID string,\n) EffectInspection {\n\tif found != 1 {\n\t\tif found >= 0 {\n\t\t\treturn EffectAbsent\n\t\t}",
+   "rationale": "duplicates must CONFLICT, never read as absent: answering absent makes the committer rewrite, and the rewrite adds another duplicate -- the infinite rewrite loop that was the second blocking finding on #1535. This collapses the duplicate arm into the absent arm for ONE comparator at a time.",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E2-coverage-partition-fence-is-in-the-readback",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?\nAND ifNull(team_id, '') = ?",
+   "replace": "WHERE org_id = ? AND (day = ? OR 1 = 1) AND provider = ? AND work_scope_id = ?\nAND ifNull(team_id, '') = ?",
+   "rationale": "estimate_coverage_metrics_daily is PARTITION BY toYYYYMM(day); FINAL only dedupes within a partition, so dropping `day` lets two months' versions of one key both survive (predicate neutralised rather than deleted, so the mutant builds and is actually measured)",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E3-state-durations-dedupe-with-argmax-not-any",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "argMax(items_touched, computed_at), max(computed_at), argMax(avg_wip, computed_at)",
+   "replace": "any(items_touched), max(computed_at), any(avg_wip)",
+   "rationale": "work_item_state_durations_daily is PLAIN MergeTree where FINAL is a no-op; any() over appended versions can return an older value than max(computed_at) reports, so the readback would confirm a row it never wrote",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E4-state-durations-group-by-is-the-natural-key",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "GROUP BY org_id, provider, work_scope_id, team_id, status, day",
+   "replace": "GROUP BY org_id, provider, work_scope_id, team_id, day",
+   "rationale": "dropping status from the grouping merges two statuses' argMax into one row, so a per-status effect would verify against a blended value",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
+  },
+  {
+   "id": "E5-attribution-tenant-fence-in-the-readback",
+   "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+   "find": "WHERE org_id = ? AND repo_id = ? AND work_item_id = ?",
+   "replace": "WHERE org_id != '' AND repo_id = ? AND work_item_id = ?",
+   "rationale": "every ClickHouse readback must fence org_id; without it a foreign tenant's row for the same work item can satisfy the check",
+   "proof": [
+    [
+     "go",
+     "test",
+     "-count=1",
+     "-run",
+     "^TestCompareGitHubEstimateCoverageVersionClauseCoverage$|^TestCompareGitHubWorkItemStateDurationVersionClauseCoverage$|^TestCompareGitHubWorkItemTeamAttributionVersionClauseCoverage$",
+     "./internal/providersync/"
+    ]
+   ]
   }
  ]
 }

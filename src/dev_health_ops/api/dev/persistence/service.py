@@ -2773,7 +2773,13 @@ class DevPersistenceService:
         # not to roll back (to protect that exact row). Any exception here
         # now unwinds only to this savepoint -- the outer session, and
         # every write already flushed on it, stays healthy regardless of
-        # what kind of failure this was.
+        # what kind of failure this was. This is CHAOS-3441's own scope,
+        # brought forward and closed inline here rather than deferred: round
+        # 3's finding supplied a concrete, reproducible mid-flush failure
+        # (a real IntegrityError, not the round-2 finding's abstract
+        # concern), verified against a genuine duplicate-insert test
+        # (test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session)
+        # rather than only documented as a residual.
         async with self.session.begin_nested():
             self.session.add(record)
             run.contract_generation = "v2"

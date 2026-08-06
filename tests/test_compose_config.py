@@ -409,7 +409,9 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
     configured_read_only_tables = _tables_for_formatted_grant(
         domain_script, "GRANT SELECT ON TABLE public.%I TO %I"
     )
-    assert configured_read_only_tables == expected_read_only_tables
+    assert configured_read_only_tables == expected_read_only_tables, (
+        "read-only grant block covers the wrong tables"
+    )
     # These tables are mutable domain state, so they deliberately live in the
     # separate read/write grant rather than the read-only VALUES list above.
     expected_read_write_tables = {
@@ -421,21 +423,85 @@ def _assert_least_privilege_domain_grants(domain_script: str) -> None:
     configured_read_write_tables = _tables_for_formatted_grant(
         domain_script, "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I"
     )
-    assert configured_read_write_tables == expected_read_write_tables
+    assert configured_read_write_tables == expected_read_write_tables, (
+        "read-write grant block covers the wrong tables"
+    )
     for grant in (
         "GRANT SELECT ON TABLE public.%I TO %I",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks",
         "GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox",
         "GRANT SELECT, INSERT ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, INSERT, DELETE ON TABLE public.sync_run_unit_effect_snapshots",
     ):
         assert grant in domain_script
     for forbidden in (
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES",
         "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES",
-        "DELETE ON TABLE",
+        "DELETE ON ALL TABLES",
     ):
         assert forbidden not in domain_script
+    # Scoped claim: within the provisioning scripts' DOMAIN SECTION, the
+    # snapshot table is the only per-table DELETE. The domain ROLE holds DELETE
+    # on more than that -- dev_conversations, external_ingest_batches,
+    # external_ingest_batch_payloads and provider_rate_limit_observations are
+    # granted it in domainPosture() -- they are simply not granted by these
+    # scripts. Stating it unscoped would be false.
+    #
+    # Assert the exact set rather than banning one spelling: admitting the
+    # snapshot grant meant relaxing a blanket "DELETE ON TABLE" ban, and a
+    # relaxed ban admits every future DELETE grant too. A templated
+    # `public.%I` DELETE block surfaces here as the literal "%I" and so
+    # cannot slip through this equality either.
+    assert _tables_for_delete_grants(domain_script) == {
+        "sync_run_unit_effect_snapshots"
+    }
+
+
+def _tables_for_delete_grants(domain_script: str) -> set[str]:
+    """Tables granted DELETE, whatever order the privilege list is written in.
+
+    Matching "DELETE ON TABLE" only sees DELETE written last:
+    `GRANT SELECT, DELETE, UPDATE ON TABLE ...` slips straight past it. That
+    used to be covered by a blanket ban on the substring "DELETE ON TABLE",
+    which this file had to relax to admit the snapshot grant -- so the narrow
+    regex and the removed ban left the same hole open together. Parse the
+    privilege list instead.
+    """
+    granted: set[str] = set()
+    for privileges, table in re.findall(
+        r"GRANT\s+([A-Z,\s()a-z_]+?)\s+ON TABLE public\.([A-Za-z0-9_%]+)",
+        domain_script,
+    ):
+        names = {
+            privilege.split("(", maxsplit=1)[0].strip().upper()
+            for privilege in privileges.split(",")
+        }
+        if "DELETE" in names:
+            granted.add(table)
+    return granted
+
+
+# The two provisioning scripts mark the end of the domain section differently.
+# Slicing both on "-- The queue role" silently returned the WHOLE of
+# init-extra-dbs.sh, which has no such marker -- so assertions meant for the
+# domain role were reading the queue role's grants too, and the negative test
+# below passed by raising for the wrong reason.
+_DOMAIN_SECTION_MARKERS = {
+    "init-extra-dbs.sh": 'GRANT USAGE ON SCHEMA public TO :"queue_role";',
+    "provision_river_roles.sql": "-- The queue role",
+}
+
+
+def _domain_section(script_path: Path) -> str:
+    marker = _DOMAIN_SECTION_MARKERS[script_path.name]
+    script = script_path.read_text(encoding="utf-8")
+    assert marker in script, (
+        f"{script_path.name} does not contain its domain-section marker "
+        f"{marker!r}; slicing on a missing marker yields the whole file and "
+        f"every domain assertion silently widens to the queue role"
+    )
+    return script.split(marker, maxsplit=1)[0]
 
 
 def _tables_for_formatted_grant(domain_script: str, grant: str) -> set[str]:
@@ -459,9 +525,7 @@ def _tables_for_formatted_grant(domain_script: str, grant: str) -> set[str]:
 def test_least_privilege_domain_grants_reject_swapped_privilege_blocks(
     script_path: Path,
 ) -> None:
-    domain_script = script_path.read_text(encoding="utf-8").split(
-        "-- The queue role", maxsplit=1
-    )[0]
+    domain_script = _domain_section(script_path)
     read_only_grant = "GRANT SELECT ON TABLE public.%I TO %I"
     read_write_grant = "GRANT SELECT, INSERT, UPDATE ON TABLE public.%I TO %I"
     inverted = (
@@ -469,9 +533,19 @@ def test_least_privilege_domain_grants_reject_swapped_privilege_blocks(
         .replace(read_write_grant, read_only_grant)
         .replace("__READ_ONLY_GRANT__", read_write_grant)
     )
+    assert inverted != domain_script, "the swap fixture changed nothing"
 
-    with pytest.raises(AssertionError):
+    # The control: unmodified input must PASS. Without it a bare
+    # pytest.raises proves only that SOMETHING raised -- deleting the swap
+    # assertions entirely still satisfied it.
+    _assert_least_privilege_domain_grants(domain_script)
+    with pytest.raises(AssertionError) as failure:
         _assert_least_privilege_domain_grants(inverted)
+    # And the reason is asserted, not assumed: the swap must be caught by the
+    # read-only/read-write table sets, not by some unrelated later assertion.
+    assert "grant block covers the wrong tables" in str(failure.value), str(
+        failure.value
+    )
 
 
 def test_legacy_compose_disables_ambient_migrations() -> None:

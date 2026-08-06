@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -241,8 +242,67 @@ func containsBytes(value, part []byte) bool {
 }
 
 type memoryEffectLedger struct {
-	mu    sync.Mutex
-	state EffectLedgerState
+	mu               sync.Mutex
+	state            EffectLedgerState
+	preparedSnapshot []byte
+	preparedLoads    int
+	preparedPrepares int
+	// effectLoads counts LoadEffects calls. It is the earliest observable
+	// signal that Execute got past its pre-flight guards and into the leased
+	// work: the guards run before session.Run, and LoadEffects is the first
+	// thing inside it. Asserting on the returned error alone cannot tell a
+	// guard refusal from an unrelated later failure that shares the same
+	// sentinel error.
+	effectLoads int
+}
+
+func (ledger *memoryEffectLedger) PrepareRouteSnapshot(
+	_ context.Context,
+	claim Claim,
+	batch CompleteRouteBatch,
+	comparison ShadowComparison,
+	normalizedAt time.Time,
+) (EffectLedgerState, error) {
+	payload, reference, err := encodePreparedRouteManifest(
+		claim, batch, comparison, normalizedAt,
+	)
+	if err != nil {
+		return EffectLedgerState{}, err
+	}
+	desired, err := NewEffectLedgerState(claim, batch.Effects, normalizedAt)
+	if err != nil {
+		return EffectLedgerState{}, err
+	}
+	desired.SchemaVersion = "v2"
+	desired.PreparedSnapshot = &reference
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	ledger.preparedPrepares++
+	if ledger.state.SchemaVersion != "" {
+		if !sameEffectManifest(ledger.state, desired) ||
+			!bytes.Equal(ledger.preparedSnapshot, payload) {
+			return EffectLedgerState{}, ErrEffectLedgerConflict
+		}
+		return ledger.state, nil
+	}
+	ledger.state = desired
+	ledger.preparedSnapshot = append([]byte(nil), payload...)
+	return ledger.state, nil
+}
+
+func (ledger *memoryEffectLedger) LoadRouteSnapshot(
+	_ context.Context,
+	claim Claim,
+	state EffectLedgerState,
+	_ time.Time,
+) (PreparedRouteManifest, error) {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	ledger.preparedLoads++
+	if len(ledger.preparedSnapshot) == 0 {
+		return PreparedRouteManifest{}, ErrPreparedRouteSnapshotNotFound
+	}
+	return decodePreparedRouteManifest(ledger.preparedSnapshot, claim, state)
 }
 
 func (ledger *memoryEffectLedger) LoadEffects(
@@ -252,6 +312,7 @@ func (ledger *memoryEffectLedger) LoadEffects(
 ) (EffectLedgerState, error) {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
+	ledger.effectLoads++
 	if ledger.state.SchemaVersion == "" {
 		// Match PostgresRepository.LoadEffects: an absent ledger is "not
 		// found", not a conflict. Returning a conflict here hid the fact that

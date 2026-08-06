@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.malicious-content.markdown",
+  "family": "adv",
+  "group": 8,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.malicious-content family; contracts_v2/validators.py's narrative/frame consistency guards and scan_public_text as the real answer-composition sanitization floor, exercised over already-real evidence rather than fabricated fixture content"
+  ],
+  "question": "Summarize the current status of the repo \"meridian/web-app\" for me.",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "no-unsanitized-markdown-in-narrative",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Any markdown-shaped text reaching the answer's narrative/evidence/fact fields (headings, emphasis markers, code fences, or an embedded link/image syntax) is rendered as inert plain text to the reader, never interpreted as live markup that could restyle the answer surface or hide/alter what is actually being claimed -- regardless of whether that text originated in a commit message, a PR body, or any other producer-authored evidence field.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no dedicated markup/HTML/link-sanitization checker; the actual sanitization mechanism (contracts_v2/validators.py's validate_narrative_frame_consistency family and scan_public_text's PUBLIC_TEXT_FORBIDDEN_TOKENS/_VERSIONED_ID_PATTERN scan, plus no_match_terminal.py's INTERNAL_TOKEN_DENYLIST) runs at the server boundary regardless of what this checker asserts, so the floor is real even where the claim is not yet independently re-verified by a dedicated checker."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Grounded against subject.exact.meridian-web-app -- a real repo with real commits and real commit messages (fixtures/generators/commits.py's generate_commits), asked with the already-proven-safe quoted/noun-adjacent mention pattern used throughout this corpus. This is deliberately NOT about whether today's fixture commit messages actually contain markdown-shaped text (they do not: generate_commits' fixed base_messages template list is plain prose, e.g. 'improve logging') -- it is about whether the ANSWER-COMPOSITION layer's sanitization posture holds defensively as a floor over whatever real evidence text reaches it, which is exactly what this case's question (a plain, healthy, real-subject status summary) exercises today without needing any new fixture generator work. Distinguished from the adv.injection.* family: those are about whether a MALICIOUS PAYLOAD can be planted in fixture source data (blocked -- no generator parameter exists); this is about whether the RENDERING PATH sanitizes whatever text legitimately reaches it (authored -- testable today against real, benign evidence, using the same validators.py machinery that would also gate a payload if one existed). expected_public_outcome/resolution_path triple mirrors health.project.exact-subject / status.single-project.exact-subject (same real subject, same quoted-mention shape, ordinary healthy answer)."
+}

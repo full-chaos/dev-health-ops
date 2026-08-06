@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.abuse.cancellation-race",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3454",
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Can you check the repo \"meridian/web-app\"? Actually, cancel that -- never mind, go ahead and finish it anyway.",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "BLOCKED: a genuine cancellation race needs a real in-flight run, a cancellation signal sent while it is executing, and a way to observe whether the cancellation and completion paths interleave safely (no double-persisted terminal, no silently-dropped turn, no crash) -- none of which a single one-shot `question` in CASE-SCHEMA.v1.md or Lane 2a's runner (single request per case, no cancellation-signal primitive) can express or execute today. Intended scenario for whoever implements structured multi-turn/concurrent-request choreography: a run against subject.exact.meridian-web-app starts; a cancellation signal (orchestrator.py's own ToolExecutionCancelled/RunState.CANCELLED path, already real production code -- see orchestrator.py's `except ToolExecutionCancelled: return await finish(RunState.CANCELLED, error=error('cancelled', ...))`) fires while the run is mid-flight; a near-simultaneous 'no, finish it anyway' follow-up races against that cancellation. The invariant this id names: exactly one terminal is ever persisted for the run (never both a CANCELLED row and a COMPLETED row for the same run_id), and the race never crashes to internal_error regardless of which side wins. [blocked_by WIRED to CHAOS-3454 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no structured multi-turn / concurrent-request choreography support'.]"
+}

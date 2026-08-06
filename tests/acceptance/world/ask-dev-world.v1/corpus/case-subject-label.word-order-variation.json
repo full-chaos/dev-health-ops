@@ -1,0 +1,54 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "subject-label.word-order-variation",
+  "family": "subject-label",
+  "group": 1,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "CHAOS-3389 eval set (\"word-order variation\")"
+  ],
+  "question": "What's the status of Web Application Meridian?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "acronym-alias",
+  "subject_ref": "subject.acronym-alias.mwa-project",
+  "invariants": [
+    {
+      "category": "no-silent-widening",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "no-internal-error-on-fuzzy-label",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "No shape of subject label (parenthetical, >=5 words, typo, acronym, wrong word order) can crash the run to internal_error; worst case is a graceful terminal.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Reordered words of \"Meridian Web Application\". alias_matching is literal/acronym, not order-invariant -- NOT expected to resolve; invariant floor only."
+}

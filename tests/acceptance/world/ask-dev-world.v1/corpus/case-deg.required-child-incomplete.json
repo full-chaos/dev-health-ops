@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.required-child-incomplete",
+  "family": "deg",
+  "group": 9,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3461",
+  "proves": [
+    "group 9 family deg.required-child-incomplete (a declared-complete parent work item whose required child is still open must be disclosed, never silently reported as clean)"
+  ],
+  "question": "Is the repo \"meridian/web-app\"'s declared-complete parent work actually done if one of its required child items is still open?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "The underlying production concept is genuinely real, checked directly in status_change_service.py: 'required_child_incomplete' is a literal reason code (is_required_child_open/required_children/required_child_total/required_child_complete), and a declared-complete parent whose required children include an open one produces code='declared_complete_conflicts_with_observed_work' -- exactly the 'completed parent with incomplete required children' shape this id names, and operational_deficiency_service.py's own module docstring independently confirms Category 2 (planning & relationships) is 'bound for ... declared-complete/observed-work conflicts, all reused directly from StatusSnapshotResult.actual'. What is NOT confirmed is a REALIZED fixture: checked fixtures/generators/work_items.py directly -- generate_work_item_dependencies creates parent/child dependency rows at a random parent_edge_rate=0.2 with no seeded positive-control scenario that guarantees a specific work item is BOTH declared-complete AND has a specific required child left open for any named subject in this world (unlike e.g. subject.stale-context's dedicated retention_conversations generator, or the deg.source-state.* matrix's dedicated realized_by rows). Whether meridian/web-app or any other fixture repo happens to exercise this reason code today depends on unseeded randomness, which this batch's authoring pass cannot responsibly assert as a deterministic, executable claim. Declared-blocked rather than gamble on an unverified random fixture outcome. question/org_alias/user_alias/subject_class/subject_ref kept as documentation of the intended (currently-blocked) scenario, grounded in meridian/web-app as the most plausible repo to eventually carry a dedicated seeded fixture for this reason code. [blocked_by WIRED to CHAOS-3461 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no dedicated fixture guarantees a required-child-incomplete-vs-declared-complete conflict for any named subject today'.]"
+}

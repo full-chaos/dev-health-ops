@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.false-green-aggregate",
+  "family": "deg",
+  "group": 9,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3460",
+  "proves": [
+    "group 9 family deg.false-green-aggregate (launch-gate property: no required job may exit success after skipping substantive work)"
+  ],
+  "question": "Across the organization's required CI jobs, did any of them exit success after skipping substantive work?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "This id's registry claim, per the batch instructions' own framing of the registry's 'proves' column ('launch-gate: no required job may exit success after skipping substantive work'), is a property of a MANIFEST/CI-aggregator's OWN job graph -- whether the CI system's launch-gate job itself is honest about substantive-work coverage across a whole workflow run -- not a property of any single Ask Dev question/answer exchange. Every other case in this corpus (including every other deg.* case authored this round) is grounded in a single dev_message_request -> DevAnswer/DevError turn against ask_dev_corpus_case.v1's own shape (question/org_alias/user_alias/subject_class + one committed terminal). There is no real single-request scenario an Ask Dev question could pose whose answer would itself constitute a check of the launch-gate's own aggregate honesty -- that property lives one layer up the stack, in the CI/manifest system that runs and gates on Ask Dev's own test suite, not in anything Ask Dev is asked about. Framing the question above org-wide (no named repo/team/project) is the closest single-turn approximation and is a genuine, answerable Ask Dev question shape (org-wide ci_pipeline_runs data), deliberately not naming a specific repo like meridian/web-app -- doing so would falsely imply that repo's fixture carries a dedicated false-green scenario, which it does not (same false-implication concern case-deg.source-state.redacted.json's notes already raise for this world). Answering it would only describe what the fixture's ci_pipeline_runs rows already record -- it would not exercise or prove the launch-gate aggregator invariant itself, which requires observing an entire job graph's exit-code/skip-status relationship, a shape ask_dev_corpus_case.v1 has no field for. Declared-blocked as a genuine schema-capability gap (not a production-code defect, hence a 'runner:' prefix rather than a CHAOS ticket) rather than silently claim single-turn coverage of a multi-job-graph property. subject_class n/a and subject_ref null because the registry claim itself is not about any one named repo/team/project subject. [blocked_by WIRED to CHAOS-3460 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no case-schema shape for a manifest/CI-aggregator invariant'.]"
+}

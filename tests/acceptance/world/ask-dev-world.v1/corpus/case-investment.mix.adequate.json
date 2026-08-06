@@ -1,0 +1,30 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "investment.mix.adequate",
+  "family": "investment",
+  "group": 1,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 1 bullet 11"
+  ],
+  "question": "What's our investment mix across feature/maintenance/risk work?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Org-wide investment-mix classification over the default (unmutated) generation profile -- world.json's generation block (with_work_graph=true) drives dev_health_ops.metrics.sinks.clickhouse.investment.InvestmentMixin's classification over the default synthetic work-item category distribution, which is not deliberately skewed toward any single category. Positive control: proves an org with a genuinely balanced mix reads answered, not spuriously flagged answered_with_gaps. Paired with investment.mix.inadequate (same question, fixture deliberately skewed) to prove the classifier can actually distinguish the two, not just always emit one verdict. No subject-mention/scope-resolution mechanism is exercised (n/a subject, no team/repo mention to widen or fuzzy-match), so no invariant from the fixed contract/security/persistence taxonomy is a genuine fit here -- honestly left empty rather than padded with an invariant this case does not actually exercise."
+}

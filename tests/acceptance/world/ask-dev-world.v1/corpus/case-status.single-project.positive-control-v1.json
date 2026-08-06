@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "status.single-project.positive-control-v1",
+  "family": "status",
+  "group": 1,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 1 Product-question corpus; status family positive control -- Wave 3.1 heritage oracle (ask-dev-oracle.v1.json), byte-identical question text"
+  ],
+  "question": "How did completed work change in this scope during the selected time range, and what evidence supports it?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "no-silent-widening",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Question text must remain byte-identical to ../../ask-dev-oracle.v1.json's `question` field -- that file is the Wave 3.1 heritage positive control (expected_metric_id items_completed, expected_evidence_entity_fragment 'meridian/web-app', model ask-dev-scripted-v1, required_tool_ids [query_metric.v1, search_evidence.v1, data_health.v1]). This CHAOS-3219 case re-anchors the same oracle question against subject.exact.meridian-web-app so the Wave 4 corpus and the pre-existing smoke oracle stay pointed at one real scenario instead of two independently-drifting approximations. Minimal invariant set (one) because this is a plain positive control with nothing degraded -- the point of this case is a clean answered terminal, not a fuzzy-label/degradation probe (those are subject-label.*/status.single-project.readiness-completion's job)."
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.cross-tenant.repository-id",
+  "family": "adv",
+  "group": 8,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.cross-tenant family; inv.no-unauthorized-candidate-surfaces (repository-kind identifier)"
+  ],
+  "question": "Is the repo \"sibling-only/private-repo\" on track?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.tenant.sibling-only-private-repo",
+  "invariants": [
+    {
+      "category": "no-unauthorized-candidate-surfaces",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every candidate offered (ranked or unranked) is drawn from the requester's own authorized catalog (permission_fingerprint-scoped); a candidate outside that scope -- including a full, exact, correctly-spelled sibling-tenant identifier -- must never appear, ranked or unranked.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "no-silent-widening",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; a cross-tenant identifier that cannot resolve within the requester's own org must terminate gracefully (not_found), never silently fall back to answering about something else.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn. Applies here per the same precedent as scope.no-match (a not_found terminal, not only needs_clarification/failed/denied/unsupported ones, must still leave a real row).",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Deliberately mirrors the already-authored group-1 case tenant.cross-tenant-identifier-refused (same fixture row, same full-exact-identifier mention shape, same DataHealthService.inspect/ScopeResolutionService guard) so this group-8 security/adversarial family gets DIRECT coverage of that same invariant under its own registry id -- not a mechanism difference, a registry-organization one (group 1 'tenant' vs. group 8 'adv.cross-tenant/security'). Question phrasing ('Is the repo \"...\" on track?' vs. the group-1 case's 'What's the status of the repo \"...\"?') is deliberately DIFFERENT text, not a copy-paste: provider_scripts.py requires globally-unique question text per role script (test_a_question_fingerprint_collision_fails_to_load, per the tenant.authorization-change-mid-conversation case's own note on this same constraint), so two ids sharing literal question text could never both get a script entry. expected_public_outcome/resolution_path triple copied verbatim from tenant.cross-tenant-identifier-refused's own profile entry for the identical reasoning documented there (not_found chosen over denied: PublicOutcome.DENIED is reserved for genuinely prohibited actions per contracts_v2/base.py, not a passive cross-tenant read that simply never resolves)."
+}

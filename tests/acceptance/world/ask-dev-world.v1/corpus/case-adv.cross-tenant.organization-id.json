@@ -1,0 +1,54 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.cross-tenant.organization-id",
+  "family": "adv",
+  "group": 8,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.cross-tenant family; inv.no-unauthorized-candidate-surfaces generalized to an org-level probe"
+  ],
+  "question": "What's the status of the Orbit organization?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "no-unauthorized-candidate-surfaces",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every candidate offered (ranked or unranked) is drawn from the requester's own authorized catalog (permission_fingerprint-scoped); a candidate outside that scope -- including a full, exact, correctly-spelled sibling-tenant identifier -- here, a full sibling ORGANIZATION name -- must never appear, ranked or unranked.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "no-silent-widening",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; a cross-tenant identifier naming a different organization by name that cannot resolve within the requester's own org must terminate gracefully (not_found), never silently fall back to answering about something else.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn. Applies here per the same precedent as tenant.cross-tenant-identifier-refused (a not_found terminal, not only needs_clarification/failed/denied/unsupported ones, must still leave a real row).",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "\"Orbit\" is the sibling org's real display name (world.json orgs[alias=sibling].name == \"Orbit (Ask Dev World Sibling Tenant)\"; the question uses its short form the way a user naturally would). There is no subjects.json class for an organization-kind entity (entity_kind is only ever repository/project/team/n-a across the 8 documented classes) and no 'organization' noun in question_interpreter.py's closed _KIND_NOUNS list, so this mention is never TYPED the way 'the repo \"X\"' is. It is still a real, extractable mention: 'Orbit' is a single capitalized word that does NOT open the sentence (it follows 'the status of the'), so question_interpreter.untyped_name_candidates's own guard ('a single capitalized word that opens a sentence is capitalized by grammar, not by naming' -- and this one does not open the sentence) does not discard it; it is picked up as an UNTYPED bare-name candidate (default requested_entity_kind=PROJECT, searched across every kind by subject_preflight per the module's own contract). Primary org's own catalog (repos/projects/teams) has no row named 'Orbit' -- the org itself is not a searchable catalog entity -- so the mention search comes back empty exactly like scope.no-match, hence not_found/unresolved/miss-clarification, not a leaked sibling-org candidate. Chosen NOT to invent a fake organization UUID: a raw id literal has no capitalization/quoting/kind-noun adjacency at all and would not extract as a mention (a materially WEAKER, not stronger, probe than the real display name -- it would silently degrade straight to org-wide behavior instead of exercising a genuine unauthorized-candidate check). expected_public_outcome/resolution_path triple mirrors tenant.cross-tenant-identifier-refused / subject-label.unauthorized-candidate-excluded / scope.no-match exactly, generalized here from a repo-shaped identifier to an org-shaped one."
+}

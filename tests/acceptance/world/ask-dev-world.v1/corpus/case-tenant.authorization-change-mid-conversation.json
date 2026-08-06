@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "tenant.authorization-change-mid-conversation",
+  "family": "tenant",
+  "group": 1,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3454",
+  "proves": [
+    "group 1 bullet 14"
+  ],
+  "question": "Is the repo \"meridian/web-app\" still on track?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all 57 cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "BLOCKED during Lane 2b codex round-1 remediation, 2026-08-06 (codex finding, independently confirmed): this case's real scenario needs a turn-1/turn-2 conversation with a mid-conversation authorization mutation between them, actor/org context distinct from a fresh single-shot request, and a runner that actually drives that sequence. Neither CASE-SCHEMA.v1.md (a single `question` field, no structured-turn concept) nor Lane 2a's runner (creates one fresh conversation per case with a generic org/superuser context, per codex's read of the runner code) can express or execute this today -- an authored case here would silently exercise an unrelated single-turn default path and could pass or fail for reasons having nothing to do with mid-conversation revocation, which is exactly the false-pass shape this lane's verification discipline exists to prevent. Per codex's explicit recommendation: 'keep the case blocked until the second-turn denial is asserted.' `question`/`org_alias`/`user_alias`/`subject_class`/`subject_ref` are kept as documentation of the intended (currently-blocked) scenario, matching the declared-blocked precedent elsewhere in this world. Full intended scenario, preserved for whoever implements structured multi-turn support: turn 1 sent while primary.ordinary is fully entitled, answered normally (ANSWERED, EXACT) against subject.exact.meridian-web-app; between turn 1 and turn 2 in the SAME conversation, the user's authorization changes (org ask_dev_entitlement disabled, or membership/permission_fingerprint revoked -- a runtime event, not a static world.json fixture row); turn 2 repeats the same named-subject question and must be refused (DENIED, not answered from turn 1's still-warm context), asserting expected_scope_resolution_outcome=forbidden_or_not_found (the value subjects.json's own comment names for DataHealthService.inspect's authorization-guard branch). subject_ref choice honesty caveat carried forward: the tenant family's other id shares subject.tenant.sibling-only-private-repo, but that subject is permanently cross-tenant (never resolvable from primary regardless of any mid-conversation event), which does not fit an 'entitled, THEN revoked' narrative -- subject.exact.meridian-web-app (answerable in turn 1, refused in turn 2 once authorization changes) is the shape that actually matches this id's scenario. Blocker is a runner/schema capability gap, not a ticket -- unblock alongside whichever lane adds structured-turn case support. [blocked_by WIRED to CHAOS-3454 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no structured multi-turn / actor-authorization-mutation support'.]"
+}

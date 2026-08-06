@@ -1,0 +1,54 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.cross-tenant.project-id",
+  "family": "adv",
+  "group": 8,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.cross-tenant family; inv.no-unauthorized-candidate-surfaces (project-kind identifier)"
+  ],
+  "question": "What's the status of the project \"sibling-only/private-repo\"?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.tenant.sibling-only-private-repo",
+  "invariants": [
+    {
+      "category": "no-unauthorized-candidate-surfaces",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every candidate offered (ranked or unranked) is drawn from the requester's own authorized catalog (permission_fingerprint-scoped); a candidate outside that scope -- including a full, exact, correctly-spelled sibling-tenant identifier -- must never appear, ranked or unranked.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "no-silent-widening",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; a cross-tenant identifier that cannot resolve within the requester's own org must terminate gracefully (not_found), never silently fall back to answering about something else.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn. Applies here per the same precedent as tenant.cross-tenant-identifier-refused (a not_found terminal, not only needs_clarification/failed/denied/unsupported ones, must still leave a real row).",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "No separate sibling-org PROJECT catalog row is documented anywhere in this fixture world distinct from the sibling REPOSITORY row (subjects.json's own subject.tenant.sibling-only-private-repo entry is explicitly entity_kind=repository, corrected there from an earlier mislabel) -- so this deliberately reuses that SAME fixture row and the SAME DataHealthService.inspect/ScopeResolutionService guard the repository-id case (adv.cross-tenant.repository-id) and the group-1 tenant.* pair already exercise, distinguishing this case from those not by underlying entity but by MENTION SHAPE: the full, exact, literal identifier adjacent to the 'project' kind noun (question_interpreter._KIND_NOUNS maps 'project' to EntityKind.PROJECT) rather than 'repo'/'repository'. This proves the cross-tenant refusal holds regardless of which closed kind-noun grammar the mention is typed through -- the authorization guard in DataHealthService.inspect fires on the RESOLVED SCOPE's outcome, not on the requested_entity_kind label the question happened to use. Deliberately full+exact (not the fuzzy 'the private-repo project' phrasing subject-label.unauthorized-candidate-excluded already uses), matching tenant.cross-tenant-identifier-refused's own reasoning for choosing the exact form there. expected_public_outcome/resolution_path triple copied verbatim from that case's profile entry for the same reason: not_found regardless of mention shape is the stronger, simpler invariant."
+}

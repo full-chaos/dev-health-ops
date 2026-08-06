@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.budget-exhaustion.without-frame",
+  "family": "deg",
+  "group": 9,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3455",
+  "proves": [
+    "group 9 family deg.budget-exhaustion (provider-cost/token budget exhaustion before any frame ever exists)"
+  ],
+  "question": "Did the assistant run out of budget for the repo \"meridian/web-app\" before it could gather any evidence at all?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "Same real error-code mapping as deg.budget-exhaustion.with-frame (see that case's notes for the full terminal_frames.py/orchestrator.py verification trail): 'cost_limit_reached' -> PublicOutcome.FAILED unconditionally, keyed purely by error code with no frame-state branch, so the intended expected_public_outcome once unblocked is FAILED here too -- same lesson as provider-fail.before-frame/after-frame, frame timing (with vs. without) does not change the outcome bucket. Genuinely blocked today for the identical reason as the with-frame sibling: no scripted fault type sets AgentProviderErrorCode.BUDGET_EXHAUSTED, and no scripted decision shape (ToolCallDecision/FinalAnswerDecision/DisambiguationDecision/RefusalDecision) carries a settable token/cost usage field to organically trip ProviderBudget's real accounting either -- checked provider_scripts.py directly, not assumed. question/org_alias/user_alias/subject_class/subject_ref kept as documentation of the intended (currently-blocked) scenario -- budget exhausted on round 0 itself, before any tool has ever been requested for this case (mirroring provider-fail.before-frame's fires_from_round: 0 shape, but for a budget error rather than a provider-unavailable one). [blocked_by WIRED to CHAOS-3455 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no budget/cost-limit fault type scripted yet'.]"
+}

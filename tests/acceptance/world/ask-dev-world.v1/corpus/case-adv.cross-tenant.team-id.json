@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.cross-tenant.team-id",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3459",
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.cross-tenant family; inv.no-unauthorized-candidate-surfaces (team-kind identifier, intended scenario)"
+  ],
+  "question": "What's the status of the sibling org's platform team?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all 57 cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "Blocked, not authored, on honesty grounds -- unlike organization-id (which has a real, world.json-documented sibling display name, 'Orbit', to name plainly), NO sibling-org team identity is documented anywhere in this fixture world. world.json's orgs[] entries carry no team roster at all (teams are a separate, per-repo/per-world generation via fixtures/generators/teams.py, whose generic 'Team Alpha'/'Team Beta' roster (generate_teams_config) is not tied to any org-distinguishing display name), and subjects.json's own team-kind entries (subject.acronym-alias.ground-control-team, subject.partially-resolved.platform-mobile-squad) are both explicitly primary-org only. Inventing a plausible-sounding sibling team name here would be exactly the hand-authored-fixture-pretending-to-be-real defect this lane's discipline forbids ('generate from the real producer, never hand-author fixtures', generalized from data payloads to identifiers) -- a runner asserting against a name that maps to nothing in the generated database would pass or fail for reasons unrelated to the cross-tenant guard under test. `question`/`subject_class`/`subject_ref` above document the intended (currently un-groundable) scenario only, per the declared-blocked precedent. [blocked_by WIRED to CHAOS-3459 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no sibling-org team identifier documented in world.json/subjects.json fixture'.]"
+}

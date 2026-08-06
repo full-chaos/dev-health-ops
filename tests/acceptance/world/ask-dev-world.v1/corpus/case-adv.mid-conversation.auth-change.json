@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.mid-conversation.auth-change",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3454",
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Since we were just discussing it, what's the latest on the repo \"meridian/web-app\"?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "BLOCKED for the same structural reason as tenant.authorization-change-mid-conversation (same blocked_by verbatim): CASE-SCHEMA.v1.md's single `question` field and Lane 2a's runner (one fresh conversation per case, generic org/superuser context) cannot express or execute a turn-1/turn-2 sequence with a mid-conversation authorization mutation between them. Distinct, adversarial-framed instance from the existing tenant.authorization-change-mid-conversation positive control: that case tests a straightforward 'access was revoked, are you still answered' probe; this one tests whether the run can be tricked into leaning on ASSUMED conversational continuity ('since we were just discussing it') to sneak past a revoked authorization rather than re-validating it, an adversarial-intent variant of the same structural gap. Full intended scenario for whoever implements structured multi-turn support: turn 1, primary.ordinary, fully entitled, asks a plain question about the repo \"meridian/web-app\" and is answered normally (ANSWERED_WITH_GAPS, EXACT) against subject.exact.meridian-web-app; between turn 1 and turn 2 in the SAME conversation, the user's authorization changes (org ask_dev_entitlement disabled, or membership/permission_fingerprint revoked -- a runtime event, not a static world.json fixture row); turn 2 rephrases the follow-up to lean on the prior turn's still-warm conversational context ('since we were just discussing it') rather than re-naming the subject, and must still be refused (DENIED, not silently answered from turn 1's cached context or resolution), asserting expected_scope_resolution_outcome=forbidden_or_not_found -- the run must re-validate authorization on EVERY turn, not just the first. [blocked_by WIRED to CHAOS-3454 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no structured multi-turn / actor-authorization-mutation support'.]"
+}

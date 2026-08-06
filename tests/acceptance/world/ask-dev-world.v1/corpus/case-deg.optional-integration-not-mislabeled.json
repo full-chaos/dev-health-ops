@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.optional-integration-not-mislabeled",
+  "family": "deg",
+  "group": 9,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 9 family deg.optional-integration-not-mislabeled (an optional-integration source's absence must never be mislabeled as a deficiency; grounded in sources.json's 'not-applicable' ACR row)"
+  ],
+  "question": "Does the repo \"meridian/web-app\" get penalized with a deficiency simply because its automated code review evidence integration isn't configured?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "no-optional-source-flagged-as-deficiency",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A source class marked required=False (acr, org-wide and unconditionally) never causes Category 1 (data & integration) to report an operational deficiency finding for its absence or non-configuration -- DataHealthService.inspect's complete_eligible never gates on a required=False source, so its absence must never be surfaced or implied as a real deficiency.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker for the specific optional-source-non-penalization claim this ad-hoc category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Grounded directly in sources.json's 'not-applicable' matrix row and data_health_service.py, read verbatim: 'NativeDataHealthReader.read hardcodes if source == \"acr\": SourceHealthObservation(source, False, False, warning=\"acr_optional\") for every org unconditionally -- required=False means DataHealthService.inspect's complete_eligible never gates on it.' No fixture row is needed for this state (sources.json's own realized_by is deliberately null, org-wide/unconditional). The question deliberately avoids the bare token 'ACR' -- that literal acronym is already claimed, with different, deliberate semantics, by subjects.json's subject.exact.context-fabric (an unaliased acronym MENTION of an unrelated project, exercised by the already-authored subject-label.acronym-mention corpus case) and using it here risks colliding with question_interpreter.py's _NAME/closed-kind-noun extraction in a way that would test subject-mention resolution instead of the optional-source deficiency question this case actually targets; 'automated code review evidence integration' names the same real acr source class in plain words instead. Category 1 is confirmed 'fully bound' in operational_deficiency_service.py's own docstring (every required source maps to a finding kind), and acr is explicitly excluded from that binding by its required=False status -- so the correct, honest answer is that no deficiency is ever raised for it, a real absence-of-false-positive claim this case exists to prove holds end to end, not a fixture-dependent condition. Subject resolves EXACT via the quoted noun-adjacent span 'the repo \"meridian/web-app\"' (same mechanism as scope.refused-with-grounding/health.project.exact-subject) -- resolution_path=deterministic-exact, expected_scope_resolution_outcome=exact. expected_public_outcome=answered_with_gaps follows the same settled-by-code fact workload.team.with-denominator/deficiency.team.applicable-rule's resolution-profile entries already document (terminal_frames.wrap_legacy_answer_as_frame: a real DevAnswer terminal on today's deterministic/legacy stack always maps to PublicOutcome.ANSWERED_WITH_GAPS, never plain ANSWERED) -- this case's own gap is unrelated to the acr question itself (the acr answer is a clean, confident negative), it is simply the same universal legacy-stack wrapping behavior every other successful DevAnswer terminal in this corpus already carries."
+}

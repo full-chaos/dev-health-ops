@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.cross-tenant.evidence-ref-id",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3459",
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.cross-tenant family; inv.no-unauthorized-candidate-surfaces (evidence-ref-id direct request, intended scenario)"
+  ],
+  "question": "Can you show me the evidence behind the sibling org's earlier citation?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all 57 cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "No mechanism exists in this fixture world (or, so far as this lane's reading of the contracts found, in production) for a requester to name a specific `evidence_ref_id` directly in a follow-up question and have the server look it up cross-run -- DevAnswer.evidence entries are minted per-run and consumed by the same run's own frame/narrative, never exposed as a standalone addressable identifier a later question could cite (no 'evidence' kind noun exists in question_interpreter.py's closed _KIND_NOUNS list either, so even a well-formed attempt could not TYPE such a mention). There is consequently no real, groundable sibling-org evidence-ref-id to name -- inventing one (e.g. 'ev1-...', the very prefix no_match_terminal.py's own _EXTRA_INTERNAL_TOKENS denylists as an internal handle shape) would both fabricate a fixture identifier and misrepresent a request shape production does not support. Per the assignment's guidance ('likely also declared-blocked... use judgment'): blocked. `question`/`subject_class`/`subject_ref` document the intended scenario only. [blocked_by WIRED to CHAOS-3459 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no sibling-org evidence/citation ref-id mechanism to reference directly'.]"
+}

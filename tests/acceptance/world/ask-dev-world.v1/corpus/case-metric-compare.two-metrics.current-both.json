@@ -1,0 +1,30 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "metric-compare.two-metrics.current-both",
+  "family": "metric-compare",
+  "group": 1,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 1 bullet 11"
+  ],
+  "question": "Compare items completed against cyclomatic per kloc",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Org-wide two-metric comparison (items_completed vs cyclomatic_per_kloc) over the default generation profile, where every repo's sources are current (no staleness mutation applied) -- positive control demonstrating query_metric.v1 can serve two DIFFERENT metric ids in one answer with both reading fresh, matching ask-dev-oracle.v1.json's tool contract style (required_tool_ids: query_metric.v1, search_evidence.v1, data_health.v1). Supersedes wave31 matrix.multi-metric-comparison-organization-wide -- same shape (org-wide, two metrics), re-authored here against this world's real fixtures rather than carried forward from the wave 3.1 heritage suite. Paired with metric-compare.two-metrics.stale-source (same two metrics, one source pinned stale) to prove the comparison discloses per-source applicability rather than always reporting current. n/a subject -- no scope-resolution mechanism exercised, so no invariant from the fixed taxonomy is a genuine fit; left empty rather than padded."
+}

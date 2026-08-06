@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "unrelated-evidence.org-wide",
+  "family": "unrelated-evidence",
+  "group": 1,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "launch threshold \"zero unrelated evidence surfaces in a named-subject answer\" (org-wide counterpart: the same fixture data that is 'unrelated' when the question names meridian/web-app is IN-scope, legitimate evidence once the question is deliberately org-wide)"
+  ],
+  "question": "What's the status of the organization's repositories?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "org-wide-scope-not-narrowed",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "An explicit org-wide request ('the organization's repositories', no single subject named) is answered using evidence drawn from every repository/project the requester is authorized to see across the org -- the answer must never silently narrow to a subset (e.g. only the most recently active repo, or only meridian/web-app) while presenting itself as a complete org-wide answer. This is the direct complement of unrelated-evidence.named-subject's invariant: the same cross-repository evidence that must never leak into a NAMED-subject answer must never be silently excluded from a genuinely ORG-WIDE one.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "No provider-scripts/role-legacy_agent.json entry exists for this id -- the question falls through to the default heuristic untouched (CASE-SCHEMA.v1.md's own point: under-coverage never masks as false success). subject_class/subject_ref are n/a because this question deliberately names no single subject; it is the org-wide/portfolio-shaped counterpart to unrelated-evidence.named-subject, sharing the same fixture (multiple real primary-org repositories/projects) but exercising the opposite failure mode. expected_scope_resolution_outcome in the resolution-profile fragment is asserted as null for the same reason scope.unsupported-request/scope.prohibited-write assert null -- this question does not exercise ScopeResolutionService's per-mention candidate-resolution machinery at all (there is no named mention to resolve); it is served by the org-wide/portfolio aggregation path (see portfolio.org-wide.status), which is a distinct mechanism from named-subject scope resolution and is not itself under test here."
+}

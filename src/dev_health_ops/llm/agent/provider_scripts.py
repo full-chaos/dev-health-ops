@@ -528,10 +528,128 @@ def load_registry_ids(*, scripts_dir: Path | None = None) -> frozenset[str]:
             "this scripted provider does not run from a full repo checkout)",
         )
     payload = json.loads(path.read_text(encoding="utf-8"))
-    ids: set[str] = set()
-    for group in payload.get("groups", {}).values():
-        ids.update(group.get("ids", []))
+    if not isinstance(payload, dict):
+        raise UnmappedCaseError(
+            "registry_malformed",
+            f"{path}: top-level JSON value must be an object, got "
+            f"{type(payload).__name__}",
+        )
+    # "groups" is REQUIRED, load-bearing data (the frozen case-id freeze) --
+    # missing entirely or explicitly null are both malformed, never a silent
+    # empty result.
+    ids: set[str] = _collect_group_ids(
+        payload.get("groups"),
+        path=path,
+        section="groups",
+        key_present="groups" in payload,
+        absent_key_is_backward_compatible=False,
+    )
+    # CHAOS-3219 Phase 2 Lane 2b (2026-08-06): the frozen 134-id "groups"
+    # block is the case-id freeze -- it must never gain or lose an id after
+    # acceptance. "amendments" is the CHAOS-3389 fold-in's separate,
+    # explicitly-recorded registry amendment (corpus/REGISTRY-AMENDMENT.v1.md
+    # sec.2): the freeze governs case IDs, not the registry's total count, so
+    # an amendment family's ids are just as real and script-addressable as a
+    # frozen one -- a role script that references an amendment case id is not
+    # referencing an "unknown" id, it is referencing a properly-recorded one.
+    # "amendments" is genuinely OPTIONAL, unlike "groups" -- a registry file
+    # authored before the amendments block existed (or one that legitimately
+    # has none) must still load cleanly, so an ABSENT key is backward
+    # compatible. codex round-4 finding (medium, 2026-08-06): an EXPLICIT
+    # null is different -- it signals something clobbered a previously-real
+    # value (a version-skewed or templated registry file), not "this
+    # registry predates amendments", so it must raise, not silently degrade
+    # to "no amendments".
+    ids |= _collect_group_ids(
+        payload.get("amendments"),
+        path=path,
+        section="amendments",
+        skip_keys={"$comment"},
+        key_present="amendments" in payload,
+        absent_key_is_backward_compatible=True,
+    )
     return frozenset(ids)
+
+
+def _collect_group_ids(
+    section_payload: object,
+    *,
+    path: Path,
+    section: str,
+    key_present: bool,
+    absent_key_is_backward_compatible: bool,
+    skip_keys: frozenset[str] | set[str] = frozenset(),
+) -> set[str]:
+    """Defensively walk a ``registry-ids.v1.json`` ``groups``/``amendments``
+    section, raising a typed, expected :class:`UnmappedCaseError` on a
+    malformed shape instead of letting an ``AttributeError``/``TypeError``
+    propagate uncaught out of a request path this function's caller
+    (``try_load_engine``) invokes before any default-heuristic fallback --
+    codex round-2 finding (medium, 2026-08-06): a null/list/scalar
+    ``amendments`` value, or a non-dict group entry, or a non-list ``ids``
+    value must degrade to a clear, typed load error, never a confusing
+    generic exception a malformed or version-skewed mounted registry file
+    could otherwise trigger on every request.
+
+    ``key_present``/``absent_key_is_backward_compatible`` (codex round-4,
+    medium, 2026-08-06): an ABSENT key and an EXPLICIT ``null`` value both
+    arrive here as ``section_payload is None`` -- ``dict.get`` cannot tell
+    them apart -- so the caller passes whether the key literally existed in
+    the parsed JSON. Only an absent key may silently degrade to an empty
+    set, and only for a section the caller has declared backward-compatible
+    (``amendments``); an explicit ``null`` always raises, and a required
+    section (``groups``) raises either way."""
+
+    if section_payload is None:
+        if key_present and not absent_key_is_backward_compatible:
+            raise UnmappedCaseError(
+                "registry_malformed",
+                f"{path}: {section!r} is explicitly null -- a required "
+                "section must be an object, not null (an absent key would "
+                "be a different, backward-compatible case; an explicit "
+                "null is not)",
+            )
+        if not key_present and not absent_key_is_backward_compatible:
+            raise UnmappedCaseError(
+                "registry_malformed",
+                f"{path}: required section {section!r} is missing",
+            )
+        if key_present:
+            raise UnmappedCaseError(
+                "registry_malformed",
+                f"{path}: {section!r} is explicitly null -- omit the key "
+                "entirely for 'no amendments', not null (a version-skewed "
+                "or templated registry file setting it to null must fail "
+                "loud, not silently drop every amendment id)",
+            )
+        return set()
+    if not isinstance(section_payload, dict):
+        raise UnmappedCaseError(
+            "registry_malformed",
+            f"{path}: {section!r} must be an object keyed by group name, got "
+            f"{type(section_payload).__name__}",
+        )
+    ids: set[str] = set()
+    for key, group in section_payload.items():
+        if key in skip_keys:
+            continue
+        if not isinstance(group, dict):
+            raise UnmappedCaseError(
+                "registry_malformed",
+                f"{path}: {section}[{key!r}] must be an object, got "
+                f"{type(group).__name__}",
+            )
+        group_ids = group.get("ids", [])
+        if not isinstance(group_ids, list) or not all(
+            isinstance(entry, str) for entry in group_ids
+        ):
+            raise UnmappedCaseError(
+                "registry_malformed",
+                f"{path}: {section}[{key!r}]['ids'] must be a list of "
+                f"strings, got {group_ids!r}",
+            )
+        ids.update(group_ids)
+    return ids
 
 
 def load_role_script(role: str, *, scripts_dir: Path | None = None) -> RoleScript:

@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.source-state.unconfigured",
+  "family": "deg",
+  "group": 9,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 9 family deg.source-state (sources.json per-source-class terminal-state matrix, state=unconfigured)"
+  ],
+  "question": "What incidents has the repo \"probe/source-current\" had?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "no-silent-widening",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Grounded against sources.json's dedicated 'unconfigured' matrix row: primary org's sync_providers deliberately omit pagerduty/opsgenie/incident -> _source_configured('incidents', configs) is False org-wide for primary -> DataHealthState.UNCONFIGURED for 'incidents' regardless of which repo is asked about (incidents carries no repo_id column). sources.json attaches this row to probe/source-current (an org-wide effect, reusing an already-realized repo rather than minting a dedicated one) -- this case follows that same attachment and asks specifically about incidents, per this batch's instruction, rather than reusing probe/source-current's role as the deg.source-state.current positive-control repo for a general status question. Repo referenced directly by name (no dedicated subjects.json entry needed for this angle), same pattern as the other deg.source-state.* cases in this batch."
+}

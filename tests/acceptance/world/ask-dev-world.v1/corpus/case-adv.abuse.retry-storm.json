@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.abuse.retry-storm",
+  "family": "adv",
+  "group": 8,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "What's the status of meridian/web-app, checked repeatedly?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": "adv.abuse.retry-storm",
+  "notes": "Question text copied verbatim from provider-scripts/role-legacy_agent.json's cases['adv.abuse.retry-storm'].question (already pre-existing there, kind=fault, type=retry-storm-trigger, fires_from_round=0, http_error 429 'scripted_fault_retry_storm' on EVERY provider call -- 'to trigger the caller's retry policy'). Subject resolution: same bare-lowercase-slug shape and reasoning as provider-fail.before-frame/after-frame (already-adopted precedent, read directly): 'meridian/web-app' has no capitalized letters and is not quoted or kind-noun-adjacent, so extract_mentions' typed grammar recognizes zero mentions and its untyped bare-name path also recognizes nothing (no capitalized/quoted span at all) -- resolution_path is honestly null (resolution_path.py derives it strictly from dev_run_resolutions entries, which are never written here), while expected_scope_resolution_outcome is asserted 'exact' following the SAME corrected precedent those two cases already established for this identical bare-slug-question shape, since deterministic subject preflight runs before the provider's decision loop and is independent of the fault. Public outcome: a persistent 429/rate-limit on EVERY round (unlike provider-fail's single/round-1 failure) exhausts the caller's retry policy; terminal_frames.PUBLIC_OUTCOME_BY_ERROR_CODE maps 'rate_limited' -> PublicOutcome.TEMPORARILY_UNAVAILABLE unconditionally (errors.py's safe_agent_provider_error classifies an LLMRateLimitError as AgentProviderErrorCode.RATE_LIMITED, retryable=True), which is the outcome asserted here. Honesty caveat: the exact retry-count/backoff budget before the caller gives up and surfaces this terminal was not traced end-to-end in this pass (out of Lane 2b's read scope) -- flagged as a documented judgment call, not a confirmed trace, matching this corpus's own established practice for this class of uncertainty."
+}

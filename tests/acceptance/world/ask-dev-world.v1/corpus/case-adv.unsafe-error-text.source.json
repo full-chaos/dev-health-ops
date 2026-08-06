@@ -1,0 +1,46 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.unsafe-error-text.source",
+  "family": "adv",
+  "group": 8,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Can you tell me whether the data behind the repo \"sibling-only/private-repo\" is reliable right now?",
+  "org_alias": "sibling",
+  "user_alias": "sibling.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.tenant.sibling-only-private-repo",
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "no-unsafe-error-text-leaks",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "A genuinely degraded SOURCE (sync failure, not a provider/LLM fault) is disclosed using only the closed-vocabulary DataHealthState/SourceHealthObservation vocabulary -- never a raw sync-adapter exception message, connection string, internal hostname, or credential fragment, even though the underlying failure is real (active_failure=True), not scripted.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Distinct from adv.unsafe-error-text.provider by MECHANISM, per the family description: that id exercises a scripted provider/LLM-layer HTTP fault with an embedded text canary (safe_agent_provider_error's text-discarding classification); this id exercises a genuinely-broken SOURCE (a real sync-adapter failure state, not a scripted fault) reaching the client through DataHealthService/NativeDataHealthReader's own disclosure path instead. Grounded in sources.json's real 'unavailable' row (read directly): world.json's sibling org has sync_providers.local.state='active_failure' org-wide -> SyncConfiguration(provider='local', is_active=True, last_sync_success=False) -> NativeDataHealthReader's `failure = any(config.last_sync_success is False and _provider_supports(...))` -> DataHealthState.UNAVAILABLE for every git-backed source (commits/pull_requests/reviews/deployments) on sibling-only/private-repo -- asked from the SIBLING org's OWN vantage (org_alias='sibling', user_alias='sibling.ordinary'), the SAME underlying vantage sources.json's own comment names ('Same fixture row also realizes deg.source-state.unavailable ... from the SIBLING org's own vantage'), deliberately distinct from tenant.cross-tenant-identifier-refused / adv.abuse.subject-set-mutation-attempt, which both ask about this SAME repo from PRIMARY's cross-tenant vantage instead (a different, authorization-layer observation of the identical fixture row, not this one's source-health-layer observation). The mention 'repo \"sibling-only/private-repo\"' is quoted and kind-noun-adjacent, extracted normally, and resolves EXACT within sibling's own authorized catalog (not cross-tenant here -- sibling asking about its own repo). Public outcome: mirrors trust.source-health.stale's own already-adopted answered_with_gaps pattern (a real, resolved subject whose source health degrades, honestly disclosed) rather than a hard failure -- 'unavailable' is a more severe DataHealthState than 'stale', but DataHealthService.inspect still returns a real (degraded) SourceHealthObservation for the resolved scope, not an UNAUTHORIZED/terminal-error state (UNAUTHORIZED is reserved for the cross-tenant-ASKED-FROM-PRIMARY vantage, not this same-org vantage), so the run reaches a real DevAnswer with the degradation disclosed as a limitation, matching this corpus's global 'a real DevAnswer terminal always maps to answered_with_gaps, never plain answered' rule (terminal_frames.wrap_legacy_answer_as_frame, confirmed by workload.team.with-denominator's own already-adopted profile-entry correction)."
+}

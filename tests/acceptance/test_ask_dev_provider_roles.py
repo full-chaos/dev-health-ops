@@ -87,6 +87,7 @@ _SCRIPTS_DIR = (
     _ROOT / "tests" / "acceptance" / "world" / "ask-dev-world.v1" / "provider-scripts"
 )
 _REGISTRY_PATH = _SCRIPTS_DIR / "registry-ids.v1.json"
+_CORPUS_DIR = _ROOT / "tests" / "acceptance" / "world" / "ask-dev-world.v1" / "corpus"
 _API_KEY = "provider-roles-conformance-key"
 
 #: The only role with a working, production-representative certification
@@ -248,12 +249,298 @@ def test_every_enabled_role_has_a_script_file(role: AgentRole) -> None:
 
 
 def test_registry_ids_file_totals_match_the_frozen_registry() -> None:
+    """The frozen 134-id ``groups`` block (case-id freeze, CHAOS-3219 Phase
+    2) is checked in isolation here -- byte-untouched-count invariant.
+
+    CHAOS-3219 Phase 2 Lane 2b (2026-08-06) added a SEPARATE, additive
+    ``amendments`` block (corpus/REGISTRY-AMENDMENT.v1.md sec.2 -- the freeze
+    governs case IDs, not the registry's total count) that
+    ``load_registry_ids`` now legitimately includes too, so that function's
+    return-value length is checked against ``134 + every amendment group's
+    count`` in ``test_load_registry_ids_includes_amendment_ids_additively``
+    right below, not against the frozen ``134`` alone.
+    """
     payload = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
-    ids = provider_scripts.load_registry_ids(scripts_dir=_SCRIPTS_DIR)
-    assert len(ids) == payload["total"] == 134
+    frozen_ids: set[str] = set()
     for group in payload["groups"].values():
         assert len(group["ids"]) == group["count"]
         assert len(set(group["ids"])) == group["count"], "duplicate id within a group"
+        frozen_ids.update(group["ids"])
+    assert len(frozen_ids) == payload["total"] == 134
+
+
+def test_load_registry_ids_includes_amendment_ids_additively() -> None:
+    payload = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
+    frozen_ids: set[str] = set()
+    for group in payload["groups"].values():
+        frozen_ids.update(group["ids"])
+    amendment_ids: set[str] = set()
+    for key, group in payload.get("amendments", {}).items():
+        if key == "$comment" or not isinstance(group, dict):
+            continue
+        assert len(group["ids"]) == group["count"]
+        assert len(set(group["ids"])) == group["count"], (
+            "duplicate id within an amendment group"
+        )
+        amendment_ids.update(group["ids"])
+    assert frozen_ids.isdisjoint(amendment_ids), (
+        "an amendment id collides with a frozen id -- the amendment must "
+        "never re-mint an id the freeze already owns"
+    )
+    ids = provider_scripts.load_registry_ids(scripts_dir=_SCRIPTS_DIR)
+    assert ids == frozen_ids | amendment_ids
+    assert len(ids) == payload.get("totals_after_amendment", {}).get("ids")
+
+
+@pytest.mark.parametrize(
+    "malformed_amendments",
+    [
+        [],
+        "not-a-dict",
+        42,
+        {"subject-label": "not-a-dict-group"},
+        {"subject-label": {"count": 1, "ids": "not-a-list"}},
+        {"subject-label": {"count": 1, "ids": [1, 2, 3]}},
+    ],
+    ids=[
+        "amendments-is-list",
+        "amendments-is-string",
+        "amendments-is-int",
+        "group-is-not-a-dict",
+        "ids-is-not-a-list",
+        "ids-contains-non-strings",
+    ],
+)
+def test_load_registry_ids_fails_loud_not_uncaught_on_malformed_amendments(
+    tmp_path: Path, malformed_amendments: object
+) -> None:
+    """codex round-2 finding (medium, 2026-08-06): a malformed/version-skewed
+    ``amendments`` shape must raise the same typed ``UnmappedCaseError`` this
+    function already raises for a missing registry file -- never an
+    ``AttributeError``/``TypeError`` propagating out of a request path this
+    module's callers invoke before any default-heuristic fallback."""
+
+    directory = tmp_path / "provider-scripts"
+    directory.mkdir()
+    (directory / "registry-ids.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ask_dev_corpus_registry_ids.v1",
+                "total": 1,
+                "groups": {
+                    "1": {"count": 1, "ids": ["status.single-project.exact-subject"]}
+                },
+                "amendments": malformed_amendments,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(provider_scripts.UnmappedCaseError):
+        provider_scripts.load_registry_ids(scripts_dir=directory)
+
+
+def test_load_registry_ids_fails_loud_on_malformed_groups(tmp_path: Path) -> None:
+    directory = tmp_path / "provider-scripts"
+    directory.mkdir()
+    (directory / "registry-ids.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ask_dev_corpus_registry_ids.v1",
+                "total": 0,
+                "groups": "not-a-dict",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(provider_scripts.UnmappedCaseError):
+        provider_scripts.load_registry_ids(scripts_dir=directory)
+
+
+def test_load_registry_ids_tolerates_a_missing_amendments_key(tmp_path: Path) -> None:
+    """Backward compatibility: a registry file authored before the
+    amendments block existed (or one that legitimately has none) must still
+    load cleanly -- absence is not malformed."""
+
+    directory = tmp_path / "provider-scripts"
+    directory.mkdir()
+    (directory / "registry-ids.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ask_dev_corpus_registry_ids.v1",
+                "total": 1,
+                "groups": {
+                    "1": {"count": 1, "ids": ["status.single-project.exact-subject"]}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ids = provider_scripts.load_registry_ids(scripts_dir=directory)
+    assert ids == {"status.single-project.exact-subject"}
+
+
+def test_load_registry_ids_rejects_an_explicit_null_amendments(tmp_path: Path) -> None:
+    """codex round-4 finding (medium, 2026-08-06): an explicit `"amendments":
+    null` must NOT be silently treated the same as an absent key -- dict.get
+    cannot tell them apart, so load_registry_ids must check key presence
+    explicitly. An absent key means 'this registry predates amendments'
+    (backward compatible); an explicit null means something clobbered a
+    previously-real value (version-skewed/templated registry) and must fail
+    loud, not silently drop every amendment id while script routing (which
+    fingerprints, not registry-checks) stays active."""
+
+    directory = tmp_path / "provider-scripts"
+    directory.mkdir()
+    (directory / "registry-ids.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ask_dev_corpus_registry_ids.v1",
+                "total": 1,
+                "groups": {
+                    "1": {"count": 1, "ids": ["status.single-project.exact-subject"]}
+                },
+                "amendments": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(provider_scripts.UnmappedCaseError):
+        provider_scripts.load_registry_ids(scripts_dir=directory)
+
+
+def test_load_registry_ids_rejects_an_explicit_null_groups(tmp_path: Path) -> None:
+    """`groups` is required, load-bearing data (the frozen case-id freeze) --
+    unlike `amendments` it has no backward-compatible absent-key case at
+    all: missing or explicitly null must both raise."""
+
+    directory = tmp_path / "provider-scripts"
+    directory.mkdir()
+    (directory / "registry-ids.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ask_dev_corpus_registry_ids.v1",
+                "total": 0,
+                "groups": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(provider_scripts.UnmappedCaseError):
+        provider_scripts.load_registry_ids(scripts_dir=directory)
+
+
+def test_load_registry_ids_rejects_a_missing_groups_key(tmp_path: Path) -> None:
+    directory = tmp_path / "provider-scripts"
+    directory.mkdir()
+    (directory / "registry-ids.v1.json").write_text(
+        json.dumps({"schema_version": "ask_dev_corpus_registry_ids.v1", "total": 0}),
+        encoding="utf-8",
+    )
+    with pytest.raises(provider_scripts.UnmappedCaseError):
+        provider_scripts.load_registry_ids(scripts_dir=directory)
+
+
+def test_every_authored_corpus_case_has_a_legacy_agent_script_entry() -> None:
+    """codex round-2 finding (high, 2026-08-06): a prior manual, ephemeral
+    check (importing Lane 2a's not-yet-merged ``script_inventory.py`` by
+    hand in a session) is not a durable CI guard -- this test expresses the
+    same "every authored corpus case is addressable" guarantee using ONLY
+    code that exists on this branch today (``provider_scripts.py``), so it
+    is checked-in, runs in the pure-Python unit tier, and cannot silently
+    stop being enforced if a case file or a script entry is later removed.
+
+    codex round-3 finding (high, 2026-08-06): id-presence alone does not
+    prove routing -- ``ScriptEngine.resolve`` (production) dispatches by
+    the NORMALIZED QUESTION FINGERPRINT, not by case id at all (the case id
+    is only the JSON key a human/author uses; the wire request carries only
+    question text). A case whose file's ``question`` drifts out of sync
+    with its own role-script entry's ``question`` (e.g. one gets reworded
+    and the other doesn't) would still pass an id-only check while silently
+    routing to the unscripted default heuristic at request time -- exactly
+    the false-green this guard exists to prevent. Now also asserts every
+    authored case's own question fingerprint matches its script entry's.
+
+    This does not replace Lane 2a's own runner-level ``script_inventory``
+    check (that one gates a LIVE run, this one gates CI) -- both are needed;
+    this one is the one this lane can actually own and merge today.
+    """
+
+    case_files = sorted(_CORPUS_DIR.glob("case-*.json"))
+    assert case_files, (
+        f"{_CORPUS_DIR}: zero corpus case files found -- a measurement that "
+        "found nothing must fail loud, not silently pass as 'nothing to "
+        "check'"
+    )
+
+    script = provider_scripts.load_role_script(
+        AgentRole.LEGACY_AGENT.value, scripts_dir=_SCRIPTS_DIR
+    )
+    scripted_ids = set(script.cases)
+
+    authored: dict[str, str] = {}
+    blocked_without_reason: list[str] = []
+    duplicate_ids: dict[str, list[str]] = {}
+    seen: dict[str, str] = {}
+    for path in case_files:
+        case = json.loads(path.read_text(encoding="utf-8"))
+        case_id = case["id"]
+        if case_id in seen:
+            duplicate_ids.setdefault(case_id, [seen[case_id]]).append(str(path))
+        seen[case_id] = str(path)
+
+        status = case.get("status")
+        assert status in ("authored", "declared-blocked"), (
+            f"{path}: unknown status {status!r}"
+        )
+        if status == "authored":
+            authored[case_id] = case["question"]
+        elif not case.get("blocked_by"):
+            blocked_without_reason.append(case_id)
+
+    assert not duplicate_ids, (
+        f"duplicate case id(s) across corpus files: {duplicate_ids}"
+    )
+    assert not blocked_without_reason, (
+        f"declared-blocked case(s) with no blocked_by reason: {blocked_without_reason}"
+    )
+
+    missing_scripts = sorted(set(authored) - scripted_ids)
+    assert not missing_scripts, (
+        f"{len(missing_scripts)} authored corpus case(s) have no "
+        f"role-legacy_agent.json entry -- a corpus run must never execute "
+        f"these against the unscripted default heuristic: {missing_scripts}"
+    )
+
+    # RoleScript.by_fingerprint is what ScriptEngine.resolve actually looks
+    # up at request time (keyed by fingerprint, not case id) -- inverting it
+    # gives case id -> the fingerprint its OWN script entry actually routes
+    # on, entirely via public data (RoleScript.cases values are `_CaseScript
+    # | str` depending on entry kind -- a private type this test has no
+    # business reaching into directly).
+    script_fingerprint_by_case_id = {
+        case_id: fingerprint
+        for fingerprint, (case_id, _entry) in script.by_fingerprint.items()
+    }
+    fingerprint_mismatches = {
+        case_id: {
+            "corpus_question": corpus_question,
+            "corpus_fingerprint": provider_scripts.question_fingerprint(
+                corpus_question
+            ),
+            "script_fingerprint": script_fingerprint_by_case_id.get(case_id),
+        }
+        for case_id, corpus_question in authored.items()
+        if case_id in script_fingerprint_by_case_id
+        and provider_scripts.question_fingerprint(corpus_question)
+        != script_fingerprint_by_case_id[case_id]
+    }
+    assert not fingerprint_mismatches, (
+        "authored corpus case(s) whose question does not fingerprint-match "
+        "their role-legacy_agent.json entry -- ScriptEngine.resolve routes "
+        "by question fingerprint at request time, so a mismatch here means "
+        "the case would silently fall through to the unscripted default "
+        f"heuristic despite passing the id-presence check: {fingerprint_mismatches}"
+    )
 
 
 @pytest.mark.parametrize("role", _ENABLED_ROLES)

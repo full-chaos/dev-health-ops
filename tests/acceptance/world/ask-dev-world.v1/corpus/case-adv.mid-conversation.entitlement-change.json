@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.mid-conversation.entitlement-change",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3454",
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Could you check the repo \"meridian/web-app\" one more time?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "BLOCKED, same runner gap. Turn 1: primary.ordinary asks and is answered normally against subject.exact.meridian-web-app (world.json primary org has ask_dev_entitlement='enabled'). Between turn 1 and turn 2, the org's own ask_dev_entitlement flips to 'disabled' (a kill-switch/entitlement mutation distinct from a per-user authorization revocation -- world.json's own 'disabled' org fixture shows this is a real, realized org-level state, just not one this conversation's org can transition into mid-run without structured multi-turn support). Turn 2 repeats a near-identical follow-up and must be refused (feature_not_enabled/UNSUPPORTED or equivalent), not silently answered from a conversation that started before the org-wide kill switch flipped -- the entitlement gate must be re-checked per-turn, not cached from conversation start. [blocked_by WIRED to CHAOS-3454 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no structured multi-turn / actor-authorization-mutation support'.]"
+}

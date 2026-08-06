@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "readiness.capabilities.unsupported-model",
+  "family": "readiness",
+  "group": 1,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "P0-B MISSING item 14"
+  ],
+  "question": "Please give me the status of the repo \"meridian/web-app\".",
+  "org_alias": "primary",
+  "user_alias": "primary.unsupported-model-user",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Realizes world.json's `provider_profiles.unsupported-model-profile` (readiness: unsupported_model, intent: readiness_probe) -- user_alias primary.unsupported-model-user carries provider_profile_override: unsupported-model-profile, which selects this profile regardless of question content, so the exact question text is deliberately generic (any status question exercises the same gate). Subject is n/a: the readiness/capability gate is evaluated before any subject preflight or scope resolution ever runs, so no ScopeResolutionOutcome value is asserted here (mirrors scope.unsupported-request / scope.prohibited-write's null-subject convention). Only one invariant is asserted (justifying the corpus's 'must justify zero/near-zero invariants' rule): the other three fixed invariants are about subject-label parsing and unauthorized-candidate leakage, neither of which this scenario exercises -- the readiness gate fires before a subject mention is ever parsed. Outcome choice (UNSUPPORTED, not TEMPORARILY_UNAVAILABLE) is documented in the resolution-profile fragment rather than here, per this schema's own design principle (matcher/provider-state-specific expected outcomes belong in the profile, not the case). [Reworded during Lane 2b codex round-1 remediation, 2026-08-06, from \"What's the status of meridian/web-app?\": production's provider_scripts.py requires GLOBALLY-UNIQUE question text per role script (test_a_question_fingerprint_collision_fails_to_load), and every corpus case now needs its own role-legacy_agent.json entry (script_inventory.py's full-coverage requirement) -- two cases sharing literal question text could never both get a script entry. Subject mention substring kept character-identical to subjects.json's declared 'mentions' so the deterministic extractor still recognizes it; only the surrounding phrasing changed.] [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from 'Please give me the status of meridian/web-app.': question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+}

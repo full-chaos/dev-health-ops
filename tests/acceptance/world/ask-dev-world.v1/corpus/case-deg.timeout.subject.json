@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.timeout.subject",
+  "family": "deg",
+  "group": 9,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3455",
+  "proves": [
+    "group 9 family deg.timeout (pipeline-stage timeout matrix -- subject-resolution instance)"
+  ],
+  "question": "Is subject resolution for the repo \"meridian/web-app\" still working, or has it stalled?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "Checked provider_scripts.py and orchestrator.py directly: the deterministic server-side subject preflight (recorder.record_preflight) runs to completion BEFORE the model/provider loop ever starts -- multiple already-authored cases (provider-fail.before-frame, provider-fail.after-frame, scope.refused-with-grounding) independently confirm this same architectural fact in their own notes ('scope resolution runs before the provider is ever invoked'). The only scripted fault mechanism today, slow-response (provider_scripts.py's ScriptTurn.delay_ms, applied in scripted_openai_service.py's _serve_scripted_turn), delays the provider's OWN decide() call/HTTP response -- it cannot inject latency into a step that has already finished by the time the provider is even reachable. There is therefore no scriptable way, today, to simulate a timeout occurring DURING subject resolution itself (as opposed to a timeout on a later provider round or tool call, which the sibling deg.timeout.metric/evidence/graph/data-health cases DO realize). A genuine fix would require either (a) a new fault type that injects latency into subject_preflight.py's own resolution path independent of the provider, or (b) exposing resolve_scope.v1 as a provider-requestable tool call the provider must explicitly wait on -- neither exists today. question/org_alias/user_alias/subject_class/subject_ref kept as documentation of the intended (currently-blocked) scenario. [blocked_by WIRED to CHAOS-3455 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no per-stage timeout fault type scripted yet'.]"
+}

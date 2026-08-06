@@ -1,0 +1,28 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.mid-conversation.cache-staleness",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3454",
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Did anything change with it since then?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "declared-blocked-placeholder",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
+      "executable_today": false
+    }
+  ],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "BLOCKED, same runner gap. Distinct from the already-realized subject.stale-context.rotated-service / scope.stale-context-subject (which model TIME-based staleness -- a committed DevRunSubjectSet older than the conversation's own rotation window): this id is about a CATALOG mutation invalidating a committed resolution cache between turns, not elapsed time. Turn 1: primary.ordinary asks about the repo \"meridian/web-app\" and resolves EXACT against subject.exact.meridian-web-app, committed to the conversation's DevRunSubjectSet. Between turn 1 and turn 2, the underlying project is retired/archived (an is_active=0 catalog mutation, the same production mechanism subject.deleted.legacy-billing already realizes as a static fixture -- projects.is_active flips on the most recent ReplacingMergeTree(updated_at) version) rather than at generation time. Turn 2's bare follow-up ('it') must not silently keep answering from the turn-1 cached committed resolution once the catalog has moved out from under it -- the run must re-validate the cached subject against the CURRENT catalog state, not trust a conversation-scoped cache indefinitely. [blocked_by WIRED to CHAOS-3454 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no structured multi-turn / actor-authorization-mutation support'.]"
+}

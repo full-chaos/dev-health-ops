@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "provider-fail.before-frame",
+  "family": "provider-fail",
+  "group": 1,
+  "status": "authored",
+  "blocked_by": null,
+  "proves": [
+    "CHAOS-3219 fault-type matrix (provider-fail, 1 of 6 scripted fault types); CHAOS-3423 no-answer-terminal persistence"
+  ],
+  "question": "Has anything changed in meridian/web-app during the selected period?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn. Applies here even though the provider failed before any frame or tool call ever executed (fires_from_round: 0): CHAOS-3423 Codex round-3/round-4 fixes exist precisely because a before-frame provider failure used to be reachable without persisting anything.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": "provider-fail.before-frame",
+  "notes": "Question text copied verbatim from provider-scripts/role-legacy_agent.json's `cases[\"provider-fail.before-frame\"].question`. Fault script: kind=fault, type=fail-before-frame, fires_from_round=0, http_error 503 'scripted_fault_fail_before_frame' -- every round (including the very first provider.decide() call) fails; no tool has ever been requested for this case, so no DevAnswerFrame is ever committed. Subject resolution: `meridian/web-app` is a literal, unambiguous exact-subject mention; the deterministic server-side subject preflight (recorder.record_preflight, run before the model loop starts per orchestrator.py) is independent of the provider fault -- it is not a 'tool' and does not require a successful provider.decide() call -- so EXACT scope resolution is asserted to complete before the fault fires. This is an inference about SubjectPreflightResult's independence from provider.decide() faults, not something confirmed by running the (not-yet-built) corpus runner; flagged honestly. Public outcome CORRECTED during Lane 2b merge/QA (2026-08-06): terminal_frames.py's PUBLIC_OUTCOME_BY_ERROR_CODE is a totality-checked table (import-time guard over every ORCHESTRATOR_ERROR_CODES member) mapping 'provider_unavailable' -> PublicOutcome.TEMPORARILY_UNAVAILABLE unconditionally, keyed purely by error code with no frame-state branch -- errors.py's `safe_agent_provider_error` classifies a bare 503 as AgentProviderErrorCode.PROVIDER_UNAVAILABLE -> orchestrator.py's `_provider_error` code_map -> 'provider_unavailable' -> that table. This settles the outcome as TEMPORARILY_UNAVAILABLE, not FAILED (the sub-agent draft's guess, matched to the registry sketch's imprecise 'failed' proves-column language); inv.terminal-persists-assistant-row's persistence requirement holds regardless of which PublicOutcome bucket applies."
+}

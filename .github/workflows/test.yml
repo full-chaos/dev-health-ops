@@ -408,14 +408,19 @@ jobs:
 
           split_pct = line_rate(os.environ["SPLIT_XML"])
           baseline_pct = line_rate(os.environ["BASELINE_XML"])
-          delta = abs(split_pct - baseline_pct)
+          # Signed, not absolute: which direction it moves matters (a split
+          # that reads *higher* than the serial baseline is just as
+          # suspicious as one that reads lower). Always printed, regardless
+          # of outcome -- a 0.0 delta is a result to state, not something to
+          # imply via a green check.
+          signed_delta = split_pct - baseline_pct
           print(f"split (serialized live-pg pass, --cov-append):  {split_pct:.4f}%")
           print(f"baseline (pre-split single pass, serial):       {baseline_pct:.4f}%")
-          print(f"delta: {delta:.4f} percentage points")
-          if delta > 0.5:
-              print("FAIL: split coverage total diverges from the serial ground truth by more than 0.5pp")
+          print(f"REPORT: signed_delta_pp={signed_delta:+.4f}")
+          if abs(signed_delta) > 0.5:
+              print("FAIL: split coverage total diverges from the serial ground truth by more than 0.5pp -- explain before shipping, do not raise the tolerance to pass silently")
               sys.exit(1)
-          print("OK: split total matches the serial ground truth within tolerance")
+          print("PASS (within 0.5pp hard ceiling) -- the signed_delta_pp line above is still the number that matters, not this pass/fail alone")
           PYEOF
       - name: "[verify] compare combined line-rate totals"
         env:

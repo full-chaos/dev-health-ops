@@ -163,10 +163,39 @@ def _session_level_payload_guards_disabled():
         event.listen(Session, "do_orm_execute", on_bulk_dml)
 
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv(_POSTGRES_URI_ENV),
-    reason=f"requires {_POSTGRES_URI_ENV}",
-)
+def _require_postgres_test_uri() -> None:
+    """Same contract as ``tests/api/admin/test_add_member_visibility.py``'s
+    ``_require_postgres_test_uri`` (CHAOS-3411): skip locally when the URI is
+    not configured, but hard-``pytest.fail`` under CI.
+
+    This module used a plain module-level ``skipif`` (CHAOS-3441 Codex round 1
+    follow-up), which is the same silent-skip trap CHAOS-3411 closed for its
+    own module, and it had been open here the whole time: the PR-gated unit
+    step (`.github/workflows/test.yml`, "Run parallel unit test contract")
+    never sets this URI, the PR-gated "Run PostgreSQL migration tests" step
+    named four files and not this one, and the only job that does set it
+    (`coverage`) is gated `if: github.event_name != 'pull_request'`. So all
+    of this module took the skip branch on every PR -- not just CHAOS-3441's
+    two savepoint proofs, but the CHAOS-3297/3325 duplicate-key and NUL-alias
+    trigger proofs that have guarded the payload contract since they landed.
+    A stripped commit would have passed the required gate. Missing coverage
+    under CI must be a loud failure, not a silent pass -- and the module is
+    now named in that step's file list so CI genuinely runs it.
+    """
+
+    if os.getenv(_POSTGRES_URI_ENV):
+        return
+    if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+        pytest.fail(
+            f"{_POSTGRES_URI_ENV} must be configured for the Ask Dev "
+            "persistence PostgreSQL proofs"
+        )
+    pytest.skip(f"requires {_POSTGRES_URI_ENV}")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def require_postgres_test_uri() -> None:
+    _require_postgres_test_uri()
 
 
 @pytest_asyncio.fixture

@@ -270,7 +270,21 @@ func preparedGitHubWorkItemsSession(
 	now time.Time,
 ) (Claim, *LeaseSession) {
 	t.Helper()
+	return preparedWorkItemsSession(t, now, "github", "work-items")
+}
+
+// preparedWorkItemsSession builds a claim for an arbitrary pair. Execute
+// requires the descriptor and the claim to agree, so testing a guard that
+// discriminates on the pair needs both sides moved together.
+func preparedWorkItemsSession(
+	t *testing.T,
+	now time.Time,
+	provider string,
+	dataset string,
+) (Claim, *LeaseSession) {
+	t.Helper()
 	unit := githubWorkItemOracleClaim().Unit
+	unit.Provider, unit.Dataset = provider, dataset
 	leases := newMemoryLeaseRepository(unit, "dispatching")
 	claim, err := leases.Claim(context.Background(), ClaimRequest{
 		UnitID: unit.ID, OrgID: unit.OrgID, Owner: uuid.NewString(), Now: now,
@@ -398,36 +412,40 @@ func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
 // capability. A descriptor carrying it for any other pair is a wiring mistake
 // that must fail before the route touches credentials, not a route that
 // quietly runs without its snapshot.
+//
+// The mistake has to be a COHERENT one to be reachable at all: Execute's first
+// validation already rejects any descriptor that disagrees with its claim, so
+// pointing a github/work-items descriptor at another provider tests that
+// earlier check, not this guard. The reachable defect is a descriptor and
+// claim that agree with each other on some other pair while still carrying the
+// recovery flag. Measured, not assumed: an earlier version of this test used
+// the incoherent form, and both R17 and R18 survived against it.
 func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
-	claim, session := preparedGitHubWorkItemsSession(t, now)
-	batch := preparedGitHubWorkItemsFixture(t, claim)
-	for name, retarget := range map[string]func(*CompleteRouteDescriptor){
-		"another provider": func(descriptor *CompleteRouteDescriptor) {
-			descriptor.Provider = "linear"
-		},
-		"another dataset": func(descriptor *CompleteRouteDescriptor) {
-			descriptor.RouteDataset = "work-item-labels"
-		},
+	for name, pair := range map[string]struct{ provider, dataset string }{
+		"another provider": {provider: "linear", dataset: "work-items"},
+		"another dataset":  {provider: "github", dataset: "work-item-labels"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
-			descriptor.Destinations = workItemRouteDestinations()
-			descriptor.RouteReady, descriptor.RouteEnabled = true, true
-			retarget(&descriptor)
-			handler := &staticCompleteRouteHandler{batch: batch}
+			claim, session := preparedWorkItemsSession(t, now, pair.provider, pair.dataset)
+			descriptor := CompleteRouteDescriptor{
+				Provider: pair.provider, RequestedDataset: pair.dataset,
+				RouteDataset: pair.dataset, Destinations: workItemRouteDestinations(),
+				PreparedManifestRecovery: true, RouteReady: true, RouteEnabled: true,
+			}
+			handler := &staticCompleteRouteHandler{
+				batch: preparedGitHubWorkItemsFixture(t, claim),
+			}
 			ledger := &memoryEffectLedger{}
 			_, err := completeRouteExecutor(
 				now.Add(time.Hour), handler, ledger, &memoryEffectSink{},
 			).Execute(context.Background(), session, descriptor)
-			// The returned error alone proves nothing here: a mis-targeted
-			// descriptor also fails ErrInvalidConfiguration further down, once
-			// the route is already inside the lease -- which is exactly how an
-			// earlier version of this test passed with this guard mutated
-			// away. effectLoads is the discriminator: the guard runs before
-			// session.Run, so a refusal that happened there means the ledger
-			// was never consulted at all.
+			// The returned error alone is not enough: several later failures
+			// wear the same sentinel once the route is already inside the
+			// lease. effectLoads is the discriminator -- this guard runs
+			// before session.Run, so a refusal that happened there means the
+			// ledger was never consulted at all.
 			if !errors.Is(err, ErrInvalidConfiguration) || !handler.normalizedAt.IsZero() ||
 				ledger.effectLoads != 0 {
 				t.Fatalf(
@@ -435,7 +453,6 @@ func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 					err, handler.normalizedAt, ledger.effectLoads,
 				)
 			}
-			_ = claim
 		})
 	}
 }

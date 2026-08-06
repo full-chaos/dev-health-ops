@@ -417,11 +417,23 @@ func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 			descriptor.RouteReady, descriptor.RouteEnabled = true, true
 			retarget(&descriptor)
 			handler := &staticCompleteRouteHandler{batch: batch}
+			ledger := &memoryEffectLedger{}
 			_, err := completeRouteExecutor(
-				now.Add(time.Hour), handler, &memoryEffectLedger{}, &memoryEffectSink{},
+				now.Add(time.Hour), handler, ledger, &memoryEffectSink{},
 			).Execute(context.Background(), session, descriptor)
-			if !errors.Is(err, ErrInvalidConfiguration) || !handler.normalizedAt.IsZero() {
-				t.Fatalf("error=%v handler_at=%s", err, handler.normalizedAt)
+			// The returned error alone proves nothing here: a mis-targeted
+			// descriptor also fails ErrInvalidConfiguration further down, once
+			// the route is already inside the lease -- which is exactly how an
+			// earlier version of this test passed with this guard mutated
+			// away. effectLoads is the discriminator: the guard runs before
+			// session.Run, so a refusal that happened there means the ledger
+			// was never consulted at all.
+			if !errors.Is(err, ErrInvalidConfiguration) || !handler.normalizedAt.IsZero() ||
+				ledger.effectLoads != 0 {
+				t.Fatalf(
+					"error=%v handler_at=%s effect_loads=%d",
+					err, handler.normalizedAt, ledger.effectLoads,
+				)
 			}
 			_ = claim
 		})

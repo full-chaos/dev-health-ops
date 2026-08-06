@@ -247,6 +247,13 @@ type memoryEffectLedger struct {
 	preparedSnapshot []byte
 	preparedLoads    int
 	preparedPrepares int
+	// effectLoads counts LoadEffects calls. It is the earliest observable
+	// signal that Execute got past its pre-flight guards and into the leased
+	// work: the guards run before session.Run, and LoadEffects is the first
+	// thing inside it. Asserting on the returned error alone cannot tell a
+	// guard refusal from an unrelated later failure that shares the same
+	// sentinel error.
+	effectLoads int
 }
 
 func (ledger *memoryEffectLedger) PrepareRouteSnapshot(
@@ -305,6 +312,7 @@ func (ledger *memoryEffectLedger) LoadEffects(
 ) (EffectLedgerState, error) {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
+	ledger.effectLoads++
 	if ledger.state.SchemaVersion == "" {
 		// Match PostgresRepository.LoadEffects: an absent ledger is "not
 		// found", not a conflict. Returning a conflict here hid the fact that

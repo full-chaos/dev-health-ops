@@ -92,15 +92,21 @@ class PrincipalError(Exception):
 def _is_credential_rejection(exc: BaseException) -> bool:
     """Whether a failed login means "wrong credential" or "the API is unwell".
 
-    Deliberately narrow. ``AcceptanceApi`` raises with the status line inside
-    its message (``... returned HTTP 401: {"detail":"Invalid credentials"}``),
-    so 401 is what an unseeded or mismatched credential looks like from here.
-    Anything else -- 5xx, 429, a transport error -- is NOT a credential
-    problem, and must keep its own error rather than be reframed as one.
+    Deliberately narrow, and matched against the shape its producer actually
+    emits rather than a bare status number. ``AcceptanceApi.request`` raises
+    ``AcceptanceFailure(f"{method} {path} returned HTTP {exc.code}: {detail}")``
+    -- and ``detail`` there is the raw RESPONSE BODY. Searching for ``"401"``
+    anywhere in that string would therefore also match a 500 whose body
+    happens to carry ``401`` inside a trace id or correlation token, and would
+    reframe an unwell API as an unseeded credential -- sending an operator off
+    to re-mint a world that is perfectly fine.
+
+    Anything that is not a credential rejection -- 5xx, 429, a transport
+    error -- must keep its own error rather than be reframed as one.
     """
 
     text = str(exc)
-    return "401" in text or "Invalid credentials" in text
+    return "returned HTTP 401" in text or "Invalid credentials" in text
 
 
 class _Api(Protocol):

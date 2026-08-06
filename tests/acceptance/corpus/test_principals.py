@@ -580,6 +580,32 @@ class TestSeededCredentialsAreTheOnlyPath:
             "a 503 was reframed as an unseeded-credential problem"
         )
 
+    def test_a_server_error_whose_body_contains_401_is_not_reframed(self) -> None:
+        """The failure mode of matching a bare status number.
+
+        ``AcceptanceApi`` interpolates the raw response BODY into its message
+        (``... returned HTTP {code}: {detail}``), so a substring test for
+        ``"401"`` alone also fires on a 500 carrying ``401`` inside a trace
+        id. The classifier keys on ``returned HTTP 401`` -- the producer's
+        actual shape -- and this plants exactly the body that would defeat
+        the looser version.
+        """
+
+        api = _FakeApi(
+            {
+                ("POST", "/api/v1/auth/login"): AcceptanceFailure(
+                    "POST /api/v1/auth/login returned HTTP 500: "
+                    '{"detail":"internal error","trace_id":"req-a401bc93"}'
+                )
+            }
+        )
+        with pytest.raises(AcceptanceFailure, match="500") as caught:
+            self._sessions(api).session_for_alias("primary.ordinary")
+        assert "mint_ask_dev_world_snapshot" not in str(caught.value), (
+            "a 500 was reframed as a credential problem because its body "
+            "happened to contain '401'"
+        )
+
 
 class TestTheRunnerAuthenticatesWithSeededWorldCredentials:
     """CHAOS-3462 follow-up: log in with the credential the SEEDER wrote.

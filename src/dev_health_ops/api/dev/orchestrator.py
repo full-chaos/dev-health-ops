@@ -1281,12 +1281,21 @@ class DevOrchestrator:
                     # `append_assistant_error` -- runs inside a SAVEPOINT
                     # (persistence/service.py), and that savepoint now opens
                     # before its ownership/authorization SELECTs as well as
-                    # its flush, so no failure it can raise leaves this
-                    # session rollback-only: the answer/error transcript row
-                    # already flushed above survives, and the `terminal()`
-                    # write below still lands. Proven for BOTH transcript
-                    # paths against a REAL database failure, each proof
-                    # failing if that `begin_nested` is removed --
+                    # its flush. Given a caller that enters with nothing
+                    # unflushed -- which the transcript writes now guarantee,
+                    # each of them touching its conversation inside its own
+                    # savepoint (test_chaos_3441_transcript_writes_leave_no_
+                    # unflushed_state) -- no failure record_frame can raise
+                    # leaves this session rollback-only: the answer/error
+                    # transcript row already flushed above survives, and the
+                    # `terminal()` write below still lands. The one exception
+                    # is stated where it lives: pending state a caller DOES
+                    # leave is flushed at savepoint entry, before the
+                    # SAVEPOINT is emitted, so a failure there is outside
+                    # every savepoint (Codex adversarial review round 2).
+                    # Proven for BOTH transcript paths against a REAL
+                    # database failure, each proof failing if that
+                    # `begin_nested` is removed --
                     # test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session
                     # (no-answer row, duplicate-insert IntegrityError) and
                     # tests/api/dev/test_chaos_3441_record_frame_savepoint.py

@@ -3,7 +3,7 @@ frame write.
 
 Scope check first (this file is the closure evidence, so it states what was
 already true on ``main``): ``DevPersistenceService.record_frame`` and
-``record_narrative`` already isolate their flush in a SAVEPOINT
+``record_narrative`` already isolated their FLUSH in a SAVEPOINT
 (``begin_nested``), landed with CHAOS-3423/3424 (#1507), and
 ``test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session``
 already proves the NO-ANSWER path survives a real duplicate-insert
@@ -11,9 +11,20 @@ already proves the NO-ANSWER path survives a real duplicate-insert
 
 * the REAL-ANSWER path (an already-flushed ``DevAnswer`` transcript row --
   the pre-existing, accepted tradeoff CHAOS-3297 round 3 Finding 2
-  documented and this ticket exists to close), driven by a
-  connection-level mid-flush fault rather than a constraint violation, so
-  the proof is not specific to ``IntegrityError``;
+  documented and this ticket exists to close), driven by a database-side
+  rejection of the frame INSERT rather than a duplicate-key collision;
+* the savepoint BOUNDARY: it now opens before the ownership/authorization
+  SELECTs, not only around the flush, because on PostgreSQL a server-side
+  failure on any statement aborts the whole transaction. sqlite cannot
+  reproduce that, so the proof here is the statement order and the semantic
+  proof lives on the real engine --
+  ``test_persistence_postgres.py::test_chaos_3441_savepoint_recovers_an_aborted_transaction``
+  fails with ``InFailedSQLTransactionError`` against the pre-fix boundary;
+* the pending-state hazard found while building that fault injection:
+  ``SessionTransaction._take_snapshot()`` flushes the session's pending
+  state BEFORE emitting the SAVEPOINT, so the conversation ``UPDATE`` the
+  transcript writes used to leave dirty was emitted by the NEXT operation's
+  savepoint entry -- outside every savepoint;
 * the ORM half of "rolls back only the frame write". ``record_frame`` tags
   its owned run INSIDE the savepoint (``contract_generation = 'v2'``,
   ``public_outcome``) -- in-Python mutations on a *persistent* object, which
@@ -42,6 +53,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.dev import terminal_frames as dev_terminal_frames
+from dev_health_ops.api.dev.contracts import DevError
 from dev_health_ops.api.dev.persistence import (
     DevPersistenceService,
     DevPersistenceValidationError,
@@ -125,6 +137,16 @@ def _validated_answer(
         "metrics": [],
         "evidence": [],
     }
+
+
+def _error_payload() -> dict[str, Any]:
+    return DevError(
+        schema_version="dev_error.v1",
+        request_id="request-chaos-3441",
+        code="scope_not_found",
+        safe_message="The requested scope was not found.",
+        retryable=False,
+    ).model_dump(mode="json")
 
 
 def _identity_validator(payload: Any) -> Any:
@@ -594,31 +616,67 @@ async def test_chaos_3441_transcript_writes_leave_no_unflushed_state(
         if recording["on"]:
             captured.append(" ".join(statement.split()))
 
-    async with maker() as session:
-        service = DevPersistenceService(session)
+    async def _assert_touch_is_inside_a_savepoint(session, write) -> None:
+        captured.clear()
         recording["on"] = True
-        await service.append_assistant_answer(
-            org_id=org_id,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            answer_payload=_validated_answer(conversation_id, answer_id),
-            validator=_identity_validator,
-            scope_snapshot={},
-        )
+        await write()
         recording["on"] = False
 
-        savepoint = next(i for i, s in enumerate(captured) if s.startswith("SAVEPOINT"))
-        release = next(
-            i for i, s in enumerate(captured) if s.startswith("RELEASE SAVEPOINT")
-        )
+        boundaries = ("SAVEPOINT", "RELEASE SAVEPOINT", "ROLLBACK TO SAVEPOINT")
         conversation_update = next(
             i
             for i, s in enumerate(captured)
             if s.startswith("UPDATE dev_conversations")
         )
-        assert savepoint < conversation_update < release, captured
-
+        before = [s for s in captured[:conversation_update] if s.startswith(boundaries)]
+        after = [s for s in captured[conversation_update:] if s.startswith(boundaries)]
+        # The nearest savepoint boundary before the UPDATE must be an OPEN and
+        # the next one after it a RELEASE: that is what "inside a savepoint"
+        # means, and it stays true however many savepoints the method uses.
+        assert before and before[-1].startswith("SAVEPOINT"), captured
+        assert after and after[0].startswith("RELEASE SAVEPOINT"), captured
         # Nothing is left for the next savepoint entry to flush outside its
         # own savepoint.
         assert not session.dirty, session.dirty
         assert not session.new, session.new
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        # All three transcript writes, not just one: each touches its
+        # conversation, so each is its own instance of the same hazard.
+        await _assert_touch_is_inside_a_savepoint(
+            session,
+            lambda: service.append_assistant_answer(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                answer_payload=_validated_answer(conversation_id, answer_id),
+                validator=_identity_validator,
+                scope_snapshot={},
+            ),
+        )
+        await _assert_touch_is_inside_a_savepoint(
+            session,
+            lambda: service.append_assistant_error(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                message_id=uuid.uuid4(),
+                error_payload=_error_payload(),
+                validator=_identity_validator,
+                scope_snapshot={},
+                rendered_content="The requested scope was not found.",
+            ),
+        )
+        await _assert_touch_is_inside_a_savepoint(
+            session,
+            lambda: service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                client_message_id=uuid.uuid4(),
+                question="And a fresh submission on the same conversation?",
+                scope_snapshot={},
+            ),
+        )

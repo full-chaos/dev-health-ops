@@ -1755,20 +1755,6 @@ class DevPersistenceService:
                 await self.session.flush()
                 run.user_message_id = message.id
                 self.session.add(run)
-                # CHAOS-3441: the conversation mutation is made INSIDE the
-                # savepoint so its `UPDATE dev_conversations` flushes here,
-                # with the row this method exists to write. Left until after
-                # the block, it stayed dirty on the caller's session and was
-                # emitted by the NEXT operation's savepoint-entry flush --
-                # SessionTransaction._take_snapshot() flushes pending state
-                # BEFORE emitting the SAVEPOINT, so that UPDATE ran outside
-                # every savepoint. A server-side failure on it therefore
-                # poisoned the session and took this just-flushed transcript
-                # row down with it: the exact loss this ticket closes,
-                # reached by a statement nobody was looking at. Pinned by
-                # test_chaos_3441_transcript_writes_leave_no_unflushed_state.
-                conversation.current_scope = scope
-                self._touch(conversation)
                 await self.session.flush()
         except IntegrityError:
             existing = await self._message_run_by_client_id(
@@ -1781,6 +1767,31 @@ class DevPersistenceService:
                 raise
             return existing
 
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            conversation.current_scope = scope
+            self._touch(conversation)
+            await self.session.flush()
         return MessageRunResult(message=message, run=run, created=True)
 
     async def append_assistant_answer(
@@ -1850,19 +1861,6 @@ class DevPersistenceService:
         try:
             async with self.session.begin_nested():
                 self.session.add(message)
-                # CHAOS-3441: the conversation mutation is made INSIDE the
-                # savepoint so its `UPDATE dev_conversations` flushes here,
-                # with the row this method exists to write. Left until after
-                # the block, it stayed dirty on the caller's session and was
-                # emitted by the NEXT operation's savepoint-entry flush --
-                # SessionTransaction._take_snapshot() flushes pending state
-                # BEFORE emitting the SAVEPOINT, so that UPDATE ran outside
-                # every savepoint. A server-side failure on it therefore
-                # poisoned the session and took this just-flushed transcript
-                # row down with it: the exact loss this ticket closes,
-                # reached by a statement nobody was looking at. Pinned by
-                # test_chaos_3441_transcript_writes_leave_no_unflushed_state.
-                self._touch(conversation)
                 await self.session.flush()
         except IntegrityError:
             existing = await self.session.scalar(
@@ -1877,6 +1875,30 @@ class DevPersistenceService:
             if existing is None:
                 raise
             return existing
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            self._touch(conversation)
+            await self.session.flush()
         return message
 
     async def append_assistant_error(
@@ -1960,19 +1982,6 @@ class DevPersistenceService:
         try:
             async with self.session.begin_nested():
                 self.session.add(message)
-                # CHAOS-3441: the conversation mutation is made INSIDE the
-                # savepoint so its `UPDATE dev_conversations` flushes here,
-                # with the row this method exists to write. Left until after
-                # the block, it stayed dirty on the caller's session and was
-                # emitted by the NEXT operation's savepoint-entry flush --
-                # SessionTransaction._take_snapshot() flushes pending state
-                # BEFORE emitting the SAVEPOINT, so that UPDATE ran outside
-                # every savepoint. A server-side failure on it therefore
-                # poisoned the session and took this just-flushed transcript
-                # row down with it: the exact loss this ticket closes,
-                # reached by a statement nobody was looking at. Pinned by
-                # test_chaos_3441_transcript_writes_leave_no_unflushed_state.
-                self._touch(conversation)
                 await self.session.flush()
         except IntegrityError:
             existing = await self.session.scalar(
@@ -1987,6 +1996,30 @@ class DevPersistenceService:
             if existing is None:
                 raise
             return existing
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            self._touch(conversation)
+            await self.session.flush()
         return message
 
     async def record_run_diagnostics(
@@ -3003,7 +3036,25 @@ class DevPersistenceService:
         # BEFORE emitting the SAVEPOINT, so outer pending writes land in the
         # outer transaction and a savepoint rollback never takes them
         # (verified, and pinned by
-        # test_chaos_3441_savepoint_opens_before_the_pre_write_selects).
+        # test_chaos_3441_savepoint_opens_before_the_pre_write_selects; the
+        # semantics -- ROLLBACK TO SAVEPOINT actually recovering an aborted
+        # PostgreSQL transaction, which sqlite cannot express -- are proven on
+        # the real engine by
+        # test_persistence_postgres.py::test_chaos_3441_savepoint_recovers_an_aborted_transaction,
+        # which fails with InFailedSQLTransactionError if this savepoint is
+        # moved back after the ownership SELECT).
+        #
+        # The flip side of that entry-flush, stated where it lives (Codex
+        # adversarial review round 2, HIGH): pending state the CALLER left
+        # unflushed is flushed BEFORE the SAVEPOINT exists, so a failure on
+        # it is outside this savepoint and does poison the session. Every
+        # write in this service returns with nothing dirty -- the transcript
+        # writes' conversation touch is the one that did not, and now runs
+        # inside its own savepoint (see append_assistant_answer) -- so no
+        # production caller reaches here with pending state. That is an
+        # invariant of the callers, not something this method can enforce,
+        # and it is guarded by
+        # test_chaos_3441_transcript_writes_leave_no_unflushed_state.
         #
         # One failure class remains outside any savepoint's reach, stated
         # plainly rather than implied: if the CONNECTION itself dies, there

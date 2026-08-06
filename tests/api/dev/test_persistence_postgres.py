@@ -1318,3 +1318,167 @@ async def test_postgres_already_rejects_nul_alias_narrative_update(
         reloaded = await session.get(DevRunNarrative, narrative_pk)
         assert reloaded is not None
         assert reloaded.narrative_text == narrative_text
+
+
+@pytest.mark.asyncio
+async def test_chaos_3441_savepoint_recovers_an_aborted_transaction(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    """CHAOS-3441 Codex adversarial review rounds 1-2 (HIGH): the real proof,
+    on the real engine.
+
+    The failure this ticket closes is PostgreSQL-specific and sqlite cannot
+    express it: a server-side error on ANY statement aborts the whole
+    transaction, so every later statement raises ``InFailedSqlTransaction``
+    and the caller's already-flushed transcript row dies with the commit that
+    can no longer happen. ``ROLLBACK TO SAVEPOINT`` is what makes an aborted
+    transaction usable again, and it can only do that if the SAVEPOINT was
+    emitted BEFORE the failing statement. The sqlite suite can only observe
+    statement ORDER
+    (``test_chaos_3441_savepoint_opens_before_the_pre_write_selects``); this
+    test observes the semantics.
+
+    The fault is injected into ``record_frame``'s own ownership SELECT --
+    the statement that used to run outside the savepoint -- by rewriting it
+    into one PostgreSQL rejects server-side (a division by zero). The server
+    raises it, not the test harness, and the transaction is genuinely
+    aborted. What must survive: the ``DevAnswer`` transcript row and the
+    stage diagnostic flushed before the call, plus a usable session for
+    ``terminal()``'s own ``update_run``.
+    """
+
+    maker, engine, org_id, user_id = postgres_persistence
+    answer_id = uuid.uuid4()
+
+    fault_armed = {"value": False}
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute", retval=True)
+    def _abort_the_ownership_select(
+        conn: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> tuple[str, Any]:
+        if (
+            fault_armed["value"]
+            and statement.lstrip().upper().startswith("SELECT")
+            and "FROM dev_runs" in statement
+        ):
+            # Still a real statement the server parses, plans and REJECTS --
+            # not an exception raised in-process before the driver runs.
+            return statement + " AND 1 / 0 = 0", parameters
+        return statement, parameters
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What is the status of this project?",
+            scope_snapshot={},
+        )
+        await session.commit()
+        run_id = accepted.run.id
+
+        await service.append_assistant_answer(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            answer_payload={
+                "schema_version": "dev_answer.v1",
+                "answer_id": str(answer_id),
+                "conversation_id": str(conversation.id),
+                "summary": "The evidence-backed answer can be rendered from storage.",
+                "claims": [],
+                "metrics": [],
+                "evidence": [],
+            },
+            validator=lambda payload: payload,
+            scope_snapshot={},
+        )
+        await service.append_stage_diagnostic(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            ordinal=1,
+            stage_id="resolving_subjects",
+            status="completed",
+            latency_ms=12,
+            counts={"candidates": 3},
+        )
+
+        payload = _frame_payload(run_id=run_id, outcome="not_found")
+        fault_armed["value"] = True
+        try:
+            with pytest.raises(DBAPIError) as raised:
+                await service.record_frame(
+                    org_id=org_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    frame_id=uuid.UUID(payload["frame_id"]),
+                    public_outcome="not_found",
+                    payload=payload,
+                )
+        finally:
+            fault_armed["value"] = False
+        assert "division by zero" in str(raised.value.orig).lower()
+
+        # The transaction was aborted by the server and recovered by the
+        # savepoint: this write lands with no session.rollback() in between,
+        # exactly as orchestrator.finish() proceeds after a frame failure.
+        run = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="completed",
+            answer_id=answer_id,
+            provider_source="platform",
+            provider_fingerprint="sha256:" + ("a" * 64),
+            model_fingerprint="sha256:" + ("a" * 64),
+            prompt_version="dev-system.v1",
+            tool_contract_version="dev-tools.v1",
+            metric_version="metric-registry.v1",
+            query_version="dev-query.v1",
+        )
+        assert run is not None
+        await session.commit()
+
+    async with maker() as reader:
+        messages = (
+            await reader.scalars(
+                select(DevMessage).where(
+                    DevMessage.conversation_id == conversation.id,
+                    DevMessage.role == "assistant",
+                )
+            )
+        ).all()
+        assert [m.answer_id for m in messages] == [answer_id], (
+            "the flushed transcript row must survive a server-aborted "
+            "transaction inside record_frame"
+        )
+        diagnostics = (
+            await reader.scalars(
+                select(DevRunStageDiagnostic).where(
+                    DevRunStageDiagnostic.run_id == run_id
+                )
+            )
+        ).all()
+        assert [d.stage_id for d in diagnostics] == ["resolving_subjects"]
+        run_row = await reader.get(DevRun, run_id)
+        assert run_row is not None
+        assert run_row.state == "completed"
+        assert run_row.contract_generation == "v1"
+        assert (
+            await reader.scalar(
+                select(DevAnswerFrame).where(DevAnswerFrame.run_id == run_id)
+            )
+        ) is None

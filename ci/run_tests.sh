@@ -227,6 +227,7 @@ ci_tests() {
   require_cmd ruff
   require_cmd mypy
   require_cmd pytest
+  require_cmd coverage
 
   local coverage_threshold="${COVERAGE_THRESHOLD:-50}"
   local strict_quality_gates="${STRICT_QUALITY_GATES:-0}"
@@ -242,19 +243,54 @@ ci_tests() {
   fi
 
   run_step "ruff (lint gates)" ruff check --select=E9,F63,F7,F82 .
+
+  # CHAOS-3413: these files run real `CREATE DATABASE`/`DROP DATABASE`, or
+  # (test_persistence_postgres.py) hold multi-connection row locks, against
+  # the single shared Postgres service container. Running them concurrently
+  # under xdist -- as one `--cov` pass previously did -- hangs indefinitely
+  # (nothing here sets statement_timeout/lock_timeout). Mirror test-matrix's
+  # existing pattern: ignore them from the parallel pass and run them
+  # serially afterward, appending into the same coverage data file so the
+  # final --fail-under gate below still evaluates the true combined total,
+  # not a partial one.
+  local live_pg_files=(
+    tests/test_0066_celery_river_cutover_postgres.py
+    tests/test_chaos_3337_source_class_postgres_migration.py
+    tests/test_canonical_incident_feature_flag_postgres_migration.py
+    tests/api/admin/test_add_member_visibility.py
+    tests/api/dev/test_persistence_postgres.py
+    tests/test_ask_dev_v2_persistence_startup_gate.py
+  )
+  local live_pg_ignore_args=()
+  for f in "${live_pg_files[@]}"; do
+    live_pg_ignore_args+=(--ignore="${f}")
+  done
+
+  rm -f .coverage coverage.xml
+
   # Mirror unit_tests()'s marker filter: skip `clickhouse`-marked tests that
   # need a seeded live ClickHouse (opt-in locally via `pytest -m clickhouse`).
+  # --cov-report= (empty) suppresses the per-pass report but still writes the
+  # underlying coverage data file; the combined report/gate happens once,
+  # below, after both passes have contributed.
   local cov_args=(tests -v --tb=short -m "not benchmark and not clickhouse"
     --ignore=tests/test_connectors_integration.py
     --ignore=tests/test_private_repo_access.py
-    --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing
-    --cov-fail-under="${coverage_threshold}")
-  # pytest-cov aggregates per-worker coverage automatically under xdist, so the
-  # --cov-fail-under gate still evaluates the combined total across workers.
+    "${live_pg_ignore_args[@]}"
+    --cov=. --cov-report=)
   if [ "${PYTEST_XDIST_WORKERS}" != "0" ]; then
     cov_args+=(-n "${PYTEST_XDIST_WORKERS}" --dist "${PYTEST_DIST_MODE}")
   fi
-  run_pytest_step "unit tests with coverage >= ${coverage_threshold}" "${JUNIT_XML_UNIT}" "${cov_args[@]}"
+  run_pytest_step "unit tests with coverage (parallel)" "${JUNIT_XML_UNIT}" "${cov_args[@]}"
+
+  run_pytest_step "live-Postgres tests with coverage (serial)" \
+    "${JUNIT_RESULTS_DIR}/live-postgres.xml" \
+    "${live_pg_files[@]}" -v --tb=short --cov=. --cov-append --cov-report=
+
+  run_step "coverage (combined report + gate >= ${coverage_threshold})" \
+    coverage report "--fail-under=${coverage_threshold}" --show-missing
+  run_step "coverage (xml)" coverage xml -o coverage.xml
+
   integration_tests
   e2e_tests
 }

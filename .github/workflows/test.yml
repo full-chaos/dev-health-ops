@@ -293,6 +293,136 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
+  # CHAOS-3413 THROWAWAY VERIFICATION JOB -- not for merge, not wired into
+  # `needs: [test-matrix, coverage]` below, does not affect the `test`
+  # required check. Ground-truth baseline: the *pre-split* single `--cov`
+  # pass (same file set as `coverage` above, live-Postgres files included,
+  # same env), but PYTEST_XDIST_WORKERS=0 so it runs serially and cannot hit
+  # the concurrency hang -- the only way to get a trustworthy combined
+  # coverage total to diff the split's number against, since the pre-split
+  # xdist version cannot complete at all right now.
+  coverage-baseline-serial:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+
+    services:
+      postgres:
+        image: postgres:17.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.1
+        env:
+          CLICKHOUSE_DB: default
+          CLICKHOUSE_USER: ch
+          CLICKHOUSE_PASSWORD: ch
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-docs.txt
+
+      - name: "[verify] run the pre-split single pass, serially, as ground truth"
+        env:
+          DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
+          CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
+          POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          SECONDARY_DATABASE_URI: mongodb://localhost:27017
+          DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+          OTEL_ENABLED: "false"
+        run: |
+          mkdir -p test-results/junit
+          pytest tests -v --tb=short -m "not benchmark and not clickhouse" \
+            --ignore=tests/test_connectors_integration.py \
+            --ignore=tests/test_private_repo_access.py \
+            --cov=. --cov-report=xml:coverage-baseline.xml --cov-report=term-missing \
+            --junitxml=test-results/junit/baseline-serial.xml
+
+      - name: "[verify] upload baseline coverage.xml"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-baseline-serial
+          path: coverage-baseline.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # CHAOS-3413 THROWAWAY VERIFICATION JOB -- diffs the split `coverage` job's
+  # coverage.xml total against the serial ground-truth baseline above.
+  coverage-split-vs-baseline-diff:
+    needs: [coverage, coverage-baseline-serial]
+    if: always() && needs.coverage.result != 'skipped' && needs.coverage-baseline-serial.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: "[verify] download split coverage.xml"
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-py314
+          path: split
+      - name: "[verify] download baseline coverage.xml"
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-baseline-serial
+          path: baseline
+      - name: "[verify] write the comparison script"
+        run: |
+          cat > /tmp/compare_coverage.py <<'PYEOF'
+          import os
+          import re
+          import sys
+
+          def line_rate(path: str) -> float:
+              with open(path) as f:
+                  head = f.read(4096)
+              match = re.search(r'line-rate="([0-9.]+)"', head)
+              if not match:
+                  raise SystemExit(f"no line-rate attribute found in {path}")
+              return float(match.group(1)) * 100
+
+          split_pct = line_rate(os.environ["SPLIT_XML"])
+          baseline_pct = line_rate(os.environ["BASELINE_XML"])
+          delta = abs(split_pct - baseline_pct)
+          print(f"split (serialized live-pg pass, --cov-append):  {split_pct:.4f}%")
+          print(f"baseline (pre-split single pass, serial):       {baseline_pct:.4f}%")
+          print(f"delta: {delta:.4f} percentage points")
+          if delta > 0.5:
+              print("FAIL: split coverage total diverges from the serial ground truth by more than 0.5pp")
+              sys.exit(1)
+          print("OK: split total matches the serial ground truth within tolerance")
+          PYEOF
+      - name: "[verify] compare combined line-rate totals"
+        env:
+          SPLIT_XML: split/coverage.xml
+          BASELINE_XML: baseline/coverage-baseline.xml
+        run: python3 /tmp/compare_coverage.py
+
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test"; the matrix above produces "test-matrix (3.14)"
   # and the coverage job produces "coverage", neither of which match. This

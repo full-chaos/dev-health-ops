@@ -1,4 +1,16 @@
-"""Live PostgreSQL proofs for Ask Dev submission admission."""
+"""Live PostgreSQL proofs for Ask Dev submission admission.
+
+Point ``DEV_HEALTH_POSTGRES_TEST_URI`` at a SCRATCH database when running this
+module locally -- never at the dev ``devhealth`` database. The fixture isolates
+itself with ``CREATE SCHEMA`` and drops it on teardown, but a teardown that
+does not complete leaves that schema and its tables behind: one such orphan
+(``ask_dev_admission_005af009e3ae4442bc8c0f2d3b4e4b0b``, 5 tables) was found
+sitting in ``devhealth`` on 2026-08-06, and the fixture's own teardown comment
+explains why it can be left there -- a leaked session holding ACCESS SHARE
+makes ``DROP SCHEMA ... CASCADE`` wait, and there is no server-side timeout by
+default. In CI the target is a throwaway service container, so a leak costs
+nothing; on a dev box it accumulates in the database holding real data.
+"""
 
 from __future__ import annotations
 

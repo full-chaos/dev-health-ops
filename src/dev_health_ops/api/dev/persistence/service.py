@@ -2126,7 +2126,21 @@ class DevPersistenceService:
         run.state = state
         run.answer_id = answer_id
         run.terminal_reason = safe_terminal_reason
-        run.provider_source = provider_source
+        # Leave-unchanged, NOT clobber-to-None -- matching tool_call_count /
+        # citation_count / metric_count below. provider_source is set once at
+        # admission (append_user_message_and_run) and is then read back by
+        # _enforce_platform_allowance, which filters on
+        # `provider_source == "platform"`. Assigning it unconditionally from a
+        # parameter defaulting to None meant every caller that did not re-pass
+        # it nulled the column and dropped the run out of the allowance query
+        # -- silently disabling the monthly request and cost limits. Two real
+        # callers send a bare state update: OrchestratorPersistence.mark_state
+        # (state only, every non-terminal transition) and router.py's
+        # provider-unavailable 503 path (terminal, so the loss is permanent).
+        # No caller ever needs to clear this back to NULL; a run's provider is
+        # a fact about how it was admitted, not mutable per-update state.
+        if provider_source is not None:
+            run.provider_source = provider_source
         run.provider_fingerprint = safe_provider_fingerprint
         run.model_fingerprint = safe_model_fingerprint
         run.prompt_version = safe_prompt_version

@@ -277,9 +277,9 @@
     {
       "id": "M15-every-writer-routes-through-the-boundary",
       "file": "internal/providersync/repository_postgres.go",
-      "find": "\t\t\t\tnormalized, completedAt.UTC(),",
-      "replace": "\t\t\t\twatermark.UTC(), completedAt.UTC(),",
-      "rationale": "C10(c): enforcing the boundary at call sites is what CHAOS-3412 got wrong twice. This bypasses the normalizer while leaving it defined, which is precisely the shape the derivation test exists to catch.",
+      "find": "\t\t\tnormalized := normalizeWatermarkWrite(\n\t\t\t\t*watermark, claim.BeforeAt, completedAt,\n\t\t\t\tclaim.OrgID, claim.SourceExternalID, datasetKey,\n\t\t\t)",
+      "replace": "\t\t\tnormalized := watermark.UTC()",
+      "rationale": "C10(c): enforcing the boundary at call sites is what CHAOS-3412 got wrong twice. This keeps the normalizer defined but stops the one writer calling it -- exactly the shape the AST derivation test exists to catch, and the shape a hand-maintained writer list cannot.",
       "proof": [
         [
           "go",

@@ -528,6 +528,123 @@ question.
       `python_github_prs_normalization_oracle.py`) — they keep working
       exactly as documented in step 8 below. Only NEW pairs should reach
       for the generic path first.
+17. **Optional-data fetch failures: emit durable incompleteness evidence.
+    Never a silent omission, never a whole-batch failure.** This is a
+    **ratified contract** (owner ruling, 2026-08-06), not a parity
+    observation — for this class it is what the port targets, and it is
+    ahead of Python on the recording half. It also resolves **CHAOS-3188**
+    (and gives `CHAOS-3192`/`CHAOS-3196` their answer): a cap or optional
+    failure is neither "truncate silently and report success" nor "fail the
+    whole unit"; it is "land what you have, and record what you lost".
+
+    Both halves failed in production code, in opposite directions:
+    - `launchdarkly/feature-flags` and `github/cicd` truncate at their
+      5,000-flag / 1,000-run caps, return success, and advance state —
+      **silent omission** (CHAOS-3188).
+    - `github/work-items` shipped the mirror-image error, which Codex
+      caught: the composite route turned every typed incompleteness —
+      including the phases `providers/github/provider.py` logs and
+      continues past — into a whole-unit failure with **zero** effects.
+      Executing the real Python producer against those failures returns the
+      work items every time (a milestone failure degrades sprints 1 → 0 and
+      nothing else); the Go route wrote nothing at all. A persistently
+      failing optional endpoint would block the entire five-alias family for
+      that repository **forever**, with no row ever landing.
+
+    **Enumerate the producer's continue sites; do not stop at the obvious
+    ones.** The first fix here mirrored three and the review found three
+    more, because they are scattered across ~300 lines and two of them are
+    `except` blocks wrapping whole loops rather than a single call. Grep the
+    producer for every `except`/`catch` that logs and falls through, and
+    write the list down next to the classification:
+
+    | site | phase |
+    |---|---|
+    | `provider.py:202-217` | milestones |
+    | `provider.py:293-301` | per-issue comments |
+    | `provider.py:339-343` | the `/pulls` listing itself |
+    | `provider.py:369-402` | the PR-social batch |
+    | `provider.py:495-500` | per-PR comment → interaction |
+    | `provider.py:503-507` | the whole per-PR processing loop |
+
+    A site with no reachable Go analogue (here `:495-500`: the comments have
+    already been decoded and re-marshalled by the adapter, so nothing
+    downstream can fail on them) gets a **written note saying so**, not a
+    branch. An unreachable mirror is dead code that a mutation harness
+    reports as SURVIVED and a reader mistakes for coverage.
+
+    Defect classes 1 and 5 and the fail-open precondition above are about
+    the FIRST failure — a fetch that loses records and still reports clean
+    success. They never licensed the second. What to hold:
+    - **Continue and record** when an optional-data fetch fails: build the
+      effects from what you collected, and put a typed entry (component,
+      subject, stable cause class — never provider response text) in the
+      unit `Result`.
+    - **Continuation is only a fail-open if state advances, so whatever
+      holds the watermark back is load-bearing — name it, and check it
+      exists.** In `github/work-items` today that is nothing but a
+      hardcoded `Watermark: nil` on every return path of an unregistered
+      route. Nothing reads the `incomplete` entries: the route is their only
+      producer and there is no consumer anywhere in the tree. **This is an
+      unmet obligation on the activation layer, not a mechanism that
+      exists.** Whoever registers the family MUST make it read `incomplete`
+      and refuse to advance the alias watermarks for a degraded run, and
+      must ship the test that proves a degraded run does not advance them.
+      Until then, "the watermark is withheld" is true only because no
+      watermark is ever emitted — do not cite it as a safety property of the
+      degradation path, and do not let a future change hand this route a
+      real watermark without building the reader first.
+    - **Durable, or it did not happen.** The evidence has to survive the
+      encoding the durable write performs (for the Go worker,
+      `workItemAliasCompletionMetadata` + `json.Marshal` into the unit row).
+      Test that round-trip directly; a degraded run that reads as clean on
+      disk is exactly the silent omission this rule exists to stop.
+    - **Rate limits, lease loss, cancellation, required-phase failures, and
+      pagination caps are NOT this class** and still abort the unit before
+      any effect is built. Continuing on a rate limit keeps spending an
+      exhausted budget and banks a batch from a window the provider refused
+      to serve. Make that boundary a test at the composed route, not only at
+      the collector — after this rule lands, widening the classification by
+      one clause silently converts a rate limit into a landed batch.
+    - **Classify on (component, cause), never component alone, and check
+      EVERY entry.** Both halves failed review here. A cap or a broken
+      cursor arrives on an *optional* component — `pr_social` carries
+      `pagination_cap` and `invalid_pagination` — so a component-keyed test
+      lands a deterministically truncated batch as a clean success, and it
+      is asymmetric with the REST side that already returns
+      `ErrPaginationCapExceeded`. Causes with no producer analogue at all
+      (`invalid_pagination` means *our* paging is broken) must never read as
+      routine degradation. Separately, the entries are a LIST: a loop that
+      decides on the first one passes every single-entry test while the
+      blocking entry sits at position two — and in this route the blocking
+      `projects_v2` entry is appended **last**, i.e. the exact ordering
+      production emits is the one a check-first loop gets wrong. Test a
+      **mixed** batch with the blocking entry last, and mutate the loop to
+      inspect only `incomplete[:1]` to prove the test sees it.
+    - **A component absent for a reason the producer does not share** (an
+      unported seam, an unresolved policy — `projects_v2` `policy_pending`)
+      is not an optional-data fetch failure. It still fails the unit closed.
+
+    Python does not yet satisfy the recording half — it logs and drops — and
+    is tracked separately to emit the same durable evidence (CHAOS-3467
+    covers the work-items case). Do **not** port the log-and-drop: this is
+    one of the few places the port is deliberately ahead of its source, so
+    `D16`'s mirror rule does not apply to it.
+
+    **The contract is about MISSING data, not WRONG data. Where a degraded
+    read produces a confidently incorrect value instead of an absent one,
+    fail closed — D17 ratifies that too.** The donor read in
+    `github_work_items_derivation_context.go` is the worked case: Python
+    (`job_work_items.py:1196-1210`) catches a donor-load failure and
+    continues with whatever inheritance survives, which does not omit a
+    team-attribution row — it writes a *different team* onto
+    `work_item_team_attributions` and every derived surface downstream, with
+    nothing in the row marking it as computed blind. "Land what you have and
+    record what you lost" has no meaning when what you'd land is wrong
+    rather than partial, so the unit fails and the 100k donor rail fails
+    with it. Ask which of the two you have before reaching for the
+    continue-and-record shape; the answer is not "is this data optional?"
+    but "if I continue, is the output absent or is it a lie?"
 
 ## The recipe
 
@@ -900,13 +1017,35 @@ Write the plan to `internal/providersync/testdata/mutation-plans/<pair>.json`
 (checked in, reviewable) and run it with:
 
 ```
-python3 scripts/mutation_harness.py run \
+PATH="$PWD/.venv/bin:$PATH" python3 scripts/mutation_harness.py run \
   --plan internal/providersync/testdata/mutation-plans/<pair>.json \
   --assert-all-killed
 ```
 
 Report which mutation was caught by which test — that mapping is what makes
 "I mutation-tested this" a checkable claim instead of an assertion.
+
+**`BASELINE_FAILED` is an UNMEASURED mutation, not a known-failing one — and
+it is easiest to misread in a fresh worktree.** Proof commands are argv
+arrays resolved against `PATH` (`_run_command` uses `shell=False` and no
+interpreter pinning), so a plan's `pytest …` proof runs whatever `pytest`
+`PATH` finds — a pyenv shim or a Homebrew install, not this tree's `.venv`.
+Two failure modes stack:
+
+- the worktree venv does not exist or is incomplete — fix with `uv sync
+  --all-extras --dev`; `pyproject.toml` is the source of truth and `uv.lock`
+  is never hand-edited;
+- the venv exists and the proof still runs a different interpreter, because
+  `PATH` was not prefixed. This one is the trap: `./.venv/bin/python
+  scripts/mutation_harness.py` pins the *harness*, not the *proofs*.
+
+Measured instance: four `github/work-items` REST mutations reported
+`BASELINE_FAILED` from `ModuleNotFoundError: pytest_asyncio` and were carried
+in two consecutive reports as "pre-existing environment noise". They were
+neither pre-existing nor noise — with the venv synced and on `PATH` all four
+are `KILLED`. A verdict of `BASELINE_FAILED` says the mutation proved
+**nothing**; never total it alongside kills, and never let it ride into a
+second report.
 
 ## Difficulty tiers for the remaining GitHub pairs
 

@@ -380,9 +380,13 @@ func TestGitHubWorkItemsRESTCollectorRechecksLeaseBeforeOptionalDegradation(t *t
 
 func TestGitHubWorkItemsRESTCollectorRequiredFailuresReturnErrors(t *testing.T) {
 	t.Parallel()
+	// The pull-request paths are deliberately absent: provider.py:339-343
+	// catches a failed /pulls traversal and continues with the issues it
+	// already has, so under D17 they degrade with typed evidence instead of
+	// failing the unit. TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure
+	// owns that behaviour, including the cap that stays fatal.
 	for _, failedPath := range []string{
 		"/repos/acme/api", "/repos/acme/api/issues", "/repos/acme/api/issues/42/events",
-		"/repos/acme/api/pulls", "/repos/acme/api/pulls/52",
 	} {
 		failedPath := failedPath
 		t.Run(strings.TrimPrefix(failedPath, "/"), func(t *testing.T) {
@@ -467,14 +471,101 @@ func TestGitHubWorkItemsRESTPullPayloadNumberMatchesSelectedTarget(t *testing.T)
 	fixtures["/repos/acme/api/pulls/52"] = []githubWorkItemsRESTReply{{body: strings.ReplaceAll(
 		fixtures["/repos/acme/api/pulls/52"][0].body, `"number":52`, `"number":`+strconv.Itoa(99),
 	)}}
-	_, err := (GitHubWorkItemsRESTCollector{}).Collect(
+	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
 		context.Background(), githubWorkItemsRESTClaim(),
 		gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
 		time.Now(),
 	)
-	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
-		t.Fatalf("error=%v want normalization failure", err)
+	// A pull-request detail whose number does not match the one we selected is
+	// still rejected -- it never becomes a row. Under D17 the rejection
+	// degrades the pull-request phase instead of failing the unit, so the guard
+	// is now observed through the typed evidence rather than a returned error.
+	if err != nil {
+		t.Fatalf("error=%v", err)
 	}
+	if len(result.PullRequests) != 0 {
+		t.Fatalf("mismatched pull payload became a target: %+v", result.PullRequests)
+	}
+	if !reflect.DeepEqual(result.Incomplete, []GitHubWorkItemsRESTIncomplete{
+		{Component: "pull_requests", Cause: "invalid_response"},
+	}) {
+		t.Fatalf("incomplete=%+v", result.Incomplete)
+	}
+}
+
+func TestGitHubWorkItemsRESTCollectorDegradesOnOptionalPullRequestFailure(t *testing.T) {
+	t.Parallel()
+	t.Run("listing failure keeps the issues already collected", func(t *testing.T) {
+		t.Parallel()
+		fixtures := githubWorkItemsRESTFixtures()
+		fixtures["/repos/acme/api/pulls"] = []githubWorkItemsRESTReply{
+			{status: http.StatusBadGateway, body: `{"message":"down"}`},
+		}
+		claim := githubWorkItemsRESTClaim()
+		claim.DatasetOptions["fetch_milestones"] = false
+		claim.DatasetOptions["fetch_comments"] = false
+		result, err := (GitHubWorkItemsRESTCollector{}).Collect(
+			context.Background(), claim,
+			gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+			time.Now(),
+		)
+		if err != nil {
+			t.Fatalf("optional /pulls failure blocked the unit: %v", err)
+		}
+		if len(result.Rows.WorkItems) == 0 {
+			t.Fatal("issues collected before the /pulls failure were discarded")
+		}
+		if len(result.PullRequests) != 0 {
+			t.Fatalf("pull requests=%+v", result.PullRequests)
+		}
+		if !reflect.DeepEqual(result.Incomplete, []GitHubWorkItemsRESTIncomplete{
+			{Component: "pull_requests", Cause: "transient"},
+		}) {
+			t.Fatalf("incomplete=%+v", result.Incomplete)
+		}
+	})
+
+	t.Run("detail failure retains earlier pull requests", func(t *testing.T) {
+		t.Parallel()
+		fixtures := githubWorkItemsRESTFixtures()
+		fixtures["/repos/acme/api/pulls/52"] = []githubWorkItemsRESTReply{
+			{status: http.StatusBadGateway, body: `{"message":"down"}`},
+		}
+		claim := githubWorkItemsRESTClaim()
+		claim.DatasetOptions["fetch_milestones"] = false
+		claim.DatasetOptions["fetch_comments"] = false
+		result, err := (GitHubWorkItemsRESTCollector{}).Collect(
+			context.Background(), claim,
+			gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+			time.Now(),
+		)
+		if err != nil {
+			t.Fatalf("optional pull-detail failure blocked the unit: %v", err)
+		}
+		if len(result.Incomplete) != 1 || result.Incomplete[0].Component != "pull_requests" {
+			t.Fatalf("incomplete=%+v", result.Incomplete)
+		}
+	})
+
+	t.Run("pagination cap stays fatal", func(t *testing.T) {
+		t.Parallel()
+		fixtures := githubWorkItemsRESTFixtures()
+		fixtures["/repos/acme/api/pulls"] = []githubWorkItemsRESTReply{{
+			body: `[{"number":52,"updated_at":"2026-07-22T00:00:00Z"}]`,
+			link: `<https://api.github.com/repos/acme/api/pulls?page=2>; rel="next"`,
+		}}
+		claim := githubWorkItemsRESTClaim()
+		claim.DatasetOptions["fetch_milestones"] = false
+		claim.DatasetOptions["fetch_comments"] = false
+		_, err := (GitHubWorkItemsRESTCollector{MaxPages: 1}).Collect(
+			context.Background(), claim,
+			gitHubPullRequestClient(t, &githubWorkItemsRESTDoer{t: t, replies: fixtures}, "https://api.github.com"),
+			time.Now(),
+		)
+		if !errors.Is(err, ErrPaginationCapExceeded) {
+			t.Fatalf("capped /pulls traversal degraded instead of failing: %v", err)
+		}
+	})
 }
 
 func TestGitHubWorkItemsRESTCollectorStopsAtExactlyOneThousandEvents(t *testing.T) {

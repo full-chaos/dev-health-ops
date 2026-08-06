@@ -96,8 +96,8 @@
       "file": "internal/providersync/github_work_items_social_fetch.go",
       "find": "|| isRateLimited(err) {",
       "replace": "|| false {",
-      "rationale": "GitHub rate limits retain retry and deferral semantics rather than becoming Python-style optional social degradation",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherPropagatesRateLimitCancelAndLeaseLoss$/rate_limit$", "./internal/providersync/"]]
+      "rationale": "GitHub rate limits retain retry and deferral semantics rather than becoming optional social degradation. Under the ratified optional-data contract this clause is what keeps a rate limit OUT of the continue-and-record path, so the composed route boundary is proved too, not just the fetcher.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemPRSocialFetcherPropagatesRateLimitCancelAndLeaseLoss$/rate_limit$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch$", "./internal/providersync/"]]
     },
     {
       "id": "non-rate-failure-has-typed-marker",

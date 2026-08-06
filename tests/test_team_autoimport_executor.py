@@ -98,6 +98,8 @@ async def test_loader_builds_team_attribution_context(
     assert "GROUP BY" in project_query
     assert "FINAL" not in project_query
     assert "org_id = {org_id:String}" in project_query
+    assert "argMax(name, (updated_at, last_synced, name))" in project_query
+    assert "ORDER BY g.provider, g.project_id, g.team_id" in project_query
 
     assert context.project_by_id[("linear", "project-1")][0].team_id == "team-project"
     assert context.project_by_key[("linear", "PROJ")][0].team_id == "team-project"
@@ -115,6 +117,12 @@ async def test_loader_builds_team_attribution_context(
     )
     membership_query = next(q for q in calls if "team_memberships" in q)
     assert "identity_facets" in membership_query
+    assert "argMax(name, (updated_at, last_synced, name))" in membership_query
+    assert "ORDER BY g.provider, g.member_id, g.team_id" in membership_query
+
+    repo_query = next(q for q in calls if "team_repo_ownership" in q)
+    assert "argMax(name, (updated_at, last_synced, name))" in repo_query
+    assert "ORDER BY g.provider, g.repo_full_name, g.team_id" in repo_query
 
     assert len(context.manual_fallbacks) == 1
     manual = context.manual_fallbacks[0]
@@ -125,6 +133,62 @@ async def test_loader_builds_team_attribution_context(
     assert manual.priority == 5
     manual_query = next(q for q in calls if "manual_attribution_fallbacks" in q)
     assert "FINAL" in manual_query
+    manual_order = manual_query.split("ORDER BY", 1)[1]
+    positions = [
+        manual_order.index(column)
+        for column in (
+            "o.provider",
+            "o.scope_type",
+            "o.scope_id",
+            "o.priority",
+            "o.team_id",
+            "o.team_name",
+            "o.reason",
+        )
+    ]
+    assert positions == sorted(positions)
+
+
+@pytest.mark.asyncio
+async def test_loader_preserves_explicit_zero_manual_priority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    async def fake_query(_client: object, query: str, _params: dict[str, object]):
+        if "manual_attribution_fallbacks" not in query:
+            return []
+        return [
+            {
+                "provider": "github",
+                "scope_type": "repo",
+                "scope_id": "repo-zero",
+                "team_id": "team-zero",
+                "team_name": "Zero Team",
+                "reason": "explicit highest priority",
+                "priority": 0,
+            },
+            {
+                "provider": "github",
+                "scope_type": "repo",
+                "scope_id": "repo-default",
+                "team_id": "team-default",
+                "team_name": "Default Team",
+                "reason": "legacy nullable row",
+                "priority": None,
+            },
+        ]
+
+    monkeypatch.setattr(
+        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+        fake_query,
+    )
+
+    context = await ClickHouseDataLoader(
+        object(), org_id="org-1"
+    ).load_team_attribution_context(as_of=now)
+
+    assert [rule.priority for rule in context.manual_fallbacks] == [0, 100]
 
 
 @pytest.mark.asyncio

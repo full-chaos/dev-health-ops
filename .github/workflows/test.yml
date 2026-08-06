@@ -191,6 +191,10 @@ jobs:
       github.event_name != 'pull_request' &&
       (github.event_name == 'merge_group' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-26.04-arm
+    # CHAOS-3413 THROWAWAY DIAGNOSTIC PROBE -- not for merge. Bounds the run
+    # so a reproduced hang self-terminates with diagnostics captured instead
+    # of running to the 6h default; observed hangs trigger within ~8-10min.
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read
@@ -233,6 +237,43 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-docs.txt
 
+      # CHAOS-3413 THROWAWAY DIAGNOSTIC PROBE. Turns on lock-wait logging and
+      # shortens deadlock_timeout so a stuck lock shows up fast in the server
+      # log, without needing to rebuild/restart the service container.
+      - name: "[probe] enable lock-wait diagnostics on the postgres service"
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends postgresql-client
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" -c "ALTER SYSTEM SET log_lock_waits = on;"
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" -c "ALTER SYSTEM SET log_min_duration_statement = '5000';"
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" -c "ALTER SYSTEM SET deadlock_timeout = '2s';"
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" -c "SELECT pg_reload_conf();"
+
+      # CHAOS-3413 THROWAWAY DIAGNOSTIC PROBE. Polls pg_stat_activity and
+      # pg_locks every 15s for the life of the test step so a hang shows the
+      # literal blocked statement and what (if anything) is holding the
+      # ungranted lock, instead of just the eventual `cancelled` outcome.
+      - name: "[probe] start pg_locks/pg_stat_activity poller"
+        run: |
+          mkdir -p test-results/logs
+          (
+            while true; do
+              {
+                echo "=== $(date -u +%FT%TZ) ==="
+                echo "-- pg_stat_activity --"
+                psql "postgresql://postgres:postgres@localhost:5432/postgres" -c \
+                  "SELECT pid, state, wait_event_type, wait_event, now()-query_start AS age, left(query,200) AS query FROM pg_stat_activity WHERE datname IS NOT NULL ORDER BY query_start;"
+                echo "-- pg_locks (ungranted) --"
+                psql "postgresql://postgres:postgres@localhost:5432/postgres" -c \
+                  "SELECT pid, locktype, mode, granted, pg_blocking_pids(pid) AS blocked_by FROM pg_locks WHERE NOT granted;"
+                echo "-- pg_locks (granted, non-relation) held by anyone blocking someone --"
+                psql "postgresql://postgres:postgres@localhost:5432/postgres" -c \
+                  "SELECT l.pid, l.locktype, l.mode, l.granted FROM pg_locks l WHERE l.pid IN (SELECT unnest(pg_blocking_pids(pid)) FROM pg_locks WHERE NOT granted);"
+              } >> test-results/logs/pg-lock-probe.log 2>&1
+              sleep 15
+            done
+          ) &
+          echo $! > /tmp/pg_probe.pid
+
       - name: Run coverage-gated test contract
         env:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
@@ -254,6 +295,23 @@ jobs:
           mkdir -p test-results/logs
           set -o pipefail
           ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-3.14.log
+
+      # CHAOS-3413 THROWAWAY DIAGNOSTIC PROBE.
+      - name: "[probe] stop pg_locks poller"
+        if: always()
+        run: kill "$(cat /tmp/pg_probe.pid)" 2>/dev/null || true
+
+      # CHAOS-3413 THROWAWAY DIAGNOSTIC PROBE. Unconditional (not
+      # if: failure()) because the target failure mode is a hang that ends
+      # in `cancelled`, not `failure`.
+      - name: "[probe] upload pg lock probe log"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pg-lock-probe
+          path: test-results/logs/pg-lock-probe.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload junit test reports
         if: always()

@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Same interim exception documented in CASE-SCHEMA.v1.md's declared-blocked section -- do not build on it.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "DevPersistenceService.cleanup_expired exists (confirmed by reading it directly: src/dev_health_ops/api/dev/persistence/service.py) but has no beat schedule, CLI, or production caller (CHAOS-3404, already-confirmed-open ticket -- see REGISTRY-AMENDMENT.v1.md \u00a71). Also not reachable via any question-shaped /api/v1/dev/** endpoint even once wired -- it is an internal service method, not something an Ask Dev question can trigger. This case's question text is illustrative only, not a real reachable request shape."

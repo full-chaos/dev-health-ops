@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "Checked sources.json's `matrix` array in full (all 9 realized states plus the org-wide-hardcoded not-applicable row) -- there is genuinely no dedicated 'redacted' row, and no realized_by repo/mechanism anywhere in sources.json, subjects.json, or world.json produces a redacted-evidence signal (e.g. a source field masked/withheld for a policy reason distinct from unavailable/unauthorized/no-data). Following the declared-blocked pattern from case-attention.team.valid-qualification-light-on-feature-work.json: a real file with the full key set, status=declared-blocked, blocked_by naming the missing generator capability (not a CHAOS ticket -- there is no ticketed defect to cite, only an as-yet-unbuilt fixture-generator mechanism), question/org_alias/user_alias/subject_class/subject_ref kept as documentation of the intended (currently-blocked) scenario. subject_class is n/a and no specific repo is named in the question deliberately -- naming a specific real repo (e.g. probe/source-current) would falsely imply that repo has a redacted-state fixture attached to it, which it does not; an org-wide phrasing avoids that false implication while still documenting the intended scenario shape. [blocked_by WIRED to CHAOS-3461 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'generator: no redacted-source-state fixture row exists yet'.]"

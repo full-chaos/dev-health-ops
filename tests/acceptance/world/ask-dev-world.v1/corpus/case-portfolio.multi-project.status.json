@@ -3,7 +3,7 @@
   "id": "portfolio.multi-project.status",
   "family": "portfolio",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "CHAOS-3393 unblock evidence (was blocked on CHAOS-3393, now unblocked/authored per corpus/REGISTRY-AMENDMENT.v1.md \u00a71); group 1 Product-question corpus, portfolio family"

@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "BLOCKED: an oversized EVIDENCE payload (search_evidence.v1/get_evidence.v1 returning more than contracts.py's own DevAnswer evidence bound -- contract_fixtures.py's own 'oversized_evidence'/`answer_oversized` fixture, read directly, mutates `evidence` to 26 entries specifically to exercise that contract-schema bound) needs either a real tool result genuinely containing that much fixture evidence, or a scripted decision sequence that hand-constructs an oversized evidence array server-side. Unlike adv.oversized.result (which reuses the already-existing, real 'oversized-output' fault type targeting the answer's own `direct_summary` field), provider_scripts.py's fault taxonomy (read directly) has no equivalent scripted fault type targeting the `evidence` array specifically, and hand-authoring a full, contract-valid dev_answer.v1-shaped `final_answer` decision with 26+ well-formed evidence entries (correct claims/versions/evidence_ref_id wiring, matching contracts.py's real DevAnswer shape) is cross-lane schema-construction work this Lane 2b case-authoring pass cannot safely hand-build without risking a differently-shaped validation failure standing in for the one this id is actually supposed to test. The `question` field above is flavor-text documentation of the intended scenario only. [blocked_by WIRED to CHAOS-3455 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: \"runner: no scripted fault type for oversized evidence-tool output (only oversized-output/result has a scripted fault; no equivalent for search_evidence.v1/get_evidence.v1 responses without hand-constructing a full contract-valid oversized DevAnswer payload, which is cross-lane schema-construction work out of this pass's safe reach)\".]"

@@ -3,7 +3,7 @@
   "id": "attention.team.invalid-qualification-unknown",
   "family": "attention",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "CHAOS-3394 open defect evidence: investment_allocation_shift_observation reports attribution_present=False unconditionally today (real production code, not a fixture gap); group 1 Product-question corpus, attention family"

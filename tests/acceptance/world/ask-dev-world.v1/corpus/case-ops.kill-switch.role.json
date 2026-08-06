@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Same interim exception documented in CASE-SCHEMA.v1.md's declared-blocked section -- do not build on it.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "Grepped src/dev_health_ops/ for 'kill_switch'/'KillSwitch' -- ZERO matches anywhere in production code. world.json's `kill_switches` field (global/org/provider/role/surface/contextual_entry, all 'enabled' today for every one of the 3 fixture orgs) is a Lane 1a fixture-schema field with no enforcing production code behind it yet -- there is nothing for a corpus case to exercise: no request path reads that field and no org fixture variant has any switch disabled to test the off-state against. Not a case-authoring gap; a real, confirmed absence of the feature this corpus case would need to prove. [blocked_by WIRED to CHAOS-3458 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no production kill-switch enforcement code exists yet'.]"

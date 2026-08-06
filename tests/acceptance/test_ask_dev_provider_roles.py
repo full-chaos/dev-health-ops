@@ -489,10 +489,13 @@ def test_every_authored_corpus_case_has_a_legacy_agent_script_entry() -> None:
         seen[case_id] = str(path)
 
         status = case.get("status")
-        assert status in ("authored", "declared-blocked"), (
-            f"{path}: unknown status {status!r}"
+        assert status in ("active", "declared-blocked"), (
+            f"{path}: unknown status {status!r} -- Lane 2a's real "
+            "case_schema.py only recognizes 'active' (or absent, "
+            "defaulting to it) / 'declared-blocked'; 'authored' is not a "
+            "real status value in the merged loader"
         )
-        if status == "authored":
+        if status == "active":
             authored[case_id] = case["question"]
         elif not case.get("blocked_by"):
             blocked_without_reason.append(case_id)

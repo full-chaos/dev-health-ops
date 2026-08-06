@@ -3,7 +3,7 @@
   "id": "subject-label.valid-prior-turn-reference",
   "family": "subject-label",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "CHAOS-3389 eval set (\"prior-turn references\")"

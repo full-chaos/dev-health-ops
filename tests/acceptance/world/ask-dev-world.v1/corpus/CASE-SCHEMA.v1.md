@@ -38,8 +38,8 @@ answers it.
   "id": "scope.no-match",                    // verbatim registry id (frozen, or amendment)
   "family": "scope",                          // registry family
   "group": 1,                                 // registry group number (1/8/9/10/11)
-  "status": "authored",                       // "authored" | "declared-blocked"
-  "blocked_by": null,                         // "CHAOS-XXXX" when status=declared-blocked; case still gets a file (typed status, per world.json/sources.json precedent), just no live assertions
+  "status": "active",                         // "active" | "declared-blocked" -- Lane 2a's real case_schema.py vocabulary (ACTIVE_STATUS/DECLARED_BLOCKED_STATUS); "active" is also the default when the field is absent. CORRECTED 2026-08-06 rebase pass -- earlier drafts of this doc and every case file used "authored", which the real merged loader does NOT recognize (_KNOWN_STATUSES = {"active", "declared-blocked"}); every case file was rewritten to "active" in the rebase pass.
+  "blocked_by": null,                         // "CHAOS-XXXX[ free text]" when status=declared-blocked -- the real loader anchors `^CHAOS-\d+\b` at the START of the string (case-schema.py's `_BLOCKED_BY_TICKET_PATTERN`); a bare non-ticket string like "runner: ..." is REJECTED, not merely discouraged. Case still gets a file (typed status, per world.json/sources.json precedent), just no live assertions.
   "proves": ["group 1 bullet 11"],             // >=1 registry/issue-group cross-reference, verbatim from corpus-registry-v1.md's "proves" column
 
   "question": "What is the status of the Ask Dev project?",  // EXACT literal text the runner sends; must match provider-scripts/role-*.json's routing key when a scripted decision sequence exists for this id
@@ -51,11 +51,14 @@ answers it.
 
   "invariants": [
     {
-      "id": "inv.no-match-terminates-gracefully",
-      "assert": "A subject mention with zero catalog candidates reaches a terminal PublicOutcome (not_found) -- never an internal_error, never a silent fallback to org-wide scope.",
-      "class": "contract"                      // "contract" (survives any matcher) | "security" (never-violate, e.g. no-unauthorized-candidate) | "persistence" (CHAOS-3423/3424 class: terminal leaves a transcript row)
+      "category": "no-silent-widening",         // taxonomy label below, or an ad-hoc "inv.<name>" -- REQUIRED by the real loader (case_schema.py's per-entry check)
+      "check": "scope_resolution_outcome_in",    // name of a registered checker in scripts/acceptance/corpus/invariants.py's CHECKS registry -- REQUIRED; unknown names fail loud at evaluation time
+      "args": {"from_profile": "expected_scope_resolution_outcome"}, // checker-specific: literal values (e.g. "allowed": [...]) and/or "from_profile" pulling a key out of this case's resolved resolution-profile block
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope.", // human-readable full claim -- may be broader than what `check` currently verifies; NOT read by the loader/runner
+      "executable_today": true,                  // documentation only, NOT read by the loader/runner
+      "$comment": "optional: notes on why `check` is narrower than `assert`, or that it was recently wired to a graduated checker"
     }
-  ],
+  ],                                            // CORRECTED 2026-08-06: this doc's earlier draft showed {id, assert, class} -- the real, merged case_schema.py requires {category, check} on every entry (case_schema.load_corpus_case); {id, class} are not read at all. Every case file already uses the real {category, check, args, assert, executable_today, $comment} shape.
 
   "resolution_profile_ref": "deterministic-v1", // which resolution-profiles/*.json file's `cases[id]` block supplies the matcher-specific expected outcome
 
@@ -65,28 +68,53 @@ answers it.
 }
 ```
 
-## Invariant taxonomy (the fixed vocabulary every case's `invariants[].class` draws from)
+## Invariant taxonomy (the fixed vocabulary every case's `invariants[].category` draws from)
 
 These four survive *any* resolution matcher (deterministic regex stack
 today, QUA LLM-backed shortlist tomorrow) because they are asserted about
-the **contract**, not the implementation:
+the **contract**, not the implementation. `check`/`args` below reflect the
+REAL checkers wired in the rebase pass (2026-08-06) against Lane 2a's
+merged `invariants.py` (PR #1518) -- read that module directly before
+changing any of these mappings.
 
-1. **`inv.no-silent-widening`** — a named subject mention that misses its
+1. **`no-silent-widening`** — a named subject mention that misses its
    intended target never silently widens to org-wide/broader scope.
    Widening is only ever a *disclosed*, terminal `answered_with_gaps` /
    `needs_clarification` outcome, never a silent substitution. (CHAOS-3407
    class: the regex bug that dropped "Dev" and then silently ran org-wide.)
-2. **`inv.no-internal-error-on-fuzzy-label`** — no shape of subject label
+   **Wired to `scope_resolution_outcome_in`** (`args: {"from_profile":
+   "expected_scope_resolution_outcome"}`) for every case whose resolution
+   profile entry has a non-null `expected_scope_resolution_outcome` — this
+   checker unconditionally FAILS when no `scope.resolved` event was
+   observed (`invariants.py`'s `outcome is None` branch), so it must never
+   be wired onto a case whose profile's `expected_scope_resolution_outcome`
+   is `null` (no scope resolution is attempted at all, e.g. n/a-subject
+   org-wide cases) — those 4 cases (`attention.team.invalid-qualification-
+   unknown`, `portfolio.multi-project.status`, `portfolio.org-wide.plan-
+   registry-gap-loud`, `portfolio.org-wide.status`) keep the narrower
+   `no_internal_error` floor, documented via `$comment`, not silently
+   claimed as fully enforced.
+2. **`no-internal-error-on-fuzzy-label`** — no shape of subject label
    (parenthetical, ≥5 words, typo, acronym, wrong word order) can crash the
    run to `internal_error`. Worst case is a graceful terminal
    (`not_found` / `needs_clarification` / `answered_with_gaps`). (CHAOS-3421
-   class: the leaked `forbidden_or_not_found` internal_error.)
-3. **`inv.no-unauthorized-candidate-surfaces`** — every candidate offered in
+   class: the leaked `forbidden_or_not_found` internal_error.) Still backed
+   by `no_internal_error` only — no graduated checker in `invariants.py`
+   asserts the "lands in one of the three graceful terminals" half of this
+   claim yet (that would need `public_outcome_in` wired with an
+   allowed-terminals list per case, not done in this pass; tracked, not
+   silently claimed enforced).
+3. **`no-unauthorized-candidate-surfaces`** — every candidate offered in
    a clarification list, or silently chosen, is drawn from the requester's
    own authorized catalog (permission_fingerprint-scoped). A candidate that
    exists in the database but outside that scope (sibling-tenant, inactive,
-   soft-deleted) must never appear, ranked or unranked.
-4. **`inv.terminal-persists-assistant-row`** — every clarification or error
+   soft-deleted) must never appear, ranked or unranked. **Wired to
+   `no_unauthorized_candidate_surfaces`** (`args: {"authorized_entity_ids":
+   [...]}`, a literal list of org `primary`'s own real fixture entity ids —
+   see the checker's own "KNOWN TRUST BOUNDARY" docstring: correctness of
+   this declared list is case-authoring's responsibility, not something the
+   checker verifies independently).
+4. **`terminal-persists-assistant-row`** — every clarification or error
    terminal persists a real transcript row (`DevAnswer` or the CHAOS-3423
    `dev_error.v1` row) — never a silently-dropped turn. New since PR #1507;
    applies to every case whose outcome is `needs_clarification`, `failed`,
@@ -95,28 +123,44 @@ the **contract**, not the implementation:
    `provider_unavailable` error code maps to `TEMPORARILY_UNAVAILABLE` per
    `terminal_frames.PUBLIC_OUTCOME_BY_ERROR_CODE`, and CHAOS-3423 exists
    precisely because that terminal used to be reachable without persisting
-   anything).
+   anything). **Wired to `terminal_persists_assistant_row`** (no args —
+   requires `assistant_schema_versions` populated via the docker-exec
+   verification plane).
 
 A case lists only the invariants its scenario actually exercises (not all
 four on every case) but must justify a `scope.*`/`readiness.*` case
 carrying zero invariants — that would mean the case isn't testing anything
 matcher-agnostic, which is a smell for this family specifically.
 
-**Ad-hoc, case-specific invariants** (same `{id, assert, class}` shape,
-`id` prefixed `inv.` but outside the four named ones above) are allowed
+**Ad-hoc, case-specific invariants** (same `{category, check, args, assert}`
+shape, `category` outside the four named ones above) are allowed
 when a scenario needs a contract assertion the fixed vocabulary doesn't
-cover — e.g. `inv.zero-unrelated-evidence-named-subject` on
+cover — e.g. `zero-unrelated-evidence-named-subject` on
 `unrelated-evidence.named-subject`. Use sparingly; if the same ad-hoc
 invariant would apply to 3+ cases, promote it into the fixed vocabulary
-instead of copy-pasting it.
+instead of copy-pasting it. Ad-hoc invariants still back onto whichever
+real `check` in `invariants.py`'s `CHECKS` registry fits best (often
+`no_internal_error`, since most ad-hoc categories don't have a dedicated
+graduated checker) — never invent a `check` name the registry doesn't
+have.
 
 ## `resolution-profiles/<profile>.json` shape
 
+**CORRECTED 2026-08-06 (rebase pass) against the real, merged
+`case_schema.load_resolution_profile`** (`origin/main` @ `515adf994`) — an
+earlier draft of this doc showed `schema_version: "ask_dev_resolution_
+profile.v1"` / `profile` / `describes`, which Lane 2a's landed loader does
+NOT accept (`schema_version` must start with the literal prefix
+`"resolution-profile."`, and the id field is named `profile_id`, not
+`profile`). The wrapper below is the real, load-bearing shape; `cases{}`'s
+inner per-case block shape (`expected_public_outcome` etc.) is unchanged
+from the original draft and was already correct.
+
 ```jsonc
 {
-  "schema_version": "ask_dev_resolution_profile.v1",
-  "profile": "deterministic-v1",
-  "describes": "Today's deterministic matcher stack: question_interpreter.py _NAME extraction, alias_matching.py (CHAOS-3388 acronym/literal-parenthetical), scope_catalog close-match search -- pre-QUA. Superseded (not overwritten) by a future qua-shadow-v1 / qua-committed-v1 profile as CHAOS-3389 lands; a case's invariants must hold under BOTH profiles unchanged.",
+  "schema_version": "resolution-profile.v1",
+  "profile_id": "deterministic-v1",
+  "$comment": "free text describing the matcher stack this profile represents",
   "cases": {
     "scope.no-match": {
       "expected_public_outcome": "not_found",
@@ -186,19 +230,13 @@ to cite for "this case format can't express what it needs to express yet."
 Both forms are valid; a consumer should treat `blocked_by` as opaque
 documentation, never parse it as strictly ticket-shaped.
 
-**`invariants` — INTERIM, tracked exception (2026-08-06):** the ideal
-value is `[]` (empty, not omitted — nothing runs, nothing to check). In
-practice, Lane 2a's `case_schema.py` loader (read directly) requires
-`invariants` to be a **non-empty** list on every file it globs,
-unconditionally — it has no `status`-awareness yet, so an empty list on
-one blocked case raises `CaseSchemaError` and fails the **entire** corpus
-load, not just that file. Until that loader gains status-aware handling
-(flagged to Lane 2a as a real gap, not silently worked around), a
-declared-blocked case instead carries exactly one placeholder invariant
-whose `category` is `"declared-blocked-placeholder"` and whose `assert`
-text says, verbatim, that it is a placeholder and must not be read as an
-executed claim about the blocked scenario (see either declared-blocked
-case file for the exact wording). **Do not build further on this
-placeholder** — it exists solely to keep the corpus loadable pending the
-loader fix; a status-aware loader should make it unnecessary and it should
-be removed (reverted to `[]`) once that lands.
+**`invariants` — `[]` (CLOSED 2026-08-06, rebase pass):** every
+declared-blocked case's `invariants` is the empty list — nothing runs,
+nothing to check. Lane 2a's real, merged `case_schema.py` (PR #1518,
+`origin/main` @ `515adf994`) is status-aware: `load_corpus_case` exempts
+`status == "declared-blocked"` cases from the non-empty-`invariants`
+requirement (`is_blocked` short-circuits the check), so an empty list no
+longer raises `CaseSchemaError`. The earlier INTERIM `declared-blocked-
+placeholder` invariant entry (a single `no_internal_error`-backed entry
+existing solely to satisfy a pre-status-aware loader) has been removed
+from every declared-blocked case file — do not reintroduce it.

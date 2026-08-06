@@ -3,7 +3,7 @@
   "id": "unrelated-evidence.named-subject",
   "family": "unrelated-evidence",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "launch threshold \"zero unrelated evidence surfaces in a named-subject answer\""

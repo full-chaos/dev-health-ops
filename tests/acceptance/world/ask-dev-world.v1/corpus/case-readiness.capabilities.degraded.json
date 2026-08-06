@@ -3,7 +3,7 @@
   "id": "readiness.capabilities.degraded",
   "family": "readiness",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "P0-B MISSING item 14"

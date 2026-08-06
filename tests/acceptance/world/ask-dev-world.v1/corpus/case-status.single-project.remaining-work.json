@@ -3,7 +3,7 @@
   "id": "status.single-project.remaining-work",
   "family": "status",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 1 Product-question corpus; status family remaining-work enumeration over work-items"
@@ -16,11 +16,13 @@
   "invariants": [
     {
       "category": "no-silent-widening",
-      "check": "no_internal_error",
-      "args": {},
+      "check": "scope_resolution_outcome_in",
+      "args": {
+        "from_profile": "expected_scope_resolution_outcome"
+      },
       "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
       "executable_today": true,
-      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
     },
     {
       "category": "resolution-path-matches-profile",

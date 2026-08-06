@@ -3,7 +3,7 @@
   "id": "deg.optional-integration-not-mislabeled",
   "family": "deg",
   "group": 9,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 9 family deg.optional-integration-not-mislabeled (an optional-integration source's absence must never be mislabeled as a deficiency; grounded in sources.json's 'not-applicable' ACR row)"

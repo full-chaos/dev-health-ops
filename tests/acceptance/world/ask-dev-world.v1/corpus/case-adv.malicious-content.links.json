@@ -3,7 +3,7 @@
   "id": "adv.malicious-content.links",
   "family": "adv",
   "group": 8,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.malicious-content family; contracts_v2/validators.py's narrative/frame consistency guards and scan_public_text as the real answer-composition sanitization floor, exercised over already-real evidence rather than fabricated fixture content"

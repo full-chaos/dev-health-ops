@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all 57 cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "Per this lane's 'generate from the real producer, never hand-author fixtures' rule: fixtures/generators/incidents.py's generate_incidents backs models.git.Incident, which carries no free-text notes/description field at all (only repo_id/incident_id/status/started_at/resolved_at) -- this is stronger than a missing generator parameter, the model itself has no channel for injected prose to occupy. A hand-authored payload string placed directly in this case file, pretending it exists in the generated ClickHouse database, would be exactly the fabricated-fixture defect that rule forbids -- the case would pass or fail against text no real run ever produced. Once payload injection exists at the generator/model layer, the real content-security-scanning mechanism this scenario is meant to exercise is contracts_v2/validators.py's validate_no_internal_leakage/scan_public_text (PUBLIC_TEXT_FORBIDDEN_TOKENS + the versioned-rule-id pattern) at the frame layer and no_match_terminal.py's INTERNAL_TOKEN_DENYLIST (internal_token_leak/internal_token_leak_field, derived from the live ScopeResolutionOutcome/AnswerStatus/RunState/PublicOutcome/ResolutionOutcome/DevError.code enums) at the answer/error layer -- both fail-closed scans over any prose field a model or producer authored, which is the boundary a commit-message/PR-body/etc. payload would have to cross to reach a user. `resolution_profile_ref: null` and no fragment entry per the assignment's instruction for this family (blocked cases get no profile expectation). [blocked_by WIRED to CHAOS-3456 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: \"generator: fixtures/generators/incidents.py's generate_incidents backs models.git.Incident, which carries no free-text notes/description field at all (only repo_id/incident_id/status/started_at/resolved_at)\".]"

@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all 57 cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "world.json has no sibling-org user alias pre-built for this scenario -- its `users[]` list documents sibling.ordinary and sibling.org-admin only as ACTORS asking questions FROM the sibling org, never as a user-kind SUBJECT a primary-org requester could name or reference (unlike primary.impersonation-target, which exists specifically as an impersonatable subject, but within the SAME org, not cross-tenant). This id's real scenario -- an impersonation-adjacent probe naming a specific sibling-org person by id -- also has no 'user' kind noun in question_interpreter.py's closed _KIND_NOUNS list and no user-kind entity in the 8 subjects.json classes, so even a well-grounded question would degrade to an untyped bare-name search across repos/projects/teams, never actually probing a USER-scoped authorization boundary the way the scenario intends. Per the assignment's explicit instruction: reference 'a sibling-org user' conceptually here rather than inventing a fake user id string that maps to nothing real. `question`/`subject_class`/`subject_ref` document the intended (currently-blocked) scenario only. [blocked_by WIRED to CHAOS-3459 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no sibling-org user-id request-shape support'.]"

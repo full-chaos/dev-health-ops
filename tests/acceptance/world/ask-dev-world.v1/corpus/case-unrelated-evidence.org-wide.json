@@ -3,7 +3,7 @@
   "id": "unrelated-evidence.org-wide",
   "family": "unrelated-evidence",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "launch threshold \"zero unrelated evidence surfaces in a named-subject answer\" (org-wide counterpart: the same fixture data that is 'unrelated' when the question names meridian/web-app is IN-scope, legitimate evidence once the question is deliberately org-wide)"

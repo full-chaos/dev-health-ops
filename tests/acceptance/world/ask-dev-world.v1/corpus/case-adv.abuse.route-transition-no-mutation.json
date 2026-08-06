@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "BLOCKED: exercising a real route transition mid-run (the client navigating from one surface_context.route_id to another while a run is still in flight) needs a concurrent, in-flight run plus a second, route-changed request racing against it -- CASE-SCHEMA.v1.md's single `question`/one-shot-per-case shape and Lane 2a's runner (one fresh conversation/run per case) cannot express or execute that concurrency. Intended scenario for whoever implements structured multi-turn/concurrent-request choreography: an in-flight run against subject.exact.meridian-web-app started from a project-detail route context; while it is still executing, the client's surface_context.route_id changes (project page -> team page) without the run itself being cancelled or resubmitted; the invariant this id names is that the IN-FLIGHT run's own committed scope/subject resolution must not silently mutate to follow the new route -- it finishes answering the question it was actually asked, using the scope it already committed, and any DIFFERENT answer for the new route requires a genuinely new request. [blocked_by WIRED to CHAOS-3454 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no structured multi-turn / concurrent-request choreography support'.]"

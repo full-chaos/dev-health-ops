@@ -3,7 +3,7 @@
   "id": "deg.timeout.status",
   "family": "deg",
   "group": 9,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 9 family deg.timeout (pipeline-stage timeout matrix -- status-snapshot instance)"
@@ -16,11 +16,11 @@
   "invariants": [
     {
       "category": "terminal-persists-assistant-row",
-      "check": "no_internal_error",
+      "check": "terminal_persists_assistant_row",
       "args": {},
       "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn. Applies here even though the run is deliberately slow (an injected 4000ms delay before the only round's final_answer): a slow-but-successful terminal must persist exactly like a fast one.",
       "executable_today": true,
-      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
     },
     {
       "category": "resolution-path-matches-profile",

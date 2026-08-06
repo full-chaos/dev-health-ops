@@ -3,7 +3,7 @@
   "id": "adv.no-person-level-output",
   "family": "adv",
   "group": 8,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"

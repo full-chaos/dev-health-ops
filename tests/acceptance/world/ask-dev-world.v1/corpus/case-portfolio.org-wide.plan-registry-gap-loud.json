@@ -3,7 +3,7 @@
   "id": "portfolio.org-wide.plan-registry-gap-loud",
   "family": "portfolio",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "Wave 3.1 gate.plan-registry-gap-is-loud (already-proven honest-degradation half); group 1 Product-question corpus, portfolio family"

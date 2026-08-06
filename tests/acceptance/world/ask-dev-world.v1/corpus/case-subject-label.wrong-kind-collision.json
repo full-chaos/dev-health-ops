@@ -3,7 +3,7 @@
   "id": "subject-label.wrong-kind-collision",
   "family": "subject-label",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "CHAOS-3389 eval set (\"wrong-kind collisions\"); CHAOS-3422 evidence"
@@ -16,19 +16,53 @@
   "invariants": [
     {
       "category": "no-silent-widening",
-      "check": "no_internal_error",
-      "args": {},
+      "check": "scope_resolution_outcome_in",
+      "args": {
+        "from_profile": "expected_scope_resolution_outcome"
+      },
       "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
       "executable_today": true,
-      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
     },
     {
       "category": "no-unauthorized-candidate-surfaces",
-      "check": "no_internal_error",
-      "args": {},
+      "check": "no_unauthorized_candidate_surfaces",
+      "args": {
+        "authorized_entity_ids": [
+          "cf3d56b4-b75c-5328-8526-cf996e9e0ffd",
+          "2656f6c3-dff2-50a9-a1b5-a2ed0cf3d6ee",
+          "51b493e9-926d-54e3-99a0-c17a351b0b2b",
+          "8cbb50d6-992e-5823-83b1-259d8ac99cc8",
+          "d644874d-a845-53c5-a6a0-efb1f182c45f",
+          "defd02a0-b086-5f1f-9303-e6545b7ca95b",
+          "6e70d7aa-059a-5f06-8369-4214da5d9850",
+          "70951f6e-7707-599a-88ad-dcab6756edb0",
+          "91a7301e-57a2-5f9e-8ded-5175bed20134",
+          "9a10f327-7fd0-538f-8544-2cc83492ab15",
+          "84c417da-7837-5428-98fb-080a2188db9b",
+          "0dc8b6b2-79b5-59c0-bd06-5110dbe9c440",
+          "1d8a2485-779c-5304-84ea-a9dc3c50f41c",
+          "meridian/web-app",
+          "meridian/atlas",
+          "meridian-sandbox/atlas",
+          "meridian/api-gateway",
+          "meridian/context-fabric",
+          "rotated/service",
+          "probe/source-current",
+          "probe/source-stale",
+          "probe/source-no-data",
+          "probe/source-measured-zero",
+          "probe/source-truncated-workgraph",
+          "probe/source-conflicting-ci",
+          "core",
+          "platform",
+          "growth",
+          "ground-control-team"
+        ]
+      },
       "assert": "Every candidate offered (ranked or unranked) is drawn from the requester's own authorized catalog (permission_fingerprint-scoped); a candidate outside that scope must never appear.",
       "executable_today": true,
-      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+      "$comment": "Wired to the real graduated checker no_unauthorized_candidate_surfaces with a literal authorized_entity_ids allowlist -- org primary's full real fixture repository/project/team catalog, derived directly from src/dev_health_ops/fixtures/generator.py's FIXTURE_NAMESPACE uuid5 repo-id derivation, fixtures/generators/projects.py (project id = repo_full_name), and fixtures/demo_identity.py + world.py's postprocess (team id = literal slug); cross-checked against subjects.json + sources.json's org_alias=primary roster (rebase pass, 2a landed the 3 graduated checkers in PR #1518). Deliberately excludes subject.tenant.sibling-only-private-repo's sibling-org derived ids -- the whole point of this invariant is that they must never appear here. KNOWN TRUST BOUNDARY (invariants.py's own docstring): this declared list's correctness is case-authoring's responsibility, not independently re-verified by the checker at runtime."
     },
     {
       "category": "no-internal-error-on-fuzzy-label",

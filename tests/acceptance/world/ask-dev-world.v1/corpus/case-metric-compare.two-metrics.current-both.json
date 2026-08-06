@@ -3,7 +3,7 @@
   "id": "metric-compare.two-metrics.current-both",
   "family": "metric-compare",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 1 bullet 11"

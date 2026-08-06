@@ -3,7 +3,7 @@
   "id": "deg.provider.unavailable",
   "family": "deg",
   "group": 9,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 9 family deg.provider (provider readiness layer, distinct from provider-fail.before-frame/after-frame's mid-run fault scripting)"

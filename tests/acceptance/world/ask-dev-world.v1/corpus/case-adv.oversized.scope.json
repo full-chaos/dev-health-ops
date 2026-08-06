@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip) -- one blocked case with invariants:[] would crash loading for all cases. This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Flagged to team-lead/Lane 2a as a real runner gap: the loader/executor should check the case's own status field and skip execution (report blocked, not run) for any non-authored case, rather than relying on this placeholder to keep loading from crashing.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "BLOCKED: an oversized SCOPE (as opposed to an oversized set of question-text mentions, which adv.oversized.question/subject-set already cover via extract_mentions) means an oversized `DevScope.repositories`/`team_ids`/`entity_refs` list on the REQUEST's own structured scope field, not the natural-language question -- contracts.py (read directly) bounds `DevRequestedScope.repositories`/`team_ids`/`entity_refs` and `DevScope.entity_refs` each at `max_length=20`, a real, executable pydantic guard (a 21st item would raise a contract validation error before the interpreter even runs). CASE-SCHEMA.v1.md's case shape carries only `question`/`org_alias`/`user_alias` -- there is no field to author a raw `DevScope.repositories`/`team_ids`/`entity_refs` payload directly, and Lane 2a's runner (read via this doc's own description) builds the request's scope from org/user alias plus the question text, not from a case-authored structured scope object. Expressible only with a schema/runner extension letting a case author a raw oversized DevScope payload; the `question` field above is flavor-text documentation of the intended scenario only, not a mechanism that actually constructs an oversized DevScope today. [blocked_by WIRED to CHAOS-3455 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: \"runner: no structured way to author an oversized DevScope.repositories/team_ids/entity_refs payload (case schema only carries a natural-language question, not a raw DevScope object; the real 20-item pydantic bound lives on the request contract, out of this case format's reach)\".]"

@@ -3,7 +3,7 @@
   "id": "deg.provisional-unapproved-rule",
   "family": "deg",
   "group": 9,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 9 family deg.provisional-unapproved-rule (a health-rule finding whose calibration_state is provisional/shadow_only must never surface as an approved operational deficiency)"

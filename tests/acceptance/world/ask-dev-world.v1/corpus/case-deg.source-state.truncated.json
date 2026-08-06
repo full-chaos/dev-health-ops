@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code (read directly, 2026-08-06) has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "Mirrors sources.json's own 'truncated' matrix row (repo_full_name probe/source-truncated-workgraph, org primary): status: declared-blocked, blocked_by: CHAOS-3428 generator fan-out clustering. Live-verified 2026-08-05 (world_verify.verify_truncated_work_graph, first end-to-end run): observed max work-graph neighbor fan-out for this repo is 2, far short of work_graph_neighbors_service.MAX_NEIGHBORS (25) needed to trip SourceRequirementState.TRUNCATED -- SyntheticDataGenerator's work-item count scales with `days` at roughly the same rate PRs are generated (~1:1 linking), and there is currently no generator mechanism that concentrates many PRs onto one work item. Also mirrors provider-scripts/registry-ids.v1.json's group '9' blocked map, which already carries deg.source-state.truncated -> CHAOS-3428 (added 2026-08-05 per REGISTRY-AMENDMENT.v1.md sec.1, correcting a previously-stale empty blocked map). question/org_alias/user_alias/subject_class kept as documentation of the intended (currently-blocked) scenario -- a work-graph-neighbor-count question, the shape that would actually surface a TRUNCATED result once the generator gap closes. subject_ref intentionally null (no dedicated subjects.json entry for this repo, same pattern as the other deg.source-state.* cases referencing sources.json rows directly)."

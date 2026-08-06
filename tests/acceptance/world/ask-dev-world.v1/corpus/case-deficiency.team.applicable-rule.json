@@ -3,7 +3,7 @@
   "id": "deficiency.team.applicable-rule",
   "family": "deficiency",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "group 1 bullet 11"

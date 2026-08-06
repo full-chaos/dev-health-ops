@@ -3,7 +3,7 @@
   "id": "subject-label.parenthetical-quoted-control",
   "family": "subject-label",
   "group": 1,
-  "status": "authored",
+  "status": "active",
   "blocked_by": null,
   "proves": [
     "CHAOS-3389 eval set (\"quoted controls\")"

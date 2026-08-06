@@ -13,15 +13,7 @@
   "user_alias": "primary.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "declared-blocked-placeholder",
-      "check": "no_internal_error",
-      "args": {},
-      "assert": "Placeholder ONLY -- this case is status=declared-blocked (nothing runs against real production code/fixtures yet, see blocked_by). Lane 2a runner code has no declared-blocked concept: case_schema.py requires every case file, unconditionally, to carry a non-empty invariants[] list, or the WHOLE corpus load raises (not a per-file skip). This entry exists purely to satisfy that mechanical requirement so the corpus stays loadable; it must NOT be read as an executed assertion about the blocked scenario. Same interim exception documented in CASE-SCHEMA.v1.md's declared-blocked section -- do not build on it.",
-      "executable_today": false
-    }
-  ],
+  "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
   "notes": "A migration+rollback preserving retained conversations/non-Ask-Dev workflows is an infra/deployment-level property (apply migration, roll back, verify data survives) -- it has no natural 'question' at all, let alone one a corpus case's single-request shape can pose. This needs a dedicated infra verification job (Phase 5c CI territory per chaos-3219-plan.md), not an Ask Dev corpus case. [blocked_by WIRED to CHAOS-3460 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: migration/deployment-rollback is not a question-shaped scenario'.]"

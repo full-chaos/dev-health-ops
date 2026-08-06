@@ -448,6 +448,9 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			lease_expires_at timestamptz, last_heartbeat_at timestamptz,
 			duration_seconds integer, rate_limit_deferrals integer NOT NULL DEFAULT 0,
 			rate_limit_first_seen_at timestamptz,
+			budget_deferrals integer NOT NULL DEFAULT 0,
+			budget_first_deferred_at timestamptz,
+			first_blocked_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL
 		)`,

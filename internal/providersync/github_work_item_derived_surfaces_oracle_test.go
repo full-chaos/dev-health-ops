@@ -287,6 +287,62 @@ func githubDerivedOracleCases() []oracleCase {
 			},
 		},
 		{
+			// PRE-EXISTING DIVERGENCE (not introduced by this lane): Python's
+			// project-key resolver STRIPS the lookup value
+			// (providers/teams.py:88, `work_scope_id.strip()`), and the Go
+			// issue_project candidate looked it up raw. An item whose scope
+			// carries surrounding whitespace resolves to a team in Python and
+			// to nothing in Go.
+			ID: "issue_project_scope_needs_trimming",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-05T00:30:00Z", "AsOf": "2026-08-05T00:30:00Z",
+				"Facts": map[string]any{
+					"Projects": []any{}, "Repos": []any{}, "Members": []any{},
+					"ManualFallbacks": []any{},
+					"Teams": []any{map[string]any{
+						"TeamID": "platform", "TeamName": "Platform",
+						"ProjectKeys": []any{"PLAT"},
+					}},
+				},
+				"WorkItems": []any{
+					githubDerivedOracleItem("acme/api#50", map[string]any{
+						"project_id": " PLAT ",
+					}),
+				},
+				"Transitions": []any{},
+			},
+		},
+		{
+			// PRE-EXISTING DIVERGENCE (not introduced by this lane): Python
+			// builds its match sets by DROPPING falsy values
+			// (compute_work_items.py:304-309), so a rule with a blank scope_id
+			// matches nothing. Go compared the blank scope_id against
+			// stringValue(nil) == "", so the rule matched EVERY item with a
+			// null repo -- a blank config row silently attributing the whole
+			// tenant to one team.
+			ID: "manual_fallback_blank_scope_id_matches_nothing",
+			Input: map[string]any{
+				"OrgID": githubDerivedOracleOrg, "Day": "2026-08-04",
+				"ComputedAt": "2026-08-05T00:30:00Z", "AsOf": "2026-08-05T00:30:00Z",
+				"Facts": map[string]any{
+					"Teams": []any{}, "Projects": []any{}, "Repos": []any{},
+					"Members": []any{},
+					"ManualFallbacks": []any{map[string]any{
+						"Provider": "github", "ScopeType": "repo", "ScopeID": "",
+						"TeamID": "catchall", "TeamName": "Catch All",
+						"Reason": "blank scope", "Priority": 100,
+					}},
+				},
+				"WorkItems": []any{
+					// No repo_id at all, which is what the blank rule used to
+					// collide with on the Go side.
+					githubDerivedOracleItem("acme/api#51", nil),
+				},
+				"Transitions": []any{},
+			},
+		},
+		{
 			// SORTING-KEY COLLISION class. Two members of the SAME team are
 			// assigned to one issue, so the resolver emits two
 			// assignee_membership candidates that agree on team_id and differ

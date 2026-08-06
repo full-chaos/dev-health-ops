@@ -502,7 +502,12 @@ func (derived githubWorkItemDerivationContext) issueProjectCandidate(
 		keys = append(keys, *subject.ProjectKey)
 	}
 	for _, key := range keys {
-		team, exists := derived.projectKeyTeams[key]
+		// Python looks the key up STRIPPED (providers/teams.py:88,
+		// `work_scope_id.strip()`) but reports the RAW key in its evidence, so
+		// the trim belongs on the lookup alone. Trimming the evidence too
+		// would swap one divergence for another; both halves are pinned by the
+		// issue_project_scope_needs_trimming oracle case.
+		team, exists := derived.projectKeyTeams[strings.TrimSpace(key)]
 		if !exists {
 			continue
 		}
@@ -539,11 +544,29 @@ func (derived githubWorkItemDerivationContext) manualCandidates(
 		matched := false
 		switch rule.ScopeType {
 		case "repo":
-			matched = scopeID == githubWorkItemDerivationStringValue(subject.RepoID) || scopeID == githubWorkItemDerivationStringValue(subject.ProjectID)
+			// Python compares against a SET built by dropping falsy values
+			// (compute_work_items.py:304-309), so a blank scope_id matches
+			// nothing. Comparing directly against stringValue(nil) == ""
+			// instead made a blank rule match EVERY item with a null repo --
+			// one empty config row silently attributing the whole tenant to
+			// one team. githubWorkItemDerivationScopeMatch reproduces the set
+			// semantics: empty candidates are dropped and an empty scope_id
+			// can never match.
+			matched = githubWorkItemDerivationScopeMatch(scopeID,
+				githubWorkItemDerivationStringValue(subject.RepoID),
+				githubWorkItemDerivationStringValue(subject.ProjectID))
 		case "project":
-			matched = scopeID == githubWorkItemDerivationStringValue(subject.ProjectID) || scopeID == githubWorkItemDerivationStringValue(subject.ProjectKey) || scopeID == workItemDerivationScope(subject)
+			matched = githubWorkItemDerivationScopeMatch(scopeID,
+				githubWorkItemDerivationStringValue(subject.ProjectID),
+				githubWorkItemDerivationStringValue(subject.ProjectKey),
+				workItemDerivationScope(subject))
 		case "member":
 			for _, assignee := range subject.Assignees {
+				// Python's member_ids drops falsy assignees, so a blank
+				// assignee cannot be matched by a blank rule either.
+				if scopeID == "" || assignee == "" {
+					continue
+				}
 				matched = matched || normalizeDerivationIdentity(scopeID) == normalizeDerivationIdentity(assignee)
 			}
 		case "issue_key_prefix":
@@ -564,6 +587,21 @@ func (derived githubWorkItemDerivationContext) manualCandidates(
 		})
 	}
 	return result
+}
+
+// githubWorkItemDerivationScopeMatch mirrors Python's `scope_id in {...}`
+// where the set is built by dropping falsy values: an empty scope_id matches
+// nothing, and an empty candidate is not a member.
+func githubWorkItemDerivationScopeMatch(scopeID string, candidates ...string) bool {
+	if scopeID == "" {
+		return false
+	}
+	for _, candidate := range candidates {
+		if candidate != "" && strings.TrimSpace(candidate) == scopeID {
+			return true
+		}
+	}
+	return false
 }
 
 func githubWorkItemIssueKeyPrefix(workItemID string) string {

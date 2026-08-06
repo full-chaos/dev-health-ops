@@ -37,20 +37,31 @@ type GitHubWorkItemsIncomplete struct {
 	Cause     string `json:"cause"`
 }
 
-// githubWorkItemsOptionalIncompleteComponents are the collection phases whose
-// non-rate-limit failures Python logs and continues past, keeping every row it
-// already has: milestones (provider.py:202-217), per-issue comments
-// (provider.py:293-301), and the PR social batch (provider.py:369-402). D16
-// makes that behavior the contract, so the Go route mirrors it rather than
-// converting an optional enrichment failure into a zero-effect batch — a
-// permanently failing optional endpoint would otherwise block the whole
-// five-alias family for a repository forever.
+// githubWorkItemsOptionalIncompleteComponents are the collection phases that
+// carry the ratified optional-data contract (owner ruling 2026-08-06, which
+// also resolves CHAOS-3188): an optional-data fetch failure must emit durable
+// incompleteness evidence — never a silent omission, and never a whole-batch
+// failure. The three phases are milestones, per-issue comments, and the PR
+// social batch; Python reaches the same continuation by logging and dropping
+// (provider.py:202-217, :293-301, :369-402), which is the half of the contract
+// Python does not yet satisfy and is tracked separately for it.
 //
-// The degradation is NOT swallowed: every entry stays in the typed `incomplete`
-// result, which the activation layer reads to withhold all alias watermarks for
-// the run, so the next run revisits the same window. Components that are absent
-// in Go for reasons Python does not share (projects_v2 policy_pending) are not
-// listed here and still fail the unit closed.
+// Both halves are load-bearing:
+//   - Continue, so a persistently failing optional endpoint cannot block the
+//     whole five-alias family for a repository forever with nothing landing.
+//   - Record, so the omission is queryable. Every entry stays in the typed
+//     `incomplete` result, which PostgresRepository.Complete JSON-encodes into
+//     the durable unit row, and which the activation layer reads to withhold
+//     all alias watermarks for the run — continuation is only a fail-open if
+//     state advances, and the withheld watermark is what stops that.
+//
+// This governs non-rate-limit failures only. Rate limits, lease loss,
+// cancellation, required-phase failures, and pagination caps still abort the
+// unit before any effect is built (githubWorkItemsRESTOptionalFailure and
+// GitHubWorkItemPRSocialFetcher.finishFailure classify them). Components absent
+// for reasons that are not a fetch failure at all — projects_v2
+// policy_pending, an unported policy seam — are not listed here and still fail
+// the unit closed.
 var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 	"milestones":     true,
 	"issue_comments": true,
@@ -204,12 +215,13 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 				Component: "pr_social", Cause: socialResult.Incomplete.Cause,
 			})
 		}
-		// Mirror provider.py:369-402. A failed optional social batch leaves
-		// pr_events_by_number/pr_comments_by_number empty and Python still
-		// normalizes every pull request from the REST payload it already has,
-		// reading the batch with `.get(number, ())`. Dropping the pull requests
-		// here instead would withhold the required work-item/dependency/AI rows
-		// over an optional enrichment failure.
+		// An incomplete social batch must not cost us the pull requests
+		// themselves: dropping them here would withhold the required
+		// work-item/dependency/AI rows over an optional enrichment failure.
+		// Python reaches the same place from the other side — a failed batch
+		// leaves pr_events_by_number/pr_comments_by_number empty and every pull
+		// request is still normalized, read with `.get(number, ())`
+		// (provider.py:369-402).
 		for _, pull := range restResult.PullRequests {
 			payload, exists := socialResult.Payloads[pull.Number]
 			if !exists && socialComplete {

@@ -89,8 +89,8 @@
       "file": "internal/providersync/github_work_items_rest_collect.go",
       "find": "\t\tisRateLimited(err) || ctx.Err() != nil {",
       "replace": "\t\tfalse || ctx.Err() != nil {",
-      "rationale": "GitHub rate limits carry retry scheduling semantics and must propagate instead of becoming best-effort incompleteness",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorPropagatesOptionalRateLimits$", "./internal/providersync/"]]
+      "rationale": "GitHub rate limits carry retry scheduling semantics and must propagate instead of becoming best-effort incompleteness. Under the ratified optional-data contract this clause is what keeps a rate limit OUT of the continue-and-record path, so the composed route boundary is proved too, not just the collector.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRESTCollectorPropagatesOptionalRateLimits$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments$", "./internal/providersync/"]]
     },
     {
       "id": "R12-lease-is-rechecked-before-optional-degradation",

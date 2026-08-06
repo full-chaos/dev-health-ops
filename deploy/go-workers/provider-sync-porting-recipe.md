@@ -528,34 +528,60 @@ question.
       `python_github_prs_normalization_oracle.py`) — they keep working
       exactly as documented in step 8 below. Only NEW pairs should reach
       for the generic path first.
-17. **"Fail closed" is not a free upgrade over Python: an OPTIONAL-enrichment
-    failure must not become a zero-effect batch.** Defect classes 1 and 5 and
-    the fail-open precondition above are about a fetch that loses REQUIRED
-    records and still reports success. They do not license the mirror-image
-    error, which `github/work-items` shipped and Codex caught: the composite
-    route turned every typed incompleteness — including the three phases
-    `providers/github/provider.py` explicitly logs and continues past
-    (milestones `:202-217`, per-issue comments `:293-301`, the PR-social
-    GraphQL batch `:369-402`) — into a whole-unit failure with **zero**
-    effects. Executing the real Python producer against those same three
-    failures returns the work items every time (a milestone failure degrades
-    sprints 1 → 0 and nothing else); the Go route wrote nothing at all. That
-    is worse than the fail-open it was guarding against: a persistently
-    failing optional endpoint blocks the entire five-alias family for that
-    repository **forever**, and no row ever lands. The distinction to hold:
-    - Fail the unit when a **required** phase fails, when a page cap is
-      reached, or when a component is absent for a reason Python does not
-      share (an unported seam or unresolved policy — `projects_v2`
-      `policy_pending` still fails closed here).
-    - Mirror Python's continuation when the phase is one Python itself
-      degrades past, and keep the degradation as typed data in the unit
-      `Result` so the activation layer withholds the watermark. Continuation
-      is only a fail-open if state advances — holding the watermark is what
-      stops that, not throwing the collected rows away.
-    Check this while writing the handler: for every error you turn into a
-    unit failure, find the line in the Python producer that handles the same
-    failure. If Python logs and continues and you fail, you have diverged,
-    and D16 says the divergence needs ratifying before it ships.
+17. **Optional-data fetch failures: emit durable incompleteness evidence.
+    Never a silent omission, never a whole-batch failure.** This is a
+    **ratified contract** (owner ruling, 2026-08-06), not a parity
+    observation — for this class it is what the port targets, and it is
+    ahead of Python on the recording half. It also resolves **CHAOS-3188**
+    (and gives `CHAOS-3192`/`CHAOS-3196` their answer): a cap or optional
+    failure is neither "truncate silently and report success" nor "fail the
+    whole unit"; it is "land what you have, and record what you lost".
+
+    Both halves failed in production code, in opposite directions:
+    - `launchdarkly/feature-flags` and `github/cicd` truncate at their
+      5,000-flag / 1,000-run caps, return success, and advance state —
+      **silent omission** (CHAOS-3188).
+    - `github/work-items` shipped the mirror-image error, which Codex
+      caught: the composite route turned every typed incompleteness —
+      including the three phases `providers/github/provider.py` logs and
+      continues past (milestones `:202-217`, per-issue comments `:293-301`,
+      the PR-social GraphQL batch `:369-402`) — into a whole-unit failure
+      with **zero** effects. Executing the real Python producer against
+      those same three failures returns the work items every time (a
+      milestone failure degrades sprints 1 → 0 and nothing else); the Go
+      route wrote nothing at all. A persistently failing optional endpoint
+      would block the entire five-alias family for that repository
+      **forever**, with no row ever landing.
+
+    Defect classes 1 and 5 and the fail-open precondition above are about
+    the FIRST failure — a fetch that loses records and still reports clean
+    success. They never licensed the second. What to hold:
+    - **Continue and record** when an optional-data fetch fails: build the
+      effects from what you collected, and put a typed entry (component,
+      subject, stable cause class — never provider response text) in the
+      unit `Result`. Continuation is only a fail-open if state advances, so
+      the withheld watermark is what makes it safe — not throwing the
+      collected rows away.
+    - **Durable, or it did not happen.** The evidence has to survive the
+      encoding the durable write performs (for the Go worker,
+      `workItemAliasCompletionMetadata` + `json.Marshal` into the unit row).
+      Test that round-trip directly; a degraded run that reads as clean on
+      disk is exactly the silent omission this rule exists to stop.
+    - **Rate limits, lease loss, cancellation, required-phase failures, and
+      pagination caps are NOT this class** and still abort the unit before
+      any effect is built. Continuing on a rate limit keeps spending an
+      exhausted budget and banks a batch from a window the provider refused
+      to serve. Make that boundary a test at the composed route, not only at
+      the collector — after this rule lands, widening the classification by
+      one clause silently converts a rate limit into a landed batch.
+    - **A component absent for a reason the producer does not share** (an
+      unported seam, an unresolved policy — `projects_v2` `policy_pending`)
+      is not an optional-data fetch failure. It still fails the unit closed.
+
+    Python does not yet satisfy the recording half — it logs and drops — and
+    is tracked separately to emit the same durable evidence. Do **not** port
+    the log-and-drop: this is one of the few places the port is deliberately
+    ahead of its source, so `D16`'s mirror rule does not apply to it.
 
 ## The recipe
 

@@ -18,6 +18,7 @@ type githubWorkItemsRouteDoer struct {
 	t              *testing.T
 	rest           *githubWorkItemsRESTDoer
 	graphqlReplies []string
+	graphqlStatus  []int
 	graphqlCalls   int
 }
 
@@ -30,11 +31,20 @@ func (doer *githubWorkItemsRouteDoer) Do(request *http.Request) (*http.Response,
 	if doer.graphqlCalls > len(doer.graphqlReplies) {
 		doer.t.Fatalf("unexpected GraphQL request %d", doer.graphqlCalls)
 	}
+	index := doer.graphqlCalls - 1
+	status := http.StatusOK
+	if index < len(doer.graphqlStatus) && doer.graphqlStatus[index] != 0 {
+		status = doer.graphqlStatus[index]
+	}
+	header := http.Header{"Content-Type": []string{"application/json"}}
+	if status == http.StatusForbidden {
+		header.Set("X-RateLimit-Remaining", "0")
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		StatusCode: status,
+		Header:     header,
 		Body: io.NopCloser(strings.NewReader(
-			doer.graphqlReplies[doer.graphqlCalls-1],
+			doer.graphqlReplies[index],
 		)),
 		Request: request,
 	}, nil
@@ -361,6 +371,126 @@ func TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects(t *
 			Transport: "rest", RouteFamily: "work_items", Dimension: BudgetRESTCore, RequestCount: 5,
 		}}) {
 		t.Fatalf("batch=%+v incomplete=%+v", batch, githubWorkItemsRouteIncomplete(t, batch))
+	}
+}
+
+// The optional-data contract is scoped to NON-rate-limit failures. A rate limit
+// is not a degradation to record and continue past: continuing would keep
+// spending the exhausted budget and would bank a batch built from a window the
+// provider refused to serve. These two tests are the boundary clause of the
+// same ruling that makes the tests above continue, and they fail if the
+// classification ever widens to swallow a rate limit.
+func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch(t *testing.T) {
+	claim := githubWorkItemsRESTClaim()
+	claim.DatasetOptions = map[string]any{
+		"include_issues": false, "include_pull_requests": true,
+		"fetch_comments": true, "fetch_milestones": false, "comments_limit": 500,
+	}
+	fixtures := githubWorkItemsRESTFixtures()
+	for path := range fixtures {
+		if path != "/repos/acme/api" && path != "/repos/acme/api/pulls" && path != "/repos/acme/api/pulls/52" {
+			delete(fixtures, path)
+		}
+	}
+	doer := &githubWorkItemsRouteDoer{
+		t:              t,
+		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
+		graphqlReplies: []string{`{"message":"API rate limit exceeded"}`},
+		graphqlStatus:  []int{http.StatusForbidden},
+	}
+	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+	)
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
+		t.Fatalf("rate-limited social fetch did not abort the unit: error=%v", err)
+	}
+	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
+		t.Fatalf("rate-limited route returned batch=%+v or derived %d times", batch, deriver.calls)
+	}
+}
+
+func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments(t *testing.T) {
+	claim := githubWorkItemsRESTClaim()
+	claim.DatasetOptions["include_pull_requests"] = false
+	doer := &githubWorkItemsRouteDoer{
+		t: t,
+		rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
+			"/repos/acme/api":                    {{body: `{"id":4567,"full_name":"Acme/API"}`}},
+			"/repos/acme/api/milestones":         {{body: `[]`}},
+			"/repos/acme/api/issues":             {{body: `[{"number":42,"title":"Issue","state":"open","created_at":"2026-07-02T00:00:00Z","updated_at":"2026-07-20T00:00:00Z"}]`}},
+			"/repos/acme/api/issues/42/events":   {{body: `[]`}},
+			"/repos/acme/api/issues/42/comments": {{status: http.StatusForbidden, body: `{"message":"API rate limit exceeded"}`}},
+		}},
+	}
+	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+	)
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
+		t.Fatalf("rate-limited comment fetch did not abort the unit: error=%v", err)
+	}
+	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
+		t.Fatalf("rate-limited route returned batch=%+v or derived %d times", batch, deriver.calls)
+	}
+}
+
+// "Never a silent omission" is only satisfied if the evidence survives the
+// encoding the durable write actually performs. PostgresRepository.Complete
+// runs the result through workItemAliasCompletionMetadata and json.Marshal
+// before the unit row is written, so this drives that exact pair rather than
+// inspecting the in-memory map -- an incomplete entry that cannot round-trip
+// would leave a degraded run indistinguishable from a clean one on disk.
+func TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding(t *testing.T) {
+	claim := githubWorkItemsRESTClaim()
+	claim.DatasetOptions["include_pull_requests"] = false
+	doer := &githubWorkItemsRouteDoer{
+		t: t,
+		rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
+			"/repos/acme/api":                    {{body: `{"id":4567,"full_name":"Acme/API"}`}},
+			"/repos/acme/api/milestones":         {{status: http.StatusInternalServerError, body: `{"message":"down"}`}},
+			"/repos/acme/api/issues":             {{body: `[{"number":42,"title":"Issue","state":"open","created_at":"2026-07-02T00:00:00Z","updated_at":"2026-07-20T00:00:00Z"}]`}},
+			"/repos/acme/api/issues/42/events":   {{body: `[]`}},
+			"/repos/acme/api/issues/42/comments": {{status: http.StatusBadGateway, body: `{"message":"down"}`}},
+		}},
+	}
+	batch, err := (GitHubWorkItemsRouteHandler{
+		Deriver: &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
+	}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, audited, err := workItemAliasCompletionMetadata(
+		claim.Provider, claim.Dataset, claim.ProcessorFlags, batch.Result,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(audited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var durable struct {
+		Incomplete []GitHubWorkItemsIncomplete `json:"incomplete"`
+	}
+	if err := json.Unmarshal(encoded, &durable); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(durable.Incomplete, []GitHubWorkItemsIncomplete{
+		{Component: "milestones", Cause: "transient"},
+		{Component: "issue_comments", SubjectID: "42", Cause: "transient"},
+	}) {
+		t.Fatalf("durable incompleteness evidence=%s", encoded)
 	}
 }
 

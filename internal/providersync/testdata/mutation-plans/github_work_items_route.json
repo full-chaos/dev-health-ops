@@ -124,6 +124,14 @@
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects$", "./internal/providersync/"]]
     },
     {
+      "id": "degradation-reaches-the-durable-unit-row",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\"incomplete\":        incomplete,",
+      "replace": "\"incomplete\":        []GitHubWorkItemsIncomplete{},",
+      "rationale": "continuing past an optional-data failure is only allowed because the omission is recorded; dropping the entries from the result would make a degraded run indistinguishable from a clean one in the durable unit row",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding$", "./internal/providersync/"]]
+    },
+    {
       "id": "pull-requests-survive-optional-social-failure",
       "file": "internal/providersync/github_work_items_route.go",
       "find": "if !exists && socialComplete {",

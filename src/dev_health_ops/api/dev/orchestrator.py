@@ -1247,24 +1247,36 @@ class DevOrchestrator:
                     # is not, so this path deliberately leaves the session
                     # as-is and proceeds frame-less.
                     #
-                    # Codex adversarial review round 2 (honest residual, not
-                    # closed here): if `record_frame`'s failure was a real
-                    # mid-flush database error (not a pre-flush/construction
-                    # exception), the session may already be rollback-only,
-                    # and the `terminal()` write further below could still
-                    # raise `PendingRollbackError` regardless of this
-                    # branch -- a pre-existing risk this codebase already
-                    # accepts for a real `DevAnswer` (see
-                    # `DevPersistenceService.force_terminal_fallback`'s own
-                    # docstring, CHAOS-3297 round 3 Finding 2: the system
-                    # still reaches a coherent terminal state via that
-                    # fresh-session fallback, but the just-flushed row can
-                    # rarely be lost in that narrow correlated-failure
-                    # window). This makes the no-answer path symmetric with
-                    # that existing tradeoff, not worse than it -- closing
-                    # it for both would mean SAVEPOINT-wrapping
-                    # `record_frame`/`record_narrative` generally, out of
-                    # this ticket's scope.
+                    # CHAOS-3441: leaving the session as-is is safe for a real
+                    # mid-flush database failure too, not just a pre-flush
+                    # construction one. `record_frame` -- like
+                    # `record_narrative` and `append_assistant_answer`/
+                    # `append_assistant_error` -- isolates its own flush in a
+                    # SAVEPOINT (persistence/service.py), so a mid-flush error
+                    # unwinds to that savepoint and never leaves this session
+                    # rollback-only: the answer/error transcript row already
+                    # flushed above survives, and the `terminal()` write below
+                    # still lands. Proven for BOTH paths by a real database
+                    # failure, each of which fails if that `begin_nested` is
+                    # removed --
+                    # test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session
+                    # (no-answer row, duplicate-insert IntegrityError) and
+                    # tests/api/dev/test_chaos_3441_record_frame_savepoint.py
+                    # (real `DevAnswer` row, connection-level fault).
+                    #
+                    # Residual, stated honestly: the savepoint wraps the
+                    # write, not `record_frame`'s PRE-write SELECTs (run
+                    # ownership, clarification-candidate authorization). A
+                    # server-side failure there -- a statement timeout, say --
+                    # aborts the whole PostgreSQL transaction, so the
+                    # transcript row is still lost in that narrower
+                    # correlated-failure window and the run reaches a coherent
+                    # terminal state only via
+                    # `DevPersistenceService.force_terminal_fallback`'s fresh
+                    # session (CHAOS-3297 round 3 Finding 2). Deliberately not
+                    # closed here: sqlite does not reproduce
+                    # transaction-abort-on-failed-statement, so a test for it
+                    # would pass whether the code were fixed or not.
                 else:
                     # CHAOS-3297 stack #4: narrative synthesis only runs for
                     # a frame that actually persisted -- record_narrative's

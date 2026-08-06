@@ -617,26 +617,22 @@ async def test_chaos_3423_frame_write_failure_does_not_discard_the_transcript_ro
     ``DevPersistenceService.record_frame`` failure (not a recorder fake) and
     asserts the row survives.
 
-    Scope, stated honestly (Codex adversarial review round 2): this
-    ``record_frame`` failure is raised BEFORE any real ``session.flush()``
-    runs, so it proves the pre-flush/construction-failure case (e.g.
-    ``UnregisteredTerminalCode``, an unrelated Python bug in frame
-    construction) -- never a genuine mid-flush database error that marks
-    the session rollback-only. That narrower case is a PRE-EXISTING,
-    documented residual (``DevPersistenceService.force_terminal_fallback``'s
-    own docstring, CHAOS-3297 round 3 Finding 2): a real ``record_frame``
-    flush failure can already leave ``terminal()`` raising
-    ``PendingRollbackError`` for a genuine ``DevAnswer`` today (that write
-    is ALSO left un-rolled-back, for the identical "don't discard a
-    successful write" reason), recovered only at the system level (the run
-    still reaches a coherent terminal state via ``force_terminal_fallback``
-    on a fresh session -- the transcript row can rarely be lost in that
-    narrow correlated-failure window, exactly as a real answer already
-    could be). This change makes the no-answer path symmetric with that
-    existing, accepted tradeoff -- not worse than it -- rather than closing
-    it for either path; closing it fully would mean SAVEPOINT-wrapping
-    ``record_frame``/``record_narrative`` generally, which is a materially
-    larger change than this ticket's persistence-prerequisite scope.
+    Scope of THIS test (Codex adversarial review round 2): the failure is
+    raised BEFORE any real ``session.flush()``, so it proves only the
+    pre-flush/construction-failure case (e.g. ``UnregisteredTerminalCode``,
+    an unrelated Python bug in frame construction). The mid-flush case --
+    a genuine database error that used to mark the whole session
+    rollback-only -- is a separate proof, and it is closed, not a residual
+    (CHAOS-3441): ``record_frame`` isolates its flush in a SAVEPOINT, and
+    the mid-flush window is covered for both paths --
+    ``test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session``
+    below (no-answer path, real ``IntegrityError``) and
+    ``tests/api/dev/test_chaos_3441_record_frame_savepoint.py``
+    (real-``DevAnswer`` path, connection-level fault). Both fail if the
+    ``begin_nested`` is removed. What remains uncovered by a savepoint is
+    narrower and stated in ``orchestrator.finish()``'s own handler: a
+    server-side failure on ``record_frame``'s PRE-write SELECTs, which sits
+    outside the savepoint.
     """
 
     maker, org_id, user_id = seeded

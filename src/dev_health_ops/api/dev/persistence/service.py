@@ -3014,7 +3014,14 @@ class DevPersistenceService:
         # (a real IntegrityError, not the round-2 finding's abstract
         # concern), verified against a genuine duplicate-insert test
         # (test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session)
-        # rather than only documented as a residual.
+        # rather than only documented as a residual. CHAOS-3441 completes that
+        # proof for the OTHER path and a second fault class -- an already
+        # flushed real ``DevAnswer`` transcript row plus a connection-level
+        # (not constraint) mid-flush failure, and the run tags below never
+        # surviving the savepoint's rollback:
+        # tests/api/dev/test_chaos_3441_record_frame_savepoint.py. The
+        # savepoint covers this write, not the SELECTs above it; see
+        # ``orchestrator.finish()``'s frame-failure handler for that residual.
         async with self.session.begin_nested():
             self.session.add(record)
             run.contract_generation = "v2"

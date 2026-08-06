@@ -191,6 +191,25 @@ jobs:
       github.event_name != 'pull_request' &&
       (github.event_name == 'merge_group' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-26.04-arm
+    # CHAOS-3413: this job has hung indefinitely (1h45m-6h, then auto-cancelled
+    # by the next push's `cancel-in-progress` group) instead of failing, for
+    # days -- `cancelled` isn't a red check, so it merged silently as routine
+    # supersession while the COVERAGE_THRESHOLD=70 gate went unenforced. The
+    # hang starts precisely at #1335 (2026-07-30T19:40:46Z), which first gave
+    # this job DEV_HEALTH_POSTGRES_TEST_URI and so first let its live-Postgres
+    # tests actually execute -- concurrently, under xdist -n4, against the one
+    # shared Postgres service container, unlike `test-matrix` which serializes
+    # them. Before that regression, this job completed successfully in a
+    # consistent ~9m20s-11m30s (e.g. runs 30230488894, 30203314534,
+    # 30098888467) every time back through at least 07-09; it has not
+    # completed even once since. 25m is a deliberately generous multiple of
+    # that real historical baseline, not a guess -- comfortable room for
+    # coverage-instrumentation overhead plus whatever normal variance, while
+    # still bounding an indefinite hang into a `failure` well inside a
+    # workday. Tighten once the root fix (serializing the live-Postgres tests
+    # the way test-matrix already does) restores a real completion to compare
+    # against.
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: read

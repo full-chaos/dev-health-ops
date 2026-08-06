@@ -1856,3 +1856,28 @@ def test_the_report_states_what_proven_e2e_does_not_assert() -> None:
     assert "metadata only" in limits
     assert "historical records" in limits
     assert "does NOT mean" in limits
+
+
+def test_committed_report_matches_what_build_report_produces_now() -> None:
+    """The committed report is the machine-readable deliverable; the module is
+    the source of truth. Nothing tied them together, so a declaration added to
+    the source (e.g. a newly-acknowledged runtime dependency drift) could ship
+    while the committed report still described the old, smaller changed
+    surface -- consumers reading the report would understate it.
+
+    Codex adversarial review (MEDIUM, confirmed) during CHAOS-3463, whose
+    launcher change added exactly such a declaration.
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    committed = json.loads(
+        (root / "tests" / "acceptance" / "wave31-manifest-report.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert committed == build_report(root), (
+        "tests/acceptance/wave31-manifest-report.v1.json is out of date with "
+        "wave31_manifest.build_report(). Regenerate it in the same change that "
+        "altered the manifest: python scripts/acceptance/wave31_manifest.py "
+        "--skip-execution"
+    )

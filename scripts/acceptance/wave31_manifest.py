@@ -2124,10 +2124,49 @@ PROVEN_E2E_CLAIM_LIMITS = (
 _ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC = (
     "38d9503d5bd0c4e0ab3da72e2a8eeb069f7c1171cd3a9bff86742acf2239a34b"
 )
+
+#: CHAOS-3463 (world seeding): the launcher gained three things all fourteen
+#: rows' recorded hash predates -- a `dev-hops fixtures world-restore` step
+#: that seeds the pinned ask-dev-world.v1 into the serving databases before
+#: any other seeding, a boot_services/jobs_services split that starts
+#: worker+beat after that restore instead of before it, and (Codex round 3,
+#: HIGH) a per-boot `assert_world_principals_can_log_in.py` step proving the
+#: restored world's principals actually authenticate.
+#:
+#: What this declaration DOES claim: the recorded launcher hash is stale, and
+#: the reason is known and named. That is the mechanism's actual contract --
+#: acknowledged drift, never silence.
+#:
+#: What it does NOT claim, stated plainly because the tempting version of this
+#: comment overclaimed and was corrected under adversarial review: it does not
+#: claim these fourteen scenarios would produce identical evidence under the
+#: new launcher. They ran against a stack whose databases held only the
+#: `fixtures generate` fixture org; the new launcher additionally restores
+#: three ask-dev-world.v1 orgs and their users/commits/work items into the
+#: SAME databases before those scenarios execute. Ask Dev is org-scoped, so
+#: the expectation is that org-scoped and "organization-wide" answers are
+#: unaffected -- but that is an expectation about org scoping, not a
+#: measurement, and cross-tenant isolation is precisely what Wave 4's corpus
+#: exists to test rather than assume. A dependency hash can identify staleness;
+#: it cannot prove behavioural equivalence, and this comment will not pretend
+#: otherwise.
+#:
+#: Disposition (team-lead ruling required, tracked in the PR body): either
+#: re-mint all fourteen under the restored world, or accept them as evidence
+#: of the pre-restore stack and re-mint at the next acceptance run. The
+#: self-cleaning rule enforces the second half either way -- once these
+#: scenarios are re-run this declaration MUST be deleted or the manifest
+#: breaks, so it cannot outlive the drift it acknowledges.
+_LAUNCHER_AT_CHAOS_3463_WORLD_RESTORE = (
+    "4ab8b56b49103d88bfe92cc1d5bc0160be6166d8a0dca4a0cfe8f5c971513d06"
+)
 DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
     item_id: {
         "scripts/acceptance/acceptance_artifact.py": (
             _ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC
+        ),
+        "scripts/acceptance/run_ask_dev_compose.sh": (
+            _LAUNCHER_AT_CHAOS_3463_WORLD_RESTORE
         ),
     }
     for item_id in (

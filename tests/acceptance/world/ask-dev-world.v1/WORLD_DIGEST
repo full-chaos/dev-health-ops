@@ -7,11 +7,11 @@
           "row_count": 0
         },
         "primary": {
-          "content_hash": "f4cb0cad0d7d533f38cef417a5d1d74c19716feaba35b810b067b854081a8f40",
-          "row_count": 400
+          "content_hash": "6ca3a4522fcb385bb9e8e2756f82d2c6db74fe548cef88cc0fcfa4d8319c55ba",
+          "row_count": 440
         },
         "sibling": {
-          "content_hash": "f29c6b1a28c458ee894a7a46f1bfe1867a5f61bb7e695d0ca4c9f7c51a9862eb",
+          "content_hash": "e6f58320cbfae5e4b6f91af731635372aceaad7d241dd67bc6936f0928f5ec29",
           "row_count": 32
         }
       },
@@ -21,12 +21,54 @@
           "row_count": 0
         },
         "primary": {
-          "content_hash": "457b55d98468240a967b6f0dbe3cd97a12d3fa5f59ee23419602bab80f8b9787",
-          "row_count": 237
+          "content_hash": "53ba573e2d88bd04cb80cb16710a519693040d60fa2f18dde122ad63e039c1fc",
+          "row_count": 268
         },
         "sibling": {
-          "content_hash": "6cd3dd05b9788c5cbb21a1e0f3ab62c723a576b7dd74d6335e9f68e76c09c078",
+          "content_hash": "05b80daeea1374abd2f383b2ac8a6cd1c22ad89922bd52d862eb1d4c78de6b01",
           "row_count": 25
+        }
+      },
+      "dora_metrics_daily": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "f8300eed7947fe4815265bc495379f5b152d082c0343030773752e307644053b",
+          "row_count": 555
+        },
+        "sibling": {
+          "content_hash": "189805d0f6d4817489e73bc49b25b0efc37e1d7065980da8cc58754d3d68c760",
+          "row_count": 40
+        }
+      },
+      "git_commits": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "48af09476f5a1cc76eb9e495b1112feab29af8cea823b5dad5f0c3ffaeab47b9",
+          "row_count": 559
+        },
+        "sibling": {
+          "content_hash": "c5a95289b7a79e4331b4676ef76451b71198c92c44001c68a1296ed9f13197ed",
+          "row_count": 31
+        }
+      },
+      "git_pull_request_reviews": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "c5ee5bc3e1f6c9bbbfbb0ed351f5a37c1e3c9f1b37dcd046bbae18dcf570f081",
+          "row_count": 676
+        },
+        "sibling": {
+          "content_hash": "810b50a5249d0b109d40fb0e61b0f55b61cf0b72e018335f8837467a2416d05e",
+          "row_count": 43
         }
       },
       "git_pull_requests": {
@@ -35,12 +77,26 @@
           "row_count": 0
         },
         "primary": {
-          "content_hash": "58ae8cc620525cc090fb01d06405bffc270d6adc7d17406a9477588bedbe4465",
-          "row_count": 262
+          "content_hash": "d93afe23b0de6cc5920ed8459b2bc00f5e941fb2bac9fcaaec15bc09a75bb5f4",
+          "row_count": 282
         },
         "sibling": {
-          "content_hash": "a110f0e932517bc78191263a21d6430c2eb51a31ba9999368b4499043d7e0340",
+          "content_hash": "c82e64603d346c839afd8b1f5dde54e773c9313894993afbfd3be2f0a7b5a464",
           "row_count": 20
+        }
+      },
+      "operational_incidents": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "sibling": {
+          "content_hash": "523ef3749da125beaa35e7b67b8f9613ad8c01fc89581f08379a9f84f63db61a",
+          "row_count": 6
         }
       },
       "projects": {
@@ -49,8 +105,8 @@
           "row_count": 0
         },
         "primary": {
-          "content_hash": "9c5b996910c6450b06683767be532a2489c85a99792d04ff3bc58a2f0664c2d1",
-          "row_count": 12
+          "content_hash": "1c4ea25b357beb43b1a2ed2768a5b84b0701e10020cb1fe78fbd4cebb7074552",
+          "row_count": 13
         },
         "sibling": {
           "content_hash": "ced41fbd1c89872def32f24f9f1d44ec5b0d8121b73a17a4539fbe8eb21c6731",
@@ -63,8 +119,8 @@
           "row_count": 0
         },
         "primary": {
-          "content_hash": "a64943189241192ae7ff940ec6f7c85d57da6ca741137a5942dee3659cfffafa",
-          "row_count": 12
+          "content_hash": "b36e42cef61716ac7e0bff0faf3d17affb5ad88cfd1eab76c9e7c0ec85dadf3f",
+          "row_count": 13
         },
         "sibling": {
           "content_hash": "e4642ccfa70ccca574e7000233406811d378411478f09916bf73a56e56a3cbdb",
@@ -85,18 +141,60 @@
           "row_count": 3
         }
       },
+      "work_graph_issue_pr": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "1eb6f31619dc713c035c7c21de8e99bb88933ca0997476ac9208f4862c6c7b04",
+          "row_count": 304
+        },
+        "sibling": {
+          "content_hash": "5f0781480bd690e357990c973dee00a6c619eebb4751b8b443784fd7a19acc22",
+          "row_count": 20
+        }
+      },
+      "work_graph_pr_commit": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "cf501f7365922e548142617d4f04026cf0b5cef934829530f3638a008a0bb026",
+          "row_count": 793
+        },
+        "sibling": {
+          "content_hash": "8bb296c1eccb38cbc7089feb5615812d092674ea81ab6fdd9fdb3de538201678",
+          "row_count": 54
+        }
+      },
       "work_items": {
         "disabled": {
           "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "row_count": 0
         },
         "primary": {
-          "content_hash": "2527a01671432655e78ff81a4ee2d2981aaca7076872efda1dcaee8a140c5b5f",
-          "row_count": 240
+          "content_hash": "035bafe29f656433f4a50896a66687d27b0a9919157e59c4e7348178302c6726",
+          "row_count": 263
         },
         "sibling": {
-          "content_hash": "f8cfd04d9c77972f447d657b98f3df1a58861cd6e2e4788a67f789754a67b7fe",
+          "content_hash": "dd7b308da77e0861a85d06085dc3d8dd0eb3d0b4252dfd05710b8372c52cb637",
           "row_count": 21
+        }
+      },
+      "work_unit_investments": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "60071a496536045393ff710f415fe62fcae0d873c40134b5881dcf71a65ab485",
+          "row_count": 361
+        },
+        "sibling": {
+          "content_hash": "baa8addb63a7665cc88ea24933adbf766b7fb3c599892b3c19850f1fb4002d2d",
+          "row_count": 22
         }
       }
     },
@@ -215,13 +313,13 @@
       },
       "users": {
         "world": {
-          "content_hash": "cb5a5ff029b3f37d2d0a4407f6b2a97db6039bc5becfd3b82014c525eb24c9aa",
+          "content_hash": "846125f834f072f1014599aaad059d66745674d7bf2ffeefc3e3244efafb7fb5",
           "row_count": 10
         }
       }
     }
   },
-  "digest": "c6b20867e2b1c31da36e59e26572323cc8576e95e9c98e1f1ba8be6835fb7dbe",
+  "digest": "690c52260cb7f2350dbfe3404f8447cdc765818edcb519bfb7f042a0eac7642d",
   "master_seed": 3219000,
   "schema_version": "ask_dev_world.v1"
 }

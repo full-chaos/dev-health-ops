@@ -502,11 +502,23 @@ def test_launcher_error_suppression_is_confined_to_failure_diagnostics() -> None
 
 def test_launcher_boots_required_jobs_fleet_and_gates_acr_optionally() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
+    # CHAOS-3463 split this in two: the jobs fleet is still REQUIRED, it is
+    # just started after `fixtures world-restore` rather than before it.
+    # `worker`/`beat` were concurrent writers racing the restore's
+    # empty-target precondition (beat dispatches monitor-queue-depths from
+    # the moment it starts). Both lists, and the fact that BOTH are brought
+    # up, are asserted -- a split that quietly dropped the fleet would leave
+    # the "API+jobs" gate framing unmet.
     assert (
-        "boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api worker beat)"
+        "boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api)"
         in launcher
     )
+    assert "jobs_services=(worker beat)" in launcher
     assert '"${compose[@]}" up -d --build --wait "${boot_services[@]}"' in launcher
+    assert '"${compose[@]}" up -d --build --wait "${jobs_services[@]}"' in launcher
+    assert launcher.index("dev-hops fixtures world-restore") < launcher.index(
+        'up -d --build --wait "${jobs_services[@]}"'
+    ), "the jobs fleet must start AFTER the restore, not before it"
     assert "acr-db-init acr-migrate acr-api" in launcher
     # ACR services are appended to boot_services only inside the arming
     # branch, never unconditionally. The arming block now nests its own
@@ -1010,3 +1022,332 @@ def test_beat_sentinel_date_parsing_handles_naive_and_aware_timestamps() -> None
 
     assert module._parse_date_done("not-a-timestamp") is None
     assert module._parse_date_done(None) is None
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3463: world seeding wiring
+# ---------------------------------------------------------------------------
+
+
+def test_launcher_restores_the_pinned_world_before_anything_else_seeds() -> None:
+    """Ordering here is load-bearing, not stylistic.
+
+    `fixtures world-restore` refuses to write unless every table its snapshot
+    carries is still EMPTY in the target -- that emptiness predicate is what
+    makes it impossible to point at a real dev/production database, and it is
+    only satisfiable if the restore happens before `fixtures generate` and
+    `prepare_ask_dev_acceptance.py` put their own rows in. A future edit that
+    moves the restore after either of them turns a fail-closed guard into a
+    boot failure; this catches that in the unit tier.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "dev-hops fixtures world-restore" in launcher
+
+    boot_index = launcher.index('up -d --build --wait "${boot_services[@]}"')
+    restore_index = launcher.index("dev-hops fixtures world-restore")
+    generate_index = launcher.index("dev-hops fixtures generate")
+    # The INVOCATION, not the first mention: `prepare_ask_dev_acceptance.py`
+    # is named in a header comment long before it is run, and anchoring on
+    # that comment would compare the restore against the wrong position.
+    prepare_index = launcher.index("scripts/acceptance/prepare_ask_dev_acceptance.py")
+
+    assert boot_index < restore_index < generate_index < prepare_index
+
+
+def test_launcher_proves_world_principals_can_log_in_on_every_boot() -> None:
+    """Codex adversarial review round 3 (HIGH, confirmed): before this, the
+    principal login proof ran ONLY in the one-off mint script.
+
+    The digest guard cannot cover this, and that gap is the reason the step
+    exists. WORLD_DIGEST includes `password_hash`, so a verified digest proves
+    the credential BYTES are the ones the mint proved a login against -- it
+    says nothing about whether the API still ACCEPTS them. A login-path or
+    bcrypt-policy regression leaves every restored byte identical, the digest
+    green, and no world principal able to authenticate; the corpus then
+    silently runs as the superuser and its cross-tenant/entitlement cases stop
+    testing what they claim to.
+
+    Asserts the check is wired AND correctly ordered: after the restore (there
+    is nothing to authenticate before it) and before the corpus does any work.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "scripts/acceptance/assert_world_principals_can_log_in.py" in launcher, (
+        "the launcher no longer proves world principals can log in on boot -- "
+        "a login regression would ride behind a green digest"
+    )
+
+    restore_index = launcher.index("dev-hops fixtures world-restore")
+    login_index = launcher.index(
+        "scripts/acceptance/assert_world_principals_can_log_in.py"
+    )
+    prepare_index = launcher.index("scripts/acceptance/prepare_ask_dev_acceptance.py")
+    assert restore_index < login_index < prepare_index, (
+        "the login proof must run after the world is restored and before the "
+        "corpus starts, or it proves nothing about the world being served"
+    )
+
+
+def test_boot_login_proof_and_mint_use_the_same_assertion_script() -> None:
+    """One script, two callers. If the boot path ever grew its own weaker copy
+    of the login check, the mint could keep passing a stricter assertion than
+    the one every acceptance run actually relies on, and the divergence would
+    be invisible from either side alone.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    mint_path = _LAUNCHER.parent / "mint_ask_dev_world_snapshot.sh"
+    mint = mint_path.read_text(encoding="utf-8")
+
+    script = "scripts/acceptance/assert_world_principals_can_log_in.py"
+    assert script in launcher, "the boot path lost the shared login assertion"
+    assert script in mint, "the mint lost the shared login assertion"
+
+
+def test_launcher_restore_targets_the_databases_the_api_actually_serves() -> None:
+    """The whole point of CHAOS-3463's B2: the world has to land in the
+    ClickHouse `default` / Postgres `postgres` databases the acceptance API
+    reads and the corpus runner verifies (see
+    test_wave4_corpus_runner_live.py's own `_CONTAINER_*` constants), not in
+    some scratch database nothing serves."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    restore_block = launcher[launcher.index("dev-hops fixtures world-restore") :]
+    restore_block = restore_block[: restore_block.index("dev-hops fixtures generate")]
+
+    assert "clickhouse://ch:ch@clickhouse:8123/default" in restore_block
+    assert (
+        "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres" in restore_block
+    )
+    assert "/app/tests/acceptance/world/ask-dev-world.v1/snapshot" in restore_block
+
+
+def test_launcher_never_mints_the_digest_pin() -> None:
+    """`--mint-digest` re-pins WORLD_DIGEST from whatever it just restored.
+    On an ordinary boot that would make the digest guard tautological -- it
+    would "verify" the world against itself and pass no matter what drifted.
+    Minting belongs to the one-off operator flow alone."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "--mint-digest" not in launcher
+
+    mint = _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    assert mint.exists(), "the mint flow must exist somewhere, just not in the launcher"
+    assert "--mint-digest" in mint.read_text(encoding="utf-8")
+
+
+def test_world_snapshot_artifact_is_committed_and_pairs_with_the_digest() -> None:
+    """The artifact and the pin are only ever valid together: the pin is
+    re-minted FROM the snapshotted generation. A checkout carrying one
+    without the other cannot boot the acceptance stack, so both must be in
+    the repo."""
+
+    world_dir = _ROOT / "tests" / "acceptance" / "world" / "ask-dev-world.v1"
+    snapshot_dir = world_dir / "snapshot"
+
+    assert (world_dir / "WORLD_DIGEST").exists()
+    assert (snapshot_dir / "manifest.json").exists()
+
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "ask_dev_world_snapshot.v1"
+    assert manifest["clickhouse"]["tables"], (
+        "a world with no ClickHouse rows is not a world"
+    )
+    assert manifest["postgres"]["tables"], (
+        "a world with no Postgres rows is not a world"
+    )
+
+    # Every file the manifest names must actually be checked in -- a snapshot
+    # whose payload was gitignored would pass a manifest-only check and fail
+    # at boot.
+    import hashlib
+
+    for store in ("clickhouse", "postgres"):
+        for table, entry in manifest[store]["tables"].items():
+            path = snapshot_dir / entry["file"]
+            assert path.exists(), f"{store} table {table} snapshot file is missing"
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"], (
+                f"{store} table {table} snapshot file does not match its manifest hash"
+            )
+
+
+def _unset_block(script: str) -> set[str]:
+    """The set of variable names a launcher-style `unset \\ ... ` block clears."""
+    body = script.split("\nunset \\\n", 1)[1]
+    names: set[str] = set()
+    for line in body.splitlines():
+        stripped = line.strip()
+        names.update(stripped.rstrip("\\").split())
+        if not stripped.endswith("\\"):
+            break
+    return names
+
+
+def test_mint_script_hardens_the_same_env_as_the_launcher() -> None:
+    """Both scripts drive the SAME two compose files, so both are exposed to
+    the same `${VAR}` interpolation hazard a direnv-loaded ops/.env creates.
+    The launcher's list is already asserted to be a superset of every `${VAR}`
+    reference; requiring the mint script's list to be identical extends that
+    guarantee to the mint flow without maintaining a second, separately-rotting
+    allow-list.
+    """
+
+    mint = _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    launcher_names = _unset_block(_LAUNCHER.read_text(encoding="utf-8"))
+    mint_names = _unset_block(mint.read_text(encoding="utf-8"))
+
+    assert launcher_names, "the launcher's unset block could not be parsed"
+    assert mint_names == launcher_names, (
+        "mint_ask_dev_world_snapshot.sh and run_ask_dev_compose.sh must unset "
+        "exactly the same variables; they differ by "
+        f"{launcher_names ^ mint_names}"
+    )
+
+
+def test_mint_script_supplies_the_interpolation_only_variables() -> None:
+    """`web` and `bugsink` declare required (`:?`) variables. Compose refuses to
+    run ANY command -- even `ps` -- until every `${VAR}` in both files
+    interpolates, including for services this flow never starts. Observed: the
+    mint script exited 1 on `compose ps` before this."""
+
+    mint = (
+        _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    ).read_text(encoding="utf-8")
+    assert "export ASK_DEV_WEB_CONTEXT=" in mint
+    assert "export BUGSINK_SECRET_KEY=" in mint
+
+
+def test_committed_world_digest_is_a_real_pin_not_a_placeholder() -> None:
+    """A stub pin is worse than a missing one: it looks committed and it fails
+    every acceptance boot.
+
+    Found by Codex adversarial review and reproduced: `_generate_world` ends by
+    WRITING the digest, so a unit test that monkeypatched `compute_world_digest`
+    and left `digest_path=None` wrote its 64-zero stub straight onto the real,
+    committed `WORLD_DIGEST`. Merely running the unit suite corrupted the
+    artifact -- silently, because nothing asserted the pin was real. This is
+    that assertion.
+    """
+
+    world = _ROOT / "tests" / "acceptance" / "world" / "ask-dev-world.v1"
+    pinned = json.loads((world / "WORLD_DIGEST").read_text(encoding="utf-8"))
+
+    digest = pinned.get("digest")
+    assert isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest), digest
+    assert digest != "0" * 64, "WORLD_DIGEST is the all-zero placeholder, not a pin"
+
+    components = pinned.get("components") or {}
+    assert components.get("clickhouse"), "pinned digest has no ClickHouse components"
+    assert components.get("postgres"), "pinned digest has no Postgres components"
+    # A pin whose every component is an empty table would hash consistently and
+    # verify forever while describing nothing.
+    row_counts = [
+        org.get("row_count", 0)
+        for store in components.values()
+        for table in store.values()
+        for org in table.values()
+    ]
+    assert sum(row_counts) > 0, "every pinned component is empty -- this pins nothing"
+
+
+def test_pinned_digest_and_snapshot_artifact_describe_the_same_generation() -> None:
+    """Binds the two committed artifacts by an exact value, not a heuristic.
+
+    The mint stamps the digest it computed FROM the restored snapshot into the
+    snapshot's own manifest, so the pin and the artifact carry the same 64-hex
+    string or they are not a pair. Codex adversarial review round 2 (MEDIUM,
+    confirmed): the first version of this test only required pinned row counts
+    to be <= snapshot row counts and skipped zero-count tables, which a swapped
+    or polluted artifact could satisfy.
+    """
+
+    world = _ROOT / "tests" / "acceptance" / "world" / "ask-dev-world.v1"
+    pinned = json.loads((world / "WORLD_DIGEST").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (world / "snapshot" / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    stamped = manifest.get("world_digest")
+    assert stamped, (
+        "the committed snapshot manifest carries no world_digest -- it was "
+        "minted by a build that predates the pin/artifact binding, so nothing "
+        "proves it belongs with the committed WORLD_DIGEST. Re-mint."
+    )
+    assert stamped == pinned["digest"], (
+        f"the snapshot was minted for world digest {stamped} but the committed "
+        f"pin is {pinned['digest']} -- these are different generations"
+    )
+
+
+def test_committed_snapshot_is_bound_to_the_committed_world_manifest() -> None:
+    """The committed artifact must be minted for the committed `world.json`.
+
+    `restore_world` refuses a snapshot whose `world_manifest_contract` is
+    absent or disagrees with the manifest, so a committed pair that fails this
+    cannot boot the stack at all -- catching it in the unit tier beats
+    discovering it 20 minutes into an acceptance run.
+
+    This is the check WORLD_DIGEST structurally cannot make: the digest is
+    computed from the restored DATABASE, so editing `world.json` alone (an
+    email, a `membership_role`) leaves the rows and the digest identical while
+    the manifest and the served world silently diverge. Whoever edits
+    `world.json` must re-mint, and this is what says so.
+    """
+
+    import sys
+
+    sys.path.insert(0, str(_ROOT / "src"))
+    from dev_health_ops.fixtures.world import (
+        load_world_manifest,
+        world_manifest_contract_hash,
+    )
+
+    world_dir = _ROOT / "tests" / "acceptance" / "world" / "ask-dev-world.v1"
+    manifest = json.loads(
+        (world_dir / "snapshot" / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    stamped = manifest.get("world_manifest_contract")
+    assert stamped, (
+        "the committed snapshot carries no world_manifest_contract -- it was "
+        "minted by a build predating that binding, and `world-restore` now "
+        "refuses it rather than trusting it. Re-mint."
+    )
+
+    world = load_world_manifest(world_dir / "world.json")
+    assert stamped == world_manifest_contract_hash(world), (
+        "the committed snapshot was minted for a DIFFERENT world.json than the "
+        "one committed beside it. An org/user alias, id_seed, email, username, "
+        "full_name, membership_role or is_superuser value changed without a "
+        "re-mint -- the stack would refuse to boot. Re-mint the snapshot and "
+        "the pin together."
+    )
+    assert manifest.get("world_schema_version") == world.world["schema_version"]
+    assert manifest.get("master_seed") == world.master_seed
+
+
+def test_snapshot_manifest_records_a_schema_fingerprint_for_both_stores() -> None:
+    """The restore refuses a snapshot with no fingerprint, so a committed
+    artifact that lacks one cannot boot the stack at all. Catching that here
+    beats discovering it at boot."""
+
+    manifest = json.loads(
+        (
+            _ROOT
+            / "tests"
+            / "acceptance"
+            / "world"
+            / "ask-dev-world.v1"
+            / "snapshot"
+            / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    clickhouse = manifest["clickhouse"]["schema_fingerprint"]
+    postgres = manifest["postgres"]["schema_fingerprint"]
+
+    assert clickhouse["migrations"], "no ClickHouse migrations recorded"
+    assert clickhouse["server_version"]
+    assert re.fullmatch(r"[0-9a-f]{64}", clickhouse["catalog_sha256"])
+    assert postgres["alembic_heads"], "no alembic heads recorded"
+    assert re.fullmatch(r"[0-9a-f]{64}", postgres["catalog_sha256"])

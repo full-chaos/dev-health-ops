@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.db import get_postgres_uri
 from dev_health_ops.fixtures.coherence import FixtureBundle, validate_all
 from dev_health_ops.fixtures.demo_identity import (
     DEFAULT_DEMO_REPO_NAME,
@@ -464,6 +465,37 @@ async def _add_fixture_license_if_absent(
     return "inserted"
 
 
+def resolve_auth_seed_postgres_uri(ns: Any) -> str | None:
+    """Where ``run_fixtures_generation`` seeds orgs/users/memberships/licenses
+    when the analytics sink is NOT itself Postgres (i.e. ClickHouse).
+
+    CHAOS-3463 (guard escape, found live, not from reading): this used to be
+    ``get_postgres_uri()`` alone -- environment only. ``fixtures world``
+    validates its OWN ``--postgres-uri`` through
+    ``world._require_scratch_database`` and then calls
+    ``run_fixtures_generation`` once per repo, so the world's auth rows were
+    written to whatever ``DATABASE_URI``/``POSTGRES_URI`` happened to be
+    exported rather than to the scratch database the operator named and the
+    guard had just approved. Reproduced inside the ask-dev acceptance stack:
+    ``fixtures world --postgres-uri …/ask_dev_world_scratch`` created org
+    ``Meridian``, users ``admin@devhealth.example`` /
+    ``onboarding@devhealth.example`` and an enterprise ``org_license`` in the
+    SERVING ``postgres`` database. From a direnv-loaded dev shell the same
+    call lands them in the dev ``devhealth`` database -- exactly what the
+    scratch guard exists to prevent, one hop outside the module the guard
+    lives in.
+
+    An explicit ``ns.postgres_uri`` therefore WINS over the environment.
+    ``fixtures generate`` never sets that attribute, so its resolution is
+    unchanged.
+    """
+
+    explicit = getattr(ns, "postgres_uri", None)
+    if explicit:
+        return explicit
+    return get_postgres_uri()
+
+
 async def _seed_auth_data(
     session,
     user_data: dict,
@@ -634,6 +666,23 @@ async def _seed_auth_data(
 
 
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
+    # CHAOS-3463 / Codex adversarial review round 2 (HIGH, confirmed): this
+    # gate must be the FIRST thing the function does. As a bare CLI flag,
+    # `--overwrite-real-users` was an unrestricted bypass of the CHAOS-2458
+    # credential guard -- anyone could point `fixtures generate` at any
+    # database and merge a known-password superuser into it, and "demo/CI
+    # only" help text is documentation, not a control. Round 1 added the gate
+    # but placed it beside the auth seeding, which is AFTER
+    # `store.insert_teams(...)` has already written to ClickHouse: a rejected
+    # command still left fixture rows behind. A refusal must write nothing at
+    # all, so the check happens before the store is even opened.
+    if bool(getattr(ns, "overwrite_real_users", False)):
+        from dev_health_ops.fixtures.world_snapshot import (
+            _require_acceptance_environment,
+        )
+
+        _require_acceptance_environment()
+
     now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data: dict[str, list] = {
@@ -678,6 +727,17 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
         # Seed users/orgs/memberships/licenses into PostgreSQL (auth layer).
         # This must happen regardless of which analytics sink is used.
+        #
+        # CHAOS-3463: `--overwrite-real-users` opts into the existing,
+        # already-supported `_seed_auth_data(overwrite_real_users=True)` path.
+        # Off by default, so every existing caller keeps the CHAOS-2458 guard
+        # ("refuse to seed into a populated auth database") unchanged. The
+        # ask-dev acceptance launcher needs it because `fixtures world-restore`
+        # legitimately populates orgs/users with the pinned world BEFORE this
+        # runs -- without it the guard fires, the known-credential superuser is
+        # never created, and prepare_ask_dev_acceptance.py fails its login with
+        # HTTP 401 (observed live, first two-boot evidence run).
+        _overwrite_real_users = bool(getattr(ns, "overwrite_real_users", False))
         user_generator = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
         user_data: dict[str, Any] | None = user_generator.generate_users(
             org_id=org_id,
@@ -686,13 +746,14 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         if isinstance(store, SQLAlchemyStore) and db_type == "postgres":
             async with store.session_factory() as session:
                 if user_data is not None:
-                    await _seed_auth_data(session, user_data)
+                    await _seed_auth_data(
+                        session, user_data, overwrite_real_users=_overwrite_real_users
+                    )
         elif not isinstance(store, SQLAlchemyStore):
-            # Analytics sink is not SQLAlchemy (e.g. ClickHouse) — connect
-            # to PostgreSQL separately via DATABASE_URI / POSTGRES_URI
-            from dev_health_ops.db import get_postgres_uri
-
-            _pg_uri = get_postgres_uri()
+            # Analytics sink is not SQLAlchemy (e.g. ClickHouse) — connect to
+            # PostgreSQL separately, via ns.postgres_uri when the caller named
+            # one (fixtures world) and DATABASE_URI/POSTGRES_URI otherwise.
+            _pg_uri = resolve_auth_seed_postgres_uri(ns)
             if _pg_uri:
                 from sqlalchemy.ext.asyncio import (
                     AsyncSession,
@@ -706,7 +767,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 )
                 async with _pg_sf() as session:
                     if user_data is not None:
-                        await _seed_auth_data(session, user_data)
+                        await _seed_auth_data(
+                            session,
+                            user_data,
+                            overwrite_real_users=_overwrite_real_users,
+                        )
                 await _pg_engine.dispose()
             else:
                 logging.warning(
@@ -2466,6 +2531,22 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
             "into a synced org pollutes Investment and rollup charts (CHAOS-2778)."
         ),
     )
+    fix_gen.add_argument(
+        "--overwrite-real-users",
+        action="store_true",
+        dest="overwrite_real_users",
+        default=False,
+        help=(
+            "Seed fixture auth data (users/orgs/memberships/licenses) even when "
+            "the auth database already holds organizations or users. OFF by "
+            "default -- the CHAOS-2458 guard exists to stop this seeder ever "
+            "writing a known-password superuser into a populated database. "
+            "Additionally gated at runtime on ENVIRONMENT=acceptance, so it "
+            "cannot be used outside the ask-dev acceptance stack. That stack's "
+            "launcher passes it because `fixtures world-restore` legitimately "
+            "populates the auth database with the pinned world before this runs."
+        ),
+    )
     fix_gen.set_defaults(func=run_fixtures_generation)
 
     fix_val = fix_sub.add_parser("validate", help="Validate fixture data quality.")
@@ -2582,3 +2663,108 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     from dev_health_ops.fixtures.world import run_fixtures_world
 
     fix_world.set_defaults(func=run_fixtures_world)
+
+    # ------------------------------------------------------------------
+    # CHAOS-3463: generate ONCE -> snapshot -> restore per boot.
+    #
+    # `fixtures world` can only ever target a scratch database
+    # (`_require_scratch_database`), which is exactly right and is not
+    # relaxed -- but it means the ask-dev acceptance stack's own serving
+    # databases (ClickHouse `default` / Postgres `postgres`) can never be
+    # generated into. These two commands close that without touching the
+    # guard: `world-snapshot` reads a generated SCRATCH database and writes
+    # a restorable artifact; `world-restore` loads that artifact into the
+    # acceptance stack's serving databases behind its own, state-based
+    # safety preconditions. See fixtures/world_snapshot.py's module
+    # docstring for why restore is not a hole in the scratch guard.
+    # ------------------------------------------------------------------
+    fix_world_snapshot = fix_sub.add_parser(
+        "world-snapshot",
+        help=(
+            "Snapshot a generated ask-dev-world.v1 scratch database into a "
+            "restorable artifact (CHAOS-3463)."
+        ),
+    )
+    fix_world_snapshot.add_argument("--manifest", required=True)
+    fix_world_snapshot.add_argument(
+        "--sink",
+        default=os.getenv("CLICKHOUSE_URI"),
+        help="ClickHouse URI of the GENERATED scratch database (the source).",
+    )
+    fix_world_snapshot.add_argument(
+        "--postgres-uri",
+        required=True,
+        help="Postgres URI of the GENERATED scratch database (the source).",
+    )
+    fix_world_snapshot.add_argument(
+        "--baseline-sink",
+        required=True,
+        help=(
+            "ClickHouse URI of a freshly-migrated, UNSEEDED database. Which "
+            "tables the world writes is derived by diffing against this, "
+            "never from a hardcoded table list."
+        ),
+    )
+    fix_world_snapshot.add_argument(
+        "--baseline-postgres-uri",
+        required=True,
+        help="Postgres URI of a freshly-migrated, UNSEEDED database.",
+    )
+    fix_world_snapshot.add_argument(
+        "--out", required=True, help="Directory to write the snapshot into."
+    )
+
+    fix_world_restore = fix_sub.add_parser(
+        "world-restore",
+        help=(
+            "Restore an ask-dev-world.v1 snapshot into the ask-dev acceptance "
+            "stack's serving databases, then verify WORLD_DIGEST (CHAOS-3463)."
+        ),
+    )
+    fix_world_restore.add_argument("--manifest", required=True)
+    fix_world_restore.add_argument(
+        "--sink", default=os.getenv("CLICKHOUSE_URI"), help="Target ClickHouse URI."
+    )
+    fix_world_restore.add_argument(
+        "--postgres-uri", required=True, help="Target Postgres URI."
+    )
+    fix_world_restore.add_argument(
+        "--snapshot", required=True, help="Snapshot directory to restore from."
+    )
+    fix_world_restore.add_argument(
+        "--digest-path",
+        default=None,
+        help="WORLD_DIGEST path. Defaults to one alongside --manifest.",
+    )
+    fix_world_restore.add_argument(
+        "--generated-digest-path",
+        default=None,
+        dest="generated_digest_path",
+        help=(
+            "WORLD_DIGEST that `fixtures world` wrote for the generation this "
+            "snapshot came from. Supplied by the mint flow only: the restore "
+            "asserts the restored database hashes IDENTICALLY, which is the "
+            "permanent lossless-round-trip guard. An ordinary boot restores an "
+            "already-proven artifact and omits it."
+        ),
+    )
+    fix_world_restore.add_argument(
+        "--mint-digest",
+        action="store_true",
+        dest="mint_digest",
+        default=False,
+        help=(
+            "Re-pin WORLD_DIGEST from the RESTORED state instead of verifying "
+            "against it. Used only by the one-off mint flow "
+            "(scripts/acceptance/mint_ask_dev_world_snapshot.sh) -- an "
+            "ordinary boot must verify, never mint."
+        ),
+    )
+
+    from dev_health_ops.fixtures.world_snapshot import (
+        run_fixtures_world_restore,
+        run_fixtures_world_snapshot,
+    )
+
+    fix_world_snapshot.set_defaults(func=run_fixtures_world_snapshot)
+    fix_world_restore.set_defaults(func=run_fixtures_world_restore)

@@ -110,7 +110,15 @@ compose=(
   -f "${acceptance_compose_file}"
   --profile ask-dev-acceptance
 )
-boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api worker beat)
+# CHAOS-3463: split in two. `world-restore` checks that every table it is
+# about to write is empty and then writes it; a running `worker`/`beat` fleet
+# is a concurrent writer racing that check (beat dispatches monitor-queue-depths
+# every 60s from the moment it starts). The jobs fleet is therefore brought up
+# AFTER the restore -- it is still a required part of the stack, just not while
+# a state-based precondition is being evaluated. Codex adversarial review
+# (HIGH): the original single list started them before the restore.
+boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api)
+jobs_services=(worker beat)
 log_services=(api ask-dev-scripted-openai worker beat web)
 
 if [[ "${acr_armed}" == "1" ]]; then
@@ -155,8 +163,73 @@ trap report_failure EXIT
 "${compose[@]}" down --volumes --remove-orphans
 "${compose[@]}" up -d --build --wait "${boot_services[@]}"
 
+# CHAOS-3463 (Phase 2 exit blockers B2 + B3): seed the pinned
+# ask-dev-world.v1 into the databases this stack's API actually serves.
+#
+# It is a RESTORE of a snapshot, not a generation, and that is not an
+# implementation detail -- it is the only thing that can work. `fixtures
+# world` refuses `default`/`postgres` by name (`_require_scratch_database`,
+# unchanged and not weakened here), and even if it did not, per-boot
+# regeneration could never match the pinned WORLD_DIGEST: cross-generation
+# digest reproducibility is declared-blocked (world.json's
+# `cross_generation_digest_status`, CHAOS-3432). So the world is generated
+# exactly ONCE by scripts/acceptance/mint_ask_dev_world_snapshot.sh and
+# every boot restores those same bytes, which is the single-generation
+# regime the digest pin is actually proven for.
+#
+# Ordering is load-bearing: this runs immediately after `migrate` and BEFORE
+# `fixtures generate` / prepare_ask_dev_acceptance.py, because the restore
+# refuses to write unless every table it carries is still empty -- the
+# precondition that makes it impossible to run against a real database.
+#
+# It exits non-zero (and, under `set -e`, aborts the whole acceptance run)
+# if the restored world's digest does not match the pin. A stack that cannot
+# serve the pinned world must fail to come up, not quietly serve a different
+# one and let the corpus mint receipts against it (ruling D2).
+"${compose[@]}" exec -T api dev-hops fixtures world-restore \
+  --manifest /app/tests/acceptance/world/ask-dev-world.v1/world.json \
+  --sink clickhouse://ch:ch@clickhouse:8123/default \
+  --postgres-uri postgresql+asyncpg://postgres:postgres@postgres:5432/postgres \
+  --snapshot /app/tests/acceptance/world/ask-dev-world.v1/snapshot
+
+# CHAOS-3463 / Codex adversarial review round 3 (HIGH, confirmed): prove on
+# EVERY boot -- not only in the one-off mint -- that the world's principals can
+# actually authenticate.
+#
+# The digest guard above is not a substitute, and the difference is the whole
+# point of this step. WORLD_DIGEST covers `password_hash`, so a verified digest
+# proves the credential BYTES restored identically to the ones the mint proved
+# a login against. It cannot prove the API still ACCEPTS them: a login-path
+# regression, a bcrypt cost/policy change, or an auth-service refactor would
+# leave every restored byte identical and the digest green while no world
+# principal can log in. The corpus then runs as the superuser, and its
+# cross-tenant and entitlement cases quietly stop testing what they claim to.
+#
+# Runs against the stack's public API from the host, with a wrong-password
+# negative control inside the script -- an API that accepted anything would
+# otherwise satisfy every positive check here. Non-zero aborts the run under
+# `set -e`, exactly like the digest guard: a stack that cannot authenticate the
+# world it just restored must fail to come up.
+"${ops_root}/.venv/bin/python" \
+  "${ops_root}/scripts/acceptance/assert_world_principals_can_log_in.py" \
+  --api-url "${acceptance_api_url}" \
+  --manifest "${ops_root}/tests/acceptance/world/ask-dev-world.v1/world.json"
+
+# --overwrite-real-users (CHAOS-3463): the world restore above legitimately
+# populates orgs/users first, which trips `_seed_auth_data`'s CHAOS-2458 guard
+# ("refuse to seed fixture auth data into a non-empty auth database"). Without
+# this opt-in the known-credential superuser admin@devhealth.example is never
+# created and prepare_ask_dev_acceptance.py fails its login with HTTP 401
+# (observed live). The two seedings do not overlap -- the world's users are
+# @ask-dev-world-*.example in the world's own orgs, this one seeds
+# admin@/onboarding@devhealth.example in ${fixture_org_id} -- so the restored
+# world's rows, and therefore WORLD_DIGEST, are untouched.
+# The jobs fleet starts only now: see boot_services/jobs_services above.
+"${compose[@]}" up -d --build --wait "${jobs_services[@]}"
+
 "${compose[@]}" exec -T api dev-hops fixtures generate \
   --sink clickhouse://ch:ch@clickhouse:8123/default \
+  --overwrite-real-users \
   --org "${fixture_org_id}" \
   --repo-name meridian/web-app \
   --repo-count 1 \

@@ -147,6 +147,38 @@ async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_ask_dev_ephemeral_expiry_backfill(*, limit: int = 500) -> int:
+    """One-time repair for CHAOS-3404: stamp expires_at on 0-day Ask Dev
+    conversations stranded before the fix existed (see
+    DevPersistenceService.backfill_stranded_ephemeral_expiry's own
+    docstring). Loops in committed batches until a batch comes back short,
+    so it drains the full backlog in one invocation; safe to re-run --
+    returns 0 once nothing is left to stamp.
+    """
+    from dev_health_ops.api.dev.persistence import DevPersistenceService
+
+    total = 0
+    async with get_postgres_session() as db:
+        service = DevPersistenceService(db)
+        while True:
+            stamped = await service.backfill_stranded_ephemeral_expiry(limit=limit)
+            await db.commit()
+            total += stamped
+            if stamped < limit:
+                break
+    return total
+
+
+async def _cmd_maintenance_backfill_ask_dev_ephemeral_expiry(
+    _ns: argparse.Namespace,
+) -> int:
+    total = await _run_ask_dev_ephemeral_expiry_backfill()
+    logging.getLogger(__name__).info(
+        "Ask Dev ephemeral-expiry backfill complete: stamped=%s", total
+    )
+    return 0
+
+
 def _cmd_maintenance_scrub_error_text(ns: argparse.Namespace) -> int:
     from dev_health_ops.maintenance.scrub_error_text import run_scrub_error_text
 
@@ -513,6 +545,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("backfill", "run"): frozenset({_REQ_POSTGRES}),
     ("backfill", "operational"): frozenset({_REQ_CLICKHOUSE}),
     ("maintenance", "scrub-error-text"): frozenset({_REQ_POSTGRES}),
+    ("maintenance", "backfill-ask-dev-ephemeral-expiry"): frozenset({_REQ_POSTGRES}),
     # --- migrations that connect to a live database ---
     ("migrate", "clickhouse", "upgrade"): frozenset({_REQ_CLICKHOUSE}),
     ("migrate", "clickhouse", "status"): frozenset({_REQ_CLICKHOUSE}),
@@ -838,6 +871,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rows to scan per keyset-paginated batch (default: 1000).",
     )
     scrub_error_text_parser.set_defaults(func=_cmd_maintenance_scrub_error_text)
+
+    backfill_ephemeral_expiry_parser = maintenance_subparsers.add_parser(
+        "backfill-ask-dev-ephemeral-expiry",
+        help=(
+            "One-time repair (CHAOS-3404) for 0-day Ask Dev conversations "
+            "stranded (every owned run terminal, expires_at never stamped) "
+            "before the retention-sweep fix existed. Idempotent -- safe to "
+            "re-run; the ordinary retention sweep then collects the rows "
+            "this stamps."
+        ),
+    )
+    backfill_ephemeral_expiry_parser.set_defaults(
+        func=_cmd_maintenance_backfill_ask_dev_ephemeral_expiry
+    )
 
     _propagate_global_args_to_subparsers(parser)
     _attach_preflight_metadata(parser)

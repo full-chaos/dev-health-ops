@@ -60,8 +60,10 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # in round-3 hardening (an ordinary two-hop API trigger the call-graph
     # fallback missed: billing/router.py's Stripe webhook), + 1 added in
     # round-4 hardening (a separately deployed second FastAPI app,
-    # billing_edge.py, forwarding to that same handler cross-file).
-    assert inventory["row_count"] == 156
+    # billing_edge.py, forwarding to that same handler cross-file), + 2
+    # added for CHAOS-3404 (the new ask_dev_retention celery task and its
+    # ask-dev-retention-sweep Beat entry).
+    assert inventory["row_count"] == 158
 
 
 def test_discovered_keys_and_row_keys_are_identical_sets():

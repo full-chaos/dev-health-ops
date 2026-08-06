@@ -420,3 +420,55 @@ def derive_resolution_path(
             saw_alias = True
 
     return "deterministic-alias" if saw_alias else "deterministic-exact"
+
+
+#: ``resolution_path`` is absent because the run really was queried and its
+#: ``dev_run_resolutions`` ledger really was empty. HONEST: a zero-mention
+#: question (``portfolio.*``, ``investment.*``, and any question whose text
+#: carries no extractable subject span) appends nothing, and reporting a
+#: path for it would be fabrication. Not a defect in the measurement.
+ABSENCE_EMPTY_LEDGER = "empty-resolution-ledger"
+
+#: ``resolution_path`` is absent because the stream never yielded a run_id,
+#: so the ledger was NEVER QUERIED. This is a broken measurement, not an
+#: observation of absence, and callers must surface it as a failure.
+ABSENCE_RUN_ID_NOT_OBSERVED = "run-id-not-observed"
+
+
+def resolution_path_absence_reason(
+    *, run_id: str | None, path: ResolutionPath | None
+) -> str | None:
+    """Why this case has no ``resolution_path`` -- or ``None`` if it has one.
+
+    CHAOS-3219 Phase 2 exit, live-falsified. :func:`derive_resolution_path`
+    returns ``None`` for two situations a receipt reader must be able to
+    tell apart, and exit run #3 wrote ``resolution_path: null`` into all 143
+    receipts without recording which one applied:
+
+    * the ledger was read and was genuinely empty (honest absence), versus
+    * the runner never obtained a run_id, so nothing was ever read.
+
+    Collapsing those is what let an entire corpus that measured nothing read
+    as a corpus that measured cleanly. This does not change
+    ``derive_resolution_path``'s own contract (its ``None`` for an empty
+    sequence remains correct and is still the right answer for a zero-mention
+    question) -- it records the CONTEXT that ``None`` alone cannot carry.
+    """
+
+    if path is not None:
+        return None
+    if run_id is None:
+        return ABSENCE_RUN_ID_NOT_OBSERVED
+    return ABSENCE_EMPTY_LEDGER
+
+
+def absence_is_a_broken_measurement(reason: str | None) -> bool:
+    """Whether an absence reason means "this was never measured".
+
+    Deliberately a positive test against the known-broken reason rather than
+    ``reason != ABSENCE_EMPTY_LEDGER``: a future third reason then defaults
+    to "not broken" only by explicit choice, never by falling through an
+    inequality nobody revisited.
+    """
+
+    return reason == ABSENCE_RUN_ID_NOT_OBSERVED

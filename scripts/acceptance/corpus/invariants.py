@@ -352,6 +352,33 @@ def _no_unauthorized_candidate_surfaces(
     authorized_set = set(authorized)
 
     resolutions = _all_scope_resolutions_from_events(context.events)
+    if not resolutions:
+        # CHAOS-3219 Phase 2 exit, live-falsified: with zero `scope.resolved`
+        # events this scanned an empty candidate list, found no offenders and
+        # returned PASS -- 9 receipts in exit run #3 recorded this security
+        # property as satisfied while the run had produced NO observation of
+        # it whatsoever (every run terminated before an answer, so the event
+        # was never emitted).
+        #
+        # An absence of measurement is not evidence of absence of leakage.
+        # This is deliberately a FAILURE and not a silent skip: a skip would
+        # leave the same "nothing to see" reading in the receipt that made
+        # the vacuous pass invisible for three exit runs. A case that
+        # legitimately cannot produce a `scope.resolved` event must not
+        # declare this invariant at all.
+        #
+        # NOTE the distinction this preserves: a resolution that WAS observed
+        # and carried zero candidates still passes below -- that is a real
+        # measurement of a real clean run, and is covered by its own test.
+        return InvariantResult(
+            passed=False,
+            detail=(
+                "no scope.resolved event was present in the stream, so "
+                "candidate leakage was not measured -- this invariant is "
+                "reported as FAILED rather than vacuously satisfied "
+                f"(authorized: {sorted(authorized_set)!r})"
+            ),
+        )
     candidate_ids = [
         entity_id
         for resolution in resolutions

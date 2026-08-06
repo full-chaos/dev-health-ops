@@ -13,11 +13,15 @@ from __future__ import annotations
 import pytest
 
 from scripts.acceptance.corpus.resolution_path import (
+    ABSENCE_EMPTY_LEDGER,
+    ABSENCE_RUN_ID_NOT_OBSERVED,
     ResolutionLedgerEntry,
     ResolutionPathError,
+    absence_is_a_broken_measurement,
     attach_mention_texts,
     classify_match_kind,
     derive_resolution_path,
+    resolution_path_absence_reason,
 )
 
 
@@ -362,3 +366,36 @@ class TestAttachMentionTexts:
 
     def test_empty_ledger_with_empty_declaration_is_a_no_op(self) -> None:
         assert attach_mention_texts([], []) == []
+
+
+class TestHonestAbsence:
+    """CHAOS-3219 Phase 2 exit: ``derive_resolution_path`` returns ``None``
+    for BOTH "this run legitimately resolved no subject" and "this runner
+    never got far enough to look", and exit run #3 wrote ``resolution_path:
+    null`` into all 143 receipts without distinguishing them. A reader could
+    not tell an honest absence from a broken measurement, which is what let
+    a corpus that measured nothing look merely unlucky.
+    """
+
+    def test_a_derived_path_has_no_absence_reason(self) -> None:
+        assert (
+            resolution_path_absence_reason(run_id="r1", path="deterministic-exact")
+            is None
+        )
+
+    def test_empty_ledger_on_a_real_run_is_an_honest_absence(self) -> None:
+        """A zero-mention question really does append nothing -- absent, but
+        HONESTLY absent, and not a broken measurement."""
+
+        reason = resolution_path_absence_reason(run_id="r1", path=None)
+        assert reason == ABSENCE_EMPTY_LEDGER
+        assert not absence_is_a_broken_measurement(reason)
+
+    def test_a_missing_run_id_is_a_BROKEN_measurement(self) -> None:
+        """No run_id means the stream never yielded one, so the ledger was
+        never even queried. That is a measurement that did not happen and
+        must be distinguishable -- and loud."""
+
+        reason = resolution_path_absence_reason(run_id=None, path=None)
+        assert reason == ABSENCE_RUN_ID_NOT_OBSERVED
+        assert absence_is_a_broken_measurement(reason)

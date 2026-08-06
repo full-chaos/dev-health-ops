@@ -246,6 +246,49 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			Datasets: []plannerOracleDataset{{DatasetKey: "commit-stats"}},
 		},
 	)
+	// The watermark-overlap CLAMP, measured rather than assumed. Production
+	// Python clamps the overlap to zero in _watermark_overlap_seconds
+	// (src/dev_health_ops/sync/watermarks.py:120) and Go clamps at every use
+	// site (resolveWindowStart's max(input.WatermarkOverlap, 0),
+	// effectiveHeavyMaxWindow's `overlap <= 0` guard). Before these cases the
+	// table only ever fed 0 or a positive overlap, so nothing exercised that
+	// clamp on either side -- and the oracle harness itself was subtracting the
+	// raw case value, which for a negative overlap would have pushed the window
+	// START FORWARD, behaviour neither implementation has. A negative case is
+	// what turns that into a real measurement instead of an assumption.
+	//
+	// The MEDIUM case is the one with teeth: the clamp lands on window_start,
+	// so an unclamped -1h would move the start to W+1h and the plans diverge.
+	// The HEAVY case additionally pins that a negative overlap takes
+	// effectiveHeavyMaxWindow's zero branch on both sides rather than computing
+	// a nonsense negative min-cap.
+	negativeOverlap := -3600
+	negativeWideOverlap := -10 * 86_400
+	positiveClampingOverlap := 9 * 86_400
+	for _, overlapCase := range []struct {
+		id      string
+		dataset string
+		overlap int
+	}{
+		{id: "overlap_negative_is_clamped_to_zero_medium", dataset: "commits", overlap: negativeOverlap},
+		{id: "overlap_negative_is_clamped_to_zero_heavy", dataset: "commit-stats", overlap: negativeWideOverlap},
+		// The other side of the same arithmetic: a POSITIVE overlap wider than
+		// the 7-day default cap must trip the C8 clamp identically on both
+		// sides (effective cap = floor(9)+1 = 10 days). The ratchet table above
+		// pins C8 only through Go-side unit tests; this runs it differentially.
+		{id: "overlap_positive_wider_than_cap_clamps_heavy", dataset: "commit-stats", overlap: positiveClampingOverlap},
+	} {
+		cases = append(cases, plannerOracleCase{
+			ID: overlapCase.id, OrgID: "org-overlap", IntegrationID: "integration-overlap",
+			Provider: "github", Mode: SyncModeIncremental, Now: ratchetNow,
+			TierCap: &ratchetTierCap, WatermarkOverlapSeconds: overlapCase.overlap,
+			Sources:  []plannerOracleSource{{ID: "source-o", ExternalID: "owner/o", Provider: "github", FullName: "owner/o"}},
+			Datasets: []plannerOracleDataset{{DatasetKey: overlapCase.dataset}},
+			Watermarks: []plannerOracleWatermark{
+				{SourceID: "owner/o", DatasetKey: overlapCase.dataset, At: "2026-03-01T12:00:00Z"},
+			},
+		})
+	}
 	allDatasets := []string{
 		"repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments",
 		"cicd", "tests", "deployments", "incidents", "security", "work-items", "work-item-labels",

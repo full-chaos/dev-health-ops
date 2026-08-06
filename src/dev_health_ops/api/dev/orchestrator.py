@@ -1232,11 +1232,38 @@ class DevOrchestrator:
                     # v1 answer/error above is authoritative and safe to
                     # terminate on alone.
                     if answer is None and not error_message_written:
-                        # No prior write in this flush to protect, so it is
-                        # safe to roll back a poisoned session -- otherwise
-                        # the terminal() write below could raise
-                        # PendingRollbackError (mirrors the preflight
-                        # TERMINATE branch, CHAOS-3297 Codex review).
+                        # No TRANSCRIPT row in this flush to protect (the
+                        # answer path never reaches here, and
+                        # record_error_message above failed), so a rollback
+                        # cannot discard the one row that is unrecoverable,
+                        # and it buys an inline terminal if the session is
+                        # poisoned -- otherwise the terminal() write below
+                        # could raise PendingRollbackError (mirrors the
+                        # preflight TERMINATE branch, CHAOS-3297 Codex
+                        # review).
+                        #
+                        # CHAOS-3441 Codex adversarial review round 1
+                        # (MEDIUM, confirmed as to fact, fix declined with
+                        # reasoning): "no prior write to protect" was too
+                        # broad a claim and is corrected here. This rollback
+                        # DOES discard this run's already-flushed forensic
+                        # rows -- stage diagnostics, tool calls, the
+                        # resolution ledger, subject sets, intent -- and
+                        # unlike the two preflight rollback sites below,
+                        # nothing re-persists them afterward. It is kept
+                        # anyway, deliberately: `record_frame` can only
+                        # reach this handler with a POISONED session when
+                        # some earlier write already failed mid-flush (those
+                        # telemetry writes are not savepoint-isolated), and
+                        # in exactly that case dropping this rollback would
+                        # trade a specific, user-visible terminal
+                        # (`scope_not_found`, a clarification) for a generic
+                        # `internal_error` from
+                        # streaming.stream_orchestrator plus a
+                        # force_terminal_fallback hop. Forensic rows are
+                        # worth less than the terminal the user actually
+                        # sees, and both failures have to coincide for
+                        # either cost to be paid.
                         await self._recorder.rollback()
                     # else: record_answer (answer is not None) or
                     # record_error_message (CHAOS-3423 Codex adversarial
@@ -1251,32 +1278,28 @@ class DevOrchestrator:
                     # mid-flush database failure too, not just a pre-flush
                     # construction one. `record_frame` -- like
                     # `record_narrative` and `append_assistant_answer`/
-                    # `append_assistant_error` -- isolates its own flush in a
-                    # SAVEPOINT (persistence/service.py), so a mid-flush error
-                    # unwinds to that savepoint and never leaves this session
-                    # rollback-only: the answer/error transcript row already
-                    # flushed above survives, and the `terminal()` write below
-                    # still lands. Proven for BOTH paths by a real database
-                    # failure, each of which fails if that `begin_nested` is
-                    # removed --
+                    # `append_assistant_error` -- runs inside a SAVEPOINT
+                    # (persistence/service.py), and that savepoint now opens
+                    # before its ownership/authorization SELECTs as well as
+                    # its flush, so no failure it can raise leaves this
+                    # session rollback-only: the answer/error transcript row
+                    # already flushed above survives, and the `terminal()`
+                    # write below still lands. Proven for BOTH transcript
+                    # paths against a REAL database failure, each proof
+                    # failing if that `begin_nested` is removed --
                     # test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session
                     # (no-answer row, duplicate-insert IntegrityError) and
                     # tests/api/dev/test_chaos_3441_record_frame_savepoint.py
-                    # (real `DevAnswer` row, connection-level fault).
+                    # (real `DevAnswer` row, a driver-level write rejection
+                    # plus the savepoint-boundary and diagnostics-survival
+                    # proofs).
                     #
-                    # Residual, stated honestly: the savepoint wraps the
-                    # write, not `record_frame`'s PRE-write SELECTs (run
-                    # ownership, clarification-candidate authorization). A
-                    # server-side failure there -- a statement timeout, say --
-                    # aborts the whole PostgreSQL transaction, so the
-                    # transcript row is still lost in that narrower
-                    # correlated-failure window and the run reaches a coherent
-                    # terminal state only via
+                    # What no savepoint can cover, stated plainly: if the
+                    # CONNECTION dies there is no session left to roll back,
+                    # and an uncommitted transcript row is lost by
+                    # definition -- recovered at the system level only, by
                     # `DevPersistenceService.force_terminal_fallback`'s fresh
-                    # session (CHAOS-3297 round 3 Finding 2). Deliberately not
-                    # closed here: sqlite does not reproduce
-                    # transaction-abort-on-failed-statement, so a test for it
-                    # would pass whether the code were fixed or not.
+                    # session (CHAOS-3297 round 3 Finding 2).
                 else:
                     # CHAOS-3297 stack #4: narrative synthesis only runs for
                     # a frame that actually persisted -- record_narrative's

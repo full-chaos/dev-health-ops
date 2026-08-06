@@ -577,9 +577,16 @@ class TestWorldUsersAreSeededWithWorkingCredentials:
             seeded[user["email"]].password_hash,
         )
 
-    def test_the_four_corpus_contract_aliases_exist_and_are_seeded(self) -> None:
+    def test_the_corpus_contract_aliases_exist_and_are_seeded(self) -> None:
         """The contract minimum, locked in the unit tier so a world edit that
         drops or renames one fails here rather than at 2am in an evidence run.
+
+        CHAOS-3490 grew this from four to ten: ``primary.ordinary-2``..``-7``
+        are the ordinary-primary POOL the corpus is now spread over, because
+        production caps one user at 20 Ask Dev requests per 15 minutes while 85
+        of the 91 active cases had named a single alias. The expansion is
+        deliberate, and this pin is what MADE it deliberate -- it failed until
+        updated here, which is exactly its job.
         """
         from dev_health_ops.api.services.users import _verify_password
         from dev_health_ops.fixtures.world import (
@@ -595,6 +602,12 @@ class TestWorldUsersAreSeededWithWorkingCredentials:
 
         assert set(CORPUS_CONTRACT_USER_ALIASES) == {
             "primary.ordinary",
+            "primary.ordinary-2",
+            "primary.ordinary-3",
+            "primary.ordinary-4",
+            "primary.ordinary-5",
+            "primary.ordinary-6",
+            "primary.ordinary-7",
             "sibling.ordinary",
             "primary.degraded-readiness-user",
             "primary.unsupported-model-user",

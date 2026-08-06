@@ -1,0 +1,20 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.source-state.redacted",
+  "family": "deg",
+  "group": 9,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3461",
+  "proves": [
+    "group 9 family deg.source-state (sources.json per-source-class terminal-state matrix -- 'redacted' is a required registry state with NO corresponding matrix row)"
+  ],
+  "question": "Has any evidence for the organization's repositories been redacted before being shown to me?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "n/a",
+  "subject_ref": null,
+  "invariants": [],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "Checked sources.json's `matrix` array in full (all 9 realized states plus the org-wide-hardcoded not-applicable row) -- there is genuinely no dedicated 'redacted' row, and no realized_by repo/mechanism anywhere in sources.json, subjects.json, or world.json produces a redacted-evidence signal (e.g. a source field masked/withheld for a policy reason distinct from unavailable/unauthorized/no-data). Following the declared-blocked pattern from case-attention.team.valid-qualification-light-on-feature-work.json: a real file with the full key set, status=declared-blocked, blocked_by naming the missing generator capability (not a CHAOS ticket -- there is no ticketed defect to cite, only an as-yet-unbuilt fixture-generator mechanism), question/org_alias/user_alias/subject_class/subject_ref kept as documentation of the intended (currently-blocked) scenario. subject_class is n/a and no specific repo is named in the question deliberately -- naming a specific real repo (e.g. probe/source-current) would falsely imply that repo has a redacted-state fixture attached to it, which it does not; an org-wide phrasing avoids that false implication while still documenting the intended scenario shape. [blocked_by WIRED to CHAOS-3461 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'generator: no redacted-source-state fixture row exists yet'.]"
+}

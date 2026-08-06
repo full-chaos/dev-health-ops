@@ -1,0 +1,40 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.source-state.stale",
+  "family": "deg",
+  "group": 9,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 9 family deg.source-state (sources.json per-source-class terminal-state matrix, state=stale)"
+  ],
+  "question": "What's the current data freshness for the repo \"probe/source-stale\"?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": null,
+  "invariants": [
+    {
+      "category": "no-silent-widening",
+      "check": "scope_resolution_outcome_in",
+      "args": {
+        "from_profile": "expected_scope_resolution_outcome"
+      },
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Grounded against sources.json's dedicated 'stale' matrix row (repo_full_name probe/source-stale, org primary): commits/pull_requests/reviews/work_items/deployments all read DataHealthState.STALE (last_synced mutated to pinned_now - 96h, past the 48h STALE_FALLBACK_GRACE). Same fixture row already-authored trust.source-health.stale grounds, but that case asks a TRUST/trustworthiness question; this one asks a source-state/freshness question directly (the deg.source-state family's own angle: is the data current, not how trustworthy is it) -- deliberately distinct question shape per this batch's global-uniqueness requirement. Also distinct from metric-compare.two-metrics.stale-source, which asks a metric-comparison question over the same repo. subject_ref intentionally null (repo referenced directly by name, same pattern as trust.source-health.stale -- no dedicated subjects.json entry for probe/source-stale)."
+}

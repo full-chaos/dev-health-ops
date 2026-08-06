@@ -1,0 +1,20 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.mid-conversation.cache-staleness",
+  "family": "adv",
+  "group": 8,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3454",
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Did anything change with it since then?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [],
+  "resolution_profile_ref": null,
+  "fault_ref": null,
+  "notes": "BLOCKED, same runner gap. Distinct from the already-realized subject.stale-context.rotated-service / scope.stale-context-subject (which model TIME-based staleness -- a committed DevRunSubjectSet older than the conversation's own rotation window): this id is about a CATALOG mutation invalidating a committed resolution cache between turns, not elapsed time. Turn 1: primary.ordinary asks about the repo \"meridian/web-app\" and resolves EXACT against subject.exact.meridian-web-app, committed to the conversation's DevRunSubjectSet. Between turn 1 and turn 2, the underlying project is retired/archived (an is_active=0 catalog mutation, the same production mechanism subject.deleted.legacy-billing already realizes as a static fixture -- projects.is_active flips on the most recent ReplacingMergeTree(updated_at) version) rather than at generation time. Turn 2's bare follow-up ('it') must not silently keep answering from the turn-1 cached committed resolution once the catalog has moved out from under it -- the run must re-validate the cached subject against the CURRENT catalog state, not trust a conversation-scoped cache indefinitely. [blocked_by WIRED to CHAOS-3454 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no structured multi-turn / actor-authorization-mutation support'.]"
+}

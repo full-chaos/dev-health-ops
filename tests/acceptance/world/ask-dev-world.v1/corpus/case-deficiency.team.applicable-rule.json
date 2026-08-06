@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deficiency.team.applicable-rule",
+  "family": "deficiency",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 1 bullet 11"
+  ],
+  "question": "What operational deficiencies does the \"Platform Reliability (Ground Control)\" team have?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "acronym-alias",
+  "subject_ref": "subject.acronym-alias.ground-control-team",
+  "invariants": [
+    {
+      "category": "no-internal-error-on-fuzzy-label",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "No shape of subject label (parenthetical, >=5 words, typo, acronym, wrong word order) can crash the run to internal_error; worst case is a graceful terminal.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Same team subject and quoted-full-label EXACT-resolution rationale as workload.team.with-denominator (see that case's notes for the live-verified reason the bare 'Ground Control' alias mention is not used here). Positive control: operational_deficiency_service.py / health_rule_registry.py evaluates this team's real incident/team fixture data and at least one deficiency rule genuinely fires (an APPLICABLE, non-suppressed finding) -- a clean answered outcome reporting a real deficiency, not a gap in the answer's own completeness. Honesty caveat: the specific rule and the fixture condition that makes it fire for this team have not been independently live-verified against a scratch generation in this authoring pass -- flagged rather than silently claimed proven. Paired with deficiency.team.not-applicable-rule (same question, fixture where the rule is scoped NOT_APPLICABLE) to prove the deficiency engine can report both a real finding and a real non-finding, not just one constant verdict."
+}

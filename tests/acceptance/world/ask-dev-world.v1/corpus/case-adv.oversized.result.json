@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.oversized.result",
+  "family": "adv",
+  "group": 8,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "Give me a comprehensive breakdown of meridian/web-app's status.",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "terminal_persists_assistant_row",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": "adv.oversized.result",
+  "notes": "Question text copied verbatim from provider-scripts/role-legacy_agent.json's cases['adv.oversized.result'].question (already pre-existing there, kind=fault, type=oversized-output, fires_from_round=0, min_bytes=262144 -- provider_scripts._oversized_final_answer builds a FinalAnswerDecision whose `direct_summary` field is a repeated-filler string >= 262144 bytes). Subject resolution: same bare-lowercase-slug shape and reasoning as provider-fail.before-frame/after-frame/adv.abuse.retry-storm -- resolution_path null, expected_scope_resolution_outcome 'exact'. Public outcome: contracts.py's own `DevAnswerFrame.direct_summary` field is typed `LongText` (`StringConstraints(min_length=1, max_length=16_384)`, read directly) -- a >=262144-byte filler string is ~16x that character bound, so constructing/validating the resulting DevAnswer must fail contract validation; orchestrator.py has multiple real call sites finishing a run with error code 'answer_validation_failed' (read directly, grep confirms >=4 call sites), which terminal_frames.PUBLIC_OUTCOME_BY_ERROR_CODE maps unconditionally to PublicOutcome.FAILED. Honesty caveat: this is a code-grounded judgment call (the exact call site that catches an oversized `direct_summary` was not traced line-by-line end to end in this pass), not a confirmed runner trace -- flagged explicitly rather than silently asserted, matching this corpus's own established practice for this class of uncertainty."
+}

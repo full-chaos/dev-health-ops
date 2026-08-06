@@ -1,0 +1,56 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "health.team.exact-subject",
+  "family": "health",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 1 Product-question corpus; health family team subject, real-fixture correction of the registry sketch's naive 'answered' expectation (mirrors scope.acronym-alias-subject precedent)"
+  ],
+  "question": "Is the Ground Control team healthy?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "acronym-alias",
+  "subject_ref": "subject.acronym-alias.ground-control-team",
+  "invariants": [
+    {
+      "category": "no-silent-widening",
+      "check": "scope_resolution_outcome_in",
+      "args": {
+        "from_profile": "expected_scope_resolution_outcome"
+      },
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "no-internal-error-on-fuzzy-label",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "No shape of subject label (parenthetical, >=5 words, typo, acronym, wrong word order) can crash the run to internal_error; worst case is a graceful terminal.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "terminal_persists_assistant_row",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Named 'exact-subject' in the id and sketched as subject_class 'exact' / outcome 'answered' in the higher-level registry row, but the only real team subject fixture backing 'Ground Control' is subjects.json's subject.acronym-alias.ground-control-team (class acronym-alias, literal_parenthetical alias form) -- there is no plain non-alias team-name subject in this world's catalog. subjects.json is authoritative over the registry sketch here, same discrepancy already documented by case-scope.acronym-alias-subject.json for the MWA case: subject.acronym-alias.mwa-project's own notes state 'acronym/literal-alias hits are never auto-commit eligible per alias_matching.py', and that phrasing explicitly covers BOTH acronym and literal-parenthetical alias forms. So under deterministic-v1 this deterministically surfaces for single-candidate confirmation (needs_clarification / ScopeResolutionOutcome.ambiguous / resolution_path deterministic-alias), not a direct answered -- documented discrepancy vs the registry sketch's original 'answered'/'exact' shorthand, not silently changed. subject_class set to 'acronym-alias' (not 'exact') to match subjects.json's real class field for this subject_ref, per CASE-SCHEMA.v1.md's definition of that field."
+}

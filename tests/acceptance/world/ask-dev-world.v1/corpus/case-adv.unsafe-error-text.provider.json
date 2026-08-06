@@ -1,0 +1,46 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.unsafe-error-text.provider",
+  "family": "adv",
+  "group": 8,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (\"Security and adversarial\", registry-ids.v1.json -- corpus-registry-v1.md's per-bullet 'proves' text was not accessible in this Lane 2b worktree; cited by registry group name/source file instead, documented honestly rather than guessed)"
+  ],
+  "question": "How trustworthy is the data behind meridian/web-app's status?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "terminal_persists_assistant_row",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "no-unsafe-error-text-leaks",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "The client-facing error text for this terminal never contains the scripted fault's embedded canary (a fake bearer token, an internal org name, or any raw upstream exception/stack-trace text) -- the client sees only the closed-vocabulary catalog message for the classified error code, never provider-supplied text.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": "adv.unsafe-error-text.provider",
+  "notes": "Question text copied verbatim from provider-scripts/role-legacy_agent.json's cases['adv.unsafe-error-text.provider'].question (already pre-existing there, kind=fault, type=unsafe-error-text, fires_from_round=0, http_error 500 'scripted_fault_unsafe_error_text' whose message field deliberately embeds a fake bearer-token canary and an internal org name -- 'leak canary; must never reach a client'). Subject resolution: same bare-lowercase-slug shape and reasoning as provider-fail.before-frame/after-frame/adv.abuse.retry-storm/adv.oversized.result -- resolution_path null, expected_scope_resolution_outcome 'exact'. Public outcome: llm/agent/errors.py's `safe_agent_provider_error` (read directly, its own docstring: 'Map provider failures without retaining provider text or credentials') is exactly the mechanism this invariant depends on -- an unrecognized/generic provider HTTP failure (this scripted 500 does not match any of the classifier's named exception types) falls through to its final `return AgentProviderError(AgentProviderErrorCode.PROVIDER_UNAVAILABLE, retryable=True)` branch, which discards the raw provider message text entirely and substitutes ERROR_MESSAGES[PROVIDER_UNAVAILABLE]'s own fixed, safe catalog string ('The model provider is temporarily unavailable.') -- the embedded canary structurally cannot reach the client through this path. orchestrator.py's `_provider_error` maps AgentProviderErrorCode.PROVIDER_UNAVAILABLE to the orchestrator error code 'provider_unavailable', which terminal_frames.PUBLIC_OUTCOME_BY_ERROR_CODE maps unconditionally to PublicOutcome.TEMPORARILY_UNAVAILABLE."
+}

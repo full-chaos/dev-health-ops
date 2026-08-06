@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "adv.malicious-content.links",
+  "family": "adv",
+  "group": 8,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 8 (Security and adversarial) corpus (registry-ids.v1.json groups['8']); adv.malicious-content family; contracts_v2/validators.py's narrative/frame consistency guards and scan_public_text as the real answer-composition sanitization floor, exercised over already-real evidence rather than fabricated fixture content"
+  ],
+  "question": "What evidence supports the current status of the repo \"meridian/web-app\"?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "no-unsanitized-links-in-narrative",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "Any URL/link-shaped text reaching the answer's narrative, evidence display labels, or citation text is rendered as inert text, never as a live, auto-followed navigation target constructed from unescaped producer-authored content -- the citation contract (evidence.evidence_ref_id / display_label) identifies evidence, it does not grant a producer-authored string the ability to redirect the reader anywhere the server did not itself compose.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no dedicated markup/HTML/link-sanitization checker; the actual sanitization mechanism (contracts_v2/validators.py's validate_narrative_frame_consistency family and scan_public_text's PUBLIC_TEXT_FORBIDDEN_TOKENS/_VERSIONED_ID_PATTERN scan, plus no_match_terminal.py's INTERNAL_TOKEN_DENYLIST) runs at the server boundary regardless of what this checker asserts, so the floor is real even where the claim is not yet independently re-verified by a dedicated checker."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Same grounding and reasoning as adv.malicious-content.markdown (subject.exact.meridian-web-app, real commits/evidence, quoted/noun-adjacent mention), narrowed to the link/URL half of output sanitization rather than the markdown-syntax half -- kept as two separate ids (matching the registry's own adv.malicious-content.markdown / adv.malicious-content.links split) because a markdown-escaping guard and a link-auto-follow guard are independently defeatable (round-2-style adversarial review precedent throughout contracts_v2/validators.py's own docstring: a guard closing one bypass does not imply the sibling guard closing a different one). No known fixture evidence field contains a URL today (commit messages, PR bodies, etc. are all fixed plain-prose templates per the adv.injection.* family's own generator survey) -- this case exercises the rendering-path floor defensively over real, link-free evidence, not a fixture that already contains one. expected_public_outcome/resolution_path triple mirrors adv.malicious-content.markdown / health.project.exact-subject for the same real-subject, ordinary-healthy-answer reason."
+}

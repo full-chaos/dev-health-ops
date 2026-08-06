@@ -1,0 +1,48 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deficiency.team.not-applicable-rule",
+  "family": "deficiency",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 1 bullet 11"
+  ],
+  "question": "What operational deficiencies, if any, does the \"Platform Reliability (Ground Control)\" team have?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "acronym-alias",
+  "subject_ref": "subject.acronym-alias.ground-control-team",
+  "invariants": [
+    {
+      "category": "no-internal-error-on-fuzzy-label",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "No shape of subject label (parenthetical, >=5 words, typo, acronym, wrong word order) can crash the run to internal_error; worst case is a graceful terminal.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "no-silent-widening",
+      "check": "scope_resolution_outcome_in",
+      "args": {
+        "from_profile": "expected_scope_resolution_outcome"
+      },
+      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Same team subject, question, and quoted-full-label EXACT-resolution rationale as workload.team.with-denominator (see that case's notes). This id's fixture is structured so at least one deficiency rule health_rule_registry.py would otherwise evaluate is out of scope for this team (NOT_APPLICABLE -- e.g. a rule gated on a capability/dimension this team's fixture data does not exercise) -- the deficiency answer must disclose that scoping explicitly (answered_with_gaps) rather than silently omitting the rule as if it had simply passed clean. Honesty caveat: the specific rule and NOT_APPLICABLE-triggering fixture condition have not been independently live-verified against a scratch generation in this authoring pass -- flagged rather than silently claimed proven. inv.no-silent-widening's disclosure clause generalizes here: silently dropping a NOT_APPLICABLE rule from the answer (rather than reporting it as scoped-out) would be the same silent-substitution failure shape this invariant polices for subject scope. [Reworded during Lane 2b codex round-1 remediation, 2026-08-06, from 'What operational deficiencies does the \"Platform Reliability (Ground Control)\" team have?': production's provider_scripts.py requires GLOBALLY-UNIQUE question text per role script (test_a_question_fingerprint_collision_fails_to_load), and every corpus case now needs its own role-legacy_agent.json entry (script_inventory.py's full-coverage requirement) -- two cases sharing literal question text could never both get a script entry. Subject mention substring kept character-identical to subjects.json's declared 'mentions' so the deterministic extractor still recognizes it; only the surrounding phrasing changed.]"
+}

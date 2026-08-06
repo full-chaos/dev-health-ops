@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "workload.team.with-denominator",
+  "family": "workload",
+  "group": 1,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 1 bullet 11"
+  ],
+  "question": "Is the \"Platform Reliability (Ground Control)\" team overburdened?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "acronym-alias",
+  "subject_ref": "subject.acronym-alias.ground-control-team",
+  "invariants": [
+    {
+      "category": "no-internal-error-on-fuzzy-label",
+      "check": "no_internal_error",
+      "args": {},
+      "assert": "No shape of subject label (parenthetical, >=5 words, typo, acronym, wrong word order) can crash the run to internal_error; worst case is a graceful terminal.",
+      "executable_today": true,
+      "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": null,
+  "notes": "Deliberate phrasing deviation, documented explicitly (not silent): the team's ONLY subjects.json entry (subject.acronym-alias.ground-control-team) is realized with teams.name literally set to the full parenthetical label 'Platform Reliability (Ground Control)' (fixtures/world.py's _run_clickhouse_postprocess), and its registered mentions ('Ground Control'/'ground control') are candidate SPANS for alias_matching, not auto-commit-eligible text -- confirmed live by tracing scope_service.py's resolve_mention commit rule (only EXACT_MATCH when the query equals the catalog row's canonical_id OR its FULL label; any substring/alias hit, even a single unambiguous one, falls through to AMBIGUOUS_CANDIDATES per CHAOS-3388's 'never auto-commit an alias' rule) through subject_preflight.py's SubjectPreflight.run, which is called UNIFORMLY for every question_interpreter.py intent including TEAM_WORKLOAD_BALANCE -- there is no separate/direct team-name resolver for analytical questions. A bare 'the Ground Control team' mention would therefore hit needs_clarification here exactly as it does in scope.acronym-alias-subject.json (already dedicated to proving that rule for a project subject) -- repeating that same identity-resolution finding under a workload question would not test anything new, and would make this id indistinguishable from workload.team.without-denominator/small-cohort at the PublicOutcome level, defeating their purpose. Quoting the full label (mirroring subject-label.parenthetical-quoted-control's established pattern) reaches genuine EXACT resolution instead, letting this case actually exercise team-workload computation with a real baseline denominator, which is what this id is for. Flagged prominently here and in the authoring summary in case the literal bare-alias phrasing was intended instead."
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": "ask_dev_corpus_case.v1",
+  "id": "deg.timeout.graph",
+  "family": "deg",
+  "group": 9,
+  "status": "active",
+  "blocked_by": null,
+  "proves": [
+    "group 9 family deg.timeout (pipeline-stage timeout matrix -- work-graph-neighbors instance)"
+  ],
+  "question": "Is the work-graph lookup for the repo \"meridian/web-app\" taking too long to come back?",
+  "org_alias": "primary",
+  "user_alias": "primary.ordinary",
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
+  "invariants": [
+    {
+      "category": "terminal-persists-assistant-row",
+      "check": "terminal_persists_assistant_row",
+      "args": {},
+      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn. Applies here even though the run is deliberately slow (an injected 4000ms delay immediately after the work_graph_neighbors.v1 tool call returns): a slow-but-successful terminal must persist exactly like a fast one.",
+      "executable_today": true,
+      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "resolution-path-matches-profile",
+      "check": "resolution_path_in",
+      "args": {
+        "from_profile": "resolution_path"
+      },
+      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
+      "executable_today": true
+    }
+  ],
+  "resolution_profile_ref": "deterministic-v1",
+  "fault_ref": "deg.timeout.graph",
+  "notes": "No dedicated per-stage timeout fault type exists in provider_scripts.py today (the 6 real fault types are retry-storm-trigger, oversized-output, unsafe-error-text, slow-response, fail-before-frame, fail-after-frame -- none is stage-specific). This case stands in for a work-graph-neighbors-stage timeout using the EXISTING slow-response mechanism, grounded at the most plausible point: round 0 issues a real, immediate tool_call to work_graph_neighbors.v1 (ToolID.WORK_GRAPH_NEIGHBORS, wire name work_graph_neighbors_v1 per scripted_openai_service.py's dot-to-underscore wire-name convention, confirmed against its sibling _WIRE_QUERY_METRIC/_WIRE_SEARCH_EVIDENCE/_WIRE_DATA_HEALTH constants; limit=25 reused verbatim from work_graph_neighbors_service.MAX_NEIGHBORS, the real production ceiling documented in sources.json's 'truncated' matrix row), then fires_from_round=1 applies the 4000ms slow-response delay to the VERY NEXT round (the one that would synthesize a final answer from that tool's result). Honesty caveat: the fault mechanism only ever delays the provider's own decide()/HTTP round-trip, never actual server-side tool execution latency -- so this models 'the round immediately following the work-graph lookup took a long time', a plausible but not literal proxy for 'the lookup itself timed out', called out explicitly per this batch's judgment-call instruction rather than silently claimed as a literal per-tool timeout. Subject resolves EXACT via the quoted noun-adjacent span 'the repo \"meridian/web-app\"' (same mechanism as scope.refused-with-grounding/health.project.exact-subject), independent of and prior to the fault."
+}

@@ -58,10 +58,9 @@
         "tenant.authorization-change-mid-conversation"
       ],
       "blocked": {
-        "portfolio.multi-project.status": "CHAOS-3393",
-        "portfolio.org-wide.status": "CHAOS-3393",
         "attention.team.valid-qualification-light-on-feature-work": "CHAOS-3394"
-      }
+      },
+      "$comment_blocked": "portfolio.multi-project.status / portfolio.org-wide.status were unblocked 2026-08-05 (CHAOS-3393 confirmed Done, live linear-cli check) -- see REGISTRY-AMENDMENT.v1.md sec.1. Both are now authored cases; do not re-add them here without re-verifying CHAOS-3393's state first."
     },
     "8": {
       "name": "Security and adversarial",
@@ -142,7 +141,10 @@
         "deg.provisional-unapproved-rule",
         "deg.optional-integration-not-mislabeled"
       ],
-      "blocked": {}
+      "blocked": {
+        "deg.source-state.truncated": "CHAOS-3428"
+      },
+      "$comment_blocked": "Mirrors sources.json's own truncated row (status: declared-blocked, blocked_by: CHAOS-3428) -- added 2026-08-05, this map had drifted stale (empty) since sources.json's status field was set. See REGISTRY-AMENDMENT.v1.md sec.1."
     },
     "10": {
       "name": "Persistence and retention",
@@ -157,7 +159,11 @@
         "pers.usage-cost-idempotent",
         "pers.migration-rollback-preserves-state"
       ],
-      "blocked": {}
+      "blocked": {
+        "pers.retention.0-day": "CHAOS-3404",
+        "pers.retention.30-day": "CHAOS-3404"
+      },
+      "$comment_blocked": "CHAOS-3404 (confirmed open, Backlog/High 2026-08-05): DevPersistenceService.cleanup_expired has no beat schedule/CLI/caller -- retention sweeps never execute in production, so these cases cannot pass against real code yet. See REGISTRY-AMENDMENT.v1.md sec.1."
     },
     "11": {
       "name": "Operations",
@@ -177,5 +183,31 @@
       ],
       "blocked": {}
     }
+  },
+
+  "amendments": {
+    "$comment": "CHAOS-3219 Phase 2 Lane 2b, 2026-08-05. The freeze governs case IDs (the 'groups' block above, untouched), not the registry's total count -- see corpus/REGISTRY-AMENDMENT.v1.md for full rationale per id. Additive only.",
+    "subject-label": {
+      "name": "Subject mention-parsing robustness (CHAOS-3389 eval fixtures)",
+      "group": 1,
+      "count": 9,
+      "ids": [
+        "subject-label.parenthetical-unquoted",
+        "subject-label.parenthetical-quoted-control",
+        "subject-label.five-word-truncation",
+        "subject-label.acronym-mention",
+        "subject-label.typo-tolerance",
+        "subject-label.word-order-variation",
+        "subject-label.wrong-kind-collision",
+        "subject-label.valid-prior-turn-reference",
+        "subject-label.unauthorized-candidate-excluded"
+      ],
+      "blocked": {}
+    }
+  },
+
+  "totals_after_amendment": {
+    "ids": 143,
+    "families": 44
   }
 }

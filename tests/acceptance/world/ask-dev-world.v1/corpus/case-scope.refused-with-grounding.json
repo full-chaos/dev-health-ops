@@ -10,7 +10,7 @@
   ],
   "question": "Is the repo \"meridian/web-app\"'s CI passing, definitively?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-5",
   "subject_class": "exact",
   "subject_ref": null,
   "invariants": [
@@ -26,5 +26,6 @@
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
   "notes": "CHAOS-3377 contradiction backstop: reuses sources.json's 'conflicting' fixture row (probe/source-conflicting-ci, two contemporaneous CI runs for the same repo with opposite conclusions) so material grounding exists but contradicts itself past the trust threshold -- answer must be withheld ('Inconsistent result'), not silently pick a side. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"Is meridian/web-app's CI passing, definitively?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]",
-  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B6, adversarial round 3). The primary subject commits exact_match, but resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves -- derive_resolution_path returns miss-clarification if ANY mention fails to commit, so the run answers normally and would still be stamped miss-clarification. Rather than falsify the profile to match a derivation that cannot express this case's claim, the profile keeps the true expectation (deterministic-exact) and this invariant is removed -- the same disposition B4 used throughout. Every other invariant is untouched."
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B6, adversarial round 3). The primary subject commits exact_match, but resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves -- derive_resolution_path returns miss-clarification if ANY mention fails to commit, so the run answers normally and would still be stamped miss-clarification. Rather than falsify the profile to match a derivation that cannot express this case's claim, the profile keeps the true expectation (deterministic-exact) and this invariant is removed -- the same disposition B4 used throughout. Every other invariant is untouched.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 60 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

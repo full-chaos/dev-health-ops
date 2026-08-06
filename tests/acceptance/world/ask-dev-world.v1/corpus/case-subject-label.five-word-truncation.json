@@ -10,7 +10,7 @@
   ],
   "question": "What's the status of the Dev Health Agent Context Runtime project?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-6",
   "subject_class": "exact",
   "subject_ref": "subject.exact.context-fabric",
   "expected_mention_texts": [
@@ -56,5 +56,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "No-parenthetical >=5-word form: _NAME's hard 4-capitalized-word cap silently drops \"Dev\", extracting only ('Health Agent Context Runtime', PROJECT). CHAOS-3407 not yet fixed -- exact resolution NOT asserted, only the invariant floor."
+  "notes": "No-parenthetical >=5-word form: _NAME's hard 4-capitalized-word cap silently drops \"Dev\", extracting only ('Health Agent Context Runtime', PROJECT). CHAOS-3407 not yet fixed -- exact resolution NOT asserted, only the invariant floor.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 68 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

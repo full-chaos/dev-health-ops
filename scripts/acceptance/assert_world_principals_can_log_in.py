@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from dev_health_ops.fixtures.world import (  # noqa: E402
+    BOOT_LOGIN_PROOF_ALIASES,
     CORPUS_CONTRACT_USER_ALIASES,
     load_world_manifest,
     password_for_alias,
@@ -74,11 +75,14 @@ def _login(api_url: str, email: str, password: str) -> dict[str, Any]:
     return payload
 
 
-def check(api_url: str, manifest_path: str) -> list[str]:
+def check(
+    api_url: str, manifest_path: str, *, aliases: tuple[str, ...] | None = None
+) -> list[str]:
+    required = aliases if aliases is not None else CORPUS_CONTRACT_USER_ALIASES
     manifest = load_world_manifest(manifest_path)
     by_alias = {user["alias"]: user for user in manifest.world["users"]}
 
-    missing = [a for a in CORPUS_CONTRACT_USER_ALIASES if a not in by_alias]
+    missing = [a for a in required if a not in by_alias]
     if missing:
         raise PrincipalLoginError(
             f"world.json no longer defines corpus contract principal(s) {missing}. "
@@ -88,7 +92,8 @@ def check(api_url: str, manifest_path: str) -> list[str]:
         )
 
     verified: list[str] = []
-    for alias in CORPUS_CONTRACT_USER_ALIASES:
+    negative_control_done = False
+    for alias in required:
         user = by_alias[alias]
         expected_user_id = str(manifest.user_id(alias))
         expected_org_id = str(manifest.org_id(user["org_alias"]))
@@ -122,21 +127,48 @@ def check(api_url: str, manifest_path: str) -> list[str]:
 
         # Negative control: an API that accepted any password would satisfy
         # every assertion above without proving anything at all.
-        try:
-            _login(api_url, user["email"], password_for_alias(alias) + "-wrong")
-        except urllib.error.HTTPError as exc:
-            if exc.code not in (400, 401, 403):
+        #
+        # Run ONCE for the whole check, not once per alias (CHAOS-3490). The
+        # per-alias form was affordable at four contract principals and is not
+        # at ten: production limits logins to AUTH_LOGIN_IP_LIMIT
+        # ("20/15minutes", per IP -- api/middleware/rate_limit.py), so ten
+        # aliases x two attempts consumed the entire IP budget and the next
+        # caller (prepare_ask_dev_acceptance.py's superuser login) took a 429
+        # and failed the boot. Observed live, not theorised.
+        #
+        # Repeating it per alias also bought no information: the property is
+        # "this API rejects a wrong password", which belongs to the auth path,
+        # not to an individual account. One execution establishes it; ten run
+        # the same code ten times and additionally risk the DB-backed
+        # per-email lockout in login_attempts.py.
+        if not negative_control_done:
+            try:
+                _login(api_url, user["email"], password_for_alias(alias) + "-wrong")
+            except urllib.error.HTTPError as exc:
+                if exc.code not in (400, 401, 403):
+                    raise PrincipalLoginError(
+                        f"{alias}: a wrong password returned HTTP {exc.code}; "
+                        "expected an auth rejection"
+                    ) from exc
+            else:
                 raise PrincipalLoginError(
-                    f"{alias}: a wrong password returned HTTP {exc.code}; expected "
-                    "an auth rejection"
-                ) from exc
-        else:
-            raise PrincipalLoginError(
-                f"{alias}: a deliberately WRONG password was accepted. The login "
-                "check above proves nothing -- stop and fix authentication."
-            )
+                    f"{alias}: a deliberately WRONG password was accepted. The "
+                    "login checks here prove nothing -- stop and fix "
+                    "authentication."
+                )
+            negative_control_done = True
 
         verified.append(f"{alias} -> user {expected_user_id} in org {expected_org_id}")
+
+    # A negative control that silently never ran would leave every positive
+    # login above unproven, which is the "measurement that did not happen"
+    # failure mode. Absence must be loud.
+    if not negative_control_done:
+        raise PrincipalLoginError(
+            "the wrong-password negative control never ran, so every positive "
+            "login above is unproven -- an API that accepted anything would "
+            "look identical. A check that cannot fail must not report success."
+        )
     return verified
 
 
@@ -144,10 +176,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument(
+        "--boot-subset",
+        action="store_true",
+        help=(
+            "prove BOOT_LOGIN_PROOF_ALIASES instead of every contract alias. "
+            "Used by the per-boot launcher: proving all ten costs more of "
+            "AUTH_LOGIN_IP_LIMIT (20/15minutes, per IP) than a full acceptance "
+            "boot can spare. Full coverage still runs at mint time, where "
+            "there is no downstream login pressure."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
-        verified = check(args.api_url, args.manifest)
+        verified = check(
+            args.api_url,
+            args.manifest,
+            aliases=BOOT_LOGIN_PROOF_ALIASES if args.boot_subset else None,
+        )
     except PrincipalLoginError as exc:
         print(f"mint: WORLD PRINCIPAL CHECK FAILED -- {exc}", file=sys.stderr)
         return 1

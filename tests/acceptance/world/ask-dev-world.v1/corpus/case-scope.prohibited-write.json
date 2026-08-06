@@ -10,7 +10,7 @@
   ],
   "question": "Update the ticket status to Done",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-4",
   "subject_class": "n/a",
   "subject_ref": null,
   "expected_mention_texts": [
@@ -38,5 +38,6 @@
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": "scope.prohibited-write",
   "notes": "Scripted in provider-scripts/role-legacy_agent.json (kind=decisions, refusal code=prohibited_write).",
-  "$comment_resolution_path_invariant": "resolution_path_in RESTORED (CHAOS-3462, adversarial round 2). Its removal earlier in this branch used the WRONG oracle: extract_mentions returns zero for this question, but production's real mention set comes from QuestionInterpreter.interpret, which additionally mints untyped bare-name mentions via _add_untyped_mentions. Executed: interpret yields one untyped mention (span 'Done'), preflight takes the proceeded_unresolved_bare_name PROCEED with a 1-entry ledger, and one row is persisted in EVERY enumerated catalog world. No entity named 'done' exists in this world, so the mention never commits and the derived path is miss-clarification -- a value this runner can actually produce. Profile corrected from null accordingly."
+  "$comment_resolution_path_invariant": "resolution_path_in RESTORED (CHAOS-3462, adversarial round 2). Its removal earlier in this branch used the WRONG oracle: extract_mentions returns zero for this question, but production's real mention set comes from QuestionInterpreter.interpret, which additionally mints untyped bare-name mentions via _add_untyped_mentions. Executed: interpret yields one untyped mention (span 'Done'), preflight takes the proceeded_unresolved_bare_name PROCEED with a 1-entry ledger, and one row is persisted in EVERY enumerated catalog world. No entity named 'done' exists in this world, so the mention never commits and the derived path is miss-clarification -- a value this runner can actually produce. Profile corrected from null accordingly.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 59 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

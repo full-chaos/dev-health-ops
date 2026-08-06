@@ -10,7 +10,7 @@
   ],
   "question": "What's the status of Atlas, exactly?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-3",
   "subject_class": "ambiguous",
   "subject_ref": "subject.ambiguous.atlas",
   "expected_mention_texts": [
@@ -37,5 +37,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Same fixture row and mechanism as scope.ambiguous (two repos share base name 'atlas': meridian/atlas, meridian-sandbox/atlas) -- cross-referenced from the PERSISTENCE angle (group 10 bullet 3: 'clarification + candidate selection persist safely') rather than duplicated, matching the pattern subjects.json/sources.json already use for one fixture row realizing several distinct, individually-true observations. Question text deliberately reworded ('...exactly?' vs scope.ambiguous's '...Atlas?') to satisfy production's global per-role question-uniqueness constraint -- both fingerprint to the same underlying ambiguous-Atlas mention."
+  "notes": "Same fixture row and mechanism as scope.ambiguous (two repos share base name 'atlas': meridian/atlas, meridian-sandbox/atlas) -- cross-referenced from the PERSISTENCE angle (group 10 bullet 3: 'clarification + candidate selection persist safely') rather than duplicated, matching the pattern subjects.json/sources.json already use for one fixture row realizing several distinct, individually-true observations. Question text deliberately reworded ('...exactly?' vs scope.ambiguous's '...Atlas?') to satisfy production's global per-role question-uniqueness constraint -- both fingerprint to the same underlying ambiguous-Atlas mention.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 44 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

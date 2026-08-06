@@ -10,7 +10,7 @@
   ],
   "question": "How many deployments has the repo \"probe/source-no-data\" recorded recently?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-5",
   "subject_class": "exact",
   "subject_ref": null,
   "expected_mention_texts": [
@@ -39,5 +39,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Grounded against sources.json's dedicated 'no-data' matrix row (repo_full_name probe/source-no-data, org primary): repo entity exists but is generated with zero commits/PRs/reviews/deployments/work items -- watermark is genuinely NULL for every source (DataHealthState.NO_DATA), distinct from measured-zero (deg.acr-unavailable-native-usable's sibling registry doc string covers that distinction; not re-litigated here). Question asks specifically about deployments, one of the two sources sources.json explicitly asserts NO_DATA on for this repo. Repo referenced directly by name, subject_ref intentionally null (no dedicated subjects.json entry)."
+  "notes": "Grounded against sources.json's dedicated 'no-data' matrix row (repo_full_name probe/source-no-data, org primary): repo entity exists but is generated with zero commits/PRs/reviews/deployments/work items -- watermark is genuinely NULL for every source (DataHealthState.NO_DATA), distinct from measured-zero (deg.acr-unavailable-native-usable's sibling registry doc string covers that distinction; not re-litigated here). Question asks specifically about deployments, one of the two sources sources.json explicitly asserts NO_DATA on for this repo. Repo referenced directly by name, subject_ref intentionally null (no dedicated subjects.json entry).",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 25 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

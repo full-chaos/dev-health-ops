@@ -614,11 +614,64 @@ def world_manifest_contract_hash(manifest: WorldManifest) -> str:
 
 #: The world principals the Wave 4 corpus actually binds `user_alias` to
 #: (CHAOS-3462 runner lane, confirmed 2026-08-06). Credentials are seeded for
-#: EVERY world.json user; these four are the contract MINIMUM, asserted at mint
+#: EVERY world.json user; these are the contract MINIMUM, asserted at mint
 #: time to exist, be seeded, and log into the org world.json derives for them.
 #: A future world edit that drops or re-orgs one fails the mint -- not the
 #: evidence run, and not the corpus at 2am.
+#:
+#: CHAOS-3490 added ``primary.ordinary-2``..``-7``, the ordinary-primary POOL.
+#: Cases are spread round-robin over ``primary.ordinary`` plus those six
+#: because production caps one user at ``requests_per_user_per_15_minutes=20``
+#: (``DevCapabilityLimits``, ``le=20``, "may only be configured downward")
+#: while 85 of the corpus's 91 active cases named the single alias above --
+#: exactly 20 reached their assertions and the other 65 died on HTTP 429.
+#:
+#: EVERY pool member is asserted here, not a sampled subset. Sampling was
+#: considered and rejected: an unproven member does not fail at boot, it fails
+#: partway through the corpus as an unexplained 401 on whichever cases happened
+#: to land on it -- the "measurement that did not happen" shape this proof
+#: exists to prevent. Six extra logins at boot is a trivial price.
 CORPUS_CONTRACT_USER_ALIASES: tuple[str, ...] = (
+    "primary.ordinary",
+    "primary.ordinary-2",
+    "primary.ordinary-3",
+    "primary.ordinary-4",
+    "primary.ordinary-5",
+    "primary.ordinary-6",
+    "primary.ordinary-7",
+    "sibling.ordinary",
+    "primary.degraded-readiness-user",
+    "primary.unsupported-model-user",
+)
+
+#: The subset proven on EVERY BOOT, as opposed to at mint time.
+#:
+#: Codex review (P1, CHAOS-3490): proving all ten per boot is not affordable.
+#: ``run_ask_dev_compose.sh`` also performs two ``prepare_ask_dev_acceptance``
+#: superuser logins, seven smoke-script logins and a Playwright backend login,
+#: so ten positives plus the negative control pushed a normal acceptance boot
+#: past ``AUTH_LOGIN_IP_LIMIT`` ("20/15minutes", per IP) and the 21st request
+#: took a 429. The exit-run boot script never caught it because it stops before
+#: the smoke and web legs -- a truncated boot cannot observe a budget the full
+#: boot spends.
+#:
+#: WHY A SUBSET IS SOUND HERE, and it is not "sampling because it is cheaper".
+#: The two failure modes are different in kind:
+#:
+#: * A per-ACCOUNT fault (one pool member never seeded, wrong org) is caught at
+#:   MINT time, where :data:`CORPUS_CONTRACT_USER_ALIASES` is proven in full
+#:   with no downstream login pressure -- and WORLD_DIGEST covers
+#:   ``password_hash``, so every later boot restoring a verified digest is
+#:   restoring the exact credential bytes the mint proved.
+#: * A per-PATH regression (a login-path change, a bcrypt cost/policy change,
+#:   an auth refactor) is what the digest cannot see, and it breaks every
+#:   principal identically rather than one of them. Detecting it needs *a*
+#:   principal, not all ten.
+#:
+#: So the boot subset keeps exactly the four originals -- one ordinary member,
+#: a second org, and both provider-profile users -- which is what the check
+#: cost before the pool existed.
+BOOT_LOGIN_PROOF_ALIASES: tuple[str, ...] = (
     "primary.ordinary",
     "sibling.ordinary",
     "primary.degraded-readiness-user",

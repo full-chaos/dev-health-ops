@@ -10,7 +10,7 @@
   ],
   "question": "Is ACR evidence available for the repo \"meridian/web-app\"?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-6",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
   "invariants": [
@@ -28,5 +28,6 @@
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
   "notes": "Grounded against sources.json's dedicated 'not-applicable' matrix row: NativeDataHealthReader.read hardcodes `if source == 'acr': SourceHealthObservation(source, False, False, warning='acr_optional')` for every org unconditionally -- realized_by is deliberately null/org-wide (no fixture rows needed, no repo-specific mechanism). The row's own mechanism text is explicit that this is 'org-wide-hardcoded', not tied to any one repo -- meridian/web-app is used here only as the NAMED SUBJECT the question is asked about (a real, resolvable, positive-control repo per subject.exact.meridian-web-app), while the not-applicable ACR signal itself applies identically regardless of which repo is named. Expected answered_with_gaps: a question specifically about ACR evidence must disclose that ACR is optional/not-applicable rather than silently omitting the fact or silently answering as if ACR were simply absent evidence like any other source.",
-  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B6, adversarial round 3). The primary subject commits exact_match, but resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves -- derive_resolution_path returns miss-clarification if ANY mention fails to commit, so the run answers normally and would still be stamped miss-clarification. Rather than falsify the profile to match a derivation that cannot express this case's claim, the profile keeps the true expectation (deterministic-exact) and this invariant is removed -- the same disposition B4 used throughout. Every other invariant is untouched."
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B6, adversarial round 3). The primary subject commits exact_match, but resolution_path is a WHOLE-RUN scalar and this question also names an incidental untyped bare-name mention that never resolves -- derive_resolution_path returns miss-clarification if ANY mention fails to commit, so the run answers normally and would still be stamped miss-clarification. Rather than falsify the profile to match a derivation that cannot express this case's claim, the profile keeps the true expectation (deterministic-exact) and this invariant is removed -- the same disposition B4 used throughout. Every other invariant is untouched.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 26 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

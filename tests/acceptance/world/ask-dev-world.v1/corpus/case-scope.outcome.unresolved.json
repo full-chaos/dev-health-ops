@@ -10,7 +10,7 @@
   ],
   "question": "Could you check the status of the Ask Dev project?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "no-match",
   "subject_ref": "subject.no-match.ask-dev-project",
   "expected_mention_texts": [
@@ -55,5 +55,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Same underlying mechanism and question as scope.no-match (a named, non-opaque, non-org-kind mention that resolves to nothing hits scope_service.py's plain UNRESOLVED branch, not FORBIDDEN_OR_NOT_FOUND) -- kept as a separate id because it's the dedicated P0-B ScopeResolutionOutcome-value producer per the cross-reference table. Cross-referenced, not duplicated. [Reworded during Lane 2b codex round-1 remediation, 2026-08-06, from 'What is the status of the Ask Dev project?': production's provider_scripts.py requires GLOBALLY-UNIQUE question text per role script (test_a_question_fingerprint_collision_fails_to_load), and every corpus case now needs its own role-legacy_agent.json entry (script_inventory.py's full-coverage requirement) -- two cases sharing literal question text could never both get a script entry. Subject mention substring kept character-identical to subjects.json's declared 'mentions' so the deterministic extractor still recognizes it; only the surrounding phrasing changed.]"
+  "notes": "Same underlying mechanism and question as scope.no-match (a named, non-opaque, non-org-kind mention that resolves to nothing hits scope_service.py's plain UNRESOLVED branch, not FORBIDDEN_OR_NOT_FOUND) -- kept as a separate id because it's the dedicated P0-B ScopeResolutionOutcome-value producer per the cross-reference table. Cross-referenced, not duplicated. [Reworded during Lane 2b codex round-1 remediation, 2026-08-06, from 'What is the status of the Ask Dev project?': production's provider_scripts.py requires GLOBALLY-UNIQUE question text per role script (test_a_question_fingerprint_collision_fails_to_load), and every corpus case now needs its own role-legacy_agent.json entry (script_inventory.py's full-coverage requirement) -- two cases sharing literal question text could never both get a script entry. Subject mention substring kept character-identical to subjects.json's declared 'mentions' so the deterministic extractor still recognizes it; only the surrounding phrasing changed.]",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 57 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

@@ -57,5 +57,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "CHAOS-3407 primary bug: question_interpreter.py's _NAME regex extracts ZERO typed mentions for an unquoted parenthetical-qualified label. CHAOS-3407 fix not yet landed (PAUSED per t-llm-matching.md) -- exact resolution is NOT asserted, only the two invariants (must not silently widen org-wide, must not internal_error)."
+  "notes": "CHAOS-3407 primary bug: question_interpreter.py's _NAME regex extracts ZERO typed mentions for an unquoted parenthetical-qualified label. CHAOS-3407 fix not yet landed (PAUSED per t-llm-matching.md) -- exact resolution is NOT asserted, only the two invariants (must not silently widen org-wide, must not internal_error).",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 70 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

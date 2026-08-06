@@ -10,7 +10,7 @@
   ],
   "question": "What's the status of Web Application Meridian?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-5",
   "subject_class": "acronym-alias",
   "subject_ref": "subject.acronym-alias.mwa-project",
   "expected_mention_texts": [
@@ -55,5 +55,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Reordered words of \"Meridian Web Application\". alias_matching is literal/acronym, not order-invariant -- NOT expected to resolve; invariant floor only."
+  "notes": "Reordered words of \"Meridian Web Application\". alias_matching is literal/acronym, not order-invariant -- NOT expected to resolve; invariant floor only.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 74 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

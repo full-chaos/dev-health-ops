@@ -10,7 +10,7 @@
   ],
   "question": "What is the status of the Ask Dev project?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-5",
   "subject_class": "no-match",
   "subject_ref": "subject.no-match.ask-dev-project",
   "expected_mention_texts": [
@@ -55,5 +55,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "= smoke_ask_dev_not_found.py. Deliberately never realized by any fixture row -- absence IS the fixture."
+  "notes": "= smoke_ask_dev_not_found.py. Deliberately never realized by any fixture row -- absence IS the fixture.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 53 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

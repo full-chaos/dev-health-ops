@@ -10,7 +10,7 @@
   ],
   "question": "What incidents has the repo \"probe/source-current\" had?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "exact",
   "subject_ref": null,
   "expected_mention_texts": [
@@ -39,5 +39,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Grounded against sources.json's dedicated 'unconfigured' matrix row: primary org's sync_providers deliberately omit pagerduty/opsgenie/incident -> _source_configured('incidents', configs) is False org-wide for primary -> DataHealthState.UNCONFIGURED for 'incidents' regardless of which repo is asked about (incidents carries no repo_id column). sources.json attaches this row to probe/source-current (an org-wide effect, reusing an already-realized repo rather than minting a dedicated one) -- this case follows that same attachment and asks specifically about incidents, per this batch's instruction, rather than reusing probe/source-current's role as the deg.source-state.current positive-control repo for a general status question. Repo referenced directly by name (no dedicated subjects.json entry needed for this angle), same pattern as the other deg.source-state.* cases in this batch."
+  "notes": "Grounded against sources.json's dedicated 'unconfigured' matrix row: primary org's sync_providers deliberately omit pagerduty/opsgenie/incident -> _source_configured('incidents', configs) is False org-wide for primary -> DataHealthState.UNCONFIGURED for 'incidents' regardless of which repo is asked about (incidents carries no repo_id column). sources.json attaches this row to probe/source-current (an org-wide effect, reusing an already-realized repo rather than minting a dedicated one) -- this case follows that same attachment and asks specifically about incidents, per this batch's instruction, rather than reusing probe/source-current's role as the deg.source-state.current positive-control repo for a general status question. Repo referenced directly by name (no dedicated subjects.json entry needed for this angle), same pattern as the other deg.source-state.* cases in this batch.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 29 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

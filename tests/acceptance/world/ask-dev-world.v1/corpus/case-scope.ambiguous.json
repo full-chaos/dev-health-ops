@@ -10,7 +10,7 @@
   ],
   "question": "What's the status of Atlas?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "ambiguous",
   "subject_ref": "subject.ambiguous.atlas",
   "expected_mention_texts": [
@@ -87,5 +87,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Two repos share base name 'atlas' in the same org (meridian/atlas, meridian-sandbox/atlas). Scripted in provider-scripts/role-legacy_agent.json."
+  "notes": "Two repos share base name 'atlas' in the same org (meridian/atlas, meridian-sandbox/atlas). Scripted in provider-scripts/role-legacy_agent.json.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 50 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

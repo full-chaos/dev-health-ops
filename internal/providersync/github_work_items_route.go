@@ -37,6 +37,26 @@ type GitHubWorkItemsIncomplete struct {
 	Cause     string `json:"cause"`
 }
 
+// githubWorkItemsOptionalIncompleteComponents are the collection phases whose
+// non-rate-limit failures Python logs and continues past, keeping every row it
+// already has: milestones (provider.py:202-217), per-issue comments
+// (provider.py:293-301), and the PR social batch (provider.py:369-402). D16
+// makes that behavior the contract, so the Go route mirrors it rather than
+// converting an optional enrichment failure into a zero-effect batch — a
+// permanently failing optional endpoint would otherwise block the whole
+// five-alias family for a repository forever.
+//
+// The degradation is NOT swallowed: every entry stays in the typed `incomplete`
+// result, which the activation layer reads to withhold all alias watermarks for
+// the run, so the next run revisits the same window. Components that are absent
+// in Go for reasons Python does not share (projects_v2 policy_pending) are not
+// listed here and still fail the unit closed.
+var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
+	"milestones":     true,
+	"issue_comments": true,
+	"pr_social":      true,
+}
+
 // GitHubWorkItemsRouteError retains physical request actuals and typed fetch
 // evidence when a required phase fails or an optional phase is incomplete.
 // Callers can retry without confusing a zero-effect failure for success.
@@ -178,29 +198,35 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		if err := validateGitHubWorkItemsSocialResult(socialResult); err != nil {
 			return CompleteRouteBatch{}, usage.wrap(err)
 		}
-		if !socialResult.Complete() {
+		socialComplete := socialResult.Complete()
+		if !socialComplete {
 			incomplete = append(incomplete, GitHubWorkItemsIncomplete{
 				Component: "pr_social", Cause: socialResult.Incomplete.Cause,
 			})
-		} else {
-			for _, pull := range restResult.PullRequests {
-				payload, exists := socialResult.Payloads[pull.Number]
-				if !exists {
-					return CompleteRouteBatch{}, usage.wrap(providerfoundation.ErrGraphQLResponse)
-				}
-				adapted, adaptErr := adaptGitHubWorkItemPRSocialPayload(payload)
-				if adaptErr != nil {
-					return CompleteRouteBatch{}, usage.wrap(adaptErr)
-				}
-				bundle, normalizeErr := normalizeGitHubPullRequestBundle(
-					claim, restResult.RepoFullName, restResult.RepoID, pull.Payload,
-					adapted.Events, adapted.Comments, handler.ResolveIdentity, normalizedAt,
-				)
-				if normalizeErr != nil {
-					return CompleteRouteBatch{}, usage.wrap(normalizeErr)
-				}
-				appendGitHubWorkItemRows(&rows, bundle)
+		}
+		// Mirror provider.py:369-402. A failed optional social batch leaves
+		// pr_events_by_number/pr_comments_by_number empty and Python still
+		// normalizes every pull request from the REST payload it already has,
+		// reading the batch with `.get(number, ())`. Dropping the pull requests
+		// here instead would withhold the required work-item/dependency/AI rows
+		// over an optional enrichment failure.
+		for _, pull := range restResult.PullRequests {
+			payload, exists := socialResult.Payloads[pull.Number]
+			if !exists && socialComplete {
+				return CompleteRouteBatch{}, usage.wrap(providerfoundation.ErrGraphQLResponse)
 			}
+			adapted, adaptErr := adaptGitHubWorkItemPRSocialPayload(payload)
+			if adaptErr != nil {
+				return CompleteRouteBatch{}, usage.wrap(adaptErr)
+			}
+			bundle, normalizeErr := normalizeGitHubPullRequestBundle(
+				claim, restResult.RepoFullName, restResult.RepoID, pull.Payload,
+				adapted.Events, adapted.Comments, handler.ResolveIdentity, normalizedAt,
+			)
+			if normalizeErr != nil {
+				return CompleteRouteBatch{}, usage.wrap(normalizeErr)
+			}
+			appendGitHubWorkItemRows(&rows, bundle)
 		}
 	}
 
@@ -231,10 +257,12 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		}
 	}
 	finishGitHubWorkItemsEvidence(&evidence, rows)
-	if len(incomplete) > 0 {
-		return CompleteRouteBatch{}, usage.wrapRoute(
-			ErrGitHubWorkItemsIncomplete, evidence, incomplete,
-		)
+	for _, partial := range incomplete {
+		if !githubWorkItemsOptionalIncompleteComponents[partial.Component] {
+			return CompleteRouteBatch{}, usage.wrapRoute(
+				ErrGitHubWorkItemsIncomplete, evidence, incomplete,
+			)
+		}
 	}
 
 	derived, err := handler.Deriver.Derive(ctx, claim, rows, normalizedAt)

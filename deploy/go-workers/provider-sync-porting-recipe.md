@@ -528,6 +528,34 @@ question.
       `python_github_prs_normalization_oracle.py`) — they keep working
       exactly as documented in step 8 below. Only NEW pairs should reach
       for the generic path first.
+17. **"Fail closed" is not a free upgrade over Python: an OPTIONAL-enrichment
+    failure must not become a zero-effect batch.** Defect classes 1 and 5 and
+    the fail-open precondition above are about a fetch that loses REQUIRED
+    records and still reports success. They do not license the mirror-image
+    error, which `github/work-items` shipped and Codex caught: the composite
+    route turned every typed incompleteness — including the three phases
+    `providers/github/provider.py` explicitly logs and continues past
+    (milestones `:202-217`, per-issue comments `:293-301`, the PR-social
+    GraphQL batch `:369-402`) — into a whole-unit failure with **zero**
+    effects. Executing the real Python producer against those same three
+    failures returns the work items every time (a milestone failure degrades
+    sprints 1 → 0 and nothing else); the Go route wrote nothing at all. That
+    is worse than the fail-open it was guarding against: a persistently
+    failing optional endpoint blocks the entire five-alias family for that
+    repository **forever**, and no row ever lands. The distinction to hold:
+    - Fail the unit when a **required** phase fails, when a page cap is
+      reached, or when a component is absent for a reason Python does not
+      share (an unported seam or unresolved policy — `projects_v2`
+      `policy_pending` still fails closed here).
+    - Mirror Python's continuation when the phase is one Python itself
+      degrades past, and keep the degradation as typed data in the unit
+      `Result` so the activation layer withholds the watermark. Continuation
+      is only a fail-open if state advances — holding the watermark is what
+      stops that, not throwing the collected rows away.
+    Check this while writing the handler: for every error you turn into a
+    unit failure, find the line in the Python producer that handles the same
+    failure. If Python logs and continues and you fail, you have diverged,
+    and D16 says the divergence needs ratifying before it ships.
 
 ## The recipe
 

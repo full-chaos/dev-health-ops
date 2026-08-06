@@ -92,12 +92,44 @@
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
     },
     {
-      "id": "typed-incomplete-fails-before-derivation",
+      "id": "blocking-incomplete-fails-before-derivation",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "if len(incomplete) > 0 {",
-      "replace": "if false {",
-      "rationale": "nil watermark is not a retry signal, so any typed incomplete must fail with zero effects before the deriver runs",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRoute(PreservesOptionalSocialFailureAndPhysicalUsage|DefaultsProjectsToTypedPendingWithoutFetching|RejectsRESTIncompleteBeforeDerivationAndEffects)$", "./internal/providersync/"]]
+      "find": "if !githubWorkItemsOptionalIncompleteComponents[partial.Component] {",
+      "replace": "if partial.Component == \"\" {",
+      "rationale": "an incomplete component Python never degrades past (projects_v2 policy_pending) must still fail with zero effects before the deriver runs",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteDefaultsProjectsToTypedPendingWithoutFetching$", "./internal/providersync/"]]
+    },
+    {
+      "id": "optional-social-incomplete-mirrors-python-continuation",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\t\"pr_social\":      true,",
+      "replace": "\t\"pr_social\":      false,",
+      "rationale": "provider.py:369-402 logs a failed optional PR-social batch and keeps every already-collected row; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$", "./internal/providersync/"]]
+    },
+    {
+      "id": "optional-rest-incomplete-mirrors-python-continuation",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\t\"issue_comments\": true,",
+      "replace": "\t\"issue_comments\": false,",
+      "rationale": "provider.py:293-301 logs a failed per-issue comment fetch and keeps the issue; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "optional-milestone-incomplete-mirrors-python-continuation",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "\t\"milestones\":     true,",
+      "replace": "\t\"milestones\":     false,",
+      "rationale": "provider.py:202-217 logs a failed milestone fetch and keeps the issues; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "pull-requests-survive-optional-social-failure",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "if !exists && socialComplete {",
+      "replace": "if !exists {",
+      "rationale": "Python reads the social batch with .get(number, ()), so a pull request whose social payload never arrived is still normalized from the REST payload already in hand",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$", "./internal/providersync/"]]
     },
     {
       "id": "same-key-usage-is-summed",

@@ -271,19 +271,39 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
 	)
-	if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
-		t.Fatalf("error=%v", err)
+	// provider.py:369-402 logs the failed social batch and keeps normalizing
+	// every pull request with empty events/comments, so the required rows still
+	// land. Executed Python evidence for the identical scenario: no exception,
+	// 2 work items returned. Before this mirrored the route returned a zeroed
+	// CompleteRouteBatch and never called the deriver.
+	if err != nil {
+		t.Fatalf("optional social failure zeroed the batch: %v", err)
 	}
-	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-		t.Fatalf("incomplete route returned batch=%+v or derived %d times", batch, deriver.calls)
+	if deriver.calls != 1 {
+		t.Fatalf("deriver calls=%d", deriver.calls)
 	}
-	routeErr := githubWorkItemsIncompleteError(t, err)
-	if incomplete := routeErr.Incomplete; !reflect.DeepEqual(incomplete, []GitHubWorkItemsIncomplete{{
-		Component: "pr_social", Cause: "invalid_response",
-	}}) {
+	if len(deriver.got.WorkItems) != 1 || deriver.got.WorkItems[0].WorkItemID != "ghpr:Acme/API-Renamed#52" {
+		t.Fatalf("pull request rows dropped on optional social failure: %+v", deriver.got.WorkItems)
+	}
+	// The enrichment itself is genuinely absent, not fabricated.
+	if len(deriver.got.Interactions) != 0 {
+		t.Fatalf("interactions=%+v", deriver.got.Interactions)
+	}
+	workItemsEffect := githubWorkItemsRouteEffect(t, batch, "work_items")
+	if len(workItemsEffect.Rows) != 1 {
+		t.Fatalf("work_items effect rows=%s", workItemsEffect.Rows)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("degraded run advanced watermark: %v", batch.Watermark)
+	}
+	// The degradation stays queryable so the activation layer can withhold
+	// every alias watermark for this run.
+	if incomplete := githubWorkItemsRouteIncomplete(t, batch); !reflect.DeepEqual(
+		incomplete, []GitHubWorkItemsIncomplete{{Component: "pr_social", Cause: "invalid_response"}},
+	) {
 		t.Fatalf("incomplete=%+v", incomplete)
 	}
-	if usage := routeErr.Usage; !reflect.DeepEqual(usage, []GitHubWorkItemsRequestUsage{
+	if usage := githubWorkItemsRouteUsage(t, batch); !reflect.DeepEqual(usage, []GitHubWorkItemsRequestUsage{
 		{Transport: "graphql", RouteFamily: "work_item_prs", Dimension: BudgetGraphQLCost, RequestCount: 1},
 		{Transport: "rest", RouteFamily: "work_items", Dimension: BudgetRESTCore, RequestCount: 3},
 	}) {
@@ -310,23 +330,37 @@ func TestGitHubWorkItemsRouteRejectsRESTIncompleteBeforeDerivationAndEffects(t *
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
 	)
-	if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
-		t.Fatalf("error=%v", err)
+	// provider.py:202-217 (milestones) and provider.py:293-301 (issue comments)
+	// both log and continue. Executed Python evidence: a milestone failure
+	// degrades sprints 1 -> 0 and a comment failure drops interactions, but the
+	// issue work items still land and nothing is raised. Before this mirrored
+	// the route zeroed the whole batch over the same two failures.
+	if err != nil {
+		t.Fatalf("optional REST failures zeroed the batch: %v", err)
 	}
-	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-		t.Fatalf("incomplete route returned batch=%+v or derived %d times", batch, deriver.calls)
+	if deriver.calls != 1 || len(deriver.got.WorkItems) != 1 ||
+		deriver.got.WorkItems[0].WorkItemID != "gh:Acme/API#42" {
+		t.Fatalf("issue rows dropped on optional failures: calls=%d rows=%+v", deriver.calls, deriver.got.WorkItems)
 	}
-	routeErr := githubWorkItemsIncompleteError(t, err)
+	if len(deriver.got.Sprints) != 0 || len(deriver.got.Interactions) != 0 {
+		t.Fatalf("optional rows fabricated: %+v", deriver.got)
+	}
+	if len(githubWorkItemsRouteEffect(t, batch, "work_items").Rows) != 1 {
+		t.Fatalf("work_items effect rows=%s", githubWorkItemsRouteEffect(t, batch, "work_items").Rows)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("degraded run advanced watermark: %v", batch.Watermark)
+	}
 	wantIncomplete := []GitHubWorkItemsIncomplete{
 		{Component: "milestones", Cause: "transient"},
 		{Component: "issue_comments", SubjectID: "42", Cause: "transient"},
 	}
-	if !reflect.DeepEqual(routeErr.Incomplete, wantIncomplete) ||
-		routeErr.Evidence.Requests != 5 || routeErr.Evidence.Records != 1 ||
-		!reflect.DeepEqual(routeErr.Usage, []GitHubWorkItemsRequestUsage{{
+	if !reflect.DeepEqual(githubWorkItemsRouteIncomplete(t, batch), wantIncomplete) ||
+		batch.Evidence.Requests != 5 ||
+		!reflect.DeepEqual(githubWorkItemsRouteUsage(t, batch), []GitHubWorkItemsRequestUsage{{
 			Transport: "rest", RouteFamily: "work_items", Dimension: BudgetRESTCore, RequestCount: 5,
 		}}) {
-		t.Fatalf("route error=%+v", routeErr)
+		t.Fatalf("batch=%+v incomplete=%+v", batch, githubWorkItemsRouteIncomplete(t, batch))
 	}
 }
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.git import Base  # noqa: E402
@@ -1077,6 +1078,28 @@ def test_future_correction_sql_compiles_for_postgresql():
     assert "greatest" in sql.lower()
 
 
+def _sync_engine_url() -> URL:
+    """DEV_HEALTH_POSTGRES_TEST_URI names the ASYNC driver (+asyncpg), which a
+    blocking ``create_engine``/``Session`` cannot drive -- it raises
+    ``MissingGreenlet`` the moment it touches IO.
+
+    These two CHAOS-3412 tests had never actually executed: the variable is set
+    only in CI steps that do not collect this file, so they always skipped and
+    the driver mismatch stayed invisible. The Go migration branch sets
+    DEV_HEALTH_POSTGRES_TEST_URI on the unit step, which is what finally ran
+    them. Coerce to psycopg2 the same way
+    test_ask_dev_v2_persistence_startup_gate.py and
+    test_canonical_incident_feature_flag_postgres_migration.py already do.
+
+    Returns the URL OBJECT, never ``str(url)``: SQLAlchemy's ``__str__`` masks
+    the password as ``***``, which turns this into a "password authentication
+    failed" that reads like broken CI credentials rather than a broken helper.
+    """
+    return make_url(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"]).set(
+        drivername="postgresql+psycopg2"
+    )
+
+
 @pytest.mark.skipif(
     not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
     reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
@@ -1091,13 +1114,12 @@ def test_real_postgres_future_watermark_correction():
     the same branch — that a legitimate lower value is still discarded, so the
     narrowness of the exception is verified where it actually runs.
     """
-    import os as _os
     import uuid as _uuid
     from datetime import timedelta
 
     from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
-    engine = create_engine(_os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(_sync_engine_url())
     Base.metadata.create_all(engine)
     SyncWatermark.metadata.create_all(engine)
 
@@ -1171,13 +1193,12 @@ def test_real_postgres_future_write_is_clamped_at_the_boundary():
     and the UPDATE path (re-poisoning a repaired value), on the dialect that
     actually ships.
     """
-    import os as _os
     import uuid as _uuid
     from datetime import timedelta
 
     from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
-    engine = create_engine(_os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(_sync_engine_url())
     Base.metadata.create_all(engine)
     SyncWatermark.metadata.create_all(engine)
 

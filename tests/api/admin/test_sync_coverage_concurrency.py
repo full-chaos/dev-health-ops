@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, delete
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
 
 from dev_health_ops.api.services.sync_coverage import (
@@ -18,6 +19,28 @@ from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 
 
+def _sync_engine_url() -> URL:
+    """DEV_HEALTH_POSTGRES_TEST_URI names the ASYNC driver (+asyncpg), which a
+    blocking ``create_engine``/``Session`` cannot drive -- it raises
+    ``MissingGreenlet`` the moment it touches IO.
+
+    This test had never actually executed: the variable is set only in CI steps
+    that do not collect this file, so it always skipped and the mismatch stayed
+    invisible. The feature branch sets DEV_HEALTH_POSTGRES_TEST_URI on the unit
+    step, which is what finally ran it. Coerce to psycopg2 the same way
+    test_ask_dev_v2_persistence_startup_gate.py and
+    test_canonical_incident_feature_flag_postgres_migration.py already do.
+
+    Returns the URL OBJECT, never ``str(url)``: SQLAlchemy's ``__str__`` masks
+    the password as ``***``, so stringifying here swaps a MissingGreenlet for a
+    "password authentication failed" that looks like broken CI credentials
+    rather than a broken test helper. Observed exactly that while fixing this.
+    """
+    return make_url(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"]).set(
+        drivername="postgresql+psycopg2"
+    )
+
+
 @pytest.mark.skipif(
     not os.getenv("DEV_HEALTH_POSTGRES_TEST_URI"),
     reason="requires DEV_HEALTH_POSTGRES_TEST_URI",
@@ -25,7 +48,7 @@ from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 def test_invalidation_waits_for_inflight_projection_publication():
     """A rebuild cannot publish over an invalidation that began mid-scan."""
 
-    engine = create_engine(os.environ["DEV_HEALTH_POSTGRES_TEST_URI"])
+    engine = create_engine(_sync_engine_url())
     org_id = str(uuid.uuid4())
     integration_id: uuid.UUID | None = None
     config_id: uuid.UUID | None = None

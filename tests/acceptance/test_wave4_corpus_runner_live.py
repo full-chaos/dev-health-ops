@@ -330,6 +330,7 @@ def acceptance_api() -> tuple[AcceptanceApi, str]:
 @pytest.fixture(scope="session")
 def principal_sessions(
     acceptance_api: tuple[AcceptanceApi, str],
+    _world_digest_pin: str,
 ) -> PrincipalSessions:
     """Per-case principal selection (CHAOS-3462 B5).
 
@@ -341,6 +342,27 @@ def principal_sessions(
     a genuine login rather than ``/api/v1/admin/impersonate`` (the dev
     routers do not honor impersonation, and would silently evaluate
     entitlement and readiness against the superuser's org instead).
+
+    THE ``_world_digest_pin`` DEPENDENCY IS LOAD-BEARING, NOT DECORATIVE.
+    Provisioning writes a real ``password_hash`` onto world-seeded users,
+    and ``compute_world_digest`` hashes ``SELECT *`` from ``users`` with
+    only ``_VOLATILE_COLUMNS`` excluded -- ``password_hash`` is NOT in that
+    exclusion set. So the very act of selecting a principal mutates a
+    digested column. Declaring the dependency pins the ordering (digest
+    verified first, against a world nobody has touched) instead of relying
+    on the incidental "autouse session fixtures instantiate before
+    requested ones" rule, which a future edit could silently invert.
+
+    RESIDUAL, STATED RATHER THAN PAPERED OVER: this makes the FIRST armed
+    run against a freshly-seeded stack correct, and a SECOND run against
+    the same stack report a ``postgres.users`` digest mismatch caused by
+    the first run's own provisioning. Re-runs therefore need a fresh
+    seed/restore. The durable fix belongs to the world-seeding lane
+    (CHAOS-3219 B2/B3), and there are only two honest shapes for it: seed
+    the password in ``_build_auth_fixture`` so the pin includes it, or
+    exclude ``password_hash`` from the digest -- which is defensible on its
+    own terms, since a bcrypt hash is salted and therefore can never
+    reproduce across two generations of the same world anyway.
     """
 
     admin_api, _ = acceptance_api

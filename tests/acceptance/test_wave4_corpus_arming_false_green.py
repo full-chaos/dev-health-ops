@@ -80,6 +80,16 @@ def _run_inner_pytest(extra_env: dict[str, str]) -> subprocess.CompletedProcess[
     env = dict(os.environ)
     for name in (ALLOW_ENV, ARM_ENV_VAR, *ARMED_RUN_ENV_ALLOW_NAMES):
         env.pop(name, None)
+    # This module is itself collected by the gate's xdist run, so the
+    # parent's per-worker state would otherwise leak into the child and make
+    # it behave like a worker of a session that does not exist.
+    for name in (
+        "PYTEST_XDIST_WORKER",
+        "PYTEST_XDIST_WORKER_COUNT",
+        "PYTEST_XDIST_TESTRUNUID",
+        "PYTEST_CURRENT_TEST",
+    ):
+        env.pop(name, None)
     env.update(extra_env)
     # Keep the child single-process and cache-free: xdist/cache would only
     # add noise to a two-outcome assertion.

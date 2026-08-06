@@ -244,15 +244,27 @@ ci_tests() {
 
   run_step "ruff (lint gates)" ruff check --select=E9,F63,F7,F82 .
 
-  # CHAOS-3413: these files run real `CREATE DATABASE`/`DROP DATABASE`, or
-  # (test_persistence_postgres.py) hold multi-connection row locks, against
+  # CHAOS-3413: these files/tests run real `CREATE DATABASE`/`DROP DATABASE`,
+  # or (test_persistence_postgres.py) hold multi-connection row locks and
+  # leak an `idle in transaction` connection on task cancellation, against
   # the single shared Postgres service container. Running them concurrently
   # under xdist -- as one `--cov` pass previously did -- hangs indefinitely
   # (nothing here sets statement_timeout/lock_timeout). Mirror test-matrix's
-  # existing pattern: ignore them from the parallel pass and run them
+  # existing pattern: exclude them from the parallel pass and run them
   # serially afterward, appending into the same coverage data file so the
   # final --fail-under gate below still evaluates the true combined total,
   # not a partial one.
+  #
+  # Derived by `grep -rl DEV_HEALTH_POSTGRES_TEST_URI\|DEV_HEALTH_TEST_POSTGRES_ADMIN_URI
+  # tests/` and reading each hit, not hand-curated from docs -- a
+  # hand-curated list already missed two whole files and a mixed-file test
+  # once (CHAOS-3413). Whole files are excluded with --ignore; individual
+  # tests inside otherwise-ordinary files (--ignore operates on files and
+  # cannot express test-level gating) are excluded with --deselect instead
+  # -- deliberately not a switch to `--dist loadgroup`, which would drop
+  # `loadscope`'s automatic per-module co-location for the whole ~9000-test
+  # suite, not just these tests, trading a bounded problem for an unbounded
+  # one to fix ~18 tests.
   local live_pg_files=(
     tests/test_0066_celery_river_cutover_postgres.py
     tests/test_chaos_3337_source_class_postgres_migration.py
@@ -260,10 +272,39 @@ ci_tests() {
     tests/api/admin/test_add_member_visibility.py
     tests/api/dev/test_persistence_postgres.py
     tests/test_ask_dev_v2_persistence_startup_gate.py
+    tests/api/dev/test_health_rule_persistence_postgres.py
+    tests/api/admin/test_sync_coverage_concurrency.py
   )
+  local live_pg_deselect_ids=(
+    "tests/test_dispatch_outbox.py::test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible"
+    "tests/test_dispatch_outbox.py::test_real_postgres_route_change_fences_claim_from_another_session"
+    "tests/test_dispatch_outbox.py::test_real_postgres_publish_lock_blocks_route_change_until_commit"
+    "tests/test_sync_planner.py::test_postgres_missing_tier_limits_stays_inside_planner_savepoint"
+    "tests/test_sync_watermarks.py::test_real_postgres_future_watermark_correction"
+    "tests/test_sync_watermarks.py::test_real_postgres_future_write_is_clamped_at_the_boundary"
+    "tests/test_sync_reconciler.py::test_parity_capture_recovery_clears_real_postgres_statement_failure"
+    "tests/test_service_credentials_cli.py::test_service_credential_create_emits_only_token_and_db_flag_is_honored"
+    "tests/test_ask_dev_v2_persistence_migration.py::test_live_postgres_check_constraints_and_not_valid_validate_split"
+    "tests/test_ask_dev_v2_persistence_migration.py::test_live_postgres_downgrade_refuses_when_v2_data_present"
+  )
+
+  # Anti-rot guard (CHAOS-3413): `--deselect`/`--ignore` on a node ID that no
+  # longer matches anything (renamed, re-parametrized, moved, deleted) is NOT
+  # an error -- pytest silently ignores it, the test quietly re-enters the
+  # parallel pass, and the concurrency hazard returns with no signal. A stale
+  # exclusion list reads exactly like a working one. Resolve every entry via
+  # --collect-only before trusting the list for real; fail loudly, not
+  # silently, the moment the list and the suite disagree.
+  run_step "verify the CHAOS-3413 live-Postgres exclusion list still resolves" \
+    pytest --collect-only -q "${live_pg_files[@]}" "${live_pg_deselect_ids[@]}"
+
   local live_pg_ignore_args=()
   for f in "${live_pg_files[@]}"; do
     live_pg_ignore_args+=(--ignore="${f}")
+  done
+  local live_pg_deselect_args=()
+  for id in "${live_pg_deselect_ids[@]}"; do
+    live_pg_deselect_args+=(--deselect="${id}")
   done
 
   rm -f .coverage coverage.xml
@@ -277,6 +318,7 @@ ci_tests() {
     --ignore=tests/test_connectors_integration.py
     --ignore=tests/test_private_repo_access.py
     "${live_pg_ignore_args[@]}"
+    "${live_pg_deselect_args[@]}"
     --cov=. --cov-report=)
   if [ "${PYTEST_XDIST_WORKERS}" != "0" ]; then
     cov_args+=(-n "${PYTEST_XDIST_WORKERS}" --dist "${PYTEST_DIST_MODE}")
@@ -285,7 +327,7 @@ ci_tests() {
 
   run_pytest_step "live-Postgres tests with coverage (serial)" \
     "${JUNIT_RESULTS_DIR}/live-postgres.xml" \
-    "${live_pg_files[@]}" -v --tb=short --cov=. --cov-append --cov-report=
+    "${live_pg_files[@]}" "${live_pg_deselect_ids[@]}" -v --tb=short --cov=. --cov-append --cov-report=
 
   run_step "coverage (combined report + gate >= ${coverage_threshold})" \
     coverage report "--fail-under=${coverage_threshold}" --show-missing

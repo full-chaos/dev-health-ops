@@ -122,7 +122,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		Title: "project wins", Type: "issue", Status: "done",
 		ProjectID: stringPointer("ghprojv2:acme#3"),
 		Assignees: []string{}, Labels: []string{}, OrgID: claim.OrgID,
-		CreatedAt: normalizedAt, UpdatedAt: normalizedAt,
+		CreatedAt: normalizedAt, UpdatedAt: normalizedAt, LastSynced: normalizedAt,
 	}
 	projects := &githubWorkItemsRouteProjectPolicy{result: GitHubProjectV2FetchResult{
 		Rows: githubWorkItemRows{
@@ -130,7 +130,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 			StatusTransitions: []githubWorkItemTransitionRow{{
 				WorkItemID: projectRow.WorkItemID, Provider: "github",
 				OccurredAt: normalizedAt, FromStatus: "todo", ToStatus: "done",
-				OrgID: claim.OrgID,
+				OrgID: claim.OrgID, LastSynced: normalizedAt,
 			}},
 		},
 		Evidence: FetchEvidence{Provider: "github", Dataset: "projects-v2", Requests: 3, Pages: 2, Records: 2},
@@ -802,4 +802,108 @@ func githubWorkItemsIncompleteError(t *testing.T, err error) *GitHubWorkItemsRou
 		t.Fatalf("error type=%T", err)
 	}
 	return routeErr
+}
+
+// The route must truncate normalizedAt to the precision its destination columns
+// can hold. REST.Collect truncates only its own by-value copy, so without the
+// route-entry truncation the PR-bundle and projects-v2 paths carry a wall-clock
+// instant's sub-millisecond component into DateTime64(3) columns; the stored
+// value then never equals the expectation, the readback answers Absent for a
+// row that landed, and the committer rewrites it on every recovery pass.
+//
+// Asserted on the EFFECT PAYLOAD rather than on a stored row, because that is
+// what the recovery snapshot persists and replays: an untruncated payload is
+// unsatisfiable no matter what the adapter later does.
+func TestGitHubWorkItemsRouteTruncatesTimestampsToTheColumnPrecision(t *testing.T) {
+	// Deliberately sub-millisecond: 123.456789ms. A whole-millisecond fixture
+	// would pass with or without the truncation.
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 123456789, time.UTC)
+	batch := githubWorkItemsRouteCollectForTruncation(t, normalizedAt)
+
+	for _, destination := range []string{"work_items", "work_item_transitions"} {
+		effect := githubWorkItemsRouteEffect(t, batch, destination)
+		if len(effect.Rows) == 0 {
+			t.Fatalf("%s produced no rows, so this test would assert nothing", destination)
+		}
+		for index, raw := range effect.Rows {
+			var fields map[string]any
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for name, value := range fields {
+				text, isText := value.(string)
+				if !isText {
+					continue
+				}
+				stamp, err := time.Parse(time.RFC3339Nano, text)
+				if err != nil {
+					continue // not a timestamp field
+				}
+				if stamp.Truncate(time.Millisecond) != stamp {
+					t.Fatalf("%s row %d field %q carries sub-millisecond precision (%s) "+
+						"that DateTime64(3) cannot store", destination, index, name,
+						stamp.Format(time.RFC3339Nano))
+				}
+			}
+		}
+	}
+}
+
+// githubWorkItemsRouteCollectForTruncation drives the real route with the same
+// fixtures as the composition test, parameterised on normalizedAt.
+func githubWorkItemsRouteCollectForTruncation(t *testing.T, normalizedAt time.Time) CompleteRouteBatch {
+	t.Helper()
+	claim := githubWorkItemsRESTClaim()
+	claim.DatasetOptions["fetch_milestones"] = false
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+		map[string]any{"org_login": "acme", "project_number": 3},
+	}}
+	fixtures := githubWorkItemsRESTFixtures()
+	delete(fixtures, "/repos/acme/api/milestones")
+	doer := &githubWorkItemsRouteDoer{
+		t:              t,
+		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
+		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":9007199254740993,"body":"social","createdAt":"2026-07-23T00:00:00Z","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[{"__typename":"ClosedEvent","createdAt":"2026-07-24T00:00:00Z","actor":{"login":"closer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
+	}
+	client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+	// The Projects policy is a stub, so these rows bypass the real normalizer
+	// (which stamps the route's already-truncated normalizedAt). Stamping them
+	// at millisecond precision here mirrors what normalizeGitHubProjectV2Item
+	// would produce, leaving the route's OWN path as the only thing this test
+	// can be measuring.
+	stamped := normalizedAt.UTC().Truncate(time.Millisecond)
+	projectRow := githubWorkItemRow{
+		WorkItemID: "gh:Acme/API-Renamed#42", Provider: "github",
+		Title: "project wins", Type: "issue", Status: "done",
+		ProjectID: stringPointer("ghprojv2:acme#3"),
+		Assignees: []string{}, Labels: []string{}, OrgID: claim.OrgID,
+		CreatedAt: stamped, UpdatedAt: stamped, LastSynced: stamped,
+	}
+	projects := &githubWorkItemsRouteProjectPolicy{result: GitHubProjectV2FetchResult{
+		Rows: githubWorkItemRows{
+			WorkItems: []githubWorkItemRow{projectRow},
+			StatusTransitions: []githubWorkItemTransitionRow{{
+				WorkItemID: projectRow.WorkItemID, Provider: "github",
+				OccurredAt: stamped, FromStatus: "todo", ToStatus: "done",
+				OrgID: claim.OrgID, LastSynced: stamped,
+			}},
+		},
+		Evidence: FetchEvidence{Provider: "github", Dataset: "projects-v2", Requests: 3, Pages: 2, Records: 2},
+		Usage: GitHubProjectV2Usage{
+			Transport: "graphql", RouteFamily: "work_item_prs",
+			Dimension: BudgetGraphQLCost, RequestCount: 3,
+		},
+		Targets: 1,
+	}}
+	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+	handler := GitHubWorkItemsRouteHandler{Projects: projects, Deriver: deriver}
+	batch, err := handler.Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		client, normalizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return batch
 }

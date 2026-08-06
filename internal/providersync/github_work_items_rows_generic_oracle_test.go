@@ -72,8 +72,25 @@ func TestGitHubIssueWorkItemMatchesLivePythonProductionRow(t *testing.T) {
 			},
 		},
 		buildGitHubIssueWorkItemOracleRow,
-		nil,
+		githubWorkItemWriteStampGoOnly,
 	)
+}
+
+// githubWorkItemWriteStampGoOnly declares the one field the Go work-item and
+// transition rows carry that the Python semantic row structurally cannot.
+//
+// Python's WorkItem/WorkItemStatusTransition dataclasses have no last_synced:
+// the sink stamps that column from wall-clock at insert time
+// (metrics/sinks/clickhouse/work_graph.py:661 and :749). Go carries the unit's
+// normalizedAt in the row instead, so the effect payload — and therefore a
+// recovery-snapshot replay of it — is byte-identical across attempts, which a
+// wall-clock stamp can never be. The stored column keeps its meaning; only its
+// determinism changes.
+var githubWorkItemWriteStampGoOnly = map[string]string{
+	"last_synced": "Python's semantic row has no last_synced at all -- its sink " +
+		"stamps the column from wall-clock at insert time, which no retry can " +
+		"reproduce. Go carries the unit's normalizedAt in the row so a recovery " +
+		"snapshot replays to identical bytes and the readback can answer Exact.",
 }
 
 func TestGitHubSprintMatchesLivePythonProductionRow(t *testing.T) {

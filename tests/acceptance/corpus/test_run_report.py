@@ -13,6 +13,8 @@ holds the pure, unit-testable half of that assertion.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -191,6 +193,98 @@ class TestAssertArmedRunExecuted:
             assert_armed_run_executed(
                 RunSummary(tests=144, failures=0, errors=0, skipped=144)
             )
+
+
+class TestAgainstRealPytestOutput:
+    """Pin the parser against the REAL producer, not hand-authored XML.
+
+    Every other test in this module feeds the parser a string I wrote, which
+    only proves the parser agrees with my mental model of pytest's JUnit
+    format. If that model is wrong -- parametrized ids not in ``name``, setup
+    errors emitted some other way, skips marked with an attribute rather
+    than a child element -- all of them pass while the launcher's real
+    assertion is broken. So this one runs a real pytest and parses what it
+    actually wrote.
+
+    It also settles a question the hand-written fixtures cannot: a case that
+    ERRORS IN SETUP (the literal Phase 2 exit shape -- 144 collected, 144
+    setup ERROR) must count as EXECUTED. That run is loudly red on its own
+    and the launcher propagates pytest's non-zero status; treating it as
+    "nothing executed" would report the wrong diagnosis for a run that very
+    much did reach the stack.
+    """
+
+    @pytest.fixture(scope="class")
+    def real_report(self, tmp_path_factory: pytest.TempPathFactory) -> str:
+        work = tmp_path_factory.mktemp("junit-producer")
+        (work / "test_probe.py").write_text(
+            "import pytest\n"
+            "@pytest.fixture\n"
+            "def boom():\n"
+            "    raise RuntimeError('setup error')\n"
+            "@pytest.mark.parametrize('case', ['scope.ambiguous', 'adv.x'])\n"
+            "def test_corpus_case(case, boom):\n"
+            "    pass\n"
+            "def test_at_least_one_corpus_case_is_collected():\n"
+            "    pass\n"
+            "@pytest.mark.parametrize('case', ['b1'])\n"
+            "def test_declared_blocked_case(case):\n"
+            "    pass\n"
+            "def test_skipped_one():\n"
+            "    pytest.skip('nope')\n",
+            encoding="utf-8",
+        )
+        report = work / "real.xml"
+        subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "test_probe.py",
+                f"--junitxml={report}",
+                "-p",
+                "no:cacheprovider",
+                "-p",
+                "no:xdist",
+                "-q",
+            ],
+            cwd=work,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if not report.exists():
+            pytest.fail(
+                "the probe pytest wrote no JUnit report -- this test measured nothing",
+                pytrace=False,
+            )
+        return report.read_text(encoding="utf-8")
+
+    def test_parametrized_ids_survive_into_the_testcase_name(
+        self, real_report: str
+    ) -> None:
+        summary = parse_junit_xml(real_report)
+        assert "test_corpus_case[scope.ambiguous]" in summary.executed_names
+
+    def test_setup_errors_count_as_executed_corpus_cases(
+        self, real_report: str
+    ) -> None:
+        summary = parse_junit_xml(real_report)
+        assert summary.errors == 2
+        assert len(summary.executed_corpus_cases) == 2
+        assert_armed_run_executed(summary)
+
+    def test_real_skips_are_excluded(self, real_report: str) -> None:
+        summary = parse_junit_xml(real_report)
+        assert summary.skipped == 1
+        assert "test_skipped_one" not in summary.executed_names
+
+    def test_non_corpus_tests_are_recognized_but_do_not_count(
+        self, real_report: str
+    ) -> None:
+        summary = parse_junit_xml(real_report)
+        assert "test_declared_blocked_case[b1]" in summary.executed_names
+        assert "test_declared_blocked_case[b1]" not in summary.executed_corpus_cases
 
 
 class TestOnlyRealCorpusCasesCount:

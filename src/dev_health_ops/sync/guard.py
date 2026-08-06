@@ -19,6 +19,13 @@ Decision shapes
   a delayed redispatch; it MUST NOT mark the run FAILED.
 * **Full allow** — ``GuardDecision(allowed=True, concurrency_capped=False)``.
 
+Every allowed decision also carries ``slot_headroom`` (CHAOS-3465): the slots
+still free per bucket once this pass's candidates are counted as dispatched.
+It is the only sanctioned way for another admission path to add work this
+guard did not see, and is computed for buckets holding not-yet-due RETRYING
+units too — those have no candidate this pass, so omitting them would report
+"no slots" for exactly the units surplus retry exists to unblock.
+
 Concurrency model
 -----------------
 Two disjoint sets per (org_id, provider, cost_class) bucket:
@@ -72,6 +79,7 @@ import hashlib
 import os
 import uuid
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -96,12 +104,23 @@ class GuardDecision:
       them.  The caller must leave those units PLANNED and schedule a delayed
       redispatch — it must NOT mark the run FAILED.
     * **Full allow**: ``allowed=True, concurrency_capped=False``.
+
+    ``slot_headroom`` is the concurrency slots left in each
+    ``(org_id, provider, cost_class)`` bucket AFTER this pass's own candidates
+    are assumed to dispatch (CHAOS-3465). It exists so that a caller admitting
+    work the candidate set did NOT contain -- the budget guard's surplus retry
+    of not-yet-due deferred units -- can still be held to the same concurrency
+    cap this guard enforces, instead of stepping around it. Deliberately
+    conservative: every candidate is counted as if it will dispatch, even
+    though some are about to be budget-deferred, so the headroom can only ever
+    under-admit.
     """
 
     allowed: bool
     reason: str | None = None
     capped_unit_ids: tuple[str, ...] = field(default_factory=tuple)
     concurrency_capped: bool = False
+    slot_headroom: Mapping[tuple[str, str, str], int] = field(default_factory=dict)
 
 
 class DispatchGuard:
@@ -157,6 +176,14 @@ class DispatchGuard:
         candidates_by_bucket: dict[tuple[str, str, str], list[SyncRunUnit]] = (
             defaultdict(list)
         )
+        # Buckets holding only NOT-YET-DUE retrying units (CHAOS-3465). They
+        # have no candidate this pass, so the loop below would never visit
+        # them and ``slot_headroom`` would report nothing -- which the budget
+        # guard's surplus retry reads as "no slots", silently making a
+        # deferred unit alone in its bucket the one case surplus can never
+        # help. Tracked separately so those buckets get an active_count read
+        # (and an advisory lock) without becoming candidates.
+        deferred_buckets: set[tuple[str, str, str]] = set()
         for unit in units:
             bucket = (str(unit.org_id), unit.provider, unit.cost_class)
             if unit.status == SyncRunUnitStatus.PLANNED.value:
@@ -168,9 +195,11 @@ class DispatchGuard:
             elif (
                 unit.status == SyncRunUnitStatus.RETRYING.value
                 and unit.available_at is not None
-                and _as_aware_guard(unit.available_at) <= now
             ):
-                candidates_by_bucket[bucket].append(unit)
+                if _as_aware_guard(unit.available_at) <= now:
+                    candidates_by_bucket[bucket].append(unit)
+                else:
+                    deferred_buckets.add(bucket)
             # RUNNING (any age) → capacity consumer only; never a candidate (F2).
             # Fresh DISPATCHING → consumer only (counted in active_count below).
             # Future RETRYING → deferred, no capacity consumption.
@@ -186,11 +215,13 @@ class DispatchGuard:
         #
         # Key derivation reuses the same deterministic 63-bit integer pattern
         # as _bucket_advisory_lock_key() below (mirrors sync.py:224-239).
-        all_buckets = sorted(candidates_by_bucket.keys())
+        all_buckets = sorted(set(candidates_by_bucket) | deferred_buckets)
         _acquire_bucket_advisory_locks(session, all_buckets)
 
         capped_unit_ids: list[str] = []
-        for bucket, bucket_candidates in candidates_by_bucket.items():
+        slot_headroom: dict[tuple[str, str, str], int] = {}
+        for bucket in all_buckets:
+            bucket_candidates = candidates_by_bucket.get(bucket, [])
             org_id, provider, cost_class = bucket
 
             # Count the CAPACITY-CONSUMER set across ALL runs (including this
@@ -230,6 +261,7 @@ class DispatchGuard:
                 capped_unit_ids.extend(
                     str(unit.id) for unit in bucket_candidates[allowed_slots:]
                 )
+            slot_headroom[bucket] = max(0, allowed_slots - len(bucket_candidates))
 
         if capped_unit_ids:
             return GuardDecision(
@@ -237,9 +269,10 @@ class DispatchGuard:
                 f"sync unit concurrency cap exceeded: {len(capped_unit_ids)} capped",
                 tuple(capped_unit_ids),
                 concurrency_capped=True,
+                slot_headroom=slot_headroom,
             )
 
-        return GuardDecision(True)
+        return GuardDecision(True, slot_headroom=slot_headroom)
 
 
 def _bucket_advisory_lock_key(org_id: str, provider: str, cost_class: str) -> int:

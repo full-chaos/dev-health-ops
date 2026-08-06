@@ -83,6 +83,17 @@ themselves. A unit is only ever failed by one of these caps on a pass where it
 is confirmed to still be blocked; one that has become admissible is dispatched
 instead, however long it was previously held back.
 
+A pass that finishes admission with budget left over spends it retrying units
+an earlier deferral is still holding back, longest-deferred first, so a unit
+does not sit out its full deferral interval against a bucket that has since
+drained. `SYNC_BUDGET_SURPLUS_MAX_CANDIDATES` (default 16) bounds how many
+such units one pass estimates; `0` disables surplus retry entirely. The
+surplus is strictly in-cycle — unused budget is never banked for a later pass,
+which would let an idle period fund a burst and re-create the starvation the
+bucket caps exist to prevent. It relaxes budget admission and nothing else:
+the per-bucket concurrency cap, tier and total unit caps, provider cooldowns,
+and the exhaustion outcome above all still bind.
+
 A setting that enables a route is not sufficient evidence that the corresponding worker owns production work. The checked-in route, handler coverage, profile, and migration state must agree.
 
 ## External services and telemetry

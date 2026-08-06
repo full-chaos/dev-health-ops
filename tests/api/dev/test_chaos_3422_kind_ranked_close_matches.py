@@ -29,7 +29,10 @@ import pytest
 
 from dev_health_ops.api.dev.contracts_v2 import PublicOutcome, ResolutionOutcome
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
-from dev_health_ops.api.dev.scope_catalog import merge_search_candidates
+from dev_health_ops.api.dev.scope_catalog import (
+    ClickHouseAuthorizedEntityCatalog,
+    merge_search_candidates,
+)
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -357,6 +360,89 @@ async def test_a_preference_and_no_preference_do_not_share_a_cache_entry() -> No
 
     assert unpreferred.candidates[0].label != preferred.candidates[0].label
     assert preferred.candidates[0].label == ACR_PROJECT.label
+
+
+@pytest.mark.asyncio
+async def test_the_seeded_catalog_agrees_with_the_production_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A differential oracle over the two search implementations.
+
+    Every preflight scenario in this module reaches ``merge_search_candidates``
+    through ``SeededCatalog``, so the fake is a second implementation of the
+    production catalog's search and the only question that matters is whether
+    they agree. Codex review, medium: they did not — the fake skipped the
+    alias pass for any entity the substring pass had already matched, so
+    ``Zeta Runtime (ACR)`` was an alias hit in production and a substring hit
+    in the fake, one rank lower. Both are driven from the *same* rows here,
+    with the production side's ``query_dicts`` returning exactly what the fake
+    is seeded with, so the comparison cannot be satisfied by two different
+    inputs.
+    """
+
+    rows = [
+        AuthorizedEntity(
+            kind=EntityKind.PROJECT,
+            canonical_id="project-zeta",
+            label="Zeta Runtime (ACR)",
+        ),
+        AuthorizedEntity(
+            kind=EntityKind.PROJECT,
+            canonical_id="project-aardvark",
+            label="Aardvark ACR Notes",
+        ),
+        AuthorizedEntity(
+            kind=EntityKind.PROJECT,
+            canonical_id="project-agile",
+            label="Agile Core Runway",
+        ),
+    ]
+
+    async def fake_query_dicts(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM projects FINAL" not in sql:
+            return []
+        if "lowerUTF8(name)" in sql:  # the alias roster scan
+            return [
+                {"canonical_id": row.canonical_id, "label": row.label} for row in rows
+            ]
+        return [  # the substring pass
+            {"canonical_id": row.canonical_id, "label": row.label}
+            for row in rows
+            if "acr" in row.label.casefold()
+        ]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+
+    for preferred in (frozenset(), frozenset({EntityKind.PROJECT})):
+        production = await ClickHouseAuthorizedEntityCatalog(object()).search(
+            ORG_ID,
+            "acr",
+            (EntityKind.PROJECT,),
+            limit=NOT_FOUND_FALLBACK_LIMIT,
+            include_alias_matches=True,
+            preferred_kinds=preferred,
+        )
+        seeded = await SeededCatalog([(ORG_ID, row) for row in rows]).search(
+            ORG_ID,
+            "acr",
+            (EntityKind.PROJECT,),
+            limit=NOT_FOUND_FALLBACK_LIMIT,
+            include_alias_matches=True,
+            preferred_kinds=preferred,
+        )
+        assert seeded == production, f"the fake diverges for preferred={preferred}"
+
+    # And the agreed-upon answer is the right one, so agreeing on a wrong
+    # order could not satisfy this test either.
+    assert [entity.canonical_id for entity in seeded] == [
+        "project-agile",  # alias only, sorts first inside the alias tier
+        "project-zeta",  # alias AND substring -- still an alias hit
+        "project-aardvark",  # substring only
+    ]
 
 
 def test_a_preference_outside_the_searched_kinds_is_a_caller_defect() -> None:

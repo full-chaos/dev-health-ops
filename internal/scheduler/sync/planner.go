@@ -50,6 +50,43 @@ const (
 // is the complete signal.
 var warnedCapClamps sync.Map
 
+// warnedEnvIntRejections dedupes warnUnparseableEnvInt on the same (key, raw)
+// pair. incrementalHeavyMaxWindowDays runs once per (source x heavy dataset),
+// so an unguarded warning would bury the log exactly as an unguarded cap-clamp
+// warning would. The raw value is part of the key so a genuinely changed
+// setting still warns.
+var warnedEnvIntRejections sync.Map
+
+// warnUnparseableEnvInt makes a REJECTED integer setting loud instead of
+// silently falling back. It exists because Go's strconv and Python's int()
+// accept different grammars, and every Go/Python settings divergence found so
+// far surfaced as behaviour drift rather than as an error: Python accepts
+// underscore digit separators (int("3_0") == 30) and non-ASCII decimal digits
+// (int("٣٠") == 30), Go's Atoi rejects both. Porting those acceptances is an
+// explicit non-goal (see boundedEnvInt), so a value only the Python worker
+// understands has to announce itself here, naming the raw text and the value
+// actually in force.
+//
+// Warn, never fail: refusing to plan on a bad settings string would recreate
+// the do-nothing failure mode the CHAOS-3412 ratchet exists to kill.
+func warnUnparseableEnvInt(key, raw string, fallback int) {
+	type rejectionKey struct{ key, raw string }
+	if _, warned := warnedEnvIntRejections.LoadOrStore(rejectionKey{key: key, raw: raw}, true); warned {
+		return
+	}
+	slog.Default().Warn(
+		"sync.settings.env_int_rejected",
+		slog.String("setting", key),
+		slog.String("raw_value", raw),
+		slog.Int("value_in_force", fallback),
+		slog.String("reason",
+			"value is not a Go-parseable integer and was IGNORED. Python's int() "+
+				"accepts underscore digit separators and non-ASCII decimal digits; "+
+				"this worker deliberately does not. Write plain ASCII digits with an "+
+				"optional leading sign (surrounding whitespace is fine)."),
+	)
+}
+
 var (
 	ErrInvalidPlan       = errors.New("invalid scheduled sync plan")
 	ErrBackfillScheduled = errors.New("scheduled sync backfill is not supported")
@@ -308,13 +345,28 @@ func resolveWindowStart(input PlannerInput, source PlanSource, dataset PlanDatas
 // and non-integer values fall back to the default rather than erroring --
 // refusing to plan would recreate the do-nothing failure mode the ratchet
 // exists to kill.
+//
+// TrimSpace matches Python's int(), which strips surrounding whitespace. The
+// two acceptances NOT ported -- underscore digit separators and non-ASCII
+// decimal digits -- are the accepted grammar restriction documented on
+// boundedEnvInt; a value only Python would accept warns via
+// warnUnparseableEnvInt rather than falling back in silence.
+//
+// A non-POSITIVE value is not routed through that warning: Python falls back
+// on it identically (planner.py:735-743), so there is no divergence to
+// announce, and the CHAOS-3412 clause C1 contract already states the
+// fall-back as intended behaviour.
 func incrementalHeavyMaxWindowDays() int {
 	raw, ok := os.LookupEnv(incrementalHeavyMaxWindowDaysEnv)
 	if !ok {
 		return defaultIncrementalHeavyMaxWindowDays
 	}
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value <= 0 {
+	if err != nil {
+		warnUnparseableEnvInt(incrementalHeavyMaxWindowDaysEnv, raw, defaultIncrementalHeavyMaxWindowDays)
+		return defaultIncrementalHeavyMaxWindowDays
+	}
+	if value <= 0 {
 		return defaultIncrementalHeavyMaxWindowDays
 	}
 	return value

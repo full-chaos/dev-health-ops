@@ -25,14 +25,30 @@ adversarial critique, comment 7d1368d9):
   the same cardinality. This is what stops "how is the Contxt Fabric doing?"
   from reading as a corroborated org-wide proposal just because the model
   found no candidate id to name.
-* **Never-widen holds structurally.** ``_response_schema`` bounds every
-  candidate-index field to ``[0, len(combined) - 1]`` for the exact
-  authorized shortlist THIS call built -- when that shortlist is empty the
-  bound is ``[0, -1]``, which no integer satisfies, so the wire schema
-  itself cannot express a candidate when none were authorized. ``_verify``
-  re-checks every accepted index against its OWN mention's slice (not just
-  the call-wide bound) after parsing, independent of whether the provider
-  honored the schema.
+* **Never-widen is enforced at RUNTIME, not by the wire schema.** This bullet
+  used to claim the opposite -- that ``_response_schema``'s
+  ``[0, len(combined) - 1]`` index bounds made an unauthorized candidate
+  inexpressible on the wire. That was FALSE for as long as it was written
+  (CHAOS-3536). ``OpenAICompatibleAgentProvider`` projects every schema
+  through ``_structural_schema``, which keeps only ``_STRUCTURAL_SCHEMA_KEYS``
+  -- and ``minimum``/``maximum``/``minItems``/``maxItems``/``maxLength`` are
+  not among them. The bounds were stripped before dispatch on every call
+  that ever ran; no provider has seen them. Verified by executing the
+  product's own ``build_completion_request`` and reading the result, not by
+  reasoning about it.
+
+  So ``_verify`` is not a belt-and-braces second check, as this file
+  previously implied -- it is the ONLY check. It re-checks every accepted
+  index against its OWN mention's authorized slice (not just the call-wide
+  bound) after parsing, independent of whether the provider honored
+  anything, and CHAOS-3525 additionally hardened the singular path to
+  resolve by identity. That makes it a strong sole guard, but a sole guard.
+
+  The one structural bound that DOES survive projection is the
+  zero-candidate encoding: with nothing authorized,
+  ``selected_candidate_index`` is ``{"type": "null"}``, so no index is
+  expressible at all. See ``_response_schema``. CHAOS-3537 tracks restoring
+  a real structural bound for the non-empty case.
 * **LLM unavailable degrades to silent skip, never a block.** Every branch
   of ``evaluate()`` returns a ``QUAShadowRecord`` (never raises); the
   orchestrator's own call site additionally wraps the call and the
@@ -610,15 +626,40 @@ class QuestionUnderstandingShadow:
     def _response_schema(
         self, *, mention_count: int, candidate_count: int
     ) -> dict[str, Any]:
-        """A JSON Schema whose index bounds make an out-of-authorization
-        candidate literally inexpressible for THIS call. When
-        ``candidate_count`` is zero the bound is ``[0, -1]`` -- an empty
-        range no integer satisfies, so a provider honoring the schema
-        cannot select any candidate at all when none were authorized.
+        """The response schema for THIS call's authorized shortlist.
+
+        CHAOS-3536, read this before trusting the bounds below: ``minimum``,
+        ``maximum``, ``minItems``, ``maxItems`` and ``maxLength`` DO NOT
+        REACH THE PROVIDER. ``OpenAICompatibleAgentProvider`` projects every
+        schema through ``_structural_schema``, which keeps only the keys in
+        ``_STRUCTURAL_SCHEMA_KEYS`` -- and none of those five are in it. They
+        are dropped before dispatch. Keeping them here is still worthwhile
+        (they document intent, and they bound the schema for any future
+        provider that does not project), but nothing may be claimed on their
+        strength. ``_verify`` is the guard that actually holds. See
+        CHAOS-3537 for restoring a structural bound to the wire.
+
+        The zero-candidate case is the one bound that DOES survive, and it
+        is encoded to survive deliberately. It used to be the empty integer
+        range ``[0, -1]``, which projection erased down to
+        ``{"type": ["integer", "null"]}`` -- any integer expressible with
+        nothing authorized. It is now ``{"type": "null"}``: the same
+        never-widen intent, expressed with a keyword the projection keeps,
+        and parseable because the contract field is ``_StrictIndex | None``.
+
+        ``candidate_indices`` gets no equivalent treatment and is bounded
+        only at runtime: its contract field is a non-optional tuple, so a
+        null would fail parsing on every zero-candidate call, and
+        ``maxItems: 0`` would be stripped like the rest. An out-of-range
+        entry there is expressible on the wire and rejected by ``_verify``.
         """
 
         max_index = candidate_count - 1
-        index_schema = {"type": ["integer", "null"], "minimum": 0, "maximum": max_index}
+        index_schema: dict[str, Any] = (
+            {"type": "null"}
+            if candidate_count == 0
+            else {"type": ["integer", "null"], "minimum": 0, "maximum": max_index}
+        )
         mention_schema = {
             "type": "object",
             "additionalProperties": False,
@@ -649,7 +690,17 @@ class QuestionUnderstandingShadow:
                 "requires_clarification",
             ],
             "properties": {
-                "schema_version": {"const": QUESTION_UNDERSTANDING_SCHEMA_VERSION},
+                # CHAOS-3536: ``type`` is REQUIRED here, and its absence took
+                # the whole QUA path down against every real provider --
+                # strict structured-output mode rejects the request with
+                # "In context=('properties', 'schema_version'), schema must
+                # have a 'type' key". ``const`` alone is not a type
+                # declaration. The pin stays: the field must still be v1 by
+                # VALUE, not merely a string.
+                "schema_version": {
+                    "type": "string",
+                    "const": QUESTION_UNDERSTANDING_SCHEMA_VERSION,
+                },
                 "intent_id": {
                     "type": "string",
                     "enum": [intent.value for intent in QuestionIntentID],

@@ -671,7 +671,7 @@ func asTaggedValue(value any) (taggedValue, bool) {
 // directive's file list drifted out of sync with what oracleDivergences
 // actually executes.
 //
-//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py
+//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/python_investment_call_site.py testdata/oracle_pairs/*.py
 var embeddedOracleSources embed.FS
 
 func assertOracleSourcesUnchangedSinceBuild(t *testing.T) {

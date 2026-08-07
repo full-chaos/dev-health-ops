@@ -1,0 +1,13 @@
+# `priority:` PRESENT and NULL with exactly ONE rule. sorted() computes every
+# key before it compares anything, and with one element it never compares -- so
+# Python does NOT raise here, and neither may this port. The two-rule form is
+# raises_priority_null.yaml; the pair is what stops "any null priority is fatal"
+# from passing as a mirror.
+rules:
+  - id: lonely
+    priority:
+    match:
+      label: ["lonely"]
+    output:
+      investment_area: lonely_area
+      project_stream: lonely_stream

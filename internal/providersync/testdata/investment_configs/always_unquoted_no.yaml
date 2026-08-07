@@ -1,0 +1,18 @@
+# `always:` holding an UNQUOTED `no`. PyYAML implements YAML 1.1, where that
+# is the BOOLEAN false, so the rule does NOT short-circuit and falls through to
+# its label criterion. yaml.v3 implements the 1.2 core schema, where it is the
+# non-empty STRING "no" -- which is truthy, so an unnormalised Go port would
+# short-circuit and match EVERY artifact under this one rule.
+#
+# The label criterion is what makes the difference observable: the two cases
+# over this file differ only in whether the label matches, and a port that
+# short-circuited would return the same answer for both.
+rules:
+  - id: unquoted_no_always
+    priority: 10
+    match:
+      always: no
+      label: ["unquotedno"]
+    output:
+      investment_area: unquoted_no_area
+      project_stream: unquoted_no_stream

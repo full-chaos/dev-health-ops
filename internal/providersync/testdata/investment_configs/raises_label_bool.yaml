@@ -1,0 +1,9 @@
+# A label entry YAML resolves to a BOOLEAN. `no` is not the string "no" to
+# PyYAML, it is False, and False has no .lower(). The whole generator is
+# consumed before the intersection is taken, so this raises even for an
+# artifact carrying no labels at all.
+rules:
+  - id: bool_label
+    priority: 10
+    match:
+      label: [no]

@@ -1,0 +1,7 @@
+# `label:` PRESENT and NULL. `"label" in match_criteria` is true, so the arm
+# runs, and the generator iterates None.
+rules:
+  - id: null_label
+    priority: 10
+    match:
+      label:

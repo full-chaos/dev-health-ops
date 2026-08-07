@@ -1,0 +1,7 @@
+# `component:` PRESENT and NULL. `x not in None` is a containment test
+# against None, which is not a container.
+rules:
+  - id: null_component
+    priority: 10
+    match:
+      component:

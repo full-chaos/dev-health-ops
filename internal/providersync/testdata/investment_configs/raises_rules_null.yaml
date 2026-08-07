@@ -1,0 +1,4 @@
+# `rules:` PRESENT and NULL. `data.get("rules", [])` returns None -- the
+# default is not applied, because the key exists -- and sorted(None) raises.
+# This is the shape a typed Go decode collapsed into "no rules at all".
+rules:

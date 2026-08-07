@@ -1,0 +1,16 @@
+# A BARE STRING `component:`. `in` against a string is SUBSTRING containment,
+# not membership -- a latent Python bug this mirrors rather than fixes, because
+# it means the work-item call site (component always "") matches this rule for
+# EVERY artifact: "" is a substring of everything.
+#
+# The label guard is what keeps that from swallowing the other cases in this
+# directory, and it matters that the label arm is tested BEFORE the component
+# arm -- an artifact with no component key would otherwise raise here.
+rules:
+  - id: bare_component
+    priority: 10
+    match:
+      label: ["barecomponent"]
+      component: analytics
+    output:
+      investment_area: bare_component_area

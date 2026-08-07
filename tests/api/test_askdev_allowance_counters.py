@@ -505,7 +505,6 @@ async def test_reconcile_terminal_cost_can_adjust_upward(valkey_client):
     [
         ("byo", "completed", 250_000),  # not the platform provider
         ("platform", "running", 250_000),  # not terminal
-        ("platform", "completed", None),  # no real cost -- fail-closed pin stands
     ],
 )
 async def test_reconcile_terminal_cost_noop_cases(
@@ -530,6 +529,118 @@ async def test_reconcile_terminal_cost_noop_cases(
     counts = await valkey_client.hmget(key, ["requests", "cost_microusd"])
     # Unchanged -- the reservation is left exactly as it was.
     assert counts == [b"1", str(_RESERVATION).encode()]
+
+
+# -- reconcile_terminal_cost(): CHAOS-3573 NULL-cost release ------------------
+#
+# RED-first pin: a terminal run whose real cost was never recorded (NULL)
+# must have its worst-case admission-time reservation released down to 0,
+# not held forever. Before the CHAOS-3573 fix, reconcile_terminal_cost
+# returned early on `estimated_cost_microusd is None` and these three
+# assertions failed (counts stayed at the full `_RESERVATION` instead of
+# dropping to 0) -- pinning exactly the retention CHAOS-3573's evidence
+# measured in production (6 of 29 runs, 2 failed + 4 insufficient_evidence,
+# each permanently holding the $5 worst-case reservation).
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["failed", "insufficient_evidence"])
+async def test_reconcile_terminal_cost_releases_reservation_on_null_cost(
+    valkey_client, state
+):
+    """A terminal run with NULL cost never dispatched a provider call
+
+    (ProviderBudget.require() in orchestrator.py is the only writer of a
+    non-None estimated_cost_microusd, and it never resets back to None) --
+    so its real cost is 0, and the worst-case reservation held since
+    admission must be released in full.
+    """
+    key = counters._key(_ORG, datetime(2026, 8, 1, tzinfo=UTC))
+    await counters._ensure_initialized(
+        valkey_client,
+        key=key,
+        ttl_seconds=1000,
+        baseline=AllowanceCounts(requests=1, cost_microusd=_RESERVATION),
+    )
+    await reconcile_terminal_cost(
+        _fake_session(),
+        org_id=_ORG,
+        provider_source="platform",
+        state=state,
+        estimated_cost_microusd=None,
+        per_run_reservation_microusd=_RESERVATION,
+        now=_NOW,
+    )
+    counts = await valkey_client.hmget(key, ["requests", "cost_microusd"])
+    assert counts == [b"1", b"0"], (
+        "a NULL-cost terminal run must reconcile the reservation down to "
+        "its real cost (0), not keep the worst-case reservation forever"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_terminal_cost_null_cost_only_releases_that_runs_share(
+    valkey_client,
+):
+    """Two runs share the org/month key; only the NULL-cost run's own
+    reservation portion is released -- the other run's real cost stands."""
+    key = counters._key(_ORG, datetime(2026, 8, 1, tzinfo=UTC))
+    await counters._ensure_initialized(
+        valkey_client,
+        key=key,
+        ttl_seconds=1000,
+        baseline=AllowanceCounts(requests=2, cost_microusd=_RESERVATION * 2),
+    )
+    # First run already reconciled up/down to a real, non-null cost.
+    await reconcile_terminal_cost(
+        _fake_session(),
+        org_id=_ORG,
+        provider_source="platform",
+        state="completed",
+        estimated_cost_microusd=300_000,
+        per_run_reservation_microusd=_RESERVATION,
+        now=_NOW,
+    )
+    # Second run terminates with no recorded cost at all.
+    await reconcile_terminal_cost(
+        _fake_session(),
+        org_id=_ORG,
+        provider_source="platform",
+        state="failed",
+        estimated_cost_microusd=None,
+        per_run_reservation_microusd=_RESERVATION,
+        now=_NOW,
+    )
+    counts = await valkey_client.hmget(key, ["requests", "cost_microusd"])
+    # Total charged: run 1's real 300_000 + run 2's real 0.
+    assert counts == [b"2", b"300000"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_terminal_cost_regression_recorded_cost_still_reconciles(
+    valkey_client,
+):
+    """Regression guard: a terminal run WITH a recorded cost must keep
+    reconciling to that recorded value -- the NULL-cost fix must not touch
+    this path at all."""
+    key = counters._key(_ORG, datetime(2026, 8, 1, tzinfo=UTC))
+    await counters._ensure_initialized(
+        valkey_client,
+        key=key,
+        ttl_seconds=1000,
+        baseline=AllowanceCounts(requests=1, cost_microusd=_RESERVATION),
+    )
+    await reconcile_terminal_cost(
+        _fake_session(),
+        org_id=_ORG,
+        provider_source="platform",
+        state="insufficient_evidence",
+        estimated_cost_microusd=42_000,
+        per_run_reservation_microusd=_RESERVATION,
+        now=_NOW,
+    )
+    counts = await valkey_client.hmget(key, ["requests", "cost_microusd"])
+    assert counts == [b"1", b"42000"]
 
 
 @pytest.mark.asyncio

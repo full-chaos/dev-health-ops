@@ -546,11 +546,86 @@ async def test_platform_monthly_allowance_charges_unique_runs_and_replay_is_free
 
 
 @pytest.mark.asyncio
-async def test_platform_monthly_allowance_reserves_unknown_cost_fail_closed(
+async def test_platform_monthly_allowance_reserves_unknown_cost_while_running(
     postgres_persistence: tuple[
         async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
     ],
 ) -> None:
+    """While a run is still in flight, its cost is genuinely unknown, so
+    admission must reserve the full worst-case cost rather than treat it as
+    zero -- a concurrent second request that would blow the monthly cost
+    ceiling once both worst cases are counted must be rejected.
+
+    CHAOS-3573 note: this is deliberately a NON-terminal in-flight run (no
+    ``update_run`` call at all). Before CHAOS-3573 this test terminated the
+    first run (``state="cancelled"``) with no recorded cost and asserted the
+    reservation stayed pinned forever after termination too -- that was
+    exactly the bug (see
+    ``test_platform_monthly_allowance_releases_unknown_terminal_cost``
+    below, which now pins the corrected behavior for the terminal case).
+    This test keeps the still-valid half of the original contract: an
+    ACTIVE run's unknown cost must still fail closed, because it has not
+    reconciled to anything yet and may still bill up to the full estimate.
+    """
+    maker, _engine, org_id, user_id = postgres_persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            current_scope={},
+        )
+        allowance = DevPlatformAllowance(
+            monthly_request_limit=10,
+            monthly_cost_limit_microusd=5_000_000,
+        )
+        await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Reserve the full unknown platform cost",
+            scope_snapshot={},
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        # First run is left non-terminal (in flight) -- its worst-case
+        # reservation still stands, so a second admission that would exceed
+        # the cost ceiling once both worst cases are counted must reject.
+        with pytest.raises(DevMonthlyCostLimitExceeded):
+            await service.append_user_message_and_run(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                client_message_id=uuid.uuid4(),
+                question="An in-flight run's unknown cost is not zero yet",
+                scope_snapshot={},
+                provider_source="platform",
+                platform_allowance=allowance,
+            )
+
+
+@pytest.mark.asyncio
+async def test_platform_monthly_allowance_releases_unknown_terminal_cost(
+    postgres_persistence: tuple[
+        async_sessionmaker[AsyncSession], AsyncEngine, uuid.UUID, uuid.UUID
+    ],
+) -> None:
+    """CHAOS-3573: a TERMINAL run with no recorded cost must reconcile to
+    its real cost -- zero, since ``estimated_cost_microusd`` is NULL at a
+    terminal write only when the run never dispatched a single provider
+    call (see askdev_allowance_counters.reconcile_terminal_cost's
+    docstring). Before this fix, the worst-case admission-time reservation
+    was held forever past termination, which is exactly the phantom-spend
+    defect CHAOS-3573 was filed against (6 of 29 production runs, ~30% of a
+    monthly allowance, held by runs that cost approximately nothing).
+
+    This exercises the SQL-fallback ground truth (``_recompute_from_dev_
+    runs``), not the Valkey HINCRBY path -- REDIS_URL is unset for this
+    module, so ``admit()``/``reconcile_terminal_cost`` both take the
+    SQL-only branch. Both paths must agree (see the module docstring), and
+    this is the contract test for the SQL side.
+    """
     maker, _engine, org_id, user_id = postgres_persistence
     async with maker() as session:
         service = DevPersistenceService(session)
@@ -579,17 +654,20 @@ async def test_platform_monthly_allowance_reserves_unknown_cost_fail_closed(
             run_id=first.run.id,
             state="cancelled",
         )
-        with pytest.raises(DevMonthlyCostLimitExceeded):
-            await service.append_user_message_and_run(
-                org_id=org_id,
-                user_id=user_id,
-                conversation_id=conversation.id,
-                client_message_id=uuid.uuid4(),
-                question="Unknown cost cannot be treated as zero",
-                scope_snapshot={},
-                provider_source="platform",
-                platform_allowance=allowance,
-            )
+        # The first run is now terminal with no recorded cost -- its real
+        # cost is zero, and the second request must be admitted with the
+        # full $5 ceiling available again.
+        second = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="A terminal run's unrecorded cost reconciles to zero",
+            scope_snapshot={},
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        assert second.created is True
 
 
 # -- CHAOS-3297 Codex review round 9: the DB trigger closure, production

@@ -73,7 +73,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev.org_policy import TERMINAL_RUN_STATES, platform_month_window
@@ -185,19 +185,33 @@ async def _recompute_from_dev_runs(
 
     Used for the Valkey-down fallback, lazy cold-key init, breaker-recovery
     recompute, and the explicit operator reconcile. One definition, so the
-    "what counts as charged" logic (terminal + has a real cost -> the real
-    cost; anything else -> the worst-case reservation) cannot drift between
-    call sites the way it had before this module existed (ask_dev.py and
+    "what counts as charged" logic (terminal -> the real cost, zero if none
+    was ever recorded; non-terminal -> the worst-case reservation, since the
+    run may still bill up to the per-call estimate) cannot drift between call
+    sites the way it had before this module existed (ask_dev.py and
     persistence/service.py each had their own copy).
+
+    CHAOS-3573: a terminal run's ``estimated_cost_microusd`` is NULL only
+    when it never dispatched a single provider call --
+    ``ProviderBudget.require()`` (``orchestrator.py``) always turns it into a
+    concrete int the instant a call is reserved, before dispatch, and never
+    back to None afterward, so every terminal write's cost column is exactly
+    the real, fully-accounted spend for that run at the moment it reached
+    ``finish()``. A terminal-but-NULL run is therefore a genuine
+    zero-cost run (a preflight rejection, a disabled feature, a
+    provider-unavailable 503 -- never a run that spent and lost the number).
+    Charging it the worst-case reservation here would keep exactly the
+    phantom spend this function exists to heal away, and would silently
+    re-inflate the Valkey counter back to worst-case on the very next
+    cold-key init / breaker recovery / operator reconcile after
+    ``reconcile_terminal_cost`` (below) has already corrected it there --
+    the two call sites must agree, or "fixed" doesn't survive a heal cycle.
     """
 
     charged_cost = case(
         (
-            and_(
-                DevRun.state.in_(TERMINAL_RUN_STATES),
-                DevRun.estimated_cost_microusd.is_not(None),
-            ),
-            DevRun.estimated_cost_microusd,
+            DevRun.state.in_(TERMINAL_RUN_STATES),
+            func.coalesce(DevRun.estimated_cost_microusd, 0),
         ),
         else_=per_run_reservation_microusd,
     )
@@ -442,23 +456,35 @@ async def reconcile_terminal_cost(
     test_persistence_v2.py's contract test driving a terminal transition
     twice through the real path).
 
-    A no-op when there is no real cost to reconcile with (provider is not
-    "platform", the state is not terminal, or ``estimated_cost_microusd`` is
-    None -- the defensive terminal-without-cost path). Per CHAOS-3522(b):
-    the reservation stays pinned at worst-case in that last case, matching
-    the existing ``test_platform_monthly_allowance_reserves_unknown_cost_
-    fail_closed`` contract -- deliberate fail-closed, not something this
-    ticket revises.
+    A no-op only when there is no ``provider`` this counter tracks, or the
+    state is not terminal. ``estimated_cost_microusd`` being None is NOT a
+    no-op (CHAOS-3573 -- reversing CHAOS-3522(b)'s original choice here):
+    every terminal write's cost column comes from
+    ``ProviderBudget.usage.estimated_cost_microusd``
+    (``orchestrator.py``/``orchestrator_persistence.py``'s ``finish()``),
+    which ``require()`` turns into a concrete int the instant a provider
+    call is reserved and never resets to None afterward. NULL at a terminal
+    write therefore means this run never dispatched a single provider call
+    -- a preflight rejection, a disabled feature, a provider-unavailable
+    503 -- genuinely zero spend, never a run that spent and lost the
+    number. (A crash that loses a run's cost entirely bypasses this
+    function altogether: ``force_terminal_fallback`` /
+    ``recover_stale_non_terminal_run`` write ``state`` directly and never
+    call ``update_run``'s terminal branch, so they never reach here --
+    those stay fail-closed by construction, unaffected by this change.)
+    Reconciling NULL to 0 here is what makes this function agree with
+    ``_recompute_from_dev_runs``'s identical ``charged_cost`` rule above --
+    the two must match, or a cold-key heal / breaker recovery / operator
+    reconcile would re-inflate the counter this call just corrected.
     """
 
     if provider_source != "platform" or state not in TERMINAL_RUN_STATES:
         return
-    if estimated_cost_microusd is None:
-        return
 
     now = now or datetime.now(UTC)
     window_start, _reset_at = platform_month_window(now)
-    delta = estimated_cost_microusd - per_run_reservation_microusd
+    real_cost = estimated_cost_microusd if estimated_cost_microusd is not None else 0
+    delta = real_cost - per_run_reservation_microusd
     if delta == 0:
         return
 

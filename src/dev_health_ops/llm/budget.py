@@ -28,6 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.llm.agent.openai_compatible import (
+    _PLATFORM_MODEL_PRICES as _BORROWED_OPENAI_MODEL_PRICES,
+)
+from dev_health_ops.llm.agent.openai_compatible import (
+    _canonical_priced_model as _borrowed_canonical_model,
+)
+from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.errors import LLMError
 from dev_health_ops.llm.providers.base import CompletionResult, LLMProvider
 from dev_health_ops.models.licensing import OrgLicense
@@ -47,6 +54,25 @@ _PRICE_PER_MILLION: Final[dict[tuple[str, str], tuple[int, int, int]]] = {
     # input, cached input, output
     ("openai", "gpt-5-mini"): (250_000, 25_000, 2_000_000),
 }
+
+# CHAOS-3582: ``SCRIPTED_OPENAI_MODEL`` ("ask-dev-scripted-v1") is the Ask Dev
+# acceptance stack's deterministic, deliberately-free test double -- not a
+# real, billable model. Priced (tiny, non-zero, same rate on all three legs)
+# rather than left absent, mirroring the SAME carve-out
+# ``llm.agent.openai_compatible`` already made for the live platform-cost path
+# (``_PLATFORM_MODEL_PRICES["ask-dev-scripted-v1"] = (1_000, 1_000)``,
+# CHAOS-3552).
+#
+# Deliberately NOT an entry in ``_PRICE_PER_MILLION`` above -- review finding
+# (CHAOS-3582, confidence 90, confirmed live): that dict backs the generic
+# "official endpoint, known real model" lookup ``reliable_price`` falls
+# through to, so a fixture entry THERE would be reachable by MODEL NAME
+# ALONE the instant a caller's base_url happens to be empty or
+# ``api.openai.com`` -- exactly the transport-gate bypass
+# ``_is_acceptance_scripted_transport`` exists to close. Kept as a separate
+# constant, returned ONLY from the transport-gated branch in
+# ``reliable_price``, so there is no path back into the shared dict at all.
+_ACCEPTANCE_SCRIPTED_PROVIDER_PRICE: Final[tuple[int, int, int]] = (1_000, 1_000, 1_000)
 
 BudgetReason = Literal[
     "available",
@@ -180,13 +206,126 @@ def _official_openai_endpoint(base_url: str | None) -> bool:
     return parsed.scheme == "https" and parsed.hostname == "api.openai.com"
 
 
+#: CHAOS-3582 review finding (BLOCKING, confidence 90, fixed here): an
+#: earlier revision of the fixture carve-out below matched on MODEL NAME
+#: alone. Model name is tenant-controlled for a BYO configuration -- a
+#: tenant could name THEIR OWN model, on THEIR OWN real endpoint, literally
+#: ``"ask-dev-scripted-v1"``, and every real call would then price at the
+#: fixture's near-zero rate through ``guard_byo_call`` (this module) or
+#: ``guard_qua_shadow_call`` (``llm/qua_shadow_budget.py``) alike --
+#: defeating their own license-capped budget. Verified live before this
+#: constant existed: ``reliable_price(provider="openai",
+#: model="ask-dev-scripted-v1", base_url="https://api.openai.com")``
+#: returned the fixture's tuple, unconditionally, on the REAL OpenAI
+#: endpoint.
+#:
+#: Gated here on the ONE transport the acceptance stack's scripted provider
+#: is ever actually served from (``tests/acceptance/compose.ask-dev.yml``'s
+#: ``ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL``) -- a plain (non-TLS), internal,
+#: Docker-network-only hostname:port a real BYO or production endpoint has
+#: no plausible reason to coincide with. A drift here (the compose service
+#: renamed, its port changed) fails SAFE: the acceptance stack reverts to
+#: this ticket's ORIGINAL unpriced-and-loud symptom, never a silent pricing
+#: hole -- the model-name match alone was the only thing that could fail
+#: unsafe, and it no longer stands alone.
+_ACCEPTANCE_SCRIPTED_PROVIDER_HOST: Final = "ask-dev-scripted-openai"
+_ACCEPTANCE_SCRIPTED_PROVIDER_PORT: Final = 8001
+
+
+def _is_acceptance_scripted_transport(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    try:
+        parsed = urlsplit(str(base_url))
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == _ACCEPTANCE_SCRIPTED_PROVIDER_HOST
+        and parsed.port == _ACCEPTANCE_SCRIPTED_PROVIDER_PORT
+    )
+
+
 def reliable_price(
     *, provider: str, model: str, base_url: str | None
 ) -> tuple[int, int, int] | None:
     normalized_provider = provider.strip().lower()
+    normalized_model = _normalized_model(model)
+    # CHAOS-3582: the fixture carve-out is checked FIRST, before the
+    # official-endpoint test -- mirroring the ordering
+    # ``llm.agent.openai_compatible.platform_cost_metering`` already uses for
+    # the SAME model id, for the SAME reason stated there: the Ask Dev
+    # acceptance stack serves this model from its OWN scripted endpoint by
+    # construction, never from ``api.openai.com``, so an endpoint-first check
+    # would leave it permanently unpriced. Unpriced is what made
+    # ``guard_qua_shadow_call`` (the isolated QUA shadow budget guard,
+    # CHAOS-3452) fail closed on every acceptance call, unconditionally --
+    # the scripted QUA answer, contract-id routing, and commit/disclosure
+    # logic CHAOS-3532 built were never reachable as a result (see the
+    # CHAOS-3582 writeup for the full repro).
+    #
+    # Matched on the model id AND the acceptance stack's own scripted
+    # transport, both -- not model id alone (see
+    # ``_is_acceptance_scripted_transport``'s docstring for why that was a
+    # real, confirmed pricing hole). A real customer's differently-named
+    # model is never exempted by the model check; a real customer's own
+    # endpoint -- even one that happens to be named
+    # ``"ask-dev-scripted-v1"`` -- is never exempted by the transport check.
+    # Both must hold.
+    if (
+        normalized_provider == "openai"
+        and normalized_model == SCRIPTED_OPENAI_MODEL
+        and _is_acceptance_scripted_transport(base_url)
+    ):
+        return _ACCEPTANCE_SCRIPTED_PROVIDER_PRICE
     if normalized_provider != "openai" or not _official_openai_endpoint(base_url):
         return None
-    return _PRICE_PER_MILLION.get((normalized_provider, _normalized_model(model)))
+    own_price = _PRICE_PER_MILLION.get((normalized_provider, normalized_model))
+    if own_price is not None:
+        return own_price
+    return _borrowed_official_openai_price(model)
+
+
+def _borrowed_official_openai_price(model: str) -> tuple[int, int, int] | None:
+    """A REAL model this table has not been priced for yet, borrowed from
+    ``llm.agent.openai_compatible``'s own sourced, cited snapshot rates.
+
+    CHAOS-3582 (scope widened past the acceptance fixture): the shared dev
+    stack armed the QUA shadow ladder with the REAL provider on the OFFICIAL
+    OpenAI endpoint -- no base_url override at all -- and it failed closed
+    exactly the same way, for a DIFFERENT reason: ``ops/.env`` configures
+    ``LLM_MODEL="gpt-5-nano"``, and this module's own ``_PRICE_PER_MILLION``
+    has never priced anything but ``gpt-5-mini``. Every ``dev_run_qua_shadow``
+    row since the flags were armed reported ``skipped_budget_exhausted`` /
+    ``budget_unavailable`` for that reason -- CHAOS-3389 has no shadow
+    evidence from dev, and CHAOS-3525's commit mode reads as inert to a user
+    despite being armed, purely because the guard can never reserve.
+
+    Preferred over hand-adding another literal entry here for every model an
+    operator happens to configure: ``openai_compatible._PLATFORM_MODEL_PRICES``
+    already carries real, cited, per-model rates for exactly this purpose
+    (CHAOS-3552), and reusing it is honest pricing from a real source rather
+    than a second guess. This is a deliberate, temporary bridge in the
+    DIRECTION OPPOSITE of CHAOS-3560's eventual consolidation (which deletes
+    ``_PLATFORM_MODEL_PRICES`` in favour of THIS module's own table) --
+    acceptable because it only ever WIDENS what gets priced, never narrows
+    what already fails closed, and CHAOS-3560 is the ticket that resolves the
+    direction permanently. Excludes the acceptance fixture itself (handled,
+    unconditionally, before the endpoint check above) so this function is
+    reached only for a genuine OpenAI-official-endpoint real model.
+
+    Cached input is charged at the FULL input rate -- the same conservative
+    simplification ``openai_compatible._estimated_cost_microusd`` already
+    documents for its own accounting ("the normalized usage contract does not
+    expose cached-token detail"). Conservative because it can only ever
+    OVER-count, never under-count, a real cost.
+    """
+
+    canonical = _borrowed_canonical_model(model)
+    if canonical is None or canonical == SCRIPTED_OPENAI_MODEL:
+        return None
+    input_rate, output_rate = _BORROWED_OPENAI_MODEL_PRICES[canonical]
+    return (input_rate, input_rate, output_rate)
 
 
 def cost_micro_usd(

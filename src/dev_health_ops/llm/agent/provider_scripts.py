@@ -490,27 +490,36 @@ class RoleScript:
     #: normalized-question-fingerprint -> (case id, parsed entry). This is
     #: what ``ScriptEngine.resolve`` actually looks up.
     by_fingerprint: Mapping[str, tuple[str, _CaseScript | str]]
+    #: sha256 of the canonical serialization of the whole parsed document --
+    #: questions, kinds, decisions, faults, everything. Covers the CONTENT a
+    #: routing-key digest cannot see (see ``role_script_identity_digest``).
+    content_digest: str = ""
 
 
 def role_script_identity_digest(script: RoleScript) -> str:
     """A stable digest of WHICH script a loaded role actually serves.
 
-    CHAOS-3219 Phase 3. Computed over ``by_fingerprint`` -- the map
-    ``ScriptEngine.resolve`` genuinely routes on -- so two loaders agree iff
-    every question routes to the same case id. A digest over ``cases``
-    instead would miss a question edit, which is exactly the drift that
-    silently sends a corpus case to the unscripted default heuristic.
+    CHAOS-3219 Phase 3. Exists so the acceptance runner can prove the
+    CONTAINER loaded the same script the run asserts against. A case COUNT
+    cannot do that: a wrong role, a stale mount, or an unrelated script with
+    the same or larger number of cases all clear a count floor while serving
+    different decisions (codex adversarial review, HIGH, confirmed -- an
+    earlier revision compared only the count while its own comment claimed
+    it caught wrong-role mounts, which was false).
 
-    Exists so the acceptance runner can prove the CONTAINER loaded the same
-    script the run asserts against. A case COUNT cannot do that: a wrong
-    role, a stale mount, or an unrelated script with the same or larger
-    number of cases all satisfy a count floor while serving different
-    decisions (codex adversarial review, HIGH, confirmed -- an earlier
-    revision of that guard compared only the count while its own comment
-    claimed it caught wrong-role mounts, which was false).
+    Covers CONTENT, not just routing keys. A second revision hashed only the
+    ``(fingerprint, case_id)`` pairs, and execution proved that insufficient
+    too: the digest did NOT move when ``adv.injection-request.sql`` was
+    swapped from its ``refusal`` to a plain ``final_answer`` of "Sure, here
+    you go." -- same question, same case id, opposite security behaviour,
+    identical digest. A guard blind to that is not an identity check. So
+    ``content_digest`` (the canonical whole-document hash) is folded in, and
+    the routing pairs are kept beside it because they are what ``resolve``
+    actually keys on.
     """
 
     hasher = hashlib.sha256()
+    hasher.update(f"content:{script.content_digest}\n".encode())
     for fingerprint, (case_id, _entry) in sorted(script.by_fingerprint.items()):
         hasher.update(f"{fingerprint}:{case_id}\n".encode())
     return hasher.hexdigest()
@@ -716,7 +725,17 @@ def load_role_script(role: str, *, scripts_dir: Path | None = None) -> RoleScrip
                 "different cases cannot share one question; reword one"
             )
         by_fingerprint[fingerprint] = (case_id, entry)
-    return RoleScript(role=role, cases=cases, by_fingerprint=by_fingerprint)
+    return RoleScript(
+        role=role,
+        cases=cases,
+        by_fingerprint=by_fingerprint,
+        # Canonical (key-sorted, whitespace-free) serialization of the parsed
+        # document, so a pure reformat of the file does NOT move this while
+        # any semantic change does.
+        content_digest=hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
 
 
 @dataclass(frozen=True, slots=True)

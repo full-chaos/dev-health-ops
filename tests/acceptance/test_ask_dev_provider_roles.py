@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -1379,3 +1381,94 @@ async def test_legacy_marker_question_is_persisted_verbatim_but_never_reaches_an
     finally:
         await session.close()
         del service
+
+
+class TestRoleScriptIdentityDigest:
+    """CHAOS-3219 Phase 3: the digest the acceptance runner uses to prove the
+    CONTAINER serves the same script the run asserts against.
+
+    Every case here is a defect that actually got through a revision of this
+    guard, not a hypothetical:
+
+    * revision 1 compared a case-count FLOOR, so a wrong role or a stale
+      mount with an equal/larger count passed while serving a different
+      matrix (codex adversarial review round 1, HIGH);
+    * revision 2 hashed only ``(fingerprint, case_id)``, so swapping a
+      refusal for a plain answer -- same question, same id, opposite
+      security behaviour -- did not move the digest at all (found here by
+      execution, independently confirmed by codex round 2, HIGH).
+    """
+
+    @staticmethod
+    def _digest_of(mutate) -> str:
+        source = (
+            Path(__file__).parent / "world" / "ask-dev-world.v1" / "provider-scripts"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "provider-scripts"
+            shutil.copytree(source, destination)
+            path = destination / "role-legacy_agent.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            mutate(document)
+            path.write_text(json.dumps(document), encoding="utf-8")
+            return provider_scripts.role_script_identity_digest(
+                provider_scripts.load_role_script(
+                    "legacy_agent", scripts_dir=destination
+                )
+            )
+
+    def _baseline(self) -> str:
+        return self._digest_of(lambda _document: None)
+
+    def test_swapping_a_refusal_for_an_answer_moves_the_digest(self) -> None:
+        """THE regression. Same question, same case id, opposite behaviour:
+        adv.injection-request.sql stops refusing to run SQL and instead
+        answers 'Sure, here you go.' A routing-key-only digest could not see
+        this, which made the guard's own claim false."""
+
+        def swap(document: dict) -> None:
+            case_id = "adv.injection-request.sql"
+            document["cases"][case_id] = {
+                "question": document["cases"][case_id]["question"],
+                "kind": "decisions",
+                "decisions": [
+                    {
+                        "type": "final_answer",
+                        "value": {"direct_summary": "Sure, here you go."},
+                    }
+                ],
+            }
+
+        assert self._digest_of(swap) != self._baseline()
+
+    def test_changing_a_fault_http_status_moves_the_digest(self) -> None:
+        """A fault that fires a different status produces a different
+        terminal outcome, so it is a different script."""
+
+        def retune(document: dict) -> None:
+            document["cases"]["provider-fail.before-frame"]["fault"]["http_error"][
+                "status"
+            ] = 500
+
+        assert self._digest_of(retune) != self._baseline()
+
+    def test_rewording_a_question_moves_the_digest(self) -> None:
+        """Routing identity: a reworded question re-fingerprints, so the case
+        would silently drop to the unscripted default heuristic."""
+
+        def reword(document: dict) -> None:
+            case_id = "adv.injection-request.sql"
+            document["cases"][case_id]["question"] += " please"
+
+        assert self._digest_of(reword) != self._baseline()
+
+    def test_a_pure_reformat_does_NOT_move_the_digest(self) -> None:
+        """The other half of the contract, and why the hash is canonical
+        rather than over raw bytes: a guard that fires on whitespace or key
+        order would produce false failures and get switched off. This test
+        rewrites the file with different key ordering and no indentation."""
+
+        def reorder(document: dict) -> None:
+            document["cases"] = dict(reversed(list(document["cases"].items())))
+
+        assert self._digest_of(reorder) == self._baseline()

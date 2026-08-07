@@ -1654,15 +1654,18 @@ def _gates() -> tuple[ManifestItem, ...]:
                 "execute in the required tests.yml e2e-default job over "
                 "three required shards, so this is default, gating "
                 "coverage rather than an opt-in tier. (2) Why still "
-                "deferred. validate_manifest resolves every evidence path "
-                "under THIS repository's root, so a dev-health-web spec "
-                "path cannot be cited as evidence at all; proven_e2e "
-                "additionally requires an ops-resident ScenarioRecorder "
-                "execution artifact whose script is one of the row's own "
-                "evidence paths. A cross-repo claim is inexpressible here "
-                "-- the same constraint that keeps attack.runtime-"
-                "divergence deferred. Claiming proven on evidence this "
-                "repository cannot check would be a claim, not proof. "
+                "deferred. validate_manifest requires every evidence path "
+                "to resolve INSIDE this repository's root -- see "
+                "contained_path, which rejects absolute and '..'-traversing "
+                "paths outright -- so a dev-health-web spec path is not "
+                "citable as evidence; proven_e2e additionally requires an "
+                "in-repo execution artifact whose script is one of the "
+                "row's own evidence paths and whose recorded sha256 still "
+                "matches that file's current bytes. A cross-repo claim is "
+                "therefore not expressible -- the same constraint that "
+                "keeps attack.runtime-divergence deferred. Claiming proven "
+                "on evidence this repository cannot check would be a "
+                "claim, not proof. "
                 "(3) The route to proven_e2e is Phase 5's CI lane: "
                 "scripts/acceptance/run_ask_dev_compose.sh:348 already "
                 "invokes the web acceptance Playwright config, and once "
@@ -2204,6 +2207,34 @@ _ARTIFACT_JWT_PATTERN = re.compile(
 )
 
 
+def contained_path(root: Path, relative_path: str) -> Path | None:
+    """Resolve ``relative_path`` under ``root``, or ``None`` if it escapes.
+
+    Codex adversarial review (HIGH, 2026-08-06, CHAOS-3219): every path in
+    this module was joined as ``root / value`` and then existence-checked.
+    That is not containment. ``Path("/ops") / "/elsewhere/x"`` is
+    ``/elsewhere/x`` -- pathlib lets an ABSOLUTE segment replace the base
+    outright -- and ``../../`` walks out just as easily. Both validated
+    clean, so a row could cite a file in another repository (or anywhere on
+    the runner) and claim ``proven_*`` from it.
+
+    That defeats the point of the manifest. A claim is only proof if this
+    repository can check it on any machine that checks out this commit; a
+    path outside the tree is unreproducible by construction and its
+    contents are not reviewed by anything that gates this repo.
+
+    Returns the resolved path when it is genuinely inside ``root``.
+    ``strict=False`` so a non-existent path still resolves and is reported
+    as missing by the caller rather than as an escape.
+    """
+
+    resolved = (root / relative_path).resolve()
+    root_resolved = root.resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        return None
+    return resolved
+
+
 def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
     """Check one ``proven_e2e`` item's execution artifact is real, current,
     all-passing, and actually bound to this row's claim. See
@@ -2250,7 +2281,13 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
         )
         return errors
 
-    artifact_path = root / item.execution_artifact
+    artifact_path = contained_path(root, item.execution_artifact)
+    if artifact_path is None:
+        errors.append(
+            f"{item.id}: execution artifact escapes the repository root: "
+            f"{item.execution_artifact}"
+        )
+        return errors
     if not artifact_path.exists():
         errors.append(
             f"{item.id}: execution artifact does not exist: {item.execution_artifact}"
@@ -2381,8 +2418,8 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
                 f"is not among this item's own evidence paths {item.evidence!r}"
                 " -- the artifact must belong to a script this row cites"
             )
-        script_path = root / script_relative
-        if not script_path.exists():
+        script_path = contained_path(root, script_relative)
+        if script_path is None or not script_path.exists():
             errors.append(
                 f"{item.id}: execution artifact's script no longer exists: "
                 f"{script_relative}"
@@ -2423,7 +2460,13 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
         return errors
     assert item.blocked_execution_artifact is not None
 
-    artifact_path = root / item.blocked_execution_artifact
+    contained_blocked = contained_path(root, item.blocked_execution_artifact)
+    if contained_blocked is None:
+        return [
+            f"{item.id}: blocked execution artifact escapes the repository "
+            f"root: {item.blocked_execution_artifact}"
+        ]
+    artifact_path = contained_blocked
     if not artifact_path.exists():
         errors.append(
             f"{item.id}: blocked_execution_artifact does not exist: "
@@ -2545,8 +2588,8 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
                 f"{script_relative!r} is not among this item's own evidence "
                 f"paths {item.evidence!r}"
             )
-        script_path = root / script_relative
-        if not script_path.exists():
+        script_path = contained_path(root, script_relative)
+        if script_path is None or not script_path.exists():
             errors.append(
                 f"{item.id}: blocked_execution_artifact's script no longer "
                 f"exists: {script_relative}"
@@ -2638,14 +2681,22 @@ def validate_manifest(
                 )
 
         for relative_path in item.evidence:
-            if not (root / relative_path).exists():
+            contained = contained_path(root, relative_path)
+            if contained is None:
+                errors.append(
+                    f"{item.id}: evidence path escapes the repository root: "
+                    f"{relative_path} -- evidence must be a file this "
+                    "repository can check out and check; a path outside the "
+                    "tree is a claim, not proof"
+                )
+            elif not contained.exists():
                 errors.append(
                     f"{item.id}: evidence file does not exist: {relative_path}"
                 )
 
         if item.content_markers and item.evidence:
-            first_evidence = root / item.evidence[0]
-            if first_evidence.exists():
+            first_evidence = contained_path(root, item.evidence[0])
+            if first_evidence is not None and first_evidence.exists():
                 text = first_evidence.read_text(encoding="utf-8", errors="replace")
                 for marker in item.content_markers:
                     if marker not in text:

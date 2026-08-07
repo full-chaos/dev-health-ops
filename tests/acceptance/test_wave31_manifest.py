@@ -26,6 +26,7 @@ from scripts.acceptance.wave31_manifest import (
     ManifestIntegrityError,
     ManifestItem,
     build_report,
+    contained_path,
     execute_manifest,
     run_evidence_tests,
     validate_blocked_execution_artifact,
@@ -368,7 +369,14 @@ def test_web_default_ci_gate_is_deferred_for_the_cross_repo_reason() -> None:
     """
 
     by_id = {item.id: item for item in MANIFEST}
-    item = by_id["gate.web-default-ci"]
+    _assert_web_default_ci_row_is_honest(by_id["gate.web-default-ci"])
+
+
+def _assert_web_default_ci_row_is_honest(item: ManifestItem) -> None:
+    """The row's actual contract, factored out so the RED-then-GREEN proof
+    below can run this exact logic against a planted force-flip instead of
+    re-stating the constructor it just wrote.
+    """
 
     assert item.status == "deferred"
     # Honest emptiness: the whole point is that no path in THIS repo backs
@@ -399,10 +407,76 @@ def test_web_default_ci_gate_is_deferred_for_the_cross_repo_reason() -> None:
     # explicitly tied to the precedent row that shares the constraint
     assert "attack.runtime-" in reason
     assert "claim, not proof" in reason
+    # The reason must name the mechanism that actually enforces this, not
+    # merely assert the conclusion -- codex refuted an earlier wording that
+    # claimed containment the validator did not yet perform.
+    assert "contained_path" in reason
 
     # (3) the route out is producing proof, not widening what counts as it
     assert "run_ask_dev_compose.sh:348" in reason
     assert "not by widening what counts as proof" in reason
+
+
+@pytest.mark.parametrize(
+    "escaping_path",
+    [
+        pytest.param(
+            "/Users/chris/projects/full-chaos/dev-health/web/tests/"
+            "ask-dev-outcomes.spec.ts",
+            id="absolute-path-outside-the-repo",
+        ),
+        pytest.param(
+            "../../../../web/tests/ask-dev-outcomes.spec.ts",
+            id="dot-dot-traversal-out-of-the-repo",
+        ),
+    ],
+)
+def test_evidence_outside_the_repository_root_is_rejected(escaping_path: str) -> None:
+    """Codex adversarial review (HIGH, 2026-08-06): "root / value" is a join,
+    not a containment check. An ABSOLUTE segment replaces the base outright
+    (Path("/ops") / "/elsewhere/x" == "/elsewhere/x") and "../" walks out.
+    Both previously validated CLEAN, so any row could cite a file in another
+    repository -- or anywhere on the runner -- and claim proven_* from it.
+
+    Verified against the pre-fix code: both of these returned no errors.
+    That made the honesty guarantee this whole module rests on bypassable
+    with a path string, no artifact forgery required.
+    """
+
+    item = ManifestItem(
+        id="probe.escaping-evidence",
+        category="gate",
+        description="probe",
+        status="proven_unit",
+        requires_live_infra=True,
+        evidence=(escaping_path,),
+    )
+    errors = validate_manifest(_ROOT, (item,))
+    assert errors, f"{escaping_path!r} validated clean -- containment is not enforced"
+    assert any("escapes the repository root" in error for error in errors), errors
+
+
+def test_contained_path_accepts_real_in_repo_paths() -> None:
+    """Negative control for the check above: containment must not be so eager
+    that it rejects the ordinary relative paths every real row uses. Without
+    this, "reject everything" would pass the test above.
+    """
+
+    assert contained_path(_ROOT, "scripts/acceptance/wave31_manifest.py") is not None
+    assert contained_path(_ROOT, "tests/acceptance") is not None
+    # A path that stays inside the tree while containing ".." is still fine.
+    assert contained_path(_ROOT, "scripts/../tests/acceptance") is not None
+    # And a non-existent but contained path resolves -- the caller reports it
+    # as missing, which is a different (and more useful) error than an escape.
+    assert contained_path(_ROOT, "tests/acceptance/not-a-real-file.json") is not None
+
+
+def test_every_real_manifest_row_still_validates_after_containment() -> None:
+    """Regression control: the containment fix must not break any of the 67
+    landed rows, all of which cite ordinary in-repo relative paths.
+    """
+
+    assert validate_manifest(_ROOT) == []
 
 
 def test_web_default_ci_force_flip_to_proven_is_actually_caught() -> None:
@@ -438,9 +512,13 @@ def test_web_default_ci_force_flip_to_proven_is_actually_caught() -> None:
     # only demanded of proven_e2e.
     assert validate_manifest(_ROOT, (disguised,)) == []
 
-    # The exact-id test is what catches it.
-    assert disguised.status != "deferred"
-    assert disguised.evidence != ()
+    # ...and the exact-id contract IS what catches it. Running the real
+    # assertions rather than re-stating the constructor is the difference
+    # between a proof and a tautology: if a future edit loosens
+    # _assert_web_default_ci_row_is_honest until a proven status slips
+    # through, this raises nothing and fails here.
+    with pytest.raises(AssertionError):
+        _assert_web_default_ci_row_is_honest(disguised)
 
 
 def test_team_attribution_flipped_to_proven_after_chaos_3332_fix() -> None:

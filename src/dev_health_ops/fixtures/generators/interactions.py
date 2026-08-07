@@ -16,6 +16,20 @@ from dev_health_ops.metrics.schemas import (
 from dev_health_ops.models.work_items import WorkItem, WorkItemInteractionEvent
 
 
+def _max_history_days() -> int:
+    """The oldest history these generators may write, derived from the schema.
+
+    Deliberately a function call rather than a module constant captured at
+    import: the horizon comes from the migrations on disk, so a migration
+    that tightens a TTL takes effect without anyone remembering to update a
+    second copy of the number.
+    """
+
+    from dev_health_ops.fixtures.ttl_horizon import max_generated_history_days
+
+    return max_generated_history_days()
+
+
 class InteractionsGeneratorMixin(BaseGeneratorMixin):
     """Generates work item interactions, feature flags & related events, telemetry, and release impact records."""
 
@@ -108,7 +122,14 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         keys = keys[:count]
 
         for i, key in enumerate(keys):
-            created_offset_days = random.randint(7, 90)
+            # CHAOS-3432/3544: bounded by the SCHEMA's tightest TTL, not by a
+            # literal. This used to be `randint(7, 90)` against a 90-day
+            # `TTL … DELETE` on feature_flag_event, so the oldest rows sat
+            # exactly on the boundary the moment the world was generated --
+            # and ClickHouse deleted them on restore days later, breaking the
+            # content oracle with no code change anywhere. Measured: 1 row
+            # already expired and 24 due within a week.
+            created_offset_days = random.randint(7, _max_history_days())
             created_at = now - timedelta(days=created_offset_days)
 
             archived_at = None

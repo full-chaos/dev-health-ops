@@ -120,12 +120,13 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+from dev_health_ops.fixtures.ttl_horizon import TTL_SAFETY_MARGIN
 from dev_health_ops.fixtures.world import (
     WorldManifest,
     _require_scratch_database,
@@ -182,6 +183,24 @@ class RestoreRefusedError(RuntimeError):
     migrated acceptance target is exactly the failure mode
     ``_require_scratch_database`` protects ``fixtures world`` from, and this
     path must fail just as closed.
+    """
+
+
+class SnapshotExpiredError(RuntimeError):
+    """The snapshot is older than the shelf life its own generation bought.
+
+    CHAOS-3432/3544. ClickHouse TTLs delete rows on load, so a restored world
+    is not the world that was snapshotted once enough real time has passed --
+    the bytes are identical and the TABLE is not. Generated history stops a
+    full ``TTL_SAFETY_MARGIN`` inside the tightest TTL, and that margin is
+    exactly how long a snapshot stays restorable.
+
+    Raised BEFORE the content oracle, deliberately. The oracle would also
+    fail -- with a hash mismatch on whichever table happened to cross its
+    horizon first, which is how this defect spent months being attributed to
+    generator nondeterminism. "SNAPSHOT EXPIRED, re-mint required" is a
+    five-minute fix; "feature_flag_event: source=32c53f52 target=0160527f" at
+    2am is a night of archaeology for the same cause.
     """
 
 
@@ -905,6 +924,11 @@ async def snapshot_world(
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "world_schema_version": manifest.world["schema_version"],
         "master_seed": manifest.master_seed,
+        # CHAOS-3432/3544: the snapshot's own shelf life, recorded so a
+        # restore can fail on STALENESS rather than on the cryptic content
+        # mismatch staleness eventually causes.
+        "minted_at": datetime.now(UTC).isoformat(),
+        "shelf_life_days": TTL_SAFETY_MARGIN.days,
         # CHAOS-3463, Codex adversarial review (MEDIUM, confirmed): the two
         # fields above were stamped and then never read by anything -- a
         # recorded value nobody checks is a claim, not a guard. They are now
@@ -1376,6 +1400,47 @@ class RestoreResult:
     minted: bool
 
 
+def _assert_snapshot_within_shelf_life(document: dict) -> None:
+    """Fail on STALENESS before failing on its symptoms (CHAOS-3432/3544).
+
+    A snapshot older than its shelf life restores rows the database then
+    deletes on TTL, so the content oracle below would fail anyway -- on
+    whichever table crossed its horizon first, with a hash mismatch that
+    looks like generator nondeterminism and is not. This turns that into a
+    named, actionable failure.
+
+    An older snapshot with no recorded mint time is not rejected: it predates
+    this field, and refusing it would break restores that are still perfectly
+    valid. It simply cannot be checked, which is disclosed rather than
+    silently treated as fresh.
+    """
+
+    minted_at_raw = document.get("minted_at")
+    shelf_life_days = document.get("shelf_life_days")
+    if not minted_at_raw or not shelf_life_days:
+        logger.warning(
+            "world restore: snapshot records no mint time, so its shelf life "
+            "cannot be checked (pre-CHAOS-3544 snapshot); a stale one will "
+            "surface as a content-oracle mismatch instead"
+        )
+        return
+
+    minted_at = datetime.fromisoformat(minted_at_raw)
+    if minted_at.tzinfo is None:
+        minted_at = minted_at.replace(tzinfo=UTC)
+    age_days = (datetime.now(UTC) - minted_at).days
+    if age_days > int(shelf_life_days):
+        raise SnapshotExpiredError(
+            f"SNAPSHOT EXPIRED (age {age_days}d > shelf life "
+            f"{shelf_life_days}d): re-mint required. Generated history stops "
+            "a fixed margin inside the tightest ClickHouse TTL, and that "
+            "margin IS the shelf life -- past it, rows cross the TTL horizon "
+            "and are deleted on restore, so the restored world is not the "
+            "world that was snapshotted. Re-mint with "
+            "`scripts/acceptance/mint_ask_dev_world_snapshot.sh`."
+        )
+
+
 async def restore_world(
     *,
     sink: str,
@@ -1438,6 +1503,8 @@ async def restore_world(
 
     target_ch_hashes = await _with_clickhouse_client(sink, _clickhouse_content_hashes)
     target_pg_after = await _with_postgres_conn(postgres_uri, _postgres_row_counts)
+    _assert_snapshot_within_shelf_life(document)
+
     _assert_content_identity(
         source=content_hashes_from_manifest(
             document["clickhouse"]["source_content_hashes"]

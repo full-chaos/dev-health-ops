@@ -37,6 +37,33 @@ services:
       ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL: http://ask-dev-scripted-openai:8001/v1
       ASK_DEV_ACCEPTANCE_OPENAI_API_KEY: ask-dev-acceptance-local-v1
       JWT_SECRET_KEY: ask-dev-acceptance-jwt-secret-key-v1
+      # CHAOS-3532: the QUA ladder (off -> shadow -> commit). Interpolated
+      # here, but NOT from whatever the invoking shell happens to export --
+      # run_ask_dev_compose.sh clears both names unconditionally and then
+      # sets them from its own one-shot ASK_DEV_ACCEPTANCE_QUA knob, AFTER
+      # the clear.
+      #
+      # These are the only ASK_DEV_-namespaced vars that launcher clears.
+      # The prefix normally means "cannot collide with an ambient dev .env
+      # by construction" -- for these two that assumption is false: ops/.env
+      # sets both to 1 for the DEV stack and direnv exports it into every
+      # shell under the ops tree. Passing them through booted every
+      # acceptance stack from a developer shell silently ARMED, which does
+      # not merely add a feature: the shadow changes what every baseline
+      # corpus case measures, and armed runs are graded against predictions
+      # registered on an unarmed system.
+      #
+      # The `:-0` default therefore guards only the case where the launcher
+      # was bypassed entirely (a raw `docker compose` invocation). Off is the
+      # only safe default for that path too.
+      #
+      # Production reads both with a strict `os.getenv(...) == "1"`
+      # (production_runtime.py:663,679), so unset, empty, "0" and "true" are
+      # ALL off -- an empty value fails closed rather than reading as
+      # enabled. And commit already implies shadow at :679, so no interlock
+      # is needed between them.
+      ASK_DEV_QUA_SHADOW_ENABLED: "${ASK_DEV_QUA_SHADOW_ENABLED:-0}"
+      ASK_DEV_QUA_COMMIT_ENABLED: "${ASK_DEV_QUA_COMMIT_ENABLED:-0}"
       # CHAOS-3219 Wave 4 quota plumbing: these are the ONLY two Ask Dev
       # settings production code actually reads from the environment
       # (org_policy.py platform_operator_request_limit /

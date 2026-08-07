@@ -765,7 +765,14 @@ _GATES: tuple[tuple[Path, str, str, tuple[tuple[str, str], ...]], ...] = (
         WORKFLOW_PATH,
         "test",
         "Aggregate test results",
-        (("test-matrix", "path-filtered"), ("coverage", "merge-time-only")),
+        (
+            ("test-matrix", "path-filtered"),
+            ("coverage", "merge-time-only"),
+            # CHAOS-3514: unconditional, so it can never skip and no
+            # skip-legitimacy question arises. See the job's own comment for
+            # why the two gated alternatives were rejected.
+            ("docs-tests", "unconditional"),
+        ),
     ),
     (LINT_PATH, "lint", "Aggregate lint result", (("lint-job", "path-filtered"),)),
     (
@@ -917,7 +924,25 @@ def test_gated_jobs_carry_the_condition_their_policy_models(
         "merge-time-only": _MERGE_TIME_ONLY_IF,
     }
     for job_name, policy in gated:
-        assert _normalize(_job_of(path, job_name)["if"]) == expected[policy], (
+        job = _job_of(path, job_name)
+        if policy == "unconditional":
+            # The script's model of this policy is the ABSENCE of a condition
+            # -- `is_selected` returns "selected" always, on the stated
+            # grounds that "no `if:` can deselect the job, so a skip is never
+            # explainable". So the join for this policy is that there is no
+            # `if:` to read. Asserting that is not a special case bolted on;
+            # it is the same claim the other two make, for a policy whose
+            # expression happens to be empty. (CHAOS-3514 added the first
+            # unconditional gated job in any workflow, which is why this
+            # branch did not exist -- the aggregator has always supported the
+            # policy.)
+            assert "if" not in job, (
+                f"{path.name}:{job_name} is registered 'unconditional' with "
+                f"{gate} but carries an `if:` -- the script would then accept "
+                "a skip it has no way to judge"
+            )
+            continue
+        assert _normalize(job["if"]) == expected[policy], (
             f"{path.name}:{job_name} no longer matches the '{policy}' policy "
             f"that {gate} passes to ci/aggregate_gate_results.sh"
         )
@@ -1189,3 +1214,85 @@ def test_mypy_configuration_comes_from_the_file_the_filter_gates() -> None:
     )
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "[tool.mypy]" in pyproject, "mypy settings are not where this test believes"
+
+
+# --------------------------------------------------------------------------
+# Docs assertions. CHAOS-3514.
+#
+# `tests/docs` holds 113 assertions on the CONTENT and STRUCTURE of the
+# published docs, and executes only through this workflow -- docs-guards.yml
+# invokes pytest zero times. Before this job existed, the `code` filter
+# selected on `tests/**` but not `docs/**`, so editing a docs TEST ran it
+# while editing the page it asserts on did not: a docs-only PR could break an
+# assertion, stay green on every required check, and surface the failure
+# later on an unrelated author's PR.
+#
+# The fix is a dedicated UNCONDITIONAL job, so these guards assert the two
+# properties that keep it honest: it cannot be deselected, and it runs the
+# whole suite rather than a subset that would quietly shrink.
+# --------------------------------------------------------------------------
+
+
+def _docs_tests_job() -> dict:
+    job = _job_of(WORKFLOW_PATH, "docs-tests")
+    assert isinstance(job, dict)
+    return job
+
+
+def test_docs_tests_job_cannot_be_deselected() -> None:
+    # Registered `unconditional` with the aggregator, whose model of that
+    # policy is "no `if:` can deselect the job, so a skip is never
+    # explainable". An `if:` added here would make that model a lie and the
+    # aggregator would accept a skip it should refuse.
+    assert "if" not in _docs_tests_job(), (
+        "docs-tests carries an `if:`, but it is registered `unconditional` "
+        "with ci/aggregate_gate_results.sh -- either drop the condition or "
+        "change the policy AND the script's model of it, never just one"
+    )
+
+
+def test_docs_tests_job_runs_the_whole_docs_suite() -> None:
+    runs = " ".join(
+        str(step.get("run", ""))
+        for step in _docs_tests_job()["steps"]
+        if isinstance(step, dict)
+    )
+    assert "pytest tests/docs" in runs, (
+        "docs-tests no longer invokes `pytest tests/docs` -- the job would "
+        f"pass having measured nothing. steps ran: {runs!r}"
+    )
+    # A narrowed invocation (`pytest tests/docs/test_one_thing.py`) would
+    # still contain the substring above, so pin the absence of a subpath.
+    assert not re.search(r"pytest tests/docs/\S", runs), (
+        "docs-tests runs only part of tests/docs; the rest would silently "
+        "stop being guarded while the required check stayed green"
+    )
+
+
+def test_docs_tests_installs_what_the_docs_suite_imports() -> None:
+    # test_built_site_links.py shells out to `mkdocs build --strict` from
+    # inside the suite, so a job without requirements-docs.txt fails for a
+    # reason that reads like a docs regression (ci/local_validate.sh:635
+    # warns about exactly this misreading).
+    runs = " ".join(
+        str(step.get("run", ""))
+        for step in _docs_tests_job()["steps"]
+        if isinstance(step, dict)
+    )
+    # requirements.txt is `-e .[dev]`, which is where pytest AND the root
+    # conftest's imports (GitPython) come from. Omitting it is not a
+    # theoretical risk: the first version of this job installed only
+    # requirements-docs.txt and failed in CI at collection with
+    # `ModuleNotFoundError: No module named 'git'` -- tests/conftest.py is
+    # loaded even when only tests/docs is selected. Locally it passed,
+    # because the dev environment already had everything.
+    assert "requirements.txt" in runs, (
+        "docs-tests must install requirements.txt (-e .[dev]); without it "
+        "tests/conftest.py cannot even be imported and the job fails at "
+        "collection"
+    )
+    assert "requirements-docs.txt" in runs, (
+        "docs-tests must install requirements-docs.txt; test_built_site_links "
+        "shells out to `mkdocs build --strict` and without mkdocs the failure "
+        "reads like a docs regression (ci/local_validate.sh:635)"
+    )

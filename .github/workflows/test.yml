@@ -375,6 +375,53 @@ jobs:
   # why `needs.changes.result` -- not the downstream results alone -- is what
   # separates a legitimate skip from an upstream failure that skipped
   # everything (CHAOS-3482).
+  docs-tests:
+    name: docs-tests
+    # CHAOS-3514. Runs `pytest tests/docs` alone (16s measured in a clean
+    # py3.14 env, excluding install) so the 116
+    # docs guards execute on a docs-content-only PR, which previously ran
+    # none of them: `code` selects on `tests/**` but not `docs/**`, so
+    # editing a docs TEST ran it while editing the page it asserts on did
+    # not. docs-guards.yml cannot cover this -- it invokes pytest zero times.
+    #
+    # DELIBERATELY UNCONDITIONAL, and this is the design rather than
+    # laziness. Two gated alternatives were built and rejected against the
+    # repo's own machinery:
+    #
+    #   * a second `docs` filter output gating this job -- rejected because
+    #     ci/aggregate_gate_results.sh's `path-filtered` policy treats a skip
+    #     as legitimate ONLY when CHANGES_CODE == 'false', so a docs-gated
+    #     job would SKIP on an ordinary code-only PR while the aggregator
+    #     held that skip illegitimate, failing the required gate on EVERY
+    #     such PR;
+    #   * widening the condition to `code || docs` -- rejected because
+    #     _PATH_FILTERED_IF pins the exact condition every `path-filtered`
+    #     job must carry, and says in terms: "Drift here means the model is
+    #     stale: fix ci/aggregate_gate_results.sh, do not just update the
+    #     string." Inventing a policy in the script whose purpose is to
+    #     refuse ambiguity, to save ~10s on a code-only PR, is a bad trade.
+    #
+    # Unconditional needs no filter, no new policy, and no skip-legitimacy
+    # reasoning at all -- and a job that never skips is the strongest
+    # available answer to "no required job may exit success after skipping
+    # substantive work". The cost is ~10s on PRs that changed no docs.
+    needs: [changes]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install docs test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-docs.txt
+      - name: Run the docs guards
+        run: pytest tests/docs -q
+
   test:
     name: test
     # Must remain `always()`. Under `!cancelled()` (or any condition that lets
@@ -384,7 +431,7 @@ jobs:
     # Cancellation has to be reported by a job that actually ran, so this job
     # runs unconditionally and the script fails the gate on `cancelled`.
     if: always()
-    needs: [changes, test-matrix, coverage]
+    needs: [changes, test-matrix, coverage, docs-tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,6 +444,7 @@ jobs:
           CHANGES_CODE: ${{ needs.changes.outputs.code }}
           GATED_JOB_1: test-matrix|path-filtered|${{ needs.test-matrix.result }}
           GATED_JOB_2: coverage|merge-time-only|${{ needs.coverage.result }}
+          GATED_JOB_3: docs-tests|unconditional|${{ needs.docs-tests.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

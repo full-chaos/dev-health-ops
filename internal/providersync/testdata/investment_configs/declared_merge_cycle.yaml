@@ -1,0 +1,11 @@
+# DECLARED DIVERGENCE 4: a merge key whose anchor is the mapping that carries
+# it. PyYAML builds a SELF-REFERENTIAL dict and does not raise -- the rule ends
+# up with a match block holding `id` and `match`, no recognised criteria, so it
+# matches everything. This port detects the cycle and refuses rather than
+# recurse.
+rules:
+  - &self
+    id: cyclic_merge
+    priority: 10
+    match:
+      <<: *self

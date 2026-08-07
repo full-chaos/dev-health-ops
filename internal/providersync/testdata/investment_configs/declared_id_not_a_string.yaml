@@ -1,0 +1,9 @@
+# DECLARED DIVERGENCE 1: `id` is an INT. `rule.get("id", "legacy_rule")`
+# returns the int, and the Python dataclass does not enforce its `str`
+# annotation, so rule_id reaches the call site as 7. A *string cannot hold that,
+# and coercing it to "7" would be a silent value change, so this port refuses.
+rules:
+  - id: 7
+    priority: 10
+    match:
+      always: true

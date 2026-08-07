@@ -59,9 +59,31 @@ def _fields() -> frozenset[str]:
     return dataclass_field_names(SOURCE.read_text(), "InvestmentClassification")
 
 
+def _refusal(phase: str, exception: BaseException) -> dict[str, Any]:
+    # Every classification field is emitted, and emitted as None, rather than
+    # declared as an excluded_field. They are not absent from this boundary for
+    # a reason peculiar to the pair -- they are absent because NEITHER engine
+    # produced one, and that is itself worth comparing: a Go port that refused
+    # and still returned a classification would differ here. Excluding them
+    # would also have been a stale exclusion, since a declared exclusion must
+    # match a key some row actually carries.
+    row: dict[str, Any] = {name: None for name in _fields()}
+    row["raises"] = f"{phase}:{type(exception).__name__}"
+    return row
+
+
 def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     # A missing config logs a warning, and any byte on the captured streams
     # lands in front of this oracle's JSON and breaks the decode.
+    #
+    # Construction and classification are caught SEPARATELY, and the phase is
+    # part of the compared value. Which of the two raises is a real property of
+    # the shape, not an implementation detail: `rules:` null dies in
+    # _load_rules, while `match:` null LOADS FINE and dies later, only once
+    # classify() reaches that rule. A port that refuses the right config for the
+    # right exception class but at the wrong moment has not mirrored it -- it
+    # would reject a classifier Python is willing to construct -- and with only
+    # the class compared, that error would pass as agreement.
     try:
         with (
             contextlib.redirect_stdout(io.StringIO()),
@@ -70,18 +92,12 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
             classifier = InvestmentClassifier(
                 _investment_helpers.config_path(str(case["Config"]))
             )
-            result = classifier.classify(_investment_helpers.artifact(case))
     except Exception as exception:  # noqa: BLE001 -- the exception IS the measurement
-        # Every classification field is emitted, and emitted as None, rather
-        # than declared as an excluded_field. They are not absent from this
-        # boundary for a reason peculiar to the pair -- they are absent because
-        # NEITHER engine produced one, and that is itself worth comparing:
-        # a Go port that refused and still returned a classification would
-        # differ here. Excluding them would also have been a stale exclusion,
-        # since a declared exclusion must match a key some row actually carries.
-        row: dict[str, Any] = {name: None for name in _fields()}
-        row["raises"] = type(exception).__name__
-        return row
+        return _refusal("construct", exception)
+    try:
+        result = classifier.classify(_investment_helpers.artifact(case))
+    except Exception as exception:  # noqa: BLE001 -- the exception IS the measurement
+        return _refusal("classify", exception)
     raise AssertionError(
         f"case {case['id']!r} is registered as a REFUSAL case, but the real "
         f"Python classifier returned {result!r} for config "

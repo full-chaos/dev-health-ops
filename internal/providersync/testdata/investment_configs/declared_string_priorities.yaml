@@ -1,0 +1,20 @@
+# DECLARED DIVERGENCE 2: EVERY rule priority is a string, so they share one
+# orderable Python type and sorted() succeeds lexicographically ("a" before
+# "b"). This port orders only numbers and refuses rather than impose an order
+# Python would not produce.
+#
+# Contrast raises_priority_null.yaml (a null, which Python cannot order at all)
+# and a MIXED int/str config, both of which are mirrored TypeErrors.
+rules:
+  - id: b_priority
+    priority: "b"
+    match:
+      always: true
+    output:
+      investment_area: b_area
+  - id: a_priority
+    priority: "a"
+    match:
+      always: true
+    output:
+      investment_area: a_area

@@ -1,0 +1,20 @@
+# A YAML MERGE KEY. PyYAML's constructor resolves `<<` into the mapping before
+# the classifier sees a dict, so this rule matches on the merged label list.
+#
+# A node walk that treats `<<` as an ordinary key finds a match block with NO
+# criteria -- and a match block with no criteria reaches `_matches`'s final
+# `return True` and matches EVERY artifact. That is fail-open, which is why the
+# port resolves merges rather than declaring them: the two cases over this file
+# differ only in whether the merged label is present, and an unresolved port
+# returns the same answer for both.
+defaults: &shared_criteria
+  label: ["merged-label"]
+
+rules:
+  - id: merged_rule
+    priority: 10
+    match:
+      <<: *shared_criteria
+    output:
+      investment_area: merged_area
+      project_stream: merged_stream

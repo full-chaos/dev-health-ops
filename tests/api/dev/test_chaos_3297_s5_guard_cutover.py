@@ -93,15 +93,23 @@ _NARRATION = "Nightfall completed twelve work items this period."
 #: A v2-shaped evidence handle (``ev1_`` + 40 lowercase hex,
 #: ``contracts_v2.base.EvidenceHandle``).
 #:
-#: The shared harness fixture still mints the pre-v2 ``ev_01`` shape, which
-#: ``terminal_frames.wrap_legacy_answer_as_frame`` cannot project into a
-#: ``DevEvidenceRefV2`` -- so every run through that fixture silently
-#: degrades to an ``internal_error`` frame (CHAOS-3340, filed; two confirmed
-#: instances). These controls are about what the FRAME carries, so they
-#: cannot be asserted on a fixture that never produces a real one. This
-#: registry mints the handle shape production's
-#: ``EvidenceHandleService.issue`` actually returns. Repairing the shared
-#: fixture is CHAOS-3340's blast-radius call, not this stack's.
+#: CHAOS-3576 fixed the shared harness fixture at its source: ``recording_
+#: registry``/``stock_executor`` and ``answer_payload``/``grounded_answer_
+#: payload`` (``tests._chaos_3292_preflight``) now mint a real, v2-valid
+#: evidence handle by construction, so a run through the plain shared
+#: fixture no longer silently degrades to the ``internal_error`` frame
+#: (filed as "CHAOS-3340" in this file's own prior comment; CHAOS-3576 is
+#: that fix). ``_with_v2_handles``/``_V2_EVIDENCE_HANDLE`` stay for
+#: ``_canonical_tool_result`` (a standalone ``DevToolResult`` builder, never
+#: compared against ``grounded_answer_payload``'s own minted handle), but
+#: ``_v2_evidence_registry`` below now delegates to the shared harness's
+#: fixed ``recording_registry`` rather than rewriting to this SEPARATE
+#: literal handle -- keeping two independently-minted "valid" handles in
+#: one run is exactly what broke C1/C3/M1 here once the harness's own
+#: ``grounded_answer_payload`` started minting its own real handle: the
+#: model's answer cited one handle, this registry's tool result carried a
+#: different one, and the run failed answer validation before the guard
+#: this suite tests ever ran.
 _V2_EVIDENCE_HANDLE = "ev1_" + ("a1b2c3d4e5" * 4)
 
 
@@ -178,26 +186,19 @@ def _ungrounded_narrating_script(script_id: str) -> list[ScriptedStep]:
 
 
 def _v2_evidence_registry(calls: list[DevToolRequest]) -> AskDevToolRegistry:
-    """The stock success registry, with v2-projectable evidence handles."""
+    """The stock success registry, with v2-projectable evidence handles.
 
-    async def execute(_context: Any, request: DevToolRequest) -> DevToolResult:
-        calls.append(request)
-        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
-        payload.update(
-            {
-                "run_id": request.run_id,
-                "tool_call_id": request.tool_call_id,
-                "tool_id": request.tool_id.value,
-            }
-        )
-        payload = _with_v2_handles(payload)
-        # F10: a v1-sourced metric never carries evidence_ref_ids -- see
-        # terminal_frames._wrap_legacy_metric.
-        for metric in payload.get("metrics", []):
-            metric["evidence_ref_ids"] = []
-        return DevToolResult.model_validate(payload)
+    CHAOS-3576: a thin alias over the shared harness's own ``recording_
+    registry``, which now mints this SAME real evidence handle
+    ``grounded_answer_payload`` puts on the model's answer (both call
+    ``tests._chaos_3292_preflight._real_evidence_ref_id``, a deterministic
+    HMAC, so every caller gets identical output). Kept as a distinct name
+    for call-site continuity in this file rather than a second,
+    independently-minted fixture that could again drift out of step with
+    what the answer actually cites.
+    """
 
-    return AskDevToolRegistry({tool_id: execute for tool_id in ToolID})
+    return recording_registry(calls)
 
 
 def _barren_registry(calls: list[DevToolRequest]) -> AskDevToolRegistry:

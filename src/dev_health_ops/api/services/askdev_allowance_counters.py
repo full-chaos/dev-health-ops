@@ -33,6 +33,20 @@ own compensating HINCRBY lands -- self-correcting within microseconds, and
 the failure direction is conservative (a spurious reject under heavy
 contention at the exact boundary, never a spurious admit).
 
+KNOWN LIMITATION, stated rather than left for an operator to discover
+(CHAOS-3522 review round 2): admit()'s compensation is two sequential
+Valkey commands (the speculative HINCRBY, then the compensating HINCRBY on
+rejection), not one atomic step. A process crash or network partition
+between them -- not an ordinary Valkey error, which the try/except here
+already catches and compensates for -- leaves the counter with a permanent
+CONSERVATIVE overcount: never an undercount, so it can only ever cause a
+spurious future rejection, not a spurious admit. Rare (it requires the
+process to die mid-function, not merely a request to fail), but not
+impossible, and the counter does not self-heal it -- the remedy is the
+explicit operator reconcile (POST .../platform-allowance/reconcile,
+force_reconcile() below), which recomputes from dev_runs and overwrites
+whatever drift accumulated.
+
 FAILURE POLICY mirrors impersonation_cache.py: fail-correct, not fail-stale.
 A Valkey error trips a short circuit breaker; while it is open, every
 operation computes straight from ``dev_runs`` and does not attempt to write
@@ -208,30 +222,46 @@ async def _ensure_initialized(
     ttl_seconds: int,
     baseline: AllowanceCounts,
 ) -> None:
-    """Create the hash with a recomputed baseline iff nobody has yet.
+    """Create the hash with a recomputed baseline iff nobody has yet -- PER
+    FIELD, not via a single sentinel field gating a later ``HSET``.
 
     Amendment 1: two concurrent first-of-month callers both miss the key and
-    both recompute a baseline from ``dev_runs``; a blind ``HSET`` from
+    both recompute a baseline from ``dev_runs``. A blind ``HSET`` from
     whichever one runs second would silently overwrite increments the first
-    one's caller already applied in between. ``HSETNX`` on a sentinel field
-    is a single atomic Valkey command -- exactly one caller ever observes
-    "I did not already exist" and is the one that writes ``requests`` /
-    ``cost_microusd``. Every other racer's (possibly different, possibly
-    staler) recomputed baseline is silently discarded, which is correct: the
-    winner's baseline is an equally valid recomputation of the same ground
-    truth, captured a moment earlier.
+    one's caller already applied in between -- the exact race this function
+    exists to kill.
+
+    A single ``HSETNX(key, "initialized", "1")`` sentinel gating a
+    SEPARATE, later ``HSET`` of the real fields does NOT close that race: the
+    sentinel write and the baseline ``HSET`` are two distinct round trips, so
+    a THIRD caller (an ordinary admit, not another initializer) can observe
+    the key "exist" (the sentinel field landed) before ``requests`` /
+    ``cost_microusd`` do, race ahead with its own ``HINCRBY`` (which
+    auto-vivifies the missing field at 0 + its own delta), and then lose that
+    increment entirely the moment the sentinel-winner's baseline ``HSET``
+    lands and overwrites the field outright. This was CHAOS-3522 review
+    round 2's finding against the first version of this function.
+
+    ``HSETNX`` directly on ``requests`` and ``cost_microusd`` has no such
+    window: each field is independently atomic from the instant it exists,
+    whichever write reaches it first -- a losing initializer's no-op, or a
+    concurrent ``HINCRBY`` auto-vivifying it. There is no state in which the
+    key "partially exists" from an outside caller's perspective in a way
+    that can be raced.
+
+    ORDERING INVARIANT this correctness depends on (also stated at every
+    call site: admit() here, and append_user_message_and_run in
+    persistence/service.py): a request's own init-if-absent AND its own
+    admit HINCRBY must both complete BEFORE its DevRun row is inserted into
+    Postgres. If a row landed first, a concurrent caller's baseline
+    recompute (a live query over dev_runs) could already include that row,
+    and the original request's own increment would ALSO count it -- a
+    double count no amount of Valkey-side atomicity can prevent, because it
+    is an ordering problem between two different stores, not a Valkey race.
     """
 
-    won = await client.hsetnx(key, "initialized", "1")
-    if not won:
-        return
-    await client.hset(
-        key,
-        mapping={
-            "requests": baseline.requests,
-            "cost_microusd": baseline.cost_microusd,
-        },
-    )
+    await client.hsetnx(key, "requests", baseline.requests)
+    await client.hsetnx(key, "cost_microusd", baseline.cost_microusd)
     await client.expire(key, ttl_seconds)
 
 
@@ -261,6 +291,16 @@ async def admit(
 
       reject (request) iff existing_requests >= request_limit
       reject (cost)    iff existing_cost + reservation > cost_limit
+
+    ORDERING INVARIANT the caller must uphold (also stated in
+    _ensure_initialized and at the call site in
+    persistence/service.py.append_user_message_and_run): this function must
+    run, and its outcome be honoured, BEFORE the corresponding DevRun row is
+    inserted into Postgres. A cold-key recompute here reads dev_runs live --
+    if the caller's own row had already landed, a concurrent cold-key
+    recompute for the SAME org could double-count it (once from the SQL
+    scan, once from this call's own increment). Admission-before-insert is
+    what keeps every baseline recompute a valid prefix of the real history.
     """
 
     now = now or datetime.now(UTC)
@@ -304,11 +344,10 @@ async def admit(
                 mapping={
                     "requests": baseline.requests,
                     "cost_microusd": baseline.cost_microusd,
-                    "initialized": "1",
                 },
             )
             await client.expire(key, _ttl_seconds(reset_at, now))
-        elif not await client.exists(key):
+        elif await _read_hash(client, key) is None:
             baseline = await _recompute_from_dev_runs(
                 session,
                 org_id=org_id,
@@ -501,7 +540,6 @@ async def read_counts(
                 mapping={
                     "requests": baseline.requests,
                     "cost_microusd": baseline.cost_microusd,
-                    "initialized": "1",
                 },
             )
             await client.expire(key, _ttl_seconds(reset_at, now))
@@ -580,7 +618,6 @@ async def force_reconcile(
             mapping={
                 "requests": counts.requests,
                 "cost_microusd": counts.cost_microusd,
-                "initialized": "1",
             },
         )
         await client.expire(key, _ttl_seconds(reset_at, now))

@@ -1861,6 +1861,15 @@ class DevPersistenceService:
                     raise DevPersistenceValidationError(
                         "platform allowance requires a platform provider source"
                     )
+                # CHAOS-3522 ORDERING INVARIANT (also stated in
+                # askdev_allowance_counters.admit and _ensure_initialized):
+                # this call, and its own Valkey reservation, MUST complete
+                # before the DevRun row below is inserted. A cold-key
+                # baseline recompute reads dev_runs live -- if this run's
+                # row had already landed, a concurrent recompute for the
+                # same org could double-count it (once from the SQL scan,
+                # once from this call's own increment). Do not reorder this
+                # block after the DevRun/DevMessage construction below.
                 await self._enforce_platform_allowance(
                     org_id=org_id,
                     allowance=platform_allowance,

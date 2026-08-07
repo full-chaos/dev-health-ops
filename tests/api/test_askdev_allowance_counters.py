@@ -16,7 +16,7 @@ Lua-gated path that would silently skip.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -228,6 +228,63 @@ async def test_concurrent_init_race_second_racer_baseline_discarded(
     final = await valkey_client.hmget(key, ["requests", "cost_microusd"])
     # B's stale baseline must NOT have clobbered A's state.
     assert final == [b"3", b"2000000"]
+
+
+@pytest.mark.asyncio
+async def test_per_field_hsetnx_survives_admission_interleaved_between_the_two_fields(
+    valkey_client,
+):
+    """CHAOS-3522 review round 2: the finer-grained race a single sentinel
+    field cannot close.
+
+    A prior version of ``_ensure_initialized`` gated one later ``HSET`` of
+    BOTH fields behind a single ``HSETNX(key, "initialized", "1")``
+    sentinel. That sentinel write and the baseline ``HSET`` are two separate
+    round trips -- a real admission's ``HINCRBY`` landing on ONE field in
+    between them would be silently wiped out when the baseline ``HSET``
+    (writing both fields unconditionally) finally landed. This test plants
+    exactly that interleaving -- an admission's increment lands on
+    ``cost_microusd`` in between the initializer's two per-field writes --
+    and proves the CURRENT per-field-``HSETNX`` implementation survives it:
+    each field is independently atomic, so there is no window where the key
+    "exists" without both fields already being live.
+    """
+
+    key = counters._key(_ORG, datetime(2026, 8, 1, tzinfo=UTC))
+    baseline = AllowanceCounts(requests=5, cost_microusd=999_999_999)
+
+    class _InterleavingClient:
+        """Proxies to the real fakeredis client, but injects a concurrent
+        admission's HINCRBY right after the FIRST field's HSETNX lands --
+        exercising _ensure_initialized's REAL two-call sequence, not a
+        hand-simulated one."""
+
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+            self._hsetnx_calls = 0
+
+        async def hsetnx(self, *args: Any, **kwargs: Any) -> Any:
+            result = await self._inner.hsetnx(*args, **kwargs)
+            self._hsetnx_calls += 1
+            if self._hsetnx_calls == 1:
+                await self._inner.hincrby(key, "cost_microusd", _RESERVATION)
+            return result
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    await counters._ensure_initialized(
+        _InterleavingClient(valkey_client),
+        key=key,
+        ttl_seconds=1000,
+        baseline=baseline,
+    )
+
+    final = await valkey_client.hmget(key, ["requests", "cost_microusd"])
+    # requests: racer A's baseline (nothing else touched it).
+    # cost_microusd: the admission's real increment, NOT racer A's stale
+    # baseline -- HSETNX on an already-existing field is a no-op.
+    assert final == [b"5", str(_RESERVATION).encode()]
 
 
 @pytest.mark.asyncio

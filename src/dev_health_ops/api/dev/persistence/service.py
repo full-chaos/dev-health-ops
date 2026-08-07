@@ -3671,6 +3671,41 @@ class DevPersistenceService:
             or 0
         )
 
+    async def count_stranded_ephemeral(self) -> int:
+        """Count 0-day conversations still awaiting a repair stamp (CHAOS-3544).
+
+        The exact counterpart of ``count_expired``, for the population that
+        one is structurally blind to: a stranded row carries ``expires_at IS
+        NULL``, so no count of DUE expiries can ever see it.
+
+        Non-locking, and that is the whole point (Codex adversarial review
+        round 2). The sweep's stamp loop cannot conclude "backlog cleared"
+        from a short batch: ``backfill_stranded_ephemeral_expiry`` selects
+        ``FOR UPDATE SKIP LOCKED``, so a concurrent stamper -- another tick,
+        or the manual ``dev-hops maintenance`` drain -- holding the remaining
+        rows makes the batch look short while the backlog is untouched. And
+        if that peer then rolls back, the rows it held still need stamping,
+        yet this task would already have reported a healthy "completed".
+
+        Row locks block writers, not readers, so this sees every still-
+        stranded row regardless of who holds it -- exactly the argument
+        ``count_expired`` already makes for the purge half.
+        """
+
+        now = self._now()
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(DevConversation)
+                .where(
+                    DevConversation.retention_days == 0,
+                    DevConversation.expires_at.is_(None),
+                    DevConversation.updated_at < now - EPHEMERAL_ABANDONED_GRACE,
+                )
+            )
+            or 0
+        )
+
     async def backfill_stranded_ephemeral_expiry(self, *, limit: int = 500) -> int:
         """One-time repair for 0-day conversations already stranded before
         this fix existed (CHAOS-3404; Codex adversarial-review round 3,

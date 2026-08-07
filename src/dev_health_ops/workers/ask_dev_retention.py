@@ -112,7 +112,6 @@ async def _run_ask_dev_retention_cleanup(
         # Bounded and idempotent like the purge loop below, and cheap once
         # drained: the selection is one predicate that returns nothing when
         # nothing is stranded.
-        stamp_backlog_cleared = False
         for _ in range(max(1, int(max_batches))):
             async with factory() as session:
                 stamp_service = DevPersistenceService(session)
@@ -122,12 +121,6 @@ async def _run_ask_dev_retention_cleanup(
                 await session.commit()
             total_stamped += stamped
             if stamped < limit:
-                # A short batch means the selection ran out of stranded rows.
-                # Unlike cleanup_expired's own short batch below this is
-                # conclusive: the backfill's SELECT ... FOR UPDATE SKIP
-                # LOCKED can only skip rows another stamper holds, and a row
-                # another stamper is holding is a row being repaired.
-                stamp_backlog_cleared = True
                 break
 
         for _ in range(max(1, int(max_batches))):
@@ -166,8 +159,22 @@ async def _run_ask_dev_retention_cleanup(
         # That is the same false-drained claim CHAOS-3404 round 2 closed for
         # the purge half, reintroduced through the repair half.
         #
-        # Only a stamp loop that ran out of work may contribute to drained.
-        drained = drained and stamp_backlog_cleared
+        # Only a VERIFIED-empty stranded backlog may contribute to drained.
+        #
+        # Codex adversarial review round 2 (MEDIUM, confirmed) corrected the
+        # first version of this, which trusted a short stamp batch. It cannot
+        # be trusted, for exactly the reason CHAOS-3404 round 2 established
+        # for the purge half: backfill_stranded_ephemeral_expiry selects FOR
+        # UPDATE SKIP LOCKED, so a concurrent stamper holding the remaining
+        # rows makes the batch look short while the backlog is untouched --
+        # and if that peer rolls back, those rows still need stamping. The
+        # non-locking count is the same instrument count_expired already is,
+        # pointed at the population count_expired structurally cannot see.
+        async with factory() as session:
+            stranded_cleared = (
+                await DevPersistenceService(session).count_stranded_ephemeral() == 0
+            )
+        drained = drained and stranded_cleared
     except Exception:
         logger.exception(
             "ask_dev_retention_sweep.failed",

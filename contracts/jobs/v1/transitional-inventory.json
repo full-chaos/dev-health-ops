@@ -3763,12 +3763,12 @@
       "notes": "Unconditional five-minute refresh for exact coverage projections."
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/ask_dev_retention.py:210",
+      "id": "celery_task:src/dev_health_ops/workers/ask_dev_retention.py:217",
       "surface": "run_ask_dev_retention_cleanup",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/ask_dev_retention.py",
-        "line": 210
+        "line": 217
       },
       "queue_or_cadence": "default",
       "dispatches": "self (Beat)",

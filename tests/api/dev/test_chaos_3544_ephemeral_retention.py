@@ -63,7 +63,10 @@ import pytest_asyncio
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from dev_health_ops.api.dev.persistence import DevPersistenceService
+from dev_health_ops.api.dev.persistence import (
+    DevPersistenceNotFound,
+    DevPersistenceService,
+)
 from dev_health_ops.models.dev_persistence import DevConversation
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
@@ -556,3 +559,83 @@ async def test_a_resumed_pre_fix_conversation_is_not_stamped_and_purged(
         "and purged for being old -- age alone is not idleness"
     )
     assert await _exists(maker, conversation.id)
+
+
+@pytest.mark.asyncio
+async def test_a_completed_conversation_cannot_be_written_to_again(
+    retention,
+) -> None:
+    """Why a completed ephemeral conversation cannot be resurrected by a late
+    write -- established by execution, and recorded because I nearly shipped
+    a guard against it.
+
+    ``_touch`` refreshes the ephemeral expiry on activity, so a touch landing
+    AFTER ``_stamp_ephemeral_expiry_if_terminal`` would push a completed
+    conversation an hour into the future, quietly delaying the immediate
+    deletion 0-day promises. Measured directly against the helper: 12:00
+    becomes 13:00.
+
+    I added a parameter to stop that, then found the path is unreachable and
+    removed it again. Two independent mechanisms already close it: ``finish()``
+    writes the answer BEFORE the terminal transition, so the terminal stamp is
+    last; and once stamped, the conversation is due, and every append path
+    resolves through ``get_conversation``, which excludes expired rows. The
+    append does not extend retention -- it fails closed.
+
+    A guard I could not exercise through a reachable path would have been
+    complexity that reads as protection. This test asserts the mechanism that
+    actually does the work instead, so if either half ever changes, something
+    fails.
+    """
+
+    maker, org_id, user_id = retention
+    clock = Clock(_START)
+
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="A turn that completes.",
+            scope_snapshot={},
+        )
+        accepted.run.state = "completed"
+        await session.flush()
+        assert (
+            await service._stamp_ephemeral_expiry_if_terminal(
+                org_id=org_id, user_id=user_id, conversation_id=conversation.id
+            )
+            is not None
+        )
+        await session.commit()
+
+    # A late assistant write cannot even find it -- so it cannot extend it.
+    answer_id = uuid.uuid4()
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        with pytest.raises(DevPersistenceNotFound):
+            await service.append_assistant_answer(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                answer_payload={
+                    "schema_version": "dev_answer.v1",
+                    "answer_id": str(answer_id),
+                    "conversation_id": str(conversation.id),
+                    "summary": "An answer written after the terminal stamp.",
+                    "claims": [],
+                    "metrics": [],
+                    "evidence": [],
+                },
+                validator=lambda payload: payload,
+                scope_snapshot={},
+            )
+
+    # And it is still due NOW, with no grace added.
+    assert await _sweep(maker, clock) == 1
+    assert not await _exists(maker, conversation.id)

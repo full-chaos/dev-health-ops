@@ -347,6 +347,102 @@ def test_repeated_provider_gate_is_deferred_not_silently_green() -> None:
     assert "credentials" in item.blocked_reason
 
 
+def test_web_default_ci_gate_is_deferred_for_the_cross_repo_reason() -> None:
+    """CHAOS-3219 Phase 4 exit audit (2026-08-06): this row had NO exact-id
+    test, despite ManifestItem's docstring promising every id is "referenced
+    by exact-id tests below so a status cannot silently flip without a
+    corresponding test change". Repo-wide it appeared exactly twice -- the
+    definition and the generated report -- so the only thing standing
+    between it and a force-flip was
+    test_committed_report_matches_what_build_report_produces_now, which a
+    flip that regenerates the report in the same change satisfies. See the
+    RED-then-GREEN proof below for why that is not enough.
+
+    What this pins is the DISTINCTION the row now rests on: web PR #854
+    closed the substance, and the row stays deferred purely because this
+    manifest resolves evidence under its own repository root and therefore
+    cannot express a cross-repo claim. Both halves matter -- a future
+    reader who sees only "deferred" would otherwise re-derive the closed
+    coverage gap, and a future reader who sees only the coverage would
+    force the status.
+    """
+
+    by_id = {item.id: item for item in MANIFEST}
+    item = by_id["gate.web-default-ci"]
+
+    assert item.status == "deferred"
+    # Honest emptiness: the whole point is that no path in THIS repo backs
+    # the claim. A future non-empty evidence tuple must come with a real
+    # ops-resident artifact, which is a deliberate change, not a drive-by.
+    assert item.evidence == ()
+    assert item.test_nodeids == ()
+    assert item.execution_artifact is None
+
+    reason = item.blocked_reason
+    assert reason is not None
+
+    # (1) the substance is recorded as MET, with the specific merged proof
+    assert "e64bae941a3481e17f720909b60192a830a5edbe" in reason
+    assert "#854" in reason
+    assert "ask-dev-web-default-ci-delta.md" in reason
+    for spec in (
+        "tests/ask-dev-outcomes.spec.ts",
+        "tests/ask-dev-shared.spec.ts",
+        "tests/ask-dev-continuity.spec.ts",
+        "tests/ask-dev-vocabulary.spec.ts",
+    ):
+        assert spec in reason, f"blocked_reason no longer names {spec}"
+    # ...and that the coverage is DEFAULT/required, which is the row's claim
+    assert "e2e-default" in reason
+
+    # (2) the reason it is still deferred is the cross-repo evidence model,
+    # explicitly tied to the precedent row that shares the constraint
+    assert "attack.runtime-" in reason
+    assert "claim, not proof" in reason
+
+    # (3) the route out is producing proof, not widening what counts as it
+    assert "run_ask_dev_compose.sh:348" in reason
+    assert "not by widening what counts as proof" in reason
+
+
+def test_web_default_ci_force_flip_to_proven_is_actually_caught() -> None:
+    """RED-then-GREEN proof for the exact-id test above, in the same shape
+    as test_blocked_reason_mutation_is_actually_caught.
+
+    The defect this guards is the realistic one: someone force-flips this
+    row to a proven status so the CHAOS-3219 entry criterion reads green.
+    Confirm that the EXISTING integrity machinery does not catch that --
+    proving the new exact-id test does real work rather than restating a
+    guard that was already there.
+
+    proven_unit + requires_live_infra=True is the cheapest legal disguise:
+    validate_manifest waives test_nodeids for live-infra items
+    (wave31_manifest.py:2597-2605), so the only remaining requirement is a
+    non-empty evidence path that exists in THIS repo -- and any real ops
+    file satisfies that while proving nothing whatsoever about web CI.
+    """
+
+    disguised = ManifestItem(
+        id="gate.web-default-ci",
+        category="gate",
+        description="mutated",
+        status="proven_unit",
+        requires_live_infra=True,
+        # A real, existing ops file that has nothing to do with the claim.
+        evidence=("scripts/acceptance/run_ask_dev_compose.sh",),
+    )
+
+    # validate_manifest's own checks do NOT catch this: evidence is
+    # non-empty and resolvable, test_nodeids is waived by requires_live_
+    # infra, and there is no execution artifact to validate because that is
+    # only demanded of proven_e2e.
+    assert validate_manifest(_ROOT, (disguised,)) == []
+
+    # The exact-id test is what catches it.
+    assert disguised.status != "deferred"
+    assert disguised.evidence != ()
+
+
 def test_team_attribution_flipped_to_proven_after_chaos_3332_fix() -> None:
     """Locks in the 2026-08-02 team-attribution flip.
 
@@ -1671,6 +1767,11 @@ def test_committed_report_matches_what_build_report_produces_now() -> None:
     assert committed == build_report(root), (
         "tests/acceptance/wave31-manifest-report.v1.json is out of date with "
         "wave31_manifest.build_report(). Regenerate it in the same change that "
-        "altered the manifest: python scripts/acceptance/wave31_manifest.py "
-        "--skip-execution"
+        "altered the manifest, from the repository root: "
+        "PYTHONPATH=. python scripts/acceptance/wave31_manifest.py "
+        "--skip-execution  (the PYTHONPATH is required -- run as a bare "
+        "script, sys.path[0] is scripts/acceptance/ and the module-level "
+        "'from scripts.acceptance.acceptance_artifact import ...' dies "
+        "with ModuleNotFoundError; 'python -m scripts.acceptance."
+        "wave31_manifest --skip-execution' works too)"
     )

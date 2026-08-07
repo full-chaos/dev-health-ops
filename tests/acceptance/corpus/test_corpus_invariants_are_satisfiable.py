@@ -800,12 +800,30 @@ class TestEveryActiveCaseStillAssertsSomething:
 #: here rather than silently deleted, because the distinction between "this
 #: declarer was condemned" and "this declarer went away with its case" is
 #: exactly what the pin exists to keep legible.
+#:
+#: CHAOS-3219 Phase 3 (2026-08-07), armed run 11:11-11:19 PT -- the premise this
+#: pin was built on is now FALSE, and it is corrected here rather than left to
+#: assert history. "No case has ever been observed producing a non-null
+#: resolution_path" held until this run; in it, all EIGHT
+#: ``$comment_known_red_class_closed`` cases passed ``resolution_path_in`` with
+#: a non-null path (``miss-clarification``), which is CHAOS-3533's
+#: ledger-persistence fix measured live rather than inferred. One id JOINS the
+#: set on that evidence, 41 -> 42: ``deg.source-state.measured-zero``, whose own
+#: receipt recorded ``resolution_path='deterministic-exact'`` while the check was
+#: still absent -- so it is pinned on a value it was OBSERVED producing, not one
+#: predicted for it. Evidence: ``.p3-logs/PIN-MOVE-RECEIPT.md`` (run identity,
+#: WORLD_DIGEST 6dda65a6..., 134 collected / 0 skipped / 90 executed / 90
+#: receipts / 0 missing). The receipt-coverage figure is load-bearing: an earlier
+#: run the same day reported ``134 collected, 0 skipped`` while 59 of 90 cases
+#: had died on HTTP 429 before recording anything, and the same conclusion drawn
+#: from it would have rested on a third of the corpus.
 RESOLUTION_PATH_DECLARING_CASE_IDS: frozenset[str] = frozenset(
     {
         "deficiency.team.not-applicable-rule",
         "deg.optional-integration-not-mislabeled",
         "deg.provisional-unapproved-rule",
         "deg.source-state.deleted",
+        "deg.source-state.measured-zero",
         "deg.source-state.no-data",
         "deg.source-state.stale",
         "deg.source-state.unauthorized-not-visible",
@@ -893,10 +911,17 @@ class TestResolutionPathDeclarersArePinned:
             "CANNOT tell a passable declaration from an unpassable one -- the 18 "
             "cases removed in CHAOS-3490 were structurally identical to the ones "
             "still declaring it. Before adding an id to "
-            "RESOLUTION_PATH_DECLARING_CASE_IDS, get live evidence that this "
-            "case's run actually writes a dev_run_resolutions row; no case in "
-            "this corpus has yet been OBSERVED producing a non-null "
-            "resolution_path."
+            "RESOLUTION_PATH_DECLARING_CASE_IDS, get live evidence that THIS "
+            "case's run actually writes a dev_run_resolutions row: cite a "
+            "measured armed run in which this specific case produced a non-null "
+            "resolution_path, and move the pin in the same change. Post-CHAOS-3533 "
+            "(armed run 2026-08-07) non-null paths ARE now observed, so the bar "
+            "is no longer 'has any case ever managed it' but 'was THIS case "
+            "measured doing it' -- and a run that cannot show receipt coverage "
+            "(receipts written == cases executed) is not evidence, because a "
+            "case that 429'd before recording looks identical to one that never "
+            "ran. See .p3-logs/PIN-MOVE-RECEIPT.md for the shape of an "
+            "acceptable citation."
         )
         assert not removed, (
             f"case(s) {removed} no longer declare resolution_path_in. If that is "

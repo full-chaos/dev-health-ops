@@ -823,7 +823,25 @@ def _target_status_mapping() -> None:
     drift this framework exists to prevent. work_items.py imports only stdlib
     (uuid, dataclasses, datetime, typing), so the real module loads unmodified.
     """
-    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    module = _load_source_module(
+        "dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE
+    )
+    # PRODUCER PROVENANCE GUARD. `python3` on a developer machine is often an
+    # ambient virtualenv with dev_health_ops editable-installed against a
+    # DIFFERENT worktree, and a lane has already lost time comparing Go against
+    # another checkout's Python. load_live_module asserts this for the
+    # allowlisted module it loads; the dependency loaded HERE had no such
+    # check, so a wrong-checkout work_items -- which defines the valid category
+    # and type vocabulary the loader validates against -- could have been
+    # picked up silently. Comparing against the wrong producer must fail
+    # loudly, not merely be unlikely.
+    origin = getattr(module, "__file__", None)
+    if origin is None or Path(origin).resolve() != _WORK_ITEMS_MODEL_SOURCE:
+        raise RuntimeError(
+            f"oracle loaded work_items from {origin!r}, expected "
+            f"{_WORK_ITEMS_MODEL_SOURCE} -- the comparison would have run against "
+            "another checkout's producer"
+        )
 
 
 def _target_fetch_utils() -> None:

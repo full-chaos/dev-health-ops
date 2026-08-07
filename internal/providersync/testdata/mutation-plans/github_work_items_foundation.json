@@ -156,9 +156,9 @@
     {
       "id": "F9-all-seven-provider-batch-families-stay-declared",
       "file": "internal/providersync/github_work_items_rows.go",
-      "find": "\tAIAttributions    []githubAIAttributionRow",
-      "replace": "",
-      "rationale": "the Go composite must structurally account for every semantic list the real Python GitHub provider can emit, including conditional AI attribution",
+      "find": "\tSprints           []githubSprintRow\n\tAIAttributions    []githubAIAttributionRow\n}",
+      "replace": "\tSprints           []githubSprintRow\n\tAIAttributions    []githubAIAttributionRow\n\tUndeclaredFamily  []githubSprintRow\n}",
+      "rationale": "the Go composite must structurally account for every semantic list the real Python GitHub provider can emit, including conditional AI attribution -- and for NO others, since the proof compares the reflected field list against the seven families by ordered DeepEqual. Re-authored: this entry previously DELETED the AIAttributions field, which breaks the build at eight call sites, so no test ran and it scored INVALID -- reading as coverage while measuring nothing. Deletion cannot be the operator here, because no compiling mutation can remove a field other code references. Adding an undeclared eighth family is the compiling mutation that reaches the same assertion: the family list is pinned exactly, by name, order and count.",
       "proof": [
         [
           "go",

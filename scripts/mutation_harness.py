@@ -222,6 +222,10 @@ VERDICT_STALE_DECLARATION = "STALE_DECLARATION"
 # the mutation is fine and the proof is empty, so the entry measured nothing
 # while exiting 0.
 VERDICT_PROOF_VACUOUS = "PROOF_VACUOUS"
+# A proof whose selected tests all SKIPPED. Environment-gated suites (live
+# oracles, integration tags) exit 0 while running nothing, so every mutation
+# under them reports SURVIVED for a reason unrelated to coverage.
+VERDICT_PROOF_SKIPPED = "PROOF_SKIPPED"
 
 
 def _digest(data: bytes) -> str:
@@ -1322,21 +1326,72 @@ def _proof_outcome(mutation: Mutation, root: Path) -> tuple[str | None, str]:
     return None, ""
 
 
-def _vacuous_proof(mutation: Mutation, root: Path) -> tuple[str, str] | None:
-    """Return the first proof command that executes no test at all, and why.
+def _verbose_go_test(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Add -v to a `go test` command so per-test outcomes are visible.
 
-    Checked against the CLEAN tree, before anything is mutated: a proof that
-    selects no test cannot distinguish mutated source from unmutated, so the
-    honest verdict is that the entry was never measured -- not KILLED, and not a
-    survivor whose reason could be argued.
+    Verbosity is not selection: -v changes what the runner PRINTS, never which
+    tests run or how they are judged. Without it `go test` reports a package
+    whose every selected test skipped as a bare `ok`, indistinguishable from one
+    where they all passed -- which is the whole failure this classification
+    exists to catch. Applied only to the harness's own baseline invocation.
+    """
+
+    if "test" not in command or not any(
+        part == "go" or part.endswith("/go") for part in command
+    ):
+        return command
+    if "-v" in command:
+        return command
+    return command + ("-v",)
+
+
+def _baseline_proof_classification(tail: str) -> tuple[str, str] | None:
+    """Classify a baseline proof run that EXITED ZERO but proved nothing.
+
+    Two distinct ways that happens, both reported as their own verdict because
+    both read as coverage while measuring nothing:
+
+    * ``PROOF_VACUOUS`` -- the -run pattern selected no test at all.
+    * ``PROOF_SKIPPED`` -- tests were selected and every one of them skipped,
+      typically an env-gated live-oracle or integration suite whose variables
+      are unset. A skipped proof passes on the clean tree AND on every mutant,
+      so each mutation under it is reported SURVIVED for a reason that has
+      nothing to do with coverage -- and a survivor later "declared" with a
+      reason would launder an unmeasured entry into documented coverage.
+
+    Baseline-only classification is sufficient: skipping here is decided by the
+    environment, which is constant across the baseline and every mutant, so a
+    baseline that skips guarantees every verdict under that proof is unmeasured.
+    """
+
+    reason = _vacuous_proof_reason(tail)
+    if reason is not None:
+        return VERDICT_PROOF_VACUOUS, reason
+    if "--- SKIP" in tail and "--- PASS" not in tail:
+        return VERDICT_PROOF_SKIPPED, "every selected test skipped"
+    return None
+
+
+def _baseline_proofs(
+    mutation: Mutation, root: Path
+) -> tuple[str | None, str, tuple[str, str, str] | None]:
+    """Run every proof ONCE on the clean tree: pass/fail plus classification.
+
+    One execution, not two. An earlier revision of this check ran the proofs a
+    second time purely to classify them, which doubled the cost of every
+    integration-tagged plan -- 20 minutes a pass here -- for information the
+    baseline run already had.
     """
 
     for command in mutation.proof:
-        _, tail = _run_command(command, root)
-        reason = _vacuous_proof_reason(tail)
-        if reason is not None:
-            return _format_command(command), reason
-    return None
+        code, tail = _run_command(_verbose_go_test(command), root)
+        if code != 0:
+            return _format_command(command), tail, None
+        classification = _baseline_proof_classification(tail)
+        if classification is not None:
+            verdict, reason = classification
+            return None, tail, (verdict, reason, _format_command(command))
+    return None, "", None
 
 
 def run_plan(
@@ -1401,6 +1456,7 @@ def run_plan(
             VERDICT_INVALID,
             VERDICT_STALE_DECLARATION,
             VERDICT_PROOF_VACUOUS,
+            VERDICT_PROOF_SKIPPED,
         }
         for result in results
     ):
@@ -1463,31 +1519,35 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
                 failing_proof=_format_command(mutation.build),
             )
 
-    # Before asking whether the proofs PASS, ask whether they RUN. A `-run`
-    # pattern matching nothing exits 0, so it would sail through the check below
-    # and then guarantee a survivor -- or, worse, be read as a kill if anything
-    # else in the command happened to fail. Checked on the clean tree so the
-    # answer is a property of the plan entry, not of the mutation.
-    vacuous = _vacuous_proof(mutation, root)
-    if vacuous is not None:
-        vacuous_command, vacuous_reason = vacuous
-        _require_unchanged(target, original_sha, mutation, "the vacuity check ran")
+    # One baseline pass answers both questions: did the proofs PASS, and did
+    # they RUN AT ALL. A -run pattern matching nothing, or a suite whose every
+    # selected test skips, exits 0 either way -- so without this the entry sails
+    # through and then guarantees a survivor that reads as a coverage gap.
+    failing, tail, unmeasured = _baseline_proofs(mutation, root)
+    if unmeasured is not None:
+        verdict, reason, command = unmeasured
+        _require_unchanged(target, original_sha, mutation, "the baseline proofs ran")
+        explanation = (
+            "Usually a -run pattern naming a test that was renamed or deleted."
+            if verdict == VERDICT_PROOF_VACUOUS
+            else (
+                "Usually an env-gated live-oracle or integration suite whose "
+                "variables are unset. A skipped proof passes on the clean tree "
+                "AND on every mutant, so every verdict under it is unmeasured."
+            )
+        )
         return Result(
             identifier=mutation.identifier,
-            verdict=VERDICT_PROOF_VACUOUS,
+            verdict=verdict,
             detail=(
-                f"proof command executes no test ({vacuous_reason}), so it cannot "
-                "tell mutated source from unmutated and this entry measured "
-                "NOTHING while exiting 0. Usually a -run pattern naming a test "
-                "that was renamed or deleted. Point it at a test that exists; "
-                "nothing was mutated.\n"
-                f"    {vacuous_command}"
+                f"proof command proves nothing ({reason}): it cannot tell mutated "
+                "source from unmutated, so this entry measured NOTHING while "
+                f"exiting 0. {explanation} Nothing was mutated.\n"
+                f"    {command}"
             ),
             warnings=warnings,
-            failing_proof=vacuous_command,
+            failing_proof=command,
         )
-
-    failing, tail = _proof_outcome(mutation, root)
     if failing is not None:
         # Same reason as the build path above: this return claims the file was
         # never touched, and a proof command with a side effect could have made
@@ -1831,6 +1891,7 @@ def main(argv: list[str] | None = None) -> int:
                 VERDICT_INVALID,
                 VERDICT_STALE_DECLARATION,
                 VERDICT_PROOF_VACUOUS,
+                VERDICT_PROOF_SKIPPED,
             }:
                 print(f"\n{result.identifier} {result.verdict}:\n{result.detail}")
         return exit_code

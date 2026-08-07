@@ -18,9 +18,12 @@ Whether a given index actually falls within the specific shortlist shown for
 that mention is a **per-call** fact this static schema cannot know (two
 different questions show different candidate counts).
 
-**That bound is enforced in exactly ONE place: ``qua_shadow._verify``.**
-This docstring used to list two enforcement points and present them as
-defence in depth. That was wrong, and CHAOS-3536 corrected it:
+**PER-MENTION index authorization is enforced in exactly ONE place:
+``qua_shadow._verify``.** Scope that sentence carefully -- there IS one
+structural bound left (the call-wide zero-candidate encoding, below), so the
+precise claim is that no wire-level rule constrains an index to the mention
+it belongs to. This docstring used to list two enforcement points and present
+them as defence in depth. That was wrong, and CHAOS-3536 corrected it:
 
 1. ``_verify`` re-checks every index against the exact per-mention slice
    after parsing, independent of whether the provider honored anything.

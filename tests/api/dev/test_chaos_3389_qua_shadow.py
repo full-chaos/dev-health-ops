@@ -427,25 +427,30 @@ async def test_an_index_outside_the_mentions_own_shortlist_is_rejected_not_trust
     assert second.rejected_reason is None
 
 
-async def test_zero_authorized_candidates_makes_every_index_structurally_inexpressible() -> (
-    None
-):
+async def test_zero_authorized_candidates_gets_an_index_rejected_at_runtime() -> None:
     """A provider that returns index 0 with nothing authorized is rejected.
 
-    The name is accurate, but CHAOS-3536 changed WHY. This docstring used to
-    say the wire schema's bound was ``[0, -1]``, an empty range no integer
-    satisfies. That range never reached a provider -- ``_structural_schema``
-    strips ``minimum``/``maximum`` before dispatch, so the wire said
-    ``{"type": ["integer", "null"]}`` and any integer was expressible
-    (CHAOS-3537). The zero-candidate case is now encoded as
-    ``{"type": "null"}``, which survives the projection, so the index really
-    is structurally inexpressible -- see
-    ``test_chaos_3536_qua_strict_schema.py``, which asserts that on the
-    PROJECTED schema rather than the generator's output.
+    CHAOS-3536 RENAMED this test, because the old name
+    (``..._makes_every_index_structurally_inexpressible``) claimed two things
+    that are not true, and a test name is read far more often than a
+    docstring.
 
-    What THIS test proves is the runtime half, and it is the half that has
-    always been load-bearing: the scripted provider ignores the schema
-    completely and returns index 0 anyway, and ``_verify`` rejects it."""
+    "Structurally" was false: the old docstring said the wire schema's bound
+    was ``[0, -1]``, an empty range no integer satisfies. That range never
+    reached a provider -- ``_structural_schema`` strips ``minimum``/
+    ``maximum`` before dispatch, so the wire said
+    ``{"type": ["integer", "null"]}`` (CHAOS-3537).
+
+    "Every index" is still false even after the fix. The zero-candidate case
+    now sends ``{"type": "null"}`` for ``selected_candidate_index`` only;
+    ``candidate_indices`` still ships as an integer array, and this test's
+    own payload puts ``[0]`` in it. So an index IS expressible here and
+    ``_verify`` is what rejects it -- which is precisely what the assertions
+    below check, and always were.
+
+    The structural half that DOES exist is asserted in
+    ``test_chaos_3536_qua_strict_schema.py``, against the PROJECTED schema
+    rather than the generator's output."""
 
     catalog = _catalog([])  # nothing authorized in this org at all
     scope_service = ScopeResolutionService(catalog, cache=ScopeRequestCache())

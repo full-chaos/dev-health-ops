@@ -113,23 +113,33 @@ _TYPE_DECLARING_KEYS = frozenset({"type", "anyOf", "allOf", "oneOf", "$ref"})
 def strict_mode_violations(schema: Any, path: str = "$") -> list[str]:
     """Every OpenAI strict-mode STRUCTURAL rule this schema breaks.
 
-    The three rules, which are the ones the live 400 was raised against:
+    The rules:
 
     1. every object node declares ``type: "object"``;
     2. every object node sets ``additionalProperties: false``;
     3. every object node's ``required`` names EVERY property -- strict mode
        has no optional properties, so optionality is expressed as a nullable
        type, never by omission from ``required``;
+    4. every SCHEMA NODE declares a type (or defers to a combinator).
+       ``const`` alone is not a type declaration, which is the entire bug.
 
-    plus the rule the production failure actually tripped: every property
-    schema must declare a type (or defer to a combinator). ``const`` alone
-    is not a type declaration, which is the entire bug.
+    Review round 3 (medium, reproduced before fixing): rule 4 used to be
+    applied only to entries under ``properties``. A node reached through
+    ``items`` was recursed into but never checked itself, so deleting
+    ``type`` from ``candidate_indices.items`` left this function returning
+    ``[]`` -- the validator had a false-pass path of exactly the kind it
+    exists to catch. It now checks every position a schema can occupy, and
+    ``test_the_validator_detects_each_rule_it_claims_to_check`` plants a
+    defect in an array item specifically.
     """
 
     violations: list[str] = []
     if not isinstance(schema, dict):
         return violations
 
+    # Rule 4, applied to THIS node. The caller decides whether this position
+    # requires a type at all -- only the positions visited below do, and the
+    # root is entered via the object rules rather than as a bare value.
     properties = schema.get("properties")
     if isinstance(properties, dict):
         if schema.get("type") != "object":
@@ -145,32 +155,45 @@ def strict_mode_violations(schema: Any, path: str = "$") -> list[str]:
                 f"unknown={sorted(required - declared)}"
             )
         for name, definition in properties.items():
-            child = f"{path}.properties.{name}"
-            if isinstance(definition, dict) and not (
-                _TYPE_DECLARING_KEYS & set(definition)
-            ):
-                violations.append(
-                    f"{child}: no type key (has {sorted(definition)}) -- "
-                    "strict mode requires one on every property"
-                )
-            violations.extend(strict_mode_violations(definition, child))
+            violations.extend(
+                _schema_position_violations(definition, f"{path}.properties.{name}")
+            )
 
-    for key in ("items", "not"):
-        if key in schema:
-            violations.extend(strict_mode_violations(schema[key], f"{path}.{key}"))
+    if "items" in schema:
+        violations.extend(_schema_position_violations(schema["items"], f"{path}.items"))
     for key in ("anyOf", "allOf", "oneOf"):
         branches = schema.get(key)
         if isinstance(branches, list):
             for index, branch in enumerate(branches):
                 violations.extend(
-                    strict_mode_violations(branch, f"{path}.{key}[{index}]")
+                    _schema_position_violations(branch, f"{path}.{key}[{index}]")
                 )
     defs = schema.get("$defs")
     if isinstance(defs, dict):
         for name, definition in defs.items():
             violations.extend(
-                strict_mode_violations(definition, f"{path}.$defs.{name}")
+                _schema_position_violations(definition, f"{path}.$defs.{name}")
             )
+    return violations
+
+
+def _schema_position_violations(node: Any, path: str) -> list[str]:
+    """Check a node that occupies a schema position, then recurse into it.
+
+    Every such position must declare a type. Split out from
+    ``strict_mode_violations`` so that ``properties`` entries, array
+    ``items`` and combinator branches are all held to the same rule --
+    keeping the check inline for properties only is what let a typeless
+    array item through.
+    """
+
+    violations: list[str] = []
+    if isinstance(node, dict) and not (_TYPE_DECLARING_KEYS & set(node)):
+        violations.append(
+            f"{path}: no type key (has {sorted(node)}) -- "
+            "strict mode requires one on every schema node"
+        )
+    violations.extend(strict_mode_violations(node, path))
     return violations
 
 
@@ -202,6 +225,18 @@ def strict_mode_violations(schema: Any, path: str = "$") -> list[str]:
             "no type key",
             id="property-without-type",
         ),
+        pytest.param(
+            lambda node: node["properties"]["mentions"]["items"]["properties"][
+                "candidate_indices"
+            ]["items"].pop("type"),
+            "no type key",
+            id="array-item-without-type",
+        ),
+        # Deliberately NOT a case: popping ``items`` from ``mentions``. That
+        # leaves ``{"type": "array"}``, which breaks no rule this validator
+        # claims to check (arrays-must-declare-items is a real strict-mode
+        # rule, but not one of the four documented above). Asserting a
+        # violation there would record an INVALID mutation as a kill.
     ],
 )
 def test_the_validator_detects_each_rule_it_claims_to_check(

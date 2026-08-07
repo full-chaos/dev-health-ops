@@ -70,6 +70,16 @@ report *its* numbers under the name Nightfall — the same misattribution, one
 layer down. Dropping the page subject removes the entity that could be
 mislabelled.
 
+The widening is also **said out loud**. It is recorded machine-readably on
+`dev_scope_resolution.v1` (`outcome: organization_fallback`,
+`fallbacks: ["organization"]`), and the answer additionally carries one plain
+sentence — "I could not match the subject named in this question, so this
+answer covers the whole organization instead." — so a reader of the rendered
+answer, not only a reader of the wire, can tell that the thing they named was
+missed. The trigger is this branch specifically, not the `fallbacks` marker:
+a question that named no subject at all was never widened away from anything
+and is told nothing.
+
 Page context is used as the subject only when the question named nothing at
 all, including nothing we merely failed to type. Substituting the page's
 project for a name we could not parse would answer about one entity under

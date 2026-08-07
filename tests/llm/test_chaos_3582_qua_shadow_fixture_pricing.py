@@ -1,35 +1,45 @@
-"""CHAOS-3582: the isolated QUA shadow budget guard failed closed on the Ask
-Dev acceptance stack's own scripted provider, unconditionally.
+"""CHAOS-3582: the isolated QUA shadow budget guard failed closed on
+unpriced provider/model pairs, in TWO distinct ways.
 
-Found by the CHAOS-3532 live verify (2026-08-07): with the QUA shadow armed,
-``dev_run_qua_shadow`` never reached ``evaluated`` -- every call reported
+Shape 1 -- found by the CHAOS-3532 live verify (2026-08-07) against the Ask
+Dev acceptance stack: with the QUA shadow armed, ``dev_run_qua_shadow`` never
+reached ``evaluated`` -- every call reported
 ``status=skipped_budget_exhausted``, ``error_class=budget_unavailable``, with
 ZERO rows in ``dev_qua_shadow_budget_reservations`` (it failed before ever
-reserving, not from quota depletion).
+reserving, not from quota depletion). Root cause: ``llm.budget.reliable_price``
+requires ``_official_openai_endpoint(base_url)`` -- true only for an empty
+base_url or exactly ``https://api.openai.com`` -- before it will even
+consult the price table, and the acceptance stack's scripted provider is
+served from ``http://ask-dev-scripted-openai:8001/v1`` by construction, so
+it was never priced.
 
-Root cause, traced to ``llm.budget.reliable_price``: it requires
-``_official_openai_endpoint(base_url)`` -- true only for an empty base_url or
-exactly ``https://api.openai.com`` -- before it will even consult the price
-table. The acceptance stack's scripted provider is served from
-``http://ask-dev-scripted-openai:8001/v1`` by construction
-(``tests/acceptance/compose.ask-dev.yml``), so it was NEVER priced, and
-``guard_qua_shadow_call`` (``llm/qua_shadow_budget.py``) treats an unpriced
-provider/model as an accounting error and fails closed -- unlike the live/BYO
-guard, which lets an unpriced custom provider through unbudgeted. That
-asymmetry is deliberate (a real customer's unpriced spend must never be
-silently reported as free) and this fix does not touch it: the scripted
-provider is not unbudgeted here, it is honestly, explicitly priced -- the
-SAME carve-out ``llm.agent.openai_compatible`` already made for the SAME
-model id on the live platform-cost path (CHAOS-3552).
+Shape 2 -- found immediately after, live-reproduced in the SHARED DEV STACK
+with the REAL provider: the same failure, for a DIFFERENT reason. Dev has no
+base_url override at all (official endpoint), but ``ops/.env`` configures
+``LLM_MODEL="gpt-5-nano"``, and ``_PRICE_PER_MILLION`` had only ever priced
+``gpt-5-mini``. Every ``dev_run_qua_shadow`` row since the flags were armed
+reported the identical ``skipped_budget_exhausted`` / ``budget_unavailable``
+symptom -- CHAOS-3389 has no shadow evidence from dev, and CHAOS-3525's
+commit mode reads as inert to a user despite being armed.
 
-RED-first: every assertion in ``test_the_acceptance_fixture_is_priced_on_its_
-own_non_official_endpoint`` and
-``test_the_qua_shadow_guard_actually_reaches_evaluated_for_the_fixture``
-fails against ``reliable_price``/``guard_qua_shadow_call`` before this
-ticket's fix (``_PRICE_PER_MILLION`` had no ``ask-dev-scripted-v1`` entry, and
-``reliable_price`` checked the endpoint before any carve-out). The
-anti-widening tests below must stay green in both states -- they pin that the
-fix does not fail OPEN for anything else.
+Fix for both: honest pricing, never a fail-open exemption.
+* Shape 1 -- an exact-match carve-out mirroring the SAME one
+  ``llm.agent.openai_compatible`` already made for the SAME model id on the
+  live platform-cost path (CHAOS-3552), checked before the endpoint test.
+* Shape 2 -- ``reliable_price`` borrows a REAL model's rate from
+  ``openai_compatible._PLATFORM_MODEL_PRICES`` (already sourced and cited)
+  when its own table lacks an entry, but ONLY after the official-endpoint
+  check passes -- a real model on a genuine non-official/BYO endpoint still
+  resolves to no price, unchanged.
+
+RED-first: every assertion in the two ``..._is_priced_on...`` tests and the
+two ``..._guard_actually_reaches_evaluated...`` end-to-end tests fails
+against ``reliable_price``/``guard_qua_shadow_call`` before this ticket's
+fix. The anti-widening tests must stay green in both states -- they pin that
+the fix does not fail OPEN for anything else: a stem-sharing neighbour
+model id, a real model on a genuine custom/BYO endpoint, and a genuinely
+unpriced real model on the OFFICIAL endpoint (neither table has ever heard
+of it) must all still resolve to ``None``.
 """
 
 from __future__ import annotations
@@ -137,6 +147,73 @@ def test_a_real_openai_model_on_an_unlisted_endpoint_stays_unpriced() -> None:
     )
 
 
+#: ``ops/.env``'s actual configured model -- the shared dev stack's own
+#: reported failure shape, no base_url override at all.
+_DEV_STACK_MODEL = "gpt-5-nano"
+
+
+def test_the_dev_stack_configured_model_is_priced_on_the_official_endpoint() -> None:
+    """Shape 2: a real model with no price of its own in this table, on the
+    OFFICIAL endpoint (dev's actual configuration -- no base_url override),
+    must resolve to a real, non-fabricated, cited price rather than staying
+    unpriced forever until someone hand-adds a literal for it."""
+
+    price = reliable_price(provider="openai", model=_DEV_STACK_MODEL, base_url=None)
+    assert price is not None, (
+        "the dev stack's own configured model must be priced on the "
+        "official endpoint -- an unpriced result here is CHAOS-3582 shape 2"
+    )
+    input_rate, cached_input_rate, output_rate = price
+    assert input_rate > 0
+    assert cached_input_rate > 0
+    assert output_rate > 0
+    # Borrowed from openai_compatible._PLATFORM_MODEL_PRICES verbatim --
+    # never re-derived or approximated for the two legs that ARE sourced.
+    assert (input_rate, output_rate) == (50_000, 400_000)
+
+
+def test_a_dated_snapshot_of_the_dev_stack_model_resolves_the_same_price() -> None:
+    """Parity with the live path's own tested behaviour
+    (``test_chaos_3552_platform_price_book.py``): a dated model snapshot
+    (``gpt-5-nano-2026-01-01``) resolves to the SAME borrowed rate as the
+    bare id, via the same canonicalization the live path already uses."""
+
+    assert reliable_price(
+        provider="openai", model=f"{_DEV_STACK_MODEL}-2026-01-01", base_url=None
+    ) == reliable_price(provider="openai", model=_DEV_STACK_MODEL, base_url=None)
+
+
+def test_the_dev_stack_model_on_a_custom_endpoint_still_stays_unpriced() -> None:
+    """Borrowing a real model's rate must still respect the endpoint check
+    -- unlike the fixture, a REAL model's cost on a genuine non-official
+    endpoint is unknown, not zero and not OpenAI's rate."""
+
+    assert (
+        reliable_price(
+            provider="openai",
+            model=_DEV_STACK_MODEL,
+            base_url="https://my-byo-gateway.example/v1",
+        )
+        is None
+    )
+
+
+def test_a_genuinely_unpriced_model_on_the_official_endpoint_still_fails_closed() -> (
+    None
+):
+    """Borrowing only ever WIDENS what gets priced with REAL, sourced rates
+    -- it must never fabricate a price for a model neither table has ever
+    heard of. ``None`` here is the correct, unchanged, fail-closed answer;
+    an operator misconfiguration must still be loud, not silently free."""
+
+    assert (
+        reliable_price(
+            provider="openai", model="a-model-nobody-has-priced", base_url=None
+        )
+        is None
+    )
+
+
 @pytest_asyncio.fixture
 async def session_maker(tmp_path: Path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'qua_shadow.db'}")
@@ -187,18 +264,33 @@ class _FakeScriptedProvider:
 
 
 @pytest.mark.asyncio
-async def test_the_qua_shadow_guard_actually_reaches_evaluated_for_the_fixture(
-    session_maker, monkeypatch
+@pytest.mark.parametrize(
+    ("case_id", "model", "base_url"),
+    [
+        (
+            "shape1_acceptance_fixture_on_its_scripted_endpoint",
+            SCRIPTED_OPENAI_MODEL,
+            _ACCEPTANCE_BASE_URL,
+        ),
+        (
+            "shape2_dev_stack_model_on_the_official_endpoint",
+            _DEV_STACK_MODEL,
+            None,
+        ),
+    ],
+)
+async def test_the_qua_shadow_guard_actually_reaches_evaluated(
+    session_maker, monkeypatch, case_id: str, model: str, base_url: str | None
 ) -> None:
-    """End-to-end reproduction of CHAOS-3582's exact reported symptom:
-    ``guard_qua_shadow_call`` against the acceptance provider/model/base_url
-    triple must reserve, invoke, and reconcile as ``succeeded`` -- not raise
-    ``QUAShadowBudgetAccountingError`` before ever calling the provider.
+    """End-to-end reproduction of CHAOS-3582's exact reported symptom, both
+    shapes: ``guard_qua_shadow_call`` against the real provider/model/
+    base_url triple must reserve, invoke, and reconcile as ``succeeded`` --
+    not raise ``QUAShadowBudgetAccountingError`` before ever calling the
+    provider.
 
-    Before the fix: this raises ``QUAShadowBudgetAccountingError`` and
-    ``provider.calls`` stays ``0`` -- the scripted service is never even
-    invoked, matching the live boot's zero rows in
-    ``dev_qua_shadow_budget_reservations``.
+    Before the corresponding fix: this raises ``QUAShadowBudgetAccountingError``
+    and ``provider.calls`` stays ``0`` -- the provider is never even invoked,
+    matching the live boot's / dev stack's own zero/absent reservation rows.
     """
 
     org_id = str(uuid.uuid4())
@@ -228,22 +320,22 @@ async def test_the_qua_shadow_guard_actually_reaches_evaluated_for_the_fixture(
         provider,
         org_id=org_id,
         provider="openai",
-        model=SCRIPTED_OPENAI_MODEL,
-        base_url=_ACCEPTANCE_BASE_URL,
+        model=model,
+        base_url=base_url,
     )
     result = await guarded.decide(
         [AgentMessage(AgentMessageRole.USER, "question")], (), {"type": "object"}, 1, 64
     )
     assert result.decision.value == {"schema_version": "dev_question_understanding.v1"}
-    assert provider.calls == 1, "the scripted provider must actually be invoked"
+    assert provider.calls == 1, f"{case_id}: the provider must actually be invoked"
 
     async with session_maker() as session:
         rows = list(
             (await session.execute(select(QUAShadowBudgetReservation))).scalars()
         )
     assert len(rows) == 1, (
-        "exactly one reservation must exist -- CHAOS-3582 observed ZERO "
-        "because the guard raised before ever reserving"
+        f"{case_id}: exactly one reservation must exist -- CHAOS-3582 "
+        "observed ZERO because the guard raised before ever reserving"
     )
     assert rows[0].status == "succeeded"
     assert rows[0].actual_micro_usd is not None

@@ -28,6 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.llm.agent.openai_compatible import (
+    _PLATFORM_MODEL_PRICES as _BORROWED_OPENAI_MODEL_PRICES,
+)
+from dev_health_ops.llm.agent.openai_compatible import (
+    _canonical_priced_model as _borrowed_canonical_model,
+)
 from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.errors import LLMError
 from dev_health_ops.llm.providers.base import CompletionResult, LLMProvider
@@ -218,7 +224,52 @@ def reliable_price(
         return _PRICE_PER_MILLION[(normalized_provider, normalized_model)]
     if normalized_provider != "openai" or not _official_openai_endpoint(base_url):
         return None
-    return _PRICE_PER_MILLION.get((normalized_provider, normalized_model))
+    own_price = _PRICE_PER_MILLION.get((normalized_provider, normalized_model))
+    if own_price is not None:
+        return own_price
+    return _borrowed_official_openai_price(model)
+
+
+def _borrowed_official_openai_price(model: str) -> tuple[int, int, int] | None:
+    """A REAL model this table has not been priced for yet, borrowed from
+    ``llm.agent.openai_compatible``'s own sourced, cited snapshot rates.
+
+    CHAOS-3582 (scope widened past the acceptance fixture): the shared dev
+    stack armed the QUA shadow ladder with the REAL provider on the OFFICIAL
+    OpenAI endpoint -- no base_url override at all -- and it failed closed
+    exactly the same way, for a DIFFERENT reason: ``ops/.env`` configures
+    ``LLM_MODEL="gpt-5-nano"``, and this module's own ``_PRICE_PER_MILLION``
+    has never priced anything but ``gpt-5-mini``. Every ``dev_run_qua_shadow``
+    row since the flags were armed reported ``skipped_budget_exhausted`` /
+    ``budget_unavailable`` for that reason -- CHAOS-3389 has no shadow
+    evidence from dev, and CHAOS-3525's commit mode reads as inert to a user
+    despite being armed, purely because the guard can never reserve.
+
+    Preferred over hand-adding another literal entry here for every model an
+    operator happens to configure: ``openai_compatible._PLATFORM_MODEL_PRICES``
+    already carries real, cited, per-model rates for exactly this purpose
+    (CHAOS-3552), and reusing it is honest pricing from a real source rather
+    than a second guess. This is a deliberate, temporary bridge in the
+    DIRECTION OPPOSITE of CHAOS-3560's eventual consolidation (which deletes
+    ``_PLATFORM_MODEL_PRICES`` in favour of THIS module's own table) --
+    acceptable because it only ever WIDENS what gets priced, never narrows
+    what already fails closed, and CHAOS-3560 is the ticket that resolves the
+    direction permanently. Excludes the acceptance fixture itself (handled,
+    unconditionally, before the endpoint check above) so this function is
+    reached only for a genuine OpenAI-official-endpoint real model.
+
+    Cached input is charged at the FULL input rate -- the same conservative
+    simplification ``openai_compatible._estimated_cost_microusd`` already
+    documents for its own accounting ("the normalized usage contract does not
+    expose cached-token detail"). Conservative because it can only ever
+    OVER-count, never under-count, a real cost.
+    """
+
+    canonical = _borrowed_canonical_model(model)
+    if canonical is None or canonical == SCRIPTED_OPENAI_MODEL:
+        return None
+    input_rate, output_rate = _BORROWED_OPENAI_MODEL_PRICES[canonical]
+    return (input_rate, input_rate, output_rate)
 
 
 def cost_micro_usd(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,12 +52,13 @@ from dev_health_ops.llm.agent.roles import (
     AgentRole,
     SettingsRoleCertificationStore,
 )
+from dev_health_ops.models.dev_persistence import DevRun
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import Setting
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
-_TABLES = tables_of(User, Organization, Setting)
+_TABLES = tables_of(User, Organization, Setting, DevRun)
 _FINGERPRINT = "platform-readiness-fingerprint"
 
 
@@ -732,3 +734,102 @@ async def test_binary_ready_role_absent_reports_unavailable_not_ready(
     assert body["binary_transport_readiness"] == "ready"
     roles = {entry["role"]: entry for entry in body["role_readiness"]}
     assert roles["legacy_agent"]["state"] == "not_yet_certified"
+
+
+# -- CHAOS-3522: platform allowance reconcile (operator escape hatch) -------
+
+
+@pytest.mark.asyncio
+async def test_org_admin_token_cannot_reach_allowance_reconcile(
+    platform_context: PlatformContext,
+):
+    """Same regression class as readiness: an org-admin token must never
+    reach another org's allowance counter -- reconcile is platform-wide,
+    superuser-only, and deliberately absent from the org-scoped
+    ``/admin/ask-dev`` surface (an org admin resetting their own spend cap
+    enforcement would defeat the cap)."""
+
+    _as(platform_context, platform_context.org_admin)
+    org_id = str(uuid.uuid4())
+
+    response = await platform_context.client.post(
+        f"/api/v1/admin/platform/ask-dev/organizations/{org_id}/platform-allowance/reconcile"
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_reconcile_rejects_a_non_uuid_org_id(platform_context: PlatformContext):
+    response = await platform_context.client.post(
+        "/api/v1/admin/platform/ask-dev/organizations/not-a-uuid/platform-allowance/reconcile"
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recomputes_from_dev_runs_and_overwrites_the_counter(
+    platform_context: PlatformContext, monkeypatch: pytest.MonkeyPatch
+):
+    """The full round trip: seed dev_runs directly (bypassing any counter),
+    seed a DELIBERATELY WRONG Valkey value, call reconcile, and assert the
+    response AND the Valkey key both reflect dev_runs -- never the stale
+    value that was there before."""
+
+    fakeredis = pytest.importorskip("fakeredis")
+    from dev_health_ops.api.dev.org_policy import platform_month_window
+    from dev_health_ops.api.services import (
+        askdev_allowance_counters as counters,
+    )
+
+    client = fakeredis.FakeAsyncValkey(server=fakeredis.FakeServer())
+    monkeypatch.setattr(counters, "_client", client)
+    monkeypatch.setattr(counters, "_circuit_open_until", 0.0)
+    monkeypatch.setattr(counters, "_needs_recovery_recompute", False)
+
+    org_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    async with platform_context.maker() as session:
+        session.add_all(
+            [
+                DevRun(
+                    request_id=uuid.uuid4(),
+                    conversation_id=uuid.uuid4(),
+                    org_id=org_id,
+                    user_id=user_id,
+                    state="completed",
+                    estimated_cost_microusd=300_000,
+                    provider_source="platform",
+                    started_at=now,
+                ),
+                DevRun(
+                    request_id=uuid.uuid4(),
+                    conversation_id=uuid.uuid4(),
+                    org_id=org_id,
+                    user_id=user_id,
+                    state="model_decision",
+                    provider_source="platform",
+                    started_at=now,
+                ),
+            ]
+        )
+        await session.commit()
+
+    window_start, _reset_at = platform_month_window(now)
+    key = counters._key(str(org_id), window_start)
+    # A deliberately wrong stale value the reconcile must overwrite.
+    await client.hset(key, mapping={"requests": 999, "cost_microusd": 999_000_000})
+
+    response = await platform_context.client.post(
+        f"/api/v1/admin/platform/ask-dev/organizations/{org_id}/platform-allowance/reconcile"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_used"] == 2
+    # completed run: real cost (300_000). running run: worst-case reservation.
+    from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
+
+    assert body["cost_used_microusd"] == 300_000 + ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
+
+    persisted = await client.hmget(key, ["requests", "cost_microusd"])
+    assert persisted == [b"2", str(body["cost_used_microusd"]).encode()]

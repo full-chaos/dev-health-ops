@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import (
@@ -36,6 +36,7 @@ from dev_health_ops.api.dev.org_policy import (
 from dev_health_ops.api.dev.persistence.service import DevAdmissionLimits
 from dev_health_ops.api.dev.production_runtime import resolve_certification_provider
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
+from dev_health_ops.api.services import askdev_allowance_counters
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.licensing import FeatureDecisionReason, evaluate_org_feature_async
@@ -324,13 +325,6 @@ class AskDevAdminUsageResponse(StrictAdminModel):
     platform_allowance: AskDevPlatformAllowanceUsage
 
 
-def _platform_month_window(now: datetime) -> tuple[datetime, datetime]:
-    start = datetime(now.year, now.month, 1, tzinfo=UTC)
-    if now.month == 12:
-        return start, datetime(now.year + 1, 1, 1, tzinfo=UTC)
-    return start, datetime(now.year, now.month + 1, 1, tzinfo=UTC)
-
-
 def _allowance_warning(*, used: int, limit: int) -> int:
     if used >= limit:
         return 3
@@ -348,35 +342,16 @@ async def _platform_allowance_usage(
     request_limit: int,
     cost_limit_microusd: int,
 ) -> AskDevPlatformAllowanceUsage:
-    window_start, reset_at = _platform_month_window(datetime.now(UTC))
-    terminal = {
-        "completed",
-        "insufficient_evidence",
-        "refused",
-        "failed",
-        "cancelled",
-    }
-    charged_cost = case(
-        (
-            and_(
-                DevRun.state.in_(terminal),
-                DevRun.estimated_cost_microusd.is_not(None),
-            ),
-            DevRun.estimated_cost_microusd,
-        ),
-        else_=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+    # CHAOS-3522: reads the shared Valkey counters (self-healing from
+    # dev_runs on a cold key or Valkey outage) instead of re-scanning
+    # dev_runs on every admin usage read.
+    counts, window_start, reset_at = await askdev_allowance_counters.read_counts(
+        session,
+        org_id=org_id,
+        per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
     )
-    statement = select(
-        func.count(DevRun.id), func.coalesce(func.sum(charged_cost), 0)
-    ).where(
-        DevRun.org_id == uuid.UUID(org_id),
-        DevRun.provider_source == "platform",
-        DevRun.started_at >= window_start,
-        DevRun.started_at < reset_at,
-    )
-    request_used, cost_used = (await session.execute(statement)).one()
-    requests = int(request_used or 0)
-    cost = int(cost_used or 0)
+    requests = counts.requests
+    cost = counts.cost_microusd
     warning_rank = max(
         _allowance_warning(used=requests, limit=request_limit),
         _allowance_warning(used=cost, limit=cost_limit_microusd),

@@ -1666,18 +1666,28 @@ def test_acceptance_overlay_wires_the_qua_ladder_off_by_default() -> None:
         )
 
 
-def test_the_qua_flags_are_not_stripped_by_the_launcher() -> None:
-    """The other half, and the one that is easy to get backwards.
+def test_ambient_qua_flags_cannot_arm_the_acceptance_stack() -> None:
+    """CHAOS-3532: the QUA flags are CLEARED by the launcher, and armed only
+    by its own one-shot opt-in.
 
-    The launcher's `unset` block exists to stop an ambient shell value
-    reaching compose interpolation. These two are the exception that proves
-    the rule: they ARE the operator's deliberate input, so unsetting them
-    would strip the export that arms the run and leave a stack that cannot
-    exercise QUA commit while looking correctly wired.
+    THIS ASSERTION IS THE REVERSE OF THE ONE IT REPLACES, and the reversal was
+    forced by reality within the hour. The first version passed the flags
+    through from the invoking shell (`${VAR:-0}`) so an operator could arm a
+    run, and asserted they must NOT be in the unset list. Then `ops/.env`
+    gained `ASK_DEV_QUA_SHADOW_ENABLED=1` / `ASK_DEV_QUA_COMMIT_ENABLED=1`
+    for the dev stack, direnv exports that file into every shell under the
+    ops tree, and passthrough would therefore have booted EVERY future
+    acceptance stack silently ARMED -- changing what every baseline corpus
+    case measures, against predictions registered on an unarmed system.
 
-    CHAOS-3532's own scope text originally instructed the opposite. This
-    asserts the correct behaviour so the instruction cannot be followed by a
-    later reader.
+    That is not a hypothetical leftover export. It was the live state of
+    every ops shell on this machine, verified directly, while the
+    passthrough version of this file was already committed.
+
+    So arming is now a deliberate act at the launcher boundary and nowhere
+    else: both names are cleared unconditionally, and only
+    `ASK_DEV_ACCEPTANCE_QUA=1` -- the launcher's own knob, translated AFTER
+    the clear -- turns them on.
     """
 
     launcher = _LAUNCHER.read_text(encoding="utf-8")
@@ -1686,11 +1696,20 @@ def test_the_qua_flags_are_not_stripped_by_the_launcher() -> None:
     unset_vars = set(re.findall(r"[A-Z_][A-Z0-9_]*", unset_match.group(1)))
 
     for flag in ("ASK_DEV_QUA_SHADOW_ENABLED", "ASK_DEV_QUA_COMMIT_ENABLED"):
-        assert flag not in unset_vars, (
-            f"{flag} must NOT be in the launcher's unset list -- unsetting it "
-            "strips the operator's own export and makes an armed QUA run "
-            "impossible. It needs no triage there regardless: ASK_DEV_-"
-            "namespaced vars are bucket (c) of "
-            "test_launcher_hardens_compose_interpolation_env_for_every_var_"
-            "it_boots."
+        assert flag in unset_vars, (
+            f"{flag} must be CLEARED by the launcher. It is exported by "
+            "ops/.env and reaches every shell under the ops tree via direnv, "
+            "so leaving it to pass through arms every acceptance stack "
+            "booted from a developer shell."
         )
+
+    assert "ASK_DEV_ACCEPTANCE_QUA" in launcher, (
+        "the launcher must own a one-shot opt-in; clearing the flags without "
+        "one leaves no way to arm a QUA run at all"
+    )
+
+    # Ordering is the whole guarantee: translated AFTER the clear, or the
+    # clear removes what the translation just set.
+    assert launcher.index("\nunset \\\n") < launcher.index(
+        "export ASK_DEV_QUA_SHADOW_ENABLED="
+    ), "the opt-in translation must run AFTER the unset block, not before"

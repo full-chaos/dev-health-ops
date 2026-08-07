@@ -51,7 +51,7 @@ Assignments and evidence live in code at
 | Q | Question | Class | Deciding evidence |
 |---|---|---|---|
 | Q1 | What did we try last time this CI failure occurred? | **(c)** | `acr/internal/storage/interfaces.go:85-91` — no episode list method; `acr/internal/api/app.go:77` — POST-only route |
-| Q2 | What was blocking Project X on July 15, and what changed since? | **(b)** | `ops/.../native_status_change.py:369-379`; `ops/.../014_work_graph.sql:5-15` (projects RMT, `updated_at` not in ORDER BY); `014_work_graph.sql:6-22` (edges have no `valid_to`) |
+| Q2 | What was blocking Project X on July 15, and what changed since? | **(b)** — result must cite CHAOS-3563 state | `ops/.../native_status_change.py:369-379`; `ops/.../014_work_graph.sql:5-15` (projects RMT, `updated_at` not in ORDER BY); `014_work_graph.sql:6-22` (edges have no `valid_to`) |
 | Q3 | Which decision superseded the original deployment design? | **(c)** | `ops/.../work_graph/models.py:37-84` — closed 30-member `EdgeType` enum, no `supersedes` |
 | Q4 | Show prior agent attempts touching this subsystem and outcomes. | **(c)** | `acr/internal/storage/interfaces.go:85-91`; `acr/internal/sidecar/config.go:194` (`ACR_ENABLE_WRITEBACK` default `false`) |
 | Q5 | Which current project facts conflict with earlier evidence? | **(c)** | `ops/.../014_work_graph.sql:6-22` — RMT key omits `discovered_at`, so the prior version is gone |
@@ -67,6 +67,15 @@ extraction-capable arm regardless of merit**. That is not an argument to change
 the questions — they are the questions the product wants answered — it is the
 concrete reason §15.2's per-class reporting requirement is load-bearing rather
 than procedural.
+
+**Class (b) carries a dependency the ADR must record.** Any class-(b) result
+is uninterpretable without stating which state of **CHAOS-3563**
+(declared-state retention, in flight in lane-ops-pretrial) it was measured
+against: "the baseline scored 0 on class (b)" means one thing before that
+lands and something else after. The harness enforces this — an unrecorded
+dependency renders class (b) **NOT COMPARABLE** rather than emitting a number
+(`harness/runner.py`, `DependencyState`). The branch state is obtained through
+the orchestrator, not by reading that lane's worktree.
 
 Two questions straddle classes and the ADR must not hide the split:
 

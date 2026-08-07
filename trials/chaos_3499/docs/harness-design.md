@@ -66,29 +66,85 @@ and poll is strictly worse for lag measurement.
 
 ---
 
-## 3. The four arms
+## 3. Baseline versus candidate arms
 
-The PRD names three. The amendment adds episode readback as a **named** arm,
-and that separation is the single most important measurement decision in the
-trial: without it, ordinary readback value is bundled into Graphiti's score
-and the ADR cannot tell whether the graph earned anything.
+Amended §14 restructured the native work as **pre-trial increments feeding a
+native baseline** — not as a late-arriving competing entrant. The trial
+therefore reports **baseline vs Graphiti arm vs direct-store arm**, and the
+comparison maps 1:1 onto the amended PRD.
+
+### 3.1 The baseline (what the graph must beat)
+
+Two components, composed into one baseline before any candidate is scored:
+
+| Component | What it is | Built by |
+|---|---|---|
+| **Native increments** | The four §14 pre-trial increments, queried through existing ops/ACR paths | CHAOS-3562/3563/3564/3565 — **other lanes, not this one** |
+| **Episode readback** | Plain `agent_episodes` list-by-repo/task/file-overlap, zero graph infrastructure | CHAOS-3564 |
+
+Composition rule (`runner.compose_baseline`), per oracle:
+
+- **any component passes → the baseline passes.** The baseline is what the
+  product can already do, and it can do it if any of its parts can.
+- otherwise **any component unmeasured → the baseline is NOT MEASURED.**
+  Recording FAIL here would assert the product cannot answer something nobody
+  asked it, and a candidate would then be credited with beating a baseline
+  that was never run.
+- otherwise → FAIL.
+
+Episode readback is a **baseline component, not a candidate**. That placement
+is the single most important measurement decision in the trial:
+`EpisodeArtifacts.FilesTouched/TestsRun` (`acr types.go:336-340`) is already
+structured, so if plain readback answers Q4, the graph's margin there is
+**zero**. Scoring readback as a peer entrant would let Graphiti be compared
+against native alone and take credit for value ordinary readback already
+delivers.
+
+### 3.2 The candidate arms
 
 | Arm | What it is | What it isolates |
 |---|---|---|
-| **N — native** | The four §14 pre-trial increments, queried directly through ops/ACR paths. Built by other lanes (CHAOS-3562/3563/3564/3565), *not* by this lane. | The class (a) control. Per §15.2 native should win or tie on class (a); if it does not, the finding is about the harness. |
-| **E — episode readback** | Plain `agent_episodes` list-by-repo/task/file-overlap, zero graph infrastructure. | The counterfactual for Q4. `EpisodeArtifacts.FilesTouched/TestsRun` (`acr types.go:336-340`) is already structured — if readback answers Q4, the graph's margin there is **zero**. |
-| **G — Graphiti** | Graphiti over an approved backend, Dev Health authorization and provenance kept outside Graphiti. | Cross-episode association: the actual differentiator. |
-| **D — direct** | Dev Health-specific schema on the same backend, no Graphiti abstractions. | Separates "a temporal graph helps" from "Graphiti helps". |
+| **Graphiti** | Graphiti over an approved backend, Dev Health authorization and provenance kept outside Graphiti | Cross-episode association: the actual claimed differentiator |
+| **Direct store** | Dev Health-specific schema on the same backend, no Graphiti abstractions | Separates "a temporal graph helps" from "Graphiti helps" |
 
-Each arm ships exactly one adapter: `Arm(oracle) -> ArmResponse`. That adapter
-is the only arm-specific code an oracle ever sees, which is what makes one
-oracle comparable across four arms.
+Each candidate produces one `ComparisonReport` against the composed baseline,
+scored **per question class** as a delta. There is deliberately no flat league
+table: ranking four peers side by side would let a candidate "win" a class by
+placing above one baseline component while losing to the baseline as a whole,
+which is exactly the comparison the ADR must not make. `ComparisonReport`
+exposes no single headline number, and a test asserts it never grows one —
+with this question set weighted (a)×1 (b)×1 (c)×5, one number would flatter
+any extraction-capable candidate regardless of merit.
 
-**Registration is total.** An arm that cannot run must still be registered —
-`ArmRegistry.register_unavailable(name, reason)` — so it appears in the report
-as `NOT MEASURED` rather than as a column nobody notices is missing.
+### 3.3 Two invariants the report enforces itself
 
----
+**Class (a) control.** Per §15.2 the baseline must win or tie on
+natively-answerable questions. `ComparisonReport.native_control_holds()`
+checks it, and `render()` shouts when it fails: *"treat every other row in
+this report as unexplained until this is resolved"*. A candidate outscoring
+the baseline on class (a) has almost certainly been handed an advantage the
+baseline did not get.
+
+**Class (b) dependency state.** Class (b) results are uninterpretable without
+recording which state of **CHAOS-3563** they ran against — "the baseline
+scored 0 on class (b)" means something entirely different before and after
+declared-state retention lands. `DependencyState` carries that, defaults to
+`UNRECORDED_DEPENDENCY`, and an unrecorded class (b) renders **NOT
+COMPARABLE** rather than emitting a number whose meaning the report does not
+carry.
+
+CHAOS-3563 is in flight in lane-ops-pretrial. Its branch state is obtained
+**through the orchestrator**, not by reading that lane's worktree — an
+uncommitted working tree is not a state anyone can cite in an ADR.
+
+### 3.4 Registration is total
+
+An arm that cannot run must still be registered
+(`ArmRegistry.register_unavailable`) so it appears as an unmeasured row rather
+than a column nobody notices is missing. Each arm ships exactly one adapter,
+`Arm(oracle) -> ArmResponse` — the only arm-specific code an oracle ever sees,
+which is what makes one oracle comparable across the baseline and both
+candidates.
 
 ## 4. What the harness already enforces (built, green, mutation-checked)
 
@@ -104,6 +160,11 @@ as `NOT MEASURED` rather than as a column nobody notices is missing.
 | A coverage gap must be *declared*; silent emptiness fails | `Oracle._assert_coverage` |
 | Every fault mode is caught by the assertion that claims to catch it | `test_fault_mode_is_caught_by_its_own_assertion` |
 | No fault mode is inert across the whole corpus | `test_every_fault_mode_applies_to_at_least_one_oracle` |
+| The baseline is composed from its components before any candidate is scored; candidate arms can never be folded into it | `runner.compose_baseline`, `runner.compare`, `test_both_baseline_components_are_registerable_as_baseline` |
+| A baseline component that was never run degrades the baseline to NOT MEASURED, never to FAIL | `test_unmeasured_component_never_becomes_a_baseline_failure` (paired with a fully-measured control that must still record real FAILs) |
+| Class (b) renders NOT COMPARABLE until CHAOS-3563's branch state is recorded | `DependencyState`, `UNRECORDED_DEPENDENCY`, `test_class_b_is_not_comparable_until_chaos_3563_state_is_recorded` |
+| A class (a) control failure is shouted, not buried under a positive delta | `ComparisonReport.native_control_holds`, `test_class_a_control_failure_is_shouted_not_buried` |
+| No single headline number is reachable from a comparison report | `test_report_never_emits_a_single_headline_number` |
 
 **Mutation-verified**, not merely asserted. Three defects planted in
 `harness/oracle.py`, each killed, each dying in the right guard:
@@ -113,8 +174,18 @@ as `NOT MEASURED` rather than as a column nobody notices is missing.
 | `must_include` always passes | KILLED (63 failures) | `test_fault_mode_is_caught_by_its_own_assertion`, `test_direction_reversal_is_not_a_near_miss`, `test_invalidation_provenance_cannot_be_laundered`, `test_axis_pair_cannot_both_pass_with_one_answer` |
 | `NOT_MEASURED` reads as success | KILLED (22 failures) | `test_measurement_never_ran_fails_every_oracle`, `test_not_measured_is_not_silently_equal_to_pass` |
 | Direction ignored in identity match | KILLED (17 failures) | `test_direction_reversal_is_not_a_near_miss` |
+| Unmeasured baseline component folds to FAIL | KILLED | `test_unmeasured_component_never_becomes_a_baseline_failure` |
+| Class-(b) dependency state ignored in comparability | KILLED | `test_class_b_is_not_comparable_until_chaos_3563_state_is_recorded` |
+| Class (a) control always reports "holds" | KILLED | `test_class_a_control_failure_is_shouted_not_buried` |
+| Candidate arms folded into the baseline | KILLED | `test_compare_requires_at_least_one_baseline_component`, `test_class_a_control_failure_is_shouted_not_buried` |
 
-The suite currently reports **204 passed, 136 skipped**. The skips are
+A seventh mutation attempt was recorded **INVALID**, not killed: its anchor no
+longer matched after `ruff format` rewrapped the line, so the mutated file was
+never built. It was re-run against the correct anchor (the "candidate arms
+folded into the baseline" row above). A mutation that does not apply proves
+nothing and must never be counted as a kill.
+
+The suite currently reports **217 passed, 136 skipped**. The skips are
 fault×oracle pairs where the fault is genuinely inapplicable; they are
 reported rather than hidden, and the inert-fault guard fails if any fault is
 inapplicable *everywhere*.
@@ -278,10 +349,13 @@ Stated rather than left for a reviewer to find:
    is one command, and the trial report records whether it happened. Ruff
    *does* cover `trials/` (no exclusion), so lint and format are enforced.
 2. **The rebuild gate has no operational definition yet** (CHAOS-3500).
-3. **Arm N depends on other lanes.** If CHAOS-3563/3564/3565 have not landed
-   when the trial runs, the class (a) and (b) results measure a *pre-increment*
-   native arm and the ADR must say so — otherwise the graph is credited with
-   beating a baseline that was never built.
+3. **The baseline depends on other lanes.** Its components are built by
+   CHAOS-3562/3563/3564/3565, not here. If they have not landed when the trial
+   runs, class (a) and (b) measure a *pre-increment* baseline and the ADR must
+   say so — otherwise a candidate is credited with beating a baseline that was
+   never built. The harness refuses to render class (b) as comparable until
+   CHAOS-3563's state is recorded, but it cannot detect a silently
+   pre-increment class (a); that one is on the person writing the ADR.
 4. **Per-org ingestion coverage is unmeasured** pending an authorized
    environment; `deployments.v1` staleness is UNVERIFIED, not assumed.
 5. **The `entitlements` cache** (`acr/internal/entitlements/cache.go`) is a

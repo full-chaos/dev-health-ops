@@ -87,6 +87,14 @@ EVALUATION_QUESTIONS: tuple[EvaluationQuestion, ...] = (
             "gap needs its own disposition in the ADR."
         ),
         split_note=(
+            "CLASS (b) DEPENDENCY: any class-(b) result must record which "
+            "state of CHAOS-3563 (declared-state retention, in flight in "
+            "lane-ops-pretrial) it was measured against -- see "
+            "harness.runner.DependencyState. A score taken before that lands "
+            "measures a pre-increment baseline and means something different "
+            "from one taken after. Obtain the branch state through the "
+            "orchestrator; an uncommitted working tree in another lane is not "
+            "a state anyone can cite in an ADR. "
             "'What changed since' is class (a): work_item_transitions keeps "
             "occurred_at in its sorting key "
             "(009_raw_work_items.sql:30-42, 027_add_org_id_to_sorting_keys.py:"

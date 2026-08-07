@@ -9,6 +9,7 @@ canonical single-job workflow rather than the old job graph.
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -185,3 +186,47 @@ def test_docs_guards_does_not_run_external_network_or_visual_contracts() -> None
     assert "screenshot" not in run_scripts
     assert "visual regression" not in run_scripts
     assert "exact prose" not in run_scripts
+
+
+# --------------------------------------------------------------------------
+# CHAOS-3514, chris ruling: gate the scripts, keep the tests.
+#
+# `check_code_prerequisites.py` and `check_freshness_inventory.py` had unit
+# tests in this directory but their scripts ran only from Makefile targets --
+# never in CI. The tests proved the scripts WORK; nothing proved the property
+# each enforces was actually checked on a PR. These guards close that, and
+# fail if either drops back out of the workflow.
+# --------------------------------------------------------------------------
+
+NEWLY_GATED_CHECKS = (
+    ("Check code prerequisites", "scripts/check_code_prerequisites.py"),
+    ("Check freshness inventory", "scripts/check_freshness_inventory.py"),
+)
+
+
+@pytest.mark.parametrize(("step_name", "script"), NEWLY_GATED_CHECKS)
+def test_newly_gated_docs_scripts_are_invoked_by_the_workflow(
+    step_name: str, script: str
+) -> None:
+    run_by_name = {
+        str(step.get("name", "")): str(step.get("run", "")) for step in _docs_steps()
+    }
+    assert step_name in run_by_name, (
+        f"{step_name!r} is no longer a step in docs-guards.yml -- "
+        f"{script} would be back to running only from a Makefile target, "
+        "which no PR executes"
+    )
+    assert script in run_by_name[step_name], (
+        f"the {step_name!r} step no longer invokes {script}"
+    )
+    # Same streaming contract the pre-existing checks carry: without
+    # `pipefail` a failing script upstream of `tee` exits 0 and the step
+    # passes green.
+    assert "set -o pipefail" in run_by_name[step_name]
+    assert "tee" in run_by_name[step_name]
+
+
+def test_the_gated_script_inventory_is_not_empty() -> None:
+    # Rule 4: an emptied tuple would make every parametrised case above
+    # vanish and the file would report green having asserted nothing.
+    assert NEWLY_GATED_CHECKS

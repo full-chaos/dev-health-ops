@@ -230,8 +230,15 @@ class SpanMatch:
     information had to be re-derived and the re-derivation was wrong. This
     type is that provenance, carried rather than re-derived.
 
-    Both fields are computed together, from the same span, so a consumer can
-    never pair a class from one query with a coverage count from another.
+    All three fields are computed together, from the same span, so a consumer
+    can never pair a class from one query with a coverage count from another.
+
+    ``match_class`` describes the match; the two fields beneath it are the
+    independent CORROBORATIONS a consumer can weigh. They are kept separate
+    from the class on purpose: ``match_class`` collapses a span that qualifies
+    two ways down to the most specific one, and a policy that needs to know
+    whether the OTHER way also held cannot recover it from the collapsed
+    value. ``qua_promotion`` needs exactly that -- see ``is_acronym_of_label``.
     """
 
     match_class: SpanMatchClass
@@ -239,10 +246,53 @@ class SpanMatch:
     #: match that shares no word with the label at all -- which is the normal
     #: case for ``ACRONYM``, where the span is initials rather than words.
     label_tokens_covered: int
+    #: Whether the span is ALSO derivable as an acronym of the label, computed
+    #: independently of ``match_class`` and therefore still true for a span
+    #: that ``match_class`` reports as ``ALIAS``.
+    #:
+    #: That overlap is the whole reason this field exists. A parenthetical is a
+    #: literal fragment of the label, so it wins the class -- but "(MWA)" on
+    #: "Meridian Web Application (MWA)" is ALSO the acronym of the primary
+    #: name, while "(Legacy)" on "Payments (Legacy)" is not the acronym of
+    #: anything. The label itself corroborates the first and says nothing about
+    #: the second, and this module's docstring records that the difference
+    #: between an alternate NAME and a mere QUALIFIER is real and that no
+    #: catalog field marks it. Acronym derivability is the structural
+    #: distinction the schema does not supply.
+    is_acronym_of_label: bool = False
+
+
+#: Articles, excluded from ``label_tokens_covered`` on BOTH sides.
+#:
+#: This is not a stopword list and not a judgment about which words are
+#: "boilerplate" -- this module refuses that guess for acronym windows and the
+#: refusal stands. It repairs an ASYMMETRY that already exists in the
+#: pipeline: ``question_interpreter`` strips a leading article from a mention
+#: span, so the span side arrives article-free, while the catalog label side
+#: never does. Counting a label's article as content the user "accounted for"
+#: therefore measures a difference between two normalizations rather than
+#: anything the user said.
+#:
+#: The asymmetry is not even consistent on the span side, which is how it was
+#: found: "the Platform Team" yields the span "Platform", but "The Platform
+#: Team" -- capitalised, so the extractor keeps it -- yields "The Platform".
+#: The second covers ``{the, platform}`` of "The Platform Team" and would
+#: clear a two-token bound having named ONE word of the entity, with the
+#: entity's own distinguishing token ("Team") dropped by the extractor.
+#: Reported by adversarial review (codex, HIGH) and reproduced before fixing.
+#:
+#: Deliberately articles ONLY, a closed grammatical class -- not prepositions,
+#: not conjunctions, not "platform"/"service"/"team". Anything beyond this is
+#: the salience guess the module docstring rules out.
+_ARTICLES = frozenset({"the", "a", "an"})
 
 
 def _distinct_tokens(text: str) -> frozenset[str]:
     return frozenset(word.casefold() for word in _words(text))
+
+
+def _distinct_content_tokens(text: str) -> frozenset[str]:
+    return _distinct_tokens(text) - _ARTICLES
 
 
 def classify_span_match(*, span: str, label: str) -> SpanMatch:
@@ -270,21 +320,44 @@ def classify_span_match(*, span: str, label: str) -> SpanMatch:
     forms), so an id-shaped span does not reach this function on the paths
     that read the result. Should that population ever widen, this is the line
     that needs an identifier class of its own.
+
+    **Two tokenizer limits, both fail-closed, both stated rather than
+    discovered later.** ``_WORD`` is ASCII-only and treats an internal hyphen
+    as part of one word. So a non-Latin label ("Платформа Мобильная Служба")
+    yields no tokens at all and a hyphenated span ("Dev-Health" against "Dev
+    Health Platform") yields no shared tokens -- both report
+    ``label_tokens_covered == 0``. Neither is a wrong-subject risk: zero
+    coverage REFUSES, so the affected question falls through to ranked
+    clarification instead of committing. What it costs is capability, not
+    safety -- a correct non-Latin or hyphenated partial name asks for
+    confirmation where an ASCII one would not. These are pre-existing
+    properties of ``_WORD`` (``acronym_candidates`` has always had them), not
+    introduced here, and widening them is its own ticket with its own
+    evidence. Named by adversarial review (codex, MEDIUM) and reproduced.
     """
 
     normalized_span = span.strip().casefold()
     normalized_label = label.strip().casefold()
-    span_tokens = _distinct_tokens(span)
-    covered = len({token for token in _distinct_tokens(label) if token in span_tokens})
+    span_tokens = _distinct_content_tokens(span)
+    covered = len(
+        {token for token in _distinct_content_tokens(label) if token in span_tokens}
+    )
+    forms = alias_forms(label)
+    # Computed unconditionally, NOT inside the class ladder below: a
+    # parenthetical that is also an acronym takes the ALIAS branch, and a
+    # consumer that needs the acronym fact must still be able to see it.
+    is_acronym = normalized_span in forms.acronyms
 
     if normalized_span and normalized_span == normalized_label:
         match_class = SpanMatchClass.EXACT_LABEL
+    elif normalized_span in forms.literal_aliases:
+        match_class = SpanMatchClass.ALIAS
+    elif is_acronym:
+        match_class = SpanMatchClass.ACRONYM
     else:
-        forms = alias_forms(label)
-        if normalized_span in forms.literal_aliases:
-            match_class = SpanMatchClass.ALIAS
-        elif normalized_span in forms.acronyms:
-            match_class = SpanMatchClass.ACRONYM
-        else:
-            match_class = SpanMatchClass.SUBSTRING_PARTIAL
-    return SpanMatch(match_class=match_class, label_tokens_covered=covered)
+        match_class = SpanMatchClass.SUBSTRING_PARTIAL
+    return SpanMatch(
+        match_class=match_class,
+        label_tokens_covered=covered,
+        is_acronym_of_label=is_acronym,
+    )

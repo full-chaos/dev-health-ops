@@ -153,26 +153,45 @@ QUA_COMMIT_MIN_CONFIDENCE = 0.6
 #: rather than a number edited.
 _STRUCTURALLY_DISTINGUISHING_TOKENS = 2
 
-#: The span-match classes that name an entity outright rather than brushing
-#: against its label. An exact label is the entity's whole name; a
-#: parenthetical alias and an acronym are derived forms, but each is a form of
-#: the WHOLE name rather than a fragment of it, so neither leaves
-#: distinguishing words unsaid the way a partial does.
+#: Why a bare class check is not enough, recorded because the first draft of
+#: this predicate used one and it re-opened a closed incident.
 #:
-#: Admitting alias and acronym here is what keeps CHAOS-3525's literal
-#: acceptance -- "What's the status of the ACR project" -- an auto-commit
-#: instead of a clarification round trip. It does NOT repeal
-#: ``alias_matching``'s never-auto-commit rule for the DETERMINISTIC layer:
-#: that rule stands unchanged, and this path is reached only after the
-#: deterministic layer has already declined. See ``alias_matching``'s
-#: "Amendment (CHAOS-3525)" paragraph.
-_SPAN_NAMES_THE_ENTITY = frozenset(
-    {
-        SpanMatchClass.EXACT_LABEL,
-        SpanMatchClass.ALIAS,
-        SpanMatchClass.ACRONYM,
-    }
-)
+#: The obvious rule is "admit ``EXACT_LABEL``, ``ALIAS`` and ``ACRONYM``
+#: outright; hold ``SUBSTRING_PARTIAL`` to the token bound". It admits
+#: "the Legacy project" onto ``Payments (Legacy)`` -- a slice of one, class
+#: ``ALIAS`` -- which is CHAOS-3289's incident verbatim, the one
+#: ``alias_matching``'s docstring exists to warn about. Verified by execution
+#: against a catalog holding ``Payments (Legacy)`` and ``Reports (Archived)``:
+#: both committed, while "the Payments project" -- the entity's actual primary
+#: name -- was refused. Admitting the qualifier and refusing the real name is
+#: the shape of the bug.
+#:
+#: ``alias_matching`` states that nothing in the catalog schema distinguishes a
+#: parenthetical that is an alternate NAME ("(Context Fabric)") from one that
+#: is a QUALIFIER ("(Legacy)", "(Archived)"). No schema field marks it -- but
+#: derivation does: "MWA" is the acronym of "Meridian Web Application", and
+#: "Legacy" is the acronym of nothing. So the label CORROBORATES the first and
+#: says nothing about the second, and corroboration is the thing to require.
+#:
+#: Hence ``_structurally_admissible``'s clause 3 asks for one of:
+#:
+#: * the span IS the label (``EXACT_LABEL``); or
+#: * the label derives the span as an acronym
+#:   (``SpanMatch.is_acronym_of_label`` -- always true for ``ACRONYM``, and
+#:   true for the alias forms that are real short names); or
+#: * the span covers ``_STRUCTURALLY_DISTINGUISHING_TOKENS`` of the label.
+#:
+#: which is one rule over both derived classes rather than a table of them,
+#: and needs no list of "qualifier words" -- a list would itself be a guess
+#: about which words don't count, the fabrication risk ``alias_matching``
+#: already refuses for acronym windows.
+#:
+#: This does NOT repeal ``alias_matching``'s never-auto-commit rule for the
+#: DETERMINISTIC layer: that rule stands unchanged, and this path is reached
+#: only after the deterministic layer has declined. See that module's
+#: "Amendment (CHAOS-3525)" paragraph. It does keep CHAOS-3525's literal
+#: acceptance -- "the ACR project" and "the MWA project" both clear the
+#: acronym-derivation arm.
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,7 +282,14 @@ def _structurally_admissible(assessment: QUAShadowMentionAssessment) -> bool:
         # one that does not reached here from a path with no span to classify,
         # and an unclassified match is not an admissible one.
         return False
-    if span_match.match_class in _SPAN_NAMES_THE_ENTITY:
+    if span_match.match_class is SpanMatchClass.EXACT_LABEL:
+        return True
+    # A derived span -- a parenthetical alias, an acronym, or a fragment -- is
+    # admissible only where the LABEL ITSELF corroborates it. Two independent
+    # corroborations, and either suffices; see the comment block above
+    # ``_STRUCTURALLY_DISTINGUISHING_TOKENS`` for why a class check alone is
+    # not one of them.
+    if span_match.is_acronym_of_label:
         return True
     return span_match.label_tokens_covered >= _STRUCTURALLY_DISTINGUISHING_TOKENS
 

@@ -5,22 +5,30 @@ module proves the three together do the job the ticket claims: refuse every
 false positive the calibration sweep actually observed, and admit every
 positive shape it measured.
 
-**What is replayed and what is pinned.** The sweep
-(``/tmp/sweep_3539.py``, 336 provider calls, raw rows archived at
-``.remember/chaos-3539-sweep-data.jsonl``) drove the real
-``QuestionUnderstandingShadow.evaluate()`` against a fixed synthetic catalog
-of eight authorized entities. Everything about it EXCEPT the provider call is
-deterministic, so this module re-executes that part live -- the real
-``QuestionInterpreter``, the real ``ScopeResolutionService.search``, the real
-``_shortlist`` and ``_combine_shortlists`` -- and computes each mention's
-authorized slice from production code with ZERO provider calls. Only two
-things are pinned constants: the probe table (transcribed from the sweep
-script) and ``committed_in_sweep`` (counted from the archived rows).
+**What is replayed and what is measured.** The sweep (336 provider calls)
+drove the real ``QuestionUnderstandingShadow.evaluate()`` against a fixed
+synthetic catalog of eight authorized entities. Everything about it EXCEPT the
+provider call is deterministic, so this module re-executes that part live --
+the real ``QuestionInterpreter``, the real ``ScopeResolutionService.search``,
+the real ``_shortlist`` and ``_combine_shortlists`` -- and computes each
+mention's authorized slice from production code with ZERO provider calls.
 
-That split is the point. The measured half is what a model DID; the replayed
-half is what the predicate reads. If the predicate's inputs ever stop being
-derivable from production code, this test stops running rather than quietly
-passing on stored answers.
+The model's half is not restated, it is READ: the sweep's raw rows are
+vendored at ``fixtures/chaos_3539_sweep.jsonl`` and every commit count comes
+out of them. An earlier revision transcribed those counts into constants
+beside the table, which meant the "measured" assertion compared two constants
+to each other; adversarial review (codex, MEDIUM) named it and this is the
+repair.
+
+Both halves are bounded so neither can go quiet:
+
+* every probe's expected SLICE SIZE is pinned, not just the interesting two,
+  so a world that stopped resolving fails instead of presenting 30 automatic
+  refusals as a clean sheet;
+* the probe set is checked against the archive in BOTH directions;
+* the archive itself is checked to be the run the ticket describes (336 rows,
+  42 probes, 8 repeats each);
+* a missing or empty archive raises rather than skips.
 
 **The world is the sweep's world, not the acceptance world.** ``BASE`` below
 is transcribed verbatim from the sweep script and differs from
@@ -34,6 +42,9 @@ world; they are not.
 """
 
 from __future__ import annotations
+
+import json
+import pathlib
 
 import pytest
 
@@ -106,25 +117,69 @@ _INJECTION_QUESTIONS = {
     ),
 }
 
-#: ``(probe_id, mention, committed_in_sweep)`` -- one row per probe, 8 repeats
-#: each. ``committed_in_sweep`` is the number of repeats in which the model
-#: returned ``outcome=resolved`` with an entity that survived ``_verify``,
-#: counted from the archived JSONL. For a NEGATIVE that count is a false
-#: positive; for a POSITIVE it is a correct commit the predicate must not
-#: destroy.
+#: The sweep's raw rows, vendored so this test measures the real thing.
+#:
+#: The archive originally lived outside the repository
+#: (``.remember/chaos-3539-sweep-data.jsonl``), which meant a CI checkout
+#: could not read it and the commit counts had to be transcribed into
+#: constants. Adversarial review (codex, MEDIUM) pointed out what that bought:
+#: a test whose "measured" half was an assertion that two constants matched
+#: each other. Byte-identical copy (sha256
+#: 2460654b648347daf250d867697e22d86097c3796596f94a092c51d589b81014), so the
+#: counts below are DERIVED from the measurement rather than restated.
+_ARCHIVE = pathlib.Path(__file__).parent / "fixtures" / "chaos_3539_sweep.jsonl"
+
+
+def _archive_rows() -> list[dict[str, object]]:
+    """Every archived sweep row, or a loud failure.
+
+    Never a skip and never an empty list treated as success: this file IS the
+    evidence, and a run that cannot read it has measured nothing.
+    """
+
+    if not _ARCHIVE.exists():  # pragma: no cover - defended, not expected
+        raise AssertionError(f"CHAOS-3539 sweep archive missing at {_ARCHIVE}")
+    rows = [
+        json.loads(line) for line in _ARCHIVE.read_text().splitlines() if line.strip()
+    ]
+    if not rows:  # pragma: no cover - defended, not expected
+        raise AssertionError(f"CHAOS-3539 sweep archive is empty at {_ARCHIVE}")
+    return rows
+
+
+def _commits_by_probe() -> dict[str, int]:
+    """Per probe, how many repeats produced a verified selection."""
+
+    counts: dict[str, int] = {}
+    for row in _archive_rows():
+        probe_id = str(row["probe_id"])
+        counts.setdefault(probe_id, 0)
+        if row.get("selected"):
+            counts[probe_id] += 1
+    return counts
+
+
+#: ``(probe_id, mention, expected_slice_size)``.
+#:
+#: ``expected_slice_size`` is what the REPLAY must reproduce -- the number of
+#: authorized entities the span matches in ``BASE``. Pinning it for every
+#: probe, not only the interesting two, is what stops this corpus from passing
+#: vacuously: a negative with an empty slice is refused automatically, so
+#: without these numbers a seeding or interpreter regression that emptied the
+#: world would present 30 refusals as a clean sheet (codex, MEDIUM).
 POSITIVES: tuple[tuple[str, str, int], ...] = (
-    ("pos.acr.bare", "ACR", 4),
-    ("pos.acr.project", "the ACR project", 7),
-    ("pos.mwa.bare", "MWA", 7),
-    ("pos.mwa.project", "the MWA project", 7),
-    ("pos.ctxfab.bare", "Context Fabric", 4),
-    ("pos.ctxfab.project", "the Context Fabric project", 8),
-    ("pos.mwa.longlabel", "the Meridian Web Application project", 6),
-    ("pos.mwa.partial", "the Web Application project", 8),
-    ("pos.ground.team", "the Ground Control team", 7),
-    ("pos.ground.formal", "the Platform Reliability team", 8),
-    ("pos.mobile.full", "the Platform Mobile Squad team", 5),
-    ("pos.mobile.partial", "the Mobile Squad team", 8),
+    ("pos.acr.bare", "ACR", 1),
+    ("pos.acr.project", "the ACR project", 1),
+    ("pos.mwa.bare", "MWA", 1),
+    ("pos.mwa.project", "the MWA project", 1),
+    ("pos.ctxfab.bare", "Context Fabric", 1),
+    ("pos.ctxfab.project", "the Context Fabric project", 1),
+    ("pos.mwa.longlabel", "the Meridian Web Application project", 1),
+    ("pos.mwa.partial", "the Web Application project", 1),
+    ("pos.ground.team", "the Ground Control team", 1),
+    ("pos.ground.formal", "the Platform Reliability team", 1),
+    ("pos.mobile.full", "the Platform Mobile Squad team", 1),
+    ("pos.mobile.partial", "the Mobile Squad team", 1),
 )
 
 NEGATIVES: tuple[tuple[str, str, int], ...] = (
@@ -133,10 +188,10 @@ NEGATIVES: tuple[tuple[str, str, int], ...] = (
     ("neg.corpus.nomatch.3", "the Ask Dev Rollout project", 0),
     ("neg.corpus.deleted.1", "the Legacy Billing project", 0),
     ("neg.corpus.deleted.2", "Legacy Billing", 0),
-    ("neg.corpus.ambiguous.1", "the Atlas repository", 0),
-    ("neg.corpus.ambiguous.2", "Atlas", 0),
+    ("neg.corpus.ambiguous.1", "the Atlas repository", 2),
+    ("neg.corpus.ambiguous.2", "Atlas", 2),
     ("neg.corpus.ambiguous.3", "the Atlas project", 0),
-    ("neg.corpus.cohort.1", "the Meridian repositories", 0),
+    ("neg.corpus.cohort.1", "the Meridian repositories", 4),
     ("neg.A1", "the Ground Control repository", 0),
     ("neg.A2", "the MWA team", 0),
     ("neg.A3", "the Context Fabric team", 0),
@@ -147,9 +202,9 @@ NEGATIVES: tuple[tuple[str, str, int], ...] = (
     ("neg.B3", "the Meridian Mobile Application project", 0),
     ("neg.B4", "the Meridian API Gateway V2 project", 0),
     ("neg.B5", "the Platform Observability team", 0),
-    ("neg.C1", "Meridian", 4),
-    ("neg.C2", "the Meridian projects", 8),
-    ("neg.C3", "the Platform team", 0),
+    ("neg.C1", "Meridian", 5),
+    ("neg.C2", "the Meridian projects", 1),
+    ("neg.C3", "the Platform team", 2),
     ("neg.D1", "the Rotated Service repository", 0),
     ("neg.D2", "the Rotated Service project", 0),
     ("neg.D3", "the Prior Turn Subject project", 0),
@@ -160,8 +215,8 @@ NEGATIVES: tuple[tuple[str, str, int], ...] = (
     ("neg.F3", "the Sibling Only Private Repo project", 0),
 )
 
-#: The 12 false positives, by probe. Pinned as a total so a change that
-#: silently drops a probe from ``NEGATIVES`` cannot also drop its FPs.
+#: The 12 false positives CHAOS-3539 measured, and the two probes they came
+#: from. Both are checked against the archive rather than against the table.
 OBSERVED_FALSE_POSITIVES = 12
 
 
@@ -219,20 +274,28 @@ def _assessment(
     )
 
 
-@pytest.mark.parametrize(("probe_id", "mention", "committed"), NEGATIVES)
+@pytest.mark.parametrize(("probe_id", "mention", "expected_slice"), NEGATIVES)
 async def test_every_sweep_negative_is_refused_at_maximum_confidence(
-    probe_id: str, mention: str, committed: int
+    probe_id: str, mention: str, expected_slice: int
 ) -> None:
     """No negative shape is admissible, for ANY entity its span matched.
 
     The proposal is synthesized at confidence 1.0 against every candidate in
     the slice, not only the one the model happened to pick. That is stricter
-    than the sweep: it asks whether the shape could have committed at all,
+    than the sweep: it asks whether the shape COULD have committed at all,
     rather than whether this model did.
+
+    The slice size is asserted first, so a probe whose world stopped
+    resolving fails here instead of passing as a refusal it never earned.
     """
 
-    del committed
-    for span, authorized_slice in await _slices(probe_id, mention):
+    slices = await _slices(probe_id, mention)
+    total = sum(len(authorized_slice) for _, authorized_slice in slices)
+    assert total == expected_slice, (
+        f"{probe_id} ({mention!r}) replayed a slice of {total}, expected "
+        f"{expected_slice}; the replay no longer reproduces the sweep's world"
+    )
+    for span, authorized_slice in slices:
         for candidate in authorized_slice:
             assert not _structurally_admissible(
                 _assessment(span, authorized_slice, candidate)
@@ -242,22 +305,25 @@ async def test_every_sweep_negative_is_refused_at_maximum_confidence(
             )
 
 
-@pytest.mark.parametrize(("probe_id", "mention", "committed"), POSITIVES)
+@pytest.mark.parametrize(("probe_id", "mention", "expected_slice"), POSITIVES)
 async def test_every_sweep_positive_is_still_admissible(
-    probe_id: str, mention: str, committed: int
+    probe_id: str, mention: str, expected_slice: int
 ) -> None:
     """Each positive shape's single candidate remains promotable.
 
-    ``committed`` is carried so the pinned table cannot silently lose a row:
-    every positive did commit at least once in the measured run, so a zero
-    here means the transcription is wrong, not that the model declined.
+    Also checked against the ARCHIVE rather than a transcribed count: every
+    positive committed at least once in the measured run, so a zero means the
+    replay drifted from the measurement, not that the model declined.
     """
 
-    assert committed > 0, f"{probe_id} is listed as a positive but never committed"
+    committed = _commits_by_probe()
+    assert committed.get(probe_id, 0) > 0, (
+        f"{probe_id} is replayed as a positive but the archive records no commit for it"
+    )
     slices = await _slices(probe_id, mention)
     assert slices, f"{probe_id}: the interpreter extracted no mention at all"
     for span, authorized_slice in slices:
-        assert len(authorized_slice) == 1, (
+        assert len(authorized_slice) == expected_slice == 1, (
             f"{probe_id} ({span!r}) resolved to a slice of {len(authorized_slice)}; "
             "a positive shape must match exactly one authorized entity"
         )
@@ -421,14 +487,59 @@ async def test_verify_fills_the_slice_from_the_catalog_not_from_the_proposal() -
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_the_pinned_false_positive_total_matches_the_negative_table() -> None:
-    """The 12 false positives are 12, and they are where the ticket says.
+async def test_the_replayed_probe_set_is_exactly_the_measured_one() -> None:
+    """The corpus and the archive cover the same probes, both directions.
 
-    A guard on the table itself: if a future edit drops ``neg.C1`` or
-    ``neg.C2``, the negatives above still all pass (nothing is admitted) while
-    the corpus quietly stops covering the only two shapes that ever failed.
+    Totality in both directions, because each direction fails differently: a
+    probe in the table but not the archive is a shape this test claims was
+    measured and was not, and a probe in the archive but not the table is
+    measured evidence the corpus silently stopped replaying. Neither shows up
+    as a failure anywhere else -- every other assertion here is per-probe.
     """
 
-    committed = {probe_id: count for probe_id, _, count in NEGATIVES if count}
-    assert sum(committed.values()) == OBSERVED_FALSE_POSITIVES
+    replayed = {probe_id for probe_id, _, _ in POSITIVES + NEGATIVES}
+    measured = set(_commits_by_probe())
+
+    assert replayed - measured == set(), "replayed probes absent from the archive"
+    assert measured - replayed == set(), "archived probes no longer replayed"
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_the_false_positives_are_derived_from_the_archive_not_asserted() -> None:
+    """The 12 false positives are counted from the measurement.
+
+    This is the claim the whole ticket rests on -- "refuses all 12 observed
+    false positives" -- so it reads them out of the archived rows rather than
+    out of a constant beside it. It also pins WHERE they came from: if a
+    future edit drops ``neg.C1`` or ``neg.C2`` from the replay, every
+    remaining negative still passes while the corpus quietly stops covering
+    the only two shapes that ever failed.
+    """
+
+    negatives = {probe_id for probe_id, _, _ in NEGATIVES}
+    committed = {
+        probe_id: count
+        for probe_id, count in _commits_by_probe().items()
+        if probe_id in negatives and count
+    }
+
     assert committed == {"neg.C1": 4, "neg.C2": 8}
+    assert sum(committed.values()) == OBSERVED_FALSE_POSITIVES
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_the_archive_is_the_run_the_ticket_describes() -> None:
+    """336 rows, 42 probes, 8 repeats -- the run, not some other run.
+
+    Without this, the two tests above would happily derive their numbers from
+    a truncated or replaced archive and report the result as measured.
+    """
+
+    rows = _archive_rows()
+    probes = {str(row["probe_id"]) for row in rows}
+
+    assert len(rows) == 336
+    assert len(probes) == 42
+    assert {sum(1 for row in rows if row["probe_id"] == probe) for probe in probes} == {
+        8
+    }

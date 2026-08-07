@@ -20,15 +20,26 @@ The three clauses, and why each is here rather than tuned:
    a model picking one of them is breaking a tie it has no evidence to break.
 2. **The selection IS that one candidate.** Clause 1 without this admits a
    proposal that named something outside the single-candidate slice.
-3. **The span identifies the entity, not its family.** An exact-label, alias,
-   or acronym match names the entity outright. A partial match names it only
-   if it covers at least two of the label's tokens -- see
+3. **The span identifies the entity, not its family.** Either the span IS the
+   label, or the LABEL CORROBORATES the span -- by deriving it as an acronym,
+   or by having at least two of its content tokens accounted for. See
    ``qua_promotion._STRUCTURALLY_DISTINGUISHING_TOKENS`` for why two is a
-   structural floor rather than a tuned number.
+   structural floor rather than a tuned number, and the comment block beneath
+   it for why a bare match-class check is NOT a corroboration.
 
 The trap that makes clause 3 load-bearing, and that any slice-size-only rule
 walks into: ``neg.C2`` ("the Meridian projects") has a slice of EXACTLY ONE
 and produced 8 of the 12 observed false positives. Clause 1 admits it.
+
+Two further shapes clause 3 must refuse, both found by adversarial review
+after the first draft and both reproduced before being fixed -- a class-only
+version of clause 3 admitted the first, and counting articles as content
+admitted the second:
+
+* an uncorroborated parenthetical QUALIFIER ("the Legacy project" onto
+  ``Payments (Legacy)``) -- CHAOS-3289's incident, verbatim;
+* a label article standing in for a distinguishing token ("The Platform" onto
+  ``The Platform Team``, where the interpreter itself dropped "Team").
 """
 
 from __future__ import annotations
@@ -299,14 +310,15 @@ def test_clause_3_refuses_a_one_token_partial_in_a_slice_of_one() -> None:
         (MWA_LABEL, MWA_LABEL, SpanMatchClass.EXACT_LABEL),
     ],
 )
-def test_clause_3_admits_a_span_that_names_the_entity_outright(
+def test_clause_3_admits_a_span_the_label_itself_corroborates(
     span: str, label: str, expected_class: SpanMatchClass
 ) -> None:
-    """An exact label, a parenthetical alias, or an acronym names the entity.
+    """The label derives the span, or the span covers enough of the label.
 
     This is the clause that keeps CHAOS-3525's literal acceptance -- "the ACR
-    project" -- an auto-commit rather than a clarification round trip, which
-    a coverage rule alone would refuse (an acronym covers ZERO label tokens).
+    project" and "the MWA project" -- an auto-commit rather than a
+    clarification round trip, which a coverage rule alone would refuse (an
+    acronym covers ZERO label tokens, so it clears on the derivation arm).
     """
 
     entity = _entity(label, span=span)
@@ -315,6 +327,85 @@ def test_clause_3_admits_a_span_that_names_the_entity_outright(
     assert entity.span_match is not None
     assert entity.span_match.match_class is expected_class
     assert promotable_selection(record, deterministic_declined=True) is not None
+
+
+@pytest.mark.parametrize(
+    ("span", "label"),
+    [
+        # The CHAOS-3289 incident, verbatim from alias_matching's docstring.
+        ("Legacy", "Payments (Legacy)"),
+        ("Archived", "Reports (Archived)"),
+        ("Deprecated", "Checkout (Deprecated)"),
+    ],
+)
+def test_an_uncorroborated_parenthetical_qualifier_never_commits(
+    span: str, label: str
+) -> None:
+    """CHAOS-3289 must not re-open through the QUA door.
+
+    ``alias_matching``'s docstring records the incident: an earlier revision
+    let a unique literal-alias match commit outright, which auto-committed
+    "the Legacy project" onto whichever entity happened to carry "(Legacy)" --
+    answering about an entity the user never named. Nothing in the catalog
+    schema distinguishes an alternate NAME from a QUALIFIER.
+
+    A class-only clause 3 ("admit EXACT_LABEL, ALIAS and ACRONYM outright")
+    re-opens it exactly: slice of one, class ALIAS, admitted. Found by
+    adversarial review and by direct execution against a catalog holding
+    ``Payments (Legacy)``, where "the Legacy project" committed while "the
+    Payments project" -- the entity's real primary name -- was refused.
+
+    The requirement is CORROBORATION, and a qualifier has none: "Legacy" is
+    the acronym of nothing and covers one label token. "MWA" survives the same
+    rule because "Meridian Web Application" derives it; "Context Fabric"
+    survives because it covers two.
+    """
+
+    entity = _entity(label, span=span, canonical_id="acme/thing")
+    record = _record(authorized_slice=(entity,), selected=entity, confidence=1.0)
+
+    assert entity.span_match is not None
+    assert entity.span_match.match_class is SpanMatchClass.ALIAS
+    assert entity.span_match.is_acronym_of_label is False
+    assert entity.span_match.label_tokens_covered == 1
+    assert promotable_selection(record, deterministic_declined=True) is None
+
+
+def test_a_label_article_is_not_distinguishing_content() -> None:
+    """An article must not supply the second "distinguishing" token.
+
+    Reachable, not theoretical. For "What is the status of The Platform Team"
+    the interpreter emits the span "The Platform" -- it keeps the capitalised
+    article and drops the entity's own distinguishing token "Team". Counting
+    ``the`` as covered content makes that span clear a two-token bound having
+    named ONE word of the entity, and it commits whenever the span happens to
+    match a single authorized entity.
+
+    The defect is an asymmetry rather than a missing stopword list:
+    ``question_interpreter`` strips a leading lowercase article from a span,
+    so "the Platform Team" yields "Platform" while "The Platform Team" yields
+    "The Platform". Coverage was measuring which of the two normalizations ran.
+    """
+
+    entity = _entity("The Platform Team", span="The Platform", canonical_id="acme/plat")
+    record = _record(authorized_slice=(entity,), selected=entity, confidence=1.0)
+
+    assert entity.span_match is not None
+    assert entity.span_match.label_tokens_covered == 1
+    assert promotable_selection(record, deterministic_declined=True) is None
+
+    # The same span with the entity's real distinguishing token still commits,
+    # so this is an article rule and not a blanket refusal of the shape.
+    named = _entity("The Platform Team", span="Platform Team", canonical_id="acme/plat")
+    assert named.span_match is not None
+    assert named.span_match.label_tokens_covered == 2
+    assert (
+        promotable_selection(
+            _record(authorized_slice=(named,), selected=named),
+            deterministic_declined=True,
+        )
+        is not None
+    )
 
 
 def test_clause_3_admits_a_two_token_partial() -> None:

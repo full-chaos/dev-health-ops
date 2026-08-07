@@ -713,17 +713,40 @@ def test_the_disclosure_reaches_the_frame_a_reader_actually_sees() -> None:
     assert frame.public_outcome is PublicOutcome.ANSWERED_WITH_GAPS
 
 
-def test_the_disclosure_is_appended_once_and_never_evicts_a_warning() -> None:
-    """Idempotent, and it refuses to spend a warning slot it does not have."""
+def test_the_disclosure_is_added_once_and_keeps_every_warning_it_can() -> None:
+    """Idempotent, and it costs a producer warning only at the bound.
+
+    CHAOS-3531 CORRECTED this test, and the correction is the point. It used
+    to assert ``disclose_scope_widening(full).warnings == full.warnings`` --
+    that at the twenty-warning bound the answer came back untouched. That
+    pinned the DEFECT as intended behaviour: a run that widened to
+    organization scope could answer organization-wide with no prose
+    disclosure at all, while this ticket's own write-up claimed the widening
+    is "said out loud".
+
+    The half worth keeping is here unchanged (added once, idempotent, nothing
+    else disturbed). The half that encoded the bug is replaced by its
+    opposite: at the bound the disclosure displaces the last producer warning
+    rather than yielding to it. See ``test_chaos_3531_disclosure_bound.py``
+    for the full statement of that rule and why the trade is the right one.
+    """
 
     answer = DevAnswer.model_validate(positive_fixtures()["dev_answer.v1"])
     once = disclose_scope_widening(answer)
     twice = disclose_scope_widening(once)
     assert once.warnings == twice.warnings
-    assert once.warnings[:-1] == list(answer.warnings)
+    assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE in once.warnings
+    assert set(answer.warnings) <= set(once.warnings), (
+        "below the bound nothing a producer wrote may be lost"
+    )
 
     full = answer.model_copy(update={"warnings": [f"w{index}" for index in range(20)]})
-    assert disclose_scope_widening(full).warnings == full.warnings
+    disclosed = disclose_scope_widening(full)
+    assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE in disclosed.warnings, (
+        "the disclosure must survive a saturated warning list -- an "
+        "undisclosed widening is the defect CHAOS-3531 closed"
+    )
+    assert len(disclosed.warnings) == 20
 
 
 @pytest.mark.asyncio

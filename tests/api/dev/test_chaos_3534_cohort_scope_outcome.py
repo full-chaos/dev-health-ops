@@ -43,7 +43,10 @@ import uuid
 
 import pytest
 
-from dev_health_ops.api.dev.contracts import ScopeResolutionOutcome
+from dev_health_ops.api.dev.contracts import (
+    V1_SCOPE_LIST_LIMIT,
+    ScopeResolutionOutcome,
+)
 from dev_health_ops.api.dev.scope_service import AuthorizedEntity, EntityKind
 from tests._chaos_3292_preflight import (
     ASK_DEV_PROJECT,
@@ -345,7 +348,7 @@ async def test_a_21_repository_cohort_does_not_crash_the_terminal() -> None:
             f"meridian/repo-{index:02d}",
             f"meridian/repo-{index:02d}",
         )
-        for index in range(21)
+        for index in range(V1_SCOPE_LIST_LIMIT + 1)
     ]
     quoted = " and ".join(f'repo "{repo.canonical_id}"' for repo in repositories)
 
@@ -367,6 +370,72 @@ async def test_a_21_repository_cohort_does_not_crash_the_terminal() -> None:
         "not crash the terminal -- publishing the exact outcome is optional, "
         "keeping a coherent terminal is not"
     )
-    assert output.result.scope_resolution is not None, (
-        "and it must still publish SOME scope decision (CHAOS-3497)"
+
+    # Codex adversarial review round 2 (MEDIUM, confirmed): asserting only
+    # "not internal_error" and "some resolution exists" left the real failure
+    # mode uncovered. An implementation that TRUNCATED 21 refs into a 20-item
+    # exact scope would have satisfied both -- and that is a WORSE defect than
+    # the crash this test was written for, because it claims `exact` while
+    # silently dropping a repository the user named. This codebase's own rule
+    # is "bounds are rejections, never truncations" (subject_preflight, on the
+    # mention bound). The full contract is asserted instead.
+    resolution = output.result.scope_resolution
+    assert resolution is not None, (
+        "it must still publish SOME scope decision (CHAOS-3497)"
     )
+    assert resolution.outcome is ScopeResolutionOutcome.UNRESOLVED, (
+        "an oversized cohort keeps the frame-derived outcome -- v1 cannot "
+        f"list what it committed, so it must not claim exact. Got "
+        f"{resolution.outcome!r}."
+    )
+    assert resolution.authorized_repository_ids == [], (
+        "and it must publish NO repository list at all: a 20-item list for a "
+        "21-repository cohort is a silent truncation, which discloses a "
+        "subject set the run did not actually commit"
+    )
+    assert resolution.resolved_scope is None, (
+        "no resolved_scope either -- there is no faithful v1 scope for this "
+        "cohort, and inventing a bounded one is the same truncation by "
+        "another route"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_cohort_at_exactly_the_v1_limit_still_publishes_exact() -> None:
+    """The other half of the boundary pair.
+
+    A guard that refuses at 21 proves nothing on its own -- one written as
+    ``<`` instead of ``<=`` would also refuse at 20 and silently cost the
+    largest publishable cohort its disclosure, with no test noticing. Both
+    sides of the bound are asserted, and the values were confirmed by
+    execution rather than reasoning: 19 and 20 publish ``exact`` carrying
+    every id, 21 falls back.
+    """
+
+    repositories = [
+        AuthorizedEntity(
+            EntityKind.REPOSITORY,
+            f"meridian/repo-{index:02d}",
+            f"meridian/repo-{index:02d}",
+        )
+        for index in range(V1_SCOPE_LIST_LIMIT)
+    ]
+    quoted = " and ".join(f'repo "{repo.canonical_id}"' for repo in repositories)
+
+    output = await run_preflight_orchestrator(
+        question=f"What's the status of {quoted}?",
+        entities=[(ORG_ID, repo) for repo in repositories],
+        script_id="chaos-3534-limit-cohort",
+    )
+
+    assert output.recorder is not None
+    assert output.recorder.preflight_diagnostics == [("committed_cohort_v1_only", None)]
+
+    resolution = output.result.scope_resolution
+    assert resolution is not None
+    assert resolution.outcome is ScopeResolutionOutcome.EXACT, (
+        "a cohort of exactly V1_SCOPE_LIST_LIMIT members fits v1's lists and "
+        "must still be disclosed -- an off-by-one here costs the largest "
+        "publishable cohort its scope outcome, silently"
+    )
+    assert len(resolution.authorized_repository_ids) == V1_SCOPE_LIST_LIMIT

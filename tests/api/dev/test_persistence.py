@@ -1027,13 +1027,26 @@ async def test_backfill_stranded_ephemeral_expiry_repairs_pre_fix_rows(persisten
     it does nothing for rows already left with every run terminal and
     expires_at=NULL by the pre-fix force_terminal_fallback/
     recover_stale_non_terminal_run in production before this deploys.
-    Simulates exactly that pre-fix state directly (a raw state mutation,
-    bypassing update_run/force_terminal_fallback entirely -- those all
-    stamp now, so this is the only way to construct the stranded shape a
-    backfill needs to repair), then proves backfill_stranded_ephemeral_expiry
-    stamps it and the ordinary sweep collects it -- while leaving a
-    still-in-flight (non-terminal run) or run-less (freshly created,
-    nothing to retire) 0-day conversation untouched.
+    Simulates exactly that pre-fix state directly (a raw mutation, bypassing
+    update_run/force_terminal_fallback entirely -- those all stamp now, so
+    this is the only way to construct the stranded shape a backfill needs to
+    repair), then proves backfill_stranded_ephemeral_expiry stamps it and the
+    ordinary sweep collects it.
+
+    CHAOS-3544 REWROTE TWO ASSERTIONS HERE, deliberately and under an
+    explicit ruling. This test used to assert that a run-less 0-day
+    conversation and one with a non-terminal run were left untouched, and
+    that the run-less one still EXISTED after a sweep. Read today that looks
+    like a guarantee being deleted; it is not. Those assertions encoded
+    "nothing to retire YET" under the old model, where the only stamp was
+    run-terminal and a creation stamp did not exist. They were never a
+    decision that a 0-day conversation should be kept forever -- which is
+    exactly what they had come to certify, since neither row could ever be
+    stamped by anything.
+
+    Both are now stamped at creation (graced), so the shapes this test
+    constructs must set expires_at=None explicitly to simulate a pre-fix row
+    at all, and the backfill's own selection is by age rather than run state.
     """
     maker, org_id, _other_org_id, user_id, _other_user_id = persistence
     async with maker() as session:
@@ -1051,8 +1064,21 @@ async def test_backfill_stranded_ephemeral_expiry_repairs_pre_fix_rows(persisten
             scope_snapshot={},
         )
         # Raw mutation -- simulates the pre-fix force_terminal_fallback
-        # shape directly: terminal run, expires_at never stamped.
+        # shape directly: terminal run, expires_at never stamped. Since
+        # CHAOS-3544 stamps at creation, the stamp has to be cleared here too
+        # or this is no longer a pre-fix row.
         stranded_accepted.run.state = "failed"
+        stranded.expires_at = None
+        # ...and aged past the grace. A row genuinely stranded in production
+        # by the pre-fix code has been sitting there since before the deploy;
+        # a row created moments ago is indistinguishable from one whose turn
+        # is still starting, which is exactly what the age predicate refuses
+        # to touch.
+        stranded.created_at = datetime.now(UTC) - timedelta(days=2)
+        # ...and untouched since. The repair keys on updated_at, because
+        # "idle for a full grace" is the real condition -- a row someone
+        # resumed minutes ago is not stranded no matter how old it is.
+        stranded.updated_at = datetime.now(UTC) - timedelta(days=2)
         await session.flush()
 
         still_in_flight = await service.create_conversation(
@@ -1094,11 +1120,27 @@ async def test_backfill_stranded_ephemeral_expiry_repairs_pre_fix_rows(persisten
             expires_at = expires_at.replace(tzinfo=UTC)
         assert expires_at <= datetime.now(UTC)
 
-        # Untouched: still in flight, and never had a run at all.
-        assert (
+        # CHAOS-3544: these two used to be asserted as expires_at IS NULL --
+        # i.e. as permanently unpurgeable, which is the defect. Both are now
+        # stamped at CREATION (graced), so they carry a real expiry and will
+        # be collected once it elapses. What must still hold is that the
+        # backfill did not touch them: their stamp is the creation one, still
+        # in the future, not a backfill stamp of `now`.
+        in_flight_expiry = (
             await session3.get(DevConversation, still_in_flight.id)
-        ).expires_at is None
-        assert (await session3.get(DevConversation, run_less.id)).expires_at is None
+        ).expires_at
+        run_less_expiry = (await session3.get(DevConversation, run_less.id)).expires_at
+        for expiry in (in_flight_expiry, run_less_expiry):
+            assert expiry is not None, (
+                "a 0-day conversation must carry an expiry from creation -- "
+                "a NULL here is the CHAOS-3544 retained-forever shape"
+            )
+            # sqlite hands back naive datetimes; normalise before comparing.
+            aware = expiry if expiry.tzinfo is not None else expiry.replace(tzinfo=UTC)
+            assert aware > datetime.now(UTC), (
+                "and it must still be the graced creation stamp, not a "
+                "backfill stamp of now: neither row is old enough to repair"
+            )
 
     # Idempotent: a second call finds nothing left to stamp.
     async with maker() as session4:
@@ -1113,6 +1155,9 @@ async def test_backfill_stranded_ephemeral_expiry_repairs_pre_fix_rows(persisten
     assert result.purged == 1
     async with maker() as session6:
         assert await session6.get(DevConversation, stranded.id) is None
+        # Still present: its graced creation stamp has not elapsed, so the
+        # sweep has nothing to collect yet. Previously this row was retained
+        # forever; now it is retained until its expiry, which is the point.
         assert await session6.get(DevConversation, still_in_flight.id) is not None
         assert await session6.get(DevConversation, run_less.id) is not None
 

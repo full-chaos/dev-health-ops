@@ -215,7 +215,26 @@ class TestRetentionConversations:
             == bundle.conversation.created_at + timedelta(days=30)
         )
 
-    def test_retention_zero_days_has_no_expiry(self) -> None:
+    def test_retention_zero_days_carries_the_graced_creation_expiry(self) -> None:
+        """CHAOS-3544 rewrote this assertion, deliberately and under ruling.
+
+        It previously asserted ``expires_at is None`` for a 0-day row. That
+        matched production at the time -- and production was wrong: a NULL
+        expiry is exactly the shape no purge path can ever collect, so the
+        fixture world was seeding conversations that are retained forever in
+        the tier whose entire promise is immediate deletion. Every row this
+        generator emits is also run-less, which is CHAOS-3544's stranded
+        shape (a) precisely.
+
+        The assertion now tracks the producer instead of the old bug. It is
+        computed from the imported constant rather than a literal, so the
+        fixture cannot drift from production the day the grace changes.
+        """
+
+        from dev_health_ops.api.dev.persistence.service import (
+            EPHEMERAL_ABANDONED_GRACE,
+        )
+
         bundle = conv_gen.build_retention_aged_conversation(
             org_id=uuid.uuid4(),
             user_id=uuid.uuid4(),
@@ -225,8 +244,15 @@ class TestRetentionConversations:
             pinned_now=_NOW,
             title="probe",
         )
-        assert bundle.conversation.expires_at is None
         assert bundle.conversation.retention_days == 0
+        assert bundle.conversation.expires_at is not None, (
+            "a 0-day fixture row with no expiry is un-purgeable by every "
+            "code path -- the CHAOS-3544 defect, seeded"
+        )
+        assert (
+            bundle.conversation.expires_at
+            == bundle.conversation.created_at + EPHEMERAL_ABANDONED_GRACE
+        )
 
     def test_deterministic_ids_across_calls(self) -> None:
         org_id = uuid.uuid4()

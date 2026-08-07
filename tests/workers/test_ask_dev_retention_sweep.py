@@ -532,3 +532,140 @@ class TestRecordAskDevRetentionSweepGaugeContract:
 
         mock_total.assert_called_once_with(status="failed")
         mock_gauge_set.assert_not_called()
+
+
+class TestSweepRepairsStrandedEphemeralRows:
+    """CHAOS-3544: the scheduled sweep must repair stranded 0-day rows, not
+    merely purge already-stamped ones.
+
+    Before this, ``backfill_stranded_ephemeral_expiry``'s only caller was a
+    ``dev-hops maintenance`` command. A repair that depends on an operator
+    remembering to run a CLI is a promise about human behaviour, and "the
+    drain simply never happened" is the failure mode that let a
+    retained-forever population stay invisible for the whole life of the
+    defect. The beat tick already runs daily; it now stamps before it sweeps,
+    so anything repaired is collected by the same tick.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_stamps_and_then_purges_a_stranded_row(
+        self, persistence
+    ) -> None:
+        """Seeds the pre-fix shape -- a 0-day conversation with a NULL expiry,
+        old enough that no run could still be in flight -- and asserts one
+        ordinary beat tick removes it.
+
+        RED before CHAOS-3544: the task called only ``cleanup_expired``,
+        which cannot see a NULL expiry, so the row survived every tick
+        forever.
+        """
+
+        maker, org_id, user_id = persistence
+        conversation_id = await _seed_conversation(
+            maker, org_id=org_id, user_id=user_id, retention_days=0
+        )
+        # The pre-fix shape: NULL expiry, aged well past the grace.
+        async with maker() as session:
+            await session.execute(
+                update(DevConversation)
+                .where(DevConversation.id == conversation_id)
+                .values(
+                    expires_at=None,
+                    created_at=datetime.now(UTC) - timedelta(days=3),
+                    # Untouched since: the repair keys on idleness, not age.
+                    updated_at=datetime.now(UTC) - timedelta(days=3),
+                )
+            )
+            await session.commit()
+
+        from dev_health_ops.workers.ask_dev_retention import (
+            _run_ask_dev_retention_cleanup,
+        )
+
+        with patch("dev_health_ops.metrics.prometheus.record_ask_dev_retention_sweep"):
+            await _run_ask_dev_retention_cleanup(session_factory=maker)
+
+        async with maker() as session:
+            assert await session.get(DevConversation, conversation_id) is None, (
+                "one beat tick must stamp and then collect a stranded 0-day "
+                "row -- leaving it for a manual CLI drain is what made this "
+                "defect survive"
+            )
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_leaves_a_recent_ephemeral_row_alone(
+        self, persistence
+    ) -> None:
+        """The other arm: a 0-day conversation created moments ago is inside
+        its grace and may be mid-turn. A sweep that collected it would be the
+        purged-while-in-use failure the grace exists to prevent, arriving by
+        the back door of the backfill rather than the creation stamp."""
+
+        maker, org_id, user_id = persistence
+        conversation_id = await _seed_conversation(
+            maker, org_id=org_id, user_id=user_id, retention_days=0
+        )
+
+        from dev_health_ops.workers.ask_dev_retention import (
+            _run_ask_dev_retention_cleanup,
+        )
+
+        with patch("dev_health_ops.metrics.prometheus.record_ask_dev_retention_sweep"):
+            await _run_ask_dev_retention_cleanup(session_factory=maker)
+
+        async with maker() as session:
+            assert await session.get(DevConversation, conversation_id) is not None, (
+                "a freshly created 0-day conversation is inside its grace and "
+                "must survive the sweep"
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_capped_stamp_loop_reports_partial_not_completed(
+        self, persistence
+    ) -> None:
+        """CHAOS-3544, Codex adversarial review (MEDIUM): the sweep must not
+        claim it drained while stranded rows remain.
+
+        ``count_expired`` counts rows with a DUE ``expires_at``, so it is
+        structurally blind to the stranded population -- those still carry
+        ``expires_at IS NULL``. With more stranded rows than
+        ``max_batches * limit`` the stamp loop hits its cap, the purge loop
+        then finds nothing left to do, and the task would report "completed"
+        and advance the last-success gauge over an untouched older backlog.
+        That is the same false-drained claim CHAOS-3404 round 2 closed for
+        the purge half, reintroduced through the repair half.
+
+        Three stranded rows, a batch limit of one, and one batch allowed: the
+        stamp loop can only reach one of them.
+        """
+
+        from dev_health_ops.workers.ask_dev_retention import (
+            _run_ask_dev_retention_cleanup,
+        )
+
+        maker, org_id, user_id = persistence
+        aged = datetime.now(UTC) - timedelta(days=3)
+        for _ in range(3):
+            conversation_id = await _seed_conversation(
+                maker, org_id=org_id, user_id=user_id, retention_days=0
+            )
+            async with maker() as session:
+                await session.execute(
+                    update(DevConversation)
+                    .where(DevConversation.id == conversation_id)
+                    .values(expires_at=None, created_at=aged, updated_at=aged)
+                )
+                await session.commit()
+
+        with patch("dev_health_ops.metrics.prometheus.record_ask_dev_retention_sweep"):
+            result = await _run_ask_dev_retention_cleanup(
+                session_factory=maker, limit=1, max_batches=1
+            )
+
+        assert result["status"] == "partial", (
+            "the stamp loop hit its cap with stranded rows still unrepaired, "
+            "so this tick did NOT drain the backlog -- reporting 'completed' "
+            "here advances the last-success gauge over work that never "
+            f"happened. Got {result!r}."
+        )
+        assert result["drained"] is False

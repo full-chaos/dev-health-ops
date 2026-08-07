@@ -62,3 +62,4 @@ tests/acceptance/artifacts/wave4/junit-corpus.xml
 .venv/
 .mypy_cache/
 .ruff_cache/
+worktrees/

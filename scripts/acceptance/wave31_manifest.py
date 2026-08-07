@@ -1635,29 +1635,50 @@ def _gates() -> tuple[ManifestItem, ...]:
             ),
             status="deferred",
             blocked_reason=(
-                "Re-checked 2026-08-03 per team-lead priority: web #833 "
-                "(CHAOS-3287, merged to dev-health-web@main at "
-                "a24de7c90dafa98c4f46f0cf5fc4a76cf6767023) landed real, "
-                "default (not opt-in) Playwright coverage -- verified "
-                "directly against the merged spec files, not the PR "
-                "description alone: tests/ask-dev-continuity.spec.ts "
-                "proves window/dev semantic equivalence (a conversation "
-                "started in either surface resumes with the same "
-                "transcript and rendered answer in the other, both "
-                "directions); tests/ask-dev-outcomes.spec.ts and "
-                "tests/ask-dev-shared.spec.ts cover every rendered "
-                "dev_answer.v1 status, evidence-first hierarchy, and "
-                "availability gating; tests/ask-dev-vocabulary.spec.ts is "
-                "the internal-enum-leak denylist (CHAOS-3291 cross-check). "
-                "This row's own claim names 'answer-v2 outcomes' "
-                "specifically, and #833's own PR body is explicit that "
-                "dev_answer.v2's outcome taxonomy is separate CHAOS-3294/"
-                "3298 work not yet landed in web -- honoring 'claim what "
-                "you assert', this row stays deferred rather than "
-                "force-flipped, narrowed to exactly the gap #833 left: "
-                "v2 outcome coverage. Subjects/rendering/window-dev "
-                "equivalence are otherwise real, live, default-suite "
-                "coverage today, not aspirational."
+                "Re-checked 2026-08-06 after dev-health-web PR #854 "
+                "(CHAOS-3219 Phase 4, merged to dev-health-web@main at "
+                "e64bae941a3481e17f720909b60192a830a5edbe). The SUBSTANCE "
+                "of this row's claim is now met in web; what keeps it "
+                "deferred is this manifest's evidence model, not the "
+                "coverage. (1) Substance. Web consumes dev_answer.v1 only "
+                "-- dev_answer.v2 is projected down by ops before it "
+                "reaches the wire -- so 'answer-v2 outcome coverage' in "
+                "web means coverage of the projected shapes: three of the "
+                "eight PublicOutcome values arrive as a DevAnswer and five "
+                "as a DevError. #854 closed all 14 rows of the audit "
+                "committed at web docs/audits/ask-dev-web-default-ci-"
+                "delta.md, across tests/ask-dev-outcomes.spec.ts, "
+                "tests/ask-dev-shared.spec.ts, tests/ask-dev-continuity."
+                "spec.ts and tests/ask-dev-vocabulary.spec.ts -- all four "
+                "land in playwright.config.ts's authenticated project and "
+                "execute in the required tests.yml e2e-default job over "
+                "three required shards, so this is default, gating "
+                "coverage rather than an opt-in tier. (2) Why still "
+                "deferred. validate_manifest requires every evidence path "
+                "to RESOLVE inside this repository's root and to be a real "
+                "file -- see contained_path, which rejects any path whose "
+                "resolved location falls outside the tree, however it is "
+                "spelled (absolute or '..'-traversing); a path that leaves "
+                "and returns is fine, because it lands inside -- so a "
+                "dev-health-web spec path is not citable as evidence; "
+                "proven_e2e additionally requires an "
+                "in-repo execution artifact whose script is one of the "
+                "row's own evidence paths and whose recorded sha256 still "
+                "matches that file's current bytes. So a DIRECT "
+                "dev-health-web path is not citable here. What could "
+                "support promotion is an in-repo wrapper or artifact whose "
+                "cross-repo provenance is explicit and checkable from this "
+                "tree -- which is route (3) below, not an impossibility. "
+                "The same constraint keeps attack.runtime-divergence "
+                "deferred. Claiming proven on evidence this repository "
+                "cannot check would be a claim, not proof. "
+                "(3) The route to proven_e2e is Phase 5's CI lane: "
+                "scripts/acceptance/run_ask_dev_compose.sh:348 already "
+                "invokes the web acceptance Playwright config, and once "
+                "that launcher runs inside a workflow and records "
+                "ops-resident artifacts, this row acquires real checkable "
+                "evidence. The bookkeeping resolves by producing proof, "
+                "not by widening what counts as proof."
             ),
         ),
         ManifestItem(
@@ -2192,6 +2213,34 @@ _ARTIFACT_JWT_PATTERN = re.compile(
 )
 
 
+def contained_path(root: Path, relative_path: str) -> Path | None:
+    """Resolve ``relative_path`` under ``root``, or ``None`` if it escapes.
+
+    Codex adversarial review (HIGH, 2026-08-06, CHAOS-3219): every path in
+    this module was joined as ``root / value`` and then existence-checked.
+    That is not containment. ``Path("/ops") / "/elsewhere/x"`` is
+    ``/elsewhere/x`` -- pathlib lets an ABSOLUTE segment replace the base
+    outright -- and ``../../`` walks out just as easily. Both validated
+    clean, so a row could cite a file in another repository (or anywhere on
+    the runner) and claim ``proven_*`` from it.
+
+    That defeats the point of the manifest. A claim is only proof if this
+    repository can check it on any machine that checks out this commit; a
+    path outside the tree is unreproducible by construction and its
+    contents are not reviewed by anything that gates this repo.
+
+    Returns the resolved path when it is genuinely inside ``root``.
+    ``strict=False`` so a non-existent path still resolves and is reported
+    as missing by the caller rather than as an escape.
+    """
+
+    resolved = (root / relative_path).resolve()
+    root_resolved = root.resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        return None
+    return resolved
+
+
 def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
     """Check one ``proven_e2e`` item's execution artifact is real, current,
     all-passing, and actually bound to this row's claim. See
@@ -2238,8 +2287,14 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
         )
         return errors
 
-    artifact_path = root / item.execution_artifact
-    if not artifact_path.exists():
+    artifact_path = contained_path(root, item.execution_artifact)
+    if artifact_path is None:
+        errors.append(
+            f"{item.id}: execution artifact escapes the repository root: "
+            f"{item.execution_artifact}"
+        )
+        return errors
+    if not artifact_path.is_file():
         errors.append(
             f"{item.id}: execution artifact does not exist: {item.execution_artifact}"
         )
@@ -2369,8 +2424,8 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
                 f"is not among this item's own evidence paths {item.evidence!r}"
                 " -- the artifact must belong to a script this row cites"
             )
-        script_path = root / script_relative
-        if not script_path.exists():
+        script_path = contained_path(root, script_relative)
+        if script_path is None or not script_path.is_file():
             errors.append(
                 f"{item.id}: execution artifact's script no longer exists: "
                 f"{script_relative}"
@@ -2411,8 +2466,14 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
         return errors
     assert item.blocked_execution_artifact is not None
 
-    artifact_path = root / item.blocked_execution_artifact
-    if not artifact_path.exists():
+    contained_blocked = contained_path(root, item.blocked_execution_artifact)
+    if contained_blocked is None:
+        return [
+            f"{item.id}: blocked execution artifact escapes the repository "
+            f"root: {item.blocked_execution_artifact}"
+        ]
+    artifact_path = contained_blocked
+    if not artifact_path.is_file():
         errors.append(
             f"{item.id}: blocked_execution_artifact does not exist: "
             f"{item.blocked_execution_artifact}"
@@ -2533,8 +2594,8 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
                 f"{script_relative!r} is not among this item's own evidence "
                 f"paths {item.evidence!r}"
             )
-        script_path = root / script_relative
-        if not script_path.exists():
+        script_path = contained_path(root, script_relative)
+        if script_path is None or not script_path.is_file():
             errors.append(
                 f"{item.id}: blocked_execution_artifact's script no longer "
                 f"exists: {script_relative}"
@@ -2626,14 +2687,26 @@ def validate_manifest(
                 )
 
         for relative_path in item.evidence:
-            if not (root / relative_path).exists():
+            contained = contained_path(root, relative_path)
+            if contained is None:
+                errors.append(
+                    f"{item.id}: evidence path escapes the repository root: "
+                    f"{relative_path} -- evidence must be a file this "
+                    "repository can check out and check; a path outside the "
+                    "tree is a claim, not proof"
+                )
+            elif not contained.is_file():
+                # is_file(), not exists(): "" and "." resolve to the repo
+                # root, and a directory satisfies exists() while proving
+                # nothing and crashing the content_markers read below. All
+                # 95 landed evidence paths are files.
                 errors.append(
                     f"{item.id}: evidence file does not exist: {relative_path}"
                 )
 
         if item.content_markers and item.evidence:
-            first_evidence = root / item.evidence[0]
-            if first_evidence.exists():
+            first_evidence = contained_path(root, item.evidence[0])
+            if first_evidence is not None and first_evidence.is_file():
                 text = first_evidence.read_text(encoding="utf-8", errors="replace")
                 for marker in item.content_markers:
                     if marker not in text:

@@ -226,24 +226,33 @@ class ClickHouseCore(BaseMetricsSink):
             self.client.insert, "teams", matrix, column_names=column_names
         )
 
+    #: Shared by `write_projects`' two inserts below -- the history table
+    #: (074_project_declared_state_history.py) carries every column
+    #: `projects` does; only its ORDER BY key differs (CHAOS-3563).
+    _PROJECT_COLUMNS = [
+        "id",
+        "org_id",
+        "provider",
+        "project_key",
+        "name",
+        "is_active",
+        "state",
+        "target_date",
+        "url",
+        "updated_at",
+        "last_synced",
+    ]
+
     def write_projects(self, rows: Sequence[ProjectRecord]) -> None:
-        self._insert_rows(
-            "projects",
-            [
-                "id",
-                "org_id",
-                "provider",
-                "project_key",
-                "name",
-                "is_active",
-                "state",
-                "target_date",
-                "url",
-                "updated_at",
-                "last_synced",
-            ],
-            rows,
-        )
+        # CHAOS-3563: append every observed declared-state snapshot to the
+        # additive history table BEFORE writing the collapsing `projects`
+        # row -- `projects` is a ReplacingMergeTree keyed WITHOUT
+        # `updated_at`, so a background merge eventually discards every
+        # earlier version; this second, finer-keyed write is the only
+        # record of a project's declared state at a past instant once that
+        # merge happens. No change to `projects`' own write below.
+        self._insert_rows("project_declared_state_history", self._PROJECT_COLUMNS, rows)
+        self._insert_rows("projects", self._PROJECT_COLUMNS, rows)
 
     def write_members(self, rows: Sequence[MemberRecord]) -> None:
         self._insert_rows(

@@ -1169,14 +1169,13 @@ def _install_status_client_with_project_row(
     query there already falls through to an empty result, which is exactly
     what "no project row" needs, so only the new query is intercepted here).
 
-    Matched on ``"any(state) AS state"`` -- CHAOS-3368's
-    ``_PROJECT_DECLARED_FACTS_SQL`` own, unique SELECT list -- rather than
-    the broader ``"FROM projects FINAL"``: CHAOS-3374's
-    ``_PROJECT_IDENTITY_CTE`` is now spliced into EVERY project-scoped arm
-    (``_WORK_ITEMS_SQL``, ``PROJECT_REPOSITORIES_SQL``, ``_BLOCKERS_SQL``,
-    ...) and that CTE also reads ``FROM projects FINAL``, so the broader
-    substring would wrongly intercept those queries too and starve
-    ``_FakeWorkItems`` of the calls it needs to answer them.
+    Matched on ``"FROM project_declared_state_history"`` -- CHAOS-3563's
+    ``_PROJECT_DECLARED_FACTS_SQL`` reads this table exclusively, and no
+    other query in this module touches it, so the match is unambiguous
+    (unlike ``"FROM projects FINAL"``, which CHAOS-3374's
+    ``_PROJECT_IDENTITY_CTE`` also reads, spliced into every other
+    project-scoped arm -- ``_WORK_ITEMS_SQL``, ``PROJECT_REPOSITORIES_SQL``,
+    ``_BLOCKERS_SQL``, ...).
 
     Evaluates the ``updated_at <= {as_of:DateTime64(3, 'UTC')}`` predicate
     against ``params["as_of"]`` (Codex adversarial review, MEDIUM,
@@ -1189,7 +1188,7 @@ def _install_status_client_with_project_row(
     fake = _FakeWorkItems()
 
     async def wrapped(_client: object, sql: str, params: dict[str, Any]) -> Any:
-        if "any(state) AS state" in sql:
+        if "FROM project_declared_state_history" in sql:
             fake.sql.append(sql)
             fake.params.append(dict(params))
             if (
@@ -1344,12 +1343,13 @@ async def test_issue_scope_never_queries_the_projects_catalog(
 
     assert snapshot.declared_project_state is None
     assert snapshot.declared_project_target_date is None
-    # Matched on the declared-state read's own unique SELECT list, not the
+    # Matched on the declared-state read's own exclusive table, not the
     # broader "FROM projects FINAL" -- CHAOS-3374's _PROJECT_IDENTITY_CTE is
     # spliced into _WORK_ITEMS_SQL itself now, so that substring legitimately
     # appears even for an ISSUE-scope call that never reaches CHAOS-3368's
-    # own query.
-    assert not any("any(state) AS state" in sql for sql in fake.sql)
+    # own query. No other query in this module touches
+    # project_declared_state_history (CHAOS-3563), so this stays unambiguous.
+    assert not any("FROM project_declared_state_history" in sql for sql in fake.sql)
 
 
 @pytest.mark.asyncio

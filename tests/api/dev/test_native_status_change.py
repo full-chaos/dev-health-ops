@@ -3453,12 +3453,10 @@ async def test_native_project_scope_surfaces_declared_state_and_target_date(
     async def fake_query(
         _client: object, sql: str, params: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        # NOTE: ``_PROJECT_IDENTITY_CTE`` (embedded in
-        # ``PROJECT_REPOSITORIES_SQL`` below) ALSO contains the substring
-        # "FROM projects FINAL" -- match the declared-facts query's own
-        # unique ``SELECT`` clause first, or this branch wrongly answers
-        # the repository-derivation query too.
-        if "SELECT any(state) AS state" in sql:
+        # CHAOS-3563: the declared-facts query now reads
+        # ``project_declared_state_history``, a table no other query in
+        # this module touches -- a unique, unambiguous match.
+        if "FROM project_declared_state_history" in sql:
             return [
                 {
                     "state": "started",

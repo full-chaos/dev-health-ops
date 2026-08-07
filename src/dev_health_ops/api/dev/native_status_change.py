@@ -347,65 +347,71 @@ LIMIT {limit:UInt32}
 #: CHAOS-3368: the project's own DECLARED lifecycle state / target date
 #: (``projects.state``/``projects.target_date``, migration 073 -- see
 #: ``metrics.schemas.ProjectRecord``'s own docstring: "the provider's OWN
-#: lifecycle vocabulary, stored verbatim"). Read with the same RMT
-#: discipline every other catalog read in this module uses: ``FINAL`` for
-#: the current row, ``org_id`` in the WHERE, ``is_active = 1`` so a
-#: retired project row does not resurrect a stale declared state. Guarded
-#: by an explicit ``HAVING count() = 1`` for the same reason CHAOS-3374's
-#: ``_PROJECT_IDENTITY_CTE`` guards its own read of this table: the
-#: ReplacingMergeTree key is ``(org_id, provider, id)``, not ``(org_id,
-#: id)``, so a same-org, same-``id`` row minted by two different
-#: providers survives ``FINAL`` as two rows and an unguarded ``LIMIT 1``
-#: would pick one nondeterministically. This read is deliberately
-#: narrower than that CTE: it never resolves which provider a project
-#: SUBJECT belongs to (CHAOS-3374's turf) -- it only reads the declared-
-#: state columns of a subject the scope has ALREADY resolved and
-#: authorized, so an ambiguous match here is grounds to render the
-#: declared-state facts absent (fail closed), never to guess a provider.
-#: Selects ``last_synced`` under that exact alias so ``_read``'s existing
+#: lifecycle vocabulary, stored verbatim"). ``org_id`` is in the WHERE;
+#: ambiguity (more than one provider claiming the same ``id``) is guarded
+#: explicitly below and renders the declared-state facts absent (fail
+#: closed), never guesses a provider -- see CHAOS-3374's
+#: ``_PROJECT_IDENTITY_CTE`` for the same reasoning applied to project
+#: SUBJECT resolution (this read is narrower: it never resolves which
+#: provider a subject belongs to, only reads the declared-state columns of
+#: a subject the scope has ALREADY resolved and authorized). Selects
+#: ``last_synced`` under that exact alias so ``_read``'s existing
 #: watermark/freshness plumbing applies unchanged -- no bespoke handling
 #: needed here.
 #:
-#: Codex adversarial review (MEDIUM, 2026-08-04): ``FINAL`` collapses the
-#: RMT to its single CURRENT row per key -- there is no history left to read
-#: here, so ``updated_at <= {as_of:DateTime64(3, 'UTC')}`` (mirroring every
-#: other as-of-bounded read in this module, e.g. ``_WORK_ITEMS_SQL``) is not
-#: a narrowing filter, it is the difference between "this project's
-#: declared state as of the requested instant" and "whatever it is RIGHT
-#: NOW, mislabeled as of an earlier instant". A project updated after
-#: ``as_of`` is excluded entirely (``count() = 0`` -> absent facts) rather
-#: than answered with its current, not-yet-true-at-as_of state -- this
-#: ticket deliberately does not attempt a real history representation; an
-#: as-of snapshot of a since-changed declared state is simply unavailable.
-#: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04): the
-#: aggregate below was originally aliased ``AS updated_at`` -- the SAME name
-#: as the raw column the ``WHERE`` clause filters on two lines down.
+#: CHAOS-3563 (closes the CHAOS-3377 residual gap below): this now reads
+#: ``project_declared_state_history`` (migration 074), not ``projects``
+#: ``FINAL``. ``projects`` is a ReplacingMergeTree keyed on ``(org_id,
+#: provider, id)`` -- a background merge physically discards every earlier
+#: version sharing that key, so ``FINAL`` can only ever answer "what is
+#: this project's declared state RIGHT NOW", never "as of an earlier
+#: instant that has since changed". The history table is keyed one level
+#: finer, by ``(org_id, provider, id, updated_at)``: a genuine state change
+#: carries a new ``updated_at`` (the provider's own mtime, the same version
+#: column ``projects`` already used) and is therefore retained as its own
+#: row rather than merged away. Reading it with ``argMax(col, (updated_at,
+#: ingested_at))`` bounded by ``updated_at <= {as_of:...}`` -- RMT readers
+#: use argMax or FINAL; this table is read via argMax, deliberately never
+#: ``FINAL`` (``FINAL`` would collapse straight back to one row per key and
+#: reintroduce the exact gap this migration exists to close) -- picks the
+#: LATEST version that was already true at ``as_of``, so a project updated
+#: after ``as_of`` no longer blanks the whole row: its PRIOR declared state
+#: (if any exists at or before ``as_of``) is returned instead. Every
+#: ``argMax`` call shares the identical tie-break tuple, so ``state``/
+#: ``target_date``/``last_synced``/``is_active`` are always drawn from the
+#: SAME winning row, never independently. ``is_active`` is now also
+#: evaluated AS OF that same winning version (not merely "currently
+#: active") -- a project retired after ``as_of`` still answers with its
+#: pre-retirement declared state, matching the "as declared at T" contract
+#: this ticket introduces. The provider-ambiguity guard is
+#: ``countDistinct(provider) = 1`` (the multi-row analogue of the old
+#: ``FINAL``-based ``HAVING count() = 1``: with history, more than one row
+#: at a given ``(org_id, id)`` is expected and fine as long as every row
+#: agrees on ``provider``).
+#:
+#: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04, fixed
+#: prior to this migration and preserved here): never alias an aggregate to
+#: the SAME name as a raw column a ``WHERE`` clause filters on --
 #: ClickHouse resolves a bare ``WHERE`` identifier against a same-named
-#: ``SELECT`` alias in preference to the source column, so ``WHERE
-#: updated_at <= {as_of:...}`` was silently rewritten to filter on
-#: ``any(updated_at)`` -- an aggregate function, which ``WHERE`` (unlike
-#: ``HAVING``) can never contain. The result was ``Code: 184
-#: (ILLEGAL_AGGREGATION)`` raised on EVERY invocation of this query,
-#: unconditionally (never a timestamp-skew or evidence-cap artifact).
-#: ``_read`` (below) catches that exception and reports the ``projects``
-#: source as merely "unavailable" -- indistinguishable, from every caller's
-#: perspective, from a genuinely absent declared state, which is exactly why
-#: this went unnoticed: the declared-state clause simply never rendered, for
-#: any project, on any run. Aliased to ``declared_updated_at`` instead so the
-#: ``WHERE`` clause's ``updated_at`` reference stays bound to the raw
-#: column -- the fix is the rename alone; ``state``/``target_date``/
-#: ``last_synced`` are left untouched (not aggregation-clause hazards, since
-#: nothing filters on them) so ``_read``'s own generic
-#: ``row.get("last_synced")`` watermark lookup keeps working unchanged.
+#: ``SELECT`` alias in preference to the source column, silently rewriting
+#: the filter onto an aggregate function, which ``WHERE`` (unlike
+#: ``HAVING``) can never contain (``Code: 184 ILLEGAL_AGGREGATION`` on
+#: EVERY invocation, indistinguishable from a genuinely absent declared
+#: state once ``_read`` below catches the exception). ``declared_updated_at``
+#: stays a distinct alias from the raw ``updated_at`` column for exactly
+#: this reason.
 _PROJECT_DECLARED_FACTS_SQL = """
-SELECT any(state) AS state,
-       any(target_date) AS target_date,
-       any(updated_at) AS declared_updated_at,
-       any(last_synced) AS last_synced
-FROM projects FINAL
-WHERE org_id = {org_id:String} AND id = {entity_id:String} AND is_active = 1
+SELECT
+    argMax(state, (updated_at, ingested_at)) AS state,
+    argMax(target_date, (updated_at, ingested_at)) AS target_date,
+    max(updated_at) AS declared_updated_at,
+    argMax(last_synced, (updated_at, ingested_at)) AS last_synced,
+    argMax(is_active, (updated_at, ingested_at)) AS is_active,
+    countDistinct(provider) AS provider_count
+FROM project_declared_state_history
+WHERE org_id = {org_id:String} AND id = {entity_id:String}
   AND updated_at <= {as_of:DateTime64(3, 'UTC')}
-HAVING count() = 1
+HAVING count() > 0 AND provider_count = 1 AND is_active = 1
 """
 
 _BLOCKER_WATERMARK_SQL = """

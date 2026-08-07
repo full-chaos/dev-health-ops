@@ -101,6 +101,18 @@ def test_metrics_sink_writes_dimension_and_attribution_columns() -> None:
         assert sink.client.insert.call_args.args[0] == "projects"
         assert "project_key" in sink.client.insert.call_args.kwargs["column_names"]
 
+        tables_written = [call.args[0] for call in sink.client.insert.call_args_list]
+        assert tables_written == ["project_declared_state_history", "projects"], (
+            "CHAOS-3563: every project sync must append to the additive history "
+            "table IN ADDITION TO (never instead of) the existing `projects` "
+            "write -- otherwise a state change is still lost the moment "
+            "`projects`' own ReplacingMergeTree collapses it."
+        )
+        assert (
+            sink.client.insert.call_args_list[0].args[1]
+            == sink.client.insert.call_args_list[1].args[1]
+        ), "both writes must carry the identical row matrix -- no drift"
+
         sink.write_members(
             [
                 MemberRecord(

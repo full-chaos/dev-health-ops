@@ -430,6 +430,37 @@ class TestEveryResolutionPathDeclarerTreatsAnEmptyLedgerAsBroken:
         )
 
 
+#: Cases whose question extracts mentions but whose REQUEST IS REJECTED BEFORE
+#: subject resolution ever runs, so their resolution ledger is empty by
+#: construction -- permanently, not incidentally.
+#:
+#: These are exempt from the span requirement below, and the exemption is
+#: EARNED BY MEASUREMENT rather than assumed. CHAOS-3578 declared
+#: producer-derived spans on both, on the reasoning that covering a case beats
+#: exempting it ("an exemption list is the thing that rots"). The armed run of
+#: 2026-08-07 16:22 falsified that: both went from passed to FAILED on
+#: ``resolution_path_measured`` with absence reason
+#: ``empty-resolution-ledger-despite-mentions``.
+#:
+#: The mechanism is in ``resolution_path.py``'s own docstring: an empty ledger
+#: is HONEST as ``empty-resolution-ledger`` and BROKEN as
+#: ``empty-resolution-ledger-despite-mentions``, and the ONLY thing separating
+#: them is whether the case declares spans. Declaring spans on a case that
+#: cannot reach resolution asserts something false about it.
+#:
+#: Evidence, the same two cases measured both ways on the same day:
+#:   11:11 run -- no spans -- absence='empty-resolution-ledger'                 PASSED
+#:   16:22 run -- spans    -- absence='empty-resolution-ledger-despite-mentions' FAILED
+#:
+#: Adding an id here requires that kind of evidence, not an argument.
+REJECTED_BEFORE_RESOLUTION_CASE_IDS: frozenset[str] = frozenset(
+    {
+        "adv.oversized.question",
+        "adv.oversized.subject-set",
+    }
+)
+
+
 class TestDeclaredMentionTextsMatchTheProducer:
     """CHAOS-3462 B6: every declared span must be what production really
     yields for that question.
@@ -513,6 +544,55 @@ class TestDeclaredMentionTextsMatchTheProducer:
             f"a single-shot exact_match would be unclassifiable: {missing!r}"
         )
 
+    def test_the_rejected_before_resolution_exemption_is_still_earned(self) -> None:
+        """The exemption below is ASSERTED, not merely listed.
+
+        An exemption list that nobody re-checks is the thing that rots -- I
+        argued exactly that in CHAOS-3578 and used it to justify NOT exempting
+        these two cases, which is what broke them. So the list carries its own
+        guards, and both of them fail loudly rather than going quiet:
+
+        1. an exempted case must NOT declare ``expected_mention_texts``. Doing
+           so is the precise defect the exemption exists to prevent -- it flips
+           the honest ``empty-resolution-ledger`` absence to the broken
+           ``empty-resolution-ledger-despite-mentions`` one.
+        2. an exempted id must still name a real ACTIVE case. A stale id
+           silently exempts nothing and hides that the list has drifted.
+
+        WHAT THIS DOES NOT CATCH, stated rather than papered over: if the
+        oversize rejection is ever removed so one of these cases DOES reach
+        subject resolution, it becomes able to declare spans and this static
+        list would keep excusing it. No static check can see that. The live
+        signal is the case's own receipt -- a non-null ``resolution_path``
+        where the exemption claims the ledger is empty by construction -- and
+        that is a run-time observation, not a collection-time one. Recorded as
+        residual risk, because a guard that pretended to cover it would be
+        worse than an honest note.
+        """
+
+        active = {case.id: case for case in _active_cases()}
+        unknown = sorted(REJECTED_BEFORE_RESOLUTION_CASE_IDS - active.keys())
+        assert not unknown, (
+            f"exempted id(s) {unknown} are not active corpus cases. A stale "
+            "exemption excuses nothing and hides that the list has drifted -- "
+            "remove them, or fix the id."
+        )
+        contradictory = sorted(
+            cid
+            for cid in REJECTED_BEFORE_RESOLUTION_CASE_IDS
+            if active[cid].expected_mention_texts
+        )
+        assert not contradictory, (
+            f"case(s) {contradictory} are exempted from declaring spans BECAUSE "
+            "their request is rejected before subject resolution, yet they "
+            "declare expected_mention_texts anyway. That is the exact defect "
+            "the exemption exists to prevent: declaring spans flips the honest "
+            "'empty-resolution-ledger' absence to the broken "
+            "'empty-resolution-ledger-despite-mentions' one and fails the case. "
+            "Measured both ways on 2026-08-07 -- passed at 11:11 without spans, "
+            "failed at 16:22 with them."
+        )
+
     @pytest.mark.asyncio
     async def test_every_case_whose_question_names_mentions_declares_spans(
         self,
@@ -554,6 +634,8 @@ class TestDeclaredMentionTextsMatchTheProducer:
             if not list(getattr(interpreted, "mentions", None) or []):
                 continue
             extracting += 1
+            if case.id in REJECTED_BEFORE_RESOLUTION_CASE_IDS:
+                continue
             if not case.expected_mention_texts:
                 missing.append(case.id)
 

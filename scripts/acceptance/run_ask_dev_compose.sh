@@ -347,6 +347,37 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${web_root}/node_modules/.bin/playwright" test \
   -c "${web_root}/playwright.ask-dev-acceptance.config.ts"
 
+# CHAOS-3219 Phase 5 (CI lane): keep the stack up for a caller that has more
+# to run against it -- specifically scripts/acceptance/run_wave4_corpus.sh,
+# whose own header states the stack must already be up and that it will never
+# boot or tear one down. Without this the only way to run the launcher AND the
+# armed corpus in one CI job is a hand-rolled copy of the launcher's boot
+# sequence with the teardown deleted, which is what the local Phase 2 exit runs
+# had to do -- a duplicate that drifts from the canonical launcher silently and
+# is covered by none of its tests.
+#
+# Opt-IN, and deliberately not a "clean up on failure only" heuristic: the
+# default path is unchanged (always tear down, success or failure), so a
+# developer running this by hand can never leak a stack by forgetting a flag.
+# The caller that sets it owns the teardown -- .github/workflows/
+# ask-dev-acceptance.yml does it in an `if: always()` step, so a cancelled or
+# failed job still releases the runner's disk.
+if [[ "${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1" ]]; then
+  trap - EXIT
+  echo "Ask Dev Compose acceptance completed successfully; stack retained (ASK_DEV_ACCEPTANCE_KEEP_STACK=1)."
+  # Deliberately NOT spelled with the same literal as the real teardown command
+  # below. Adversarial review 2026-08-06 (HIGH): the first version of this hint
+  # printed `down --volumes --remove-orphans` verbatim, which put a SECOND
+  # occurrence of that string into the file -- silently satisfying the
+  # pre-existing `assert "down --volumes --remove-orphans" in launcher`
+  # (test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle) and this
+  # commit's own ordering assertion with a print statement. Deleting the real
+  # teardown then changed no test. A help message must not be able to stand in
+  # for the command it describes.
+  echo "Tear it down with: docker compose -p ${project_name} down -v --remove-orphans"
+  exit 0
+fi
+
 "${compose[@]}" down --volumes --remove-orphans
 trap - EXIT
 echo "Ask Dev Compose acceptance completed successfully."

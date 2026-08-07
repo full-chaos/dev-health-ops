@@ -47,6 +47,12 @@ index.txt
 # that could be swept into a commit.
 tests/acceptance/artifacts/wave4/junit-corpus.xml
 
+# CHAOS-3219 Phase 5: the acceptance CI lane's tee'd boot/corpus/stack logs.
+# .github/workflows/ask-dev-acceptance.yml writes them here and uploads them as
+# a run artifact; a local reproduction of that same sequence writes them here
+# too. Per-run byproducts, never commit content.
+.acceptance-logs/
+
 # Agent tool scratch output (browser automation, session memory). These are
 # per-run artifacts and must never enter a commit.
 .playwright-mcp/

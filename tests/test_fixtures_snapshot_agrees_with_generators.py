@@ -15,9 +15,12 @@ shape the fix exists to remove. The divergence would have surfaced only as a
 failure discovered at 2am, attributed to whatever else changed that day.
 
 WHAT IT ASSERTS. Every snapshotted ``dev_conversations`` row must carry the
-expiry the CURRENT production rule would give it, recomputed from that row's
-own ``created_at`` and ``retention_days``. The rule is imported, never
-restated, so this cannot drift by agreeing with a stale copy of itself.
+expiry the real generator PRODUCES for it today, obtained by RUNNING that
+generator against the row's own ``created_at`` and ``retention_days`` -- not
+by re-deriving the rule here. A test that re-implemented the arithmetic
+would be a second implementation of it, and two implementations drift
+together in precisely the way that leaves a differential check green while
+both are wrong.
 
 Deliberately bidirectional: it fails if the generator changes without a
 re-mint, AND if a snapshot is minted from a tree whose generator disagrees.
@@ -28,11 +31,12 @@ from __future__ import annotations
 
 import gzip
 import json
-from datetime import UTC, datetime, timedelta
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dev_health_ops.api.dev.persistence.service import EPHEMERAL_ABANDONED_GRACE
+from dev_health_ops.fixtures.generators import retention_conversations as conv_gen
 
 _SNAPSHOT = (
     Path(__file__).resolve().parents[1]
@@ -45,11 +49,6 @@ _SNAPSHOT = (
     / "dev_conversations.json.gz"
 )
 
-#: The 30-day tier's window. Imported would be better, but it is written
-#: inline in `create_conversation` rather than named; asserted here against
-#: the snapshot's own 30-day rows, which is what makes a change to it show up.
-_THIRTY_DAY_WINDOW = timedelta(days=30)
-
 
 def _unwrap(value: Any) -> Any:
     """Snapshot cells are ``{"__t__": ..., "v": ...}`` for typed columns."""
@@ -57,16 +56,33 @@ def _unwrap(value: Any) -> Any:
     return value["v"] if isinstance(value, dict) and "v" in value else value
 
 
-def _expected_expiry(created_at: datetime, retention_days: int) -> datetime:
-    """The expiry production would stamp, by the CURRENT rule.
+def _produced_expiry(created_at: datetime, retention_days: int) -> datetime | None:
+    """The expiry the REAL generator produces for this row.
 
-    Mirrors ``DevPersistenceService.create_conversation``: both tiers are
-    stamped at creation, the ephemeral one graced.
+    EXECUTED, never transcribed. Re-deriving the rule here in the test's own
+    arithmetic would make this a second implementation of it -- and two
+    implementations of the same rule can drift together in exactly the way
+    that leaves a differential check passing while both are wrong. The point
+    of this guard is to compare the snapshot against the producer, so the
+    producer has to actually run.
+
+    ``build_retention_aged_conversation`` is that producer: it is the
+    function ``fixtures/world.py`` calls to mint these rows. Passing
+    ``pinned_now=created_at`` with ``age_days=0`` reproduces the row's own
+    creation instant, so whatever it returns is what a re-mint would write
+    today.
     """
 
-    if retention_days == 30:
-        return created_at + _THIRTY_DAY_WINDOW
-    return created_at + EPHEMERAL_ABANDONED_GRACE
+    bundle = conv_gen.build_retention_aged_conversation(
+        org_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        id_seed="snapshot-agreement-probe",
+        retention_days=retention_days,
+        age_days=0,
+        pinned_now=created_at,
+        title="snapshot agreement probe",
+    )
+    return bundle.conversation.expires_at
 
 
 def test_snapshot_conversation_expiries_match_the_production_rule() -> None:
@@ -84,11 +100,21 @@ def test_snapshot_conversation_expiries_match_the_production_rule() -> None:
         actual_raw = _unwrap(row[idx["expires_at"]])
         title = _unwrap(row[idx["title"]])
 
-        expected = _expected_expiry(created_at, retention_days)
+        expected = _produced_expiry(created_at, retention_days)
+        if actual_raw is None and expected is None:
+            # Genuine agreement: the generator produces no expiry for this
+            # row and the snapshot has none. Checked BEFORE the NULL branch
+            # below, which otherwise reported "snapshot has NULL, the
+            # generator produces None" as a disagreement -- a guard that
+            # cries wolf in a legitimately agreeing state. Found by mutating
+            # the generator back to its pre-fix rule and reading the failure
+            # rather than trusting the pass/fail bit.
+            continue
         if actual_raw is None:
             disagreements.append(
                 f"{title!r} (retention_days={retention_days}): snapshot has "
-                f"expires_at=NULL, production would stamp {expected.isoformat()}"
+                f"expires_at=NULL, the generator produces "
+                f"{expected.isoformat() if expected else None}"
             )
             continue
         actual = datetime.fromisoformat(actual_raw)
@@ -97,8 +123,8 @@ def test_snapshot_conversation_expiries_match_the_production_rule() -> None:
         if actual != expected:
             disagreements.append(
                 f"{title!r} (retention_days={retention_days}): snapshot has "
-                f"{actual.isoformat()}, production would stamp "
-                f"{expected.isoformat()}"
+                f"{actual.isoformat()}, the generator produces "
+                f"{expected.isoformat() if expected else None}"
             )
 
     assert not disagreements, (

@@ -7,7 +7,9 @@ import hashlib
 import json
 import time
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from dev_health_ops.llm.providers._http import make_hardened_async_httpx_client
 from dev_health_ops.llm.providers.openai_capabilities import (
@@ -116,10 +118,141 @@ _STRUCTURAL_SCHEMA_KEYS = frozenset(
 # small, non-None cost, so ProviderBudget.add's reconciliation branch
 # replaces the reservation with the true (near-zero) figure instead of
 # leaving it stuck.
+# CHAOS-3552: "gpt-5-nano" had no entry either, and it is what the dev stack
+# actually configures (ops/.env LLM_MODEL). The same defect as the scripted
+# model above, one level more serious because it is a REAL model on a real
+# endpoint: measured at 4 rounds x the US$1 reservation, a run booked US$4.00
+# against a real cost of US$0.018 -- a 222x overcharge that exhausted the
+# default US$100 monthly allowance after 25 runs, against a request cap of
+# 1,000. That is what CHAOS-3523's "the allowance is gating platform runs"
+# turned out to be.
+# Source snapshot: https://developers.openai.com/api/docs/models/gpt-5-nano
 _PLATFORM_MODEL_PRICES: dict[str, tuple[int, int]] = {
     "gpt-5-mini": (250_000, 2_000_000),
+    "gpt-5-nano": (50_000, 400_000),
     "ask-dev-scripted-v1": (1_000, 1_000),
 }
+
+#: The deterministic acceptance provider's model id
+#: (``scripted_openai_service.SCRIPTED_OPENAI_MODEL``), named so the carve-out
+#: keys on it exactly rather than on a bare literal.
+SCRIPTED_FIXTURE_MODEL = "ask-dev-scripted-v1"
+
+#: Models exempt from the unpriced-model configuration error, by EXACT id.
+#:
+#: Exactly one entry, and a test pins the count. A test double is not an
+#: unpriced production model: it has no inference cost to get wrong, and the
+#: acceptance stack runs on it, so failing construction here would take that
+#: stack down for a fault it cannot have.
+#:
+#: Membership is exact -- deliberately NOT the prefix match
+#: ``_estimated_cost_microusd`` uses for real models below. A carve-out in that
+#: style would admit ``ask-dev-scripted-v1-v2`` and every other stem-sharer,
+#: which is how a deliberate exception becomes an accidental default. The
+#: anti-widening control in ``test_chaos_3552_platform_price_book.py`` asserts
+#: each such neighbour still fails loud.
+_CARVE_OUT_MODELS = frozenset({SCRIPTED_FIXTURE_MODEL})
+
+
+class PlatformCostMetering(StrEnum):
+    """Whether a platform provider's cost can be metered, and if not, why not.
+
+    CHAOS-3552. The distinction is load-bearing because the two "no price"
+    cases want OPPOSITE handling, and collapsing them is precisely the bug: a
+    model nobody priced is today indistinguishable from a deployment that
+    cannot be priced, so both silently book the US$1 reservation as the cost.
+    """
+
+    #: A real price exists for this provider/model/endpoint.
+    PRICED = "priced"
+    #: The deterministic acceptance fixture -- see ``_CARVE_OUT_MODELS``.
+    FIXTURE = "fixture"
+    #: Self-hosted, or any non-official endpoint. Genuinely has no dollar cost
+    #: to report, and pricing it at OpenAI's rates would FABRICATE one. Not an
+    #: error -- the run proceeds unmetered.
+    UNMETERED_SELF_HOSTED = "unmetered_self_hosted"
+    #: A real OpenAI model on the official endpoint that this build has no
+    #: price for. Operator misconfiguration, and the only case that fails.
+    UNPRICED_CONFIGURATION_ERROR = "unpriced_configuration_error"
+
+
+def _official_openai_endpoint(base_url: str | None) -> bool:
+    """Whether ``base_url`` is OpenAI's own API.
+
+    Mirrors ``llm.budget._official_openai_endpoint``. Duplicated deliberately
+    and temporarily: importing ``llm.budget`` here would pull SQLAlchemy, the
+    session factory and the licensing models into this provider's import graph
+    for one predicate. Stage 2 (CHAOS-3559) deletes this module's price book in
+    favour of ``budget.reliable_price`` and takes the duplication with it;
+    until then a differential test pins the two equal rather than letting them
+    drift -- which is the failure this whole ticket is about.
+    """
+
+    if not (base_url or "").strip():
+        return True
+    try:
+        parsed = urlsplit(str(base_url))
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and parsed.hostname == "api.openai.com"
+
+
+def _canonical_priced_model(model: str) -> str | None:
+    """The price-book key ``model`` resolves to, honouring dated variants.
+
+    Prefix matching exists for real models, which providers pin as dated
+    snapshots (``gpt-5-nano-2026-01-01`` is the same model at the same rates).
+
+    It is switched OFF for carve-out entries, and that exception is not
+    cosmetic -- the anti-widening test caught this exact hole in the first
+    revision of this change. The fixture is IN the price book, so prefix
+    matching resolved ``ask-dev-scripted-v1-v2`` to it and reported the
+    stranger as PRICED, widening the carve-out through the price book rather
+    than through ``_CARVE_OUT_MODELS``. A test double has no dated variants to
+    honour: an id that is not exactly the fixture is not the fixture.
+    """
+
+    return next(
+        (
+            known
+            for known in _PLATFORM_MODEL_PRICES
+            if model == known
+            or (known not in _CARVE_OUT_MODELS and model.startswith(f"{known}-"))
+        ),
+        None,
+    )
+
+
+def platform_cost_metering(
+    *, provider: str, model: str, base_url: str | None
+) -> PlatformCostMetering:
+    """Classify how -- or whether -- this platform provider's cost can be metered.
+
+    CHAOS-3552. This REPLACES the invariant the ticket proposed ("assert every
+    certified model is priced"), which is not implementable:
+    ``CERTIFIED_PLATFORM_AGENT_PROVIDERS`` lists PROVIDERS, not models; the
+    model is operator-configured at runtime; and self-hosted providers are
+    unpriced BY DESIGN (``budget.py``: "An absent pair is unavailable, never
+    zero"). Requiring a price for every certified provider would break every
+    self-hosted deployment.
+
+    Enforced instead: *a platform provider whose cost cannot be priced must
+    never silently book the reservation as its cost.* Only
+    ``UNPRICED_CONFIGURATION_ERROR`` is a fault; the other three are answers.
+
+    Order matters. The fixture is checked FIRST, before the endpoint test,
+    because the acceptance stack serves it from its own scripted endpoint --
+    classifying it as self-hosted would be true but useless, and would lose the
+    near-zero price that keeps its reservation reconciled.
+    """
+
+    if model.strip() in _CARVE_OUT_MODELS:
+        return PlatformCostMetering.FIXTURE
+    if provider.strip().lower() != "openai" or not _official_openai_endpoint(base_url):
+        return PlatformCostMetering.UNMETERED_SELF_HOSTED
+    if _canonical_priced_model(model) is None:
+        return PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR
+    return PlatformCostMetering.PRICED
 
 
 def _fingerprint(*parts: str) -> str:
@@ -129,14 +262,7 @@ def _fingerprint(*parts: str) -> str:
 def _estimated_cost_microusd(
     *, model: str, input_tokens: int, output_tokens: int
 ) -> int | None:
-    canonical_model = next(
-        (
-            known
-            for known in _PLATFORM_MODEL_PRICES
-            if model == known or model.startswith(f"{known}-")
-        ),
-        None,
-    )
+    canonical_model = _canonical_priced_model(model)
     if canonical_model is None:
         return None
     input_rate, output_rate = _PLATFORM_MODEL_PRICES[canonical_model]

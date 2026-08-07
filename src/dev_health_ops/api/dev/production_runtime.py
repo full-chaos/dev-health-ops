@@ -30,7 +30,9 @@ from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErr
 from dev_health_ops.llm.agent.openai_compatible import (
     READINESS_VERSION,
     OpenAICompatibleAgentProvider,
+    PlatformCostMetering,
     build_completion_request,
+    platform_cost_metering,
 )
 from dev_health_ops.llm.agent.policy import (
     CERTIFIED_PLATFORM_AGENT_PROVIDERS,
@@ -1096,6 +1098,40 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
     if candidate.provider not in CERTIFIED_PLATFORM_AGENT_PROVIDERS:
         raise DevRuntimeUnavailable(
             "model_not_supported", "The configured Ask Dev model is not supported."
+        )
+    # CHAOS-3552: an unpriced model must not reach the runtime.
+    #
+    # ProviderBudget reserves US$1 per model call and reconciles it down to the
+    # real cost afterwards -- but ONLY when a real cost exists.
+    # ``_estimated_cost_microusd`` returns None for an unpriced model and the
+    # reconciliation branch leaves the reservation standing, so every call
+    # permanently books US$1 against the org's monthly allowance. Measured on
+    # the dev stack's own ``gpt-5-nano``: US$4.00 booked per run against
+    # US$0.018 real -- a 222x overcharge that exhausted the default US$100
+    # allowance after 25 runs, against a 1,000-run request cap. That is what
+    # CHAOS-3523's "bounds sized for BYO are gating platform runs" actually was.
+    #
+    # Refused HERE, at construction, rather than left to surface as wrong
+    # numbers at runtime: it is an operator configuration fault, and a fault
+    # that reports itself as plausible cost data is worse than one that stops
+    # the process. Only the genuine misconfiguration raises -- self-hosted
+    # deployments are unpriceable by design and pass through unmetered, and the
+    # deterministic acceptance fixture is carved out. See
+    # ``platform_cost_metering``.
+    metering = platform_cost_metering(
+        provider=candidate.provider,
+        model=candidate.model,
+        base_url=candidate.credentials.base_url,
+    )
+    if metering is PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR:
+        logger.error(
+            "ask_dev.platform_model_unpriced",
+            extra={"model": candidate.model, "provider": candidate.provider},
+        )
+        raise DevRuntimeUnavailable(
+            "model_not_supported",
+            "The configured Ask Dev model has no price entry, so run cost "
+            "cannot be metered. Configure a priced model or add its price.",
         )
     return OpenAICompatibleAgentProvider(
         api_key=candidate.credentials.api_key or "platform-openai-compatible",

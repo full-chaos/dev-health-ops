@@ -342,12 +342,18 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	// "disabled" means this claim's integration configured no durable targets —
 	// the only remaining reason Projects v2 contributes nothing. It is NOT the
 	// state an operator lands in by setting GITHUB_PROJECTS_V2 in the process
-	// environment: D18 puts the environment outside the Go route entirely, so
-	// env-only configuration reads here as no configuration at all and issues
-	// zero GraphQL requests. CHAOS-3506 adds the startup-readiness warning that
-	// makes that silence audible at boot, which is where it belongs — reading
-	// the environment on this path to warn about it would reintroduce exactly
-	// the dependency the decision removes.
+	// environment: D18 puts the environment outside the Go route for
+	// CREDENTIALS AND TARGETS, so env-only configuration reads here as no
+	// configuration at all and issues zero GraphQL requests.
+	//
+	// Scoped deliberately, because "no environment reads at all" would be
+	// false: github_work_items_rows.go:869 reads GITHUB_LINEAR_LINKBACK_BOTS
+	// for bot-identity classification. That is presentation policy, not
+	// credentials or targets, and D18 does not reach it.
+	//
+	// CHAOS-3506 adds the startup-readiness warning that makes this silence
+	// audible at boot, which is where it belongs — reading the environment on
+	// this path to warn about it would reintroduce the dependency D18 removes.
 	projectState := "disabled"
 	if len(projectTargets) > 0 {
 		projectResult, projectErr := handler.Projects.Fetch(

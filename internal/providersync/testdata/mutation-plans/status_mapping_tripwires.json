@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3505 tripwire proof: every mirrored quirk fails in BOTH directions",
+  "build": ["go", "build", "./..."],
+  "$limitation": "This plan does not test the port. It tests the TRIPWIRES that pin the deliberately-mirrored quirks, and it exists because the differential oracles cannot do that job alone: an oracle compares Go against Python, so it goes GREEN if both sides are 'fixed' together and a mirrored quirk would then disappear with nothing failing. Mutations T1-T4 fix the quirk in the GO ENGINE (the tripwire must fail); T5-T6 change the REAL CONFIG the pin depends on (the tripwire must also fail, rather than passing vacuously about a section that no longer exists). A tripwire that survives either direction is not a pin.",
+  "mutations": [
+    {
+      "id": "T1-engine-fix-linear-becomes-reachable",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "var statusMappingProviders = []string{\"jira\", \"github\", \"gitlab\"}",
+      "replace": "var statusMappingProviders = []string{\"jira\", \"github\", \"gitlab\", \"linear\"}",
+      "rationale": "CHAOS-3505 fixed in the engine. The linear tripwire must fail, because that fix changes Linear classification on three axes and must not land silently inside a bug-for-bug port.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestRealConfigDeclaresLinearButTheLoaderIgnoresIt$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T2-engine-fix-pr-gains-a-priority",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\"incident\", \"bug\", \"epic\", \"story\", \"task\", \"chore\", \"issue\", \"unknown\",",
+      "replace": "\t\"incident\", \"bug\", \"epic\", \"story\", \"task\", \"chore\", \"issue\", \"pr\", \"merge_request\", \"unknown\",",
+      "rationale": "Quirk 8 fixed by giving the two orphaned types a priority. The completeness tripwire must fail: the label arm stops falling through, which changes answers wherever such a label is the only match.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestTypePriorityOmitsExactlyPrAndMergeRequest$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T3-engine-stops-reproducing-pythons-dict-repr",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\treturn pythonRepr(node)\n}",
+      "replace": "\treturn node.Value, nil\n}",
+      "rationale": "The engine stops reproducing str(dict) for the mis-parsed mapping. The misparse tripwire must fail, not just the oracle -- otherwise the only thing protecting that key is a comparison that a coordinated 'fix' on both sides would silence.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestRealConfigGithubTypeBugLabelIsAMisparsedMapping$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T4-engine-fills-the-empty-type-index",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\ttypeIndex, err := buildCategoryIndex(\n\t\t\tproviderConfig, \"types\", validWorkItemTypes)",
+      "replace": "\t\ttypeIndex, err := buildCategoryIndex(\n\t\t\tproviderConfig, \"type_labels\", validWorkItemTypes)",
+      "rationale": "Reading the wrong section makes github/gitlab's type_by_provider non-empty, reviving the dead type_raw arm. The structural-deadness tripwire must fail.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestRealConfigTypeSectionsThatDoNotExist$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T5-config-fix-the-yaml-typo",
+      "file": "src/dev_health_ops/config/status_mapping.yaml",
+      "find": "        - type: bug",
+      "replace": "        - type:bug",
+      "rationale": "THE CONFIG DIRECTION. Correcting the one-space typo makes the entry a plain string, so GitHub items labelled type:bug start classifying as bug instead of issue. The tripwire must fail rather than quietly keep passing about a mapping that is no longer there -- this is the direction an oracle can never see, because both engines would agree on the new value.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestRealConfigGithubTypeBugLabelIsAMisparsedMapping$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T6-config-rename-the-ignored-linear-section",
+      "file": "src/dev_health_ops/config/status_mapping.yaml",
+      "find": "  linear:",
+      "replace": "  linearx:",
+      "rationale": "THE CONFIG DIRECTION for CHAOS-3505. If the ignored section is renamed or deleted, the linear pin describes nothing; a tripwire that still passed would be reporting coverage it no longer has. Both engines would agree here too, so again the oracle cannot catch it.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestRealConfigDeclaresLinearButTheLoaderIgnoresIt$", "./internal/providersync/"]]
+    }
+  ]
+}

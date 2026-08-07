@@ -39,10 +39,12 @@ class _FakeApi:
         flag_globally_enabled: bool = True,
         flag_present: bool = True,
         override_enabled: bool | None = None,
+        expires_at: str | None = None,
     ) -> None:
         self.flag_globally_enabled = flag_globally_enabled
         self.flag_present = flag_present
         self.override_enabled = override_enabled
+        self.expires_at = expires_at
         self.calls: list[tuple[str, str]] = []
 
     def request(
@@ -68,13 +70,24 @@ class _FakeApi:
                         "id": "override-1",
                         "feature_key": WAVE_3_1_FEATURE_KEY,
                         "is_enabled": self.override_enabled,
+                        "expires_at": self.expires_at,
                     }
                 ]
             self.override_enabled = bool((payload or {}).get("is_enabled"))
-            return {"id": "override-1", "is_enabled": self.override_enabled}
+            self.expires_at = (payload or {}).get("expires_at")
+            return {
+                "id": "override-1",
+                "is_enabled": self.override_enabled,
+                "expires_at": self.expires_at,
+            }
         if "/feature-overrides/" in path:
             self.override_enabled = bool((payload or {}).get("is_enabled"))
-            return {"id": "override-1", "is_enabled": self.override_enabled}
+            self.expires_at = (payload or {}).get("expires_at")
+            return {
+                "id": "override-1",
+                "is_enabled": self.override_enabled,
+                "expires_at": self.expires_at,
+            }
         raise AssertionError(f"unexpected request {method} {path}")
 
 
@@ -136,3 +149,36 @@ class TestHappyPath:
         api = _FakeApi(flag_present=False)
         with pytest.raises(FeatureEnablementError, match="not registered"):
             ensure_wave_3_1_enabled(api, org_id=_ORG)
+
+
+class TestExpiredOverride:
+    """Codex adversarial review round 2 (MEDIUM, confirmed against
+    ``licensing/feature_decisions.py``, which reads ``expires_at`` into
+    ``FeatureOverrideSnapshot`` and lets an expired override stop granting):
+    an ``is_enabled: true`` override that has EXPIRED is denied by production
+    while a read-back that inspects only ``is_enabled`` is satisfied. Same
+    false-certification class as the global-kill-switch hole -- the corpus
+    would measure the legacy path while every receipt certified otherwise.
+    """
+
+    def test_verify_refuses_an_enabled_but_expired_override(self) -> None:
+        api = _FakeApi(override_enabled=True, expires_at="2020-01-01T00:00:00Z")
+        with pytest.raises(FeatureEnablementError, match="expired"):
+            verify_wave_3_1_enabled(api, org_id=_ORG)
+
+    def test_ensure_rewrites_an_enabled_but_expired_override(self) -> None:
+        """Must not early-return "already enabled" on an expired row -- it has
+        to clear the expiry, or the run proceeds on a grant production does
+        not honour."""
+
+        api = _FakeApi(override_enabled=True, expires_at="2020-01-01T00:00:00Z")
+        assert ensure_wave_3_1_enabled(api, org_id=_ORG) is True
+        assert api.expires_at is None
+        verify_wave_3_1_enabled(api, org_id=_ORG)
+
+    def test_a_future_expiry_is_accepted(self) -> None:
+        """Not-yet-expired is a real grant; this must not over-fire."""
+
+        api = _FakeApi(override_enabled=True, expires_at="2099-01-01T00:00:00Z")
+        assert ensure_wave_3_1_enabled(api, org_id=_ORG) is False
+        verify_wave_3_1_enabled(api, org_id=_ORG)

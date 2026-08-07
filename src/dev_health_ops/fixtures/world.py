@@ -559,7 +559,50 @@ class WorldManifest:
 #: kill-switch tweak that the restored rows genuinely do not encode. Each
 #: entry below is a field whose value a restored row actually carries or is
 #: derived from.
-_MANIFEST_CONTRACT_ORG_FIELDS: tuple[str, ...] = ("alias", "id_seed", "name", "slug")
+#: The feature flags this world realizes as ``org_feature_overrides``, mapped
+#: to the manifest org field that decides each one.
+#:
+#: ``ask_dev_wave_3_1`` (CHAOS-3219 Phase 2 exit) is SEEDED here rather than
+#: enabled at runtime by the corpus runner. Enabling it from the runner meant
+#: the first armed run WROTE to ``org_feature_overrides`` -- a table
+#: WORLD_DIGEST hashes -- so a second armed run against the same stack failed
+#: digest verification and needed a fresh restore, undoing the re-runnability
+#: ``principal_sessions`` had deliberately won back. Seeding restores it: a
+#: clean world already satisfies the precondition, so the runner's fixture
+#: verifies and writes nothing.
+#:
+#: Deliberately per-org, never global. The ``disabled`` org gets it OFF with
+#: its other entitlements so the disabled-entitlement cases keep their premise.
+#: The ``fixtures generate`` org -- the Wave 3.1 legacy positive-control
+#: oracle's org -- is not part of this manifest at all and is therefore
+#: untouched: that oracle must keep exercising the pre-3292 legacy loop, which
+#: is also why ``prepare_ask_dev_acceptance.py`` stays wave-3.1-free.
+_ENTITLEMENT_FIELDS: dict[str, str] = {
+    "ask_dev": "ask_dev_entitlement",
+    "ask_dev_contextual_entrypoints": "ask_dev_contextual_entrypoints_entitlement",
+    "ask_dev_wave_3_1": "ask_dev_wave_3_1_entitlement",
+}
+
+
+#: Org fields bound into the manifest contract hash. The entitlement
+#: fields are included (Codex adversarial review, HIGH, confirmed) because
+#: they DRIVE committed ``org_feature_overrides`` rows via
+#: :data:`_ENTITLEMENT_FIELDS`: flipping one without re-minting left the
+#: snapshot/world binding satisfied while the restored database
+#: contradicted the manifest premise every consumer reads -- the disabled
+#: org silently entitled, or ``ask_dev_wave_3_1`` silently off with
+#: receipts certified against the wrong runtime gate. WORLD_DIGEST cannot
+#: catch it: the digest is computed FROM THE DATABASE and the flipped
+#: value is faithfully restored, so it matches. Derived from
+#: ``_ENTITLEMENT_FIELDS`` rather than re-listed, so a future flag added
+#: there is bound automatically instead of silently unbound.
+_MANIFEST_CONTRACT_ORG_FIELDS: tuple[str, ...] = (
+    "alias",
+    "id_seed",
+    "name",
+    "slug",
+    *sorted(_ENTITLEMENT_FIELDS.values()),
+)
 _MANIFEST_CONTRACT_USER_FIELDS: tuple[str, ...] = (
     "alias",
     "org_alias",
@@ -1062,31 +1105,6 @@ def _build_auth_fixture(manifest: WorldManifest) -> dict[str, Any]:
         "memberships": memberships,
         "licenses": licenses,
     }
-
-
-#: The feature flags this world realizes as ``org_feature_overrides``, mapped
-#: to the manifest org field that decides each one.
-#:
-#: ``ask_dev_wave_3_1`` (CHAOS-3219 Phase 2 exit) is SEEDED here rather than
-#: enabled at runtime by the corpus runner. Enabling it from the runner meant
-#: the first armed run WROTE to ``org_feature_overrides`` -- a table
-#: WORLD_DIGEST hashes -- so a second armed run against the same stack failed
-#: digest verification and needed a fresh restore, undoing the re-runnability
-#: ``principal_sessions`` had deliberately won back. Seeding restores it: a
-#: clean world already satisfies the precondition, so the runner's fixture
-#: verifies and writes nothing.
-#:
-#: Deliberately per-org, never global. The ``disabled`` org gets it OFF with
-#: its other entitlements so the disabled-entitlement cases keep their premise.
-#: The ``fixtures generate`` org -- the Wave 3.1 legacy positive-control
-#: oracle's org -- is not part of this manifest at all and is therefore
-#: untouched: that oracle must keep exercising the pre-3292 legacy loop, which
-#: is also why ``prepare_ask_dev_acceptance.py`` stays wave-3.1-free.
-_ENTITLEMENT_FIELDS: dict[str, str] = {
-    "ask_dev": "ask_dev_entitlement",
-    "ask_dev_contextual_entrypoints": "ask_dev_contextual_entrypoints_entitlement",
-    "ask_dev_wave_3_1": "ask_dev_wave_3_1_entitlement",
-}
 
 
 async def _seed_entitlements(session: Any, manifest: WorldManifest) -> None:

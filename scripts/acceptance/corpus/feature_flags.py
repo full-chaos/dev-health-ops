@@ -31,6 +31,7 @@ silently produce another 91 legacy-path receipts.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 WAVE_3_1_FEATURE_KEY = "ask_dev_wave_3_1"
@@ -40,6 +41,46 @@ _REASON = "CHAOS-3219 Wave 4 corpus acceptance run"
 
 class FeatureEnablementError(RuntimeError):
     """Raised when ``ask_dev_wave_3_1`` could not be enabled for an org."""
+
+
+def _override_expiry_is_past(item: Any) -> bool:
+    """Whether this override row carries an ``expires_at`` already in the past.
+
+    Codex adversarial review round 2 (MEDIUM, confirmed against
+    ``licensing/feature_decisions.py``, which reads ``expires_at`` into
+    ``FeatureOverrideSnapshot``): production stops honouring an expired
+    override, so an ``is_enabled: true`` row that has expired grants nothing
+    at runtime. A read-back that inspects only ``is_enabled`` is satisfied by
+    exactly the shape production denies -- the same false-certification class
+    as the global kill switch, and it would put the corpus back on the legacy
+    path with every receipt certifying otherwise.
+
+    An unparseable value is treated as EXPIRED (fail closed): the corpus must
+    not proceed on a grant it cannot confirm.
+    """
+
+    raw = item.get("expires_at") if isinstance(item, dict) else None
+    if raw in (None, ""):
+        return False
+    if not isinstance(raw, str):
+        return True
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed <= datetime.now(UTC)
+
+
+def _override_is_effectively_enabled(item: Any) -> bool:
+    """``is_enabled`` AND not expired -- i.e. what production actually grants."""
+
+    return (
+        isinstance(item, dict)
+        and item.get("is_enabled") is True
+        and not _override_expiry_is_past(item)
+    )
 
 
 def _require_globally_enabled_flag(api: Any) -> dict[str, Any]:
@@ -144,15 +185,15 @@ def ensure_wave_3_1_enabled(api: Any, *, org_id: str) -> bool:
                 "reason": _REASON,
             },
         )
-        if not (isinstance(created, dict) and created.get("is_enabled") is True):
+        if not _override_is_effectively_enabled(created):
             raise FeatureEnablementError(
                 f"failed to enable {WAVE_3_1_FEATURE_KEY} for org {org_id}: {created!r}"
             )
         return True
 
-    if existing.get("is_enabled") is True:
-        # Already on -- the seeded-world path. Zero writes, so WORLD_DIGEST
-        # still verifies after this run.
+    if _override_is_effectively_enabled(existing):
+        # Already on AND unexpired -- the seeded-world path. Zero writes, so
+        # WORLD_DIGEST still verifies after this run.
         return False
 
     override_id = existing.get("id")
@@ -161,12 +202,15 @@ def ensure_wave_3_1_enabled(api: Any, *, org_id: str) -> bool:
             f"{WAVE_3_1_FEATURE_KEY} override for org {org_id} has no usable id: "
             f"{existing!r}"
         )
+    # `expires_at: None` is sent explicitly: flipping only `is_enabled` on an
+    # expired row leaves the expiry intact, so production still denies it and
+    # the run proceeds on a grant that does not exist.
     updated = api.request(
         "PATCH",
         f"{override_path}/{override_id}",
-        {"is_enabled": True, "reason": _REASON},
+        {"is_enabled": True, "reason": _REASON, "expires_at": None},
     )
-    if not (isinstance(updated, dict) and updated.get("is_enabled") is True):
+    if not _override_is_effectively_enabled(updated):
         raise FeatureEnablementError(
             f"failed to enable {WAVE_3_1_FEATURE_KEY} for org {org_id}: {updated!r}"
         )
@@ -205,6 +249,13 @@ def verify_wave_3_1_enabled(api: Any, *, org_id: str) -> None:
         ),
         None,
     )
+    if match is not None and _override_expiry_is_past(match):
+        raise FeatureEnablementError(
+            f"{WAVE_3_1_FEATURE_KEY} override for org {org_id} is EXPIRED "
+            f"(expires_at={match.get('expires_at')!r}) -- production stops "
+            "honouring an expired override, so this would measure the "
+            "pre-3292 legacy path while claiming the Wave 3.1 path"
+        )
     if match is None or match.get("is_enabled") is not True:
         raise FeatureEnablementError(
             f"{WAVE_3_1_FEATURE_KEY} read back as NOT enabled for org "

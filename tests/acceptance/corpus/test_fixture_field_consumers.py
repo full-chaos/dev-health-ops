@@ -1,7 +1,9 @@
 """CHAOS-3546: a fixture field that reads as CONFIGURATION must be consumed.
 
-Three confirmed instances of the same class (the ticket's own count), and
-their disposition:
+Four confirmed instances of the same class (the ticket named three; a
+fourth, ``kill_switches``, was found by the Phase 4d lane while this guard
+was in flight and folded in here rather than filed separately), and their
+disposition:
 
 * ``ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR`` -- set nowhere, read only from
   scrub lists, while the container silently fell back to a relative path
@@ -29,13 +31,29 @@ their disposition:
   exists nowhere today (no DB column, no migration, no settings-table write
   in the acceptance world-builder) -- rather than connecting an existing
   seam, a product-shape decision out of this ticket's scope. The field is
-  deleted from world.json. The two corpus cases it drove
-  (``deg.provider.unsupported``, ``readiness.capabilities.unsupported-model``)
-  are flipped ``status: "declared-blocked"`` on CHAOS-3588 (the follow-up
-  that must choose a real per-user or per-org denial mechanism and re-author
+  deleted from world.json. THREE corpus cases it drove
+  (``deg.provider.unsupported``, ``readiness.capabilities.unsupported-model``,
+  and ``readiness.capabilities.degraded`` -- the third found while editing
+  its two siblings, not in the ticket's original two-case count) are
+  flipped ``status: "declared-blocked"`` on CHAOS-3588 (the follow-up that
+  must choose a real per-user or per-org denial mechanism and re-author
   them) rather than left silently green on a mechanism that never fires --
-  they were PASSING while proving nothing about unsupported-model handling,
-  the exact false-coverage shape this ticket exists to close.
+  all three were PASSING while proving nothing about unsupported-model/
+  degraded-readiness handling, the exact false-coverage shape this ticket
+  exists to close.
+* ``kill_switches`` -- declared per-org in world.json (global/org/provider/
+  role/surface/contextual_entry, every fixture org's copy hardcoded
+  ``"enabled"``), referenced nowhere in ``src/``. RETIRED: CHAOS-3458 (Done)
+  already ruled the whole granular kill-switch concept superseded -- the
+  single real mechanism is ``emergency_disabled``
+  (``org_policy.ASK_DEV_EMERGENCY_DISABLED_KEY``, a settings-table boolean,
+  actually read by ``router.py``/``ask_dev.py``). That ticket's own 6 named
+  ``ops.kill-switch.*`` corpus ids confirm zero production enforcement ever
+  existed for this fixture; the 2 that were actually authored as case files
+  are declared-blocked for unrelated reasons already (CHAOS-3454, CHAOS-3549)
+  and neither references ``kill_switches`` by name, so retiring the field has
+  no corpus dependent to flip -- unlike ``provider_profile_override``, a
+  clean deletion. Removed from all 3 world.json org entries.
 
 Each instance made a scenario look configured when nothing configured it,
 and every test that "covered" it asserted nothing about it. This module is
@@ -400,3 +418,31 @@ def test_the_provider_profile_override_cases_are_declared_blocked() -> None:
         assert raw["blocked_by"] == "CHAOS-3588", (
             f"{case_id}: blocked_by={raw['blocked_by']!r}, expected 'CHAOS-3588'"
         )
+
+
+# ---------------------------------------------------------------------------
+# kill_switches -- RETIRED (CHAOS-3546, found by the Phase 4d lane). CHAOS-3458
+# (Done) already ruled the granular kill-switch concept superseded by the
+# single emergency_disabled mechanism; no corpus case references this field,
+# so retiring it is a clean deletion with no dependent to flip.
+# ---------------------------------------------------------------------------
+
+
+def test_kill_switches_is_retired_from_world_json() -> None:
+    """Asserts absence directly (the field is gone from every world.json org
+    entry, not merely unread) so a future reintroduction is caught precisely.
+    See the module docstring for the CHAOS-3458 citation.
+    """
+
+    import json
+
+    world = json.loads((_WORLD_DIR / "world.json").read_text(encoding="utf-8"))
+    offenders = [
+        org["alias"] for org in world.get("orgs", []) if "kill_switches" in org
+    ]
+    assert offenders == [], (
+        f"kill_switches reappeared on org(s) {offenders} -- CHAOS-3458 ruled "
+        "the granular kill-switch concept superseded by emergency_disabled; "
+        "either wire this for real (move it into FIXTURE_FIELD_REGISTRY with "
+        "a consumer_check) or keep it retired"
+    )

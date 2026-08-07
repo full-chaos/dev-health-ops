@@ -37,6 +37,13 @@ const gitHubProjectsV2IntegrationConfigKey = "github_projects_v2"
 //
 // Ratification is not activation: this collector still owns no registration,
 // readiness, watermark, or alias.
+// KNOWN, NOT FIXED: a project_number above 2^53 loses precision before this
+// struct ever sees it. The claim's integration_config is decoded by a plain
+// json.Unmarshal into map[string]any, so every number is a float64 by the time
+// it reaches here -- 9007199254740993 arrives as ...992. Documented rather than
+// fixed because GitHub project numbers are small sequential integers per
+// organisation and nothing near that bound is reachable; a json.Decoder with
+// UseNumber() at the repository boundary would be the fix if that ever changes.
 type GitHubProjectV2Target struct {
 	OrgLogin      string `json:"org_login"`
 	ProjectNumber int    `json:"project_number"`

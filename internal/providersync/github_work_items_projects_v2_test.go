@@ -51,13 +51,17 @@ func TestGitHubProjectV2RatificationIsNotActivation(t *testing.T) {
 	}
 }
 
-// D18 puts the environment outside the Go route. The positive half of that
-// ("durable config wins") is pinned above; this is the negative half, and it
-// asserts the REQUEST COUNTER rather than the row set. An assertion on empty
-// rows would pass just as happily with the whole collector deleted, and would
-// also pass if Go quietly adopted the env targets and the fixture returned
-// nothing — the only observation that separates "ignored the environment" from
-// "used the environment and found nothing" is that no request was ever issued.
+// D18 puts the environment outside the Go route for CREDENTIALS AND TARGETS.
+// The positive half ("durable config wins") is pinned above; this is the
+// negative half.
+//
+// What actually holds the line here is the `len(targets) != 0` assertion a few
+// lines down: with no durable config the collector never enters its fetch loop,
+// so the request counter cannot rise no matter what the environment says. The
+// counter assertion is a BACKSTOP against a future collector that reads the
+// environment further down the path, not the thing failing today — worth
+// stating, because a counter that cannot currently be tripped reads like
+// stronger evidence than it is.
 func TestGitHubProjectV2EnvironmentTargetsAreNeverAFallback(t *testing.T) {
 	t.Setenv("GITHUB_PROJECTS_V2", "acme:3,labs:12")
 	t.Setenv("GITHUB_TOKEN", "ghp_environment_token_that_must_never_be_used")
@@ -82,8 +86,8 @@ func TestGitHubProjectV2EnvironmentTargetsAreNeverAFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(doer.bodies) != 0 {
-		t.Fatalf("environment configuration issued %d GraphQL request(s); D18 puts the "+
-			"environment outside the Go route entirely", len(doer.bodies))
+		t.Fatalf("environment configuration issued %d GraphQL request(s); D18 keeps "+
+			"credentials and targets out of the Go route", len(doer.bodies))
 	}
 	if result.Targets != 0 || result.Evidence.Requests != 0 || result.Usage.RequestCount != 0 {
 		t.Fatalf("environment configuration produced request accounting: %+v", result)

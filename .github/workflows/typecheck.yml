@@ -39,6 +39,24 @@ jobs:
               # by a PR they then declined to run on.
               - '.github/workflows/**'
               - 'src/**'
+              # Inputs that decide what these tools LOOK AT, not just how
+              # they behave. ruff honours .gitignore/.ignore for file
+              # discovery: appending `src/` to .gitignore drops its file set
+              # from 1045 source files to 0, and `ruff check` still exits 0 --
+              # a green required check that inspected nothing. ruff.toml /
+              # .ruff.toml and mypy.ini / .mypy.ini / setup.cfg are config
+              # files these tools discover by default; none exists today, and
+              # a PR ADDING one would not have matched this filter, so the
+              # gate would have skipped on the very change that redefined it
+              # (CHAOS-3513 Codex round 1, same shape as the workflow-file
+              # omission above).
+              - '.gitignore'
+              - '.ignore'
+              - 'ruff.toml'
+              - '.ruff.toml'
+              - 'mypy.ini'
+              - '.mypy.ini'
+              - 'setup.cfg'
               - 'tests/**'
               - 'ci/**'
               - 'migrations/**'

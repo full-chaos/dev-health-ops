@@ -790,3 +790,95 @@ def test_paths_filter_covers_the_acceptance_runtime_dependencies() -> None:
         f"filter does not select on them: a PR touching only those files skips "
         f"every test job and the required gate goes green with nothing run."
     )
+
+
+# --------------------------------------------------------------------------
+# Tool scope. CHAOS-3513 Codex round 1.
+#
+# The filters above decide whether a gate RUNS. These two decide whether a gate
+# that ran actually looked at anything -- the same failure dressed differently:
+# `ruff check .` over an empty file set exits 0 and reports a green required
+# check. Measured on this repo: appending `src/` to .gitignore takes ruff's
+# file set from 1045 source files to 0, silently.
+# --------------------------------------------------------------------------
+
+#: Config and ignore files that ruff and mypy discover by DEFAULT (from their
+#: documented discovery order). None of these exists in the repo today, which
+#: is exactly why they are listed: a PR adding one would redefine what the gate
+#: checks, and unless the filter selects on it, that PR skips the gate.
+_TOOL_SCOPE_INPUTS = (
+    ".gitignore",
+    ".ignore",
+    "ruff.toml",
+    ".ruff.toml",
+    "mypy.ini",
+    ".mypy.ini",
+    "setup.cfg",
+)
+
+
+@pytest.mark.parametrize("path", [LINT_PATH, TYPECHECK_PATH], ids=["lint", "typecheck"])
+def test_filter_selects_on_the_inputs_that_define_tool_scope(path: Path) -> None:
+    patterns = _patterns_of(path)
+    uncovered = sorted(
+        name for name in _TOOL_SCOPE_INPUTS if not _is_covered(name, patterns)
+    )
+    assert not uncovered, (
+        f"{path.name}'s `code` filter does not select on {uncovered}. These "
+        f"change what ruff/mypy look at, so a PR adding or editing one would "
+        f"skip this gate and every later run would be measured under the new "
+        f"scope. Patterns: {patterns}"
+    )
+
+
+def test_ruff_still_sees_the_source_and_test_trees() -> None:
+    # Given `ruff check .` -- whose exit status IS the lint gate -- silently
+    # honours .gitignore/.ignore for file discovery
+    ruff = ROOT / ".venv" / "bin" / "ruff"
+    if not ruff.exists():  # pragma: no cover - depends on local env layout
+        pytest.skip(f"ruff not present at {ruff}")
+
+    listed = subprocess.run(
+        [str(ruff), "check", "--show-files", "."],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    files = [line for line in listed.stdout.splitlines() if line.strip()]
+
+    # Then the trees the gate exists to lint are actually in its file set.
+    # A scope collapse makes `ruff check` pass over nothing, which reads as a
+    # clean gate; this fails loudly instead.
+    assert any("/src/" in name for name in files), (
+        "ruff would check no files under src/ -- the lint gate would pass "
+        "having inspected none of the source. Check .gitignore/.ignore and "
+        "any ruff config for an exclusion that swallowed the tree."
+    )
+    assert any("/tests/" in name for name in files), (
+        "ruff would check no files under tests/ -- same failure, one tree over."
+    )
+    # And the count is sane rather than a handful of stragglers left behind by
+    # a partial exclusion. The floor is deliberately far below today's ~2100.
+    assert len(files) > 500, f"ruff would check only {len(files)} files"
+
+
+def test_mypy_configuration_comes_from_the_file_the_filter_gates() -> None:
+    # Given mypy discovers mypy.ini, .mypy.ini and setup.cfg BEFORE pyproject
+    competing = [
+        name
+        for name in ("mypy.ini", ".mypy.ini", "setup.cfg")
+        if (ROOT / name).exists()
+    ]
+
+    # Then none of them exists, so the settings the typecheck gate enforces are
+    # the ones in pyproject.toml -- which the filter does select on. If this
+    # fails, a config file was added that outranks pyproject: either delete it
+    # or pin the job with `mypy --config-file pyproject.toml`.
+    assert not competing, (
+        f"{competing} outrank pyproject.toml in mypy's discovery order, so the "
+        f"typecheck gate is no longer enforcing the settings its filter gates"
+    )
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.mypy]" in pyproject, "mypy settings are not where this test believes"

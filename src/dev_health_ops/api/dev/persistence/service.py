@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import and_, case, event, func, or_, select
+from sqlalchemy import and_, event, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -35,7 +35,12 @@ from dev_health_ops.api.dev.contracts_v2.narrative import (
 from dev_health_ops.api.dev.contracts_v2.subject import (
     DevResolutionEntry as DevResolutionEntryContract,
 )
-from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
+from dev_health_ops.api.dev.org_policy import (
+    ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+    TERMINAL_RUN_STATES,
+    platform_month_window,
+)
+from dev_health_ops.api.services import askdev_allowance_counters
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
     DevAnswerFrame,
@@ -156,15 +161,13 @@ def _wire_visible_message_condition():
 #: collected on the next tick, unchanged.
 EPHEMERAL_ABANDONED_GRACE = timedelta(hours=1)
 
-_TERMINAL_RUN_STATES = frozenset(
-    {
-        "completed",
-        "insufficient_evidence",
-        "refused",
-        "failed",
-        "cancelled",
-    }
-)
+#: Alias of org_policy.TERMINAL_RUN_STATES, kept private-named here for this
+#: module's own existing call sites and tests/api/dev/test_chaos_3292_run_
+#: states.py, which names it directly. The canonical definition lives in
+#: org_policy.py so ask_dev.py and askdev_allowance_counters.py can share it
+#: without importing this module (and risking a cycle: this module imports
+#: askdev_allowance_counters, which must not import back).
+_TERMINAL_RUN_STATES = TERMINAL_RUN_STATES
 _RUN_STATES = _TERMINAL_RUN_STATES | frozenset(
     {
         "accepted",
@@ -1858,6 +1861,15 @@ class DevPersistenceService:
                     raise DevPersistenceValidationError(
                         "platform allowance requires a platform provider source"
                     )
+                # CHAOS-3522 ORDERING INVARIANT (also stated in
+                # askdev_allowance_counters.admit and _ensure_initialized):
+                # this call, and its own Valkey reservation, MUST complete
+                # before the DevRun row below is inserted. A cold-key
+                # baseline recompute reads dev_runs live -- if this run's
+                # row had already landed, a concurrent recompute for the
+                # same org could double-count it (once from the SQL scan,
+                # once from this call's own increment). Do not reorder this
+                # block after the DevRun/DevMessage construction below.
                 await self._enforce_platform_allowance(
                     org_id=org_id,
                     allowance=platform_allowance,
@@ -2396,6 +2408,24 @@ class DevPersistenceService:
         run.narrative_failure_code = safe_narrative_failure_code
         if state in _TERMINAL_RUN_STATES:
             run.ended_at = self._now()
+            # CHAOS-3522: reconcile the Valkey allowance counter's worst-case
+            # reservation down (or up) to the real cost. Placed HERE -- past
+            # the early "already terminal" return above, inside the mutate
+            # block that only runs on a genuine NEW terminal transition -- so
+            # this fires exactly once per run, structurally, not because a
+            # caller happens to be well-behaved (see
+            # test_persistence_v2.py's contract test, which drives this
+            # transition twice through the real path and asserts a single
+            # reconcile).
+            await askdev_allowance_counters.reconcile_terminal_cost(
+                self.session,
+                org_id=str(org_id),
+                provider_source=run.provider_source,
+                state=state,
+                estimated_cost_microusd=estimated_cost_microusd,
+                per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+                now=self._now(),
+            )
         await self.session.flush()
 
         ephemeral_conversation = None
@@ -3934,35 +3964,23 @@ class DevPersistenceService:
         org_id: uuid.UUID,
         allowance: DevPlatformAllowance,
     ) -> None:
+        # CHAOS-3522: reservation + limit check now goes through the shared
+        # Valkey counters (askdev_allowance_counters.admit), not a fresh
+        # dev_runs aggregate scan every admission. reset_at is still needed
+        # here only to shape the raised exceptions the same as before.
         now = self._now()
-        window_start = datetime(now.year, now.month, 1, tzinfo=UTC)
-        if now.month == 12:
-            reset_at = datetime(now.year + 1, 1, 1, tzinfo=UTC)
-        else:
-            reset_at = datetime(now.year, now.month + 1, 1, tzinfo=UTC)
-        terminal_with_cost = and_(
-            DevRun.state.in_(_TERMINAL_RUN_STATES),
-            DevRun.estimated_cost_microusd.is_not(None),
+        _window_start, reset_at = platform_month_window(now)
+        outcome = await askdev_allowance_counters.admit(
+            self.session,
+            org_id=str(org_id),
+            request_limit=allowance.monthly_request_limit,
+            cost_limit_microusd=allowance.monthly_cost_limit_microusd,
+            per_run_reservation_microusd=allowance.per_run_reservation_microusd,
+            now=now,
         )
-        charged_cost = case(
-            (terminal_with_cost, DevRun.estimated_cost_microusd),
-            else_=allowance.per_run_reservation_microusd,
-        )
-        statement = select(
-            func.count(DevRun.id), func.coalesce(func.sum(charged_cost), 0)
-        ).where(
-            DevRun.org_id == org_id,
-            DevRun.provider_source == "platform",
-            DevRun.started_at >= window_start,
-            DevRun.started_at < reset_at,
-        )
-        request_count, charged_microusd = (await self.session.execute(statement)).one()
-        if int(request_count or 0) >= allowance.monthly_request_limit:
+        if outcome is askdev_allowance_counters.AdmitOutcome.REQUEST_LIMIT_EXCEEDED:
             raise DevMonthlyRequestLimitExceeded(reset_at)
-        if (
-            int(charged_microusd or 0) + allowance.per_run_reservation_microusd
-            > allowance.monthly_cost_limit_microusd
-        ):
+        if outcome is askdev_allowance_counters.AdmitOutcome.COST_LIMIT_EXCEEDED:
             raise DevMonthlyCostLimitExceeded(reset_at)
 
     async def _message_run_by_client_id(

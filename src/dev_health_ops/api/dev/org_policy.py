@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
@@ -22,6 +23,23 @@ PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD = 10_000_000
 PLATFORM_MONTHLY_COST_LIMIT_DEFAULT_MICROUSD = 100_000_000
 PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD = 500_000_000
 ASK_DEV_RUN_COST_HARD_MAX_MICROUSD = 5_000_000
+
+#: The one definition of "this dev_run is finished". Previously duplicated
+#: (persistence/service.py's own ``_TERMINAL_RUN_STATES``, and a third bare
+#: literal inline in ask_dev.py's platform-allowance query) -- the same class
+#: of "two implementations of the same fact" as platform_month_window()
+#: above. persistence/service.py keeps a private ``_TERMINAL_RUN_STATES``
+#: alias importing this, for its own existing call sites and the test that
+#: names it directly.
+TERMINAL_RUN_STATES: frozenset[str] = frozenset(
+    {
+        "completed",
+        "insufficient_evidence",
+        "refused",
+        "failed",
+        "cancelled",
+    }
+)
 
 
 def _bounded_operator_limit(
@@ -51,6 +69,27 @@ def platform_operator_cost_limit_microusd() -> int:
         minimum=PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
         hard_maximum=PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD,
     )
+
+
+def platform_month_window(now: datetime) -> tuple[datetime, datetime]:
+    """The calendar-month-UTC window platform allowance is billed against.
+
+    CHAOS-3522: this is the ONE definition. Before, ``ask_dev.py``'s admin
+    usage read and ``persistence/service.py``'s admission enforcement each
+    hand-rolled their own copy of "start of this UTC month" / "start of next
+    UTC month" -- two implementations of "this month" that happened to agree
+    only because nobody had touched either in a while. The Valkey allowance
+    counter key (``askdev:allowance:{org_id}:{YYYY-MM}``) and its TTL are
+    also derived from this function, so a key an admission writes and a key
+    a read or the SQL fallback computes are always the same key by
+    construction, never by two authors independently getting the same
+    calendar math right.
+    """
+
+    start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    if now.month == 12:
+        return start, datetime(now.year + 1, 1, 1, tzinfo=UTC)
+    return start, datetime(now.year, now.month + 1, 1, tzinfo=UTC)
 
 
 @dataclass(frozen=True, slots=True)

@@ -396,6 +396,104 @@ async def test_update_run_without_provider_source_leaves_the_column_intact(
             )
 
 
+@pytest.mark.asyncio
+async def test_terminal_transition_reconciles_the_allowance_counter_exactly_once(
+    persistence, monkeypatch
+) -> None:
+    """CHAOS-3522 amendment 2: driving update_run's terminal transition twice
+    through the REAL path must reconcile the Valkey allowance counter exactly
+    once, not zero and not twice.
+
+    This is a contract test, not an inference: ``update_run``'s "already
+    terminal" early return happens BEFORE the mutate block that calls
+    ``askdev_allowance_counters.reconcile_terminal_cost`` -- placement, not
+    caller discipline, is what makes this exactly-once. A second call with
+    the SAME terminal state on an already-terminal run must be a structural
+    no-op for the counter, the same way it already is for every ORM field.
+    """
+
+    fakeredis = pytest.importorskip("fakeredis")
+    from dev_health_ops.api.services import (
+        askdev_allowance_counters as counters,
+    )
+
+    client = fakeredis.FakeAsyncValkey(server=fakeredis.FakeServer())
+    monkeypatch.setattr(counters, "_client", client)
+    monkeypatch.setattr(counters, "_circuit_open_until", 0.0)
+    monkeypatch.setattr(counters, "_needs_recovery_recompute", False)
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    allowance = DevPlatformAllowance(
+        monthly_request_limit=10,
+        monthly_cost_limit_microusd=6_000_000,
+    )
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Reconcile exactly once",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        run_id = accepted.run.id
+
+        # After admission: reservation charged in full (worst-case hard max).
+        from dev_health_ops.api.dev.org_policy import (
+            ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+            platform_month_window,
+        )
+
+        window_start, _reset_at = platform_month_window(datetime.now(UTC))
+        key = counters._key(str(org_id), window_start)
+        after_admission = await client.hmget(key, ["requests", "cost_microusd"])
+        assert after_admission == [
+            b"1",
+            str(ASK_DEV_RUN_COST_HARD_MAX_MICROUSD).encode(),
+        ]
+
+        first = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="completed",
+            estimated_cost_microusd=250_000,
+        )
+        assert first is not None
+        assert first.state == "completed"
+        after_first = await client.hmget(key, ["requests", "cost_microusd"])
+        assert after_first == [b"1", b"250000"]
+
+        # Drive the SAME terminal transition again, with a DIFFERENT cost --
+        # if reconcile fired a second time, this would move the counter
+        # again and prove it double-applied.
+        second = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="completed",
+            estimated_cost_microusd=999_999,
+        )
+        assert second is not None
+        assert second.id == first.id
+        assert (
+            second.estimated_cost_microusd == 250_000
+        )  # unmutated, per the ORM contract
+
+        after_second = await client.hmget(key, ["requests", "cost_microusd"])
+        assert after_second == [b"1", b"250000"], (
+            "a repeat terminal update_run call must not reconcile the "
+            "allowance counter a second time"
+        )
+
+
 # -- dev_run_intents ----------------------------------------------------
 
 

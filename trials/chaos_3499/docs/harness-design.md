@@ -1,0 +1,289 @@
+# CHAOS-3499 shadow harness — design and bring-up plan
+
+**Status: design only. Nothing in this document has been brought up.**
+The acceptance stack and dev compose are single-flight and shared across
+worktrees; every environment step below is gated on an explicit slot granted
+by the orchestrator. See §7.
+
+Grounding for every infrastructure claim: [`baseline-inventory.md`](baseline-inventory.md).
+
+---
+
+## 1. Shape
+
+Shadow-only, per PRD §17. Two switches, independently operable, both default
+off:
+
+```
+                     canonical writes  (UNCHANGED)
+                            |
+  ops Postgres/ClickHouse ──┼──────────────────────────────► existing readers
+                            |
+                            ├─ worker_job_outbox ─┐   [SWITCH 1: projection]
+                            |                     v
+  acr agent_episodes ───────┴──────────► Temporal Projector (shadow)
+                                                  |
+                                                  v
+                                          isolated graph store
+                                                  |
+                            [SWITCH 2: query]      v
+   trial runner ──► arm adapter ──► ArmResponse ──► oracle ──► per-class report
+                                                  |
+                                          (no path to any user-visible
+                                           Ask Dev or ACR answer)
+```
+
+The trial runner is the *only* consumer. There is deliberately no wiring into
+`context_for_task`, no `TEMPORAL_CONTEXT` source class, and no MCP tool. Phase
+1 produces a report, not a product behaviour.
+
+---
+
+## 2. Why the projector reads an outbox that already exists
+
+The baseline inventory found a production transactional outbox already in
+place: `internal/joboutbox`, *"the generic Python-to-River transactional
+bridge"* (`types.go:1`), with a producer that requires the caller's own
+transaction so a domain transition and its handoff cannot commit
+independently (`producer.go:19-21,22-51`), a claim/lease relay
+(`relay.go:1-40`), and the documented property that
+*"unknown or invalid kinds terminalize with bounded evidence rather than
+disappearing"* (`docs/contribute/architecture/data-and-storage.md:58`).
+
+That last property is the one that matters here. A shadow projector consuming
+an unknown event kind must fail loudly and stay failed, not drop the event —
+otherwise the indexing watermark advances past work never done, and every
+downstream freshness number is a lie. The mechanism already behaves correctly;
+building a second one would mean re-earning that property.
+
+**Consequence for the ADR's ownership question (PRD §5):** ops-owned
+projection is not merely the cheaper default on retention and provider-policy
+grounds, it is where the event mechanism already lives.
+
+**No CDC exists** (searched `cdc`, `debezium`, `logical replication`,
+`wal2json` — not found in either repo), so outbox-or-poll is the real choice,
+and poll is strictly worse for lag measurement.
+
+---
+
+## 3. The four arms
+
+The PRD names three. The amendment adds episode readback as a **named** arm,
+and that separation is the single most important measurement decision in the
+trial: without it, ordinary readback value is bundled into Graphiti's score
+and the ADR cannot tell whether the graph earned anything.
+
+| Arm | What it is | What it isolates |
+|---|---|---|
+| **N — native** | The four §14 pre-trial increments, queried directly through ops/ACR paths. Built by other lanes (CHAOS-3562/3563/3564/3565), *not* by this lane. | The class (a) control. Per §15.2 native should win or tie on class (a); if it does not, the finding is about the harness. |
+| **E — episode readback** | Plain `agent_episodes` list-by-repo/task/file-overlap, zero graph infrastructure. | The counterfactual for Q4. `EpisodeArtifacts.FilesTouched/TestsRun` (`acr types.go:336-340`) is already structured — if readback answers Q4, the graph's margin there is **zero**. |
+| **G — Graphiti** | Graphiti over an approved backend, Dev Health authorization and provenance kept outside Graphiti. | Cross-episode association: the actual differentiator. |
+| **D — direct** | Dev Health-specific schema on the same backend, no Graphiti abstractions. | Separates "a temporal graph helps" from "Graphiti helps". |
+
+Each arm ships exactly one adapter: `Arm(oracle) -> ArmResponse`. That adapter
+is the only arm-specific code an oracle ever sees, which is what makes one
+oracle comparable across four arms.
+
+**Registration is total.** An arm that cannot run must still be registered —
+`ArmRegistry.register_unavailable(name, reason)` — so it appears in the report
+as `NOT MEASURED` rather than as a column nobody notices is missing.
+
+---
+
+## 4. What the harness already enforces (built, green, mutation-checked)
+
+| Property | Where |
+|---|---|
+| An unmeasured oracle can never read as a pass | `Verdict.NOT_MEASURED`, `runner.run_oracle` converts a raising arm into `NOT_RUN` rather than aborting the sweep |
+| Aggregate scores carry the per-class breakdown, and are marked NOT COMPARABLE when anything went unmeasured | `runner.TrialReport.render` |
+| Every as-of oracle pins its axis | `TemporalContextQuery.__post_init__`, plus `test_every_as_of_oracle_pins_its_axis` |
+| An oracle that cannot fail cannot be constructed | `Oracle.__post_init__` |
+| Direction is compared positionally; a reversed edge is reported as a direction failure, not a near miss | `FactExpectation.identity_matches`, `test_direction_reversal_is_not_a_near_miss` |
+| Every observed fact must close to provenance — on every oracle, not opt-in | `Oracle._assert_provenance_closure` |
+| A closed validity window with no `invalidated_by` fails (PRD §6.3 endpoint laundering) | same |
+| A coverage gap must be *declared*; silent emptiness fails | `Oracle._assert_coverage` |
+| Every fault mode is caught by the assertion that claims to catch it | `test_fault_mode_is_caught_by_its_own_assertion` |
+| No fault mode is inert across the whole corpus | `test_every_fault_mode_applies_to_at_least_one_oracle` |
+
+**Mutation-verified**, not merely asserted. Three defects planted in
+`harness/oracle.py`, each killed, each dying in the right guard:
+
+| Planted defect | Verdict | Died in |
+|---|---|---|
+| `must_include` always passes | KILLED (63 failures) | `test_fault_mode_is_caught_by_its_own_assertion`, `test_direction_reversal_is_not_a_near_miss`, `test_invalidation_provenance_cannot_be_laundered`, `test_axis_pair_cannot_both_pass_with_one_answer` |
+| `NOT_MEASURED` reads as success | KILLED (22 failures) | `test_measurement_never_ran_fails_every_oracle`, `test_not_measured_is_not_silently_equal_to_pass` |
+| Direction ignored in identity match | KILLED (17 failures) | `test_direction_reversal_is_not_a_near_miss` |
+
+The suite currently reports **204 passed, 136 skipped**. The skips are
+fault×oracle pairs where the fault is genuinely inapplicable; they are
+reported rather than hidden, and the inert-fault guard fails if any fault is
+inapplicable *everywhere*.
+
+---
+
+## 5. Deployment design
+
+### 5.1 Placement — `deploy/docker-compose/compose.temporal-trial.yml`
+
+Not the root `compose.yml`. The inventory found root compose declares 13
+always-on services with **no `profiles:` anywhere**; the opt-in precedent
+lives in `deploy/docker-compose/compose.go-workers.yml:16,58,94,108`
+(`profiles: [go-workers]`) and `compose.production.yml:400` (`pooler`), whose
+header states operators must opt in explicitly. A new always-on stateful
+service in root compose would start for every developer and every worktree on
+the host.
+
+Required shape, from the existing stateful-service pattern:
+
+- `profiles: [temporal-trial]` on every service;
+- pinned image **by `sha256` digest** (as `compose.yml:42,112,137` do);
+- `healthcheck:` (pattern `compose.yml:76-81`) and consumers gated on
+  `condition: service_healthy` (pattern `compose.yml:255-265`);
+- a dedicated named volume;
+- respect `name: dev-health-ops` project-name isolation (`compose.yml:1-13`,
+  pinned after CHAOS-3142);
+- a host port **not** already claimed: 5555, 6432, 8123, 9000, 6379, 8000,
+  8010, 8800 are taken.
+
+### 5.2 kind
+
+The inventory found **no kind stack in ops**. The kind fixture is
+`acr/scripts/e2e/kind-fixture.sh` (config `:637`, cluster create `:657`),
+which stands up its own Postgres and ClickHouse pods (`:803-959`) with
+hand-authored manifests and does **not** reference either repo's
+`compose.yml`. There is no compose↔kind mapping to extend; they are parallel
+stacks.
+
+That makes the kind fixture the **preferred** environment for this trial: it
+is already isolated by construction, so the trial store never touches the
+shared dev containers. Adding a graph-store pod there follows the existing
+`deploy_postgres`/`deploy_clickhouse` pattern with a pinned digest in
+`scripts/e2e/pins.env`.
+
+### 5.3 The two switches
+
+| Switch | Off means | Default |
+|---|---|---|
+| `TEMPORAL_PROJECTION_ENABLED` | the projector claims nothing from the outbox; canonical writes and existing consumers are untouched | off |
+| `TEMPORAL_QUERY_ENABLED` | the query path returns `ArmOutcome.UNAVAILABLE`; nothing reads the store | off |
+
+Independently operable, per §17. The rollback path (§20) is: query off,
+projection off, canonical services untouched — no data migration, because
+nothing canonical ever depended on the store.
+
+### 5.4 Isolation invariants — non-negotiable
+
+- **Never** the dev ClickHouse `default` database. It holds real dev data
+  (ops `AGENTS.md`, safety rule).
+- The trial store is its own container and its own volume, dropped on
+  teardown.
+- The trial never runs `ci/local_validate.sh` — host-wide single-flight,
+  orchestrator-granted only.
+- No Ask Dev runtime registry, no acceptance corpus, no main branches.
+
+### 5.5 Org-deletion registration is a precondition, not a follow-up
+
+The inventory (baseline §12) confirms org deletion discovers ClickHouse tables
+by regex-scanning one migration directory
+(`org_deletion.py:133-154`, `:75-77`) with no derived-store registry anywhere.
+A graph store stood up outside that directory is invisible to org deletion the
+moment it holds real org data.
+
+For a shadow trial on synthetic corpus data this is tolerable. It stops being
+tolerable at Phase 2 (design-partner cohort, real data). **CHAOS-3566 must
+land before any real org data reaches the trial store**, and the trial store
+must be among the first entries in its registry.
+
+The same inventory found two org-scoped stores *already* outside deletion's
+reach — Valkey allowance counters (`askdev:allowance:{org_id}:{YYYY-MM}`,
+`askdev_allowance_counters.py:9-11`) and `worker_job_outbox`, which has no
+`org_id` column at all (`models/worker_job_outbox.py:35,41`). Those are
+present-day gaps independent of this epic and belong in CHAOS-3566's scope.
+
+---
+
+## 6. Observability — the §18 prerequisite is half-met
+
+PRD §18 blocks a user-visible trial on worker `/metrics`, stating no worker
+container exposes a scraped endpoint. The inventory found this is **true only
+for Python/Celery workers** (`workers/ask_dev_retention.py:36-45`;
+`compose.yml:335-396` — no `ports:` on any worker or beat service; `/metrics`
+mounted only on the FastAPI app, `api/_observability.py:34-49`).
+
+**Go workers already expose `/metrics` on :8080** —
+`internal/platform/health/server.go:114-118` registers it beside
+`/healthz`/`/readyz`, serving real Prometheus text (`:160-220`);
+`docker/go-worker.Dockerfile:102`; `deploy/docker-compose/compose.go-workers.yml:115`.
+
+**Recommendation for the ADR:** implement the projector as a Go worker. The
+§18 blocking prerequisite is then already satisfied, which removes a stated
+dependency from CHAOS-3500/3503 and materially changes the build-vs-block
+calculus. If the projector is instead Python/Celery, the prerequisite is real
+and unbuilt.
+
+Content-safety rule for every metric and log emitted: no source prose, prompt
+text, evidence excerpt, transcript, credential, person-level data, or
+unbounded entity name in labels or traces — **including Graphiti's own default
+logging**, which §18 requires be audited rather than assumed.
+
+---
+
+## 7. Bring-up plan — every step gated
+
+Nothing below has been executed.
+
+| # | Step | Needs a slot? | Blocking dependency |
+|---|---|---|---|
+| 0 | Corpus, oracles, fault self-tests | no — pure Python, already green | — |
+| 1 | Arm adapters against fixture data (no stack) | no | — |
+| 2 | Author `compose.temporal-trial.yml` + kind pod manifest | no — authoring only | — |
+| 3 | First stack bring-up, isolated kind | **YES** | orchestrator grant |
+| 4 | Projector consumes outbox, watermark + lag measured | **YES** | step 3 |
+| 5 | Arms N and E measured | **YES** | CHAOS-3563/3564/3565 landed |
+| 6 | Arm G — **any LLM extraction spend** | **YES, separately** | explicit cost authorization; provider keys only via the product's own resolution path |
+| 7 | Arm D | **YES** | step 3 |
+| 8 | Security/provenance suite (§19) | **YES** | steps 3–7 |
+| 9 | Rebuild gate | **YES** | CHAOS-3500's "semantically equivalent" definition — **not landed**; ADR must flag the gap if still absent |
+
+The isolated-kind path (step 3) is the requested grant: it does not contend
+with dev compose or the acceptance stack.
+
+---
+
+## 8. Thresholds
+
+Per PRD §16, **no numeric threshold is proposed here.** Observed distributions
+first; adoption thresholds proposed in the ADR afterward. Metrics to be
+recorded per §16 operational list, and every product-quality metric reported
+**per class**, never as an aggregate alone.
+
+One measurement the amendment specifically requires and that is easy to skip:
+**confidence calibration** — confidence buckets against oracle correctness.
+Until that is measured, §6.3 holds that consumers present `claim_kind` plus
+supporting-source count rather than the raw float. The trial should either
+produce the calibration curve or state plainly that it did not.
+
+---
+
+## 9. Known gaps in this design
+
+Stated rather than left for a reviewer to find:
+
+1. **Trial code is outside CI.** Root `pytest.ini` sets `testpaths = tests`,
+   and `[tool.mypy] files = ["src", "tests", "scripts"]` — so `trials/` is
+   neither collected by `ci/local_validate.sh` nor typechecked. That isolation
+   is deliberate (shadow trial code must not destabilise a host-wide
+   single-flight gate other lanes queue behind), but the cost is real: these
+   tests run only when someone runs them. `run_oracles.sh` exists so the run
+   is one command, and the trial report records whether it happened. Ruff
+   *does* cover `trials/` (no exclusion), so lint and format are enforced.
+2. **The rebuild gate has no operational definition yet** (CHAOS-3500).
+3. **Arm N depends on other lanes.** If CHAOS-3563/3564/3565 have not landed
+   when the trial runs, the class (a) and (b) results measure a *pre-increment*
+   native arm and the ADR must say so — otherwise the graph is credited with
+   beating a baseline that was never built.
+4. **Per-org ingestion coverage is unmeasured** pending an authorized
+   environment; `deployments.v1` staleness is UNVERIFIED, not assumed.
+5. **The `entitlements` cache** (`acr/internal/entitlements/cache.go`) is a
+   revocation-lag path that has not been timed. Credential revocation is live
+   (no cache); entitlement revocation is not.

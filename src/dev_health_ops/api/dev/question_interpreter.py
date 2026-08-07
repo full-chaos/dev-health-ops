@@ -68,6 +68,7 @@ __all__ = [
     "QuestionInterpreter",
     "count_mention_candidates",
     "extract_mentions",
+    "organization_mention_spans",
 ]
 
 #: Satisfies ``base.PlatformVersionToken``, which
@@ -356,6 +357,64 @@ def untyped_name_candidates(
         seen.add(normalized)
         found.append(span)
     return tuple(found)
+
+
+#: The organization noun, kept deliberately separate from ``_KIND_NOUNS``:
+#: an organization is not a ``EntityKind`` and never a searchable catalog
+#: entity (CHAOS-3574 -- ``adv.cross-tenant.organization-id``'s own corpus
+#: notes: "there is no subjects.json class for an organization-kind entity
+#: ... the org itself is not a searchable catalog entity"). A name adjacent
+#: to this noun still states, as plainly as a kind-noun match does, that the
+#: user is naming *something* by that name -- just not something
+#: ``resolve_mention`` can ever confirm by catalog lookup. That is what
+#: distinguishes "the Orbit organization" from an ordinary ambiguous bare
+#: word like "Zephyr" or "DORA" (``question_interpreter``'s own module
+#: docstring example, and ``scope.outcome.organization-fallback``'s pinned
+#: corpus case): both go unresolved, but only the former unambiguously names
+#: an organization, and an organization the requester's own catalog does not
+#: contain is, by construction, never the requester's own.
+_ORGANIZATION_NOUN_ALTERNATION = "|".join(
+    re.escape(noun) for noun in ("organizations", "organization", "orgs", "org")
+)
+_ORGANIZATION_NOUN_LEADING = re.compile(
+    rf"\b(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\s+"
+    rf"(?:{_QUOTED}|(?P<plain>{_NAME}))",
+)
+_ORGANIZATION_NOUN_TRAILING = re.compile(
+    rf"(?:{_QUOTED}|(?P<plain>{_NAME}))\s+"
+    rf"(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\b",
+)
+
+
+def organization_mention_spans(question: str) -> frozenset[str]:
+    """Normalized bare-name spans adjacent to an "organization"/"org" noun.
+
+    A subset of what :func:`untyped_name_candidates` already finds (every
+    span here is still an untyped bare name -- there is no ``EntityKind`` to
+    type it as), surfaced separately so a caller can tell "unresolved, and
+    unambiguously claims to name an organization" apart from "unresolved,
+    and may not be a subject at all". ``subject_preflight`` uses this to
+    terminate the former rather than silently widening to organization scope
+    the way it must for the latter (CHAOS-3574).
+    """
+
+    found: set[str] = set()
+    for pattern in (_ORGANIZATION_NOUN_LEADING, _ORGANIZATION_NOUN_TRAILING):
+        for match in pattern.finditer(question):
+            raw = match.group("quoted") or match.group("plain")
+            if raw is None:
+                continue
+            span = raw.strip()
+            if len(span) < 2 or len(span) > 256:
+                continue
+            words = [
+                _strip_word_punctuation(word) for word in _normalize(span).split(" ")
+            ]
+            words = [word for word in words if word]
+            if not words or all(word in _NAME_STOP_WORDS for word in words):
+                continue
+            found.add(_normalize(span))
+    return frozenset(found)
 
 
 def _candidate_mentions(

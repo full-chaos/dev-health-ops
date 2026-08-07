@@ -20,6 +20,7 @@ from dev_health_ops.api.dev.question_interpreter import (
     ClassifierProposal,
     QuestionInterpreter,
     extract_mentions,
+    organization_mention_spans,
 )
 from tests._chaos_3292_preflight import fixed_now, request_for, sequential_ids
 
@@ -429,3 +430,41 @@ async def test_a_proposal_cannot_clear_a_clarification_requirement() -> None:
     assert not hasattr(ClassifierProposal, "requires_clarification")
     assert "requires_clarification" not in ClassifierProposal.__annotations__
     assert "mention_id" not in ClassifierProposal.__annotations__
+
+
+# ---------------------------------------------------------------------------
+# organization_mention_spans (CHAOS-3574)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # Trailing: "<Name> organization"/"org" -- the corpus case's own shape.
+        ("What's the status of the Orbit organization?", frozenset({"orbit"})),
+        ("Is the Nightfall Holdings org on track?", frozenset({"nightfall holdings"})),
+        # Leading: "organization/org <Name>".
+        (
+            'What is organization "Orbit" doing?',
+            frozenset({"orbit"}),
+        ),
+        # No capitalized/quoted name adjacent to the noun at all.
+        ("What's the status of our organization?", frozenset()),
+        ("What's the status of the organization's repositories?", frozenset()),
+        ("Purge my organization's expired conversations.", frozenset()),
+        # A bare name with no organization noun nearby is not in scope for
+        # this recognizer -- it is still an ordinary untyped bare name.
+        ("What is our DORA score?", frozenset()),
+        ("What's the status of Zephyr?", frozenset()),
+        ("How is Nightfall doing?", frozenset()),
+    ],
+)
+def test_organization_mention_spans(question: str, expected: frozenset[str]) -> None:
+    assert organization_mention_spans(question) == expected
+
+
+def test_organization_mention_spans_ignores_stop_word_only_spans() -> None:
+    """ "Our Org" mints no span -- "Our" is a closed stop word, matching every
+    other recognizer's treatment of "Our team is overburdened"."""
+
+    assert organization_mention_spans("How is Our Org doing?") == frozenset()

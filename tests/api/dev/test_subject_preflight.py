@@ -140,6 +140,95 @@ async def test_an_unresolved_bare_name_withholds_resolve_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_unresolved_bare_name_without_organization_noun_still_widens() -> None:
+    """Regression guard for CHAOS-3574's new termination path below: an
+    ordinary ambiguous bare word with no "organization"/"org" noun nearby
+    must still widen exactly as before -- this is the shape the corpus case
+    ``scope.outcome.organization-fallback`` pins as ``answered_with_gaps``/
+    ``organization_fallback``, and the fix must not touch it.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of Zephyr?"),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "proceeded_unresolved_bare_name"
+    assert result.legacy_guard_required is True
+
+
+@pytest.mark.asyncio
+async def test_a_cross_tenant_organization_reference_terminates_not_found() -> None:
+    """CHAOS-3574: ``adv.cross-tenant.organization-id``'s exact question.
+
+    "Orbit" is the sibling tenant's real display name -- a well-formed,
+    unambiguous organization-shaped mention the primary org's own catalog
+    can never contain (an organization is never a searchable catalog entity
+    at all). Before this fix the mention stayed untyped (no ``organization``
+    kind noun exists in the closed ``_KIND_NOUNS`` table) and hit the
+    generic ``unresolved_untyped`` branch, which widened to organization
+    scope and went on to ANSWER — observed twice on the Phase 3 armed corpus
+    run as ``answered_with_gaps`` where the corpus case allows only
+    ``not_found``.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of the Orbit organization?"),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NOT_FOUND
+    assert result.diagnostic == "unresolved_no_authorized_match"
+    # Never the widen-and-disclose path: no answer text is ever computed for
+    # this run at all, so there is nothing that could narrate "Orbit".
+    assert result.legacy_guard_required is False
+    assert result.committed_resolution is None
+    assert result.allowed_tools == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_and_nonexistent_organizations_are_indistinguishable() -> (
+    None
+):
+    """CHAOS-3574: the security property ``no_unauthorized_candidate_surfaces``
+    already protects (and both armed runs PASSED) is that a genuine sibling
+    org and a name that names nothing at all must read identically to the
+    requester. "Orbit" is the sibling tenant's real name; "Zzyzx" is authored
+    to not exist anywhere in this fixture world. Both must terminate on the
+    exact same public outcome and the exact same user-visible frame shape —
+    never distinguishable by content, only by the fact that neither is ever
+    found.
+    """
+
+    sibling = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of the Orbit organization?"),
+    )
+    nonexistent = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of the Zzyzx organization?"),
+    )
+
+    for result in (sibling, nonexistent):
+        assert result.decision is PreflightDecision.TERMINATE
+        assert result.outcome is PublicOutcome.NOT_FOUND
+        assert result.answer is not None
+
+    assert sibling.answer.public_outcome == nonexistent.answer.public_outcome
+    assert (
+        sibling.answer.outcome_display_label == nonexistent.answer.outcome_display_label
+    )
+    assert (
+        sibling.answer.frame.public_outcome == nonexistent.answer.frame.public_outcome
+    )
+    assert sibling.answer.frame.direct_answer == nonexistent.answer.frame.direct_answer
+    assert sibling.answer.frame.coverage == nonexistent.answer.frame.coverage
+    assert sibling.answer.frame.versions == nonexistent.answer.frame.versions
+
+
+@pytest.mark.asyncio
 async def test_a_resolved_cohort_is_unsupported_not_partially_committed() -> None:
     """Two real subjects: v1 ``DevScope`` names one, so neither is guessed.
 

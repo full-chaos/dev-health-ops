@@ -75,7 +75,12 @@ from .preflight_outcomes import (
     PREFLIGHT_OUTCOME_BY_RESOLUTION,
     build_preflight_answer,
 )
-from .question_interpreter import MAX_MENTIONS, InterpretedQuestion, QuestionInterpreter
+from .question_interpreter import (
+    MAX_MENTIONS,
+    InterpretedQuestion,
+    QuestionInterpreter,
+    organization_mention_spans,
+)
 from .scope_service import (
     DIRECT_SCOPE_KINDS,
     SEARCHABLE_ENTITY_KINDS,
@@ -619,6 +624,51 @@ class SubjectPreflight:
                 )
 
         if unresolved_untyped:
+            # CHAOS-3574: an unresolved untyped mention that is unambiguously
+            # naming an ORGANIZATION (adjacent to "organization"/"org" in the
+            # raw question -- see `organization_mention_spans`) is not the
+            # same shape as an ordinary ambiguous bare word ("Zephyr", "DORA")
+            # that may not name a subject at all. An organization is never a
+            # searchable catalog entity, so it can never be *the requester's
+            # own* -- a name that does not resolve here is, by construction,
+            # either nonexistent or someone else's tenant, and those two must
+            # be indistinguishable to the requester (the same
+            # no-unauthorized-candidate-surfaces property a typed cross-tenant
+            # identifier already gets). Terminating on the SAME per-mention
+            # ledger entry the typed path above uses -- not a new outcome, not
+            # a new search -- is what keeps this from silently widening to
+            # organization scope and answering with someone else's identity
+            # implicitly ruled out only by omission.
+            organization_probe_spans = organization_mention_spans(request.question)
+            organization_probe_mention = next(
+                (
+                    mention
+                    for mention in mentions
+                    if mention.mention_id in untyped_ids
+                    and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+                    and mention.normalized_lookup_text in organization_probe_spans
+                ),
+                None,
+            )
+            if organization_probe_mention is not None:
+                entry = latest[organization_probe_mention.mention_id]
+                return self._terminate(
+                    interpretation=interpretation,
+                    ledger=ledger,
+                    outcome=PREFLIGHT_OUTCOME_BY_RESOLUTION[entry.outcome],
+                    diagnostic=f"unresolved_{entry.outcome.value}",
+                    run_id=run_id,
+                    answer_id=answer_id,
+                    conversation_id=conversation_id,
+                    generated_at=generated_at,
+                    clarification_key="ambiguous",
+                    terminating_resolution_entry=(
+                        entry
+                        if entry.outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+                        else None
+                    ),
+                )
+
             # A bare name we could not resolve is not proof of a subject, so
             # blocking here would break questions like "what is our DORA
             # score?". The run continues organization-wide — today's behaviour

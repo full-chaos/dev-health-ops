@@ -169,7 +169,13 @@ def test_the_bound_is_call_wide_not_per_mention() -> None:
     shortlist, so a mention whose own slice is empty still sees every
     authorized index of the call. The enum narrows the call's index space to
     what the CALL authorized; only ``_verify`` narrows it to what the MENTION
-    authorized. Both guards are needed and neither subsumes the other.
+    authorized.
+
+    Precisely: every mention slice is a subset of ``[0, len(combined))``, so
+    ``_verify``'s rejection set strictly SUBSUMES the enum's -- the two are
+    useful at different STAGES, not over different sets. An earlier version
+    of this docstring said "neither subsumes the other", which was wrong and
+    is the claim this file exists to keep honest.
     """
 
     properties = _wire_mention_properties(candidate_count=50, mention_count=3)

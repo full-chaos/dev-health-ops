@@ -54,11 +54,16 @@ adversarial critique, comment 7d1368d9):
   bullet claimed the latter and was wrong. Every mention slice is a subset of
   ``[0, len(combined))``, so any index the enum rejects is also outside every
   mention's slice: ``_verify``'s rejection set strictly SUBSUMES the enum's.
-  The enum is worth having because it acts BEFORE generation (an unauthorized
-  index is never produced, rather than produced and then rejected, which also
-  means the proposal survives instead of being discarded) and because it ends
-  ``_verify``'s status as a single point of failure. Per-mention ownership is
-  ``_verify``'s alone and always will be: the schema cannot express it.
+
+  What the enum buys, scoped to what is actually true: **for a decoder that
+  honors the schema**, a call-wide-out-of-range index is not generated in the
+  first place, so the proposal arrives usable instead of arriving and being
+  rejected. It is a generation-time constraint that reduces malformed
+  proposals -- NOT an authorization control and NOT a backstop. A
+  non-compliant decoder can still emit anything (and a decoder that dislikes
+  the schema can reject the request outright), and ``_verify`` remains the
+  sole enforcement point for per-mention ownership, which the schema cannot
+  express at all. If ``_verify`` regresses, the enum does not save you.
 
   With zero candidates authorized, ``selected_candidate_index`` is
   ``{"type": "null"}``. ``candidate_indices`` stays a plain integer array and
@@ -677,17 +682,32 @@ class QuestionUnderstandingShadow:
         than the residual it closes. Adopt it only with per-endpoint
         certification evidence (CHAOS-3538 is the natural home).
 
+        Decoder compatibility, since the live evidence is one endpoint
+        (OpenAI/gpt-5-nano) and ``CERTIFIED_PLATFORM_AGENT_PROVIDERS`` also
+        holds ``local``/``ollama``/``lmstudio``: ``enum`` itself is NOT a new
+        dependency for them. Every Ask Dev call already ships enums to every
+        provider family -- ``_decision_response_schema``'s mandatory ``kind``
+        field is one, and this schema's own ``intent_id``/``cardinality``/
+        ``outcome`` were enums before this change. The untested delta is
+        narrow: integer-valued enums rather than string, and a list up to 50
+        long. That is why the EMPTY enum was withdrawn while these were kept
+        -- an unsatisfiable choice set is a genuinely novel construct, a
+        50-element integer enum is a variation on something already in every
+        request. Fold the remaining delta into CHAOS-3538's certification.
+
         What the enum does NOT do, stated because the first version of this
         docstring got it wrong: it does not add coverage ``_verify`` lacks.
         Every mention's slice is a subset of ``[0, len(combined))``, so an
         index the enum would reject is outside every mention's slice and
         ``_verify`` rejects it too -- ``_verify``'s rejection set strictly
         SUBSUMES the enum's. The enum earns its place by acting at a
-        different STAGE, not over a different set: it constrains generation,
-        so an unauthorized index is never produced rather than produced and
-        then rejected, and a ``_verify`` regression is no longer a
-        single point of failure. Per-mention ownership remains ``_verify``'s
-        alone -- the schema is built once per call from the COMBINED
+        different STAGE, not over a different set: for a decoder that honors
+        the schema it constrains generation, so a call-wide-out-of-range
+        index is not produced rather than produced and then rejected, and the
+        proposal survives instead of being discarded. It is not an
+        authorization control and not a backstop -- a non-compliant decoder
+        can emit anything, and per-mention ownership remains ``_verify``'s
+        alone, since the schema is built once per call from the COMBINED
         shortlist and cannot express it.
 
         ``maxItems``/``maxLength`` below are stripped in transit and are kept

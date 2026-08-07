@@ -1,7 +1,11 @@
 {
   "schema_version": 1,
   "name": "github/tests complete native route (CHAOS-3336)",
-  "build": ["go", "build", "./..."],
+  "build": [
+    "go",
+    "build",
+    "./..."
+  ],
   "mutations": [
     {
       "id": "T1-report-count-cap",
@@ -9,7 +13,15 @@
       "find": "if processed >= githubTestsMaxReportsPerRun {",
       "replace": "if false {",
       "rationale": "one run may parse at most 200 classified reports so an artifact set cannot create unbounded CPU and row volume",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactEnforcesReportCountCap$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactEnforcesReportCountCap$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T2-doctype-rejected",
@@ -17,7 +29,15 @@
       "find": "bytes.Contains(bytes.ToUpper(body), []byte(\"<!DOCTYPE\")) ||",
       "replace": "false ||",
       "rationale": "untrusted artifact XML containing a DTD must be rejected before decoding",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T3-stack-truncation",
@@ -25,7 +45,15 @@
       "find": "if len(value) > 4096 {",
       "replace": "if false {",
       "rationale": "failure stack text persisted from an untrusted report is capped at the Python contract's 4096 bytes",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T4-failure-status",
@@ -33,7 +61,15 @@
       "find": "case item.Failure != nil:",
       "replace": "case false:",
       "rationale": "a JUnit failure element must normalize to failed and contribute to the suite's failed count",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactParsesJUnitCasesAndCoverage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactParsesJUnitCasesAndCoverage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T5-covered-cannot-exceed-total",
@@ -41,7 +77,15 @@
       "find": "aggregateLinesCovered > aggregateLinesTotal ||",
       "replace": "false ||",
       "rationale": "an incoherent coverage report must be rejected instead of skewing TestOps rollups",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageRejectsCoveredGreaterThanTotal$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsCoverageRejectsCoveredGreaterThanTotal$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T6-da-lines-fallback",
@@ -49,7 +93,15 @@
       "find": "lineNumbers[lineNumber] = struct{}{}",
       "replace": "delete(lineNumbers, lineNumber)",
       "rationale": "LCOV files without LF/LH must derive total and covered lines from unique DA records exactly like the live Python parser",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageFallsBackToUniqueDALines$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsCoverageFallsBackToUniqueDALines$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T7-majority-file-service",
@@ -57,7 +109,15 @@
       "find": "if serviceCounts[service] > bestCount {",
       "replace": "if serviceCounts[service] > 0 && bestCount == 0 {",
       "rationale": "coverage service attribution must choose the service represented by the most report files, not the first source path",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsCoverageAttributesMajorityFileService$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsCoverageAttributesMajorityFileService$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T8-cobertura-classification",
@@ -65,7 +125,15 @@
       "find": "strings.Contains(head, \"<coverage\")",
       "replace": "false",
       "rationale": "Cobertura artifacts must be classified and normalized rather than silently skipped",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactParsesCoberturaCoverage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactParsesCoberturaCoverage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T9-run-cap-fails-closed",
@@ -73,7 +141,15 @@
       "find": "if runsPage.CapReached || len(runsPage.Items) > maxRuns {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
       "replace": "if false {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
       "rationale": "a capped Actions inventory must remain retryable and cannot advance the watermark",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsRouteFailsClosedOnRunPaginationCap$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsRouteFailsClosedOnRunPaginationCap$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T10-artifact-redirect-strips-auth",
@@ -81,7 +157,15 @@
       "find": "client.DoUnauthenticated(ctx, http.MethodGet, location)",
       "replace": "client.Do(ctx, http.MethodGet, location, nil)",
       "rationale": "the GitHub credential must never be forwarded to the pre-signed artifact blob host",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T11-fetch-error-no-watermark",
@@ -90,16 +174,47 @@
       "replace": "if pageErr != nil {\n\t\t\treturn CompleteRouteBatch{Watermark: claim.BeforeAt}, nil\n\t\t}",
       "expect_occurrences": 2,
       "rationale": "an incomplete jobs inventory cannot be committed or acknowledged by advancing the watermark",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsRouteFetchFailureCannotCommitEffectsOrWatermark$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsRouteFetchFailureCannotCommitEffectsOrWatermark$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
-      "id": "T12-six-destination-contract",
+      "id": "T12-six-destination-contract-github-cicd",
       "file": "internal/providersync/execution_registry.go",
-      "find": "\"test_suite_results\", \"test_case_results\", \"coverage_snapshots\",",
-      "replace": "\"test_suite_results\", \"test_case_results\", \"coverage_snapshots_broken\",",
-      "expect_occurrences": 2,
-      "rationale": "the route descriptor must advertise the same six destinations that the complete handler emits",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth$", "./internal/providersync/"]]
+      "find": "case provider == \"github\" && dataset == \"cicd\":\n\t\t// cicd and tests delegate to one complete-row unit. Startup rejects both\n\t\t// switches enabled together, so ci_pipeline_runs has one active writer.\n\t\tdescriptor.Destinations = []string{\n\t\t\t\"ci_pipeline_runs\", \"ci_job_runs\", \"ci_acceptance_checks\",\n\t\t\t\"test_suite_results\", \"test_case_results\", \"coverage_snapshots\",\n\t\t}",
+      "replace": "case provider == \"github\" && dataset == \"cicd\":\n\t\t// cicd and tests delegate to one complete-row unit. Startup rejects both\n\t\t// switches enabled together, so ci_pipeline_runs has one active writer.\n\t\tdescriptor.Destinations = []string{\n\t\t\t\"ci_pipeline_runs\", \"ci_job_runs\", \"ci_acceptance_checks\",\n\t\t\t\"test_suite_results\", \"test_case_results\", \"coverage_snapshots_broken\",\n\t\t}",
+      "rationale": "the route descriptor must advertise the same six destinations that the complete handler emits Split per descriptor (github/cicd): expect_occurrences 2 stopped identifying the two GitHub sites once GitLab cicd/tests grew the same destination list, and one mutation spanning both GitHub sites can be killed by either while the other goes unmeasured.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "T12-six-destination-contract-github-tests",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "case provider == \"github\" && dataset == \"tests\":\n\t\tdescriptor.Destinations = []string{\n\t\t\t\"ci_pipeline_runs\", \"ci_job_runs\", \"ci_acceptance_checks\",\n\t\t\t\"test_suite_results\", \"test_case_results\", \"coverage_snapshots\",\n\t\t}",
+      "replace": "case provider == \"github\" && dataset == \"tests\":\n\t\tdescriptor.Destinations = []string{\n\t\t\t\"ci_pipeline_runs\", \"ci_job_runs\", \"ci_acceptance_checks\",\n\t\t\t\"test_suite_results\", \"test_case_results\", \"coverage_snapshots_broken\",\n\t\t}",
+      "rationale": "the route descriptor must advertise the same six destinations that the complete handler emits Split per descriptor (github/tests): expect_occurrences 2 stopped identifying the two GitHub sites once GitLab cicd/tests grew the same destination list, and one mutation spanning both GitHub sites can be killed by either while the other goes unmeasured.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T13-default-off-switch",
@@ -107,7 +222,15 @@
       "find": "name:   \"WORKER_GITHUB_TESTS_ENABLED\",",
       "replace": "name:   \"WORKER_GITHUB_TESTS_ENABLED_BROKEN\",",
       "rationale": "the opt-in GitHub tests environment switch must map to its dedicated config field",
-      "proof": [["go", "test", "-run", "^TestQueueControlAndRetentionOverridesAreBounded$", "./internal/platform/config/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestQueueControlAndRetentionOverridesAreBounded$",
+          "./internal/platform/config/"
+        ]
+      ]
     },
     {
       "id": "T14-total-entry-cap",
@@ -115,7 +238,15 @@
       "find": "if len(members) > githubTestsMaxArchiveEntries {",
       "replace": "if false {",
       "rationale": "the Python archive boundary examines only the first 2000 total entries, including ignored files",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactDoesNotTraversePastPythonEntryCap$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactDoesNotTraversePastPythonEntryCap$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T15-compression-ratio-cap",
@@ -123,7 +254,15 @@
       "find": "member.UncompressedSize64 > compressed*githubTestsMaxCompressionRatio",
       "replace": "false",
       "rationale": "a matching report above Python's 200 to 1 compression ratio must not be inflated",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactSkipsPythonOverRatioMember$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactSkipsPythonOverRatioMember$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T16-default-branch-artifact-selection",
@@ -131,7 +270,15 @@
       "find": "artifactRunQuery.Set(\"branch\", repo.DefaultBranch)",
       "replace": "artifactRunQuery.Set(\"branch\", \"\")",
       "rationale": "report artifacts must use Python's separate server-side default-branch run selection",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsRoute(ExcludesFeatureBranchArtifactsLikePythonProducer|KeepsPythonDateFloorArtifactSelectionIndependent)$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsRoute(ExcludesFeatureBranchArtifactsLikePythonProducer|KeepsPythonDateFloorArtifactSelectionIndependent)$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T17-atomic-batch-send",
@@ -139,7 +286,16 @@
       "find": "return batch.Send()",
       "replace": "return nil",
       "rationale": "all validated rows for one destination must be sent as one atomic ClickHouse block",
-      "proof": [["go", "test", "-tags=integration", "-run", "^TestGitHubTestsMultiRowEffectsAreAtomicAndRejectDuplicateNaturalKeys$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags=integration",
+          "-run",
+          "^TestGitHubTestsMultiRowEffectsAreAtomicAndRejectDuplicateNaturalKeys$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T18-duplicate-natural-key-rejected",
@@ -147,7 +303,16 @@
       "find": "if _, exists := seen[key]; exists {",
       "replace": "if false {",
       "rationale": "one effect cannot contain two versions of the same tenant-prefixed natural key",
-      "proof": [["go", "test", "-tags=integration", "-run", "^TestGitHubTestsMultiRowEffectsAreAtomicAndRejectDuplicateNaturalKeys$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags=integration",
+          "-run",
+          "^TestGitHubTestsMultiRowEffectsAreAtomicAndRejectDuplicateNaturalKeys$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T19-junit-millisecond-normalization",
@@ -155,7 +320,16 @@
       "find": "parsed = parsed.UTC().Truncate(time.Millisecond)",
       "replace": "parsed = parsed.UTC()",
       "rationale": "timestamps must match ClickHouse DateTime64(3) before effect hashing so recovery can observe EffectExact",
-      "proof": [["go", "test", "-tags=integration", "-run", "^TestGitHubTestsJUnitMillisecondTimestampsReadBackExact$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags=integration",
+          "-run",
+          "^TestGitHubTestsJUnitMillisecondTimestampsReadBackExact$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T20-complete-unit-mutual-exclusion",
@@ -163,15 +337,31 @@
       "find": "if cfg.WorkerGithubCICDEnabled && cfg.WorkerGithubTestsEnabled {",
       "replace": "if false {",
       "rationale": "the cicd and tests matrix names may not activate two writers for the same complete natural-key unit",
-      "proof": [["go", "test", "-run", "^TestGitHubCompleteUnitAliasesAreMutuallyExclusive$", "./internal/platform/config/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubCompleteUnitAliasesAreMutuallyExclusive$",
+          "./internal/platform/config/"
+        ]
+      ]
     },
     {
       "id": "T21-provider-timestamp-millisecond-normalization",
-	  "file": "internal/providersync/github_prs_route.go",
-	  "find": "parsed = parsed.UTC().Truncate(time.Millisecond)",
-	  "replace": "parsed = parsed.UTC()",
+      "file": "internal/providersync/github_prs_route.go",
+      "find": "parsed = parsed.UTC().Truncate(time.Millisecond)",
+      "replace": "parsed = parsed.UTC()",
       "rationale": "every provider timestamp must match ClickHouse DateTime64(3) before complete-unit effect hashing",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsNormalizesEveryProviderTimestampBeforeHashing$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsNormalizesEveryProviderTimestampBeforeHashing$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T22-archive-empty-name",
@@ -179,7 +369,15 @@
       "find": "name == \"\" || strings.HasSuffix(name, \"/\")",
       "replace": "false || strings.HasSuffix(name, \"/\")",
       "rationale": "the shared Python archive safety contract rejects empty member names before classification",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArchiveMemberNameMatchesPythonSafetyContract$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArchiveMemberNameMatchesPythonSafetyContract$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T23-archive-directory-name",
@@ -187,7 +385,15 @@
       "find": "name == \"\" || strings.HasSuffix(name, \"/\")",
       "replace": "name == \"\" || false",
       "rationale": "the shared Python archive safety contract rejects directory members before classification",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArchiveMemberNameMatchesPythonSafetyContract$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArchiveMemberNameMatchesPythonSafetyContract$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T24-archive-leading-slash",
@@ -195,7 +401,15 @@
       "find": "strings.HasPrefix(name, \"/\") || strings.HasPrefix(name, `\\`)",
       "replace": "false || strings.HasPrefix(name, `\\`)",
       "rationale": "absolute POSIX archive member names must be excluded before report classification",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T25-archive-leading-backslash",
@@ -203,7 +417,15 @@
       "find": "strings.HasPrefix(name, \"/\") || strings.HasPrefix(name, `\\`)",
       "replace": "strings.HasPrefix(name, \"/\") || false",
       "rationale": "absolute and UNC-style Windows archive member names must be excluded before report classification",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T26-archive-parent-component",
@@ -211,7 +433,15 @@
       "find": "if part == \"..\" {",
       "replace": "if part != part {",
       "rationale": "parent-directory components must be excluded regardless of separator before report classification",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T27-archive-drive-absolute",
@@ -219,7 +449,15 @@
       "find": "if len(name) >= 2 && name[1] == ':' {",
       "replace": "if false {",
       "rationale": "Windows drive-absolute archive member names must be excluded before report classification",
-      "proof": [["go", "test", "-run", "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubTestsArtifactSkipsUnsafeNamesBeforeClassification$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T28-go-complete-unit-admission-identity",
@@ -227,7 +465,15 @@
       "find": "if dataset == \"cicd\" {",
       "replace": "if false {",
       "rationale": "both public aliases must reserve the same Go route-family bucket for the shared complete TestOps unit",
-      "proof": [["go", "test", "-run", "^TestGitHubCICDAndTestsAliasesEmitTheSameCompleteEffects$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^TestGitHubCICDAndTestsAliasesEmitTheSameCompleteEffects$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "T29-python-complete-unit-admission-identity",
@@ -235,7 +481,15 @@
       "find": "if dataset_key == DatasetKey.CICD.value",
       "replace": "if False",
       "rationale": "the live Python estimator must reserve the tests route-family bucket for both public aliases",
-      "proof": [[".venv/bin/pytest", "-q", "tests/providers/test_github_budget.py", "-k", "cicd_aliases_share_complete_testops_admission_identity"]]
+      "proof": [
+        [
+          ".venv/bin/pytest",
+          "-q",
+          "tests/providers/test_github_budget.py",
+          "-k",
+          "cicd_aliases_share_complete_testops_admission_identity"
+        ]
+      ]
     },
     {
       "id": "T30-python-cicd-actuals-admission-identity",
@@ -243,7 +497,15 @@
       "find": "TESTS_ROUTE_FAMILY = \"tests\"",
       "replace": "TESTS_ROUTE_FAMILY = \"cicd\"",
       "rationale": "the executed legacy CICD producer must record actual REST requests against the same tests route-family bucket its estimator reserves",
-      "proof": [[".venv/bin/pytest", "-q", "tests/providers/test_github_code_client_cicd.py", "-k", "producer_actuals_share_tests_estimator_admission_identity"]]
+      "proof": [
+        [
+          ".venv/bin/pytest",
+          "-q",
+          "tests/providers/test_github_code_client_cicd.py",
+          "-k",
+          "producer_actuals_share_tests_estimator_admission_identity"
+        ]
+      ]
     }
   ]
 }

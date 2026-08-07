@@ -341,3 +341,56 @@ class TestOnlyRealCorpusCasesCount:
         assert summary.executed_corpus_cases == ()
         with pytest.raises(ArmedRunNotExecutedError):
             assert_armed_run_executed(summary)
+
+
+class TestTheSuccessLineNamesWhatItCounted:
+    """The success line must never call two different denominators "case(s)".
+
+    Found by the phase5-ci lane comparing two CI runs (2026-08-07). The
+    failure path reports ``len(executed_corpus_cases)`` -- real corpus cases
+    only -- while the success path reported ``summary.executed``, which
+    counts every non-skipped testcase: real cases PLUS the declared-blocked
+    receipts PLUS the collection guard. Both said "executed ... case(s)".
+
+    Comparing a failed run's line to a successful one therefore read as the
+    corpus gaining 53 cases when nothing had changed, and very nearly got a
+    correct prediction filed as a wrong one. This module's entire purpose is
+    answering "did this run measure anything"; it must not be ambiguous
+    about what it counted.
+    """
+
+    @staticmethod
+    def _mixed_xml() -> str:
+        # 1 collection guard + 2 declared-blocked + 3 real corpus cases.
+        cases = (
+            '<testcase classname="c" name="test_at_least_one_corpus_case_is_collected"/>'
+            '<testcase classname="c" name="test_declared_blocked_case[a]"/>'
+            '<testcase classname="c" name="test_declared_blocked_case[b]"/>'
+            '<testcase classname="c" name="test_corpus_case[one]"/>'
+            '<testcase classname="c" name="test_corpus_case[two]"/>'
+            '<testcase classname="c" name="test_corpus_case[three]"/>'
+        )
+        return (
+            "<testsuites>"
+            f'<testsuite errors="0" failures="0" skipped="0" tests="6">{cases}'
+            "</testsuite></testsuites>"
+        )
+
+    def test_both_denominators_are_reported_and_distinguishable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from scripts.acceptance.corpus import run_report
+
+        report = tmp_path / "junit.xml"
+        report.write_text(self._mixed_xml(), encoding="utf-8")
+        assert run_report.main([str(report)]) == 0
+        line = capsys.readouterr().out
+
+        # The two counts are genuinely different here (3 vs 6), which is what
+        # makes this test able to fail at all -- a fixture where they matched
+        # would pass against the old wording too.
+        assert "3 real corpus case(s)" in line, line
+        assert "6 executed testcase(s)" in line, line
+        # The specific regression: the headline number must not be the
+        # all-testcase count wearing the word "case(s)".
+        assert "executed 6 case(s)" not in line, line

@@ -255,8 +255,20 @@ def main(argv: list[str] | None = None) -> int:
     except ArmedRunNotExecutedError as exc:
         print(f"NOT EXECUTED: {exc}", file=sys.stderr)
         return EXIT_NOT_EXECUTED
+    # Both counters, explicitly labelled and never both called "case(s)".
+    # Found by the phase5-ci lane comparing two CI runs (2026-08-07): this
+    # success line used to print `summary.executed`, which counts EVERY
+    # non-skipped testcase (real cases + declared-blocked receipts + the
+    # collection guard), while the failure path's message prints
+    # `len(executed_corpus_cases)`, which counts real corpus cases only.
+    # Same word, two denominators: comparing a failed run's line to a
+    # successful one read as the corpus gaining 53 cases when nothing had
+    # changed, and very nearly got a correct prediction filed as a wrong one.
+    # A harness whose whole job is answering "did this run measure anything"
+    # must not be ambiguous about what it counted.
     print(
-        f"armed run executed {summary.executed} case(s) "
+        f"armed run executed {len(summary.executed_corpus_cases)} real corpus "
+        f"case(s) of {summary.executed} executed testcase(s) "
         f"(collected {summary.tests}, skipped {summary.skipped}, "
         f"failed {summary.failures}, errored {summary.errors})"
     )

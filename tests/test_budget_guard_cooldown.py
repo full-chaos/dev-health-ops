@@ -1610,6 +1610,7 @@ def test_budget_wall_clock_cap_exhausts_below_the_count_cap(db_session, monkeypa
     it is actually admissible -- which is the defect F1 fixed, not the cap
     this test is about.
     """
+    from dev_health_ops.providers.github import budget as github_budget
     from dev_health_ops.sync.budget_guard import (
         BUDGET_DEFERRAL_WALL_CLOCK_SECONDS_DEFAULT,
         BUDGET_MAX_DEFERRALS_DEFAULT,
@@ -1645,6 +1646,9 @@ def test_budget_wall_clock_cap_exhausts_below_the_count_cap(db_session, monkeypa
     # unit must genuinely not fit for exhaustion to be considered at all.
     monkeypatch.setenv("SYNC_BUDGET_BUCKET_LIMITS", '{"github:rest_core": 0}')
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    monkeypatch.setattr(
+        github_budget, "_credential_fingerprint", lambda *_a, **_k: "ca360fbc"
+    )
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -1658,8 +1662,19 @@ def test_budget_wall_clock_cap_exhausts_below_the_count_cap(db_session, monkeypa
     # units against a cap of 100). Review round 2, F1: the explanation has to
     # come from the same evaluation that made the decision, or an operator is
     # handed numbers from a bucket state that no longer exists.
+    #
+    # CHAOS-3530: asserted against the NUMERIC evidence field, not a bare
+    # "360" substring of the whole message. The credential fingerprint above
+    # is pinned to a digest that itself contains "360" (github.com/... run
+    # 31160919212 hit an unpinned digest with the same collision) -- a
+    # substring check over the full error text fires on that hex noise
+    # whether or not the stale count leaked, and used to flake whenever an
+    # unpinned random digest happened to contain the same three digits.
+    # Checking the field the number actually lives in is immune to what the
+    # fingerprint hashes to.
     assert unit.error is not None
-    assert "360" not in unit.error, unit.error
+    assert unit.result["estimated_units"] == 2, unit.result
+    assert unit.result["estimated_units"] != 360, unit.result
     assert "estimates 2 units" in unit.error
     assert "cap is 0" in unit.error
     assert "rest_core" in unit.error

@@ -1,0 +1,25 @@
+{
+  "schema_version": "ask_dev_qua_script.v1",
+  "answers_contract": "dev_question_understanding.v1",
+  "note": "CHAOS-3532. Deterministic Question Understanding Agent decisions for the acceptance stack. NOT named role-*.json on purpose: the role is not the routing key. qua_shadow runs under the already-certified legacy_agent provider (see llm/agent/roles.py AgentRole.QUESTION_UNDERSTANDING, which is a reserved probe-less member), so a role-question_understanding.json would never be loaded by anything. The scripted service recognises a QUA call by the answers_contract id above appearing in the request's own response_format json_schema, and matches on the exact question text. A question with no entry here returns HTTP 422 scripted_provider_unmapped_qua_question -- never a heuristic answer, because a guessed QUA decision is indistinguishable downstream from the QUA path declining.",
+  "cases": {
+    "What's the status of the ACR project?": {
+      "$comment": "chris's original complaint: this question dead-ends before CHAOS-3525. With the QUA ladder armed it should resolve the mention and commit the subject, which is what an armed run has to be able to demonstrate. Confidence is above qua_promotion.QUA_COMMIT_MIN_CONFIDENCE (0.85) so the promotion actually engages; a value below it would exercise the shadow and silently decline to commit.",
+      "value": {
+        "schema_version": "dev_question_understanding.v1",
+        "intent_id": "entity_status",
+        "cardinality": "singular",
+        "mentions": [
+          {
+            "text_span": "ACR",
+            "outcome": "resolved",
+            "selected_candidate_index": 0,
+            "candidate_indices": [0],
+            "confidence": 0.95
+          }
+        ],
+        "requires_clarification": false
+      }
+    }
+  }
+}

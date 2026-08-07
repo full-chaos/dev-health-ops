@@ -238,7 +238,8 @@ class SpanMatch:
     from the class on purpose: ``match_class`` collapses a span that qualifies
     two ways down to the most specific one, and a policy that needs to know
     whether the OTHER way also held cannot recover it from the collapsed
-    value. ``qua_promotion`` needs exactly that -- see ``is_acronym_of_label``.
+    value. ``qua_promotion`` needs exactly that -- see
+    ``is_acronym_of_primary_name``.
     """
 
     match_class: SpanMatchClass
@@ -246,20 +247,34 @@ class SpanMatch:
     #: match that shares no word with the label at all -- which is the normal
     #: case for ``ACRONYM``, where the span is initials rather than words.
     label_tokens_covered: int
-    #: Whether the span is ALSO derivable as an acronym of the label, computed
-    #: independently of ``match_class`` and therefore still true for a span
-    #: that ``match_class`` reports as ``ALIAS``.
+    #: Whether the span is derivable as an acronym of the label's PRIMARY
+    #: NAME -- the label with its parentheticals and articles removed.
     #:
-    #: That overlap is the whole reason this field exists. A parenthetical is a
-    #: literal fragment of the label, so it wins the class -- but "(MWA)" on
-    #: "Meridian Web Application (MWA)" is ALSO the acronym of the primary
-    #: name, while "(Legacy)" on "Payments (Legacy)" is not the acronym of
-    #: anything. The label itself corroborates the first and says nothing about
-    #: the second, and this module's docstring records that the difference
-    #: between an alternate NAME and a mere QUALIFIER is real and that no
-    #: catalog field marks it. Acronym derivability is the structural
-    #: distinction the schema does not supply.
-    is_acronym_of_label: bool = False
+    #: Computed independently of ``match_class``, so it stays true for a span
+    #: that ``match_class`` reports as ``ALIAS``. That overlap is the whole
+    #: reason this field exists: a parenthetical is a literal fragment of the
+    #: label so it wins the class, but "(MWA)" on "Meridian Web Application
+    #: (MWA)" is ALSO the acronym of the primary name, while "(Legacy)" on
+    #: "Payments (Legacy)" is the acronym of nothing. The label corroborates
+    #: the first and says nothing about the second, and this module's
+    #: docstring records that the difference between an alternate NAME and a
+    #: mere QUALIFIER is real and that no catalog field marks it.
+    #:
+    #: **"Primary name" is load-bearing, not incidental phrasing.** An earlier
+    #: revision tested against ``alias_forms(label).acronyms``, which unions
+    #: the acronyms of the primary name with those of every parenthetical --
+    #: so a MULTI-WORD qualifier corroborated itself. "LO" against "Payments
+    #: (Legacy Operations)" was admitted on the strength of an acronym of
+    #: "Legacy Operations", re-opening through two derivations the exact
+    #: qualifier bug the field was added to close (adversarial review round 2,
+    #: HIGH; reproduced before fixing). Corroboration has to come from the name
+    #: the CATALOG asserts, never from another derived form -- an acronym of a
+    #: parenthetical is doubly derived and corroborates nothing.
+    #:
+    #: Articles are dropped before deriving, so an article-only label ("The
+    #: An") yields no acronyms and can corroborate nothing, rather than
+    #: "corroborating" the initials of its own articles.
+    is_acronym_of_primary_name: bool = False
 
 
 #: Articles, excluded from ``label_tokens_covered`` on BOTH sides.
@@ -346,18 +361,33 @@ def classify_span_match(*, span: str, label: str) -> SpanMatch:
     # Computed unconditionally, NOT inside the class ladder below: a
     # parenthetical that is also an acronym takes the ALIAS branch, and a
     # consumer that needs the acronym fact must still be able to see it.
-    is_acronym = normalized_span in forms.acronyms
+    #
+    # Derived from the PRIMARY name only, with articles dropped -- deliberately
+    # NARROWER than ``forms.acronyms``, which also unions in the acronyms of
+    # every parenthetical and would let a multi-word qualifier corroborate
+    # itself ("LO" for "Payments (Legacy Operations)"). See the field's own
+    # comment on ``SpanMatch``.
+    primary, _ = strip_parentheticals(label)
+    primary_content = " ".join(
+        word for word in _words(primary) if word.casefold() not in _ARTICLES
+    )
+    is_acronym_of_primary = normalized_span in {
+        acronym.casefold() for acronym in acronym_candidates(primary_content)
+    }
 
     if normalized_span and normalized_span == normalized_label:
         match_class = SpanMatchClass.EXACT_LABEL
     elif normalized_span in forms.literal_aliases:
         match_class = SpanMatchClass.ALIAS
-    elif is_acronym:
+    elif normalized_span in forms.acronyms:
+        # Still classified ACRONYM on the WIDER vocabulary: the class
+        # describes the match, and an acronym of a parenthetical genuinely is
+        # one. Only the CORROBORATION above is narrowed.
         match_class = SpanMatchClass.ACRONYM
     else:
         match_class = SpanMatchClass.SUBSTRING_PARTIAL
     return SpanMatch(
         match_class=match_class,
         label_tokens_covered=covered,
-        is_acronym_of_label=is_acronym,
+        is_acronym_of_primary_name=is_acronym_of_primary,
     )

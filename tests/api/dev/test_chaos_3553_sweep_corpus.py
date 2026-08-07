@@ -147,14 +147,97 @@ def _archive_rows() -> list[dict[str, object]]:
     return rows
 
 
+#: Every field a sweep row must carry, and the types it may carry them as.
+#:
+#: Checked per row rather than assumed. Adversarial review round 2 (MEDIUM)
+#: pointed out that ``if row["selected"]`` accepts ANY truthy value, so a
+#: malformed row such as ``{"selected": "false"}`` would count as a commit,
+#: and a positive row selecting ``wrong-project`` would still satisfy a
+#: ``> 0`` assertion. A count over unvalidated rows is not a measurement.
+_ROW_SCHEMA: dict[str, tuple[type, ...]] = {
+    "probe_id": (str,),
+    "cls": (str,),
+    "group": (str,),
+    "mention": (str,),
+    "repeat": (int,),
+    "status": (str,),
+    "outcome": (str, type(None)),
+    "confidence": (float, type(None)),
+    "selected": (str, type(None)),
+    "expected_canonical_id": (str, type(None)),
+}
+
+
+def _validated_rows() -> list[dict[str, object]]:
+    """Archive rows, each checked against ``_ROW_SCHEMA`` and its own class."""
+
+    return _validate(_archive_rows())
+
+
+def _validate(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The oracle itself, over rows supplied by the caller.
+
+    Split from ``_validated_rows`` so a test can hand it a DOCTORED row and
+    watch it refuse. Removing the validation call is invisible against a clean
+    archive -- the counts come out the same either way -- so the only way to
+    show this guard does anything is to plant the corruption it exists to
+    catch.
+    """
+
+    for index, row in enumerate(rows):
+        for field, allowed in _ROW_SCHEMA.items():
+            assert field in row, f"row {index}: missing {field!r}"
+            assert isinstance(row[field], allowed), (
+                f"row {index}: {field!r} is {type(row[field]).__name__}, "
+                f"expected one of {[t.__name__ for t in allowed]}"
+            )
+        assert row["cls"] in {"POSITIVE", "NEGATIVE"}, f"row {index}: bad cls"
+        # A selection is only meaningful alongside a resolved outcome; without
+        # this a row could carry a selection the run never actually made.
+        if row["selected"] is not None:
+            # Non-empty, so "has a selection" and "is truthy" cannot come
+            # apart downstream -- an empty string would be counted by one and
+            # not the other.
+            assert row["selected"] != "", f"row {index}: empty selection"
+            assert row["outcome"] == "resolved", (
+                f"row {index}: selected without outcome=resolved"
+            )
+        if row["cls"] == "POSITIVE":
+            assert row["expected_canonical_id"], f"row {index}: positive with no target"
+            # The oracle that makes a POSITIVE count mean "committed the RIGHT
+            # entity" rather than merely "committed something".
+            if row["selected"] is not None:
+                assert row["selected"] == row["expected_canonical_id"], (
+                    f"row {index}: positive selected {row['selected']!r}, "
+                    f"expected {row['expected_canonical_id']!r}"
+                )
+        else:
+            assert row["expected_canonical_id"] is None, (
+                f"row {index}: negative carries a target"
+            )
+    return rows
+
+
 def _commits_by_probe() -> dict[str, int]:
-    """Per probe, how many repeats produced a verified selection."""
+    """Per probe, how many repeats produced a verified selection.
+
+    Reads VALIDATED rows, so a positive count means "committed the right
+    entity" and a negative count means "committed anything at all".
+
+    ``is not None`` rather than a truthiness test is intent, not a guard:
+    ``_validate`` has already established that ``selected`` is either ``None``
+    or a NON-EMPTY ``str``, so the two forms provably agree here. Recorded
+    because a mutation sweep flags the swap as surviving, and that survivor is
+    equivalent-by-construction rather than a hole -- the guard that actually
+    stops a bogus selection from being counted is ``_validate``, and it is
+    observed refusing nine planted corruptions above.
+    """
 
     counts: dict[str, int] = {}
-    for row in _archive_rows():
+    for row in _validated_rows():
         probe_id = str(row["probe_id"])
         counts.setdefault(probe_id, 0)
-        if row.get("selected"):
+        if row["selected"] is not None:
             counts[probe_id] += 1
     return counts
 
@@ -486,6 +569,69 @@ async def test_verify_fills_the_slice_from_the_catalog_not_from_the_proposal() -
     assert not _structurally_admissible(assessment)
 
 
+def _clean_committed_positive() -> dict[str, object]:
+    """A positive row that ACTUALLY selected its expected entity.
+
+    Deliberately not "the first positive row": that one is ``pos.acr.bare``
+    repeat 0, whose outcome is ``ambiguous`` with ``selected: null``. Building
+    corruptions on top of it made every case trip the "selection without
+    outcome=resolved" assertion FIRST, so the wrong-entity and truthiness
+    cases were passing for a reason that had nothing to do with what they
+    claimed to prove -- and a mutation sweep caught exactly that, with both
+    oracle mutants surviving a green test.
+    """
+
+    return next(
+        row
+        for row in _archive_rows()
+        if row["cls"] == "POSITIVE" and row["selected"] is not None
+    )
+
+
+@pytest.mark.parametrize(
+    ("corruption", "why"),
+    [
+        (
+            {"selected": "wrong-project"},
+            "a positive that committed the WRONG entity, counted as a correct "
+            "commit -- the oracle that makes a positive count mean anything",
+        ),
+        (
+            {"selected": "false"},
+            'a truthy STRING that reads as "no selection"',
+        ),
+        ({"selected": ""}, "an empty selection, truthy-false but not None"),
+        ({"outcome": "no_match"}, "a selection the run's own outcome denies"),
+        ({"confidence": "0.72"}, "a stringified float"),
+        ({"repeat": "0"}, "a stringified int"),
+        ({"cls": "MAYBE"}, "a class outside the closed pair"),
+        ({"expected_canonical_id": None}, "a positive with no target to check"),
+        ({"probe_id": 7}, "a non-string probe id"),
+    ],
+)
+@pytest.mark.asyncio(loop_scope="function")
+async def test_a_corrupted_archive_row_is_refused(
+    corruption: dict[str, object], why: str
+) -> None:
+    """Each planted corruption must be REFUSED, individually.
+
+    Rule of this repo: a guard never observed failing is not known to be a
+    guard. Deleting the validation call passes against the real archive -- it
+    is clean, so validated and unvalidated counts agree -- so the only
+    evidence the oracle does anything is a row it rejects.
+    """
+
+    clean = _clean_committed_positive()
+    doctored = {**clean, **corruption}
+
+    with pytest.raises(AssertionError):
+        _validate([doctored])
+
+    # The same row without the corruption passes, so the refusal is caused by
+    # the planted defect and not by the fixture being unusable.
+    assert _validate([dict(clean)]) == [clean], why
+
+
 @pytest.mark.asyncio(loop_scope="function")
 async def test_the_replayed_probe_set_is_exactly_the_measured_one() -> None:
     """The corpus and the archive cover the same probes, both directions.
@@ -535,7 +681,7 @@ async def test_the_archive_is_the_run_the_ticket_describes() -> None:
     a truncated or replaced archive and report the result as measured.
     """
 
-    rows = _archive_rows()
+    rows = _validated_rows()
     probes = {str(row["probe_id"]) for row in rows}
 
     assert len(rows) == 336
@@ -543,3 +689,14 @@ async def test_the_archive_is_the_run_the_ticket_describes() -> None:
     assert {sum(1 for row in rows if row["probe_id"] == probe) for probe in probes} == {
         8
     }
+    # The class split, and the selections that carry the whole argument: 79
+    # correct commits on positives (every one verified against its own
+    # expected_canonical_id by ``_validated_rows``) plus the 12 false
+    # positives. A truncated or doctored archive fails here rather than
+    # quietly re-deriving smaller numbers that still "agree" with themselves.
+    assert sum(1 for row in rows if row["cls"] == "POSITIVE") == 96
+    assert sum(1 for row in rows if row["cls"] == "NEGATIVE") == 240
+    selections = [row for row in rows if row["selected"] is not None]
+    assert len(selections) == 91
+    assert sum(1 for row in selections if row["cls"] == "POSITIVE") == 79
+    assert sum(1 for row in selections if row["cls"] == "NEGATIVE") == 12

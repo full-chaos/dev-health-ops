@@ -176,9 +176,10 @@ _STRUCTURALLY_DISTINGUISHING_TOKENS = 2
 #: Hence ``_structurally_admissible``'s clause 3 asks for one of:
 #:
 #: * the span IS the label (``EXACT_LABEL``); or
-#: * the label derives the span as an acronym
-#:   (``SpanMatch.is_acronym_of_label`` -- always true for ``ACRONYM``, and
-#:   true for the alias forms that are real short names); or
+#: * the label's PRIMARY NAME derives the span as an acronym
+#:   (``SpanMatch.is_acronym_of_primary_name`` -- narrower than the ACRONYM
+#:   class on purpose, since an acronym of a PARENTHETICAL is doubly derived
+#:   and corroborates nothing); or
 #: * the span covers ``_STRUCTURALLY_DISTINGUISHING_TOKENS`` of the label.
 #:
 #: which is one rule over both derived classes rather than a table of them,
@@ -312,7 +313,7 @@ def _structurally_admissible(assessment: QUAShadowMentionAssessment) -> bool:
     # corroborations, and either suffices; see the comment block above
     # ``_STRUCTURALLY_DISTINGUISHING_TOKENS`` for why a class check alone is
     # not one of them.
-    if span_match.is_acronym_of_label:
+    if span_match.is_acronym_of_primary_name:
         return True
     return span_match.label_tokens_covered >= _STRUCTURALLY_DISTINGUISHING_TOKENS
 

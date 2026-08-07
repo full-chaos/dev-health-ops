@@ -366,7 +366,7 @@ def test_an_uncorroborated_parenthetical_qualifier_never_commits(
 
     assert entity.span_match is not None
     assert entity.span_match.match_class is SpanMatchClass.ALIAS
-    assert entity.span_match.is_acronym_of_label is False
+    assert entity.span_match.is_acronym_of_primary_name is False
     assert entity.span_match.label_tokens_covered == 1
     assert promotable_selection(record, deterministic_declined=True) is None
 
@@ -440,6 +440,64 @@ def test_unclassified_provenance_fails_closed() -> None:
     assert promotable_selection(record, deterministic_declined=True) is None
 
 
+@pytest.mark.parametrize(
+    ("span", "label"),
+    [
+        # The round-2 repro: "LO" is the acronym of the QUALIFIER "Legacy
+        # Operations", and of nothing the catalog asserts as a name.
+        ("LO", "Payments (Legacy Operations)"),
+        ("AB", "Checkout (Archived Beta)"),
+        # An acronym of a parenthetical that IS a real alternate name is
+        # refused too -- doubly derived is doubly derived, and refusing costs
+        # a clarification round trip rather than a wrong subject.
+        ("CF", "Dev Health Agent Context Runtime (Context Fabric)"),
+    ],
+)
+def test_an_acronym_of_a_parenthetical_corroborates_nothing(
+    span: str, label: str
+) -> None:
+    """Corroboration must come from the name the CATALOG asserts.
+
+    The first version of the corroboration rule tested against
+    ``alias_forms(label).acronyms``, which unions the primary name's acronyms
+    with those of every parenthetical. A MULTI-WORD qualifier therefore
+    corroborated itself: "LO" against "Payments (Legacy Operations)" was
+    admitted on the strength of an acronym of "Legacy Operations", walking
+    straight back into the CHAOS-3289 qualifier bug the rule had just closed
+    for the single-word case ("Legacy"). Found by adversarial review round 2
+    and reproduced before fixing.
+
+    An acronym of a parenthetical is derived from a derived form. The catalog
+    asserts the primary name and nothing else, so that is the only thing that
+    can corroborate.
+    """
+
+    entity = _entity(label, span=span, canonical_id="acme/thing")
+    record = _record(authorized_slice=(entity,), selected=entity, confidence=1.0)
+
+    assert entity.span_match is not None
+    assert entity.span_match.is_acronym_of_primary_name is False
+    assert promotable_selection(record, deterministic_declined=True) is None
+
+
+def test_an_article_only_label_can_corroborate_nothing() -> None:
+    """A label with no content words must not derive its own initials.
+
+    "TA" against "The An" was admitted through the acronym arm: the label's
+    two articles supplied the two words an acronym window needs. Articles are
+    dropped before deriving, so the primary name has no content and generates
+    no acronyms. Round-2 edge case, reproduced before fixing.
+    """
+
+    entity = _entity("The An", span="TA", canonical_id="acme/degenerate")
+    record = _record(authorized_slice=(entity,), selected=entity, confidence=1.0)
+
+    assert entity.span_match is not None
+    assert entity.span_match.is_acronym_of_primary_name is False
+    assert entity.span_match.label_tokens_covered == 0
+    assert promotable_selection(record, deterministic_declined=True) is None
+
+
 def test_a_short_acronym_window_still_admits_which_is_a_known_residual() -> None:
     """CHARACTERIZATION, not an endorsement. This shape is NOT closed.
 
@@ -469,7 +527,7 @@ def test_a_short_acronym_window_still_admits_which_is_a_known_residual() -> None
 
     assert entity.span_match is not None
     assert entity.span_match.match_class is SpanMatchClass.ACRONYM
-    assert entity.span_match.is_acronym_of_label is True
+    assert entity.span_match.is_acronym_of_primary_name is True
     assert entity.span_match.label_tokens_covered == 0
     assert promotable_selection(record, deterministic_declined=True) is not None
 

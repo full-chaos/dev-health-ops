@@ -139,12 +139,21 @@ def _wire_visible_message_condition():
 #: with its derivation written beside it.
 #:
 #: WHAT THIS CHANGES ABOUT THE PRODUCT PROMISE. 0-day retention now means
-#: "deleted at completion, or within an hour if abandoned". It previously
-#: meant "deleted at completion, or NEVER" -- a conversation that never
-#: completed a turn was retained indefinitely in the one tier whose entire
-#: promise is immediate deletion. The grace applies ONLY to conversations
-#: that never complete a turn: a completed one is still stamped to ``now`` at
-#: terminal and collected on the next tick, unchanged.
+#: **"deleted at completion, or after 1 hour with no activity if abandoned"**.
+#: It previously meant "deleted at completion, or NEVER" -- a conversation
+#: that never completed a turn was retained indefinitely in the one tier
+#: whose entire promise is immediate deletion.
+#:
+#: The invariant is IDLE-anchored, not creation-anchored: an ephemeral
+#: conversation is **never collectable until it has been idle for a full
+#: grace period**. ``_touch`` refreshes this expiry on every activity, which
+#: is what makes that true -- anchoring on creation alone was a data-loss
+#: path, deleting a turn that started late in the window while it was still
+#: in flight.
+#:
+#: The grace therefore only ever affects conversations that go quiet: one
+#: that completes a turn is still stamped to ``now`` at terminal and
+#: collected on the next tick, unchanged.
 EPHEMERAL_ABANDONED_GRACE = timedelta(hours=1)
 
 _TERMINAL_RUN_STATES = frozenset(

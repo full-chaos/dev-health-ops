@@ -45,9 +45,23 @@ stamped to ``now`` at terminal and purged immediately, exactly as before --
 the grace only ever affects conversations that never complete one, which is
 precisely the stranded population.
 
-``test_an_active_conversation_is_not_purged_while_in_flight`` is the test
-that kills the literal stamp-at-creation. It was watched failing against
-that implementation before this one was written.
+THE INVARIANT IS IDLE-ANCHORED, NOT CREATION-ANCHORED. Anchoring on
+creation alone was itself a data-loss path, found in review: a turn started
+55 minutes after the conversation was opened is legitimately in flight when
+the creation stamp falls due, and gets its conversation deleted out from
+under it. ``_touch`` therefore refreshes the expiry on every activity, so
+the real rule is: an ephemeral conversation is never collectable until it
+has been idle for a full grace period.
+
+So the promise this suite defends is **"deleted at completion, or after 1
+hour with no activity if abandoned"** -- previously "deleted at completion,
+or never".
+
+``test_an_active_conversation_is_not_purged_while_in_flight`` kills the
+literal stamp-at-creation, and
+``test_a_turn_started_late_in_the_grace_is_not_purged_under_it`` kills the
+creation-anchored one. Both were watched failing against the implementation
+they exist to reject, before it was replaced.
 """
 
 from __future__ import annotations

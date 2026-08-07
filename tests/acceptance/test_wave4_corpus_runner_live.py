@@ -156,6 +156,7 @@ from scripts.acceptance.corpus.receipt import (
     write_declared_blocked_receipt,
 )
 from scripts.acceptance.corpus.resolution_path import (
+    ABSENCE_RUN_ID_NOT_OBSERVED,
     ResolutionPathError,
     absence_is_a_broken_measurement,
     attach_mention_texts,
@@ -831,19 +832,30 @@ def test_corpus_case(
         ),
     )
     # An absent resolution_path is only acceptable when the ledger was
-    # genuinely read and genuinely empty. "No run_id, so nothing was read" is
-    # a broken measurement and must never sit in a receipt looking like an
-    # honest absence.
+    # genuinely read and genuinely empty. Both broken reasons -- "no run_id,
+    # so nothing was read" and "read, non-empty, unclassifiable" -- must never
+    # sit in a receipt looking like an honest absence.
+    #
+    # The detail is derived per reason rather than hardcoded: the first
+    # version said "the ledger was never queried" for BOTH, which is false for
+    # the unclassifiable case (it was queried, and was not empty) and would
+    # have sent a reader hunting the wrong defect -- the same misdescription
+    # this check exists to prevent, one layer up.
     if absence_is_a_broken_measurement(resolution_path_absence):
+        broken_detail = (
+            "the ledger was never queried"
+            if resolution_path_absence == ABSENCE_RUN_ID_NOT_OBSERVED
+            else "the ledger was queried and was NOT empty, but could not be "
+            "classified (see resolution_path_classifiable)"
+        )
         recorder.check(
             category="subject-resolution",
             name="resolution_path_measured",
             condition=False,
             detail=(
                 f"resolution_path is absent for reason "
-                f"{resolution_path_absence!r} -- the ledger was never "
-                "queried, so this case measured nothing about subject "
-                "resolution"
+                f"{resolution_path_absence!r} -- {broken_detail}, so this "
+                "case measured nothing trustworthy about subject resolution"
             ),
         )
     for entry in case.invariants:

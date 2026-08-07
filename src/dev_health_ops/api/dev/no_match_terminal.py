@@ -266,29 +266,63 @@ _MAX_ANSWER_WARNINGS: int = next(
 )
 
 
-def disclose_scope_widening(answer: DevAnswer) -> DevAnswer:
-    """Add the widening disclosure to ``answer.warnings``, once.
+def _disclosed(answer: DevAnswer, sentence: str) -> DevAnswer:
+    """Put one server-owned ``sentence`` into ``answer.warnings``, once.
 
-    Returns ``answer`` unchanged when the sentence is already present or the
-    contract's twenty-warning bound is already spent -- a disclosure that
-    cannot fit must not silently evict a warning the producer chose.
+    The single implementation of "a disclosure survives the bound", shared by
+    every disclosure below so the rule is decided once rather than per
+    caller. CHAOS-3531: the two callers used to disagree here -- one yielded
+    at the bound and one took the slot -- which is a trap for the next reader
+    and made "never silent" true of one disclosure and false of its twin.
 
     ``warnings`` is the right channel rather than a bespoke field: it is what
     ``streaming`` publishes as ``warning`` frames and what
     ``terminal_frames.wrap_legacy_answer_as_frame`` copies into the frame's
-    ``limitations``, so one append reaches both the wire and the rendered
-    answer. ``answered_with_gaps`` (what every wrapped legacy answer is)
+    ``limitations``, so one entry reaches the wire and the rendered answer
+    together. ``answered_with_gaps`` (what every wrapped legacy answer is)
     requires disclosed limitations, so adding one can never invalidate the
     frame.
+
+    At the contract's twenty-warning bound the disclosure DISPLACES the last
+    producer warning rather than yielding to it. That trade is deliberate and
+    it is the whole point of this function: an undisclosed scope decision is
+    a claim the reader cannot check, and a dropped twentieth warning is not.
+    An answer carrying twenty warnings is already degenerate; the disclosure
+    is the one entry whose absence changes what the answer MEANS.
+
+    That judgement rests on a checked property of today's producers, stated
+    so a future change can notice it: every server-authored writer of
+    ``warnings`` emits at MOST one entry (the server-grounded notice, the
+    budget-exhaustion notice, these disclosures), so the only way to reach
+    the bound is model-authored free text -- displacement evicts model prose,
+    never a server safety signal. If a deterministic producer ever starts
+    emitting many machine warnings here, revisit this trade rather than
+    assuming it still holds.
+
+    The sentence goes FIRST so a truncating renderer keeps it, and the
+    function is idempotent -- disclosing twice costs one slot, not two.
     """
 
-    if SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE in answer.warnings:
-        return answer
-    if len(answer.warnings) >= _MAX_ANSWER_WARNINGS:
+    if sentence in answer.warnings:
         return answer
     return answer.model_copy(
-        update={"warnings": [*answer.warnings, SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE]}
+        update={"warnings": [sentence, *answer.warnings][:_MAX_ANSWER_WARNINGS]}
     )
+
+
+def disclose_scope_widening(answer: DevAnswer) -> DevAnswer:
+    """Disclose that the run widened to organization scope, once.
+
+    CHAOS-3531 corrects what CHAOS-3497 claimed: this used to return the
+    answer unchanged once the twenty-warning bound was spent, so a widened
+    run could answer organization-wide with no prose disclosure at all --
+    while CHAOS-3497's own write-up said the widening "is said out loud"
+    without qualification. The claim is now true rather than qualified: see
+    ``_disclosed`` for the bound rule and why displacement is the right
+    trade.
+    """
+
+    return _disclosed(answer, SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE)
 
 
 #: CHAOS-3525: the sentence that makes a model-chosen subject visible.
@@ -315,41 +349,20 @@ def subject_matched_disclosure(*, span: str, label: str) -> str:
 
 
 def disclose_subject_match(answer: DevAnswer, *, span: str, label: str) -> DevAnswer:
-    """Add the QUA-match disclosure to ``answer.warnings``, once.
-
-    Same channel and same bound discipline as ``disclose_scope_widening``
-    above -- one append reaches the stream's ``warning`` frames and the
-    frame's ``limitations`` together, so a reader of the rendered answer and
-    a reader of the wire see the same claim.
+    """Disclose which subject a QUA proposal committed, once.
 
     The label is authorized catalog content, so a legitimate entity whose
     name happens to contain a denylisted token must not fail its own answer:
     the caller attests it through ``finish()``'s ``extra_attested`` seam, the
     same trust tier already granted to clarification-candidate labels.
+
+    Bound behaviour is ``_disclosed``'s, shared with the widening disclosure
+    -- a model-chosen subject reaching a reader unannounced is the failure
+    the whole promotion path is gated to prevent, and it must not become
+    reachable just because an answer already carried twenty warnings.
     """
 
-    sentence = subject_matched_disclosure(span=span, label=label)
-    if sentence in answer.warnings:
-        return answer
-    # Unlike the widening disclosure above, this one is NOT best-effort: it
-    # takes the last slot rather than yielding it.
-    #
-    # `warnings` is bounded at twenty. Yielding at that bound meant a
-    # QUA-committed subject could reach a reader with no disclosure at all
-    # while the commit still stood -- a silent, model-chosen subject, which
-    # is the precise failure this whole path is gated to prevent, reachable
-    # with no authorization failure anywhere (adversarial review finding,
-    # reproduced before fixing). Displacing a producer warning is the
-    # cheaper loss by a wide margin: an undisclosed subject is a claim the
-    # reader cannot check, and a dropped twentieth warning is not.
-    #
-    # The disclosure goes FIRST so it is the one a truncating renderer keeps,
-    # and the tail is cut to the contract bound.
-    return answer.model_copy(
-        update={
-            "warnings": [sentence, *answer.warnings][:_MAX_ANSWER_WARNINGS],
-        }
-    )
+    return _disclosed(answer, subject_matched_disclosure(span=span, label=label))
 
 
 #: The noun used when the question gave no entity noun of its own. Never

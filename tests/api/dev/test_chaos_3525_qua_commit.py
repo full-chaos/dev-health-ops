@@ -48,6 +48,7 @@ from dev_health_ops.api.dev.scope_service import (
 from dev_health_ops.llm.agent.contracts import AgentFinalAnswer
 from dev_health_ops.llm.agent.scripted import ScriptedAgentProvider, ScriptedStep
 from tests._chaos_3292_preflight import (
+    CHAOS_3388_ACR_PROJECT,
     ORG_ID,
     SeededCatalog,
     run_preflight_orchestrator,
@@ -56,17 +57,17 @@ from tests._chaos_3292_preflight import (
 pytestmark = pytest.mark.asyncio
 
 
-#: The acceptance world's own project row, verbatim
-#: (``tests/acceptance/world/ask-dev-world.v1/subjects.json``'s
-#: ``subject.exact.context-fabric``). Reused rather than re-worded so this
-#: unit proof and the acceptance corpus point at the same real label shape:
-#: >=5 capitalized words AND a parenthetical qualifier, with an acronym
-#: ("ACR") that matches the INNER words only.
-ACR_PROJECT = AuthorizedEntity(
-    EntityKind.PROJECT,
-    "project-context-fabric",
-    "Dev Health Agent Context Runtime (Context Fabric)",
-)
+#: The CHAOS-3388 live-repro fixture, reused rather than re-declared.
+#:
+#: It is the REAL production catalog row read live from ClickHouse during
+#: that incident, and its display label is exactly the shape this ticket is
+#: about: >=5 capitalized words with a parenthetical qualifier, and an
+#: acronym ("ACR") over the label's INNER words only. An earlier revision of
+#: this module declared its own copy with an invented canonical id -- two
+#: fixtures for one real subject, which is how they drift apart. Sharing it
+#: also makes the ticket chain visible in the fixtures themselves: CHAOS-3388
+#: correctly declines to auto-commit this row, CHAOS-3525 commits it.
+ACR_PROJECT = CHAOS_3388_ACR_PROJECT
 
 ACR_QUESTION = "What's the status of the ACR project"
 

@@ -168,6 +168,24 @@ services:
       ASK_DEV_LIVE_ACCEPTANCE: "1"
       ASK_DEV_ACCEPTANCE_OPENAI_API_KEY: ask-dev-acceptance-local-v1
       ASK_DEV_ACCEPTANCE_OPENAI_PORT: "8001"
+      # CHAOS-3219 Phase 3: without this pair the scripted provider served
+      # NOTHING. The `api` image target ships only the built wheel -- no
+      # `tests/` tree -- so provider_scripts._scripts_dir()'s relative
+      # default resolved against WORKDIR /app and missed, try_load_engine()
+      # swallowed the failure and returned None (correct for organic
+      # production traffic, catastrophic here), and all 19 scripted cases
+      # fell through to the unscripted default heuristic while PASSING.
+      # Set EXPLICITLY rather than relying on the relative walk-up that
+      # failed silently. A literal path, never a compose interpolation: an
+      # interpolated variable would also need triaging into
+      # run_ask_dev_compose.sh's unset list, per
+      # test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots.
+      ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR: /opt/ask-dev/provider-scripts
+    volumes:
+      # Read-only: these fixtures are an oracle the provider reads, never
+      # writes. Mounted rather than baked into the image so the acceptance
+      # fault matrix cannot drift from the corpus it is generated beside.
+      - ./tests/acceptance/world/ask-dev-world.v1/provider-scripts:/opt/ask-dev/provider-scripts:ro
     expose:
       - "8001"
     healthcheck:

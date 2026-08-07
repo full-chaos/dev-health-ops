@@ -164,6 +164,10 @@ from scripts.acceptance.corpus.resolution_path import (
     resolution_path_absence_reason,
 )
 from scripts.acceptance.corpus.script_inventory import check_script_inventory
+from scripts.acceptance.corpus.scripted_engine import (
+    ScriptedEngineUnavailableError,
+    require_scripted_engine_loaded,
+)
 from scripts.acceptance.corpus.sse_client import SseFrame, parse_sse_events
 from scripts.acceptance.corpus.world_digest_guard import (
     WorldDigestMismatchError,
@@ -297,6 +301,32 @@ def _world_digest_pin(compose_context: ComposeContext) -> str:
     try:
         return _resolve_world_digest_pin(compose_context)
     except (DbVerifyUnavailableError, WorldDigestMismatchError) as exc:
+        pytest.fail(str(exc), pytrace=False)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _scripted_engine_precondition(compose_context: ComposeContext, role_script) -> None:
+    """CHAOS-3219 Phase 3: refuse to measure a corpus the scripted provider
+    cannot actually serve.
+
+    The 2026-08-07 04:55 armed run produced 140 receipts and reported the
+    corpus green while ``try_load_engine`` was returning ``None`` inside the
+    provider container -- all 19 scripted cases (10 faults, 9 decision
+    scripts) silently degraded to the unscripted default heuristic and
+    PASSED, having exercised no fault at all. Nothing failed when the fault
+    matrix stopped existing; this fixture is why it now would.
+
+    ``minimum_cases`` is the HOST's own role-script case count rather than a
+    hardcoded floor, which makes this a DIFFERENTIAL rather than a
+    threshold: the container must have loaded the same script this run
+    asserts against. A stale, partial, or wrong-role mount then fails here
+    instead of quietly serving a different matrix than the corpus expects.
+    """
+
+    _role, script = role_script
+    try:
+        require_scripted_engine_loaded(compose_context, minimum_cases=len(script.cases))
+    except ScriptedEngineUnavailableError as exc:
         pytest.fail(str(exc), pytrace=False)
 
 

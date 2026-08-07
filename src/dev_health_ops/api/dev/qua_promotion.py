@@ -22,11 +22,18 @@ cohort, an uncorroborated organization-wide cardinality -- each returns
 without the seam. There is no branch here that repairs a partial proposal
 into a usable one.
 
-**It re-authorizes at commit time.** The shadow already bounds proposals two
-ways (a per-call JSON Schema that makes an out-of-range index inexpressible,
-and a runtime verifier re-checking each index against that mention's own
-slice). Promotion adds a third check, and on the singular path that third
-check is not redundancy -- it is the ONLY receipt. ``committed_resolution_for``
+**It re-authorizes at commit time.** This paragraph used to say the shadow
+already bounds proposals "two ways" -- a per-call JSON Schema making an
+out-of-range index inexpressible, plus a runtime verifier. CHAOS-3536
+established that the first of those does not exist: the schema's
+``minimum``/``maximum`` bounds are stripped by the provider's
+``_structural_schema`` projection and have never reached a decoder
+(CHAOS-3537). Shadow-time index bounding is ``qua_shadow._verify`` alone,
+re-checking each index against that mention's own slice.
+
+So promotion's ``verify_still_authorized`` is the SECOND check overall, not
+the third -- and on the singular path it is not redundancy either way, it is
+the ONLY receipt. ``committed_resolution_for``
 mints no ``subject_set_fingerprint``, and the executor's fingerprint
 cross-check (``investigation_plans/executor.py``) only covers *set* batches,
 so nothing downstream re-verifies a singular committed entity. See
@@ -141,19 +148,31 @@ def promotable_selection(
     # truncation. So for a question with many mentions, a later mention
     # cannot carry a selection that survives verification.
     #
-    # CHAOS-3536 corrected the mechanism claimed here. This used to say the
-    # per-call JSON Schema bounded such a mention's index range to
-    # ``[0, -1]``, "which no integer satisfies" -- i.e. that the provider
-    # could not express it. It could: ``_structural_schema`` strips
-    # ``minimum``/``maximum`` before dispatch (CHAOS-3537). The empty
-    # zero-candidate slice is now sent as ``{"type": "null"}``, which does
-    # survive projection, so the schema half is real again for THIS shape --
-    # but the guarantee that has always held is ``_verify``'s, which rejects
-    # any index not in the mention's own slice.
+    # CHAOS-3536 corrected the mechanism claimed here, and the claim was
+    # wrong in TWO ways. It used to say the per-call JSON Schema bounded
+    # such a mention's index range to ``[0, -1]``, "which no integer
+    # satisfies".
     #
-    # Either way the direction is fail-closed (no proposal rather than a
-    # proposal over a truncated list), and it is one more reason a
-    # multi-mention question falls through to clarification above.
+    # First: those bounds never reached the provider at all --
+    # ``_structural_schema`` strips ``minimum``/``maximum`` before dispatch
+    # (CHAOS-3537).
+    #
+    # Second, and independent of the stripping: THERE IS NO PER-MENTION
+    # INDEX RANGE IN THE SCHEMA. ``_response_schema`` is built once per call
+    # from ``candidate_count=len(combined)`` -- the COMBINED, call-wide
+    # shortlist -- so every mention shares one index space. A mention past
+    # ``max_total_candidates`` gets an empty SLICE from
+    # ``_combine_shortlists``, but ``candidate_count`` is still 50, so the
+    # schema keeps expressing 0..49 for it. The zero-candidate
+    # ``{"type": "null"}`` encoding fires only when the WHOLE call
+    # authorized nothing, which is not this case.
+    #
+    # So for a truncated mention the schema offers nothing whatsoever, and
+    # ``_verify`` -- which checks each index against that mention's OWN
+    # ``[start, end)`` slice, not the call-wide range -- is the entire
+    # reason a truncated mention cannot carry a selection. That is still
+    # fail-closed, and it is one more reason a multi-mention question falls
+    # through to clarification above.
     # An organization-wide proposal can name no entity to verify, so there is
     # nothing here to commit even when corroborated; a singular commit is the
     # only shape this promotion has. Checked explicitly rather than left to

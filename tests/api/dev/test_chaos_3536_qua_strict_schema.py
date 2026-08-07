@@ -341,6 +341,38 @@ def test_a_selectable_index_is_still_expressible_when_candidates_exist() -> None
     assert "null" in selected["type"], "no_match must remain expressible"
 
 
+def test_the_null_encoding_is_call_wide_and_not_per_mention() -> None:
+    """The trap this encoding sets, pinned so the next reader does not fall in.
+
+    ``_response_schema`` is built ONCE per call from the COMBINED shortlist,
+    so every mention shares one index space. ``candidate_count == 0`` means
+    "this CALL authorized nothing", not "this mention's slice is empty".
+
+    A mention past ``max_total_candidates`` gets an empty ``[start, end)``
+    slice from ``_combine_shortlists`` while the call-wide count stays
+    non-zero -- so it still sees the full range in the schema, and ONLY
+    ``_verify``'s per-mention check stops it selecting another mention's
+    candidate.
+
+    Written after review caught the author claiming the opposite in
+    ``qua_promotion``'s truncation comment. The pre-existing comment there
+    made the same error, so this is a mistake the code invites rather than
+    one anybody made carelessly, which is exactly why it is worth a test.
+    """
+
+    wire = _qua_branch(_wire_schema(candidate_count=50, mention_count=3))
+    selected = wire["properties"]["mentions"]["items"]["properties"][
+        "selected_candidate_index"
+    ]
+
+    assert selected != {"type": "null"}, (
+        "a multi-mention call with a non-empty combined shortlist must NOT "
+        "get the zero-candidate encoding, however empty an individual "
+        "mention's own slice may be"
+    )
+    assert "integer" in selected["type"]
+
+
 # ---------------------------------------------------------------------------
 # What this schema does NOT guarantee. Stated, because the module docstring
 # used to claim the opposite.

@@ -40,11 +40,19 @@ defence in depth. That was wrong, and CHAOS-3536 corrected it:
    reading it. Tracked as CHAOS-3537.
 
 The one structural bound that DOES survive projection is the zero-candidate
-case: with nothing authorized, ``selected_candidate_index`` is sent as
-``{"type": "null"}``, so no index is expressible at all. ``candidate_indices``
-has no equivalent -- it is a non-optional tuple here, so a null would fail
-parsing -- and is therefore unbounded on the wire and rejected only by
-``_verify``.
+case: when the CALL authorized nothing at all, ``selected_candidate_index``
+is sent as ``{"type": "null"}``, so no SELECTED index is expressible. That
+covers ``selected_candidate_index`` only -- ``candidate_indices`` still goes
+out as ``{"type": "array", "items": {"type": "integer"}}`` even then, so an
+index remains expressible there and is caught only by ``_verify``.
+
+Note the scope of that carefully -- it is call-wide, not per mention.
+``_response_schema`` is built once from the COMBINED shortlist, so all
+mentions share one index space, and a mention whose own slice is empty (past
+``max_total_candidates``) still sees the call's full range in the schema.
+Only ``_verify`` knows about per-mention slices. ``candidate_indices`` gets
+no structural bound either -- it is a non-optional tuple here, so a null
+would fail parsing -- and is likewise rejected only by ``_verify``.
 """
 
 from __future__ import annotations

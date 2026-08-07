@@ -45,10 +45,20 @@ adversarial critique, comment 7d1368d9):
   resolve by identity. That makes it a strong sole guard, but a sole guard.
 
   The one structural bound that DOES survive projection is the
-  zero-candidate encoding: with nothing authorized,
-  ``selected_candidate_index`` is ``{"type": "null"}``, so no index is
-  expressible at all. See ``_response_schema``. CHAOS-3537 tracks restoring
-  a real structural bound for the non-empty case.
+  zero-candidate encoding: when the CALL authorized nothing,
+  ``selected_candidate_index`` is ``{"type": "null"}``. Two limits on that,
+  both stated because the previous version of this bullet is what taught us
+  not to round such claims up:
+
+  - it covers ``selected_candidate_index`` only. ``candidate_indices`` still
+    ships as ``{"type": "array", "items": {"type": "integer"}}``, so an
+    index stays expressible there and ``_verify`` remains its only guard;
+  - it is CALL-wide, not per mention. ``_response_schema`` is built once
+    from the combined shortlist, so a mention whose own slice is empty
+    (past ``max_total_candidates``) still sees the call's full range.
+
+  See ``_response_schema``. CHAOS-3537 tracks restoring a real structural
+  bound for the non-empty case.
 * **LLM unavailable degrades to silent skip, never a block.** Every branch
   of ``evaluate()`` returns a ``QUAShadowRecord`` (never raises); the
   orchestrator's own call site additionally wraps the call and the

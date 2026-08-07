@@ -1,0 +1,14 @@
+# MIRRORED AttributeError: a SEXAGESIMAL in a label list. PyYAML resolves it
+# to the int 90, and an int has no .lower(), so the generator raises before any
+# intersection is taken.
+#
+# This was FAIL-OPEN before the sexagesimal literal was recognised: yaml.v3
+# leaves `1:30` a string, so the port lower-cased it, matched nothing, and
+# quietly classified where Python refuses.
+rules:
+  - id: sexagesimal_label
+    priority: 10
+    match:
+      label: [1:30]
+    output:
+      investment_area: sexagesimal_label_area

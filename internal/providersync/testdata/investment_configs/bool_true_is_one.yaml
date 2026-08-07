@@ -1,0 +1,20 @@
+# Pins the VALUE of a true priority, not merely that it is numeric.
+# Python: True == 1, so the priority-0 rule sorts FIRST and answers.
+#
+# File order is load-bearing: the true rule is written first, so a port that
+# decoded True as 0 would tie the two and the STABLE sort would hand the answer
+# to the true rule instead. bool_priorities.yaml cannot catch that -- 0 and 1
+# both sort before 9 -- which is exactly how a wrong-value decode survived.
+rules:
+  - id: true_rule
+    priority: true
+    match:
+      always: true
+    output:
+      investment_area: true_area
+  - id: zero_rule
+    priority: 0
+    match:
+      always: true
+    output:
+      investment_area: zero_area

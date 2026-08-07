@@ -1,0 +1,18 @@
+# DECLARED DIVERGENCE: every priority is a DATE. PyYAML resolves a plain
+# 2024-01-02 to datetime.date and orders dates among themselves, so the 2023
+# rule sorts first and answers. This port has no ordering to offer that is
+# Pythons, so it refuses. Contrast raises_date_and_int_priorities.yaml, where
+# a date beside an int makes Python itself raise.
+rules:
+  - id: later_date
+    priority: 2024-01-02
+    match:
+      always: true
+    output:
+      investment_area: later_date_area
+  - id: earlier_date
+    priority: 2023-01-02
+    match:
+      always: true
+    output:
+      investment_area: earlier_date_area

@@ -149,6 +149,10 @@ PREFLIGHT_DIAGNOSTICS: tuple[str, ...] = (
     # PROCEED diagnostics -- see the two call sites' own comments.
     "committed_cohort_portfolio_v1",
     "committed_portfolio_org_wide",
+    # CHAOS-3528: the CHAOS-3393 portfolio catalog-outage branch's own
+    # diagnostic, emitted at a real call site but never added here -- the
+    # exact CHAOS-3292 class this tuple exists to prevent.
+    "portfolio_catalog_unavailable",
     # CHAOS-3525: a subject the deterministic layer declined, committed from
     # a verified QUA proposal. Lives in this closed tuple like every other
     # branch's diagnostic even though the branch that sets it is in the

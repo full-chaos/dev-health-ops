@@ -394,6 +394,41 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${web_root}/node_modules/.bin/playwright" test \
   -c "${web_root}/playwright.ask-dev-acceptance.config.ts"
 
+# CHAOS-3586 (unblocks CHAOS-3510 / Phase 4 Lane 4d): the Wave 4 access
+# matrix. A SECOND playwright invocation rather than more env on the one
+# above, because the two configs arm on different contracts and must be able
+# to fail independently -- folding them together would let a Phase 1 oracle
+# change take the access matrix down with it, and vice versa.
+#
+# ASK_DEV_WAVE4_ACCESS_MATRIX is deliberately its own knob, not implied by
+# ASK_DEV_LIVE_ACCEPTANCE. A launcher predating this lane sets the latter but
+# not the former, so it cannot appear to have run a matrix that did not exist
+# yet -- the web config throws instead of silently proving nothing.
+#
+# ASK_DEV_ACCEPTANCE_ACR is forwarded rather than defaulted: the entitlement
+# non-coupling rows assert against the DECLARED arming state, and the web
+# config rejects anything that is not exactly "0" or "1". Forwarding
+# ${acr_armed} (already normalized above) keeps that contract honest whether
+# or not this run armed ACR.
+if [[ ! -s "${org_ids_output}" ]]; then
+  echo "Wave 4 access matrix cannot run: ${org_ids_output} is missing or empty." >&2
+  echo "prepare_ask_dev_acceptance.py must have written the org-ids artifact" >&2
+  echo "(schema ask_dev_acceptance_org_ids.v1) before this point. Refusing to" >&2
+  echo "run the matrix against unknown tenants rather than skipping it." >&2
+  exit 1
+fi
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_COMPOSE_WEB_READY=1 \
+ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
+ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
+ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
+PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${web_root}/node_modules/.bin/playwright" test \
+  -c "${web_root}/playwright.ask-dev-wave4.config.ts"
+
 # CHAOS-3219 Phase 5 (CI lane): keep the stack up for a caller that has more
 # to run against it -- specifically scripts/acceptance/run_wave4_corpus.sh,
 # whose own header states the stack must already be up and that it will never

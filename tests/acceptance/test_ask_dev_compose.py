@@ -1785,3 +1785,58 @@ def test_ambient_qua_flags_cannot_arm_the_acceptance_stack() -> None:
     assert launcher.index("\nunset \\\n") < launcher.index(
         "export ASK_DEV_QUA_SHADOW_ENABLED="
     ), "the opt-in translation must run AFTER the unset block, not before"
+
+
+def test_launcher_runs_the_wave4_access_matrix_with_its_own_arming_contract() -> None:
+    """CHAOS-3586 (unblocks CHAOS-3510 / Phase 4 Lane 4d).
+
+    The Wave 4 access matrix is a SECOND playwright invocation with its own
+    arming contract. Every assertion here exists because the corresponding
+    omission would produce a silently weaker run rather than a failure:
+
+    - a missing config reference means the matrix never runs at all, and the
+      launcher still exits 0;
+    - a missing ASK_DEV_WAVE4_ACCESS_MATRIX means a launcher predating this
+      lane looks like it ran the matrix;
+    - a missing ASK_DEV_ACCEPTANCE_ORG_IDS means the entitlement rows cannot
+      find the disabled-entitlement tenant;
+    - a missing ASK_DEV_ACCEPTANCE_ACR means the non-coupling rows assert
+      against an undeclared toggle state.
+    """
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+
+    assert "playwright.ask-dev-wave4.config.ts" in launcher
+    assert "ASK_DEV_WAVE4_ACCESS_MATRIX=1" in launcher
+    assert 'ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}"' in launcher
+    assert 'ASK_DEV_ACCEPTANCE_ACR="${acr_armed}"' in launcher
+
+    # Two SEPARATE invocations, not one with more env. Folding them together
+    # would couple the Phase 1 oracle to the access matrix so either could
+    # take the other down.
+    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 2
+
+    # Ordering: the matrix runs after web is up and after the Phase 1 spec,
+    # so a Phase 1 regression is reported against Phase 1 rather than
+    # surfacing as a confusing access-matrix failure.
+    web_up_index = launcher.index("up -d --build --wait web")
+    acceptance_config_index = launcher.index("playwright.ask-dev-acceptance.config.ts")
+    wave4_config_index = launcher.index("playwright.ask-dev-wave4.config.ts")
+    assert web_up_index < acceptance_config_index < wave4_config_index
+
+    # The org-ids artifact must be written before it is forwarded. index()
+    # raises rather than passing vacuously if either anchor disappears.
+    org_ids_written_index = launcher.index(
+        'ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT="${org_ids_output}"'
+    )
+    org_ids_forwarded_index = launcher.index(
+        'ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}"'
+    )
+    assert org_ids_written_index < org_ids_forwarded_index
+
+    # A missing/empty artifact must ABORT, never skip. The matrix asserting
+    # nothing about tenants it could not identify is the false green this
+    # whole lane exists to prevent.
+    assert '[[ ! -s "${org_ids_output}" ]]' in launcher
+    preflight_index = launcher.index('[[ ! -s "${org_ids_output}" ]]')
+    assert preflight_index < wave4_config_index
+    assert "|| true" not in launcher[preflight_index:wave4_config_index]

@@ -366,6 +366,23 @@
           "./internal/providersync/"
         ]
       ]
+    },
+    {
+      "id": "P22-present-but-null-target-list-is-refused",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "\tif err := decoder.Decode(&targets); err != nil || targets == nil {",
+      "replace": "\tif err := decoder.Decode(&targets); err != nil {",
+      "rationale": "clause-level: a present github_projects_v2 key holding a null/typed-nil list decodes cleanly to a nil slice. Without the nil clause that is indistinguishable from an empty list, so configuration the operator actually wrote is silently ignored instead of refused -- the fail-open-on-malformed-config class.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^(TestGitHubProjectV2TargetsFailClosedOnMalformedDurableConfig)$",
+          "./internal/providersync/"
+        ]
+      ]
     }
   ]
 }

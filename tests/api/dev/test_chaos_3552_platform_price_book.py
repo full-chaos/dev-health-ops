@@ -277,7 +277,7 @@ def test_the_duplicated_endpoint_predicate_matches_budgets(
     it to its original is exactly the defect this whole ticket is about, so the
     two are executed side by side rather than assumed equal.
 
-    Stage 2 (CHAOS-3559) deletes the copy; until then this is what stops them
+    Stage 2 (CHAOS-3560) deletes the copy; until then this is what stops them
     drifting. Note the ``https://api.openai.com.evil.example`` case: a
     hostname-suffix impostor must be refused by BOTH, and a naive
     ``endswith`` re-implementation of either would admit it.

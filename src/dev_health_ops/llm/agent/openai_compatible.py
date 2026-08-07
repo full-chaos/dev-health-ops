@@ -182,7 +182,7 @@ def _official_openai_endpoint(base_url: str | None) -> bool:
     Mirrors ``llm.budget._official_openai_endpoint``. Duplicated deliberately
     and temporarily: importing ``llm.budget`` here would pull SQLAlchemy, the
     session factory and the licensing models into this provider's import graph
-    for one predicate. Stage 2 (CHAOS-3559) deletes this module's price book in
+    for one predicate. Stage 2 (CHAOS-3560) deletes this module's price book in
     favour of ``budget.reliable_price`` and takes the duplication with it;
     until then a differential test pins the two equal rather than letting them
     drift -- which is the failure this whole ticket is about.

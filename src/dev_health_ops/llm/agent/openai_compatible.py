@@ -260,8 +260,29 @@ def _fingerprint(*parts: str) -> str:
 
 
 def _estimated_cost_microusd(
-    *, model: str, input_tokens: int, output_tokens: int
+    *, model: str, input_tokens: int, output_tokens: int, base_url: str | None = None
 ) -> int | None:
+    """Cost for one call, or ``None`` when it genuinely cannot be known.
+
+    CHAOS-3552. The two "no price" cases return DIFFERENT values, and that is
+    the whole point -- ``ProviderBudget.add`` reconciles a numeric cost down
+    from the US$1 admission reservation and leaves the reservation standing on
+    ``None``, so returning ``None`` for both meant self-hosted deployments
+    booked US$4/run for infrastructure the operator already owns.
+
+    * Self-hosted (any non-official endpoint) -> explicit **0**. Unmetered, and
+      unmetered is the honest answer: the run costs the operator nothing on our
+      platform key. Zero reconciles, so no reservation is booked.
+    * OpenAI-official with an unpriced model -> ``None``. The reservation
+      deliberately stands, because a platform run spends real operator dollars
+      and unmetered openai spend bounded only by the request cap is not an
+      acceptable posture. It is never SILENT: ``production_runtime._provider``
+      warns and increments ``ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL`` at
+      construction, naming the model and the remedy.
+    """
+
+    if not _official_openai_endpoint(base_url):
+        return 0
     canonical_model = _canonical_priced_model(model)
     if canonical_model is None:
         return None
@@ -521,6 +542,7 @@ class OpenAICompatibleAgentProvider:
                 model=self.model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                base_url=self.base_url,
             ),
         )
 

@@ -66,6 +66,9 @@ from dev_health_ops.llm.providers import (
 )
 from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
 from dev_health_ops.llm.qua_shadow_budget import attach_qua_shadow_budget_guard
+from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL,
+)
 from dev_health_ops.models.settings import SettingCategory
 
 from .contracts import (
@@ -1124,15 +1127,38 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
         base_url=candidate.credentials.base_url,
     )
     if metering is PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR:
-        logger.error(
+        # LOUD, not fatal (team-lead ruling, revising an earlier fail-loud
+        # ruling on measured availability evidence). Refusing construction
+        # would have taken Ask Dev away from every organization running an
+        # OpenAI model outside this build's three-entry price book --
+        # gpt-4o, gpt-5, o3 and the rest -- which is a far larger harm than
+        # an overstated allowance.
+        #
+        # So the run proceeds and books the worst-case reservation exactly as
+        # it does today, because a platform run spends real operator dollars
+        # on the platform key and unmetered openai spend bounded only by the
+        # request cap is not an acceptable posture. What changes is that it is
+        # never SILENT: the invariant survives as written -- "must never
+        # SILENTLY book the reservation as its cost" -- and loud booking
+        # satisfies it. Under chris's request-primary ruling the request cap
+        # is the control anyway, so a conservative charge against the cost
+        # backstop is defensible once it is attributed.
+        #
+        # Emitted at CONSTRUCTION rather than per call: once per provider
+        # build is enough to tell an operator, and per-call would be log spam
+        # on the exact deployments already paying for the defect.
+        logger.warning(
             "ask_dev.platform_model_unpriced",
-            extra={"model": candidate.model, "provider": candidate.provider},
+            extra={
+                "model": candidate.model,
+                "provider": candidate.provider,
+                "remedy": (
+                    "price the model in _PLATFORM_MODEL_PRICES or set "
+                    "LLM_MODEL to a priced model"
+                ),
+            },
         )
-        raise DevRuntimeUnavailable(
-            "model_not_supported",
-            "The configured Ask Dev model has no price entry, so run cost "
-            "cannot be metered. Configure a priced model or add its price.",
-        )
+        ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL.labels(model=candidate.model).inc()
     return OpenAICompatibleAgentProvider(
         api_key=candidate.credentials.api_key or "platform-openai-compatible",
         model=candidate.model,

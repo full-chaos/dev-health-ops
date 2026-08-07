@@ -258,6 +258,17 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 5.0),
     )
 
+    ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_platform_model_unpriced_total",
+        "Ask Dev platform providers constructed with an OpenAI model that has "
+        "no entry in _PLATFORM_MODEL_PRICES. Every such run books the "
+        "worst-case admission reservation as its cost instead of a real "
+        "figure, so allowance usage for this organization is an overstatement "
+        "-- CHAOS-3552 measured 222x on gpt-5-nano. Non-zero means an operator "
+        "must price the model or change LLM_MODEL; it is a configuration "
+        "defect, not a provider fault.",
+        ["model"],
+    )
     ASK_DEV_QUA_SHADOW_FAULT_TOTAL = _prometheus_client_module.Counter(
         "devhealth_ask_dev_qua_shadow_fault_total",
         "Ask Dev QUA shadow evaluations or shadow-record writes that raised "
@@ -341,6 +352,7 @@ else:
     ASK_DEV_QUA_SHADOW_TOTAL = _noop_counter()
     ASK_DEV_QUA_COMMIT_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_LATENCY_SECONDS = _noop_histogram()
+    ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_FAULT_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_CARDINALITY_UNCORROBORATED_TOTAL = _noop_counter()
     ASK_DEV_RETENTION_SWEEP_TOTAL = _noop_counter()

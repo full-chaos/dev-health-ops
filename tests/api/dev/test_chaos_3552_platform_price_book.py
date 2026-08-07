@@ -313,25 +313,81 @@ def _candidate(model: str, *, provider: str = "openai", base_url: str = ""):
     )
 
 
-def test_construction_refuses_an_unpriced_model() -> None:
-    """The classifier is only advice until something acts on it.
+def test_an_unpriced_openai_model_is_booked_LOUDLY_not_refused(caplog) -> None:
+    """The invariant is "never SILENTLY book the reservation" -- loud booking satisfies it.
 
-    Asserted against the real ``production_runtime._provider`` -- the single
-    place a platform provider is built -- because a test that only exercises
-    ``platform_cost_metering`` would pass just as happily with the guard
-    deleted from the call site.
+    An earlier revision refused construction. Measured availability evidence
+    revised that (team-lead ruling): the price book has three entries, so
+    refusing would have taken Ask Dev away from every organization running
+    gpt-4o, gpt-5, o3 or anything else unlisted -- a far larger harm than an
+    overstated allowance. Platform runs spend real operator dollars, so the
+    conservative charge stays; what changes is that it is attributed.
+
+    THE LOUDNESS IS THE GUARD, so it is what this asserts. Both signals are
+    checked: a warning naming the model and the remedy, and the metric an
+    operator would actually alert on.
     """
 
+    import logging
+
     from dev_health_ops.api.dev.production_runtime import _provider
-    from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
+    from dev_health_ops.llm.agent.openai_compatible import _estimated_cost_microusd
 
-    with pytest.raises(DevRuntimeUnavailable) as excinfo:
-        _provider(_candidate("gpt-6-imaginary"))
+    with caplog.at_level(logging.WARNING):
+        assert _provider(_candidate("gpt-6-imaginary")) is not None
 
-    assert excinfo.value.code == "model_not_supported"
-    # The operator has to be able to tell this apart from an uncertified
-    # provider, which raises the same code from the branch above it.
-    assert "price" in excinfo.value.safe_message.lower()
+    records = [
+        r for r in caplog.records if r.message == "ask_dev.platform_model_unpriced"
+    ]
+    assert len(records) == 1, "the unpriced model was booked SILENTLY"
+    assert getattr(records[0], "model", None) == "gpt-6-imaginary"
+    assert "LLM_MODEL" in getattr(records[0], "remedy", "")
+
+    # And the cost really is unknown, so the worst-case reservation stands --
+    # the charge this warning is telling the operator about.
+    assert (
+        _estimated_cost_microusd(
+            model="gpt-6-imaginary", input_tokens=10_000, output_tokens=1_000
+        )
+        is None
+    )
+
+
+def test_self_hosted_books_no_reservation_at_all() -> None:
+    """The other half of the invariant, which an earlier revision only claimed.
+
+    ``UNMETERED_SELF_HOSTED`` previously just declined to raise --
+    ``_estimated_cost_microusd`` still returned ``None``, so self-hosted
+    deployments kept booking US$4/run for hardware the operator already owns.
+    The docstring said "must not book the reservation either" and the code did
+    not do it. Explicit **0** now, not ``None``: zero reconciles the admission
+    reservation away, ``None`` leaves it standing, and that difference is the
+    entire defect.
+    """
+
+    from dev_health_ops.llm.agent.openai_compatible import _estimated_cost_microusd
+
+    cost = _estimated_cost_microusd(
+        model="llama-3.1-70b",
+        input_tokens=10_000,
+        output_tokens=1_000,
+        base_url=SELF_HOSTED_URL,
+    )
+    assert cost == 0, "self-hosted must be unmetered, not unknown"
+    assert cost is not None, "None would leave the US$1 reservation booked"
+
+
+def test_a_priced_model_still_reports_a_real_cost() -> None:
+    """Control: making self-hosted zero must not zero out real metering."""
+
+    from dev_health_ops.llm.agent.openai_compatible import _estimated_cost_microusd
+
+    assert (
+        _estimated_cost_microusd(
+            model=DEV_STACK_MODEL, input_tokens=10_000, output_tokens=1_000
+        )
+        == 900
+    )
 
 
 @pytest.mark.parametrize(

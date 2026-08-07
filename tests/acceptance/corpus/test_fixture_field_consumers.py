@@ -1,6 +1,7 @@
 """CHAOS-3546: a fixture field that reads as CONFIGURATION must be consumed.
 
-Three confirmed instances of the same class (the ticket's own count):
+Three confirmed instances of the same class (the ticket's own count), and
+their disposition:
 
 * ``ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR`` -- set nowhere, read only from
   scrub lists, while the container silently fell back to a relative path
@@ -8,18 +9,33 @@ Three confirmed instances of the same class (the ticket's own count):
   19 scripted cases exercised nothing. Fixed in ops #1567, whose own guard
   (``provider_scripts.role_script_identity_digest``) proves the CONTAINER
   loaded the intended script -- but that guard is narrow to one env var and
-  one digest, not a general property of the fixture surface.
+  one digest, not a general property of the fixture surface. WIRED (already,
+  by #1567); kept in :data:`FIXTURE_FIELD_REGISTRY` as the positive-control
+  precedent this module generalizes.
 * ``fault_ref`` -- declared on 18 corpus cases, read by zero code paths
-  (fault selection is entirely by ``question_fingerprint``). Worse,
-  internally inconsistent: 10 of the 18 point at a ``kind: "fault"``
-  provider-scripts entry, the other 8 at ``kind: "decisions"``.
+  (fault selection is entirely by ``question_fingerprint``). Investigation
+  found it carried strictly zero information even where present: its value
+  equalled the case's OWN ``id`` in all 18 cases, with no exceptions -- not
+  a pointer to something else, a redundant marker of "I am scripted"
+  reconstructible from the id alone. RETIRED: the field itself is deleted
+  from the 18 cases that declared it (CASE-SCHEMA.v1.md's row removed too)
+  rather than wired, and the real invariant it gestured at -- "a scripted
+  provider-scripts entry corresponds to a real corpus case" -- is enforced
+  below as a DERIVED cross-check that needs no field on either side, reading
+  provider-scripts' own registry instead. See ``_scripted_registry_violations``.
 * ``provider_profile_override`` -- declared on two world.json users,
-  referenced nowhere. Tracked as an open decision (see the module docstring
-  note near the bottom); not yet in :data:`FIXTURE_FIELD_REGISTRY` because
-  wiring it means inventing a new per-user override concept this repo does
-  not have anywhere today (no DB column, no fixture-seeding code even
-  writes it) -- a product-shape call, not a plumbing fix, and out of this
-  guard's scope until that call is made.
+  referenced nowhere. RETIRED (not wired): wiring it would mean inventing a
+  whole new production feature -- a per-user provider-override concept that
+  exists nowhere today (no DB column, no migration, no settings-table write
+  in the acceptance world-builder) -- rather than connecting an existing
+  seam, a product-shape decision out of this ticket's scope. The field is
+  deleted from world.json. The two corpus cases it drove
+  (``deg.provider.unsupported``, ``readiness.capabilities.unsupported-model``)
+  are flipped ``status: "declared-blocked"`` on CHAOS-3588 (the follow-up
+  that must choose a real per-user or per-org denial mechanism and re-author
+  them) rather than left silently green on a mechanism that never fires --
+  they were PASSING while proving nothing about unsupported-model handling,
+  the exact false-coverage shape this ticket exists to close.
 
 Each instance made a scenario look configured when nothing configured it,
 and every test that "covered" it asserted nothing about it. This module is
@@ -38,20 +54,17 @@ comment, or in this very module's own registry entry for it.
 ``field_has_external_consumer`` requires the literal field name, as a whole
 identifier (``\\b``-bounded), inside a ``.py`` file that is neither the
 fixture directory nor this guard module itself -- enough to separate a real
-``.get("fault_ref")``/attribute read from prose that merely mentions the
-field, and to stop a field from certifying itself by appearing in its own
-registry row. ``fault_ref`` is the one exception, and deliberately so: its
-real consumer (the correctness check below) lives IN this excluded module,
-so its ``consumer_check`` calls that function directly instead of grepping
-for it -- see the comment on its registry entry.
+``.get(...)``/attribute read from prose that merely mentions the field, and
+to stop a field from certifying itself by appearing in its own registry row.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -120,93 +133,119 @@ def field_has_external_consumer(field_name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# fault_ref -- the wire decision (CHAOS-3546)
+# fault_ref -- RETIRED (CHAOS-3546). Replaced by a derived cross-check that
+# needs no field on either side: the real invariant was always "a scripted
+# provider-scripts entry corresponds to a real corpus case", readable
+# straight off the registry without a marker on the case at all.
 # ---------------------------------------------------------------------------
 
 
-def _fault_ref_cases() -> list[dict]:
+def _scripted_registry_entries(cases: Mapping[str, Any]) -> dict[str, str]:
+    """Every provider-scripts case KEY whose entry is genuinely SCRIPTED --
+    kind ``"fault"`` or ``"decisions"`` -- excluding the ``"delegate_default"``
+    string sentinel, which is not a per-case script at all.
+
+    Takes the registry's own ``cases`` mapping as a parameter rather than
+    loading ``role-legacy_agent.json`` itself, so the cross-check below can
+    be proven against a synthetic mapping without editing the real file --
+    that file's identity digest is pinned by the in-flight armed run for the
+    duration of this ticket (see the PR notes) and must not be touched,
+    planted defect or not.
+    """
+
+    scripted: dict[str, str] = {}
+    for case_id, entry in cases.items():
+        kind = entry if isinstance(entry, str) else entry.kind
+        if kind in ("fault", "decisions"):
+            scripted[case_id] = kind
+    return scripted
+
+
+def _corpus_case_ids() -> frozenset[str]:
     import json
 
-    cases = []
-    for path in sorted(_CORPUS_DIR.glob("case-*.json")):
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if raw.get("fault_ref") is not None:
-            cases.append(raw)
-    return cases
+    return frozenset(
+        json.loads(path.read_text(encoding="utf-8"))["id"]
+        for path in sorted(_CORPUS_DIR.glob("case-*.json"))
+    )
 
 
-def _fault_ref_violations() -> list[str]:
-    """Every way a declared ``fault_ref`` can fail to name a real,
-    correctly-shaped scripted-engine entry.
+def _scripted_registry_violations(
+    cases: Mapping[str, Any], corpus_ids: frozenset[str]
+) -> list[str]:
+    """CHAOS-3546's derived replacement for the retired ``fault_ref`` field.
 
-    This IS ``fault_ref``'s consumer (CHAOS-3546's wire decision): the field
-    was never meant to drive request-time routing -- that is
-    ``question_fingerprint``'s job, unconditionally, and changing it is a
-    much larger, riskier change than this ticket is about. What was missing
-    is any assertion that the field TELLS THE TRUTH about the case it is
-    declared on. Three things must hold for every non-null ``fault_ref``:
+    ``fault_ref`` asked, per case, "if I am declared scripted, does the
+    registry actually have an entry for me" -- redundant, because the
+    field's value was always the case's own ``id`` (measured: true in all 18
+    cases that declared it, no exceptions), so that question and "does the
+    registry have an entry named <this case's id>" were the same question
+    asked twice through an extra field. This asks the only question that
+    needed asking, from the side that actually holds authoritative
+    information -- the registry -- with no field on the case at all: for
+    every provider-scripts key that is genuinely scripted, does a corpus
+    case with that id exist?
 
-    1. its value equals the case's own ``id`` -- true today in all 18 cases,
-       with no exceptions; a future case that declares something else is a
-       real authoring bug this catches;
-    2. a ``provider-scripts/role-legacy_agent.json`` entry exists for that
-       id;
-    3. that entry's ``kind`` is ``"fault"`` or ``"decisions"`` -- widened
-       from the schema doc's original "fault case only" wording, because 8
-       of the 18 (every ``adv.injection-request.*`` plus
-       ``scope.prohibited-write``/``scope.unsupported-request``) are
-       legitimately decision-scripted refusals, not fault injections, and
-       always have been; the field's job is "this case is scripted, not
-       left to the unscripted default heuristic", which both kinds satisfy.
+    A registry entry with no corresponding corpus case is dead script: the
+    fault/decision it encodes can never fire in production, because nothing
+    ever asks the engine a question that fingerprints to it
+    (``provider_scripts.question_fingerprint`` is the only routing
+    mechanism, driven entirely by corpus case question text).
     """
 
+    return [
+        f"{case_id}: provider-scripts has a {kind!r}-kind scripted entry for "
+        f"this id, but no corpus case declares it -- dead script, can never "
+        f"fire"
+        for case_id, kind in sorted(_scripted_registry_entries(cases).items())
+        if case_id not in corpus_ids
+    ]
+
+
+def _live_role_script_cases() -> Mapping[str, Any]:
     from dev_health_ops.llm.agent.provider_scripts import load_role_script
 
-    role_script = load_role_script("legacy_agent")
-    violations: list[str] = []
-    for raw in _fault_ref_cases():
-        case_id = raw["id"]
-        fault_ref = raw["fault_ref"]
-        if fault_ref != case_id:
-            violations.append(
-                f"{case_id}: fault_ref={fault_ref!r} does not equal the case's own id"
-            )
-            continue
-        entry = role_script.cases.get(case_id)
-        if entry is None:
-            violations.append(
-                f"{case_id}: fault_ref is set but role-legacy_agent.json has no "
-                f"entry for this case id"
-            )
-            continue
-        kind = "delegate_default" if isinstance(entry, str) else entry.kind
-        if kind not in ("fault", "decisions"):
-            violations.append(
-                f"{case_id}: fault_ref is set but the scripted-engine entry's "
-                f"kind is {kind!r}, not 'fault' or 'decisions' -- this case "
-                f"would run against the unscripted default heuristic despite "
-                f"declaring a fault_ref"
-            )
-    return violations
+    return load_role_script("legacy_agent").cases
 
 
-def test_fault_ref_is_declared_on_at_least_the_measured_population() -> None:
-    """Sanity floor for the two tests below: if this drops to zero, they
-    would pass VACUOUSLY (an empty violation list from an empty case list),
-    which would read as "fault_ref is fine" while actually meaning "fault_ref
-    was never checked". CHAOS-3546 measured exactly 18; asserting >= 18
-    rather than == 18 so a newly-authored fault/decisions case does not fail
-    this guard for the unrelated reason of growing the population.
+def test_scripted_registry_cross_check_catches_a_planted_mismatch() -> None:
+    """RED-first proof the cross-check is not vacuously green: a synthetic
+    registry entry naming a case id that does not exist must be caught.
+    Uses a FAKE mapping, never the real ``role-legacy_agent.json`` -- see
+    ``_scripted_registry_entries`` for why that file stays untouched here.
     """
 
-    assert len(_fault_ref_cases()) >= 18
+    fake_cases = {"chaos_3546_dead_script_entry_no_such_case": "fault"}
+    violations = _scripted_registry_violations(fake_cases, _corpus_case_ids())
+    assert violations == [
+        "chaos_3546_dead_script_entry_no_such_case: provider-scripts has a "
+        "'fault'-kind scripted entry for this id, but no corpus case "
+        "declares it -- dead script, can never fire"
+    ]
 
 
-def test_every_declared_fault_ref_names_a_real_scripted_engine_entry() -> None:
-    violations = _fault_ref_violations()
+def test_scripted_registry_population_floor() -> None:
+    """Sanity floor for the test below: if this drops to zero, that test
+    would pass VACUOUSLY. CHAOS-3546 measured 20 real fault/decisions-kind
+    entries (10 fault, 10 decisions -- 2 more decisions-kind entries than
+    the 18 cases that used to declare the now-retired ``fault_ref``, because
+    that field was never completely applied by authors even while it
+    existed -- ``pers.clarification-persistence`` and ``scope.ambiguous``
+    were always scripted without ever declaring it). Asserting >= 20 rather
+    than == 20 so a newly-scripted case does not fail this guard for the
+    unrelated reason of growing the population.
+    """
+
+    assert len(_scripted_registry_entries(_live_role_script_cases())) >= 20
+
+
+def test_every_scripted_registry_entry_names_a_real_corpus_case() -> None:
+    violations = _scripted_registry_violations(
+        _live_role_script_cases(), _corpus_case_ids()
+    )
     assert violations == [], (
-        "fault_ref is declared but does not correctly name a scripted-engine "
-        f"entry for {len(violations)} case(s):\n" + "\n".join(violations)
+        f"provider-scripts declares {len(violations)} scripted entry(ies) "
+        "with no corresponding corpus case:\n" + "\n".join(violations)
     )
 
 
@@ -232,32 +271,10 @@ class FixtureField:
 #: catch, so there is no default/permissive fallback: an entry with no
 #: verifiable consumer FAILS, on purpose, until it is wired or removed from
 #: the fixture and this table together.
+#: ``fault_ref`` is deliberately NOT here -- it is retired, not wired (see
+#: the module docstring and the derived cross-check above); a field with no
+#: field left to check does not belong in a registry of fields.
 FIXTURE_FIELD_REGISTRY: tuple[FixtureField, ...] = (
-    FixtureField(
-        name="fault_ref",
-        intended_purpose=(
-            "corpus case field naming the provider-scripts entry that makes "
-            "this a scripted fault/decisions case rather than the unscripted "
-            "default heuristic"
-        ),
-        consumer_location=(
-            "tests/acceptance/corpus/test_fixture_field_consumers.py::"
-            "_fault_ref_violations (this module)"
-        ),
-        # Not `field_has_external_consumer`: this field's own consumer lives
-        # IN this module (`_fault_ref_violations`, tested above), which
-        # `_EXCLUDED_PATHS` deliberately excludes from the generic scan so a
-        # field cannot certify itself merely by being named in its own
-        # registry entry below. The real proof for `fault_ref` specifically
-        # is that the dedicated consistency check runs and finds nothing
-        # wrong -- which is exactly what
-        # `test_every_declared_fault_ref_names_a_real_scripted_engine_entry`
-        # already asserts; re-running it here keeps `fault_ref` visible in
-        # the SAME registry every other tracked field is enumerated from,
-        # rather than being a special case a reader has to know to look for
-        # elsewhere.
-        consumer_check=lambda: _fault_ref_violations() == [],
-    ),
     FixtureField(
         name="ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR",
         intended_purpose=(
@@ -304,14 +321,12 @@ def test_registry_names_are_unique() -> None:
 
 
 def test_field_has_external_consumer_is_not_vacuously_true() -> None:
-    """Negative control: a name that names nothing must fail the check the
-    same way ``provider_profile_override`` currently does (see the module
-    docstring) -- proves ``field_has_external_consumer`` can say no, not
-    only yes. Also pins the anti-self-reference guard directly: this
-    module's OWN source contains the literal needle below (right here, in
-    this string), and the check must still return ``False`` because
-    ``_EXCLUDED_PATHS`` excludes this file from counting as its own
-    consumer.
+    """Negative control: a name that names nothing must fail the check --
+    proves ``field_has_external_consumer`` can say no, not only yes. Also
+    pins the anti-self-reference guard directly: this module's OWN source
+    contains the literal needle below (right here, in this string), and the
+    check must still return ``False`` because ``_EXCLUDED_PATHS`` excludes
+    this file from counting as its own consumer.
     """
 
     needle = "chaos_3546_field_that_names_nothing_real"
@@ -319,17 +334,69 @@ def test_field_has_external_consumer_is_not_vacuously_true() -> None:
     assert needle in Path(__file__).read_text(encoding="utf-8")
 
 
-def test_provider_profile_override_is_confirmed_still_unconsumed() -> None:
-    """CHAOS-3546's third field, deliberately NOT in
-    :data:`FIXTURE_FIELD_REGISTRY` -- see the module docstring for why
-    (wiring it means inventing a per-user override concept this repo does
-    not have anywhere, a product-shape call pending an explicit decision,
-    not a plumbing fix). This test exists so that call is never made
-    silently: it fails the day someone adds a real reader (which is the
-    correct, loud signal to move the field into the registry above with a
-    consumer_check pointing at it), and until then it pins the exact,
-    current, measured state rather than leaving the gap undocumented in
-    executable form.
+# ---------------------------------------------------------------------------
+# provider_profile_override -- RETIRED (CHAOS-3546). Removed from world.json
+# outright rather than merely left unconsumed: wiring it means inventing a
+# per-user provider-override concept this repo has nowhere today (no DB
+# column, no migration, no settings-table write in the acceptance
+# world-builder) -- a product-shape decision parked on CHAOS-3588, not a
+# plumbing fix.
+# ---------------------------------------------------------------------------
+
+
+def test_provider_profile_override_is_retired_from_world_json() -> None:
+    """Deliberately NOT in :data:`FIXTURE_FIELD_REGISTRY` -- there is no
+    field left to check a consumer for. Asserts absence directly (the field
+    is gone from world.json, not merely unread) so a future reintroduction
+    is caught precisely, rather than re-running the generic external-
+    consumer scan on a field that no longer exists to scan for.
     """
 
-    assert field_has_external_consumer("provider_profile_override") is False
+    import json
+
+    world = json.loads((_WORLD_DIR / "world.json").read_text(encoding="utf-8"))
+    offenders = [
+        user["alias"]
+        for user in world.get("users", [])
+        if "provider_profile_override" in user
+    ]
+    assert offenders == [], (
+        f"provider_profile_override reappeared on user(s) {offenders} -- "
+        "either wire it for real (move it into FIXTURE_FIELD_REGISTRY with "
+        "a consumer_check) or keep it retired"
+    )
+
+
+def test_the_provider_profile_override_cases_are_declared_blocked() -> None:
+    """The other half of retiring ``provider_profile_override``: every
+    corpus case it used to drive must not stay silently ``active`` and
+    green on a mechanism that no longer exists (and, before this ticket,
+    never existed in production either). CHAOS-3546's initial scope named
+    two -- ``deg.provider.unsupported`` and ``readiness.capabilities.
+    unsupported-model`` -- both found PASSING while proving nothing about
+    unsupported-model handling; a THIRD, ``readiness.capabilities.degraded``
+    (the ``degraded-profile`` companion, via ``primary.degraded-readiness-
+    user``), was found the same way while editing its siblings and is
+    covered here too rather than left as a residual gap.
+    ``declared-blocked`` on CHAOS-3588 (the ticket that must build a real
+    denial mechanism and re-author all three) is the honest terminal state,
+    not a silent pass.
+    """
+
+    import json
+
+    for case_id in (
+        "deg.provider.unsupported",
+        "readiness.capabilities.unsupported-model",
+        "readiness.capabilities.degraded",
+    ):
+        path = _CORPUS_DIR / f"case-{case_id}.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw["status"] == "declared-blocked", (
+            f"{case_id}: status={raw['status']!r}, expected declared-blocked "
+            "-- its mechanism (provider_profile_override) was retired by "
+            "CHAOS-3546 with nothing yet replacing it (CHAOS-3588)"
+        )
+        assert raw["blocked_by"] == "CHAOS-3588", (
+            f"{case_id}: blocked_by={raw['blocked_by']!r}, expected 'CHAOS-3588'"
+        )

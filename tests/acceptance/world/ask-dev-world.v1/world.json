@@ -266,8 +266,7 @@
       "full_name": "Uma UnsupportedModel",
       "membership_role": "member",
       "is_superuser": false,
-      "feature_overrides": {},
-      "provider_profile_override": "unsupported-model-profile"
+      "feature_overrides": {}
     },
     {
       "alias": "primary.degraded-readiness-user",
@@ -278,8 +277,7 @@
       "full_name": "Dana DegradedReadiness",
       "membership_role": "member",
       "is_superuser": false,
-      "feature_overrides": {},
-      "provider_profile_override": "degraded-profile"
+      "feature_overrides": {}
     },
     {
       "alias": "sibling.ordinary",

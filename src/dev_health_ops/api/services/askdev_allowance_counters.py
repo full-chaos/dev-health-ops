@@ -73,7 +73,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev.org_policy import TERMINAL_RUN_STATES, platform_month_window
@@ -185,30 +185,91 @@ async def _recompute_from_dev_runs(
 
     Used for the Valkey-down fallback, lazy cold-key init, breaker-recovery
     recompute, and the explicit operator reconcile. One definition, so the
-    "what counts as charged" logic (terminal -> the real cost, zero if none
-    was ever recorded; non-terminal -> the worst-case reservation, since the
-    run may still bill up to the per-call estimate) cannot drift between call
-    sites the way it had before this module existed (ask_dev.py and
-    persistence/service.py each had their own copy).
+    "what counts as charged" logic cannot drift between call sites the way
+    it had before this module existed (ask_dev.py and persistence/service.py
+    each had their own copy).
 
-    CHAOS-3573: a terminal run's ``estimated_cost_microusd`` is NULL only
-    when it never dispatched a single provider call --
-    ``ProviderBudget.require()`` (``orchestrator.py``) always turns it into a
-    concrete int the instant a call is reserved, before dispatch, and never
-    back to None afterward, so every terminal write's cost column is exactly
-    the real, fully-accounted spend for that run at the moment it reached
-    ``finish()``. A terminal-but-NULL run is therefore a genuine
-    zero-cost run (a preflight rejection, a disabled feature, a
-    provider-unavailable 503 -- never a run that spent and lost the number).
-    Charging it the worst-case reservation here would keep exactly the
-    phantom spend this function exists to heal away, and would silently
-    re-inflate the Valkey counter back to worst-case on the very next
-    cold-key init / breaker recovery / operator reconcile after
-    ``reconcile_terminal_cost`` (below) has already corrected it there --
-    the two call sites must agree, or "fixed" doesn't survive a heal cycle.
+    CHAOS-3573: a terminal run's ``estimated_cost_microusd`` is NULL for one
+    of two structurally distinct reasons, and they must be charged
+    oppositely:
+
+    1. It never dispatched a single provider call.
+       ``ProviderBudget.require()`` (``orchestrator.py``) always turns
+       ``estimated_cost_microusd`` into a concrete int the instant a call is
+       reserved, before dispatch, and never back to None afterward -- every
+       *normal* terminal write's cost column (via ``update_run``'s terminal
+       branch, reached from ``orchestrator_persistence.py``'s ``terminal()``
+       or ``router.py``'s provider-unavailable path) is exactly the real,
+       fully-accounted spend at the moment it reached ``finish()``. Genuinely
+       zero real cost here -> charge 0.
+
+    2. Its terminal write bypassed the normal path entirely.
+       ``DevPersistenceService.force_terminal_fallback`` /
+       ``recover_stale_non_terminal_run`` (persistence/service.py) exist
+       specifically because ``finish()`` may already have dispatched real,
+       billed provider calls before its own terminal ``update_run`` write
+       died (a dropped connection, a poisoned session) -- these force
+       ``state`` terminal directly and never touch ``estimated_cost_microusd``
+       or call ``reconcile_terminal_cost``. Real cost here is UNKNOWN, not
+       zero -- coalescing it to 0 would erase a possibly-real charge on every
+       cold-key heal, which runs routinely (first request of the month, TTL
+       lapse, Valkey restart), not rarely. Worst-case reservation stays
+       charged.
+
+    Discriminator for (2): both recovery paths are the ONLY writers on
+    ``dev_runs`` that set ``safe_error_code`` non-NULL while leaving
+    ``terminal_error_payload`` NULL (pinned by
+    ``test_force_terminal_fallback_forces_a_stuck_run_terminal`` /
+    ``test_recover_stale_non_terminal_run_forces_a_stuck_run_terminal_when_
+    old_enough`` in test_persistence_v2.py). Every normal path derives both
+    columns from the same ``DevError`` object at the same time
+    (``orchestrator_persistence.py.terminal()``:
+    ``safe_error_code=error.code if error else None`` alongside
+    ``terminal_error_payload=(error.model_dump(...) if error is not None
+    else None)``; ``router.py``'s provider-unavailable path passes both
+    together too) -- so a normal write is always both-None or both-set, and
+    only the two forced-recovery paths ever decouple them. This also
+    correctly falls back to worst-case for any pre-``terminal_error_payload``-
+    column legacy row (the column's own docstring: NULL for every run that
+    predates it) -- an ambiguous old row stays conservative by construction,
+    not by a special case.
+
+    Charging (1) at worst-case here would keep exactly the phantom spend
+    CHAOS-3573 exists to heal away, and would silently re-inflate the Valkey
+    counter back to worst-case on the very next heal after
+    ``reconcile_terminal_cost`` (below) already corrected it there -- the two
+    call sites must agree on (1), or "fixed" doesn't survive a heal cycle.
     """
 
+    # NOTE on JSON-column NULL semantics: SQLAlchemy's JSON type defaults to
+    # ``none_as_null=False`` (Python None -> JSON "null", not SQL NULL) for a
+    # column that is EXPLICITLY assigned None as a genuine value change.
+    # ``terminal_error_payload`` never hits that path here: it starts
+    # genuinely unset (omitted from the original INSERT, since
+    # append_user_message_and_run never passes it), every intermediate
+    # bare-state ``update_run`` call re-assigns the SAME None it already
+    # holds (a no-op the ORM excludes from its UPDATE entirely -- verified
+    # directly against this exact code path, not assumed), and
+    # force_terminal_fallback/recover_stale_non_terminal_run's own
+    # ``run.terminal_error_payload = None`` is the identical no-op. It only
+    # ever becomes a real value (dict -> JSON, never back to None) on a
+    # genuine terminal write carrying a real ``DevError``. So this column
+    # reads as true SQL NULL via ``.is_(None)`` on every path this
+    # discriminator cares about, on both SQLite and Postgres (the
+    # unchanged-attribute exclusion is ORM/unit-of-work behavior, not
+    # dialect-specific).
+    recovery_write_with_unknown_cost = and_(
+        DevRun.safe_error_code.is_not(None),
+        DevRun.terminal_error_payload.is_(None),
+    )
     charged_cost = case(
+        (
+            and_(
+                DevRun.state.in_(TERMINAL_RUN_STATES),
+                recovery_write_with_unknown_cost,
+            ),
+            per_run_reservation_microusd,
+        ),
         (
             DevRun.state.in_(TERMINAL_RUN_STATES),
             func.coalesce(DevRun.estimated_cost_microusd, 0),
@@ -459,23 +520,36 @@ async def reconcile_terminal_cost(
     A no-op only when there is no ``provider`` this counter tracks, or the
     state is not terminal. ``estimated_cost_microusd`` being None is NOT a
     no-op (CHAOS-3573 -- reversing CHAOS-3522(b)'s original choice here):
-    every terminal write's cost column comes from
+    every terminal write reaching THIS FUNCTION had its cost column set from
     ``ProviderBudget.usage.estimated_cost_microusd``
     (``orchestrator.py``/``orchestrator_persistence.py``'s ``finish()``),
     which ``require()`` turns into a concrete int the instant a provider
-    call is reserved and never resets to None afterward. NULL at a terminal
-    write therefore means this run never dispatched a single provider call
-    -- a preflight rejection, a disabled feature, a provider-unavailable
-    503 -- genuinely zero spend, never a run that spent and lost the
-    number. (A crash that loses a run's cost entirely bypasses this
-    function altogether: ``force_terminal_fallback`` /
-    ``recover_stale_non_terminal_run`` write ``state`` directly and never
-    call ``update_run``'s terminal branch, so they never reach here --
-    those stay fail-closed by construction, unaffected by this change.)
-    Reconciling NULL to 0 here is what makes this function agree with
-    ``_recompute_from_dev_runs``'s identical ``charged_cost`` rule above --
-    the two must match, or a cold-key heal / breaker recovery / operator
-    reconcile would re-inflate the counter this call just corrected.
+    call is reserved and never resets to None afterward. NULL here therefore
+    means this run never dispatched a single provider call -- a preflight
+    rejection, a disabled feature, a provider-unavailable 503 -- genuinely
+    zero spend, never a run that spent and lost the number.
+
+    CRASH-RECOVERED ROWS NEVER REACH THIS FUNCTION AT ALL -- a narrower
+    claim than "unaffected by this change" would suggest, so spelled out
+    precisely: ``force_terminal_fallback`` / ``recover_stale_non_terminal_
+    run`` (persistence/service.py) write ``run.state`` directly for a run
+    whose ``finish()`` may already have dispatched real, billed provider
+    calls before its own terminal ``update_run`` write died -- their real
+    cost is UNKNOWN, not proven zero, and they never call ``update_run``'s
+    terminal branch, so they structurally cannot call this function either.
+    Nothing here reconciles those rows one way or the other; the Valkey
+    reservation this function would have touched is simply never revisited
+    for them. The overall CHAOS-3573 fix DOES still cover them, at the
+    other call site: ``_recompute_from_dev_runs`` above carries its own
+    explicit discriminator (a decoupled ``safe_error_code``/
+    ``terminal_error_payload`` pair, unique to those two recovery paths)
+    that keeps them charged at worst-case on every cold-key heal / breaker
+    recovery / operator reconcile -- see that function's docstring for the
+    full argument. This function and that one therefore agree on the ONE
+    case both ever see (a normal ``update_run``-reached terminal with NULL
+    cost -> 0), and disagree by construction on the case only the SQL side
+    ever sees (a recovery-forced terminal -> worst-case), because only one
+    of the two functions is ever invoked for the latter.
     """
 
     if provider_source != "platform" or state not in TERMINAL_RUN_STATES:

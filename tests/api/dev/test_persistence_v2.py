@@ -2510,6 +2510,84 @@ async def test_force_terminal_fallback_is_a_noop_for_a_missing_run(persistence) 
         )
 
 
+@pytest.mark.asyncio
+async def test_recompute_from_dev_runs_keeps_worst_case_for_force_terminal_fallback_row(
+    persistence,
+) -> None:
+    """CHAOS-3573 follow-up (adversarial review finding).
+
+    force_terminal_fallback exists precisely because finish() may already
+    have dispatched real, billed provider calls before its own terminal
+    update_run write died -- the row it leaves behind has
+    estimated_cost_microusd == NULL with UNKNOWN real cost, never a proven
+    zero. _recompute_from_dev_runs must not coalesce that NULL to 0 the way
+    it correctly does for a genuine zero-spend terminal (preflight
+    rejection, disabled feature, etc.) -- doing so would erase a
+    possibly-real charge on every cold-key heal (routine: first request of
+    the month, TTL lapse, Valkey restart), not merely a rare event.
+
+    This is the SQL-ground-truth sibling of
+    test_force_terminal_fallback_forces_a_stuck_run_terminal above, which
+    already pins the row shape (safe_error_code set, terminal_error_payload
+    NULL) this discriminator relies on.
+    """
+
+    from dev_health_ops.api.dev.org_policy import (
+        ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        platform_month_window,
+    )
+    from dev_health_ops.api.services.askdev_allowance_counters import (
+        _recompute_from_dev_runs,
+    )
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="A run that dies mid-flight after real spend",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=DevPlatformAllowance(
+                monthly_request_limit=10,
+                monthly_cost_limit_microusd=6_000_000,
+            ),
+        )
+        await session.commit()
+
+        await service.force_terminal_fallback(
+            org_id=org_id, user_id=user_id, run_id=accepted.run.id
+        )
+
+        run_after = await session.get(DevRun, accepted.run.id)
+        assert run_after is not None
+        assert run_after.state == "failed"
+        assert run_after.estimated_cost_microusd is None
+        # Sanity: the exact decoupled signature the discriminator keys off.
+        assert run_after.safe_error_code is not None
+        assert run_after.terminal_error_payload is None
+
+        window_start, reset_at = platform_month_window(datetime.now(UTC))
+        counts = await _recompute_from_dev_runs(
+            session,
+            org_id=str(org_id),
+            window_start=window_start,
+            reset_at=reset_at,
+            per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        )
+        assert counts.cost_microusd == ASK_DEV_RUN_COST_HARD_MAX_MICROUSD, (
+            "a force_terminal_fallback row's unknown cost must stay "
+            "charged at the worst-case reservation, never coalesced to zero"
+        )
+
+
 # -- recover_stale_non_terminal_run (CHAOS-3297 Codex review round 5 HIGH) --
 #
 # force_terminal_fallback is the request's own last-resort write. This is
@@ -2762,6 +2840,80 @@ async def test_recover_stale_non_terminal_run_refreshes_a_stale_identity_map_ent
         assert run_after.safe_error_code != "internal_error"
         assert run_after.ended_at is not None
         assert run_after.ended_at.replace(tzinfo=UTC) == completed_at
+
+
+@pytest.mark.asyncio
+async def test_recompute_from_dev_runs_keeps_worst_case_for_recover_stale_row(
+    persistence,
+) -> None:
+    """CHAOS-3573 follow-up (adversarial review finding): the
+    recover_stale_non_terminal_run sibling of
+    test_recompute_from_dev_runs_keeps_worst_case_for_force_terminal_fallback_row
+    above -- same unknown-real-cost hazard, reached via the SECOND recovery
+    path instead of the first."""
+
+    from dev_health_ops.api.dev.org_policy import (
+        ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        platform_month_window,
+    )
+    from dev_health_ops.api.services.askdev_allowance_counters import (
+        _recompute_from_dev_runs,
+    )
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="A run stuck non-terminal after real spend",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=DevPlatformAllowance(
+                monthly_request_limit=10,
+                monthly_cost_limit_microusd=6_000_000,
+            ),
+        )
+        run_id = accepted.run.id
+        await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="resolving_scope"
+        )
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        run.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        await session.commit()
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        recovered = await service.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stale_after=timedelta(minutes=5),
+        )
+        assert recovered is not None
+        assert recovered.estimated_cost_microusd is None
+        assert recovered.safe_error_code is not None
+        assert recovered.terminal_error_payload is None
+
+        window_start, reset_at = platform_month_window(datetime.now(UTC))
+        counts = await _recompute_from_dev_runs(
+            session,
+            org_id=str(org_id),
+            window_start=window_start,
+            reset_at=reset_at,
+            per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        )
+        assert counts.cost_microusd == ASK_DEV_RUN_COST_HARD_MAX_MICROUSD, (
+            "a recover_stale_non_terminal_run row's unknown cost must stay "
+            "charged at the worst-case reservation, never coalesced to zero"
+        )
 
 
 # -- dev_run_stage_diagnostics ---------------------------------------------

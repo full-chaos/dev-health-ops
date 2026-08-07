@@ -1150,6 +1150,13 @@ def test_needs_clarification_zero_candidates_no_longer_fabricates_a_placeholder(
         ("unsupported", "feature_not_enabled"),
         ("denied", "forbidden"),
         ("failed", "internal_error"),
+        # CHAOS-3541: before compat._ERROR_OUTCOME_CODES carried a
+        # PublicOutcome.REFUSED entry, this parametrization (with "refused"
+        # added) raised a live KeyError from _project_error -- the gap
+        # named explicitly in review: nothing at import time catches a
+        # missing _ERROR_OUTCOME_CODES entry, only a request that actually
+        # reaches v1 replay for that outcome does.
+        ("refused", "refused"),
     ],
 )
 def test_compat_projects_empty_content_outcomes_to_v1_error(
@@ -1164,6 +1171,35 @@ def test_compat_projects_empty_content_outcomes_to_v1_error(
     # The v1 boundary emits the same server-owned copy the frame is pinned
     # to, built from the table rather than carried across from the frame.
     assert projected.safe_message == v2.CANONICAL_NO_ANSWER_COPY[outcome]
+
+
+def test_compat_error_outcome_codes_is_total_over_no_answer_outcomes() -> None:
+    """CHAOS-3541 (team-lead ruling): close the CLASS, not just this instance.
+
+    ``compat._ERROR_OUTCOME_CODES`` is a plain dict, direct-indexed
+    (``_project_error``) with no import-time totality guard of its own --
+    the ``PublicOutcome.REFUSED`` gap this ticket closes was exactly that:
+    a live ``KeyError`` on the one request that reached v1 replay for that
+    outcome, invisible to every earlier import or test. This test is the
+    guard that gap should have had from the start: it fails at collection
+    time (not on some future request) the next time a ``NO_ANSWER_OUTCOMES``
+    member is added without a matching ``_ERROR_OUTCOME_CODES`` entry --
+    whatever that member's name turns out to be, not just "refused".
+
+    Scoped to ``NO_ANSWER_OUTCOMES`` specifically, not all of
+    ``PublicOutcome``: ``ANSWERED``/``ANSWERED_WITH_GAPS``/
+    ``NEEDS_CLARIFICATION`` never reach ``_project_error`` at all (they take
+    the ``_project_answered``/``_project_needs_clarification`` branches in
+    ``project_answer_v2_to_v1``), so requiring them here would be a false
+    claim about what this table actually needs to cover.
+    """
+
+    expected = {v2.PublicOutcome(outcome) for outcome in v2.NO_ANSWER_OUTCOMES}
+    actual = set(compat_module._ERROR_OUTCOME_CODES)
+    assert actual == expected, (
+        f"missing: {sorted(o.value for o in expected - actual)}, "
+        f"unexpected: {sorted(o.value for o in actual - expected)}"
+    )
 
 
 def test_compat_never_mislabels_a_team_subject_answer() -> None:

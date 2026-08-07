@@ -28,7 +28,8 @@
         "answer_validation_failed",
         "cancelled",
         "provider_contract_violation",
-        "internal_error"
+        "internal_error",
+        "refused"
       ],
       "title": "Code",
       "type": "string"

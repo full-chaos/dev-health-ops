@@ -296,6 +296,10 @@ def test_public_outcome_bucket_table_stays_inside_the_closed_wire_vocabulary() -
         "unsupported",
         "denied",
         "failed",
+        # CHAOS-3541: matches ck_dev_runs_public_outcome /
+        # ck_dev_answer_frames_public_outcome, widened in
+        # alembic/versions/0088-0091.
+        "refused",
     }
     for outcome in tf.PUBLIC_OUTCOME_BY_ERROR_CODE.values():
         assert outcome.value in db_closed_vocabulary

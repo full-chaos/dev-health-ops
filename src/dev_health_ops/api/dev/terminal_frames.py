@@ -193,6 +193,8 @@ ORCHESTRATOR_ERROR_CODES = frozenset(
         "scope_not_found",
         "tool_limit_reached",
         "tool_unavailable",
+        # CHAOS-3541
+        "refused",
     }
 )
 
@@ -219,6 +221,13 @@ PUBLIC_OUTCOME_BY_ERROR_CODE: Mapping[str, PublicOutcome] = {
     "internal_error": PublicOutcome.FAILED,
     "invalid_request": PublicOutcome.FAILED,
     "provider_contract_violation": PublicOutcome.FAILED,
+    # CHAOS-3541: the ONE code for a genuinely prohibited request (arbitrary
+    # execution, a write) -- distinct from scope_forbidden (an
+    # AUTHORIZATION claim: this scope is not yours) and from
+    # insufficient_evidence (an evidence-gap claim: ask again with more to
+    # go on). A refusal is neither -- the requester has access, and no
+    # amount of additional evidence changes the answer.
+    "refused": PublicOutcome.REFUSED,
 }
 
 _missing_codes = ORCHESTRATOR_ERROR_CODES - set(PUBLIC_OUTCOME_BY_ERROR_CODE)

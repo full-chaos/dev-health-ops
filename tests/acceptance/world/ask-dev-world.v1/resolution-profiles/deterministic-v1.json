@@ -426,9 +426,9 @@
     },
     "subject-label.five-word-truncation": {
       "expected_public_outcome": "needs_clarification",
-      "expected_scope_resolution_outcome": "unresolved",
+      "expected_scope_resolution_outcome": "ambiguous",
       "resolution_path": "miss-clarification",
-      "notes": "Exact terminal not pinned pending CHAOS-3407; invariant floor only."
+      "notes": "Exact terminal not pinned pending CHAOS-3407; invariant floor only. [expected_scope_resolution_outcome CORRECTED from 'unresolved' to 'ambiguous' (CHAOS-3490 Part 2, 2026-08-07) on evidence CHAOS-3497 made observable for the first time. This was a PRE-REGISTERED PREDICTION MISS and is recorded as such: I predicted this case would flip to passing on 3497 and it did not -- the post-3497 armed run (world digest 2e1e254d..., errored 0) measured scope_resolution_outcome='ambiguous' against allowed=['unresolved']. Before 3497 no scope.resolved frame was emitted on this non-answer terminal at all, so nobody could see which of the two it was; 'unresolved' was a reasonable guess and it was wrong. The truncated >=5-word label does not fail to match -- _NAME's 4-capitalized-word cap drops 'Dev' and the remainder matches MULTIPLE candidates, so the preflight terminates ambiguous and offers them. Its sibling subject-label.wrong-kind-collision already declared 'ambiguous' and observed it in the same run, so this is family parity, not a special case. NOT A LOOSENING: the case's own no-silent-widening prose is satisfied MORE strongly by 'ambiguous' than by 'unresolved' -- ambiguous is a clarification terminal (dev_error.v1 persisted, verified in the same receipt), not a widening -- and no invariant was dropped, no allowed list widened, and 'unresolved' remains asserted by other cases so nothing loses coverage.]"
     },
     "subject-label.parenthetical-quoted-control": {
       "expected_public_outcome": "answered_with_gaps",

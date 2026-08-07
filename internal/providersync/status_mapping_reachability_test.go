@@ -152,10 +152,14 @@ func TestTypePriorityOmitsExactlyPrAndMergeRequest(t *testing.T) {
 	}
 }
 
-// TestRealConfigGithubTypeBugLabelIsAMisparsedMapping pins the highest-impact
-// quirk: status_mapping.yaml's github `bug` list contains `- type: bug` WITH A
-// SPACE, which YAML reads as a mapping. Python indexes it under str(dict), so
-// the conventional GitHub label `type:bug` matches nothing.
+// TestRealConfigGithubTypeBugLabelIsAMisparsedMapping pins CHAOS-3512, the
+// highest-impact quirk here: status_mapping.yaml's github `bug` list contains
+// `- type: bug` WITH A SPACE, which YAML reads as a mapping. Python indexes it
+// under str(dict), so the conventional GitHub label `type:bug` matches nothing.
+//
+// CHAOS-3512 is fixed PYTHON-FIRST and then re-mirrored into this port. This
+// test is what makes that sequencing safe: it fails on the Python/config fix
+// AND on a Go-side change, so the two halves cannot land out of step.
 func TestRealConfigGithubTypeBugLabelIsAMisparsedMapping(t *testing.T) {
 	github := realConfigProviderSection(t, "github")
 	bugValues := sequenceItems(mappingValue(mappingValue(github, "type_labels"), "bug"))

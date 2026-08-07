@@ -99,6 +99,12 @@ func normKey(value string) string {
 // resulting index key is the literal Python dict repr `{'type': 'bug'}`. Go's
 // own formatting would render that node as `map[type:bug]` and diverge on the
 // single most user-visible entry in the file.
+//
+// That misparse is CHAOS-3512: GitHub items carrying the conventional
+// `type:bug` label classify as "issue" instead of "bug". It is fixed
+// PYTHON-FIRST and then re-mirrored here -- this port reproduces the CURRENT
+// behaviour, and the tripwire in status_mapping_reachability_test.go fails the
+// moment either side changes, so the re-mirror cannot drift silently.
 func pythonStr(node *yaml.Node) (string, error) {
 	node = resolveAlias(node)
 	if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {
@@ -295,7 +301,9 @@ func indexValues(into map[string]string, values *yaml.Node, category string) err
 // deploy config sets the variable, and the Python test harness lists it in its
 // env-neutralization set), but reproduced because D16 says mirror.
 //
-// DECLARED DIVERGENCE, the one place this is not a faithful mirror: Python
+// DECLARED DIVERGENCE (Decision Log D19), the one place this is not a faithful
+// mirror. D19 also records where the obligation lands: supplying the path is
+// the worker-wiring and activation layer's job, not this function's. Python
 // falls back to DEFAULT_STATUS_MAPPING_PATH, computed relative to the .py
 // file's own location, when the caller passes nothing (job_work_items.py:427
 // does exactly that). Go has no equivalent source-relative anchor, so an empty

@@ -25,40 +25,39 @@ adversarial critique, comment 7d1368d9):
   the same cardinality. This is what stops "how is the Contxt Fabric doing?"
   from reading as a corroborated org-wide proposal just because the model
   found no candidate id to name.
-* **Never-widen is enforced at RUNTIME, not by the wire schema.** This bullet
-  used to claim the opposite -- that ``_response_schema``'s
-  ``[0, len(combined) - 1]`` index bounds made an unauthorized candidate
-  inexpressible on the wire. That was FALSE for as long as it was written
-  (CHAOS-3536). ``OpenAICompatibleAgentProvider`` projects every schema
-  through ``_structural_schema``, which keeps only ``_STRUCTURAL_SCHEMA_KEYS``
-  -- and ``minimum``/``maximum``/``minItems``/``maxItems``/``maxLength`` are
-  not among them. The bounds were stripped before dispatch on every call
-  that ever ran; no provider has seen them. Verified by executing the
-  product's own ``build_completion_request`` and reading the result, not by
-  reasoning about it.
+* **Never-widen is enforced in TWO places, and the split is exact.** This
+  bullet has now been wrong in both directions, so it states the boundary
+  rather than a slogan.
 
-  So ``_verify`` is not a belt-and-braces second check, as this file
-  previously implied -- it is the ONLY check. It re-checks every accepted
-  index against its OWN mention's authorized slice (not just the call-wide
-  bound) after parsing, independent of whether the provider honored
-  anything, and CHAOS-3525 additionally hardened the singular path to
-  resolve by identity. That makes it a strong sole guard, but a sole guard.
+  *Call-wide, structurally, on the wire.* ``_response_schema`` enumerates the
+  authorized indices as ``enum``, rebuilt per call, so a provider cannot
+  express an index this CALL did not authorize. Read the mechanism, because
+  the keyword choice is the whole point: ``OpenAICompatibleAgentProvider``
+  projects every schema through ``_structural_schema``, which keeps only
+  ``_STRUCTURAL_SCHEMA_KEYS``. ``minimum``/``maximum``/``minItems``/
+  ``maxItems``/``maxLength`` are NOT in that set; ``enum`` is. The original
+  bullet claimed this guarantee on the strength of ``[0, len(combined) - 1]``
+  range bounds, and was FALSE for as long as it was written (CHAOS-3536) --
+  those bounds were stripped before dispatch on every call that ever ran.
+  CHAOS-3537 re-expressed the bound in a keyword that survives, which is also
+  strictly stronger: a range admits every integer between its ends, an enum
+  admits exactly the shortlist.
 
-  The one structural bound that DOES survive projection is the
-  zero-candidate encoding: when the CALL authorized nothing,
-  ``selected_candidate_index`` is ``{"type": "null"}``. Two limits on that,
-  both stated because the previous version of this bullet is what taught us
-  not to round such claims up:
+  *Per-mention, at runtime.* ``_verify`` re-checks every accepted index
+  against its OWN mention's authorized slice, which the wire schema cannot
+  express at all -- the schema is built once per call from the COMBINED
+  shortlist, so a mention whose own slice is empty (past
+  ``max_total_candidates``) still sees the call's full range. CHAOS-3525
+  additionally hardened the singular path to resolve by identity.
 
-  - it covers ``selected_candidate_index`` only. ``candidate_indices`` still
-    ships as ``{"type": "array", "items": {"type": "integer"}}``, so an
-    index stays expressible there and ``_verify`` remains its only guard;
-  - it is CALL-wide, not per mention. ``_response_schema`` is built once
-    from the combined shortlist, so a mention whose own slice is empty
-    (past ``max_total_candidates``) still sees the call's full range.
+  **Neither subsumes the other.** The schema stops "an index that exists
+  nowhere in this call"; ``_verify`` stops "an index that belongs to a
+  different mention". Weakening either is a real reduction in coverage, not
+  the removal of a redundancy.
 
-  See ``_response_schema``. CHAOS-3537 tracks restoring a real structural
-  bound for the non-empty case.
+  With zero candidates authorized, both index fields are closed structurally:
+  ``selected_candidate_index`` is ``{"type": "null"}`` and
+  ``candidate_indices`` carries an empty item enum. See ``_response_schema``.
 * **LLM unavailable degrades to silent skip, never a block.** Every branch
   of ``evaluate()`` returns a ``QUAShadowRecord`` (never raises); the
   orchestrator's own call site additionally wraps the call and the
@@ -638,37 +637,54 @@ class QuestionUnderstandingShadow:
     ) -> dict[str, Any]:
         """The response schema for THIS call's authorized shortlist.
 
-        CHAOS-3536, read this before trusting the bounds below: ``minimum``,
-        ``maximum``, ``minItems``, ``maxItems`` and ``maxLength`` DO NOT
-        REACH THE PROVIDER. ``OpenAICompatibleAgentProvider`` projects every
-        schema through ``_structural_schema``, which keeps only the keys in
-        ``_STRUCTURAL_SCHEMA_KEYS`` -- and none of those five are in it. They
-        are dropped before dispatch. Keeping them here is still worthwhile
-        (they document intent, and they bound the schema for any future
-        provider that does not project), but nothing may be claimed on their
-        strength. ``_verify`` is the guard that actually holds. See
-        CHAOS-3537 for restoring a structural bound to the wire.
+        Index bounds are expressed as ``enum``, not as ``minimum``/
+        ``maximum``, and that is load-bearing rather than stylistic.
+        ``OpenAICompatibleAgentProvider`` projects every schema through
+        ``_structural_schema``, which keeps only ``_STRUCTURAL_SCHEMA_KEYS``.
+        ``minimum``/``maximum``/``minItems``/``maxItems``/``maxLength`` are
+        NOT in that set and are stripped before dispatch; ``enum`` IS, and
+        survives untouched. CHAOS-3536 found the range bounds had therefore
+        never reached any provider, leaving ``_verify`` as the sole guard;
+        CHAOS-3537 is this repair.
 
-        The zero-candidate case is the one bound that DOES survive, and it
-        is encoded to survive deliberately. It used to be the empty integer
-        range ``[0, -1]``, which projection erased down to
-        ``{"type": ["integer", "null"]}`` -- any integer expressible with
-        nothing authorized. It is now ``{"type": "null"}``: the same
-        never-widen intent, expressed with a keyword the projection keeps,
-        and parseable because the contract field is ``_StrictIndex | None``.
+        An enumeration is also strictly STRONGER than the range it replaces:
+        ``[0, n-1]`` admits every integer between the ends, while the enum
+        admits exactly the indices this call authorized, rebuilt per call.
 
-        ``candidate_indices`` gets no equivalent treatment and is bounded
-        only at runtime: its contract field is a non-optional tuple, so a
-        null would fail parsing on every zero-candidate call, and
-        ``maxItems: 0`` would be stripped like the rest. An out-of-range
-        entry there is expressible on the wire and rejected by ``_verify``.
+        Measured live before adopting (CHAOS-3537, gpt-5-nano): strict mode
+        accepts an integer enum at 3 and at 50 candidates and accepts the
+        empty enum below; and given a prompt instructing it to return
+        out-of-range index 7, the pre-fix schema returned
+        ``selected_candidate_index: 7`` at confidence 0.92 in 3 runs of 3,
+        while the enum-bound schema could not express it in any of 3.
+
+        Zero candidates gets both fields closed, which the previous encoding
+        could not manage. ``selected_candidate_index`` is ``{"type": "null"}``
+        (parseable -- the contract field is ``_StrictIndex | None``), and
+        ``candidate_indices`` keeps its array type, so it still parses as the
+        empty tuple, but with an EMPTY item enum so no element value is
+        admissible. That closes the residual CHAOS-3536 had to leave open,
+        where ``maxItems: 0`` was stripped and any integer stayed expressible.
+
+        Still NOT closed here, and still ``_verify``'s job: the schema is
+        built once per call from the COMBINED shortlist, so the enum bounds
+        indices to what the CALL authorized, never to what the MENTION
+        authorized. A mention whose own slice is empty still sees the call's
+        full range. Neither guard subsumes the other.
+
+        ``maxItems``/``maxLength`` below are stripped in transit and are kept
+        only as intent, and as a real bound for any future provider that does
+        not project. Nothing may be claimed on their strength.
         """
 
-        max_index = candidate_count - 1
+        authorized_indices = list(range(candidate_count))
         index_schema: dict[str, Any] = (
             {"type": "null"}
             if candidate_count == 0
-            else {"type": ["integer", "null"], "minimum": 0, "maximum": max_index}
+            else {
+                "type": ["integer", "null"],
+                "enum": [*authorized_indices, None],
+            }
         )
         mention_schema = {
             "type": "object",
@@ -684,7 +700,11 @@ class QuestionUnderstandingShadow:
                 "candidate_indices": {
                     "type": "array",
                     "maxItems": 25,
-                    "items": {"type": "integer", "minimum": 0, "maximum": max_index},
+                    # Empty enum when nothing was authorized: the array still
+                    # parses as the empty tuple, but no element value is
+                    # admissible. See the docstring -- this is the half
+                    # CHAOS-3536 could not close.
+                    "items": {"type": "integer", "enum": authorized_indices},
                 },
                 "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             },

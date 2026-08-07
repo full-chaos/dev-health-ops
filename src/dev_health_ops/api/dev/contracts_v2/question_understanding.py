@@ -18,44 +18,38 @@ Whether a given index actually falls within the specific shortlist shown for
 that mention is a **per-call** fact this static schema cannot know (two
 different questions show different candidate counts).
 
-**PER-MENTION index authorization is enforced in exactly ONE place:
-``qua_shadow._verify``.** Scope that sentence carefully -- there IS one
-structural bound left (the call-wide zero-candidate encoding, below), so the
-precise claim is that no wire-level rule constrains an index to the mention
-it belongs to. This docstring used to list two enforcement points and present
-them as defence in depth. That was wrong, and CHAOS-3536 corrected it:
+**That bound is enforced in two places, split by scope.** This paragraph has
+been wrong in both directions -- it once claimed defence in depth that did not
+exist (CHAOS-3536), then, while that was true, understated what came back
+(CHAOS-3537) -- so it now states the boundary precisely rather than a slogan:
 
-1. ``_verify`` re-checks every index against the exact per-mention slice
-   after parsing, independent of whether the provider honored anything.
-   A violation marks that one mention's proposal ``rejected``, never the
-   whole record. CHAOS-3525 additionally hardened the singular commit path
-   to resolve by identity, so this is a strong check -- but it is the only
-   one, and a change that weakens it is not backstopped by anything.
-2. The wire-level JSON Schema was the claimed second enforcement point:
-   ``_response_schema`` bounds every index field to
-   ``[0, total_candidates - 1]``, so a provider honoring the schema could
-   not generate an out-of-range integer. **Those bounds never reached a
-   provider.** ``OpenAICompatibleAgentProvider`` projects every schema
-   through ``_structural_schema``, which keeps only
-   ``_STRUCTURAL_SCHEMA_KEYS`` -- ``minimum``/``maximum``/``minItems``/
-   ``maxItems``/``maxLength`` are not in it and are stripped before
-   dispatch. Verified by executing ``build_completion_request``, not by
-   reading it. Tracked as CHAOS-3537.
+1. **Call-wide, structurally, on the wire.** ``qua_shadow._response_schema``
+   enumerates this call's authorized indices as ``enum``, so a provider cannot
+   express an index the CALL never authorized. The keyword matters:
+   ``OpenAICompatibleAgentProvider`` projects every schema through
+   ``_structural_schema``, which keeps only ``_STRUCTURAL_SCHEMA_KEYS``.
+   ``minimum``/``maximum``/``minItems``/``maxItems``/``maxLength`` are not in
+   it and are stripped in transit; ``enum`` is, and survives. The original
+   claim rested on ``[0, total_candidates - 1]`` range bounds and was false
+   for as long as it stood -- those never reached any provider.
+2. **Per-mention, at runtime.** ``_verify`` re-checks every index against the
+   exact per-mention slice after parsing, independent of whether the provider
+   honored anything. A violation marks that one mention's proposal
+   ``rejected``, never the whole record. CHAOS-3525 additionally hardened the
+   singular commit path to resolve by identity.
 
-The one structural bound that DOES survive projection is the zero-candidate
-case: when the CALL authorized nothing at all, ``selected_candidate_index``
-is sent as ``{"type": "null"}``, so no SELECTED index is expressible. That
-covers ``selected_candidate_index`` only -- ``candidate_indices`` still goes
-out as ``{"type": "array", "items": {"type": "integer"}}`` even then, so an
-index remains expressible there and is caught only by ``_verify``.
+**Neither subsumes the other, which is why both are listed.** The schema is
+built once per call from the COMBINED shortlist, so all mentions share one
+index space: it can stop an index that exists nowhere in the call, and it
+cannot stop an index belonging to a *different mention* of the same call.
+Only ``_verify`` knows about per-mention slices. Treating either as
+redundant would be a real reduction in coverage.
 
-Note the scope of that carefully -- it is call-wide, not per mention.
-``_response_schema`` is built once from the COMBINED shortlist, so all
-mentions share one index space, and a mention whose own slice is empty (past
-``max_total_candidates``) still sees the call's full range in the schema.
-Only ``_verify`` knows about per-mention slices. ``candidate_indices`` gets
-no structural bound either -- it is a non-optional tuple here, so a null
-would fail parsing -- and is likewise rejected only by ``_verify``.
+With zero candidates authorized, both index fields are closed structurally:
+``selected_candidate_index`` is sent as ``{"type": "null"}``, and
+``candidate_indices`` keeps its array type (a null would fail parsing here --
+the field is a non-optional tuple) with an EMPTY item enum, so no element
+value is admissible.
 """
 
 from __future__ import annotations
@@ -78,11 +72,12 @@ QUESTION_UNDERSTANDING_SCHEMA_VERSION = "dev_question_understanding.v1"
 
 #: Bound applied to every candidate-index field regardless of shortlist size.
 #:
-#: CHAOS-3536: this used to call itself the "belt" to the wire schema's
-#: tighter per-call bound. There is no such braces -- the wire bound is
-#: stripped by the provider projection (CHAOS-3537), so for a non-empty
-#: shortlist this ceiling and ``_verify`` are what exist. Kept as the
-#: absolute ceiling a hand-authored ``max_length``/``le`` must never exceed.
+#: CHAOS-3536 found this calling itself the "belt" to a tighter per-call wire
+#: bound that had been stripped in transit and did not exist. CHAOS-3537
+#: restored that bound as an ``enum``, which survives the projection -- so the
+#: braces are real again and this genuinely is the belt. Kept as the absolute
+#: ceiling a hand-authored ``max_length``/``le`` must never exceed, and as the
+#: bound that still applies if the per-call enum is ever widened.
 _MAX_MENTIONS = 25
 _MAX_CANDIDATE_INDICES = 25
 

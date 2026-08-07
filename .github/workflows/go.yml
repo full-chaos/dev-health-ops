@@ -146,6 +146,21 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
+      # The derived work-item integration tests migrate their throwaway
+      # ClickHouse container with the project's REAL migration chain
+      # (internal/testsupport/chschema), which shells out to Python. This job
+      # previously installed no Python dependencies at all, so that helper died
+      # with ModuleNotFoundError. The closure is pinned and installed with
+      # --no-deps for the same reason go-quality's is: an undeclared dependency
+      # must fail loudly rather than drift to latest.
+      - name: Set up Python 3.13.14 for the ClickHouse migration chain
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.14'
+
+      - name: Install locked ClickHouse migration dependencies
+        run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
+
       - name: Run isolated storage integration suite
         run: bash ci/check_go.sh integration
 

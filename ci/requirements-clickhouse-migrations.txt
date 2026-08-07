@@ -1,0 +1,62 @@
+# Exact Python 3.13 closure from uv.lock for RUNNING THE REAL ClickHouse
+# migration chain from a Go integration test (internal/testsupport/chschema).
+#
+# Separate from requirements-live-python-oracles.txt on purpose. That file
+# serves go-quality, whose oracle loader STUBS the heavy modules before
+# importing production code, so it needs neither FastAPI nor a ClickHouse
+# client. chschema does the opposite by design: it executes the project's real
+# migration entrypoint, so it drags the entrypoint's true import closure --
+# which reaches dev_health_ops.models -> licensing -> fastapi and nacl -- plus a
+# live ClickHouse client. Merging the two files would put that weight on a job
+# that does not need it, and would hide which job needs what.
+#
+# CI installs this with --no-deps, so every transitive is listed explicitly and
+# an undeclared dependency fails loudly instead of silently drifting to latest.
+#
+# Versions are from uv.lock, NOT from a fresh resolve. That distinction is not
+# cosmetic: resolving these packages latest-first yields
+# clickhouse-connect 1.6.0 (lock: 0.15.1) and fastapi 0.141.1, and the latter
+# violates pyproject's own `fastapi>=0.136.1,<0.137` constraint. A CI job that
+# installed the resolved set would be testing against dependencies the project
+# forbids.
+
+# --- shared with the live-oracle closure ---
+annotated-types==0.7.0
+anyio==4.13.0
+certifi==2026.4.22
+defusedxml==0.7.1
+gitdb==4.0.12
+GitPython==3.1.54
+greenlet==3.5.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.15
+pydantic==2.13.4
+pydantic-core==2.46.4
+PyYAML==6.0.3
+smmap==5.0.3
+SQLAlchemy==2.0.49
+typing-extensions==4.15.0
+typing-inspection==0.4.2
+
+# --- additionally required to import the migration entrypoint ---
+# dev_health_ops.metrics.sinks -> models -> licensing.gating imports FastAPI,
+# and licensing.validator imports nacl. Both are on the import path of the
+# migration runner even though a migration performs no HTTP and verifies no
+# signature.
+annotated-doc==0.0.4
+fastapi==0.136.3
+starlette==1.3.1
+pynacl==1.6.2
+cffi==2.0.0
+pycparser==3.0
+
+# --- ClickHouse client used to APPLY the migrations ---
+clickhouse-connect==0.15.1
+lz4==4.4.5
+urllib3==2.7.0
+zstandard==0.25.0
+# pytz is required by clickhouse-connect 0.15.1's tzutil at IMPORT time; the
+# --no-deps install is what surfaced it.
+pytz==2026.2

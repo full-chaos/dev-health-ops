@@ -480,6 +480,59 @@ def test_an_acronym_of_a_parenthetical_corroborates_nothing(
     assert promotable_selection(record, deterministic_declined=True) is None
 
 
+@pytest.mark.parametrize(
+    ("span", "label"),
+    [
+        # One nesting level: the outer parenthetical's words survived a single
+        # strip pass and derived the acronym of the qualifier itself.
+        ("LO", "Payments (Legacy Operations (LO))"),
+        # Two levels, to prove the fix peels rather than special-cases one.
+        ("LO", "Payments (Legacy Operations (Deprecated (LO)))"),
+    ],
+)
+def test_a_nested_parenthetical_cannot_corroborate_through_the_primary_name(
+    span: str, label: str
+) -> None:
+    """The primary-name rule must hold at any nesting depth.
+
+    ``_PARENTHETICAL`` matches only INNERMOST groups, so ONE strip pass over
+    "Payments (Legacy Operations (LO))" leaves "Payments (Legacy Operations )"
+    -- and those leftover qualifier words then derived "LO" as an acronym of
+    the "primary" name. The guarantee the round-2 fix added was false for
+    nested labels, which is the same qualifier bug wearing a third disguise
+    (adversarial review round 3, HIGH; reproduced before fixing).
+
+    ``_corroborating_primary`` substitutes to a fixpoint, so every level is
+    peeled whatever the depth.
+    """
+
+    entity = _entity(label, span=span, canonical_id="acme/pay")
+    record = _record(authorized_slice=(entity,), selected=entity, confidence=1.0)
+
+    assert entity.span_match is not None
+    assert entity.span_match.is_acronym_of_primary_name is False
+    assert promotable_selection(record, deterministic_declined=True) is None
+
+
+def test_a_nested_label_still_corroborates_its_own_real_acronym() -> None:
+    """The fix must peel qualifiers, not disable corroboration outright.
+
+    A narrower reading of the round-3 fix -- "refuse anything with nested
+    parentheses" -- would pass the test above while silently retiring the
+    CHAOS-3525 acceptance path for any label that happens to nest. This is the
+    control that keeps the fix a peel rather than a ban.
+    """
+
+    entity = _entity(
+        "Meridian Web Application (MWA (legacy))", span="MWA", canonical_id="a/mwa"
+    )
+
+    assert entity.span_match is not None
+    assert entity.span_match.is_acronym_of_primary_name is True
+    record = _record(authorized_slice=(entity,), selected=entity)
+    assert promotable_selection(record, deterministic_declined=True) is not None
+
+
 def test_an_article_only_label_can_corroborate_nothing() -> None:
     """A label with no content words must not derive its own initials.
 

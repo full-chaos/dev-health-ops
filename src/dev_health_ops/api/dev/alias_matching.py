@@ -313,6 +313,42 @@ class SpanMatch:
 _ARTICLES = frozenset({"the", "a", "an"})
 
 
+def _corroborating_primary(name: str) -> str:
+    """The label text a span may be corroborated AGAINST: no parentheses, no
+    articles.
+
+    Not ``strip_parentheticals(name)[0]``, and the difference is a defect that
+    one round of review missed. ``_PARENTHETICAL`` matches only INNERMOST
+    groups (its body is ``[^()]*``), so one pass over a nested label leaves
+    outer parenthetical text behind: "Payments (Legacy Operations (LO))"
+    becomes "Payments (Legacy Operations )". Those leftover words then feed
+    the acronym derivation, and "LO" -- an acronym of the QUALIFIER -- was
+    admitted as corroboration from the "primary" name. The exact bug the
+    primary-name rule exists to prevent, re-entered through nesting
+    (adversarial review round 3, HIGH; reproduced before fixing).
+
+    Substituting to a fixpoint peels one nesting level per pass, so ALL
+    parenthetical text is gone whatever the depth. Unbalanced parentheses
+    simply stop matching and the loop ends, so a malformed label degrades to
+    "less is stripped" rather than looping.
+
+    ``strip_parentheticals`` itself is deliberately NOT changed: the
+    deterministic CHAOS-3388 path depends on its current alias extraction, and
+    widening a shared primitive to fix a consumer is how the alias precedence
+    in CHAOS-3422 was broken. This is a corroboration-local rule.
+    """
+
+    previous = name
+    while True:
+        stripped = _PARENTHETICAL.sub(" ", previous)
+        if stripped == previous:
+            break
+        previous = stripped
+    return " ".join(
+        word for word in _words(previous) if word.casefold() not in _ARTICLES
+    )
+
+
 def _distinct_tokens(text: str) -> frozenset[str]:
     return frozenset(word.casefold() for word in _words(text))
 
@@ -378,12 +414,9 @@ def classify_span_match(*, span: str, label: str) -> SpanMatch:
     # every parenthetical and would let a multi-word qualifier corroborate
     # itself ("LO" for "Payments (Legacy Operations)"). See the field's own
     # comment on ``SpanMatch``.
-    primary, _ = strip_parentheticals(label)
-    primary_content = " ".join(
-        word for word in _words(primary) if word.casefold() not in _ARTICLES
-    )
     is_acronym_of_primary = normalized_span in {
-        acronym.casefold() for acronym in acronym_candidates(primary_content)
+        acronym.casefold()
+        for acronym in acronym_candidates(_corroborating_primary(label))
     }
 
     if normalized_span and normalized_span == normalized_label:

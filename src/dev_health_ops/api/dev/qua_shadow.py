@@ -199,6 +199,23 @@ class QUAShadowConfig:
     #: evidence. Two flags keep the rollout ladder (shadow -> commit) real:
     #: ``commit_enabled`` is meaningless unless ``enabled`` is also set, since
     #: there is no proposal to promote otherwise.
+    #:
+    #: **Before arming this in an environment, read
+    #: ``qua_promotion._structurally_admissible``'s generalization limit.**
+    #: CHAOS-3553 replaced the confidence floor with a structural predicate and
+    #: closed every false positive CHAOS-3539 measured, but it left TWO shapes
+    #: admitting, both stated there and both pinned by characterization tests:
+    #: a short acronym window from a genuine primary name ("AC", "OP", "API"),
+    #: and a multi-word parenthetical qualifier named in full ("Legacy
+    #: Operations"). Neither is a regression -- the previous confidence-only
+    #: gate admitted both -- and neither has a structural fix available without
+    #: an explicit catalog alias field.
+    #:
+    #: So landing CHAOS-3553 does NOT by itself authorize arming this flag.
+    #: Adversarial review was explicit that "not a regression" is not a safety
+    #: closure, and it is right. Arming is a product decision that owns those
+    #: two residuals, and it belongs to CHAOS-3525 with evidence, not to
+    #: whoever next edits this file.
     commit_enabled: bool = False
     #: Platform-spec hard cap (comment 6fa38d88, "Performance and budgets").
     #: Also bounded by the run's own remaining wall-clock budget at the call

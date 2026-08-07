@@ -43,6 +43,7 @@ world; they are not.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 
@@ -129,6 +130,47 @@ _INJECTION_QUESTIONS = {
 #: counts below are DERIVED from the measurement rather than restated.
 _ARCHIVE = pathlib.Path(__file__).parent / "fixtures" / "chaos_3539_sweep.jsonl"
 
+#: The archive's content digest, pinned as the outermost guard.
+#:
+#: Every per-row rule below checks a row against OTHER FIELDS OF THE SAME ROW,
+#: so a doctored archive that changes two fields together satisfies all of
+#: them: setting ``selected`` and ``expected_canonical_id`` both to
+#: "wrong-project" passes the "positive committed the right entity" oracle,
+#: leaves every count unchanged, and would have let this corpus report a
+#: measurement that never happened (adversarial review round 3, MEDIUM). An
+#: archive cannot be its own oracle for its own truth fields.
+#:
+#: The digest closes that generally rather than field by field: any edit to
+#: any byte fails here first. The per-row rules stay because they say WHAT a
+#: well-formed row is, and they are what a future archive would be validated
+#: against; this says THIS archive is the one the ticket measured.
+_ARCHIVE_SHA256 = "2460654b648347daf250d867697e22d86097c3796596f94a092c51d589b81014"
+
+
+def _load(path: pathlib.Path) -> list[dict[str, object]]:
+    """Read one sweep archive, refusing anything that is not THE archive.
+
+    Takes a path so a test can hand it a DOCTORED copy and watch it refuse.
+    Deleting the digest comparison passes against the real file -- it matches,
+    so the guard never fires -- which means the only evidence the pin does
+    anything is a file it rejects.
+    """
+
+    if not path.exists():
+        raise AssertionError(f"CHAOS-3539 sweep archive missing at {path}")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != _ARCHIVE_SHA256:
+        raise AssertionError(
+            f"CHAOS-3539 sweep archive has changed: {digest} != {_ARCHIVE_SHA256}. "
+            "This file is measured evidence, not a fixture to edit -- a new "
+            "measurement needs a new run, a new digest, and the claims that "
+            "rest on it re-checked."
+        )
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    if not rows:
+        raise AssertionError(f"CHAOS-3539 sweep archive is empty at {path}")
+    return rows
+
 
 def _archive_rows() -> list[dict[str, object]]:
     """Every archived sweep row, or a loud failure.
@@ -137,14 +179,7 @@ def _archive_rows() -> list[dict[str, object]]:
     evidence, and a run that cannot read it has measured nothing.
     """
 
-    if not _ARCHIVE.exists():  # pragma: no cover - defended, not expected
-        raise AssertionError(f"CHAOS-3539 sweep archive missing at {_ARCHIVE}")
-    rows = [
-        json.loads(line) for line in _ARCHIVE.read_text().splitlines() if line.strip()
-    ]
-    if not rows:  # pragma: no cover - defended, not expected
-        raise AssertionError(f"CHAOS-3539 sweep archive is empty at {_ARCHIVE}")
-    return rows
+    return _load(_ARCHIVE)
 
 
 #: Every field a sweep row must carry, and the types it may carry them as.
@@ -630,6 +665,65 @@ async def test_a_corrupted_archive_row_is_refused(
     # The same row without the corruption passes, so the refusal is caused by
     # the planted defect and not by the fixture being unusable.
     assert _validate([dict(clean)]) == [clean], why
+
+
+@pytest.mark.parametrize(
+    ("mutate", "what"),
+    [
+        (
+            lambda text: text.replace(
+                '"selected": null', '"selected": "wrong-project"', 1
+            ),
+            "a selection invented for a row that never made one",
+        ),
+        (
+            lambda text: text.replace(
+                '"expected_canonical_id": "meridian/context-fabric"',
+                '"expected_canonical_id": "wrong-project"',
+            ).replace(
+                '"selected": "meridian/context-fabric"', '"selected": "wrong-project"'
+            ),
+            "BOTH truth fields changed together -- passes every per-row rule, "
+            "leaves every count identical, and is the case that motivated the "
+            "digest",
+        ),
+        (
+            lambda text: text.replace('"confidence": 0.72', '"confidence": 0.99'),
+            "a doctored confidence",
+        ),
+        (lambda text: "\n".join(text.splitlines()[:-8]) + "\n", "a truncated archive"),
+    ],
+)
+@pytest.mark.asyncio(loop_scope="function")
+async def test_a_doctored_archive_file_is_refused(
+    tmp_path: pathlib.Path, mutate, what: str
+) -> None:
+    """The digest must reject any edit, including self-consistent ones.
+
+    Every per-row rule checks a row against other fields of the SAME row, so
+    an archive doctored in two places at once satisfies all of them -- setting
+    ``selected`` and ``expected_canonical_id`` both to "wrong-project" passes
+    the "committed the right entity" oracle and changes no count. An archive
+    cannot be its own oracle for its own truth fields (adversarial review
+    round 3, MEDIUM).
+
+    Each case is a real edit to a real copy of the file, so the guard is
+    observed refusing rather than assumed to.
+    """
+
+    doctored = tmp_path / "doctored.jsonl"
+    original = _ARCHIVE.read_text()
+    doctored.write_text(mutate(original))
+    assert doctored.read_text() != original, f"the {what} case mutated nothing"
+
+    with pytest.raises(AssertionError, match="archive has changed"):
+        _load(doctored)
+
+    # An untouched copy at a different path still loads, so the refusal is the
+    # edit and not the path.
+    pristine = tmp_path / "pristine.jsonl"
+    pristine.write_text(original)
+    assert len(_load(pristine)) == 336
 
 
 @pytest.mark.asyncio(loop_scope="function")

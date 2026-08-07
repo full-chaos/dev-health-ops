@@ -447,6 +447,34 @@ question.
       hard requirement for these tests, not a nice-to-have, and say so at
       the top of any new oracle pair file that reaches outside
       `testdata/`.
+    - **REQUIREMENT: set `PYTHON` to the worktree's `.venv` for any DIRECT
+      `go test` run of a live oracle.** `pythonExecutable`
+      (`capabilities_test.go`) uses `$PYTHON`, else `python3` from `PATH`. If
+      `PATH` resolves to an ambient virtualenv (a pyenv `VIRTUAL_ENV` exported
+      by a shell profile, say) whose `dev_health_ops` is editable-installed
+      against a DIFFERENT worktree, a pair that imports the producer directly
+      (`from dev_health_ops.metrics... import ...`) compares your branch's Go
+      against **another checkout's Python** and reports PASS.
+      `ci/check_go.sh live-python-oracles` is safe: it exports
+      `PYTHONPATH="${ROOT}/src"` before `go test` (check_go.sh:230), which
+      precedes site-packages on `sys.path`. A bare `go test` carrying only the
+      two oracle env vars has no such protection. Measured both ways on one
+      branch: the bare run FAILs with `ImportError: cannot import name X from
+      'dev_health_ops...' (/…/ops-worktrees/<other>/src/…)`; the identical
+      command with `PYTHONPATH=$PWD/src` passes. The import error is the LUCKY
+      shape — loud. The dangerous shape is a foreign producer that imports
+      cleanly and quietly answers the comparison.
+      SCOPE: this reaches pairs that import `dev_health_ops` directly. Pairs
+      going through `load_live_module` are protected by its own
+      origin assertion and module-shadowing, measured separately as producing
+      byte-identical output under either interpreter — so a green
+      `load_live_module` pair is NOT automatically suspect.
+      Do NOT verify with `import dev_health_ops`: it reports the installed
+      package rather than what the pair loaded, and false-alarms on
+      `load_live_module` pairs. Verify what the PAIR resolved — for a
+      direct-import pair, `inspect.getsourcefile(<the imported producer>)`
+      must land inside the current worktree. This trap consumed real evidence
+      twice in one session (CHAOS-3123).
     - **A shared mutation harness proof command with no cache-bypass can
       report a false SURVIVED (or, worse, a false KILLED) depending on
       unrelated prior `go test` invocations in the same session** —

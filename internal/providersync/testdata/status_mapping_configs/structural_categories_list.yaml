@@ -1,0 +1,3 @@
+version: 1
+status_categories: [a, b]
+providers: {}

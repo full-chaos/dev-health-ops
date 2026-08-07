@@ -1,0 +1,14 @@
+# Python's str.lower() is FULL case mapping; Go's strings.ToLower is simple
+# per-rune folding. "İ" (U+0130) lowercases to "i" + U+0307 in Python but to a
+# bare "i" in strings.ToLower, so a naive port MATCHES where Python MISSES.
+# Final sigma differs the same way.
+version: 1
+status_categories: {}
+providers:
+  github:
+    type_labels:
+      bug:
+        - İSSUE
+        - ΤΕΛΟΣ
+      incident:
+        - STRASSE

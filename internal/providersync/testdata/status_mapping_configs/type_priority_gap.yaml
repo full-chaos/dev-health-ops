@@ -1,0 +1,35 @@
+# Synthetic config for the _TYPE_PRIORITY gap (quirk 8).
+#
+# WorkItemType has TEN members; _TYPE_PRIORITY lists only EIGHT. "pr" and
+# "merge_request" are valid types that `_as_work_item_type` accepts and the
+# loader indexes happily, but they appear in NO priority list.
+#
+# So when a label maps ONLY to one of those two, `if matched_types:` is entered
+# -- the set is genuinely non-empty -- and then the priority loop completes
+# WITHOUT RETURNING. Control falls through to the lower-precedence type_raw arm
+# and then to the default, silently discarding a label match that the
+# documented precedence says should have won.
+#
+# The real config cannot express this: nothing in it maps to pr/merge_request.
+version: 1
+
+status_categories: {}
+
+providers:
+  github:
+    type_labels:
+      # Valid WorkItemType, absent from _TYPE_PRIORITY.
+      pr:
+        - PR Label
+      # Present in _TYPE_PRIORITY, so a case pairing the two shows the
+      # fall-through happens ONLY when the unprioritized match is alone.
+      bug:
+        - Bug Label
+    types:
+      # The arm that wins the fall-through.
+      task:
+        - Some Raw Type
+  gitlab:
+    type_labels:
+      merge_request:
+        - MR Label

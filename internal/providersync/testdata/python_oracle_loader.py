@@ -94,6 +94,9 @@ _LICENSE_TYPES_SOURCE = _source("dev_health_ops/licensing/types.py")
 _LICENSE_REGISTRY_SOURCE = _source("dev_health_ops/licensing/registry.py")
 _FEATURE_POLICY_SOURCE = _source("dev_health_ops/licensing/feature_policy.py")
 
+_STATUS_MAPPING_SOURCE = _source("dev_health_ops/providers/status_mapping.py")
+_WORK_ITEMS_MODEL_SOURCE = _source("dev_health_ops/models/work_items.py")
+
 # The ClickHouse metrics sink package, for the direct work-item destination
 # projection oracle. Every one of these is a real production source; the list
 # is long because the target is a package __init__ that composes fourteen
@@ -808,6 +811,21 @@ def _target_feature_policy() -> None:
     _load_source_module("dev_health_ops.licensing.registry", _LICENSE_REGISTRY_SOURCE)
 
 
+def _target_status_mapping() -> None:
+    """Load the REAL work-item vocabulary that the status mapper validates against.
+
+    status_mapping.py derives _VALID_STATUS_CATEGORIES and _VALID_WORK_ITEM_TYPES
+    from work_items.py's Literal aliases via get_args, and the loader uses them to
+    decide which category names are real -- an unrecognised one is skipped in
+    silence. Stubbing that module would hand-maintain a SECOND copy of the valid
+    vocabulary, and the "invalid category is silently skipped" pin would then be
+    proven against the copy rather than against production, which is the precise
+    drift this framework exists to prevent. work_items.py imports only stdlib
+    (uuid, dataclasses, datetime, typing), so the real module loads unmodified.
+    """
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+
+
 def _target_fetch_utils() -> None:
     _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
 
@@ -886,6 +904,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.processors.fetch_utils",
         _FETCH_UTILS_SOURCE,
         _target_fetch_utils,
+    ),
+    _STATUS_MAPPING_SOURCE: (
+        "dev_health_ops.providers.status_mapping",
+        _STATUS_MAPPING_SOURCE,
+        _target_status_mapping,
     ),
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",

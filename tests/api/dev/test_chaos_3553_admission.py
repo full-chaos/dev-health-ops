@@ -498,6 +498,51 @@ def test_an_article_only_label_can_corroborate_nothing() -> None:
     assert promotable_selection(record, deterministic_declined=True) is None
 
 
+def test_a_multi_word_qualifier_named_in_full_still_admits() -> None:
+    """CHARACTERIZATION of the qualifier shape that CANNOT be closed here.
+
+    "the Legacy project" onto ``Payments (Legacy)`` is refused (one token, no
+    acronym). "LO" onto ``Payments (Legacy Operations)`` is refused (an
+    acronym of a parenthetical corroborates nothing). But "Legacy Operations"
+    named IN FULL covers two tokens and is admitted.
+
+    That is the rule working, not failing, on a case where the structure
+    carries no answer. Token for token it is identical to the CHAOS-3525
+    acceptance case that MUST commit::
+
+        "Legacy Operations" -> "Payments (Legacy Operations)"      wrong
+        "Context Fabric"    -> "... Runtime (Context Fabric)"      right
+
+    Both are a two-word parenthetical named in full, covering two label
+    tokens, deriving no acronym. Asserted side by side so the indistinguish-
+    ability is visible rather than argued: any change that refuses the first
+    refuses the second, and the second is a shipped requirement.
+
+    Closing it needs a real catalog alias field, which does not exist -- see
+    ``qua_promotion``'s comment block. Until then the residual is bounded by
+    disclosure, not by refusal.
+    """
+
+    qualifier = _entity(
+        "Payments (Legacy Operations)", span="Legacy Operations", canonical_id="a/pay"
+    )
+    alternate_name = _entity(
+        "Dev Health Agent Context Runtime (Context Fabric)",
+        span="Context Fabric",
+        canonical_id="a/ctx",
+    )
+
+    assert qualifier.span_match is not None
+    assert alternate_name.span_match is not None
+    # Structurally indistinguishable -- same class, same coverage, same
+    # (absent) derivation. This equality IS the finding.
+    assert qualifier.span_match == alternate_name.span_match
+
+    for entity in (qualifier, alternate_name):
+        record = _record(authorized_slice=(entity,), selected=entity)
+        assert promotable_selection(record, deterministic_declined=True) is not None
+
+
 def test_a_short_acronym_window_still_admits_which_is_a_known_residual() -> None:
     """CHARACTERIZATION, not an endorsement. This shape is NOT closed.
 

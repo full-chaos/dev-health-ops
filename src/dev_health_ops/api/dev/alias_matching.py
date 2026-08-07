@@ -73,6 +73,17 @@ and the label in the user-facing answer, so a reader can catch exactly the
 mistake 3289 produced. A derived alias may now be *selected*; it can never be
 selected *quietly*.
 
+How much of the 3289 shape that actually removes is stated precisely at
+``qua_promotion._STRUCTURALLY_DISTINGUISHING_TOKENS``, and it is not all of
+it: a single-word qualifier ("Legacy") and a qualifier's acronym ("LO" for
+"Legacy Operations") are refused, but a MULTI-WORD qualifier named in full
+("Legacy Operations") is admitted, because it is token-for-token identical to
+a multi-word alternate name ("Context Fabric") that CHAOS-3525 requires
+committing. That is this module's own "nothing about the catalog schema tells
+the two apart", reaching its limit -- the explicit alias field named two
+paragraphs above is what would close it, and disclosure is what bounds it
+meanwhile.
+
 Every acronym window (not only the whole-name acronym) is generated because
 a real display name routinely carries organization/product boilerplate a
 user's shorthand omits: "Dev Health Agent Context Runtime" collapses to

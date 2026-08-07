@@ -193,6 +193,39 @@ _STRUCTURALLY_DISTINGUISHING_TOKENS = 2
 #: "Amendment (CHAOS-3525)" paragraph. It does keep CHAOS-3525's literal
 #: acceptance -- "the ACR project" and "the MWA project" both clear the
 #: acronym-derivation arm.
+#:
+#: **What this closes, stated exactly, because "closes CHAOS-3289" would be
+#: an over-claim.** Two of the three qualifier shapes are closed:
+#:
+#: * a SINGLE-WORD qualifier named in full ("the Legacy project" onto
+#:   ``Payments (Legacy)``) -- covers one token, derives no acronym, refused;
+#: * a qualifier's own ACRONYM ("LO" onto ``Payments (Legacy Operations)``) --
+#:   refused since corroboration comes from the primary name alone.
+#:
+#: The third is NOT closed and cannot be closed here: a MULTI-WORD qualifier
+#: named in full. "the Legacy Operations project" covers two tokens of
+#: ``Payments (Legacy Operations)`` and is admitted. That is not an oversight
+#: in the rule -- it is the rule working on a case where the structure carries
+#: no answer. Compare, token for token:
+#:
+#:     span "Legacy Operations" -> "Payments (Legacy Operations)"     [wrong]
+#:     span "Context Fabric"    -> "... Runtime (Context Fabric)"     [right]
+#:
+#: Identical shape: a two-word parenthetical named in full, covering two
+#: tokens, deriving no acronym. The second is a CHAOS-3525 acceptance case
+#: that MUST commit. No structural predicate can separate them, which is
+#: precisely what ``alias_matching`` means by "nothing about the catalog
+#: schema tells the two apart" -- the acronym trick above only works while the
+#: parenthetical is initialism-shaped.
+#:
+#: Closing it needs the thing that does not exist yet: a real, explicit
+#: catalog alias field, which ``alias_matching``'s docstring already names as
+#: the input that would deserve a different policy. Until then the residual is
+#: bounded by disclosure rather than by prediction -- a QUA commit is never
+#: silent (``no_match_terminal.disclose_subject_match`` names the span AND the
+#: committed label in the answer), so a user who is shown "Legacy Operations"
+#: resolved to "Payments (Legacy Operations)" can see the mistake. That is a
+#: weaker guarantee than refusal and it is recorded as one.
 
 
 @dataclass(frozen=True, slots=True)

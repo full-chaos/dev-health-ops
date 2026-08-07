@@ -22,18 +22,21 @@ cohort, an uncorroborated organization-wide cardinality -- each returns
 without the seam. There is no branch here that repairs a partial proposal
 into a usable one.
 
-**It re-authorizes at commit time.** This paragraph used to say the shadow
-already bounds proposals "two ways" -- a per-call JSON Schema making an
-out-of-range index inexpressible, plus a runtime verifier. CHAOS-3536
-established that the first of those does not exist: the schema's
-``minimum``/``maximum`` bounds are stripped by the provider's
-``_structural_schema`` projection and have never reached a decoder
-(CHAOS-3537). Shadow-time index bounding is ``qua_shadow._verify`` alone,
-re-checking each index against that mention's own slice.
+**It re-authorizes at commit time.** The shadow does bound proposals two ways
+before promotion sees them -- but read ``qua_shadow``'s module docstring for
+what each one covers, because this paragraph once asserted the pair
+uncritically while one of them was absent. CHAOS-3536 found the wire-level
+bound stripped in transit (``minimum``/``maximum`` are not in
+``_STRUCTURAL_SCHEMA_KEYS``); CHAOS-3537 restored it as an ``enum``, which
+survives the projection. So today the wire schema bounds indices to what the
+CALL authorized, and ``qua_shadow._verify`` bounds them to what the MENTION
+authorized. Those are different STAGES rather than different coverage --
+``_verify``'s rejection set subsumes the schema's, and the schema's value is
+that an unauthorized index is never generated in the first place.
 
-So promotion's ``verify_still_authorized`` is the SECOND check overall, not
-the third -- and on the singular path it is not redundancy either way, it is
-the ONLY receipt. ``committed_resolution_for``
+Promotion's ``verify_still_authorized`` is the third check, and on the
+singular path it is not redundancy -- it is the ONLY receipt.
+``committed_resolution_for``
 mints no ``subject_set_fingerprint``, and the executor's fingerprint
 cross-check (``investigation_plans/executor.py``) only covers *set* batches,
 so nothing downstream re-verifies a singular committed entity. See
@@ -153,19 +156,22 @@ def promotable_selection(
     # such a mention's index range to ``[0, -1]``, "which no integer
     # satisfies".
     #
-    # First: those bounds never reached the provider at all --
-    # ``_structural_schema`` strips ``minimum``/``maximum`` before dispatch
-    # (CHAOS-3537).
+    # First: as written, those bounds never reached the provider at all --
+    # ``_structural_schema`` strips ``minimum``/``maximum`` before dispatch.
+    # CHAOS-3537 fixed that by re-expressing the bound as an ``enum``, which
+    # survives, so a call-wide bound now genuinely reaches the decoder. That
+    # repair does NOT rescue the claim below.
     #
-    # Second, and independent of the stripping: THERE IS NO PER-MENTION
+    # Second, and the reason CHAOS-3537 changes nothing here: THERE IS NO
+    # PER-MENTION
     # INDEX RANGE IN THE SCHEMA. ``_response_schema`` is built once per call
     # from ``candidate_count=len(combined)`` -- the COMBINED, call-wide
     # shortlist -- so every mention shares one index space. A mention past
     # ``max_total_candidates`` gets an empty SLICE from
     # ``_combine_shortlists``, but ``candidate_count`` is still 50, so the
-    # schema keeps expressing 0..49 for it. The zero-candidate
-    # ``{"type": "null"}`` encoding fires only when the WHOLE call
-    # authorized nothing, which is not this case.
+    # schema's enum keeps admitting 0..49 for it. The zero-candidate encoding
+    # fires only when the WHOLE call authorized nothing, which is not this
+    # case.
     #
     # So for a truncated mention the schema offers nothing whatsoever, and
     # ``_verify`` -- which checks each index against that mention's OWN

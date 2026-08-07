@@ -414,50 +414,51 @@ def test_the_null_encoding_is_call_wide_and_not_per_mention() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_bounding_keywords_do_not_survive_the_projection() -> None:
-    """Pins the fact CHAOS-3536 corrected in ``qua_shadow``'s docstring.
+def test_the_range_keywords_still_do_not_survive_the_projection() -> None:
+    """Unchanged fact, and the reason CHAOS-3537 had to use ``enum``.
 
-    ``qua_shadow.py`` claimed "never-widen holds structurally" on the
-    strength of ``minimum``/``maximum`` on every index field. Those keywords
-    are not in ``_STRUCTURAL_SCHEMA_KEYS``, so the provider projection drops
-    them before dispatch and they have never constrained any real decoder.
+    ``minimum``/``maximum``/``minItems``/``maxItems``/``maxLength`` are still
+    absent from ``_STRUCTURAL_SCHEMA_KEYS`` and still stripped before
+    dispatch. CHAOS-3537 did not change that -- it changed which keyword the
+    bound is written in.
 
-    This is asserted rather than merely documented so that the docstring
-    cannot quietly drift back to the stronger claim: if someone adds the
-    bounding keywords to the allowlist (CHAOS-3537), this test fails and
-    points at the docs that must change with it.
+    ``maxItems`` is still emitted by the generator as intent, so this asserts
+    the round trip: written by the generator, gone on the wire. If someone
+    later widens the allowlist instead, this fails and sends them to
+    ``qua_shadow``'s docstring, which says why the enum was chosen over
+    exactly that.
     """
 
-    generated = _generated_schema(candidate_count=3)
-    generated_mention = generated["properties"]["mentions"]["items"]["properties"]
-    assert generated_mention["selected_candidate_index"]["maximum"] == 2, (
-        "the generator still expresses the bound..."
+    generated_mention = _generated_schema(candidate_count=3)["properties"]["mentions"][
+        "items"
+    ]["properties"]
+    assert generated_mention["candidate_indices"]["maxItems"] == 25, (
+        "the generator still states the intent..."
     )
 
     wire_mention = _qua_branch(_wire_schema(candidate_count=3))["properties"][
         "mentions"
     ]["items"]["properties"]
-    assert "maximum" not in wire_mention["selected_candidate_index"], (
-        "...but it does not reach the wire, so it guarantees nothing"
+    assert "maxItems" not in wire_mention["candidate_indices"], (
+        "...but it does not reach the wire, so nothing may be claimed on it"
     )
-    assert "minimum" not in wire_mention["selected_candidate_index"]
+    for keyword in ("minimum", "maximum"):
+        assert keyword not in wire_mention["selected_candidate_index"]
 
 
-def test_candidate_indices_remain_unbounded_on_the_wire() -> None:
-    """An honest residual, not an oversight.
+def test_candidate_indices_stay_unbounded_when_nothing_was_authorized() -> None:
+    """The residual CHAOS-3536 documented is still open, on purpose.
 
-    ``candidate_indices`` cannot get the ``{"type": "null"}`` treatment: the
-    contract field is a non-optional ``tuple[_StrictIndex, ...]``, so a null
-    would fail parsing as SKIPPED_INVALID_OUTPUT on every zero-candidate
-    call. ``maxItems: 0`` would express "must be empty" but is stripped by
-    the projection like every other bounding keyword.
+    CHAOS-3537 bounded every index field with an ``enum`` for the non-empty
+    case, and could have closed this one too with an EMPTY item enum --
+    measured live against OpenAI and accepted. It was dropped on review:
+    ``enum: []`` is unsatisfiable, and ``local``/``ollama``/``lmstudio`` are
+    certified platform providers whose decoders were never probed. One that
+    rejects it turns every zero-candidate call into a provider error, losing
+    the no-match evidence the shadow exists to gather.
 
-    So at zero candidates an out-of-range entry in ``candidate_indices`` is
-    still EXPRESSIBLE on the wire, and ``_verify`` -- which re-checks every
-    accepted index against its own mention's authorized slice -- is the only
-    thing that rejects it. That is a real guard, not a gap, but it is a
-    RUNTIME guard, and this test exists so nobody records the schema as
-    doing work it does not do.
+    ``_verify`` covers this case regardless -- with nothing authorized every
+    mention slice is empty, so any index at all is rejected.
     """
 
     items = _qua_branch(_wire_schema(candidate_count=0))["properties"]["mentions"][
@@ -465,6 +466,6 @@ def test_candidate_indices_remain_unbounded_on_the_wire() -> None:
     ]["properties"]["candidate_indices"]["items"]
 
     assert items == {"type": "integer"}, (
-        "if this becomes structurally bounded, the residual documented in "
-        "qua_shadow's module docstring and in _verify must be revisited"
+        "if this becomes structurally bounded, the certification evidence "
+        "for every supported decoder must land with it"
     )

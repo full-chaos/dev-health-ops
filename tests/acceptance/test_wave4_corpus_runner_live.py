@@ -139,6 +139,10 @@ from scripts.acceptance.corpus.db_verify import (
     query_transcript_assistant_schema_versions_via_exec,
     verify_world_digest_via_exec,
 )
+from scripts.acceptance.corpus.feature_flags import (
+    ensure_wave_3_1_enabled,
+    verify_wave_3_1_enabled,
+)
 from scripts.acceptance.corpus.invariants import InvariantContext, evaluate_invariant
 from scripts.acceptance.corpus.principals import (
     SEEDED_PROVISIONING_MARKER,
@@ -152,9 +156,12 @@ from scripts.acceptance.corpus.receipt import (
     write_declared_blocked_receipt,
 )
 from scripts.acceptance.corpus.resolution_path import (
+    ABSENCE_RUN_ID_NOT_OBSERVED,
     ResolutionPathError,
+    absence_is_a_broken_measurement,
     attach_mention_texts,
     derive_resolution_path,
+    resolution_path_absence_reason,
 )
 from scripts.acceptance.corpus.script_inventory import check_script_inventory
 from scripts.acceptance.corpus.sse_client import SseFrame, parse_sse_events
@@ -387,6 +394,74 @@ def principal_sessions(
     )
 
 
+@pytest.fixture(scope="session")
+def wave_3_1_enabled_orgs(
+    acceptance_api: tuple[AcceptanceApi, str],
+    principal_sessions: PrincipalSessions,
+) -> frozenset[str]:
+    """Turn the CHAOS-3292 preflight ON for every org the corpus runs in.
+
+    CHAOS-3219 Phase 2 exit, live-diagnosed: without this the corpus measured
+    the pre-3292 legacy path for all 91 armed cases (see
+    ``corpus/feature_flags.py`` for the full diagnosis and why
+    ``prepare_ask_dev_acceptance.py`` is deliberately NOT the right place).
+
+    Scoped to exactly the orgs the ACTIVE cases actually name, derived from
+    the cases rather than hardcoded. That matters beyond tidiness: the world
+    also contains a ``disabled`` org whose entitlement is off ON PURPOSE, and
+    blanket-enabling every org in ``world.json`` would quietly destroy the
+    disabled-entitlement cases' whole premise.
+
+    Enable-then-read-back per org: a 200 on the write is the server echoing
+    the request body, not proof the org resolves the flag as on.
+    """
+
+    admin_api, _admin_org_id = acceptance_api
+    org_ids: set[str] = set()
+    for org_alias, user_alias in _representative_alias_per_org():
+        # Resolve the alias pair to its real org_id through the SAME principal
+        # directory the cases authenticate with, so this can never enable the
+        # flag on a different org than the one under test. `session_for_alias`
+        # caches, so these are the same sessions the cases go on to reuse --
+        # not extra logins against AUTH_LOGIN_IP_LIMIT.
+        session = principal_sessions.session_for_alias(user_alias, org_alias=org_alias)
+        ensure_wave_3_1_enabled(admin_api, org_id=session.org_id)
+        verify_wave_3_1_enabled(admin_api, org_id=session.org_id)
+        org_ids.add(session.org_id)
+    if not org_ids:
+        raise AcceptanceFailure(
+            "no active corpus case declares an org_alias -- cannot enable the "
+            "wave 3.1 preflight, and running without it would silently "
+            "measure the pre-3292 legacy path"
+        )
+    return frozenset(org_ids)
+
+
+def _representative_alias_per_org() -> list[tuple[str, str]]:
+    """One ``(org_alias, user_alias)`` pair per distinct org the ACTIVE cases
+    name, in stable order.
+
+    Read off ``case.raw`` rather than ``CorpusCase`` on purpose, and for the
+    reason ``principals.principal_for`` documents: ``case_schema`` never
+    rejects unknown extra fields so Lane 2b can add bookkeeping without a
+    loader change, which is exactly why ``org_alias``/``user_alias`` live on
+    the raw mapping and not on the dataclass. Cases missing either are skipped
+    here rather than raising -- ``principal_for`` already fails loud on them
+    at the point of use, and duplicating that check here would just move the
+    error message somewhere less informative.
+    """
+
+    seen: dict[str, str] = {}
+    for case in _CASES:
+        raw = getattr(case, "raw", {}) or {}
+        org_alias = raw.get("org_alias")
+        user_alias = raw.get("user_alias")
+        if not isinstance(org_alias, str) or not isinstance(user_alias, str):
+            continue
+        seen.setdefault(org_alias, user_alias)
+    return sorted(seen.items())
+
+
 def _scope(org_id: str) -> dict[str, Any]:
     now = datetime.now(UTC).replace(microsecond=0)
     current_start = now - timedelta(days=28)
@@ -525,6 +600,7 @@ def test_corpus_case(
     quota_budget: QuotaBudget,
     compose_context: ComposeContext,
     _world_digest_pin: str,
+    wave_3_1_enabled_orgs: frozenset[str],
 ) -> None:
     admin_api, _admin_org_id = acceptance_api
     # CHAOS-3462 B5: resolved BEFORE the quota reservation and any HTTP
@@ -648,6 +724,21 @@ def test_corpus_case(
             resolution_path = None
             ledger_classification_error = str(exc)
 
+    # CHAOS-3219 Phase 2 exit: `resolution_path is None` meant two different
+    # things and the receipt recorded neither -- "the ledger was read and was
+    # honestly empty" versus "no run_id, so nothing was ever read". All 143
+    # receipts in exit run #3 said `resolution_path: null` and a reader could
+    # not tell which had happened. Recorded explicitly from here on.
+    resolution_path_absence = resolution_path_absence_reason(
+        run_id=run_id,
+        path=resolution_path,
+        # Codex adversarial review (MEDIUM): a ledger that was queried and
+        # could not be CLASSIFIED is not an empty ledger. Without this the
+        # error path below reported `empty-resolution-ledger` -- an honest
+        # absence -- for a measurement that actually broke.
+        classification_failed=ledger_classification_error is not None,
+    )
+
     # 2b codex round-1 addition (team-lead direction 2026-08-06): the third
     # harness concern allowed through the exec verification plane --
     # `terminal_persists_assistant_row` proves CHAOS-3423's own guarantee
@@ -724,6 +815,49 @@ def test_corpus_case(
             condition=False,
             detail=ledger_classification_error,
         )
+    # CHAOS-3219 Phase 2 exit: the run measured the CHAOS-3292 preflight path
+    # rather than the pre-3292 legacy loop. Recorded as a NAMED, always-present
+    # check on every receipt, not asserted once in a fixture -- exit runs #1-#3
+    # were all invalidated by this being off, and a run-wide precondition that
+    # leaves no per-receipt trace is exactly the kind that goes unnoticed for
+    # three runs. A reader of any single receipt can now see which path it
+    # measured.
+    recorder.check(
+        category="run-validity",
+        name="measured_wave_3_1_preflight_path",
+        condition=org_id in wave_3_1_enabled_orgs,
+        detail=(
+            f"org_id={org_id!r} wave_3_1 preflight enabled="
+            f"{org_id in wave_3_1_enabled_orgs}"
+        ),
+    )
+    # An absent resolution_path is only acceptable when the ledger was
+    # genuinely read and genuinely empty. Both broken reasons -- "no run_id,
+    # so nothing was read" and "read, non-empty, unclassifiable" -- must never
+    # sit in a receipt looking like an honest absence.
+    #
+    # The detail is derived per reason rather than hardcoded: the first
+    # version said "the ledger was never queried" for BOTH, which is false for
+    # the unclassifiable case (it was queried, and was not empty) and would
+    # have sent a reader hunting the wrong defect -- the same misdescription
+    # this check exists to prevent, one layer up.
+    if absence_is_a_broken_measurement(resolution_path_absence):
+        broken_detail = (
+            "the ledger was never queried"
+            if resolution_path_absence == ABSENCE_RUN_ID_NOT_OBSERVED
+            else "the ledger was queried and was NOT empty, but could not be "
+            "classified (see resolution_path_classifiable)"
+        )
+        recorder.check(
+            category="subject-resolution",
+            name="resolution_path_measured",
+            condition=False,
+            detail=(
+                f"resolution_path is absent for reason "
+                f"{resolution_path_absence!r} -- {broken_detail}, so this "
+                "case measured nothing trustworthy about subject resolution"
+            ),
+        )
     for entry in case.invariants:
         result = evaluate_invariant(entry, context)
         recorder.check(
@@ -733,6 +867,9 @@ def test_corpus_case(
             detail=result.detail,
         )
     recorder.set_resolution_path(resolution_path)
+    # Never let a bare `resolution_path: null` stand alone again: the receipt
+    # now always says WHY it is absent (or carries None when it is present).
+    recorder.set_extra("resolution_path_absence", resolution_path_absence)
     recorder.set_world_digest(_world_digest_pin)
     artifact = recorder.write(_RECEIPTS_DIR / f"{case.id}.json")
     assert artifact["status"] == "passed", (

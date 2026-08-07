@@ -315,7 +315,36 @@ class TestNoUnauthorizedCandidateSurfaces:
         assert not result.passed
         assert "sibling-org-repo" in result.detail
 
-    def test_no_candidates_at_all_passes(self) -> None:
+    def test_a_measured_resolution_with_zero_candidates_passes(self) -> None:
+        """The GENUINE clean case: the run really did resolve scope and
+        really did surface no candidates. This is the only shape that may
+        pass -- and it must keep passing, or the fix below would just trade
+        a false green for a false red."""
+
+        result = evaluate_invariant(
+            {
+                "check": "no_unauthorized_candidate_surfaces",
+                "args": {"authorized_entity_ids": ["repo-1"]},
+            },
+            _context(events=(_scope_resolved_event(outcome="exact", candidates=[]),)),
+        )
+        assert result.passed
+
+    def test_zero_scope_resolved_events_is_not_measured_and_must_not_pass(
+        self,
+    ) -> None:
+        """CHAOS-3219 Phase 2 exit, live-falsified: with NO ``scope.resolved``
+        event in the stream this checker scanned an empty list, found no
+        offenders, and returned PASS -- so 9 receipts in exit run #3 asserted
+        a security property ("zero cross-tenant candidate leakage") that was
+        never observed even once.
+
+        A measurement that did not happen must fail loudly, never render as
+        satisfied. The superseded test this replaces
+        (``test_no_candidates_at_all_passes``) is the one that encoded the
+        vacuous pass as intended behaviour.
+        """
+
         result = evaluate_invariant(
             {
                 "check": "no_unauthorized_candidate_surfaces",
@@ -323,7 +352,9 @@ class TestNoUnauthorizedCandidateSurfaces:
             },
             _context(events=()),
         )
-        assert result.passed
+        assert not result.passed
+        assert "no scope.resolved event" in result.detail
+        assert "not measured" in result.detail
 
     def test_pulls_authorized_set_from_profile(self) -> None:
         events = (

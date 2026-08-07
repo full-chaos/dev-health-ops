@@ -420,3 +420,81 @@ def derive_resolution_path(
             saw_alias = True
 
     return "deterministic-alias" if saw_alias else "deterministic-exact"
+
+
+#: ``resolution_path`` is absent because the run really was queried and its
+#: ``dev_run_resolutions`` ledger really was empty. HONEST: a zero-mention
+#: question (``portfolio.*``, ``investment.*``, and any question whose text
+#: carries no extractable subject span) appends nothing, and reporting a
+#: path for it would be fabrication. Not a defect in the measurement.
+ABSENCE_EMPTY_LEDGER = "empty-resolution-ledger"
+
+#: ``resolution_path`` is absent because the stream never yielded a run_id,
+#: so the ledger was NEVER QUERIED. This is a broken measurement, not an
+#: observation of absence, and callers must surface it as a failure.
+ABSENCE_RUN_ID_NOT_OBSERVED = "run-id-not-observed"
+
+#: ``resolution_path`` is absent because the ledger WAS queried and was NOT
+#: empty, but :func:`derive_resolution_path` could not classify it (a
+#: ``ResolutionPathError``: declared mention spans drifted from what the run
+#: actually resolved, or an entry shape this module does not handle).
+#:
+#: Codex adversarial review (MEDIUM, confirmed): this used to collapse into
+#: ``ABSENCE_EMPTY_LEDGER``, because the runner sets ``path=None`` on the
+#: error path while ``run_id`` is still present. "Could not be read" is not
+#: "was empty" -- it is a broken measurement, and labelling it an honest
+#: absence is the very conflation this vocabulary exists to prevent.
+ABSENCE_UNCLASSIFIABLE_LEDGER = "unclassifiable-resolution-ledger"
+
+
+def resolution_path_absence_reason(
+    *,
+    run_id: str | None,
+    path: ResolutionPath | None,
+    classification_failed: bool = False,
+) -> str | None:
+    """Why this case has no ``resolution_path`` -- or ``None`` if it has one.
+
+    CHAOS-3219 Phase 2 exit, live-falsified. :func:`derive_resolution_path`
+    returns ``None`` for situations a receipt reader must be able to tell
+    apart, and exit run #3 wrote ``resolution_path: null`` into all 143
+    receipts without recording which one applied:
+
+    * the ledger was read and was genuinely empty (honest absence),
+    * the runner never obtained a run_id, so nothing was ever read, or
+    * the ledger was read, was non-empty, and could not be classified
+      (``classification_failed``) -- the Codex MEDIUM finding.
+
+    Collapsing those is what let an entire corpus that measured nothing read
+    as a corpus that measured cleanly. This does not change
+    ``derive_resolution_path``'s own contract (its ``None`` for an empty
+    sequence remains correct and is still the right answer for a zero-mention
+    question) -- it records the CONTEXT that ``None`` alone cannot carry.
+
+    ``classification_failed`` is checked BEFORE the empty-ledger fallback:
+    only the caller knows the derivation raised, and that fact must not be
+    reconstructible from ``path is None`` alone, which is exactly how the two
+    got conflated in the first place.
+    """
+
+    if path is not None:
+        return None
+    if run_id is None:
+        return ABSENCE_RUN_ID_NOT_OBSERVED
+    if classification_failed:
+        return ABSENCE_UNCLASSIFIABLE_LEDGER
+    return ABSENCE_EMPTY_LEDGER
+
+
+def absence_is_a_broken_measurement(reason: str | None) -> bool:
+    """Whether an absence reason means "this was not honestly measured".
+
+    Deliberately a positive test against the known-broken reasons rather than
+    ``reason != ABSENCE_EMPTY_LEDGER``: a future reason then defaults to "not
+    broken" only by explicit choice, never by falling through an inequality
+    nobody revisited. (That inequality would, by luck, have handled the Codex
+    MEDIUM finding correctly -- and would equally have mislabelled the next
+    honest reason someone adds. The explicit set is still right.)
+    """
+
+    return reason in {ABSENCE_RUN_ID_NOT_OBSERVED, ABSENCE_UNCLASSIFIABLE_LEDGER}

@@ -513,6 +513,67 @@ class TestDeclaredMentionTextsMatchTheProducer:
             f"a single-shot exact_match would be unclassifiable: {missing!r}"
         )
 
+    @pytest.mark.asyncio
+    async def test_every_case_whose_question_names_mentions_declares_spans(
+        self,
+    ) -> None:
+        """CHAOS-3578: declaring ``resolution_path_in`` is the WRONG trigger.
+
+        The guard above only asks cases that DECLARE ``resolution_path_in``
+        for spans. But the runner derives and classifies a resolution path
+        for every case whose question actually resolves mentions, declared or
+        not -- so a case with extractable mentions and no declaration skips
+        the guard and then fails at runtime as unclassifiable.
+
+        That is not hypothetical. ``portfolio.multi-project.status`` declared
+        only ``no_internal_error``, sailed past the guard above, and the armed
+        run of 2026-08-07 failed it with ``unclassifiable-resolution-ledger``:
+        a mention resolved ``exact_match`` on its first entry with no
+        ``mention_text``/``committed_label`` to confirm it was a direct match.
+        It had inherited ``subject_class: "n/a"`` from its org-wide siblings
+        while being the only member of its family that names typed subjects.
+
+        So the trigger here is what the PRODUCER actually extracts, executed
+        rather than read off a hand-maintained field. A case cannot skip this
+        by mislabelling itself -- which is exactly how the last one skipped.
+        """
+
+        from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
+
+        # The canonical runner-shaped request lives on
+        # TestNoResolutionPathCaseCanProduceZeroLedgerRows; reuse it rather
+        # than re-rolling a second request shape that could drift from the
+        # one the rest of these guards derive against.
+        build_request = TestNoResolutionPathCaseCanProduceZeroLedgerRows._request
+
+        interpreter = QuestionInterpreter()
+        missing: list[str] = []
+        extracting = 0
+        for case in _active_cases():
+            interpreted = await interpreter.interpret(build_request(case.question))
+            if not list(getattr(interpreted, "mentions", None) or []):
+                continue
+            extracting += 1
+            if not case.expected_mention_texts:
+                missing.append(case.id)
+
+        # A guard that silently measured nothing would be worse than absent:
+        # if extraction broke wholesale, every case would look exempt and this
+        # test would pass having checked nobody.
+        assert extracting, (
+            "no active case extracted a single mention -- extraction is broken "
+            "or the request shape drifted; this guard would otherwise report "
+            "green having checked nothing"
+        )
+        assert not missing, (
+            f"{len(missing)} of {extracting} active case(s) whose question "
+            f"resolves mentions declare no expected_mention_texts, so a "
+            f"single-shot exact_match would be unclassifiable at runtime: "
+            f"{missing!r}. Derive them by EXECUTING the producer "
+            "(QuestionInterpreter().interpret, taking each mention's "
+            "normalized_lookup_text) -- never by hand."
+        )
+
 
 class TestSingleTurnRunnerCannotProduceAliasPaths:
     """``deterministic-alias`` is unproducible while the runner is

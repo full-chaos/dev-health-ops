@@ -1,7 +1,11 @@
 {
   "schema_version": 1,
   "name": "github work-item complete-unit foundation",
-  "build": ["go", "build", "./internal/providersync/"],
+  "build": [
+    "go",
+    "build",
+    "./internal/providersync/"
+  ],
   "$limitation": "This first unregistered layer pins the exact Python write-surface manifest. Semantic rows, alias completion, collectors, effects, derived metrics, and activation add their own mutations in subsequent stack layers; none of the five aliases is route-ready here.",
   "mutations": [
     {
@@ -11,7 +15,14 @@
       "replace": "\t\t\"estimate_coverage_metrics_daily\",",
       "rationale": "the GitHub Python work-item unit conditionally writes AI attribution beside the raw and derived work-item effects, so the complete-route manifest must include it for recovery and atomic ownership",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestWorkItemRouteDestinationsMatchTheRetrySafePythonUnitSurface$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestWorkItemRouteDestinationsMatchTheRetrySafePythonUnitSurface$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -21,7 +32,14 @@
       "replace": "\t\tif false {",
       "rationale": "a misspelled or future family flag must not silently terminalize a unit whose per-alias watermark identities Go cannot prove",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestWorkItemAliasCompletionMetadata/(unknown_enabled_alias_fails_closed|unknown_disabled_alias_also_fails_closed)$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestWorkItemAliasCompletionMetadata/(unknown_enabled_alias_fails_closed|unknown_disabled_alias_also_fails_closed)$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -31,7 +49,14 @@
       "replace": "\tif false {",
       "rationale": "a collapsed canonical claim with no enabled alias has no authoritative watermark target and cannot be reported successful",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestWorkItemAliasCompletionMetadata/all_aliases_disabled_fails_closed$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestWorkItemAliasCompletionMetadata/all_aliases_disabled_fails_closed$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -40,9 +65,24 @@
       "find": "\t\tfor _, datasetKey := range datasetKeys {",
       "replace": "\t\tfor _, datasetKey := range datasetKeys[:1] {",
       "rationale": "successful completion of the one canonical crawl must advance every enabled family alias rather than only the canonical work-items watermark",
-      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "build": [
+        "go",
+        "test",
+        "-tags=integration",
+        "-run",
+        "^$",
+        "./internal/providersync/"
+      ],
       "proof": [
-        ["go", "test", "-count=1", "-tags=integration", "-run", "^TestPostgresLeaseClaimRenewRecoveryAndTerminalFence$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-tags=integration",
+          "-run",
+          "^TestPostgresLeaseClaimRenewRecoveryAndTerminalFence$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -52,17 +92,31 @@
       "replace": "\taudited[workItemFamilyAuditResultKey] = []string{}",
       "rationale": "the canonical unit result must retain the enabled alias identities for operational audit and compute checkpoint provenance",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestWorkItemAliasCompletionMetadata/(all_enabled_aliases_use_canonical_order|enabled_subset_excludes_false_aliases)$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestWorkItemAliasCompletionMetadata/(all_enabled_aliases_use_canonical_order|enabled_subset_excludes_false_aliases)$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
       "id": "F6-milestone-identities-preserve-large-integers",
       "file": "internal/providersync/github_work_items_rows.go",
-      "find": "\tdecoder.UseNumber()",
-      "replace": "",
-      "rationale": "GitHub database identifiers above 2^53 must never pass through float64 before becoming the stable sprint identity",
+      "find": "\tvar milestone githubMilestonePayload\n\tdecoder := json.NewDecoder(bytes.NewReader(raw))\n\tdecoder.UseNumber()",
+      "replace": "\tvar milestone githubMilestonePayload\n\tdecoder := json.NewDecoder(bytes.NewReader(raw))",
+      "rationale": "GitHub database identifiers above 2^53 must never pass through float64 before becoming the stable sprint identity. Anchor narrowed to the MILESTONE decoder: a second UseNumber() now exists on the comment path, and the bare anchor matched both -- mutating an unrelated site this entry never claimed to cover.",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestNormalizeGitHubSprintMatchesProductionBoundary$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNormalizeGitHubSprintMatchesProductionBoundary$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -72,17 +126,31 @@
       "replace": "\t\tWorkItemID: \"gh:\" + repoFullName + \"#\" + strconv.Itoa(0),",
       "rationale": "the normalized GitHub issue identity must retain its provider number so updates and derived metrics converge on the Python row",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestNormalizeGitHubIssueWorkItemMatchesProductionBoundary$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNormalizeGitHubIssueWorkItemMatchesProductionBoundary$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
       "id": "F8-priority-label-enrichment-is-in-band",
       "file": "internal/providersync/github_work_items_rows.go",
-      "find": "\tpriority, serviceClass := githubPriorityFromLabels(labels)",
-      "replace": "\tpriority, serviceClass := (*string)(nil), (*string)(nil)",
-      "rationale": "Python enriches every GitHub issue WorkItem with priority and service class before adding it to the provider batch",
+      "find": "\tpriority, serviceClass := githubPriorityFromLabels(labels)\n\trow := githubWorkItemRow{",
+      "replace": "\tpriority, serviceClass := (*string)(nil), (*string)(nil)\n\trow := githubWorkItemRow{",
+      "rationale": "Python enriches every GitHub issue WorkItem with priority and service class before adding it to the provider batch. Anchor narrowed to the ISSUE path (its rationale and proof name issues): the pull-request normalizer grew an identical call, and the bare anchor matched both.",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestNormalizeGitHubIssueWorkItemMatchesProductionBoundary$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestNormalizeGitHubIssueWorkItemMatchesProductionBoundary$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -92,7 +160,14 @@
       "replace": "",
       "rationale": "the Go composite must structurally account for every semantic list the real Python GitHub provider can emit, including conditional AI attribution",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^TestGitHubWorkItemCompositeDeclaresEveryPythonBatchFamily$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemCompositeDeclaresEveryPythonBatchFamily$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -102,7 +177,14 @@
       "replace": "\tparsed = parsed.UTC().Truncate(time.Millisecond)\n\treturn &parsed",
       "rationale": "Python retains full provider timestamp precision in the semantic WorkItem and Sprint dataclasses; only the later ClickHouse projection may coerce to DateTime64(3)",
       "proof": [
-        ["go", "test", "-count=1", "-run", "^(TestNormalizeGitHubIssueWorkItemMatchesProductionBoundary|TestNormalizeGitHubSprintMatchesProductionBoundary)$", "./internal/providersync/"]
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^(TestNormalizeGitHubIssueWorkItemMatchesProductionBoundary|TestNormalizeGitHubSprintMatchesProductionBoundary)$",
+          "./internal/providersync/"
+        ]
       ]
     },
     {
@@ -111,9 +193,20 @@
       "find": "            reopen_events = [\n                replace(event, org_id=org_id) if hasattr(event, \"org_id\") else event\n                for event in reopen_events\n            ]",
       "replace": "            reopen_events = list(reopen_events)",
       "rationale": "reopen rows are written to an org-partitioned ClickHouse table and must not retain the dataclass default empty tenant key",
-      "build": [".venv/bin/python", "-m", "py_compile", "src/dev_health_ops/metrics/job_work_items.py"],
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/metrics/job_work_items.py"
+      ],
       "proof": [
-        [".venv/bin/pytest", "-q", "tests/providers/test_github_ai_attribution_integration.py", "-k", "writes_ai_attribution_with_org_id"]
+        [
+          ".venv/bin/pytest",
+          "-q",
+          "tests/providers/test_github_ai_attribution_integration.py",
+          "-k",
+          "writes_ai_attribution_with_org_id"
+        ]
       ]
     },
     {
@@ -122,9 +215,20 @@
       "find": "            interactions = [\n                replace(event, org_id=org_id) if hasattr(event, \"org_id\") else event\n                for event in interactions\n            ]",
       "replace": "            interactions = list(interactions)",
       "rationale": "comment interaction rows are tenant-partitioned and must be visible only under the owning organization",
-      "build": [".venv/bin/python", "-m", "py_compile", "src/dev_health_ops/metrics/job_work_items.py"],
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/metrics/job_work_items.py"
+      ],
       "proof": [
-        [".venv/bin/pytest", "-q", "tests/providers/test_github_ai_attribution_integration.py", "-k", "writes_ai_attribution_with_org_id"]
+        [
+          ".venv/bin/pytest",
+          "-q",
+          "tests/providers/test_github_ai_attribution_integration.py",
+          "-k",
+          "writes_ai_attribution_with_org_id"
+        ]
       ]
     },
     {
@@ -133,9 +237,20 @@
       "find": "            sprints = [\n                replace(sprint, org_id=org_id) if hasattr(sprint, \"org_id\") else sprint\n                for sprint in sprints\n            ]",
       "replace": "            sprints = list(sprints)",
       "rationale": "milestone-derived sprint rows use org_id in their deduplication key and must be stamped before the sink write",
-      "build": [".venv/bin/python", "-m", "py_compile", "src/dev_health_ops/metrics/job_work_items.py"],
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/metrics/job_work_items.py"
+      ],
       "proof": [
-        [".venv/bin/pytest", "-q", "tests/providers/test_github_ai_attribution_integration.py", "-k", "writes_ai_attribution_with_org_id"]
+        [
+          ".venv/bin/pytest",
+          "-q",
+          "tests/providers/test_github_ai_attribution_integration.py",
+          "-k",
+          "writes_ai_attribution_with_org_id"
+        ]
       ]
     }
   ]

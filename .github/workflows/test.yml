@@ -50,6 +50,15 @@ jobs:
               - 'ci/**'
               - 'migrations/**'
               - 'requirements.txt'
+              # Both test jobs `pip install -r requirements-docs.txt` before
+              # running anything, so it is part of the test environment. It
+              # was missing here until CHAOS-3482 Codex round 2: a PR touching
+              # only this file got code=false, skipped both test jobs, and the
+              # aggregator -- correctly, by its own rule -- called that a
+              # legitimate docs-only skip and reported the required check
+              # green. test_paths_filter_covers_every_file_the_test_jobs_install
+              # derives this list from the jobs' own install commands.
+              - 'requirements-docs.txt'
               - 'pyproject.toml'
               - 'pytest.ini'
               - 'alembic.ini'

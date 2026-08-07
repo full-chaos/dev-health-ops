@@ -28,6 +28,7 @@ drift apart while every row here keeps passing.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -309,6 +310,62 @@ def _steps(name: str) -> list[object]:
 def _normalize(expression: object) -> str:
     assert isinstance(expression, str)
     return " ".join(expression.split())
+
+
+def _code_filter_patterns() -> list[str]:
+    filter_step = next(
+        step
+        for step in _steps("changes")
+        if isinstance(step, dict) and step.get("id") == "filter"
+    )
+    with_block = filter_step["with"]
+    assert isinstance(with_block, dict)
+    filters = yaml.safe_load(with_block["filters"])
+    assert isinstance(filters, dict)
+    patterns = filters["code"]
+    assert isinstance(patterns, list)
+    return [str(pattern) for pattern in patterns]
+
+
+def _is_covered(path: str, patterns: list[str]) -> bool:
+    for pattern in patterns:
+        if pattern == path:
+            return True
+        if pattern.endswith("/**") and path.startswith(pattern[: -len("**")]):
+            return True
+    return False
+
+
+def test_paths_filter_covers_every_file_the_test_jobs_install() -> None:
+    # Given the aggregator now formally blesses `code == 'false'` skips, the
+    # filter's file list is what decides whether a change is untested. A file
+    # the test jobs consume but the filter omits is a green required check with
+    # zero tests run -- which is what `requirements-docs.txt` was until
+    # CHAOS-3482 Codex round 2.
+    patterns = _code_filter_patterns()
+    installed: set[str] = set()
+    for job_name in ("test-matrix", "coverage"):
+        for step in _steps(job_name):
+            if not isinstance(step, dict):
+                continue
+            run = step.get("run")
+            if not isinstance(run, str):
+                continue
+            for match in re.finditer(r"pip install -r\s+(\S+)", run):
+                installed.add(match.group(1))
+
+    # Then the set is derived from the jobs themselves (not hand-listed here,
+    # which would go stale the moment a job installs something new) ...
+    assert installed, "no `pip install -r` found -- this guard measured nothing"
+
+    # ... and every one of those files is gated by the filter.
+    uncovered = sorted(path for path in installed if not _is_covered(path, patterns))
+    assert not uncovered, (
+        f"the test jobs install {uncovered}, but the `code` path filter does "
+        f"not select on them: a PR touching only those files skips every test "
+        f"job and the required gate goes green with nothing run. Filter "
+        f"patterns: {patterns}"
+    )
 
 
 def test_aggregator_consumes_the_changes_job() -> None:

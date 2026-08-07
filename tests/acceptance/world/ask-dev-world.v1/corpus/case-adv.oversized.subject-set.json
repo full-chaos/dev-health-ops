@@ -21,11 +21,48 @@
       "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
   "notes": "Targets question_interpreter.py's real oversized-rejection guard (module docstring / count_mention_candidates / MAX_MENTIONS=25, read directly): subject_preflight.py's SubjectPreflight.run checks `interpretation.total_named_mention_count > MAX_MENTIONS` BEFORE any catalog round trip and, if so, terminates with outcome=PublicOutcome.UNSUPPORTED, diagnostic='oversized_mention_set_in_v1', ledger=None (subject_preflight.py lines ~394-410, read directly) -- 'Bounds are rejections, never truncations (CHAOS-3301)'. Because the run never reaches RESOLVING_SUBJECTS (no resolve_mention call is ever made, ledger stays None), no dev_run_resolutions entries are ever written -- resolution_path is null, and expected_scope_resolution_outcome is null too (no entity ever gets a chance to commit), mirroring scope.unsupported-request/prohibited-write's own null/null pattern for a pre-resolution short-circuit, just reached via a different guard. 26 distinct quoted/noun-adjacent repo mentions (one past MAX_MENTIONS=25) in a compact enumeration -- pressure from the COUNT of named subjects in one message, not from prose length/repetition (that shape is adv.oversized.question's own job). Both ids exercise the identical production guard (subject_preflight.oversized_mention_set_in_v1) via two different question shapes, matching the task's framing that both are 'oversized pressure' variants of the same underlying bound.",
   "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B4). The oversized rejection fires in subject_preflight against interpretation.total_named_mention_count > MAX_MENTIONS -- AFTER mention extraction but BEFORE any catalog round trip or ledger construction (_terminate is called with ledger=None and no terminating_resolution_entry), so orchestrator's append_resolution sites never run. The 25 extracted mentions are therefore not evidence of a written ledger. derive_resolution_path returns None; resolution_path_in could never pass. Profile null is CORRECT and stays.",
-  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 16 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 16 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible.",
+  "expected_mention_texts": [
+    "meridian/probe-01",
+    "meridian/probe-02",
+    "meridian/probe-03",
+    "meridian/probe-04",
+    "meridian/probe-05",
+    "meridian/probe-06",
+    "meridian/probe-07",
+    "meridian/probe-08",
+    "meridian/probe-09",
+    "meridian/probe-10",
+    "meridian/probe-11",
+    "meridian/probe-12",
+    "meridian/probe-13",
+    "meridian/probe-14",
+    "meridian/probe-15",
+    "meridian/probe-16",
+    "meridian/probe-17",
+    "meridian/probe-18",
+    "meridian/probe-19",
+    "meridian/probe-20",
+    "meridian/probe-21",
+    "meridian/probe-22",
+    "meridian/probe-23",
+    "meridian/probe-24",
+    "meridian/probe-25"
+  ]
 }

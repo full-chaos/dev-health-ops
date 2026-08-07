@@ -64,6 +64,16 @@
       "assert": "Every candidate offered in a clarification list, or silently chosen, is drawn from the requester's own authorized catalog -- a cross-tenant repository that exists in the database but outside primary's authorization scope must never appear, ranked or unranked, silently folded into a committed subject set.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker no_unauthorized_candidate_surfaces with a literal authorized_entity_ids allowlist -- org primary's full real fixture repository/project/team catalog, derived directly from src/dev_health_ops/fixtures/generator.py's FIXTURE_NAMESPACE uuid5 repo-id derivation, fixtures/generators/projects.py (project id = repo_full_name), and fixtures/demo_identity.py + world.py's postprocess (team id = literal slug); cross-checked against subjects.json + sources.json's org_alias=primary roster (rebase pass, 2a landed the 3 graduated checkers in PR #1518). Deliberately excludes subject.tenant.sibling-only-private-repo's sibling-org derived ids -- the whole point of this invariant is that they must never appear here. KNOWN TRUST BOUNDARY (invariants.py's own docstring): this declared list's correctness is case-authoring's responsibility, not independently re-verified by the checker at runtime."
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",

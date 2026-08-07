@@ -405,6 +405,45 @@ measure something trustworthy instead of reporting a broken measurement.
 
 **CORRECTED 2026-08-07, before merge, and recorded rather than rewritten away: this section first said FIVE.** `scope.outcome.organization-fallback` was wrongly among them. It is class (b) — reachable, just not from its old question — and is re-authored in sec.10.6 instead. The trace-first rule caught it; a confident-but-wrong (a) would have deleted real coverage.
 
+> **CORRECTED AGAIN, 2026-08-07 (CHAOS-3219 Phase 3), and this one is a
+> correction to a mechanism, not a count. `FILTERED` IS REACHABLE. The
+> bullet below is wrong** where it says `team_filter_refs` comes only from
+> "a model-authored `DevScope.team_ids`". Executing
+> `production_runtime._scope_request` shows a **client-supplied** `DevScope`
+> with `direct_scope != team` and non-empty `team_ids` yields non-empty
+> `team_filter_refs` (`production_runtime.py:1141-1145`) — and that shape is
+> the canonical `dev_scope.v1` positive fixture itself, so no model
+> authoring is involved. `scope.outcome.filtered` is therefore **class (b),
+> reachable but not from this case's input shape**, not class (a). It stays
+> declared-blocked, but on an honest blocker: the runner hardcodes
+> `"team_ids": []` for every case (`test_wave4_corpus_runner_live.py:479`)
+> and the case schema has no scope field — filed as **CHAOS-3543**.
+>
+> Two lessons, both already written down and both re-learned here: the
+> original bullet read one producer (`scope_service.py`) and stopped, which
+> is the "grepped a directory, concluded absence" failure; and a class-(a)
+> ruling deletes a coverage claim, so the bar for it must be higher than for
+> (b). Sec.10.3's own opening paragraph warns about exactly this and the
+> warning still was not enough — the count was re-checked, the mechanisms
+> were not.
+>
+> **Undetermined, stated rather than assumed:** whether the whole-run scalar
+> still reports `FILTERED` after `subject_preflight` commits an exact repo
+> match. `scope_service.py:998-1008` rebuilds the committed scope with
+> `team_ids=[entity.canonical_id] if is_team else []`, i.e. it **drops** the
+> caller's team filter. That needs a live run to settle.
+>
+> `INHERITED` (next bullet) was re-verified at `a07d9ff35` and **is** still
+> genuinely unreachable — all 7 `ScopeResolveRequest(` construction sites in
+> `src/` pass neither context-ref field. Filed as **CHAOS-3542** (wire it or
+> retire the vocabulary). The two outcomes must not be re-conflated: one was
+> wrong, one was right.
+>
+> Also: all four cases in this section cited `blocked_by: CHAOS-3520`, which
+> is now **closed** — and closed with no product change. A case blocked on a
+> closed ticket is a false claim under the house rule, so all four were
+> repointed (3543, 3542, CHAOS-3429, CHAOS-3454 respectively).
+
 `scope.outcome.filtered`, `scope.outcome.inherited`, `scope.partially-resolved-subject`, `scope.stale-context-subject` all observed `exact`. `exact` is not a
 near-miss — it means the scenario each case is named for never occurred.
 Rewriting the expectation to `exact` would be the "rewrite an honest
@@ -462,6 +501,42 @@ CHAOS-3520, not five cases that pass while proving nothing.
   by construction. Unblocking is a Lane 2a runner seam, not more case
   authoring.
 
+> **CORRECTED 2026-08-07 (CHAOS-3219 Phase 3). The "by construction" claim
+> in the bullet immediately above is FALSE on today's runner.** It is not
+> true that an active case in the disabled-entitlement org must fail the
+> run-validity assertion. `wave_3_1_enabled_orgs`
+> (`test_wave4_corpus_runner_live.py:397-436`) derives its org set from
+> `_representative_alias_per_org()` (`:440-460`), which iterates `_CASES` —
+> **active cases only** (`:204`). Making `ops.kill-switch.global` active
+> would therefore *add* `('disabled', 'disabled.ordinary')` to that set,
+> `ensure_wave_3_1_enabled` would be called for it, and the assertion would
+> **pass**. The disabled org is not "by construction" outside that set; it
+> is outside it only while the case stays blocked, which makes the argument
+> circular.
+>
+> The conclusion (stay blocked) survives; the reasoning did not. The real
+> blocker is earlier and cruder: `_require_ask_dev` (`router.py:376-398`)
+> 403s **at `POST /conversations`** (`:1036-1045`), `AcceptanceApi.request`
+> converts any `HTTPError` into a failure
+> (`prepare_ask_dev_acceptance.py:70-74`), and the runner re-raises
+> (`:636-641`). The case aborts with **no receipt and zero assertions** —
+> it never reaches the `measured_wave_3_1_preflight_path` check at all.
+> What is needed is an `expected_http_refusal` case shape, filed as
+> **CHAOS-3549**.
+>
+> **A second, real hazard this correction surfaced:** if that org set were
+> widened, `ensure_wave_3_1_enabled` **writes** `org_feature_overrides`
+> (`feature_flags.py:186-215`), a table `WORLD_DIGEST` hashes
+> (`fixtures/world.py:1111-1123`). So activating the case naively would
+> drift the live world off its pinned digest and fail the *next* armed run's
+> verification. Any fix must exclude disabled-entitlement orgs from that
+> set rather than enable them.
+>
+> Both cases cited `blocked_by: CHAOS-3458`, now **closed** as superseded by
+> the single-flag ruling. Repointed: `.global` → CHAOS-3549, `.org` →
+> CHAOS-3454 (mid-run entitlement mutation, appended to that ticket's scope
+> rather than forked).
+
 ### 10.5 Registry totals after this pass
 
 | | files | active | declared-blocked |
@@ -517,3 +592,59 @@ what its profile already expected), and the widening now says itself out loud
 in `warnings`. Per the team-lead's framing: a case that starts passing after
 this rebase passes on NEW EVIDENCE, not on loosening — and anything still
 failing afterwards is a genuine finding.
+
+## 11. Nine non-question-shaped ids routed OUT of the corpus (2026-08-07, CHAOS-3219 Phase 3)
+
+Team-lead ruling, applying chris's corpus boundary rule: **the corpus is user
+questions over INGESTED data** (the customer's CI, deploys, incidents,
+migrations). A claim that is not question-shaped does not become one by being
+written as a case file, and force-fitting it produces a file that reads as
+coverage while asserting nothing.
+
+CHAOS-3460 was **Canceled** with a note routing *"a non-question-shaped case
+type for persistence/ops claims"* into the Phase 3 design brief. That note is
+honoured by **routing the claims to the subsystems that own them**, not by
+inventing a second case schema inside the corpus.
+
+Retired here (case files deleted; ids stay in the frozen
+`registry-ids.v1.json` `groups` block, exactly as the sec.10.4 kill-switch
+retirement established — the freeze governs ids, and no guard requires a
+registry id to have a case file):
+
+| id | why it is not question-shaped | owning module, for the subsystem test |
+|---|---|---|
+| `deg.false-green-aggregate` | a CI-aggregator property | `ci/aggregate_gate_results.sh` — **already covered** by `tests/tooling/test_aggregate_gate_results.py` |
+| `pers.usage-cost-idempotent` | billing-layer idempotency | `models/llm_budget.py:58-64` unique constraint, enforced `llm/budget.py:485` — **already covered** |
+| `ops.quota-cost-reconcile` | billing-layer reconciliation | three independently-computed cost tracks with **no cross-check** — `llm/budget.py`, `orchestrator.py:793`, `admin/routers/ask_dev.py:344`. Filed **CHAOS-3545** |
+| `ops.content-security-scan` | a scan job over deployed telemetry | no runtime scanner exists; `tracing.py` / `metrics/prometheus.py` have zero redaction. Manifest already declares it deferred (`wave31_manifest.py:1685`) |
+| `ops.alert-test-recover` | alert delivery/recovery | `alerts/rules.yml` is static rules only; no Alertmanager config anywhere, and **no worker-side metrics scrape** (`workers/ask_dev_retention.py:39-46` admits this itself) |
+| `ops.rollback-preserves-state` | deployment-level rollback | `.gitlab-ci.yml` has **no deploy stage at all**; `internal/jobroute/control.go:180` is route-level, not deployment |
+| `pers.migration-rollback-preserves-state` | migration data survival | Postgres `migrate.py:283` `_run_downgrade`; **ClickHouse has no downgrade subcommand at all** across 82 migration files, and the one PG round-trip test asserts the table is GONE after downgrade (`test_byo_llm_budget_migration.py:68-72`) — schema shape, not data survival |
+| `pers.purge-after-disable` | a job, not a turn | `cleanup_expired` has exactly two callers, the Celery task and the CLI; **no `/api/v1/dev/**` route invokes it** |
+| `ops.cleanup-purge-recover` | a job, not a turn | its `question` field is literally `"n/a"`, which answers the classification by itself |
+
+**Two of the nine are already proven elsewhere** (`deg.false-green-aggregate`,
+`pers.usage-cost-idempotent`) — they were never uncovered, only covered in the
+wrong place. That is worth stating plainly, because "routed out" and
+"unproven" are different words and only one of them is true here.
+
+**Residual risk, stated rather than assumed away:** the other seven now have
+**no automated coverage anywhere** until their subsystem tests are written.
+That is a real, named gap — and it is a smaller lie than nine files that
+report green while proving nothing. Two findings surfaced while mapping the
+owners deserve their own attention regardless of the corpus: the **absent
+ClickHouse downgrade path**, and the **three unreconciled cost tracks**.
+
+### Totals after this pass
+
+| | files | active | declared-blocked |
+|---|---|---|---|
+| Before (sec.10.5) | 139 | 87 | 52 |
+| Non-question-shaped retirement | −9 | 0 | −9 |
+| **After** | **130** | **87** | **43** |
+
+Armed-run pytest item count is therefore **131** (87 + 43 + the
+`test_at_least_one_corpus_case_is_collected` collection guard).
+
+No active case was touched, so the measured behaviour of the corpus is
+unchanged by this pass — only claims that were never measurable are gone.

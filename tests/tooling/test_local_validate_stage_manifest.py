@@ -38,6 +38,7 @@ hook.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -45,6 +46,54 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ci" / "local_validate.sh"
 _BASE_PATH = "/usr/bin:/bin"
 _TIMEOUT = 30
+
+# Every external command local_validate.sh's startup + ch_probe_docker() path
+# can reach, EXCLUDING docker itself. Used only by the "docker absent" test
+# below -- see its docstring for why `_BASE_PATH` alone is not safe for that
+# one case.
+_NON_DOCKER_TOOLS = (
+    "bash",
+    "dirname",
+    "mktemp",
+    "sed",
+    "tr",
+    "grep",
+    "cat",
+    "rm",
+    "sha256sum",
+    "shasum",
+    "openssl",
+    "cksum",
+    "awk",
+)
+
+
+def _path_guaranteed_docker_free(bin_dir: Path) -> str:
+    """A PATH that resolves every tool `local_validate.sh` needs up to and
+    including `ch_probe_docker()`'s "docker missing" branch -- EXCEPT
+    `docker` itself, which is guaranteed absent regardless of the host.
+
+    `_BASE_PATH` ("/usr/bin:/bin") is NOT reliably docker-free: GitHub's
+    `ubuntu-latest` Actions runners ship docker preinstalled at
+    `/usr/bin/docker`, so a test that reused `_BASE_PATH` here (as an earlier
+    version of this file did) found a REAL docker on that PATH and got
+    rc=3 ("container confirmed NOT running") instead of the intended rc=1
+    ("docker CLI not found") -- exactly what happened the first time this
+    test ran in CI. This builds the allowed toolset by resolving each name in
+    `_NON_DOCKER_TOOLS` via the REAL, live `PATH` (whatever it is on this
+    host) and symlinking only those into an isolated directory, so the
+    result is portable across hosts that do and do not ship docker in a
+    standard location, without guessing at a fixed exclusion list.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for tool in _NON_DOCKER_TOOLS:
+        found = shutil.which(tool)
+        if found:
+            (bin_dir / tool).symlink_to(found)
+    assert shutil.which("docker", path=str(bin_dir)) is None, (
+        "docker leaked into the supposedly docker-free PATH"
+    )
+    return str(bin_dir)
 
 
 def _write_fake_docker(
@@ -128,10 +177,22 @@ def test_docker_ps_failure_is_reported_as_a_failed_probe_not_a_confirmed_absence
 
 def test_docker_absent_from_path_is_a_distinct_hard_failure(tmp_path):
     """No ``docker`` binary at all is its own, differently-worded case --
-    never confused with a probe that ran and failed."""
-    result = _run_ch_probe_only(
-        tmp_path, extra_env={}
-    )  # empty tmp_path: no docker stub written
+    never confused with a probe that ran and failed.
+
+    Uses `_path_guaranteed_docker_free`, NOT the `_BASE_PATH`-based
+    `_run_ch_probe_only` helper every other test in this file uses: this is
+    the one case that specifically needs docker to be verifiably absent, and
+    `_BASE_PATH` alone does not guarantee that on every host (see that
+    helper's docstring).
+    """
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--ch-probe-only"],
+        cwd=ROOT,
+        env={"PATH": _path_guaranteed_docker_free(tmp_path / "no-docker-bin")},
+        capture_output=True,
+        text=True,
+        timeout=_TIMEOUT,
+    )
     combined = result.stdout + result.stderr
 
     assert result.returncode == 1, combined

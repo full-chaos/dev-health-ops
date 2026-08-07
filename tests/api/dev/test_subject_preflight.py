@@ -21,7 +21,7 @@ from dev_health_ops.api.dev.contracts_v2.subject import (
     UNRESOLVED_OUTCOMES,
     DevResolutionCandidate,
 )
-from dev_health_ops.api.dev.orchestrator_states import TERMINAL_STATES
+from dev_health_ops.api.dev.orchestrator_states import TERMINAL_STATES, RunState
 from dev_health_ops.api.dev.preflight_outcomes import (
     PLAN_ID_BY_INTENT,
     PREFLIGHT_OUTCOME_BY_RESOLUTION,
@@ -31,6 +31,8 @@ from dev_health_ops.api.dev.preflight_outcomes import (
 )
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
 from dev_health_ops.api.dev.scope_service import (
+    AuthorizedEntity,
+    EntityKind,
     ScopeRequestCache,
     ScopeResolutionService,
 )
@@ -47,6 +49,7 @@ from tests._chaos_3292_preflight import (
     SeededCatalog,
     fixed_now,
     request_for,
+    run_preflight_orchestrator,
     sequential_ids,
     versions,
 )
@@ -137,6 +140,293 @@ async def test_an_unresolved_bare_name_withholds_resolve_scope() -> None:
     # exactly the one tool that could re-derive and leak the same failed
     # resolution, never the whole subject-bearing surface.
     assert SUBJECT_BEARING_TOOLS <= result.allowed_tools
+
+
+@pytest.mark.asyncio
+async def test_an_unresolved_bare_name_without_organization_noun_still_widens() -> None:
+    """Regression guard for CHAOS-3574's new termination path below: an
+    ordinary ambiguous bare word with no "organization"/"org" noun nearby
+    must still widen exactly as before -- this is the shape the corpus case
+    ``scope.outcome.organization-fallback`` pins as ``answered_with_gaps``/
+    ``organization_fallback``, and the fix must not touch it.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of Zephyr?"),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "proceeded_unresolved_bare_name"
+    assert result.legacy_guard_required is True
+
+
+@pytest.mark.asyncio
+async def test_a_cross_tenant_organization_reference_terminates_not_found() -> None:
+    """CHAOS-3574: ``adv.cross-tenant.organization-id``'s exact question.
+
+    "Orbit" is the sibling tenant's real display name -- a well-formed,
+    unambiguous organization-shaped mention the primary org's own catalog
+    can never contain (an organization is never a searchable catalog entity
+    at all). Before this fix the mention stayed untyped (no ``organization``
+    kind noun exists in the closed ``_KIND_NOUNS`` table) and hit the
+    generic ``unresolved_untyped`` branch, which widened to organization
+    scope and went on to ANSWER — observed twice on the Phase 3 armed corpus
+    run as ``answered_with_gaps`` where the corpus case allows only
+    ``not_found``.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of the Orbit organization?"),
+    )
+
+    assert result.decision is PreflightDecision.TERMINATE
+    assert result.outcome is PublicOutcome.NOT_FOUND
+    assert result.diagnostic == "unresolved_no_authorized_match"
+    # Never the widen-and-disclose path: no answer text is ever computed for
+    # this run at all, so there is nothing that could narrate "Orbit".
+    assert result.legacy_guard_required is False
+    assert result.committed_resolution is None
+    assert result.allowed_tools == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_and_nonexistent_organizations_are_indistinguishable() -> (
+    None
+):
+    """CHAOS-3574: the security property ``no_unauthorized_candidate_surfaces``
+    already protects (and both armed runs PASSED) is that a genuine sibling
+    org and a name that names nothing at all must read identically to the
+    requester. "Orbit" is the sibling tenant's real name; "Zzyzx" is authored
+    to not exist anywhere in this fixture world. Both must terminate on the
+    exact same public outcome and the exact same user-visible frame shape —
+    never distinguishable by content, only by the fact that neither is ever
+    found.
+    """
+
+    sibling = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of the Orbit organization?"),
+    )
+    nonexistent = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of the Zzyzx organization?"),
+    )
+
+    for result in (sibling, nonexistent):
+        assert result.decision is PreflightDecision.TERMINATE
+        assert result.outcome is PublicOutcome.NOT_FOUND
+        assert result.answer is not None
+
+    assert sibling.answer.public_outcome == nonexistent.answer.public_outcome
+    assert (
+        sibling.answer.outcome_display_label == nonexistent.answer.outcome_display_label
+    )
+    assert (
+        sibling.answer.frame.public_outcome == nonexistent.answer.frame.public_outcome
+    )
+    assert sibling.answer.frame.direct_answer == nonexistent.answer.frame.direct_answer
+    assert sibling.answer.frame.coverage == nonexistent.answer.frame.coverage
+    assert sibling.answer.frame.versions == nonexistent.answer.frame.versions
+
+
+#: CHAOS-3574 review round 2 fixtures: the reviewer's own live-repro
+#: repositories, both real and both individually resolvable -- same ids
+#: CHAOS-3551's own corpus case uses, for a fully-resolved, homogeneous,
+#: v1-renderable repository cohort.
+_REVIEW2_WEB_APP = AuthorizedEntity(
+    EntityKind.REPOSITORY, "meridian/web-app", "meridian/web-app"
+)
+_REVIEW2_API_GATEWAY = AuthorizedEntity(
+    EntityKind.REPOSITORY, "meridian/api-gateway", "meridian/api-gateway"
+)
+_REVIEW2_COHORT_BYSTANDER_QUESTION = (
+    'What\'s the status of repo "meridian/web-app" and repo '
+    '"meridian/api-gateway" compared to the Orbit organization?'
+)
+
+
+@pytest.mark.asyncio
+async def test_a_bystander_organization_mention_does_not_discard_a_resolved_cohort() -> (
+    None
+):
+    """CHAOS-3574 review round 2 (CONFIRMED, blocking): before this fix, the
+    org-probe (and, underneath it, the pre-existing plain widen-to-org
+    fallback) ran BEFORE the CHAOS-3551 cohort-commit/render logic and
+    unconditionally decided the run's outcome the moment ANY unresolved
+    untyped mention existed -- discarding a fully-resolved, two-repository
+    cohort because an UNRELATED mention ("the Orbit organization") also
+    happened to be in the question and could not resolve. Reproduced live by
+    the reviewer with the CHAOS-3551 fixtures; both repositories are real and
+    individually resolvable here too.
+
+    The org-probe (and the general widen fallback) must only decide the
+    outcome when it is LOAD-BEARING -- nothing else in the question resolved.
+    A bystander must never preempt an already-resolved cohort: the cohort
+    still commits and renders, and the unresolved bystander is disclosed via
+    a warning instead of silently vanishing or terminating the run.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, _REVIEW2_WEB_APP), (ORG_ID, _REVIEW2_API_GATEWAY)]),
+        request_for(_REVIEW2_COHORT_BYSTANDER_QUESTION),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "committed_cohort_v1_render"
+    assert result.outcome is None
+    assert result.committed_resolution is not None
+    assert result.allowed_tools == frozenset(ToolID) - {ToolID.RESOLVE_SCOPE}
+    assert SUBJECT_BEARING_TOOLS <= result.allowed_tools
+    # `all_subjects_committed` must read True for the two repositories that
+    # DID resolve -- the bystander must never gate subject-bearing tools shut
+    # for a run that has a real, committed subject.
+    assert result.all_subjects_committed is True
+    assert result.subject_set is not None
+    committed_ids = {ref.entity_id for ref in result.subject_set.committed_entity_refs}
+    assert committed_ids == {"meridian/web-app", "meridian/api-gateway"}
+    # The cohort itself is complete (both its own members resolved) --
+    # the bystander is not one of ITS members, so it must not make an
+    # otherwise-complete repository cohort read as partial.
+    assert result.subject_set.cohort_complete is True
+    assert result.subject_set.unresolved_mention_ids == ()
+    # Disclosed, not vanished.
+    assert any(w for w in result.subject_set.warnings), (
+        "the unresolved bystander mention must be disclosed via a warning, "
+        "not silently dropped"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_bystander_organization_mention_does_not_discard_a_cohort_end_to_end() -> (
+    None
+):
+    """CHAOS-3574 review round 2, driven through the REAL
+    ``DevOrchestrator.run()`` (not just ``SubjectPreflight`` in isolation),
+    mirroring CHAOS-3551's own end-to-end proof: "PROCEED" alone does not
+    show the model round loop actually executes a subject-bearing tool
+    against the committed cohort and returns a real answer.
+
+    Before this fix: TERMINATE not_found, no model round, no answer.
+    """
+
+    output = await run_preflight_orchestrator(
+        question=_REVIEW2_COHORT_BYSTANDER_QUESTION,
+        entities=[(ORG_ID, _REVIEW2_WEB_APP), (ORG_ID, _REVIEW2_API_GATEWAY)],
+        script_id="chaos-3574-bystander-cohort-render",
+    )
+
+    assert output.recorder is not None
+    assert output.recorder.preflight_diagnostics == [
+        ("committed_cohort_v1_render", None)
+    ]
+    assert output.result.state is RunState.COMPLETED
+    assert output.result.error is None, (
+        f"a resolved cohort beside an unrelated unresolvable bystander must "
+        f"not refuse -- got {output.result.error!r}"
+    )
+    assert output.result.answer is not None
+    # The model round loop actually ran a subject-bearing tool against the
+    # committed scope, rather than the commit being decorative.
+    assert [call.tool_id for call in output.calls] == [ToolID.STATUS_SNAPSHOT]
+    resolution = output.result.scope_resolution
+    assert resolution is not None
+    assert resolution.resolved_scope is not None
+    assert sorted(resolution.resolved_scope.repositories) == [
+        "meridian/api-gateway",
+        "meridian/web-app",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_bystander_organization_mention_does_not_discard_a_singular_subject() -> (
+    None
+):
+    """The same LOAD-BEARING gate, for the singular-commit path: ONE real,
+    resolved project beside an unresolved organization-adjacent bystander
+    must still PROCEED and commit the real subject, not widen or terminate.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for(
+            "What's the status of the Ask Dev project compared to the "
+            "Orbit organization?"
+        ),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "proceeded_committed_subject"
+    assert result.committed_resolution is not None
+    assert result.all_subjects_committed is True
+    assert result.subject_set is not None
+    assert any(w for w in result.subject_set.warnings), (
+        "the unresolved bystander mention must be disclosed via a warning, "
+        "not silently dropped"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_organization_idiom_is_not_mistaken_for_a_named_organization() -> None:
+    """CHAOS-3574 review round 2 (CONFIRMED, blocking): the trailing-noun
+    regex alone, with no guard on what follows "organization"/"org", fired on
+    attributive/idiomatic uses -- "the Atlas organization chart" is not a
+    claim that an organization named Atlas exists, "chart" is the actual
+    noun being named and "organization" is a modifier. Before this fix this
+    reached TERMINATE not_found exactly like a genuine cross-tenant probe;
+    after, it falls back to the same graceful ``proceeded_unresolved_bare_name``
+    path a plain ambiguous bare word like "Zephyr"/"DORA" already gets --
+    "Atlas" is still extracted as an ordinary untyped bare name (unaffected),
+    it is only no longer treated as unambiguously naming an organization.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the status of the Atlas organization chart?"),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "proceeded_unresolved_bare_name"
+    assert result.legacy_guard_required is True
+
+
+@pytest.mark.asyncio
+async def test_a_leading_form_organization_idiom_is_not_mistaken_for_a_named_organization() -> (
+    None
+):
+    """CHAOS-3574 review round 3 (CONFIRMED, blocking): the round-2 guard was
+    added only to the TRAILING form. The LEADING form ("org/organization
+    <Name>") is idiomatic too when the captured name IS itself a
+    continuation word, capitalized the way a question naturally capitalizes
+    it mid-sentence -- ``_NAME`` requires only a leading capital, not a real
+    proper noun, so "Chart" satisfies it exactly as "Orbit" does.
+
+    Phrased with a LOWERCASE "org" specifically ("the org Chart status"), not
+    "the Org Chart" -- a capitalized noun immediately adjacent to a
+    capitalized continuation word merges into ONE multi-word bare-name
+    mention ("Org Chart") under `untyped_name_candidates`'s own greedy
+    `_NAME` grammar, which never equals `organization_mention_spans`'s
+    noun-stripped single-word span ("chart") regardless of this guard --
+    verified directly by executing both functions side by side before
+    reaching for this test, per repro-first discipline. THIS phrasing is the
+    one that is actually reachable through the real mention extraction the
+    org-probe reads: the noun is lowercase (excluded from `_NAME`'s
+    leading-capital grammar), so only "Chart" is extracted as the untyped
+    mention, and it collides with `organization_mention_spans`'s "chart"
+    exactly the way "Orbit" collides with "orbit" in the genuine case. Before
+    this fix: TERMINATE not_found. After: falls back gracefully, same as any
+    other idiom.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the org Chart status?"),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "proceeded_unresolved_bare_name"
+    assert result.legacy_guard_required is True
 
 
 @pytest.mark.asyncio

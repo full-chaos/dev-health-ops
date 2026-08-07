@@ -75,7 +75,12 @@ from .preflight_outcomes import (
     PREFLIGHT_OUTCOME_BY_RESOLUTION,
     build_preflight_answer,
 )
-from .question_interpreter import MAX_MENTIONS, InterpretedQuestion, QuestionInterpreter
+from .question_interpreter import (
+    MAX_MENTIONS,
+    InterpretedQuestion,
+    QuestionInterpreter,
+    organization_mention_spans,
+)
 from .scope_service import (
     DIRECT_SCOPE_KINDS,
     SEARCHABLE_ENTITY_KINDS,
@@ -618,7 +623,67 @@ class SubjectPreflight:
                     ),
                 )
 
-        if unresolved_untyped:
+        # CHAOS-3574 review round 2 (CONFIRMED, blocking): an unresolved
+        # untyped mention -- org-probe or the plain widen-to-org fallback
+        # alike -- may only decide the run's outcome when it is LOAD-BEARING:
+        # nothing else in the question resolved to a real, committable
+        # subject. A BYSTANDER unresolved mention beside an already-resolved
+        # subject (or cohort) must never preempt it -- "status of repo
+        # meridian/web-app and repo meridian/api-gateway compared to the
+        # Orbit organization" names two real, catalog-confirmed repositories;
+        # the fact that "Orbit" separately fails to resolve must not discard
+        # that cohort, whether by hard termination (the org-probe, below) or
+        # by silently swapping it for organization-wide scope (the pre-
+        # existing plain widen). Both branches below are gated on this.
+        has_other_committed_subject = any(
+            entry.outcome is ResolutionOutcome.EXACT_MATCH for entry in latest.values()
+        )
+        if unresolved_untyped and not has_other_committed_subject:
+            # CHAOS-3574: an unresolved untyped mention that is unambiguously
+            # naming an ORGANIZATION (adjacent to "organization"/"org" in the
+            # raw question -- see `organization_mention_spans`) is not the
+            # same shape as an ordinary ambiguous bare word ("Zephyr", "DORA")
+            # that may not name a subject at all. An organization is never a
+            # searchable catalog entity, so it can never be *the requester's
+            # own* -- a name that does not resolve here is, by construction,
+            # either nonexistent or someone else's tenant, and those two must
+            # be indistinguishable to the requester (the same
+            # no-unauthorized-candidate-surfaces property a typed cross-tenant
+            # identifier already gets). Terminating on the SAME per-mention
+            # ledger entry the typed path above uses -- not a new outcome, not
+            # a new search -- is what keeps this from silently widening to
+            # organization scope and answering with someone else's identity
+            # implicitly ruled out only by omission.
+            organization_probe_spans = organization_mention_spans(request.question)
+            organization_probe_mention = next(
+                (
+                    mention
+                    for mention in mentions
+                    if mention.mention_id in untyped_ids
+                    and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+                    and mention.normalized_lookup_text in organization_probe_spans
+                ),
+                None,
+            )
+            if organization_probe_mention is not None:
+                entry = latest[organization_probe_mention.mention_id]
+                return self._terminate(
+                    interpretation=interpretation,
+                    ledger=ledger,
+                    outcome=PREFLIGHT_OUTCOME_BY_RESOLUTION[entry.outcome],
+                    diagnostic=f"unresolved_{entry.outcome.value}",
+                    run_id=run_id,
+                    answer_id=answer_id,
+                    conversation_id=conversation_id,
+                    generated_at=generated_at,
+                    clarification_key="ambiguous",
+                    terminating_resolution_entry=(
+                        entry
+                        if entry.outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+                        else None
+                    ),
+                )
+
             # A bare name we could not resolve is not proof of a subject, so
             # blocking here would break questions like "what is our DORA
             # score?". The run continues organization-wide — today's behaviour
@@ -742,7 +807,18 @@ class SubjectPreflight:
             # `unresolved_mention_ids`) so a reader — and any later
             # ambiguity-disambiguation flow — can tell "we found nothing" from
             # "we found more than one" without re-deriving it from the ledger.
-            omitted_blocking_entries = [
+            #
+            # Scoped to `blocking_ids` (typed mentions) deliberately, not
+            # every mention -- these two fields drive `cohort_complete`
+            # (`omitted == 0`) below, which CHAOS-3551's own render gate reads
+            # to decide whether this IS the SAME kind of cohort the question
+            # asked for, fully resolved. An unrelated untyped bystander
+            # mention (CHAOS-3574 review round 2 -- see
+            # `has_other_committed_subject` above) is never one of the
+            # cohort's own members, so it must not make an otherwise-complete
+            # repository cohort read as partial and lose the render path; it
+            # gets its own, separate disclosure below instead.
+            omitted_entries = [
                 (mention.mention_id, latest[mention.mention_id].outcome)
                 for mention in mentions
                 if mention.mention_id in blocking_ids
@@ -750,12 +826,12 @@ class SubjectPreflight:
             ]
             unresolved_ids = tuple(
                 mention_id
-                for mention_id, outcome in omitted_blocking_entries
+                for mention_id, outcome in omitted_entries
                 if outcome is not ResolutionOutcome.AMBIGUOUS_CANDIDATES
             )
             ambiguous_ids = tuple(
                 mention_id
-                for mention_id, outcome in omitted_blocking_entries
+                for mention_id, outcome in omitted_entries
                 if outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
             )
             warnings: tuple[str, ...] = ()
@@ -768,6 +844,21 @@ class SubjectPreflight:
                 warnings += (
                     "one or more named subjects were ambiguous and were "
                     "omitted from this set",
+                )
+            # CHAOS-3574 review round 2: a bystander unresolved UNTYPED
+            # mention (`has_other_committed_subject` let it fall through
+            # instead of terminating/widening) is disclosed here, separately
+            # from `unresolved_ids`/`ambiguous_ids` above -- it is not a
+            # missing member of THIS cohort, so it must not affect
+            # `cohort_complete`, but it must not silently vanish either.
+            if any(
+                mention.mention_id in untyped_ids
+                and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+                for mention in mentions
+            ):
+                warnings += (
+                    "a separately named subject outside this scope could not "
+                    "be resolved and is not reflected in this answer",
                 )
             subject_set = self._scope_service.committed_subject_set_for(
                 unique_entities,
@@ -897,11 +988,61 @@ class SubjectPreflight:
         # question's original mention count is not lost, not because this run
         # is a cohort — it never blocks execution, unlike the >1-distinct
         # branch above.
+        #
+        # CHAOS-3574 review round 2: the same disclosure the >1-distinct
+        # branch gives an omitted mention -- a bystander unresolved mention
+        # (e.g. an org-adjacent name beside a single resolved project) reaches
+        # this singular path too now that `has_other_committed_subject` lets
+        # it fall through instead of terminating/widening, and it must not
+        # vanish here either. Scoped to `blocking_ids` for the same reason as
+        # the cohort branch above (consistency, and this field's presence is
+        # read by other callers even though `cohort_complete` gates nothing
+        # on this PROCEED-unconditional path) -- an untyped bystander gets
+        # its own separate warning below instead.
+        singular_omitted_entries = [
+            (mention.mention_id, latest[mention.mention_id].outcome)
+            for mention in mentions
+            if mention.mention_id in blocking_ids
+            and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+        ]
+        singular_unresolved_ids = tuple(
+            mention_id
+            for mention_id, outcome in singular_omitted_entries
+            if outcome is not ResolutionOutcome.AMBIGUOUS_CANDIDATES
+        )
+        singular_ambiguous_ids = tuple(
+            mention_id
+            for mention_id, outcome in singular_omitted_entries
+            if outcome is ResolutionOutcome.AMBIGUOUS_CANDIDATES
+        )
+        singular_warnings: tuple[str, ...] = ()
+        if singular_unresolved_ids:
+            singular_warnings += (
+                "one or more named subjects could not be resolved and "
+                "were omitted from this set",
+            )
+        if singular_ambiguous_ids:
+            singular_warnings += (
+                "one or more named subjects were ambiguous and were "
+                "omitted from this set",
+            )
+        if any(
+            mention.mention_id in untyped_ids
+            and latest[mention.mention_id].outcome in UNRESOLVED_OUTCOMES
+            for mention in mentions
+        ):
+            singular_warnings += (
+                "a separately named subject outside this scope could not be "
+                "resolved and is not reflected in this answer",
+            )
         audit_subject_set: DevSubjectSet | None = (
             self._scope_service.committed_subject_set_for(
                 unique_entities,
                 set_id=self._mint_id(),
                 original_mention_count=len(mentions),
+                unresolved_mention_ids=singular_unresolved_ids,
+                ambiguous_mention_ids=singular_ambiguous_ids,
+                warnings=singular_warnings,
             )
             if len(mentions) > 1
             else None
@@ -923,7 +1064,19 @@ class SubjectPreflight:
             # channel unreachable on this path, without renaming a token that
             # five published v1 schemas carry.
             allowed_tools=ALL_TOOLS - {ToolID.RESOLVE_SCOPE},
-            blocking_mention_ids=frozenset(mention.mention_id for mention in mentions),
+            # CHAOS-3574 review round 2: was `frozenset(all mentions)`, safe
+            # only because every untyped mention was previously guaranteed
+            # EXACT_MATCH by the time this path was reached (`unresolved_
+            # untyped` always terminated/widened first). Now that a bystander
+            # unresolved mention can fall through here via `has_other_
+            # committed_subject`, gating `all_subjects_committed` on it would
+            # wrongly deny every subject-bearing tool for a run that DID
+            # commit a real subject -- `blocking_ids` (typed mentions only,
+            # the same set the cohort branch above already gates on) is the
+            # property's own documented scope ("every *blocking* mention"),
+            # and a resolved untyped mention still satisfies it vacuously
+            # when it is the only mention (the ordinary case, unchanged).
+            blocking_mention_ids=blocking_ids,
             diagnostic="proceeded_committed_subject",
         )
 

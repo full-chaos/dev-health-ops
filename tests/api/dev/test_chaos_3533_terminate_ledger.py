@@ -54,6 +54,7 @@ from dev_health_ops.models.dev_persistence import (
     DevAnswerFrame,
     DevRun,
     DevRunResolution,
+    DevRunSubjectSet,
 )
 from scripts.acceptance.corpus._inner_ledger_query import _fetch_entries
 from scripts.acceptance.corpus.resolution_path import (
@@ -601,3 +602,74 @@ async def test_chaos_3533_a_failed_ledger_write_still_leaves_a_terminal_frame(
         run_row = await session.get(DevRun, run_id)
         assert run_row is not None
         assert run_row.preflight_outcome == "unresolved_no_authorized_match"
+
+
+@pytest.mark.asyncio
+async def test_chaos_3533_a_failed_ledger_write_does_not_discard_the_subject_set(
+    seeded,  # noqa: F811
+) -> None:
+    """The committed subject set must survive the ledger-fault rollback.
+
+    ``record_subject_set`` is called BEFORE this block and shares its
+    transaction, so the rollback that discards a poisoned ledger write
+    discards the subject set with it. The PROCEED-branch sibling handler
+    already re-persists it for exactly this reason; the TERMINATE handler did
+    not, and the split made that reachable.
+
+    This is the committed-cohort terminate specifically -- the run that
+    resolved every named member exactly, committed a real
+    ``dev_subject_set.v1``, and could not render it on the v1 surface. Losing
+    that set to an unrelated ledger fault would erase the only record that
+    the cohort resolved at all, which is the same forensic hole one layer up.
+    """
+
+    maker, org_id, user_id = seeded
+    question = (
+        'What\'s the status of repo "meridian/web-app" and repo "meridian/api-gateway"?'
+    )
+    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        def recorder_factory() -> Recorder:
+            return _LedgerWriteFailsRecorder(  # type: ignore[return-value]
+                service,
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                provider_source="platform",
+            )
+
+        output = await run_preflight_orchestrator(
+            question=question,
+            entities=[(str(org_id), WEB_APP), (str(org_id), API_GATEWAY)],
+            org_id=str(org_id),
+            user_id=str(user_id),
+            conversation_id=str(conversation_id),
+            run_id=str(run_id),
+            answer_id=str(uuid.uuid4()),
+            script_id="chaos-3533-cohort-ledger-fault",
+            recorder_factory=recorder_factory,
+        )
+        await session.commit()
+
+        # Setup controls: the cohort really did commit a subject set, and the
+        # ledger write really did fail.
+        run_row = await session.get(DevRun, run_id)
+        assert run_row is not None
+        assert run_row.preflight_outcome == "committed_cohort_v1_only"
+        assert output.result.answer is None
+        assert await _ledger_rows(session, run_id) == []
+
+        subject_sets = (
+            await session.scalars(
+                select(DevRunSubjectSet).where(DevRunSubjectSet.run_id == run_id)
+            )
+        ).all()
+        assert len(subject_sets) == 1, (
+            "the committed dev_subject_set.v1 must survive a ledger-write "
+            "rollback -- the PROCEED-branch handler already re-persists it, "
+            f"and this branch must too. Got {len(subject_sets)} rows."
+        )

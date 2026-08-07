@@ -2278,14 +2278,27 @@ class DevOrchestrator:
                             exception_type=type(terminate_ledger_write_fault).__name__
                         ).inc()
                         await self._recorder.rollback()
-                        # The rollback discards the record_preflight()
-                        # diagnostic flushed above, which shares this same
-                        # transaction -- re-persisted for exactly the reason
-                        # the frame handler below re-persists it.
+                        # The rollback discards every unflushed write on this
+                        # session, not only the poisoned ledger -- including
+                        # the record_preflight() diagnostic AND the committed
+                        # subject set flushed above, which share this same
+                        # transaction. Both are re-persisted, exactly as the
+                        # PROCEED-branch handler already does for both.
+                        #
+                        # The subject set matters most on the committed-cohort
+                        # terminate: that run resolved every named member
+                        # exactly and committed a real dev_subject_set.v1, so
+                        # losing it to an unrelated ledger fault would erase
+                        # the only surviving record that the cohort resolved
+                        # at all -- the same forensic hole one layer up.
                         await self._recorder.record_preflight(
                             preflight_outcome=preflight_result.diagnostic,
                             legacy_guard_reason=None,
                         )
+                        if preflight_result.subject_set is not None:
+                            await self._recorder.record_subject_set(
+                                preflight_result.subject_set
+                            )
                     try:
                         await self._recorder.record_frame(
                             preflight_result.answer.frame,

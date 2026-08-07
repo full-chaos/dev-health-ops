@@ -457,6 +457,21 @@ async def test_a_proposal_cannot_clear_a_clarification_requirement() -> None:
         ("What is our DORA score?", frozenset()),
         ("What's the status of Zephyr?", frozenset()),
         ("How is Nightfall doing?", frozenset()),
+        # CHAOS-3574 review round 2 (CONFIRMED): attributive/idiomatic uses --
+        # "organization"/"org" modifies a FOLLOWING noun rather than being
+        # named by the PRECEDING one. A closed, stated-not-hidden
+        # continuation list, not an attempt at exhaustive NLP.
+        ("What's the status of the Atlas organization chart?", frozenset()),
+        ("Can you share the Atlas org structure?", frozenset()),
+        ("Where's the Meridian organization diagram?", frozenset()),
+        # Possessive attributive use is excluded the same way.
+        ("What's the Atlas organization's status?", frozenset()),
+        # Still fires when the noun is not followed by an idiom continuation,
+        # even with trailing words after it.
+        (
+            "Is the Nightfall Holdings org on track this quarter?",
+            frozenset({"nightfall holdings"}),
+        ),
     ],
 )
 def test_organization_mention_spans(question: str, expected: frozenset[str]) -> None:

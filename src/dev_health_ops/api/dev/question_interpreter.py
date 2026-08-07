@@ -380,9 +380,33 @@ _ORGANIZATION_NOUN_LEADING = re.compile(
     rf"\b(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\s+"
     rf"(?:{_QUOTED}|(?P<plain>{_NAME}))",
 )
+#: CHAOS-3574 review round 2 (CONFIRMED): the trailing form alone, with no
+#: guard on what follows the noun, fired on "the Atlas organization chart" /
+#: "org structure" / "organization's status" -- attributive/idiomatic uses
+#: where "organization"/"org" modifies a FOLLOWING noun ("chart", "structure")
+#: or is itself possessed ("'s"), rather than the preceding name naming an
+#: organization outright. A closed, small continuation list, deliberately not
+#: exhaustive (stated, not hidden): it catches the reported idiom class and
+#: nothing broader. "Is the Nightfall Holdings org on track?" is unaffected —
+#: "on" is not in the list, so the noun still reads as naming an organization
+#: there.
+_ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS = (
+    "chart",
+    "charts",
+    "structure",
+    "structures",
+    "diagram",
+    "diagrams",
+    "hierarchy",
+    "hierarchies",
+)
+_ORGANIZATION_ATTRIBUTIVE_GUARD = (
+    r"(?!'s\b)" + rf"(?!\s+(?:{'|'.join(_ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS)})\b)"
+)
 _ORGANIZATION_NOUN_TRAILING = re.compile(
     rf"(?:{_QUOTED}|(?P<plain>{_NAME}))\s+"
-    rf"(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\b",
+    rf"(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\b"
+    rf"{_ORGANIZATION_ATTRIBUTIVE_GUARD}",
 )
 
 

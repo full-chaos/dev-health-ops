@@ -92,15 +92,16 @@
 #   DECLARED stage set up front, not a runtime probe result the gate decided on
 #   its own to trust.
 #
-#   The verdict line and a machine-readable `GATE_STAGE_MANIFEST ...` log line
-#   both carry `declared=<N> executed=<N>` plus the exact stage ids that ran
-#   (`GATE PASSED. [8/8: lint_format,lint_check,typecheck,ch_probe,
-#   ch_scratch_create,ch_migrate,unit_suite,ch_argmax_proof] safe to push.`,
-#   or `[4/4: ...]` under SKIP_CLICKHOUSE=1) -- a degraded run cannot produce a
-#   verdict line indistinguishable from a full one, even in a copy-pasted PR
-#   quote. `verify_stage_manifest()` additionally self-checks that the set of
-#   stages that actually ran equals the declared set and fails the gate on ANY
-#   mismatch, even if every stage that did run passed -- an independent
+#   A machine-readable `GATE_STAGE_MANIFEST ... declared=<N> executed=<N>
+#   declared_ids=... executed_ids=...` log line carries the literal counts and
+#   ids, and the human verdict line carries the same information formatted as
+#   `[executed/declared: ids]` (`GATE PASSED. [8/8: lint_format,lint_check,
+#   typecheck,ch_probe,ch_scratch_create,ch_migrate,unit_suite,ch_argmax_proof]
+#   safe to push.`, or `[4/4: ...]` under SKIP_CLICKHOUSE=1) -- a degraded run
+#   cannot produce a verdict line indistinguishable from a full one, even in a
+#   copy-pasted PR quote. `verify_stage_manifest()` additionally self-checks
+#   that the set of stages that actually ran equals the declared set and fails
+#   the gate on ANY mismatch, even if every stage that did run passed -- an independent
 #   backstop against this exact class of bug recurring, not just a fix for this
 #   one instance of it. See tests/tooling/test_local_validate_stage_manifest.py.
 #
@@ -1357,7 +1358,7 @@ fi
 # stage-execution / verify_stage_manifest / verdict-line bookkeeping in
 # run_declared_stages() end-to-end, with every expensive or environment-
 # dependent LEAF stage swapped for a trivial stand-in -- same technique as
-# --lock-probe-exit-order's cleanup_scratch() override above, applied to seven
+# --lock-probe-exit-order's cleanup_scratch() override above, applied to eight
 # functions instead of one. This is deliberately NOT a test of any individual
 # gate's correctness (lint/mypy/pytest are not being exercised here at all);
 # it is a test that the manifest machinery itself -- the part CHAOS-3571 was

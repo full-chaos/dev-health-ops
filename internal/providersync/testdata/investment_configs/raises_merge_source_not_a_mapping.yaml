@@ -1,0 +1,8 @@
+# `<<` whose value is neither a mapping nor a list of mappings. PyYAML raises
+# ConstructorError while CONSTRUCTING the document, so this dies in the
+# construct phase, before _load_rules ever runs.
+rules:
+  - id: bad_merge
+    priority: 10
+    match:
+      <<: 5

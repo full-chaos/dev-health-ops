@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"testing"
 )
@@ -272,6 +273,78 @@ func investmentOracleCases() []oracleCase {
 			},
 		},
 		{
+			// ONE null output value at a time. The both-null case above cannot
+			// tell a port that reads project_stream correctly from one that
+			// reads neither -- a single case over a compound condition reports
+			// coverage it does not have. This one pins project_stream (F5) with
+			// investment_area holding an ordinary value beside it.
+			ID: "output_null_project_stream_only",
+			Input: map[string]any{
+				"Config":   "output_nulls",
+				"Artifact": map[string]any{"Labels": []any{"streamnull"}},
+			},
+		},
+		{
+			// ...and its mirror image, pinning investment_area alone. Python
+			// annotates that field `str` and does not enforce it, so None
+			// reaches the call site regardless.
+			ID: "output_null_investment_area_only",
+			Input: map[string]any{
+				"Config":   "output_nulls",
+				"Artifact": map[string]any{"Labels": []any{"areanull"}},
+			},
+		},
+		{
+			// A YAML MERGE KEY, resolved: the rule matches on the merged label
+			// list exactly as PyYAML's constructor makes it.
+			ID: "merge_key_is_resolved_into_the_match_block",
+			Input: map[string]any{
+				"Config":   "merge_keys",
+				"Artifact": map[string]any{"Labels": []any{"merged-label"}},
+			},
+		},
+		{
+			// The half that catches an UNRESOLVED merge, and the reason merges
+			// are mirrored rather than declared. A port that leaves `<<` as an
+			// ordinary key sees a match block with no criteria, which matches
+			// EVERY artifact -- so it returns merged_area here, where Python
+			// falls to legacy_default. Fail-open, and invisible without this
+			// case.
+			ID: "merge_key_unresolved_would_match_every_artifact",
+			Input: map[string]any{
+				"Config":   "merge_keys",
+				"Artifact": map[string]any{"Labels": []any{"not-the-merged-label"}},
+			},
+		},
+		{
+			// MERGE PRECEDENCE: an explicit key beats a merged one even though
+			// the `<<` comes first in the mapping. Under last-wins-by-position
+			// the merged label would survive and this artifact would miss.
+			ID: "merge_explicit_key_beats_merged_key",
+			Input: map[string]any{
+				"Config":   "merge_precedence",
+				"Artifact": map[string]any{"Labels": []any{"explicit"}},
+			},
+		},
+		{
+			// ...and the overridden rule really is overridden: "from-first"
+			// falls past it to the list-merge rule below.
+			ID: "merge_overridden_label_no_longer_matches",
+			Input: map[string]any{
+				"Config":   "merge_precedence",
+				"Artifact": map[string]any{"Labels": []any{"from-first"}},
+			},
+		},
+		{
+			// MERGE PRECEDENCE in a list: `<<: [*first, *second]` keeps the
+			// FIRST source's label, so the second's must not match at all.
+			ID: "merge_first_list_source_beats_the_second",
+			Input: map[string]any{
+				"Config":   "merge_precedence",
+				"Artifact": map[string]any{"Labels": []any{"from-second"}},
+			},
+		},
+		{
 			// `priority:` PRESENT and NULL with exactly ONE rule. sorted()
 			// computes every key up front but never compares a single element,
 			// so Python does NOT raise. The two-rule form is a refusal case;
@@ -493,6 +566,25 @@ func investmentRefusalCases() []oracleCase {
 			ID:    "raises_null_priority_with_two_rules",
 			Input: map[string]any{"Config": "raises_priority_null"},
 		},
+		{
+			// MIXED priority types: one int, one string. Python compares only
+			// WITHIN a type, so sorted() raises -- while an ALL-string config
+			// sorts fine and is a declared divergence instead. Without this case
+			// "non-numeric priority" is one undifferentiated branch, and the
+			// port could claim a mirrored TypeError for the config Python
+			// happily sorts.
+			ID:    "raises_mixed_int_and_string_priorities",
+			Input: map[string]any{"Config": "raises_mixed_priority_types"},
+		},
+		{
+			// A `<<` whose value is neither a mapping nor a list of mappings.
+			// PyYAML raises while CONSTRUCTING the document, so this dies before
+			// _load_rules runs at all -- and it is the only case here whose
+			// exception class is neither AttributeError nor TypeError, which is
+			// what stops the phase-and-class value from being guessable.
+			ID:    "raises_merge_source_is_not_a_mapping",
+			Input: map[string]any{"Config": "raises_merge_source_not_a_mapping"},
+		},
 		// --- shapes that raise at CLASSIFY ---
 		{
 			// `match:` PRESENT and NULL. A typed decode read this as "no match
@@ -570,12 +662,21 @@ func TestInvestmentClassifierRefusesWhatLivePythonRefuses(t *testing.T) {
 // non-refusal: the description is compared against Python's class name and
 // therefore fails loudly, carrying the classification Go invented into the
 // failure message rather than reporting a bare inequality.
+// The value is PHASE-QUALIFIED ("construct:TypeError", "classify:AttributeError")
+// because which of the two raises is a real property of the config shape, not an
+// implementation detail: `rules:` null dies in _load_rules, while `match:` null
+// LOADS FINE and dies only once classify() reaches that rule. A port that
+// refuses the right file for the right exception class at the wrong moment
+// rejects a classifier Python is willing to construct, and comparing the class
+// alone would let that pass as agreement.
 func investmentGoRefusal(t *testing.T, input map[string]any) string {
 	t.Helper()
+	phase := "construct"
 	classifier, err := NewInvestmentClassifier(
 		investmentConfigPath(t, input["Config"].(string)),
 	)
 	if err == nil {
+		phase = "classify"
 		var classification InvestmentClassification
 		classification, err = classifier.Classify(investmentOracleArtifact(input))
 		if err == nil {
@@ -586,7 +687,7 @@ func investmentGoRefusal(t *testing.T, input map[string]any) string {
 	}
 	var configError *InvestmentConfigError
 	if !errors.As(err, &configError) {
-		return fmt.Sprintf("<not a mirrored refusal: %v>", err)
+		return fmt.Sprintf("<%s: not a mirrored refusal: %v>", phase, err)
 	}
 	if configError.PythonException == "" {
 		// A declared divergence is Go refusing where Python PROCEEDS. Letting
@@ -594,7 +695,144 @@ func investmentGoRefusal(t *testing.T, input map[string]any) string {
 		// itself: the case says Python raises, and this says it does not.
 		return fmt.Sprintf("<declared divergence, not a mirror: %s>", configError.Detail)
 	}
-	return configError.PythonException
+	return phase + ":" + configError.PythonException
+}
+
+// investmentDeclaredDivergenceRow asserts the RELATIONSHIP between the engines
+// for a shape this port declares it does not mirror, rather than either
+// engine's answer.
+//
+// Relation carries a sentinel both sides emit only when their own half holds --
+// Python classified, and this port refused with a DECLARED refusal. The rows
+// therefore match only when the whole declaration is still true. A divergence
+// that lives only in a comment decays silently the day someone makes the
+// engines agree; this one fails the build instead.
+//
+// GoRefusal is declared through the harness's goOnlyFields mechanism, which
+// enforces both directions of its own claim: it fails if the field ever shows
+// up on the Python side, and it fails if it never shows up on the Go side.
+type investmentDeclaredDivergenceRow struct {
+	Relation  string  `json:"relation"`
+	GoRefusal *string `json:"go_refusal"`
+}
+
+func investmentDeclaredDivergenceCases() []oracleCase {
+	return []oracleCase{
+		{
+			// `id: 7` -- Python's rule_id is the int 7, in a field its own
+			// dataclass annotates `str`.
+			ID:    "declared_rule_id_is_not_a_string",
+			Input: map[string]any{"Config": "declared_id_not_a_string"},
+		},
+		{
+			// The same shape on an output field: `investment_area: true`.
+			ID:    "declared_investment_area_is_not_a_string",
+			Input: map[string]any{"Config": "declared_area_not_a_string"},
+		},
+		{
+			// Every priority is a string, so they share one orderable Python
+			// type and sorted() succeeds lexicographically. Its neighbours are
+			// mirrored TypeErrors -- a null priority, or a mixed int/str
+			// config -- which is what makes this a divergence rather than a
+			// missing branch.
+			ID:    "declared_all_string_priorities_sort_lexicographically",
+			Input: map[string]any{"Config": "declared_string_priorities"},
+		},
+		{
+			// A leading-zero priority: octal 8 to PyYAML, decimal 10 to
+			// yaml.v3, so the two engines order the rules differently.
+			ID:    "declared_leading_zero_priority_is_octal_to_pyyaml",
+			Input: map[string]any{"Config": "declared_octal_priority"},
+		},
+		{
+			// A merge key pointing at its own mapping. PyYAML builds a
+			// self-referential dict and classifies; this port refuses rather
+			// than recurse.
+			ID:    "declared_merge_key_cycle",
+			Input: map[string]any{"Config": "declared_merge_cycle"},
+		},
+	}
+}
+
+func TestInvestmentClassifierDeclaredDivergencesStillDiverge(t *testing.T) {
+	sentinel := investmentDivergenceSentinel(t)
+	compareRowsAgainstPythonOracle(
+		t,
+		"analytics/investment/divergence",
+		investmentDeclaredDivergenceCases(),
+		func(t *testing.T, input map[string]any) investmentDeclaredDivergenceRow {
+			t.Helper()
+			return investmentGoDeclaredDivergence(t, sentinel, input)
+		},
+		map[string]string{
+			"go_refusal": "the text of this port's refusal. It exists on the Go " +
+				"side only BY CONSTRUCTION -- Python classifies these shapes, which " +
+				"is half of what each case asserts -- so the harness's own check " +
+				"that a goOnlyField never appears on the Python side is itself an " +
+				"assertion that the divergence still has the shape claimed.",
+		},
+	)
+}
+
+func investmentGoDeclaredDivergence(
+	t *testing.T, sentinel string, input map[string]any,
+) investmentDeclaredDivergenceRow {
+	t.Helper()
+	classifier, err := NewInvestmentClassifier(
+		investmentConfigPath(t, input["Config"].(string)),
+	)
+	var classification InvestmentClassification
+	if err == nil {
+		classification, err = classifier.Classify(investmentOracleArtifact(input))
+	}
+	if err == nil {
+		return investmentDeclaredDivergenceRow{
+			Relation: fmt.Sprintf(
+				"<BOTH ENGINES CLASSIFY (%s): the declared divergence is GONE. If "+
+					"that is deliberate, delete the declaration in "+
+					"investment_classifier.go and the PR body and move this case to "+
+					"the classify pair -- do not leave a note describing a divergence "+
+					"that no longer exists>",
+				investmentDescribeClassification(classification)),
+		}
+	}
+	var configError *InvestmentConfigError
+	if !errors.As(err, &configError) {
+		return investmentDeclaredDivergenceRow{
+			Relation: fmt.Sprintf("<refused with an unclassified error: %v>", err),
+		}
+	}
+	if configError.PythonException != "" {
+		return investmentDeclaredDivergenceRow{
+			Relation: fmt.Sprintf(
+				"<refused as a MIRROR of Python %s, but Python classified this "+
+					"config -- a mirrored refusal cannot stand in for a declared one>",
+				configError.PythonException),
+		}
+	}
+	detail := configError.Detail
+	return investmentDeclaredDivergenceRow{Relation: sentinel, GoRefusal: &detail}
+}
+
+// investmentDivergenceSentinel reads the sentinel out of the Python pair rather
+// than restating it in Go. Hand-copying it would put the agreed sentence in two
+// places, and the copy that drifts is the one nobody reads.
+func investmentDivergenceSentinel(t *testing.T) string {
+	t.Helper()
+	source := filepath.Join(investmentRepoRoot(t),
+		"internal/providersync/testdata/oracle_pairs/analytics_investment_divergence.py")
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^DIVERGENCE_HOLDS = "([^"]+)"$`).
+		FindSubmatch(contents)
+	if match == nil {
+		t.Fatalf("no DIVERGENCE_HOLDS assignment found in %s -- the Go side cannot "+
+			"emit a sentinel it cannot read, and hard-coding a copy here is what "+
+			"this lookup exists to avoid", source)
+	}
+	return string(match[1])
 }
 
 func investmentDescribeClassification(classification InvestmentClassification) string {

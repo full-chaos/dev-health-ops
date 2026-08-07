@@ -1,0 +1,14 @@
+# MIXED priority types: one int, one string. Python compares only WITHIN a
+# type, so sorted() raises here -- unlike declared_string_priorities.yaml,
+# where every priority is a string and sorted() succeeds. This file is what
+# stops "non-numeric priority" from being one undifferentiated branch: one of
+# the two shapes is a mirrored raise and the other is a declared divergence.
+rules:
+  - id: numeric_priority
+    priority: 10
+    match:
+      always: true
+  - id: string_priority
+    priority: "ten"
+    match:
+      always: true

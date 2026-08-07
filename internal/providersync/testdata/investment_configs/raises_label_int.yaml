@@ -1,0 +1,7 @@
+# A label entry that is an INT. Same arm, same generator, different type name
+# in the message -- kept as its own file so the bool case cannot pass for it.
+rules:
+  - id: int_label
+    priority: 10
+    match:
+      label: [1]

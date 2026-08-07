@@ -1,0 +1,5 @@
+# A rules ENTRY that is not a mapping. sorted() applies its key function to
+# every element before comparing anything, so this raises at LOAD time even
+# though there is only one entry.
+rules:
+  - just_a_string

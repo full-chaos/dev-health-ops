@@ -1,0 +1,11 @@
+# A DUPLICATE mapping key. PyYAML silently keeps the LAST one; yaml.v3 rejects
+# the document when decoding into a typed value, which is why the port walks
+# yaml.Nodes instead. Mirrored, not declared.
+rules:
+  - id: first
+    id: second
+    priority: 10
+    match:
+      always: true
+    output:
+      investment_area: duplicate_area

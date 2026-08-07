@@ -1,0 +1,14 @@
+# `output:` PRESENT and NULL on a rule that MATCHES. Python evaluates
+# `rule.get("output", {})` before the match test but only dereferences it
+# after, so this raises exactly when the rule fires. The second rule proves
+# the file itself is loadable.
+rules:
+  - id: null_output
+    priority: 10
+    match:
+      always: true
+    output:
+  - id: unreached
+    priority: 20
+    match:
+      always: true

@@ -1,0 +1,10 @@
+# A BARE STRING `label:`. The generator iterates the string, so the target set
+# is its CHARACTERS -- the single letter "s" matches and the whole word
+# "security" does not. Mirrored, not declared.
+rules:
+  - id: bare_label
+    priority: 10
+    match:
+      label: security
+    output:
+      investment_area: bare_label_area

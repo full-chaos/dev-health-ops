@@ -1,0 +1,4 @@
+# The document is a LIST, not a mapping, so `data.get` is an attribute lookup
+# on a list.
+- id: a
+- id: b

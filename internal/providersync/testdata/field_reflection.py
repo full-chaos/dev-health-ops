@@ -178,6 +178,46 @@ def typed_dict_field_names(source: str, class_name: str) -> frozenset[str]:
     )
 
 
+def call_dict_literal_keys(source: str, method_name: str) -> frozenset[str]:
+    """Return the string keys of the dict literal passed to ``x.method_name({...})``.
+
+    Some contracts are stated by a CALL rather than by a type: the investment
+    classifier's production call site builds its artifact as an inline dict
+    literal argument, and which keys that literal does NOT contain is exactly
+    what makes three config rules unreachable. ``dict_literal_keys`` cannot see
+    it -- there is no named variable and no return statement to anchor on -- so
+    a test wanting that premise had no choice but to transcribe it, which is how
+    it rots the day the call site gains a key.
+
+    Raises when the call is absent or its first positional argument is not a
+    non-empty string-keyed dict literal, rather than returning an empty set: a
+    silently empty premise makes every assertion built on it vacuously true.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Attribute)
+            or node.func.attr != method_name
+            or not node.args
+            or not isinstance(node.args[0], ast.Dict)
+        ):
+            continue
+        keys = {
+            key.value
+            for key in node.args[0].keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        if keys:
+            return frozenset(keys)
+    raise ValueError(
+        f"call_dict_literal_keys: no `.{method_name}(...)` call taking a "
+        "non-empty string-keyed dict literal was found in the given source -- "
+        "the call site has moved or changed shape, and every premise derived "
+        "from it must be re-derived rather than silently emptied"
+    )
+
+
 def dict_assigned_keys(
     source: str, function_name: str, dict_var_name: str
 ) -> frozenset[str]:

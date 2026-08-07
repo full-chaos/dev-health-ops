@@ -150,6 +150,20 @@ class QUAShadowConfig:
     #: The single flag flip CHAOS-3389 requires: off is byte-identical to
     #: the seam not existing at all (see ``evaluate``'s first branch).
     enabled: bool = False
+    #: CHAOS-3525: whether an EVALUATED proposal may be promoted to the run's
+    #: committed subject, instead of only being recorded.
+    #:
+    #: A SECOND gate on purpose, rather than widening what ``enabled`` means.
+    #: ``enabled`` is the shadow's own contract -- "this seam observes and
+    #: never influences" -- and that contract is what
+    #: ``test_chaos_3389_qua_shadow.py``'s byte-identity tests certify. Making
+    #: ``enabled`` also mean "and may now change the answer" would retire
+    #: those proofs by redefinition rather than by evidence, and would leave
+    #: no flag state in which the shadow can still be run purely for
+    #: evidence. Two flags keep the rollout ladder (shadow -> commit) real:
+    #: ``commit_enabled`` is meaningless unless ``enabled`` is also set, since
+    #: there is no proposal to promote otherwise.
+    commit_enabled: bool = False
     #: Platform-spec hard cap (comment 6fa38d88, "Performance and budgets").
     #: Also bounded by the run's own remaining wall-clock budget at the call
     #: site -- whichever is smaller governs.
@@ -226,6 +240,31 @@ class QuestionUnderstandingShadow:
         self._config = config
         self._now = now
         self._monotonic = monotonic
+
+    @property
+    def commit_enabled(self) -> bool:
+        """Whether a proposal from this shadow may be promoted (CHAOS-3525).
+
+        Read by the orchestrator's promotion seam. Exposed as a property
+        rather than reaching into ``_config`` so the gate has one reader and
+        one name, and so a caller cannot accidentally consult ``enabled``
+        (which means only "a proposal was produced") when it meant this.
+        """
+
+        return self._config.commit_enabled
+
+    @property
+    def scope_service(self) -> ScopeResolutionService:
+        """The SAME authorization boundary this shadow built its shortlist from.
+
+        CHAOS-3525's commit-time re-verification has to ask the boundary
+        again, and it must be the identical service instance -- a different
+        one would carry a different request-scoped, permission-fingerprint-
+        keyed cache, so "is this entity authorized for this caller" could be
+        answered from a snapshot the proposal was never checked against.
+        """
+
+        return self._scope_service
 
     async def evaluate(
         self,

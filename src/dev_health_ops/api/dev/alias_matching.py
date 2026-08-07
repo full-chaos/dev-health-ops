@@ -39,6 +39,25 @@ explicit alias field distinct from this label-splitting, that field's
 values -- not this module's derived ``literal_aliases`` -- would be the
 input eligible for a different policy.
 
+**Amendment (CHAOS-3525, team-lead ruling 2026-08-07).** The rule above still
+binds every caller in this module's reach, and nothing here auto-commits. One
+narrow path outside it may now commit over a candidate this module derived:
+the Question Understanding Agent's verified proposal (``qua_promotion.py``),
+reached only after the deterministic layer has already declined.
+
+Recorded here because it amends the default this docstring sets. The
+CHAOS-3289 incident was a *derived string match* standing in for intent --
+"the Legacy project" committing onto whichever entity carried ``(Legacy)`` --
+and a string overlap is not evidence about what a person meant. A model that
+has read the question and the candidate labels is a different class of
+evidence, and it is gated as such: the deterministic layer must decline
+first, the proposal must clear a confidence floor, and the entity is
+re-authorized against the catalog at commit time. Crucially the commit is
+never silent -- ``no_match_terminal.disclose_subject_match`` names the span
+and the label in the user-facing answer, so a reader can catch exactly the
+mistake 3289 produced. A derived alias may now be *selected*; it can never be
+selected *quietly*.
+
 Every acronym window (not only the whole-name acronym) is generated because
 a real display name routinely carries organization/product boilerplate a
 user's shorthand omits: "Dev Health Agent Context Runtime" collapses to

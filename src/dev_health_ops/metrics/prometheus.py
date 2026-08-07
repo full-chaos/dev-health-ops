@@ -236,6 +236,19 @@ if _PROMETHEUS_AVAILABLE:
         ["status", "deterministic_decision"],
     )
 
+    # CHAOS-3525: a QUA proposal that actually became the run's subject.
+    # Distinct from the shadow counter above on purpose -- that one counts
+    # observations, this one counts DECISIONS, and conflating them would hide
+    # the promotion rate inside the evaluation rate. Labelled by entity kind
+    # only: content-free, like every other Ask Dev metric.
+    ASK_DEV_QUA_COMMIT_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_qua_commit_total",
+        "Ask Dev subjects committed from a verified QUA proposal, by entity "
+        "kind. Increments only where the deterministic layer declined and the "
+        "proposal passed the commit-time authorization re-check.",
+        ["entity_kind"],
+    )
+
     ASK_DEV_QUA_SHADOW_LATENCY_SECONDS = _prometheus_client_module.Histogram(
         "devhealth_ask_dev_qua_shadow_latency_seconds",
         "Ask Dev QUA shadow provider-call latency, by outcome status. Feeds "
@@ -326,6 +339,7 @@ else:
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_TOTAL = _noop_counter()
+    ASK_DEV_QUA_COMMIT_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_LATENCY_SECONDS = _noop_histogram()
     ASK_DEV_QUA_SHADOW_FAULT_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_CARDINALITY_UNCORROBORATED_TOTAL = _noop_counter()

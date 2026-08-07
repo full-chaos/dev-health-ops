@@ -2485,7 +2485,20 @@ async def _assemble_production_runtime(
             provider=provider.qua_shadow_provider,
             scope_service=scope_service,
             config=QUAShadowConfig(
-                enabled=os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1"
+                enabled=os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1",
+                # CHAOS-3525: a SECOND flag, not a widening of the first.
+                # ``ASK_DEV_QUA_SHADOW_ENABLED`` keeps meaning exactly what
+                # CHAOS-3389's byte-identity tests certify -- the seam
+                # observes and never influences -- and this one is what
+                # allows a verified proposal to become the run's subject.
+                # Meaningless on its own: with the shadow off there is no
+                # proposal to promote, which is why it reads the shadow flag
+                # as its own precondition rather than being an independent
+                # third state.
+                commit_enabled=(
+                    os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1"
+                    and os.getenv("ASK_DEV_QUA_COMMIT_ENABLED") == "1"
+                ),
             ),
         )
         if wave_3_1_enabled

@@ -77,12 +77,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.has_table(bind, _TABLE):
-        new_outcomes_list = ", ".join(f"'{outcome}'" for outcome in _NEW_OUTCOMES)
+        # Built from SQLAlchemy operators rather than a formatted string. Same
+        # statement -- SELECT count(*) FROM <table> WHERE public_outcome IN
+        # (...) -- but the identifier is quoted by the compiler and the outcome
+        # values travel as bound parameters instead of being spliced into SQL
+        # text. Unlike the DDL in upgrade(), which cannot take bound parameters
+        # and carries a justified nosemgrep, a SELECT can, so this needs no
+        # suppression: the rule is satisfied, not silenced.
+        counted = sa.table(_TABLE, sa.column("public_outcome"))
         new_outcome_rows = bind.execute(
-            sa.text(
-                f"SELECT count(*) FROM {_TABLE} WHERE public_outcome IN "
-                f"({new_outcomes_list})"
-            )
+            sa.select(sa.func.count())
+            .select_from(counted)
+            .where(counted.c.public_outcome.in_(_NEW_OUTCOMES))
         ).scalar()
         if new_outcome_rows:
             raise RuntimeError(

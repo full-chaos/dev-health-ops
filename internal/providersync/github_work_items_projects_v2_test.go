@@ -176,12 +176,62 @@ func TestGitHubProjectV2TargetsFailClosedOnMalformedDurableConfig(t *testing.T) 
 		[]any{map[string]any{"org_login": "acme", "project_number": 0}},
 		[]any{map[string]any{"org_login": "acme", "project_number": 1, "token": "forbidden"}},
 		"acme:1",
+		// A present key holding a typed nil slice decodes cleanly to a nil
+		// target list. Without the nil check this reads as "configured, with
+		// nothing in it" -- indistinguishable from a genuinely empty list, so
+		// a config the operator wrote would be silently ignored rather than
+		// rejected. The key being present at all is the signal that they meant
+		// something by it.
+		[]any(nil),
+		[]any{nil},
+		map[string]any{"org_login": "acme", "project_number": 1},
+		[]any{map[string]any{"org_login": "acme", "project_number": 3.7}},
+		[]any{map[string]any{"org_login": "   ", "project_number": 1}},
+		[]any{map[string]any{"org_login": "acme", "project_number": -1}},
 	} {
 		claim := githubWorkItemOracleClaim()
 		claim.IntegrationConfig = map[string]any{"github_projects_v2": value}
 		if _, err := githubProjectV2Targets(claim); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Fatalf("value=%#v error=%v", value, err)
 		}
+	}
+}
+
+// Every test above builds IntegrationConfig as a Go literal, with `int` or
+// json.Number project numbers. PRODUCTION NEVER PRODUCES EITHER: the claim's
+// integration_config arrives as a Postgres JSONB column decoded by a plain
+// json.Unmarshal into map[string]any (repository_postgres.go), so every number
+// is a float64. A parser that happened to accept only int/json.Number would
+// pass this package's whole suite and reject every real tenant's configuration.
+//
+// This builds the config the way the repository does -- from JSON bytes -- so
+// the representation under test is the one production hands us.
+func TestGitHubProjectV2TargetsAcceptThePostgresJSONRepresentation(t *testing.T) {
+	var integrationConfig map[string]any
+	if err := json.Unmarshal([]byte(
+		`{"github_projects_v2":[{"org_login":"acme","project_number":3},`+
+			`{"org_login":"labs","project_number":12}]}`,
+	), &integrationConfig); err != nil {
+		t.Fatal(err)
+	}
+	// Guard the guard: if this stops being float64, the gap this test exists to
+	// close has moved and the test would otherwise keep passing for the wrong
+	// representation.
+	first := integrationConfig["github_projects_v2"].([]any)[0].(map[string]any)
+	if _, isFloat := first["project_number"].(float64); !isFloat {
+		t.Fatalf("project_number decoded as %T, not float64 -- this test is no "+
+			"longer exercising the production representation", first["project_number"])
+	}
+
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = integrationConfig
+	targets, err := githubProjectV2Targets(claim)
+	if err != nil {
+		t.Fatalf("the production JSONB representation was rejected: %v", err)
+	}
+	want := []GitHubProjectV2Target{{OrgLogin: "acme", ProjectNumber: 3}, {OrgLogin: "labs", ProjectNumber: 12}}
+	if !reflect.DeepEqual(targets, want) {
+		t.Fatalf("targets=%+v want=%+v", targets, want)
 	}
 }
 

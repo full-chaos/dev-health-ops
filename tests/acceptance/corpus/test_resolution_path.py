@@ -14,6 +14,7 @@ import pytest
 
 from scripts.acceptance.corpus.resolution_path import (
     ABSENCE_EMPTY_LEDGER,
+    ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS,
     ABSENCE_RUN_ID_NOT_OBSERVED,
     ABSENCE_UNCLASSIFIABLE_LEDGER,
     ResolutionLedgerEntry,
@@ -389,6 +390,40 @@ class TestHonestAbsence:
         HONESTLY absent, and not a broken measurement."""
 
         reason = resolution_path_absence_reason(run_id="r1", path=None)
+        assert reason == ABSENCE_EMPTY_LEDGER
+        assert not absence_is_a_broken_measurement(reason)
+
+    def test_empty_ledger_for_a_question_that_NAMED_subjects_is_broken(self) -> None:
+        """CHAOS-3533: after a preflight TERMINATE began persisting its whole
+        ledger, an empty ledger for a question that NAMED subjects is a
+        measurement that did not happen -- not an honest absence.
+
+        The distinction is the case's own declared mention spans. A
+        zero-mention question (``portfolio.*``, ``investment.*``) still
+        appends nothing and is still honestly absent -- that is the test
+        above, and it must keep passing. But a case that declares
+        ``expected_mention_texts`` asserts the run named subjects the
+        preflight resolved; every terminate now persists that ledger, so an
+        empty one means the run never reached resolution, the ledger read
+        failed, or the fix regressed. All three are broken measurements, and
+        before this they read as a clean 'empty-resolution-ledger' absence
+        that failed only the one invariant and looked merely unlucky.
+        """
+
+        reason = resolution_path_absence_reason(
+            run_id="r1", path=None, named_subject_mentions=True
+        )
+        assert reason == ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS
+        assert absence_is_a_broken_measurement(reason)
+
+    def test_the_zero_mention_case_is_still_an_honest_absence(self) -> None:
+        """The other arm of the same guard, stated explicitly so a future
+        widening of the broken set cannot quietly swallow it: a case that
+        declares NO mention spans keeps its honest empty-ledger absence."""
+
+        reason = resolution_path_absence_reason(
+            run_id="r1", path=None, named_subject_mentions=False
+        )
         assert reason == ABSENCE_EMPTY_LEDGER
         assert not absence_is_a_broken_measurement(reason)
 

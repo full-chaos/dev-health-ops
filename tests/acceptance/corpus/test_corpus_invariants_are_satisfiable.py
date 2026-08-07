@@ -47,6 +47,10 @@ from scripts.acceptance.corpus.case_schema import (
     load_resolution_profile,
     resolve_case_expectations,
 )
+from scripts.acceptance.corpus.resolution_path import (
+    absence_is_a_broken_measurement,
+    resolution_path_absence_reason,
+)
 
 _WORLD_DIR = (
     Path(__file__).resolve().parents[2] / "acceptance" / "world" / "ask-dev-world.v1"
@@ -363,6 +367,66 @@ class TestNoResolutionPathCaseCanProduceZeroLedgerRows:
             "returns None, and resolution_path_in can never pass -- in any "
             "catalog world, whatever the profile declares:\n  "
             + "\n  ".join(sorted(zero_mention))
+        )
+
+
+class TestEveryResolutionPathDeclarerTreatsAnEmptyLedgerAsBroken:
+    """CHAOS-3533: the hardening must cover the population it was built for.
+
+    ``resolution_path_absence_reason`` now classifies an empty ledger as a
+    BROKEN measurement when the case declares subject mention spans, and as
+    an honest absence when it does not. That split is only worth anything if
+    every case declaring ``resolution_path_in`` really does land on the
+    broken side -- a declarer that somehow reached the runner without spans
+    would keep classifying its empty ledger as honest, and would go on
+    failing one invariant while reporting that it measured cleanly.
+
+    Asserted against the REAL corpus rather than a constructed case, and
+    driven through the real ``resolution_path_absence_reason``, so this
+    cannot pass by agreeing with a re-implementation of the rule.
+
+    (``case_schema`` separately requires spans on any case declaring
+    ``resolution_path_in``. This does not restate that rule -- it asserts the
+    CONSEQUENCE the runner depends on, which is what would actually break.)
+    """
+
+    def test_every_declarer_classifies_an_empty_ledger_as_broken(self) -> None:
+        declaring = [
+            case
+            for case in load_corpus_cases(_CORPUS_DIR)
+            if case.status == "active"
+            and any(entry["check"] == "resolution_path_in" for entry in case.invariants)
+        ]
+        assert declaring, "no active case declares resolution_path_in"
+
+        not_broken = [
+            case.id
+            for case in declaring
+            if not absence_is_a_broken_measurement(
+                resolution_path_absence_reason(
+                    run_id="a-real-run",
+                    path=None,
+                    named_subject_mentions=bool(case.expected_mention_texts),
+                )
+            )
+        ]
+        assert not not_broken, (
+            "these cases declare resolution_path_in but an empty resolution "
+            "ledger would still classify as an HONEST absence for them, so a "
+            "run that measured nothing would report one failed invariant "
+            "instead of an unmeasured case:\n  " + "\n  ".join(sorted(not_broken))
+        )
+
+    def test_a_case_without_declared_spans_keeps_its_honest_absence(self) -> None:
+        """The other arm: the zero-mention families (``portfolio.*``,
+        ``investment.*``) genuinely append nothing, and widening the broken
+        set to swallow them would turn every one of them permanently red for
+        doing exactly what they are supposed to do."""
+
+        assert not absence_is_a_broken_measurement(
+            resolution_path_absence_reason(
+                run_id="a-real-run", path=None, named_subject_mentions=False
+            )
         )
 
 

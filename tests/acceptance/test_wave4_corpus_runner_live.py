@@ -156,6 +156,7 @@ from scripts.acceptance.corpus.receipt import (
     write_declared_blocked_receipt,
 )
 from scripts.acceptance.corpus.resolution_path import (
+    ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS,
     ABSENCE_RUN_ID_NOT_OBSERVED,
     ResolutionPathError,
     absence_is_a_broken_measurement,
@@ -737,6 +738,15 @@ def test_corpus_case(
         # error path below reported `empty-resolution-ledger` -- an honest
         # absence -- for a measurement that actually broke.
         classification_failed=ledger_classification_error is not None,
+        # CHAOS-3533: the case's own declared mention spans separate "this
+        # question named no subject, so an empty ledger is honest" from "this
+        # question named subjects the preflight had to resolve, so an empty
+        # ledger is a measurement that did not happen". Only derivable now
+        # that every preflight TERMINATE persists its whole ledger -- before
+        # that an empty ledger was the NORMAL outcome for any terminal
+        # without an ambiguity, and eight cases sat red on exactly that for
+        # three rounds, each reading as merely unlucky rather than unmeasured.
+        named_subject_mentions=bool(case.expected_mention_texts),
     )
 
     # 2b codex round-1 addition (team-lead direction 2026-08-06): the third
@@ -842,12 +852,24 @@ def test_corpus_case(
     # have sent a reader hunting the wrong defect -- the same misdescription
     # this check exists to prevent, one layer up.
     if absence_is_a_broken_measurement(resolution_path_absence):
-        broken_detail = (
-            "the ledger was never queried"
-            if resolution_path_absence == ABSENCE_RUN_ID_NOT_OBSERVED
-            else "the ledger was queried and was NOT empty, but could not be "
-            "classified (see resolution_path_classifiable)"
-        )
+        if resolution_path_absence == ABSENCE_RUN_ID_NOT_OBSERVED:
+            broken_detail = "the ledger was never queried"
+        elif resolution_path_absence == ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS:
+            # CHAOS-3533: given its own arm for the same reason the
+            # unclassifiable case got one -- a reader sent hunting the wrong
+            # defect is the misdescription this check exists to prevent.
+            broken_detail = (
+                "the ledger was queried and was EMPTY even though this case "
+                "declares subject mention spans; since every preflight "
+                "terminate persists its whole ledger, that means the run "
+                "never reached subject resolution, the ledger read failed, "
+                "or the CHAOS-3533 persistence fix regressed"
+            )
+        else:
+            broken_detail = (
+                "the ledger was queried and was NOT empty, but could not be "
+                "classified (see resolution_path_classifiable)"
+            )
         recorder.check(
             category="subject-resolution",
             name="resolution_path_measured",

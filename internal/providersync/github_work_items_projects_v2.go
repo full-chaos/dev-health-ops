@@ -84,16 +84,21 @@ func githubProjectV2Targets(claim Claim) ([]GitHubProjectV2Target, error) {
 	if !configured {
 		return []GitHubProjectV2Target{}, nil
 	}
-	// Present key holding JSON null. This FAILED OPEN until CHAOS-3123: it
-	// shared the branch above and returned empty targets with a nil error, so
-	// `{"github_projects_v2": null}` in the durable config was indistinguishable
-	// from never having configured Projects v2 at all. Postgres JSONB null
-	// decodes to an UNTYPED nil interface, so this is the shape production
-	// actually produces -- not a Go-literal typed nil. The operator wrote the
-	// key; refusing is the only answer that cannot silently drop their intent.
-	if value == nil {
-		return nil, ErrInvalidConfiguration
-	}
+	// A present key holding JSON null deliberately does NOT return here. It
+	// FAILED OPEN until CHAOS-3123, when this branch read
+	// `!configured || value == nil` and answered "not configured" for a key the
+	// operator had written -- Postgres JSONB null decodes to an untyped nil
+	// interface, so that is the shape production actually delivers, not the
+	// Go-literal typed nil a test would reach for. Dropping the clause is the
+	// whole fix: null now falls through, marshals to `null`, decodes to a nil
+	// target list, and is refused by the `targets == nil` check below.
+	//
+	// No separate `if value == nil { refuse }` guard sits here on purpose. One
+	// was written and measured first: its mutation SURVIVED, because deleting it
+	// changed no behaviour at all -- the decode path already refuses. That is
+	// the third unkillable clause this file has grown and removed; a guard whose
+	// removal is undetectable is not defence in depth, it is a coverage claim
+	// nothing backs.
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, ErrInvalidConfiguration

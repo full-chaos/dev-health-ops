@@ -113,6 +113,22 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	if len(doer.requests) != 7 || doer.requests[6] != "blob.example/report.zip" {
 		t.Fatalf("requests=%v", doer.requests)
 	}
+	// cicd and tests delegate to ONE complete-row unit, so this same batch must
+	// also satisfy the github/cicd descriptor's destination contract.
+	//
+	// Only the tests descriptor was asserted before, which left github/cicd's
+	// six-destination list entirely unpinned. Found by splitting the mutation
+	// entry that spanned both descriptors: while one entry mutated both sites,
+	// the assertion above absorbed the kill and the cicd site was never
+	// measured -- a wholesale mutation reading as coverage for two sites while
+	// covering one.
+	cicd, known := (CompleteRouteSwitches{GithubCICD: true}).Descriptor("github", "cicd")
+	if !known {
+		t.Fatal("github/cicd capability disappeared")
+	}
+	if err := batch.validate(cicd); err != nil {
+		t.Fatalf("github/cicd descriptor rejects the shared complete batch: %v", err)
+	}
 }
 
 func TestGitHubTestsRouteExcludesFeatureBranchArtifactsLikePythonProducer(t *testing.T) {

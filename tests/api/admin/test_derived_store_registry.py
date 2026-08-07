@@ -65,6 +65,11 @@ def test_registry_covers_every_table_the_migration_scan_discovers():
     """The actual CI guard: a future migration that adds an org_id-bearing
     ClickHouse table without registering it here must fail this test, not
     pass silently.
+
+    This is a deletion-completeness invariant, not a file-list drift check:
+    the failure demands a real per-table decision (does org deletion purge
+    this store, or is it deliberately excluded?), not merely "the list is
+    stale, copy the new name over."
     """
     discovered = frozenset(_clickhouse_tables_from_migrations())
     registered = registered_clickhouse_tables()
@@ -72,15 +77,22 @@ def test_registry_covers_every_table_the_migration_scan_discovers():
     assert discovered, "ClickHouse migration table catalog must not be empty"
     missing = discovered - registered
     assert not missing, (
-        "ClickHouse table(s) discovered in migrations but not covered by "
-        f"derived_store_registry.CLICKHOUSE_DERIVED_STORES: {sorted(missing)}. "
-        "Add them to the registry in the same change."
+        "Org deletion has no reviewed deletion-completeness decision for "
+        f"the following ClickHouse table(s), each newly discovered with an "
+        f"org_id column: {sorted(missing)}. For EACH one, decide and record "
+        "in api/services/derived_store_registry.py: add its name to "
+        "CLICKHOUSE_DERIVED_STORES to confirm org deletion purges it (the "
+        "normal case -- _purge_clickhouse already will, once registered), "
+        "or document why it must be excluded from org-scoped deletion. This "
+        "is not a list to copy the new name into without that decision."
     )
     stale = registered - discovered
     assert not stale, (
-        "derived_store_registry.CLICKHOUSE_DERIVED_STORES lists table(s) no "
-        f"longer discovered by any migration: {sorted(stale)}. Remove them so "
-        "the registry stays an accurate, reviewable list."
+        "api/services/derived_store_registry.py's CLICKHOUSE_DERIVED_STORES "
+        f"lists table(s) no migration discovers with an org_id column "
+        f"anymore: {sorted(stale)}. Remove them, or restore the migration if "
+        "this is unintended so the registry keeps reflecting a real, current "
+        "deletion-completeness decision -- not a stale entry nobody re-checked."
     )
 
 

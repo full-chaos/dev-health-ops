@@ -559,9 +559,11 @@ class OrganizationDeletionService:
         unregistered = unregistered_clickhouse_tables(tables)
         if unregistered:
             result.warnings.append(
-                "ClickHouse table(s) discovered but not covered by "
-                "derived_store_registry.CLICKHOUSE_DERIVED_STORES (update the "
-                f"registry): {sorted(unregistered)}"
+                "Org deletion has no reviewed deletion-completeness decision "
+                f"for: {sorted(unregistered)}. Record one in "
+                "api/services/derived_store_registry.py's "
+                "CLICKHOUSE_DERIVED_STORES (this run still purged them via "
+                "the migration scan; the registry is out of date)."
             )
 
         client, close_client = self._resolve_clickhouse_client(result)

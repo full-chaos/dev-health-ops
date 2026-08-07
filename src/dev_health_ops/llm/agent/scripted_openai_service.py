@@ -364,6 +364,73 @@ def _acceptance_answer(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def scripted_engine_health() -> dict[str, object]:
+    """The ``/healthz`` body, reporting whether the decision/fault engine is
+    ACTUALLY loaded.
+
+    CHAOS-3219 Phase 3. This endpoint used to return a hardcoded
+    ``{"status":"ready", ...}`` byte string, so the container advertised
+    itself healthy -- and ``api`` started against it, since compose gates
+    ``api`` on this healthcheck -- while ``try_load_engine`` was returning
+    ``None`` and every scripted fault and refusal in the corpus was silently
+    degrading to the unscripted default heuristic. A whole armed run passed
+    that way, 19 scripted cases reporting green having exercised nothing.
+
+    A health endpoint that cannot report the one thing this service exists
+    to do is not a health check. ``script_directory`` and ``cases`` are
+    included so a reader can tell "loaded, 93 cases" from "loaded, 0 cases",
+    which are very different kinds of ready.
+
+    Deliberately still HTTP 200 with ``status: degraded`` rather than a 5xx:
+    the corpus runner's own precondition is what must fail the RUN loudly,
+    and returning 5xx here would instead wedge compose's dependency gate and
+    surface as an opaque "api never became healthy" boot timeout -- a worse,
+    less diagnosable failure than an honest body a guard can read.
+    """
+
+    role = provider_scripts.current_role()
+    try:
+        engine = provider_scripts.try_load_engine(role)
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        return {
+            "status": "degraded",
+            "script": "ask-dev-scripted-v1",
+            "scripted_engine": {
+                "loaded": False,
+                "role": role,
+                "reason": f"{type(exc).__name__}: {exc}",
+            },
+        }
+    if engine is None:
+        return {
+            "status": "degraded",
+            "script": "ask-dev-scripted-v1",
+            "scripted_engine": {
+                "loaded": False,
+                "role": role,
+                "reason": (
+                    "try_load_engine returned None -- the script directory is "
+                    "unreachable or unreadable from this container"
+                ),
+            },
+        }
+    return {
+        "status": "ready",
+        "script": "ask-dev-scripted-v1",
+        "scripted_engine": {
+            "loaded": True,
+            "role": role,
+            "cases": len(engine.role_script.cases),
+            # WHICH script, not just how many. A count cannot distinguish a
+            # wrong role or a stale mount that happens to carry the same
+            # number of cases (codex adversarial review, HIGH, confirmed).
+            "script_digest": provider_scripts.role_script_identity_digest(
+                engine.role_script
+            ),
+        },
+    }
+
+
 class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
     server: ScriptedOpenAIServer
 
@@ -371,7 +438,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         if self.path != "/healthz":
             self.send_error(404)
             return
-        encoded = b'{"status":"ready","script":"ask-dev-scripted-v1"}'
+        encoded = json.dumps(scripted_engine_health()).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))

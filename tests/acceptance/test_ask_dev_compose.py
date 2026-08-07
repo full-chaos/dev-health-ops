@@ -67,8 +67,80 @@ def test_scripted_openai_service_is_profiled_internal_and_unpublished() -> None:
         "dev_health_ops.llm.agent.scripted_openai_service",
     ]
     healthcheck = service["healthcheck"]
-    assert healthcheck["test"][-1] == "http://localhost:8001/healthz"
+    probe = "\n".join(str(part) for part in healthcheck["test"])
+    assert "http://localhost:8001/healthz" in probe
     assert healthcheck["retries"] > 1
+    # CHAOS-3219 Phase 3 (codex adversarial review, MEDIUM, confirmed): this
+    # used to assert only that the probe named the URL. /healthz answers 200
+    # even with a dead engine, so a status-code-only probe reported the
+    # container healthy while it could serve no scripted case at all -- and
+    # `api` is gated on this healthcheck, so the whole stack came up and the
+    # launcher's smoke/web leg ran against the unscripted heuristic. The
+    # probe must inspect the BODY.
+    assert "loaded" in probe, (
+        "the healthcheck must verify the scripted engine actually LOADED, "
+        f"not merely that /healthz answers: {probe!r}"
+    )
+
+
+def test_scripted_provider_can_actually_reach_its_script_directory() -> None:
+    """CHAOS-3219 Phase 3. The scripted provider IS the fault/decision matrix
+    (D4: "scripted only" is launch-blocking), and it was reaching none of it.
+
+    Measured, not reasoned -- executed against the very image the 2026-08-07
+    04:55 armed run used::
+
+        scripts_dir = tests/.../provider-scripts | exists = False
+        try_load_engine('legacy_agent') -> None
+        load_registry_ids() raises UnmappedCaseError scripts_directory_unavailable
+
+    The chain: this overlay declared no ``volumes:`` at all and set neither
+    scripted-provider env var; ``docker/Dockerfile``'s ``api`` target ships
+    only the built wheel, no ``tests/`` tree; so ``_scripts_dir()`` resolved a
+    RELATIVE path against WORKDIR ``/app`` and missed. ``try_load_engine``
+    then swallows that and returns ``None`` by design -- correct for organic
+    production traffic, catastrophic here -- and every scripted case fell
+    through to the unscripted default heuristic. All 19 scripted cases (10
+    faults + 9 decision scripts) recorded ``dev_answer.v1`` COMPLETED and
+    PASSED, having exercised no fault at all.
+
+    Nothing failed when the fault matrix stopped existing. This test is why
+    it now would.
+
+    The mount supplies the files; the env var makes the lookup EXPLICIT
+    rather than leaving it to a relative walk-up from the working directory,
+    which is precisely what failed silently. A literal path (not a
+    ``${VAR}`` interpolation) is deliberate -- an interpolation would also
+    need triaging into ``run_ask_dev_compose.sh``'s unset list, per
+    ``test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots``.
+    """
+
+    document = _load_overlay()
+    service = document["services"]["ask-dev-scripted-openai"]
+
+    scripts_dir = service["environment"]["ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR"]
+    assert scripts_dir, "the scripted provider must be told where its scripts are"
+
+    mounts = service["volumes"]
+    matching = [mount for mount in mounts if mount.split(":")[1] == scripts_dir]
+    assert matching, (
+        f"nothing mounts the declared scripts dir {scripts_dir!r} into the "
+        f"container -- the env var would point at an empty path. mounts={mounts!r}"
+    )
+    assert matching[0].endswith(":ro"), (
+        "the corpus fixtures are an oracle the provider reads, never writes -- "
+        f"mount them read-only: {matching[0]!r}"
+    )
+
+    # Guard against a mount that satisfies the shape while delivering
+    # nothing. _OVERLAY is <ops_root>/tests/acceptance/compose.ask-dev.yml,
+    # so the compose build context (".") is parents[2].
+    host_path = _OVERLAY.parents[2] / matching[0].split(":")[0].lstrip("./")
+    assert (host_path / "role-legacy_agent.json").is_file(), (
+        f"the mounted host path {host_path} does not contain "
+        "role-legacy_agent.json, so this mount would pass the shape check "
+        "while still delivering no scripts"
+    )
 
 
 def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:

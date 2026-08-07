@@ -1,0 +1,8 @@
+# `match:` PRESENT and NULL. Inert until classify() REACHES this rule, and
+# then `match_criteria.get("always")` is an attribute lookup on None. A typed
+# decode read this as "no match block", which matches EVERYTHING -- the rule
+# fired and returned a classification where Python raises.
+rules:
+  - id: null_match
+    priority: 10
+    match:

@@ -1,0 +1,11 @@
+# `always:` holding a non-empty STRING. Python tests the key for TRUTHINESS,
+# and every non-empty string is truthy -- including the one YAML would fold to
+# false if it were unquoted. Contrast quirks.yaml, where `always: false` is a
+# real boolean and falls through.
+rules:
+  - id: truthy_string_always
+    priority: 10
+    match:
+      always: "no"
+    output:
+      investment_area: truthy_string_area

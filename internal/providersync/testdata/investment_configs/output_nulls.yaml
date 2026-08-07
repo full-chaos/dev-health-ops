@@ -1,0 +1,21 @@
+# NULL values inside an output block. `output.get("investment_area", DEFAULT)`
+# returns None for a present-but-null key -- the default is not applied -- so
+# both fields reach InvestmentClassification as None despite the dataclass
+# annotating investment_area as `str`.
+#
+# The first rule is a null output BLOCK that does not match. It is here to
+# prove the null-output AttributeError is a property of MATCHING and not of
+# being iterated past: this file must classify cleanly.
+rules:
+  - id: never_fires_with_null_output
+    priority: 10
+    match:
+      label: ["neverfires"]
+    output:
+  - id: null_output_values
+    priority: 20
+    match:
+      label: ["nullvalues"]
+    output:
+      investment_area:
+      project_stream:

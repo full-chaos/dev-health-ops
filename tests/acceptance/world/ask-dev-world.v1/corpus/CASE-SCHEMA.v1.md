@@ -62,7 +62,7 @@ answers it.
 
   "resolution_profile_ref": "deterministic-v1", // which resolution-profiles/*.json file's `cases[id]` block supplies the matcher-specific expected outcome
 
-  "fault_ref": null,                            // provider-scripts/role-*.json case key, when this id is a provider-fail/adversarial-fault case; null otherwise
+  "fault_ref": null,                            // provider-scripts/role-*.json case key, when this id is scripted (a provider-fail/adversarial-fault OR an adversarial-decisions case -- e.g. every adv.injection-request.* refusal); null otherwise. CHAOS-3546: enforced, not decorative -- tests/acceptance/corpus/test_fixture_field_consumers.py asserts, for every non-null value, that it equals the case's own id AND that role-legacy_agent.json has a matching entry whose kind is "fault" or "decisions" (both count: the field's real job is "this case is scripted, not left to the unscripted default heuristic", and 8 of the measured 18 cases are legitimately decisions-shaped refusals, not fault injections -- narrowing the doc to "fault case only" was the defect, not those 8 cases).
 
   "notes": "free text: fixture provenance, cross-refs, honesty caveats"
 }

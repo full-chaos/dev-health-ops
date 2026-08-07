@@ -583,3 +583,72 @@ def test_the_classifier_and_the_pricer_agree_on_a_whitespace_model_id() -> None:
             f"{raw!r} classified {classified.value} but priced None -- the "
             "reservation would stand on a model the classifier admitted"
         )
+
+
+def test_the_provider_threads_base_url_so_a_gateway_is_not_priced_as_openai() -> None:
+    """Dropping ``base_url`` reintroduces the fail-open in a subtler form.
+
+    The provider-identity test above passes ``cost_provider="ollama"``, whose
+    zero is licensed by the PROVIDER, so it never exercises ``base_url`` at
+    all. A mutation sweep caught that: hard-coding ``base_url=None`` at the
+    call site survived every test.
+
+    It matters most for the case the fail-open fix exists for. An Azure or
+    gateway deployment is ``cost_provider="openai"`` with a **priced** model
+    name; if the endpoint is dropped, it looks official, the price book hits,
+    and we report OpenAI's rates for infrastructure billed by someone else --
+    a fabricated cost, and low rather than high.
+    """
+
+    from dev_health_ops.llm.agent.openai_compatible import (
+        OpenAICompatibleAgentProvider,
+    )
+
+    response = SimpleNamespace(
+        usage=SimpleNamespace(prompt_tokens=10_000, completion_tokens=1_000)
+    )
+    gateway = OpenAICompatibleAgentProvider(
+        api_key="k",
+        model="gpt-5-mini",
+        base_url="https://myco.openai.azure.com/openai/deployments/gpt-5",
+        cost_provider="openai",
+        client=object(),
+    )
+
+    assert gateway._normalize_usage(response).estimated_cost_microusd is None, (
+        "a paid gateway was priced at OpenAI's rates -- base_url was not "
+        "threaded into the cost lookup"
+    )
+
+
+def test_the_two_loud_cases_carry_DIFFERENT_remedies(caplog) -> None:
+    """One remedy for both would send an operator chasing the wrong fix.
+
+    Also caught by the sweep: collapsing the conditional so both cases emit
+    the price-entry remedy left every test green. A typo'd model needs a price
+    added; an Azure/OpenRouter deployment needs its gateway priced
+    (CHAOS-3560) and cannot act on "add it to _PLATFORM_MODEL_PRICES" at all.
+    """
+
+    import logging
+
+    from dev_health_ops.api.dev.production_runtime import _provider
+
+    def _remedy_and_reason(model: str, base_url: str) -> tuple[str, str]:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            _provider(_candidate(model, base_url=base_url))
+        record = next(
+            r for r in caplog.records if r.message == "ask_dev.platform_model_unpriced"
+        )
+        return getattr(record, "remedy", ""), getattr(record, "reason", "")
+
+    unpriced_remedy, unpriced_reason = _remedy_and_reason("gpt-6-imaginary", "")
+    gateway_remedy, gateway_reason = _remedy_and_reason(
+        "gpt-5-mini", "https://openrouter.ai/api/v1"
+    )
+
+    assert unpriced_reason != gateway_reason
+    assert unpriced_remedy != gateway_remedy, "both loud cases emitted the same remedy"
+    assert "LLM_MODEL" in unpriced_remedy
+    assert "3560" in gateway_remedy or "endpoint" in gateway_remedy

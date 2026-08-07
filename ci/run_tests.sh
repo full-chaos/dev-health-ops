@@ -6,9 +6,44 @@ EXIT_MISSING_DEP=3
 EXIT_MISSING_TOKENS=4
 EXIT_FAILURE=10
 
-usage() {
-  cat <<'EOF'
-Usage: ci/run_tests.sh <tier>
+# The usage text, held as a shell string rather than a here-document.
+#
+# WHY NOT A HERE-DOCUMENT (CHAOS-3489, same class as CHAOS-3362 — do not
+# "simplify" it back). Bash delivers a here-document by writing it into a pipe
+# and only THEN forking the command that reads it, so the writing shell briefly
+# holds both ends of that pipe itself. If the document does not fit in the pipe
+# buffer, the write can never complete: nothing is reading, and because the
+# writer owns the read end it cannot even get EPIPE. It blocks forever.
+#
+# Measured on this host with `cat >/dev/null <<EOF`, timeout 5:
+#
+#     400 bytes -> ok, 0.30s
+#     512 bytes -> WEDGED
+#    1024 bytes -> WEDGED
+#    4000 bytes -> WEDGED
+#
+# while `lsof` reports those same pipes with the nominal 16384-byte capacity.
+# Nominal is not actual: macOS hands out a small pipe buffer and defers
+# expansion under kernel pipe-memory pressure, which a host running many
+# concurrent agent sessions sits in persistently. This text is 800 bytes, i.e.
+# permanently over the line.
+#
+# Hosted CI runners have normal pipe buffers, so this never wedged in CI. It
+# wedges on a developer machine — and because usage() fires only on `--help` or
+# a bad argument, it wedged exactly when someone mistyped an invocation, which
+# is a bad moment to hang silently with no output at all.
+#
+# `printf` is a BUILTIN: it writes this string straight to stdout in-process,
+# with no pipe and no fork. A temp file would be pure ceremony here — the
+# payload is going to stdout, not to an interpreter that needs a path. Note
+# that `cat >file <<EOF` would NOT have fixed this: the pipe IS the
+# here-document delivery mechanism, not something the reader introduces, which
+# is why the repro above uses `cat`.
+#
+# CONSTRAINT: this is a single-quoted shell string, so the text must contain no
+# single-quote character. tests/tooling/test_local_validate_heredocs.py enforces
+# that, and budgets every here-document under ci/ at the measured 400 bytes.
+USAGE_TEXT='Usage: ci/run_tests.sh <tier>
 
 Tiers:
   unit         Run unit test suite (excludes integration test files)
@@ -23,7 +58,10 @@ Environment:
   TEST_RESULTS_DIR=...   Base directory for junit outputs (default: ./test-results)
   PYTEST_XDIST_WORKERS=auto   pytest-xdist worker count (-n). Set 0 to disable parallelism.
   PYTEST_DIST_MODE=loadscope  xdist distribution mode (loadscope keeps a module on one worker).
-EOF
+'
+
+usage() {
+  printf '%s' "${USAGE_TEXT}"
 }
 
 if [ "$#" -ne 1 ]; then

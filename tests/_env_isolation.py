@@ -140,14 +140,14 @@ CONDITIONAL_KEEP_ENV_NAMES: dict[str, str] = {
     # `ci/run_tests.sh` and `ci/local_validate.sh` mention neither REDIS_URL nor
     # VALKEY.
     #
-    # Requirement: ci/run_live_backend_e2e.sh:399 exports it, and :406 runs
+    # Requirement: ci/run_live_backend_e2e.sh:492 exports it, and :499 runs
     # tests/test_external_ingest_customer_push_live.py -- "the only module in
     # this repo that needs all three live services at once", which reads
     # REDIS_URL at import (:91) and skipifs the WHOLE MODULE without it (:96).
     # An unconditional scrub would turn that lane's coverage into a silent skip.
     #
     # LIVE_E2E_BASE_URL is that lane's own sentinel, exported at
-    # run_live_backend_e2e.sh:405 -- one line after REDIS_URL, same subshell.
+    # run_live_backend_e2e.sh:498 -- six lines after REDIS_URL, same subshell.
     "REDIS_URL": "LIVE_E2E_BASE_URL",
 }
 

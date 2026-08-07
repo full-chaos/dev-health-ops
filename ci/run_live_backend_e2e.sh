@@ -53,6 +53,191 @@ run_python() {
   exit "${EXIT_MISSING_DEP}"
 }
 
+# ---------------------------------------------------------------------------
+# The Python programs this harness runs, held as shell strings rather than
+# here-documents.
+#
+# WHY NOT HERE-DOCUMENTS (CHAOS-3489, same class as CHAOS-3362 — do not
+# "simplify" them back). Bash delivers a here-document by writing it into a
+# pipe and only THEN forking the command that reads it, so the writing shell
+# briefly holds both ends of that pipe itself. If the document does not fit in
+# the pipe buffer, the write can never complete: nothing is reading, and
+# because the writer owns the read end it cannot even get EPIPE. It blocks
+# forever, before the interpreter is ever exec'd.
+#
+# Measured on this host with `cat >/dev/null <<EOF`, timeout 5:
+#
+#     400 bytes -> ok, 0.30s
+#     512 bytes -> WEDGED
+#    1024 bytes -> WEDGED
+#    4000 bytes -> WEDGED
+#
+# while `lsof` reports those same pipes with the nominal 16384-byte capacity.
+# Nominal is not actual: macOS hands out a small pipe buffer and defers
+# expansion under kernel pipe-memory pressure, which a host running many
+# concurrent agent sessions sits in persistently. Two of these programs were
+# permanently over the line (2240 and 1201 bytes) and every one of them runs on
+# the main path, so a wedge here stalls the whole harness with no output.
+#
+# Hosted CI runners have normal pipe buffers, so this never wedged in CI; it
+# wedges on a developer machine, which is exactly the condition CHAOS-3362
+# spent three days being misattributed to ClickHouse.
+#
+# The fix is to remove the pipe, not to shrink the programs: each is written to
+# a private temp file with the `printf` BUILTIN (in-process, no pipe, no fork)
+# and Python is handed that path. `cat >file <<EOF` would NOT help — the pipe
+# IS the here-document delivery mechanism, not something the reader introduces,
+# which is why the repro above uses `cat`. All seven are converted, not only
+# the two over budget: 400 bytes is the largest size measured to COMPLETE, the
+# 382-byte one below sits one edit away from it, and a mixed file invites the
+# next stage to be added in the wedging shape.
+#
+# CONSTRAINT: these are single-quoted shell strings, so no program may contain
+# a single-quote character. tests/tooling/test_local_validate_heredocs.py
+# enforces that, checks each one compiles as Python, and budgets every
+# here-document under ci/ at the measured 400 bytes.
+# ---------------------------------------------------------------------------
+
+PY_PROG_REDIS_PING='import os
+import sys
+
+import valkey
+
+client = valkey.from_url(os.environ["REDIS_URL"])
+try:
+    client.ping()
+except Exception:
+    sys.exit(1)
+'
+
+# NOTE: the users INSERT binds auth_provider as a parameter rather than
+# inlining the SQL literal it used to carry. Same value reaching the same
+# column via the same SQLAlchemy text() call — the literal simply cannot be
+# spelled inside a single-quoted shell string.
+PY_PROG_AUTH_TOKEN='import hashlib, jwt, uuid, os
+from datetime import datetime, timedelta, timezone
+
+user_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+org_id = uuid.UUID(os.getenv("E2E_ORG_ID", "11111111-2222-3333-4444-555555555555"))
+
+pg_uri = os.getenv("POSTGRES_URI", os.getenv("DATABASE_URI", ""))
+if pg_uri:
+    sync_uri = pg_uri.replace("+asyncpg", "", 1)
+    from sqlalchemy import create_engine, text
+    engine = create_engine(sync_uri)
+    from dev_health_ops.models.git import Base
+    import dev_health_ops.models.users  # register models
+    Base.metadata.create_all(engine, checkfirst=True)
+    now = datetime.now(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)"
+            " VALUES (:id, :slug, :name, :settings, :tier, true, :now, :now)"
+            " ON CONFLICT (id) DO NOTHING"
+        ), {"id": str(org_id), "slug": "e2e-org", "name": "E2E Org",
+            "settings": "{}", "tier": "enterprise", "now": now})
+        conn.execute(text(
+            "INSERT INTO users (id, email, is_active, is_verified, is_superuser, auth_provider, created_at, updated_at)"
+            " VALUES (:id, :email, true, false, false, :auth_provider, :now, :now)"
+            " ON CONFLICT (id) DO NOTHING"
+        ), {"id": str(user_id), "email": "e2e@test.local", "auth_provider": "local", "now": now})
+        conn.execute(text(
+            "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"
+            " VALUES (:mid, :uid, :oid, :role, :now, :now)"
+            " ON CONFLICT DO NOTHING"
+        ), {"mid": str(uuid.uuid4()), "uid": str(user_id), "oid": str(org_id),
+            "role": "admin", "now": now})
+    engine.dispose()
+
+enc_key = os.getenv("SETTINGS_ENCRYPTION_KEY", "dev-key-not-for-prod")
+secret = hashlib.sha256(enc_key.encode()).hexdigest()
+payload = {
+    "sub": str(user_id),
+    "email": "e2e@test.local",
+    "org_id": str(org_id),
+    "role": "admin",
+    "is_superuser": False,
+    "type": "access",
+    "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    "iat": datetime.now(timezone.utc),
+    "jti": str(uuid.uuid4()),
+}
+print(jwt.encode(payload, secret, algorithm="HS256"))
+'
+
+PY_PROG_READY_HEALTH='import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = json.loads(path.read_text())
+assert payload.get("status") == "ok", payload
+services = payload.get("services", {})
+assert services.get("clickhouse") == "ok", services
+assert services.get("postgres") in ("ok", "not_configured"), services
+'
+
+PY_PROG_JWT_SECRET='import hashlib, os
+enc_key = os.environ["ENC_KEY_INPUT"]
+print(hashlib.sha256(enc_key.encode()).hexdigest())
+'
+
+PY_PROG_ASSERT_HEALTH='import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert payload["status"] == "ok", payload
+services = payload.get("services", {})
+assert services.get("clickhouse") == "ok", services
+assert services.get("postgres") in ("ok", "not_configured"), services
+'
+
+PY_PROG_ASSERT_META='import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert payload.get("backend") == "clickhouse", payload
+assert payload.get("limits", {}).get("max_days") == 365, payload
+assert payload.get("limits", {}).get("max_repos") == 1000, payload
+supported = payload.get("supported_endpoints", [])
+assert "/api/v1/home" in supported, supported
+'
+
+PY_PROG_ASSERT_HOME='import json
+import os
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+freshness = payload.get("freshness", {})
+assert "last_ingested_at" in freshness, freshness
+sources = freshness.get("sources", {})
+allowed_states = {"ok", "degraded", "down", "stale", "unknown", "not_configured", "error"}
+fixture_provider = os.environ.get("FIXTURE_PROVIDER", "github")
+expected_sources = {"ci"}
+if fixture_provider != "synthetic":
+    expected_sources.add(fixture_provider)
+assert set(sources) == expected_sources, sources
+for key in expected_sources:
+    assert key in sources, sources
+    assert str(sources.get(key, "")).lower() in allowed_states, sources
+coverage = freshness.get("coverage", {})
+assert float(coverage.get("repos_covered_pct", 0.0)) > 0.0, coverage
+deltas = payload.get("deltas", [])
+assert len(deltas) >= 1, len(deltas)
+for row in deltas:
+    assert "metric" in row, row
+    assert "value" in row, row
+tiles = payload.get("tiles", {})
+for key in ("understand", "measure", "align", "execute"):
+    assert key in tiles, tiles
+constraint = payload.get("constraint", {})
+assert constraint.get("title"), constraint
+assert constraint.get("evidence"), constraint
+'
+
 require_cmd curl
 
 CLICKHOUSE_URI_DEFAULT="clickhouse://ch:ch@127.0.0.1:8123/default"
@@ -103,6 +288,44 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+# A private SUBDIRECTORY of our own temp dir, not a shared /tmp and not TMP_DIR
+# itself: `python <script>` puts the script directory on sys.path[0] (where
+# `python -` put the CWD), so a stray .py sitting next to the script could
+# shadow a real module. Keeping the programs away from the JSON payloads this
+# harness also writes into TMP_DIR keeps that directory empty of anything but
+# our own programs. Removed by cleanup() along with TMP_DIR.
+PY_PROGRAM_DIR="${TMP_DIR}/py"
+
+write_py_program() {
+  local name="$1"
+  local text="$2"
+  # `printf` is a BUILTIN writing straight to the redirected file: no pipe, no
+  # fork, nothing that can block. Using `cat >file <<EOF` here would
+  # reintroduce exactly the here-document pipe this change exists to remove.
+  if ! printf '%s' "${text}" >"${PY_PROGRAM_DIR}/${name}"; then
+    echo "ERROR: could not write ${PY_PROGRAM_DIR}/${name}."
+    return 1
+  fi
+}
+
+write_py_programs() {
+  if ! mkdir -p "${PY_PROGRAM_DIR}"; then
+    echo "ERROR: could not create ${PY_PROGRAM_DIR}."
+    return 1
+  fi
+  write_py_program redis_ping.py "${PY_PROG_REDIS_PING}"
+  write_py_program auth_token.py "${PY_PROG_AUTH_TOKEN}"
+  write_py_program ready_health.py "${PY_PROG_READY_HEALTH}"
+  write_py_program jwt_secret.py "${PY_PROG_JWT_SECRET}"
+  write_py_program assert_health.py "${PY_PROG_ASSERT_HEALTH}"
+  write_py_program assert_meta.py "${PY_PROG_ASSERT_META}"
+  write_py_program assert_home.py "${PY_PROG_ASSERT_HOME}"
+}
+
+# Materialize before any stage runs: every stage below hands Python a path from
+# this directory.
+write_py_programs
+
 wait_for_redis() {
   # CHAOS-2702: fail fast (before burning time on fixture generation / API
   # boot) if the Valkey service container isn't reachable yet. Uses the
@@ -111,19 +334,7 @@ wait_for_redis() {
   # `valkey-cli`/`redis-cli` binary on the runner.
   local i
   for ((i = 1; i <= READINESS_ATTEMPTS; i++)); do
-    if REDIS_URL="${REDIS_URL}" run_python - <<'PY'
-import os
-import sys
-
-import valkey
-
-client = valkey.from_url(os.environ["REDIS_URL"])
-try:
-    client.ping()
-except Exception:
-    sys.exit(1)
-PY
-    then
+    if REDIS_URL="${REDIS_URL}" run_python "${PY_PROGRAM_DIR}/redis_ping.py"; then
       echo "Valkey ready after ${i} attempt(s)."
       return 0
     fi
@@ -134,57 +345,7 @@ PY
 }
 
 generate_auth_token() {
-  run_python - <<'PY'
-import hashlib, jwt, uuid, os
-from datetime import datetime, timedelta, timezone
-
-user_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-org_id = uuid.UUID(os.getenv("E2E_ORG_ID", "11111111-2222-3333-4444-555555555555"))
-
-pg_uri = os.getenv("POSTGRES_URI", os.getenv("DATABASE_URI", ""))
-if pg_uri:
-    sync_uri = pg_uri.replace("+asyncpg", "", 1)
-    from sqlalchemy import create_engine, text
-    engine = create_engine(sync_uri)
-    from dev_health_ops.models.git import Base
-    import dev_health_ops.models.users  # register models
-    Base.metadata.create_all(engine, checkfirst=True)
-    now = datetime.now(timezone.utc).isoformat()
-    with engine.begin() as conn:
-        conn.execute(text(
-            "INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)"
-            " VALUES (:id, :slug, :name, :settings, :tier, true, :now, :now)"
-            " ON CONFLICT (id) DO NOTHING"
-        ), {"id": str(org_id), "slug": "e2e-org", "name": "E2E Org",
-            "settings": "{}", "tier": "enterprise", "now": now})
-        conn.execute(text(
-            "INSERT INTO users (id, email, is_active, is_verified, is_superuser, auth_provider, created_at, updated_at)"
-            " VALUES (:id, :email, true, false, false, 'local', :now, :now)"
-            " ON CONFLICT (id) DO NOTHING"
-        ), {"id": str(user_id), "email": "e2e@test.local", "now": now})
-        conn.execute(text(
-            "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"
-            " VALUES (:mid, :uid, :oid, :role, :now, :now)"
-            " ON CONFLICT DO NOTHING"
-        ), {"mid": str(uuid.uuid4()), "uid": str(user_id), "oid": str(org_id),
-            "role": "admin", "now": now})
-    engine.dispose()
-
-enc_key = os.getenv("SETTINGS_ENCRYPTION_KEY", "dev-key-not-for-prod")
-secret = hashlib.sha256(enc_key.encode()).hexdigest()
-payload = {
-    "sub": str(user_id),
-    "email": "e2e@test.local",
-    "org_id": str(org_id),
-    "role": "admin",
-    "is_superuser": False,
-    "type": "access",
-    "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-    "iat": datetime.now(timezone.utc),
-    "jti": str(uuid.uuid4()),
-}
-print(jwt.encode(payload, secret, algorithm="HS256"))
-PY
+  run_python "${PY_PROGRAM_DIR}/auth_token.py"
 }
 
 fetch_json() {
@@ -228,18 +389,7 @@ wait_for_ready() {
           -H "Accept: application/json" \
           "${BASE_URL}/health" || true
       )"
-      if [ "${health_status}" = "200" ] && run_python - "${readiness_file}" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-payload = json.loads(path.read_text())
-assert payload.get("status") == "ok", payload
-services = payload.get("services", {})
-assert services.get("clickhouse") == "ok", services
-assert services.get("postgres") in ("ok", "not_configured"), services
-PY
+      if [ "${health_status}" = "200" ] && run_python "${PY_PROGRAM_DIR}/ready_health.py" "${readiness_file}"
       then
         echo "All dependencies healthy."
         return 0
@@ -294,11 +444,7 @@ DEV_HEALTH_POSTGRES_TEST_URI="${POSTGRES_URI}" \
 # value generate_auth_token() uses so tokens match between API and e2e client.
 if [ -z "${JWT_SECRET_KEY:-}" ]; then
   JWT_SECRET_KEY="$(
-    ENC_KEY_INPUT="${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}" run_python - <<'PY'
-import hashlib, os
-enc_key = os.environ["ENC_KEY_INPUT"]
-print(hashlib.sha256(enc_key.encode()).hexdigest())
-PY
+    ENC_KEY_INPUT="${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}" run_python "${PY_PROGRAM_DIR}/jwt_secret.py"
   )"
   export JWT_SECRET_KEY
 fi
@@ -325,70 +471,17 @@ AUTH_TOKEN="$(generate_auth_token)"
 echo "==> validating /health"
 HEALTH_FILE="${TMP_DIR}/health.json"
 fetch_json "/health" "${HEALTH_FILE}" "200"
-run_python - "${HEALTH_FILE}" <<'PY'
-import json
-import pathlib
-import sys
-
-payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
-assert payload["status"] == "ok", payload
-services = payload.get("services", {})
-assert services.get("clickhouse") == "ok", services
-assert services.get("postgres") in ("ok", "not_configured"), services
-PY
+run_python "${PY_PROGRAM_DIR}/assert_health.py" "${HEALTH_FILE}"
 
 echo "==> validating /api/v1/meta"
 META_FILE="${TMP_DIR}/meta.json"
 fetch_json "/api/v1/meta" "${META_FILE}" "200"
-run_python - "${META_FILE}" <<'PY'
-import json
-import pathlib
-import sys
-
-payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
-assert payload.get("backend") == "clickhouse", payload
-assert payload.get("limits", {}).get("max_days") == 365, payload
-assert payload.get("limits", {}).get("max_repos") == 1000, payload
-supported = payload.get("supported_endpoints", [])
-assert "/api/v1/home" in supported, supported
-PY
+run_python "${PY_PROGRAM_DIR}/assert_meta.py" "${META_FILE}"
 
 echo "==> validating /api/v1/home"
 HOME_FILE="${TMP_DIR}/home.json"
 fetch_json "/api/v1/home" "${HOME_FILE}" "200"
-run_python - "${HOME_FILE}" <<'PY'
-import json
-import os
-import pathlib
-import sys
-
-payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
-freshness = payload.get("freshness", {})
-assert "last_ingested_at" in freshness, freshness
-sources = freshness.get("sources", {})
-allowed_states = {"ok", "degraded", "down", "stale", "unknown", "not_configured", "error"}
-fixture_provider = os.environ.get("FIXTURE_PROVIDER", "github")
-expected_sources = {"ci"}
-if fixture_provider != "synthetic":
-    expected_sources.add(fixture_provider)
-assert set(sources) == expected_sources, sources
-for key in expected_sources:
-    assert key in sources, sources
-    assert str(sources.get(key, "")).lower() in allowed_states, sources
-coverage = freshness.get("coverage", {})
-assert float(coverage.get("repos_covered_pct", 0.0)) > 0.0, coverage
-deltas = payload.get("deltas", [])
-assert len(deltas) >= 1, len(deltas)
-for row in deltas:
-    assert "metric" in row, row
-    assert "value" in row, row
-tiles = payload.get("tiles", {})
-for key in ("understand", "measure", "align", "execute"):
-    assert key in tiles, tiles
-constraint = payload.get("constraint", {})
-assert constraint.get("title"), constraint
-assert constraint.get("evidence"), constraint
-PY
+run_python "${PY_PROGRAM_DIR}/assert_home.py" "${HOME_FILE}"
 
 echo "==> running customer-push external-ingest live e2e test (CHAOS-2702)"
 (

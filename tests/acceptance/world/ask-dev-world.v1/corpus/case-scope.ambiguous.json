@@ -32,6 +32,16 @@
       "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
     },
     {
+      "category": "disclosed-terminal-on-widening",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "A run that widens scope must reach a DISCLOSED terminal -- the widening is never absorbed into a terminal that reads as an ordinary, subject-specific answer.",
+      "executable_today": true,
+      "$comment": "CHAOS-3490 Part 2, closing an adversarial-review finding (2026-08-07). scope_resolution_outcome_in checks only the outcome ENUM; this case's no-silent-widening assert prose additionally requires the widening to be DISCLOSED, and nothing asserted that half. The gap was real and narrow: before the allowed list was widened, ANY organization_fallback failed by accident (wrong enum); after widening, a run that genuinely widens but fails the disclosure half would have passed. Nothing structural closes it -- validate_outcome_consistency only checks frame self-consistency, and the CHAOS-3421 leak guard is a text heuristic. Wired via from_profile so the profile stays the single source of truth rather than a literal pair chosen here."
+    },
+    {
       "category": "no-unauthorized-candidate-surfaces",
       "check": "no_unauthorized_candidate_surfaces",
       "args": {

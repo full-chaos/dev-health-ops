@@ -3,8 +3,10 @@
   "name": "github work-item effect-layer composition (sink constructor, deriver, multi-day loop)",
   "build": [
     "go",
-    "build",
-    "./..."
+    "test",
+    "-run",
+    "^$",
+    "./internal/providersync/"
   ],
   "mutations": [
     {

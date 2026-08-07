@@ -110,9 +110,16 @@ func (GitHubProjectV2Fetcher) Fetch(
 	normalizedAt time.Time,
 	resolveIdentity githubIdentityResolver,
 ) (GitHubProjectV2FetchResult, error) {
+	// There is deliberately no `credential.ID == ""` clause. claim.Validate()
+	// has already returned nil by the time this is evaluated, and Unit.Validate
+	// refuses an empty CredentialID (lease.go), so an empty credential.ID is
+	// necessarily unequal to the claim's and the equality clause below already
+	// decides it. A clause that cannot fail on its own is not defence in depth;
+	// it is an unkillable mutation that reads as coverage forever — measured as
+	// exactly that before removal.
 	if ctx == nil || claim.Validate() != nil || claim.Provider != "github" ||
 		!isWorkItemFamilyDataset(claim.Dataset) || credential.Provider != "github" ||
-		credential.ID == "" || credential.ID != claim.CredentialID || client == nil ||
+		credential.ID != claim.CredentialID || client == nil ||
 		client.Provider != "github" || client.BaseURL == nil || client.Lease == nil ||
 		normalizedAt.IsZero() {
 		return GitHubProjectV2FetchResult{}, ErrInvalidConfiguration

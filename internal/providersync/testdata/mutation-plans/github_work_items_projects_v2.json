@@ -300,23 +300,6 @@
       ]
     },
     {
-      "id": "P18-credential-id-must-be-resolved",
-      "file": "internal/providersync/github_work_items_projects_v2.go",
-      "find": "credential.ID == \"\" || credential.ID != claim.CredentialID || client == nil ||",
-      "replace": "credential.ID != claim.CredentialID || client == nil ||",
-      "rationale": "clause-level sibling of P1: an unresolved (empty) credential id must be refused on its own clause, which is the shape an environment token would arrive as",
-      "proof": [
-        [
-          "go",
-          "test",
-          "-count=1",
-          "-run",
-          "^(TestGitHubProjectV2RefusesEnvironmentTokenWhenClaimCredentialIsUnusable)$",
-          "./internal/providersync/"
-        ]
-      ]
-    },
-    {
       "id": "P19-credential-provider-must-be-github",
       "file": "internal/providersync/github_work_items_projects_v2.go",
       "find": "!isWorkItemFamilyDataset(claim.Dataset) || credential.Provider != \"github\" ||",
@@ -363,6 +346,23 @@
           "-count=1",
           "-run",
           "^(TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets)$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "P18-environment-authored-claims-never-reach-a-collector",
+      "file": "internal/providersync/lease.go",
+      "find": "\tif unit.AuthSource == \"environment\" || unit.CredentialID == \"\" {",
+      "replace": "\tif unit.CredentialID == \"\" {",
+      "rationale": "clause-level: D18 puts environment credentials outside the Go route, and this fence is where that is actually enforced -- a unit whose AuthSource is \"environment\" must never reach any collector. Found unmeasured by a surviving mutation on the collector's redundant credential.ID == \"\" clause, which was redundant only because this fence holds.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^(TestGitHubProjectV2RefusesClaimsAuthoredFromTheEnvironment)$",
           "./internal/providersync/"
         ]
       ]

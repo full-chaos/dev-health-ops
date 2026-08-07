@@ -312,3 +312,61 @@ def test_the_cohort_builder_refuses_an_unrepresentable_kind() -> None:
             base_scope=DevScope.model_validate(scope_dict(organization_id=ORG_ID)),
             resolved_at=datetime.now(UTC),
         )
+
+
+@pytest.mark.asyncio
+async def test_a_21_repository_cohort_does_not_crash_the_terminal() -> None:
+    """Codex adversarial review, HIGH: the v1 list caps are LOWER than the
+    subject set's own bound, and the exact-cohort publisher copies every
+    committed ref into both bounded lists.
+
+    ``DevSubjectSet.committed_entity_refs`` allows up to 25.
+    ``DevScope.repositories`` and ``DevScopeResolution.
+    authorized_repository_ids`` are both capped at 20. So a fully-resolved,
+    fully-authorized cohort of 21-25 repositories would raise during terminal
+    construction and turn an honest ``feature_not_enabled`` into an opaque
+    ``internal_error``.
+
+    That is the SAME defect the project-cohort restriction already fixed,
+    at a different boundary -- a bound that is legal upstream and illegal
+    downstream. Finding it twice in one change is the argument for asserting
+    the boundary rather than reasoning about it: the first instance was
+    caught by an existing test, this one only by review.
+
+    A cohort that does not fit v1's lists keeps the prior frame-derived
+    terminal rather than crashing. It is not disclosed as exact -- v1 cannot
+    say what it committed -- and that under-disclosure is the honest failure
+    mode, the same call the project-cohort residual makes.
+    """
+
+    repositories = [
+        AuthorizedEntity(
+            EntityKind.REPOSITORY,
+            f"meridian/repo-{index:02d}",
+            f"meridian/repo-{index:02d}",
+        )
+        for index in range(21)
+    ]
+    quoted = " and ".join(f'repo "{repo.canonical_id}"' for repo in repositories)
+
+    output = await run_preflight_orchestrator(
+        question=f"What's the status of {quoted}?",
+        entities=[(ORG_ID, repo) for repo in repositories],
+        script_id="chaos-3534-oversized-cohort",
+    )
+
+    # Setup control: this really is a committed cohort of >20 members, not a
+    # run that was rejected earlier for some other reason. Without it a
+    # change to the mention bound would make this test vacuous.
+    assert output.recorder is not None
+    assert output.recorder.preflight_diagnostics == [("committed_cohort_v1_only", None)]
+
+    assert output.result.error is not None
+    assert output.result.error.code != "internal_error", (
+        "a fully-resolved cohort larger than v1's 20-item scope lists must "
+        "not crash the terminal -- publishing the exact outcome is optional, "
+        "keeping a coherent terminal is not"
+    )
+    assert output.result.scope_resolution is not None, (
+        "and it must still publish SOME scope decision (CHAOS-3497)"
+    )

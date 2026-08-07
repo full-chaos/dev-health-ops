@@ -63,6 +63,7 @@ from .answer_validator import (
     validate_answer_candidate,
 )
 from .contracts import (
+    V1_SCOPE_LIST_LIMIT,
     AnswerStatus,
     DevAnswer,
     DevClaim,
@@ -2204,11 +2205,27 @@ class DevOrchestrator:
                     # is a list. A project cohort therefore keeps today's
                     # frame-derived outcome; that residual is real, is NOT
                     # fixed here, and is tracked rather than papered over.
+                    #
+                    # And bounded by V1_SCOPE_LIST_LIMIT, because the subject
+                    # set's own bound is LARGER than v1's: a DevSubjectSet may
+                    # commit up to 25 refs, while DevScope.repositories and
+                    # DevScopeResolution.authorized_repository_ids both cap at
+                    # 20. Without this a fully-resolved, fully-authorized
+                    # 21-25 repository cohort raises during terminal
+                    # construction -- the SAME "legal upstream, illegal
+                    # downstream" defect as the project-kind case above, at a
+                    # different boundary, and it would have turned an honest
+                    # feature_not_enabled into an opaque internal_error.
+                    # (Codex adversarial review, HIGH; reproduced before
+                    # fixing.) An oversized cohort keeps the frame-derived
+                    # outcome: under-disclosure is the honest failure here,
+                    # since v1 genuinely cannot list what was committed.
                     cohort = preflight_result.subject_set
                     if (
                         cohort is not None
                         and cohort.cohort_complete
                         and cohort.entity_kind is ContractEntityKind.REPOSITORY
+                        and len(cohort.committed_entity_refs) <= V1_SCOPE_LIST_LIMIT
                     ):
                         preflight_terminal_resolution = (
                             ScopeResolutionService.committed_cohort_resolution_for(

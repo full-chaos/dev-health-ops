@@ -31,6 +31,14 @@ jobs:
         with:
           filters: |
             code:
+              # CHAOS-3513: omitting this put an unlinted, untypechecked
+              # change into main. In merge_group runs 30597898813 and
+              # 30597912205 the only file in the queue's diff was
+              # .github/workflows/governance.yml, so the filter reported
+              # code=false, the gated job skipped, and the required check
+              # reported SUCCESS. The gates could be edited -- weakened --
+              # by a PR they then declined to run on.
+              - '.github/workflows/**'
               - 'src/**'
               - 'tests/**'
               - 'ci/**'
@@ -41,7 +49,12 @@ jobs:
 
   lint-job:
     needs: [changes]
+    # dorny/paths-filter has no PR base/head diff to compute in the merge
+    # queue and can report code=false there, which would skip this job and
+    # let the aggregator see a skip it cannot attribute. Always run in the
+    # queue, as test.yml's test-matrix already does.
     if: >-
+      github.event_name == 'merge_group' ||
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -74,26 +87,33 @@ jobs:
           ruff check .
 
   # Required-status-check gate. Branch protection requires a check named
-  # exactly "lint". The aggregator always runs and treats skipped (path
-  # filter, e.g. docs-only PRs) as pass so PRs are never blocked waiting
-  # on a status that will never report. Do not remove.
+  # exactly "lint"; the job above is named "lint-job", which does not
+  # match. Do not remove.
+  #
+  # The verdict lives in ci/aggregate_gate_results.sh, shared with test.yml
+  # and typecheck.yml, so one table-driven test covers all three gates. It
+  # reads `needs.changes.result` because a skip caused by a dead upstream and
+  # a skip caused by the path filter are the same literal string
+  # (CHAOS-3482, CHAOS-3513).
   lint:
     name: lint
+    # Must remain `always()`. Under `!cancelled()` (or any condition that lets
+    # this job itself skip) a cancelled run leaves the REQUIRED check *skipped*,
+    # and branch protection counts a skipped required check as satisfied --
+    # which moves the silent pass one level up instead of closing it.
     if: always()
-    needs: [lint-job]
+    needs: [changes, lint-job]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Aggregate lint result
         env:
-          LINT_RESULT: ${{ needs.lint-job.result }}
+          GATE_NAME: lint
+          EVENT_NAME: ${{ github.event_name }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_CODE: ${{ needs.changes.outputs.code }}
+          GATED_JOB_1: lint-job|path-filtered|${{ needs.lint-job.result }}
         run: |
-          echo "lint-job result: ${LINT_RESULT}"
-          case "${LINT_RESULT}" in
-            success|skipped)
-              echo "lint gate passed"
-              ;;
-            failure|cancelled|*)
-              echo "lint gate failed"
-              exit 1
-              ;;
-          esac
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

@@ -32,7 +32,7 @@ jobs:
         # job skipped and the required `test` check still went green
         # (CHAOS-3482 Codex round 1). Leaving the filter unrun makes `code`
         # empty, which the job conditions below and
-        # ci/aggregate_test_results.sh both read as "not 'true'" -- so the
+        # ci/aggregate_gate_results.sh both read as "not 'true'" -- so the
         # dispatch clause, not the path filter, is what selects the jobs.
         # Same construction as lint.yml and typecheck.yml.
         if: github.event_name != 'workflow_dispatch'
@@ -222,7 +222,7 @@ jobs:
   # unchanged: a manual run is the fast-suite path, proved by test-matrix,
   # which workflow_dispatch now always selects. The aggregator accepts this
   # skip for the same reason it accepts the pull_request one -- the job's own
-  # condition did not select it -- and ci/aggregate_test_results.sh derives
+  # condition did not select it -- and ci/aggregate_gate_results.sh derives
   # that from this exact expression.
   coverage:
     needs: [changes]
@@ -356,9 +356,9 @@ jobs:
   # and the coverage job produces "coverage", neither of which match. It is the
   # single required check for both PRs and the merge queue. Do not remove.
   #
-  # The verdict lives in ci/aggregate_test_results.sh rather than inline here,
+  # The verdict lives in ci/aggregate_gate_results.sh rather than inline here,
   # so it can be driven through the whole result matrix by
-  # tests/tooling/test_aggregate_test_results.py. See that script's header for
+  # tests/tooling/test_aggregate_gate_results.py. See that script's header for
   # why `needs.changes.result` -- not the downstream results alone -- is what
   # separates a legitimate skip from an upstream failure that skipped
   # everything (CHAOS-3482).
@@ -378,11 +378,12 @@ jobs:
 
       - name: Aggregate test results
         env:
+          GATE_NAME: test
           EVENT_NAME: ${{ github.event_name }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           CHANGES_CODE: ${{ needs.changes.outputs.code }}
-          MATRIX_RESULT: ${{ needs.test-matrix.result }}
-          COVERAGE_RESULT: ${{ needs.coverage.result }}
+          GATED_JOB_1: test-matrix|path-filtered|${{ needs.test-matrix.result }}
+          GATED_JOB_2: coverage|merge-time-only|${{ needs.coverage.result }}
         run: |
-          chmod +x ci/aggregate_test_results.sh
-          ./ci/aggregate_test_results.sh
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

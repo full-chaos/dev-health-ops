@@ -1,0 +1,17 @@
+# DECLARED DIVERGENCE 3: a LEADING-ZERO integer priority. PyYAML YAML 1.1
+# reads 010 as octal 8, which sorts BEFORE the 9 below; yaml.v3 YAML 1.2 reads
+# it as decimal 10, which sorts after. Both engines sort; neither order is the
+# mirror, so this port refuses instead of picking one.
+rules:
+  - id: octal_or_decimal
+    priority: 010
+    match:
+      always: true
+    output:
+      investment_area: octal_area
+  - id: plainly_nine
+    priority: 9
+    match:
+      always: true
+    output:
+      investment_area: nine_area

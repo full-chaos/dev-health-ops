@@ -1,0 +1,33 @@
+# PyYAML's merge PRECEDENCE, which is not the obvious one and is measured
+# rather than assumed:
+#
+#   - an EXPLICIT key beats a merged one wherever it sits in the mapping,
+#     including AFTER the `<<`;
+#   - for `<<: [*a, *b]`, the FIRST source wins a key both define.
+#
+# Getting either backwards silently changes which rule fires, so both are
+# pinned by cases whose answers differ under the wrong rule.
+first: &first
+  label: ["from-first"]
+second: &second
+  label: ["from-second"]
+
+rules:
+  # The merged `label` is OVERRIDDEN by the explicit one below it. Under
+  # last-wins-by-position the merged value would survive and this rule would
+  # answer for "from-first" instead.
+  - id: explicit_beats_merged
+    priority: 10
+    match:
+      <<: *first
+      label: ["explicit"]
+    output:
+      investment_area: explicit_area
+  # Two sources define `label`; the FIRST wins. Under last-wins this rule would
+  # match "from-second" and not "from-first".
+  - id: first_source_beats_second
+    priority: 20
+    match:
+      <<: [*first, *second]
+    output:
+      investment_area: first_source_area

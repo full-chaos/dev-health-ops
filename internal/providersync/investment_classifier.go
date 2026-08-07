@@ -66,16 +66,31 @@ import (
 //     InvestmentClassification, whose Python annotation is `str` and is not
 //     enforced. Go's *string cannot hold it, so this refuses rather than
 //     silently coerce to "7".
-//  2. Two or more rules whose `priority` values are all non-numeric but
-//     mutually comparable (`priority: "a"` everywhere). Python's sort succeeds;
-//     this refuses. A single rule with a non-numeric priority is MIRRORED --
-//     sorted() never calls the comparator for one element, so Python does not
-//     raise there either.
-//  3. A document yaml.v3's parser rejects outright but PyYAML accepts.
+//  2. Two or more rules whose priorities share ONE orderable non-numeric Python
+//     type -- every rule `priority: "a"`-style strings, or every rule a list.
+//     Python's sort succeeds lexicographically; this orders only numbers, so it
+//     refuses rather than impose an order Python would not produce. A single
+//     rule with such a priority is MIRRORED, since sorted() never calls the
+//     comparator for one element. A MIXED config (`1` and `"a"`), or any null
+//     or mapping priority, is a mirrored TypeError instead -- Python really
+//     does raise there.
+//  3. A leading-zero integer priority, which PyYAML's YAML 1.1 resolver reads
+//     as octal and yaml.v3's 1.2 reads as decimal. Both engines sort; neither
+//     order is the mirror.
+//  4. A merge key whose anchor chain refers back to its own mapping.
 //
-// All three are Go-erroring-where-Python-proceeds, which is the loud/safe
+// All four are Go-erroring-where-Python-proceeds, which is the loud/safe
 // direction: the job fails visibly rather than emitting a row Python would not
-// have. None of the three occurs in the checked-in config.
+// have. None of them occurs in the checked-in config, and each is pinned by the
+// analytics/investment/declared_divergence oracle pair -- which asserts the
+// divergence STILL EXISTS, so making the engines agree without deleting the
+// declaration fails the build rather than leaving a stale note behind.
+//
+// One residual is NOT a declared divergence because no instance of it is known:
+// the two YAML PARSERS could in principle disagree at the syntax level. Every
+// candidate tried lands the same way on both (a tab indent is rejected by
+// both), and this is recorded as a risk rather than a claim precisely because
+// there is nothing to pin.
 
 const (
 	legacyDefaultInvestmentArea = "product"
@@ -239,6 +254,11 @@ func NewInvestmentClassifier(configPath string) (*InvestmentClassifier, error) {
 		// when decoding into a typed value, and this decodes into a Node.
 		return nil, fmt.Errorf("investment config %s: %w", configPath, err)
 	}
+	if err := investmentExpandMergeKeys(
+		&root, map[*yaml.Node]bool{}, map[*yaml.Node]bool{},
+	); err != nil {
+		return nil, err
+	}
 	investmentApplyPyYAMLBooleans(&root)
 	document := investmentDocumentBody(&root)
 	if document == nil || document.Tag == yamlNullTag {
@@ -325,35 +345,92 @@ func investmentResolvePriorities(rules []investmentRule) error {
 	if len(rules) < 2 {
 		return nil
 	}
+	// Python's `<` is defined WITHIN a type, not across types, so what decides
+	// between "sorted() raises" and "sorted() succeeds and we cannot reproduce
+	// its order" is whether every key shares one orderable Python type. Both
+	// halves are measured: sorted(["b","a"]) and sorted([[2],[1]]) succeed,
+	// while sorted([1,"a"]), sorted([None,None]) and sorted([{},{}]) all raise.
+	// Collapsing that into "not a number means Python raises" would have this
+	// port CLAIM a mirrored TypeError for an all-string config Python sorts
+	// happily -- a false mirror, which is worse than an admitted divergence.
+	groups := map[string]bool{}
+	ambiguous := false
 	for _, rule := range rules {
-		switch rule.priorityKind {
-		case investmentPriorityNotComparable:
+		if rule.priorityKind == investmentPriorityUnorderable {
 			return investmentTypeError(
 				"'<' not supported between instances of 'int' and '%s': a rule's "+
-					"priority is not a number and there is more than one rule to order",
+					"priority is of a type Python cannot order at all, and there is "+
+					"more than one rule to order",
 				investmentPythonTypeName(rule.priority))
-		case investmentPriorityAmbiguous:
-			return investmentUnrepresentable(
-				"priority %q is octal to PyYAML's YAML 1.1 resolver and decimal to "+
-					"yaml.v3's 1.2 one, so no ordering here is the mirror",
-				investmentResolveAlias(rule.priority).Value)
 		}
+		if rule.priorityKind == investmentPriorityAmbiguousNumeric {
+			ambiguous = true
+		}
+		groups[investmentPriorityPythonType(rule.priorityKind)] = true
+	}
+	if len(groups) > 1 {
+		return investmentTypeError(
+			"'<' not supported between instances of %s: the rules mix priority "+
+				"types, and Python compares only within one",
+			investmentSortedQuoted(groups))
+	}
+	if groups["str"] || groups["list"] {
+		return investmentUnrepresentable(
+			"every rule's priority is a %s, which Python orders lexicographically; "+
+				"this port orders only numbers, so it refuses rather than impose an "+
+				"order Python would not produce", investmentSortedQuoted(groups))
+	}
+	if ambiguous {
+		return investmentUnrepresentable(
+			"a priority is written with a leading zero, which is octal to PyYAML's " +
+				"YAML 1.1 resolver and decimal to yaml.v3's 1.2 one, so no ordering " +
+				"here is the mirror")
 	}
 	return nil
+}
+
+func investmentSortedQuoted(values map[string]bool) string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, "'"+name+"'")
+	}
+	sort.Strings(names)
+	return strings.Join(names, " and ")
 }
 
 // investmentPriorityKind is how `x.get("priority", 100)` behaves as a sort key.
 type investmentPriorityKind int
 
 const (
-	// Python compares it fine and both resolvers agree on its value.
+	// An int, float or bool: Python orders them together (bool IS an int), and
+	// both YAML resolvers agree on the value.
 	investmentPriorityNumeric investmentPriorityKind = iota
-	// Python raises on the first comparison (null, a string, a container).
-	investmentPriorityNotComparable
-	// Both engines sort, but they would sort DIFFERENTLY -- a declared
-	// divergence rather than a mirrored raise, and so refused separately.
-	investmentPriorityAmbiguous
+	// An int literal the two resolvers read differently (a leading zero is
+	// octal to PyYAML, decimal to yaml.v3). Both engines sort; they would sort
+	// DIFFERENTLY, so this is a declared divergence, not a mirrored raise.
+	investmentPriorityAmbiguousNumeric
+	// A string. Python orders these lexicographically among themselves.
+	investmentPriorityString
+	// A sequence. Python orders these lexicographically among themselves too.
+	investmentPrioritySequence
+	// null or a mapping: Python raises on the first comparison, even against
+	// another value of the same type (`None < None` and `{} < {}` both raise).
+	investmentPriorityUnorderable
 )
+
+// investmentPriorityPythonType names the Python type whose ordering applies, so
+// two kinds that share one type (a plain int and an ambiguous one) group
+// together and a mixed config is detected as mixed.
+func investmentPriorityPythonType(kind investmentPriorityKind) string {
+	switch kind {
+	case investmentPriorityString:
+		return "str"
+	case investmentPrioritySequence:
+		return "list"
+	default:
+		return "int"
+	}
+}
 
 // investmentPrioritySortKey returns the numeric sort key and how Python would
 // treat it. bool counts as numeric because Python's bool IS an int subclass, so
@@ -363,10 +440,19 @@ func investmentPrioritySortKey(node *yaml.Node) (float64, investmentPriorityKind
 		return legacyDefaultRulePriority, investmentPriorityNumeric
 	}
 	node = investmentResolveAlias(node)
-	if node == nil || node.Kind != yaml.ScalarNode {
-		return 0, investmentPriorityNotComparable
+	if node == nil {
+		return 0, investmentPriorityUnorderable
+	}
+	if node.Kind == yaml.SequenceNode {
+		return 0, investmentPrioritySequence
+	}
+	if node.Kind != yaml.ScalarNode {
+		// A mapping: Python cannot order two of them either.
+		return 0, investmentPriorityUnorderable
 	}
 	switch node.Tag {
+	case yamlStrTag:
+		return 0, investmentPriorityString
 	case yamlIntTag:
 		// A leading zero is the one integer literal the two resolvers read
 		// differently: PyYAML's YAML 1.1 makes `010` OCTAL (8), yaml.v3's 1.2
@@ -375,15 +461,16 @@ func investmentPrioritySortKey(node *yaml.Node) (float64, investmentPriorityKind
 		// one.
 		digits := strings.TrimLeft(node.Value, "-+")
 		if len(digits) > 1 && digits[0] == '0' {
-			return 0, investmentPriorityAmbiguous
+			return 0, investmentPriorityAmbiguousNumeric
 		}
 	case yamlFloatTag, yamlBoolTag:
 	default:
-		return 0, investmentPriorityNotComparable
+		// A null, or a scalar carrying some other tag (a plain timestamp, say).
+		return 0, investmentPriorityUnorderable
 	}
 	var number float64
 	if err := node.Decode(&number); err != nil {
-		return 0, investmentPriorityNotComparable
+		return 0, investmentPriorityUnorderable
 	}
 	return number, investmentPriorityNumeric
 }
@@ -738,6 +825,124 @@ func investmentTruthy(node *yaml.Node) bool {
 		}
 	default:
 		return true
+	}
+}
+
+// investmentExpandMergeKeys resolves YAML merge keys (`<<: *anchor`) into the
+// mapping that carries them, as PyYAML's constructor does before the classifier
+// ever sees a dict.
+//
+// Without this the node walk treats `<<` as an ordinary key and never finds the
+// merged criteria -- and the direction is fail-open, which is why it is fixed
+// rather than declared. A rule written as
+//
+//	match:
+//	  <<: *shared_labels
+//
+// has, to this port, a match block with NO criteria, and a match block with no
+// criteria reaches `_matches`'s final `return True` and MATCHES EVERY ARTIFACT.
+// Python matches only the artifacts carrying the merged labels. Pinned by two
+// cases over one file that differ only in whether those labels are present.
+//
+// The precedence rules are PyYAML's, measured rather than assumed:
+//
+//   - an EXPLICIT key beats a merged one wherever it appears in the mapping,
+//     including after the `<<`;
+//   - for `<<: [*a, *b]`, the FIRST source wins a key both define;
+//   - a source that itself carries a `<<` is expanded first.
+func investmentExpandMergeKeys(node *yaml.Node, done, active map[*yaml.Node]bool) error {
+	node = investmentResolveAlias(node)
+	if node == nil || done[node] {
+		return nil
+	}
+	if active[node] {
+		// `a: &x {<<: *x}`. PyYAML recurses until it dies; refusing is the
+		// loud direction and no config can need this.
+		return investmentUnrepresentable("a merge key refers to its own mapping")
+	}
+	active[node] = true
+	defer func() {
+		delete(active, node)
+		done[node] = true
+	}()
+	for _, child := range node.Content {
+		if err := investmentExpandMergeKeys(child, done, active); err != nil {
+			return err
+		}
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	var explicit []*yaml.Node
+	var merges []*yaml.Node
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		key, value := node.Content[index], node.Content[index+1]
+		if key.Tag == "!!merge" || key.Value == "<<" {
+			merges = append(merges, value)
+			continue
+		}
+		explicit = append(explicit, key, value)
+	}
+	if len(merges) == 0 {
+		return nil
+	}
+	claimed := make(map[string]bool, len(explicit)/2)
+	for index := 0; index < len(explicit); index += 2 {
+		claimed[explicit[index].Value] = true
+	}
+	for _, merge := range merges {
+		sources, err := investmentMergeSources(merge)
+		if err != nil {
+			return err
+		}
+		for _, source := range sources {
+			if err := investmentExpandMergeKeys(source, done, active); err != nil {
+				return err
+			}
+			for index := 0; index+1 < len(source.Content); index += 2 {
+				key, value := source.Content[index], source.Content[index+1]
+				if claimed[key.Value] {
+					continue
+				}
+				claimed[key.Value] = true
+				explicit = append(explicit, key, value)
+			}
+		}
+	}
+	node.Content = explicit
+	return nil
+}
+
+// investmentMergeSources flattens a merge value into the mappings it names.
+// PyYAML accepts one mapping or a sequence of mappings and raises
+// ConstructorError for anything else.
+func investmentMergeSources(node *yaml.Node) ([]*yaml.Node, error) {
+	node = investmentResolveAlias(node)
+	if node == nil {
+		return nil, investmentMergeTypeError()
+	}
+	if node.Kind == yaml.MappingNode {
+		return []*yaml.Node{node}, nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, investmentMergeTypeError()
+	}
+	sources := make([]*yaml.Node, 0, len(node.Content))
+	for _, entry := range node.Content {
+		entry = investmentResolveAlias(entry)
+		if entry == nil || entry.Kind != yaml.MappingNode {
+			return nil, investmentMergeTypeError()
+		}
+		sources = append(sources, entry)
+	}
+	return sources, nil
+}
+
+func investmentMergeTypeError() error {
+	return &InvestmentConfigError{
+		PythonException: "ConstructorError",
+		Detail: "expected a mapping or a list of mappings for merging, " +
+			"but found another node",
 	}
 }
 

@@ -1,0 +1,9 @@
+# DECLARED DIVERGENCE 1, other field: `investment_area` is a BOOL. Python puts
+# True into a field annotated `str`.
+rules:
+  - id: bool_area
+    priority: 10
+    match:
+      always: true
+    output:
+      investment_area: true

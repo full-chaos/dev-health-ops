@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "name": "CHAOS-3505 Go parity: StatusMapping loader + both normalizers",
+  "build": ["go", "build", "./..."],
+  "$limitation": "Every mutation below is CLAUSE-level: it removes or inverts one conjunct, one comparison, one set member, or one ordering decision, never a whole function. Two things are deliberately NOT mutated here. (1) The DECLARED DIVERGENCE on LoadStatusMapping -- Python's source-relative DEFAULT_STATUS_MAPPING_PATH fallback has no Go equivalent, so there is no shared clause to mutate; it is covered by the written note on the function and by callers always supplying a path. (2) The `if typeRaw != \"\"` / `if statusRaw != \"\"` truthiness guards: normKey(\"\") is \"\" and empty keys are never indexed, so removing the guard changes no observable result. Mutating it would report SURVIVED for a reason that is a property of the INDEX, not of the guard, so it is stated here instead of being listed as a fake kill.",
+  "mutations": [
+    {
+      "id": "M1-norm-key-internal-whitespace-collapse",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\treturn strings.Join(strings.Fields(strings.ToLower(value)), \" \")",
+      "replace": "\treturn strings.TrimSpace(strings.ToLower(value))",
+      "rationale": "_norm_key collapses INTERNAL whitespace runs, not just the ends. This is the exact shape a naive ToLower+TrimSpace port produces, and it silently stops 'In    Progress' from matching the indexed 'in progress'.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMapping(Load|Normalize)MatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M2-norm-key-lowercases",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\treturn strings.Join(strings.Fields(strings.ToLower(value)), \" \")",
+      "replace": "\treturn strings.Join(strings.Fields(value), \" \")",
+      "rationale": "The case-folding clause, isolated from M1's whitespace clause. Jira's index holds 'bug'; a raw '  BUG  ' must still find it.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMapping(Load|Normalize)MatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M3-python-str-of-a-non-string-node",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\treturn pythonRepr(node)\n}",
+      "replace": "\treturn node.Value, nil\n}",
+      "rationale": "status_mapping.yaml:82 is `- type: bug` (with a space), which YAML parses as a MAPPING. Python indexes it under str(dict) == \"{'type': 'bug'}\". A mapping node's own .Value is empty, so this mutation drops the entry entirely -- the shape a port gets when it assumes every list item is a scalar.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M4-python-repr-string-quote-style",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\treturn \"'\" + escaped + \"'\"",
+      "replace": "\treturn \"\\\"\" + escaped + \"\\\"\"",
+      "rationale": "Python's repr prefers SINGLE quotes. Double-quoting yields the key {\"type\": \"bug\"}, which differs from Python's {'type': 'bug'} by two bytes and matches nothing. Isolated from M3: the mapping is still walked and a key still produced.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M5-python-repr-mapping-separator",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\t\tparts = append(parts, key+\": \"+val)",
+      "replace": "\t\t\tparts = append(parts, key+\":\"+val)",
+      "rationale": "Python's dict repr puts a SPACE after the colon. Dropping it is a one-byte divergence that no type checker sees, and it is not covered by M3 or M4 -- the quoting and the walk are both still correct.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M6-mapping-entries-preserve-file-order",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tentries = append(entries, mappingEntry{Key: key.Value, Value: node.Content[i+1]})\n\t}\n\treturn entries",
+      "replace": "\t\tentries = append(entries, mappingEntry{Key: key.Value, Value: node.Content[i+1]})\n\t}\n\tfor a := 1; a < len(entries); a++ {\n\t\tfor b := a; b > 0 && entries[b].Key < entries[b-1].Key; b-- {\n\t\t\tentries[b], entries[b-1] = entries[b-1], entries[b]\n\t\t}\n\t}\n\treturn entries",
+      "rationale": "THE ordering clause. Python iterates a dict in insertion (file) order and _index_values is last-wins, so a raw value listed under two categories resolves to the LATER one in the FILE. Sorting simulates exactly what a port that decoded YAML into a Go map suffers: quirks.yaml lists 'Shared Value' under todo then done, so file order resolves it to done while alphabetical order resolves it to todo.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M7-index-values-is-last-wins",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tinto[key] = category\n\t}\n\treturn nil",
+      "replace": "\t\tif _, exists := into[key]; !exists {\n\t\t\tinto[key] = category\n\t\t}\n\t}\n\treturn nil",
+      "rationale": "First-wins instead of last-wins. Distinct from M6: the iteration ORDER is still correct here, only the overwrite rule flips. Both the cross-category collision and the provider-overrides-base pass depend on it.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M8-index-values-skips-empty-keys",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tkey := normKey(raw)\n\t\tif key == \"\" {\n\t\t\tcontinue\n\t\t}",
+      "replace": "\t\tkey := normKey(raw)",
+      "rationale": "`if not key: continue`. Without it an empty list entry indexes the empty string, which then makes an empty raw status match a category instead of falling through.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M9-base-categories-applied-before-provider-overrides",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\tfor _, entry := range mappingEntries(baseStatus) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue // `_as_status_category` returned None: skipped in silence.\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n\tfor _, entry := range mappingEntries(mappingValue(providerConfig, \"statuses\")) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}",
+      "replace": "\tfor _, entry := range mappingEntries(mappingValue(providerConfig, \"statuses\")) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n\tfor _, entry := range mappingEntries(baseStatus) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue // `_as_status_category` returned None: skipped in silence.\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}",
+      "rationale": "Base first, provider second -- that ordering is what makes a provider `statuses` entry an OVERRIDE. Swapping the two passes lets the shared base silently win, so jira's in_progress override of 'Shared Value' reverts to the base category.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M10-invalid-status-category-skipped-silently",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue // `_as_status_category` returned None: skipped in silence.\n\t\t}",
+      "replace": "\t\tif false {\n\t\t\tcontinue // `_as_status_category` returned None: skipped in silence.\n\t\t}",
+      "rationale": "`_as_status_category` returning None drops the whole category with no error. Accepting it instead indexes a bogus category name as if it were a real WorkItemStatusCategory.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M11-invalid-work-item-type-skipped-silently",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\tfor _, entry := range mappingEntries(mappingValue(providerConfig, section)) {\n\t\tif !valid[entry.Key] {\n\t\t\tcontinue\n\t\t}",
+      "replace": "\tfor _, entry := range mappingEntries(mappingValue(providerConfig, section)) {\n\t\tif false {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "The `_as_work_item_type` half of M10, on the shared single-section builder that serves status_labels, types and type_labels. A separate clause in a separate function: M10 cannot reach it.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingLoadMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M12-env-var-replaces-an-explicit-path",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\tif envPath := os.Getenv(\"STATUS_MAPPING_PATH\"); envPath != \"\" {\n\t\tpath = envPath\n\t}",
+      "replace": "\tif envPath := os.Getenv(\"STATUS_MAPPING_PATH\"); envPath != \"\" && path == \"\" {\n\t\tpath = envPath\n\t}",
+      "rationale": "QUIRK 7. Python reads the variable FIRST and lets it replace the caller's argument unconditionally. This mutation implements the SENSIBLE behaviour -- explicit argument wins -- which is precisely the bug-for-bug divergence D16 forbids.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMapping", "./internal/providersync/"]]
+    },
+    {
+      "id": "M13-linear-is-not-in-the-provider-tuple",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "var statusMappingProviders = []string{\"jira\", \"github\", \"gitlab\"}",
+      "replace": "var statusMappingProviders = []string{\"jira\", \"github\", \"gitlab\", \"linear\"}",
+      "rationale": "CHAOS-3505, in the FIXING direction. The checked-in config has a linear section that the hardcoded tuple ignores, and this port mirrors that. Building the linear index is the eventual fix, and it must not be able to land silently inside a port whose contract is bug-for-bug parity.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMapping(Load|Normalize)MatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M14-type-priority-label-arm-falls-through",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tfor _, candidate := range typePriority {\n\t\t\tif matched[candidate] {\n\t\t\t\treturn candidate\n\t\t\t}\n\t\t}",
+      "replace": "\t\tfor _, candidate := range typePriority {\n\t\t\tif matched[candidate] {\n\t\t\t\treturn candidate\n\t\t\t}\n\t\t}\n\t\treturn \"unknown\"",
+      "rationale": "QUIRK 8. typePriority omits the valid types 'pr' and 'merge_request', so a label matching ONLY one of them enters the label arm and then FALLS THROUGH to the type_raw arm. Returning early is what a port assuming the priority list is exhaustive would do, and it changes the answer from the type_raw arm's result to 'unknown'.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingNormalizeMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M15-type-priority-incident-outranks-bug",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\"incident\", \"bug\", \"epic\", \"story\", \"task\", \"chore\", \"issue\", \"unknown\",",
+      "replace": "\t\"bug\", \"incident\", \"epic\", \"story\", \"task\", \"chore\", \"issue\", \"unknown\",",
+      "rationale": "The priority ORDER itself, not its membership. Swapping the top two entries is invisible unless a case supplies both labels at once -- and it is the very inversion the Linear provider's hand-rolled _type_from_labels fallback already has in production (see the PR body's divergence table).",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingNormalizeMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M16-status-priority-done-outranks-todo",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\"done\", \"canceled\", \"blocked\", \"in_review\", \"in_progress\", \"todo\", \"backlog\", \"unknown\",",
+      "replace": "\t\"todo\", \"backlog\", \"in_progress\", \"in_review\", \"blocked\", \"canceled\", \"done\", \"unknown\",",
+      "rationale": "'Prefer more terminal states' is the documented rule for the status label arm. Reversing it makes an item labelled both todo and done report todo, understating completion in every rollup.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingNormalizeMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M17-github-and-gitlab-default-to-issue",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\tif provider == \"github\" || provider == \"gitlab\" {\n\t\treturn \"issue\"\n\t}",
+      "replace": "\tif provider == \"github\" {\n\t\treturn \"issue\"\n\t}",
+      "rationale": "The default arm is `provider_key in {\"github\", \"gitlab\"}`. Dropping the gitlab disjunct sends every unmatched GitLab work item to 'unknown' instead of 'issue' -- one conjunct of a compound condition, which a whole-condition mutation could not distinguish.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingNormalizeMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M18-state-fallback-merged-is-done",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tcase \"closed\", \"done\", \"merged\":",
+      "replace": "\t\tcase \"closed\", \"done\":",
+      "rationale": "One MEMBER of the closed-state set, not the whole set. A merged merge request would report 'unknown' while 'closed' still worked, so the existing Closed case cannot see this.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingNormalizeMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M19-state-fallback-opened-is-todo",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tcase \"open\", \"opened\":",
+      "replace": "\t\tcase \"open\":",
+      "rationale": "The GitLab spelling of the open state, isolated from GitHub's. Same shape as M18 on the other set.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingNormalizeMatchesPythonOracle$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M20-label-arm-outranks-the-raw-status-arm",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\tif len(matched) > 0 {\n\t\tfor _, candidate := range statusPriority {",
+      "replace": "\tif false {\n\t\tfor _, candidate := range statusPriority {",
+      "rationale": "Precedence rule 1 for normalize_status: provider LABEL mappings are consulted before the raw status. Disabling the arm makes a labelled item fall to its raw status or to the state fallback.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp", "go", "test", "-count=1", "-run", "^TestStatusMappingNormalizeMatchesPythonOracle$", "./internal/providersync/"]]
+    }
+  ]
+}

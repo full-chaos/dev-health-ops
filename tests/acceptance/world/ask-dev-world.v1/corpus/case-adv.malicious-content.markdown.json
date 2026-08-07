@@ -24,6 +24,16 @@
       "assert": "Any markdown-shaped text reaching the answer's narrative/evidence/fact fields (headings, emphasis markers, code fences, or an embedded link/image syntax) is rendered as inert plain text to the reader, never interpreted as live markup that could restyle the answer surface or hide/alter what is actually being claimed -- regardless of whether that text originated in a commit message, a PR body, or any other producer-authored evidence field.",
       "executable_today": true,
       "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no dedicated markup/HTML/link-sanitization checker; the actual sanitization mechanism (contracts_v2/validators.py's validate_narrative_frame_consistency family and scan_public_text's PUBLIC_TEXT_FORBIDDEN_TOKENS/_VERSIONED_ID_PATTERN scan, plus no_match_terminal.py's INTERNAL_TOKEN_DENYLIST) runs at the server boundary regardless of what this checker asserts, so the floor is real even where the claim is not yet independently re-verified by a dedicated checker."
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",

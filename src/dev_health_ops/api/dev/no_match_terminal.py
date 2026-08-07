@@ -68,8 +68,10 @@ __all__ = [
     "INTERNAL_TOKEN_DENYLIST",
     "NEVER_ATTESTABLE_TOKENS",
     "REFUSED_WITH_GROUNDING_SUMMARY",
+    "SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE",
     "WITHHELD_COPY",
     "attested_strings",
+    "disclose_scope_widening",
     "internal_token_leak",
     "internal_token_leak_field",
     "named_subject_not_found_answer",
@@ -211,6 +213,80 @@ _UNNAMED_SUBJECT_SENTENCE = (
 )
 _NO_SUBSTITUTION_SENTENCE = "I did not substitute organization-wide data."
 _CLOSEST_MATCHES_SENTENCE = "Here are the closest matches, if any."
+
+#: CHAOS-3497 part 2: the one sentence that discloses a widening in prose.
+#:
+#: When a bare name in the question cannot be resolved, the run does not stop
+#: -- it widens to organization scope and answers anyway (see
+#: ``subject_preflight``'s ``unresolved_untyped`` branch and its comment for
+#: why). That widening was recorded machine-readably
+#: (``dev_scope_resolution.v1.fallbacks == ["organization"]``, outcome
+#: ``organization_fallback``, no ``subject_ref`` on the frame) but said
+#: nowhere a person reading the rendered answer would see it: measured live
+#: 2026-08-06, ``resolved_scope.warnings`` was empty and the frame's
+#: ``limitations`` carried only unrelated provenance entries. A reader saw
+#: "answered with gaps" and no indication that the thing they named had been
+#: missed.
+#:
+#: Deliberately NOT keyed on ``fallbacks == ["organization"]``, which the
+#: ticket suggested. That marker has a second producer:
+#: ``scope_service.resolve`` sets it for a request that named no subject at
+#: all and was ALLOWED to default to the organization -- not a widening away
+#: from anything, and a reader must not be told their subject was missed when
+#: they never named one. Measured, that second producer is unreachable from
+#: Ask Dev today (``production_runtime._scope_request`` passes
+#: ``allow_organization_fallback=False``), so the two predicates currently
+#: agree -- ``test_chaos_3497_scope_observability`` pins exactly that, so this
+#: is a checked claim rather than a story, and the day the flag flips the copy
+#: does not start lying.
+#:
+#: The trigger is instead the preflight's own ``legacy_guard_required``: true
+#: on exactly the branch where a NAMED bare subject went unresolved and the
+#: organization was committed in its place.
+#:
+#: Names nothing the user typed: the unresolved span is available
+#: (``SubjectPreflightResult.unresolved_name_spans``) but echoing it here
+#: would reopen the producer-authored-copy channel this module's docstring
+#: closes, and the sentence is true and actionable without it.
+SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE = (
+    "I could not match the subject named in this question, so this answer "
+    "covers the whole organization instead."
+)
+
+
+#: ``DevAnswer.warnings``' own contract bound, read off the model so this
+#: cannot drift from it.
+_MAX_ANSWER_WARNINGS: int = next(
+    metadata.max_length
+    for metadata in DevAnswer.model_fields["warnings"].metadata
+    if getattr(metadata, "max_length", None) is not None
+)
+
+
+def disclose_scope_widening(answer: DevAnswer) -> DevAnswer:
+    """Add the widening disclosure to ``answer.warnings``, once.
+
+    Returns ``answer`` unchanged when the sentence is already present or the
+    contract's twenty-warning bound is already spent -- a disclosure that
+    cannot fit must not silently evict a warning the producer chose.
+
+    ``warnings`` is the right channel rather than a bespoke field: it is what
+    ``streaming`` publishes as ``warning`` frames and what
+    ``terminal_frames.wrap_legacy_answer_as_frame`` copies into the frame's
+    ``limitations``, so one append reaches both the wire and the rendered
+    answer. ``answered_with_gaps`` (what every wrapped legacy answer is)
+    requires disclosed limitations, so adding one can never invalidate the
+    frame.
+    """
+
+    if SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE in answer.warnings:
+        return answer
+    if len(answer.warnings) >= _MAX_ANSWER_WARNINGS:
+        return answer
+    return answer.model_copy(
+        update={"warnings": [*answer.warnings, SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE]}
+    )
+
 
 #: The noun used when the question gave no entity noun of its own. Never
 #: "project": guessing a kind the search never confirmed would state

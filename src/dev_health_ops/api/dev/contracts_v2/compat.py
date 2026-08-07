@@ -57,6 +57,7 @@ client can only ever see an approximation of the richer v2 frame):
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -87,11 +88,11 @@ from dev_health_ops.api.dev.contracts import (
 
 from .answer import DevAnswerV2
 from .base import EntityKind, FactDisclosure, OpaqueID, PublicOutcome
-from .frame import DevFrameVersions
+from .frame import DevAnswerFrame, DevFrameVersions
 from .subject import DevResolutionCandidate
 from .validators import CANONICAL_NO_ANSWER_COPY, CANONICAL_NO_ANSWER_REMEDIATION
 
-__all__ = ["project_answer_v2_to_v1"]
+__all__ = ["project_answer_v2_to_v1", "scope_resolution_from_frame"]
 
 _V1Model = TypeVar("_V1Model", bound=BaseModel)
 
@@ -203,6 +204,79 @@ def _project_clarification_candidate(
         ),
         repository_id=entity.repository_id,
         reason=candidate.reason,
+    )
+
+
+def scope_resolution_from_frame(
+    frame: DevAnswerFrame,
+    *,
+    requested_scope: DevScope,
+    resolved_at: datetime,
+) -> DevScopeResolution:
+    """The v1 scope resolution a preflight-terminated run actually reached.
+
+    Three cases, in priority order (CHAOS-3325's own rules, unchanged --
+    this function is the extraction of what ``_project_needs_clarification``
+    already did inline, so there is exactly ONE producer of this shape):
+
+    1. ``frame.clarification_candidates`` is non-empty (the preflight
+       ambiguous-mention case): every real, authorized ledger candidate is
+       projected and the outcome is ``AMBIGUOUS``, matching v1's own
+       "ambiguous carries candidates" invariant.
+    2. ``frame.subject_ref`` is set instead: one derived candidate from the
+       one real committed entity.
+    3. Neither: ``UNRESOLVED``, carrying nothing. An honest "not resolved,
+       nothing to offer" rather than a fabricated option.
+
+    CHAOS-3497 made this callable from ``orchestrator.run()``'s preflight
+    TERMINATE branch. Until then that branch published the run's *original*
+    top-level resolve on the wire -- which by construction can only be
+    ``exact``/``filtered``/``inherited``/``organization_fallback``, since
+    every unhealthy outcome already returned earlier. A reader therefore saw
+    "scope resolved: exact" one frame before an error saying the named
+    subject could not be found: the exact juxtaposition
+    ``no_match_terminal``'s module docstring says the PRD prohibits, and it
+    also left ``no_unauthorized_candidate_surfaces`` scanning a list that
+    STRUCTURALLY cannot hold candidates (v1 permits them only on
+    candidate-bearing outcomes), turning a loud "not measured" failure into
+    a silent vacuous pass over the wrong object.
+    """
+
+    if frame.clarification_candidates:
+        outcome = ScopeResolutionOutcome.AMBIGUOUS
+        candidates = [
+            _project_clarification_candidate(candidate)
+            for candidate in frame.clarification_candidates
+        ]
+    elif frame.subject_ref is not None:
+        outcome = ScopeResolutionOutcome.AMBIGUOUS
+        candidates = [
+            DevDisambiguationCandidate(
+                entity_ref=DevEntityRef(
+                    entity_type=_KIND_TO_ENTITY_TYPE.get(
+                        frame.subject_ref.entity_kind, EntityType.REPOSITORY
+                    ),
+                    entity_id=frame.subject_ref.entity_id,
+                    display_label=frame.subject_ref.display_label,
+                    repository_id=frame.subject_ref.repository_id,
+                ),
+                reason="Clarification requested before continuing.",
+            )
+        ]
+    else:
+        outcome = ScopeResolutionOutcome.UNRESOLVED
+        candidates = []
+    return DevScopeResolution(
+        schema_version="dev_scope_resolution.v1",
+        requested_scope=requested_scope,
+        resolved_scope=None,
+        outcome=outcome,
+        authorized_repository_ids=[],
+        authorized_entity_ids=[],
+        candidates=candidates,
+        fallbacks=[],
+        warnings=[],
+        resolved_at=resolved_at,
     )
 
 
@@ -402,41 +476,8 @@ def _project_needs_clarification(
     frame = answer.frame
     versions = _require_versions(frame.versions, answer.public_outcome)
     resolved = _build_resolved_scope(answer, organization_id, time_range)
-    if frame.clarification_candidates:
-        outcome = ScopeResolutionOutcome.AMBIGUOUS
-        candidates = [
-            _project_clarification_candidate(candidate)
-            for candidate in frame.clarification_candidates
-        ]
-    elif frame.subject_ref is not None:
-        outcome = ScopeResolutionOutcome.AMBIGUOUS
-        candidates = [
-            DevDisambiguationCandidate(
-                entity_ref=DevEntityRef(
-                    entity_type=_KIND_TO_ENTITY_TYPE.get(
-                        frame.subject_ref.entity_kind, EntityType.REPOSITORY
-                    ),
-                    entity_id=frame.subject_ref.entity_id,
-                    display_label=frame.subject_ref.display_label,
-                    repository_id=frame.subject_ref.repository_id,
-                ),
-                reason="Clarification requested before continuing.",
-            )
-        ]
-    else:
-        outcome = ScopeResolutionOutcome.UNRESOLVED
-        candidates = []
-    resolution = DevScopeResolution(
-        schema_version="dev_scope_resolution.v1",
-        requested_scope=resolved,
-        resolved_scope=None,
-        outcome=outcome,
-        authorized_repository_ids=[],
-        authorized_entity_ids=[],
-        candidates=candidates,
-        fallbacks=[],
-        warnings=[],
-        resolved_at=answer.generated_at,
+    resolution = scope_resolution_from_frame(
+        frame, requested_scope=resolved, resolved_at=answer.generated_at
     )
     return DevAnswer(
         schema_version="dev_answer.v1",

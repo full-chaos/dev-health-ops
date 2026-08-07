@@ -109,11 +109,28 @@ async def stream_orchestrator(
             yield public_event(StreamEventType.ERROR, error=error)
             yield public_event(StreamEventType.DONE, terminal_kind="error")
             return
-        if result.answer is not None:
+        # CHAOS-3497: emitted for EVERY terminal whose run got as far as
+        # completing scope resolution -- not only the answering ones.
+        #
+        # This frame used to be built from ``result.answer.resolved_scope``
+        # inside the answer branch below, so a run that resolved scope and
+        # then terminated without an answer (insufficient_evidence, a
+        # refusal, a not-found) published no scope decision at all. An
+        # auditor reading the wire could not tell a failed run that resolved
+        # to an exact subject from one that silently widened to organization
+        # scope -- and a run that widens and then fails to ground is exactly
+        # the shape the no-silent-widening audit family exists to catch.
+        #
+        # Ordering is unchanged for the answer path (scope.resolved, then
+        # warnings, then the terminal) and mirrors it for the error path
+        # (scope.resolved, then the terminal), so ``validate_stream``'s
+        # "terminal result immediately followed by done" rule still holds.
+        if result.scope_resolution is not None:
             yield public_event(
                 StreamEventType.SCOPE_RESOLVED,
-                scope_resolution=result.answer.resolved_scope,
+                scope_resolution=result.scope_resolution,
             )
+        if result.answer is not None:
             for warning in result.answer.warnings:
                 yield public_event(StreamEventType.WARNING, warning=warning)
             yield public_event(

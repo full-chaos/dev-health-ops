@@ -313,8 +313,9 @@ RELATIONSHIP_MATRIX: dict[SourceClass, RelationshipMatrixEntry] = {
         # INVESTMENT_ALLOCATION above -- no plan or step mints content under
         # TEMPORAL_CONTEXT yet, so it carries no relationship vocabulary and
         # is not evidence-expansion capable. Amend when the post-ADR
-        # implementation issue actually wires a plan against it (see
-        # design/CHAOS-3567-ask-dev-temporal-source-design.md).
+        # implementation issue actually wires a plan against it (see the
+        # Linear project doc "CHAOS-3567: Ask Dev temporal source -- design
+        # + registry-impact map", Context Fabric project).
         _entry(
             SourceClass.TEMPORAL_CONTEXT,
             role="supporting",

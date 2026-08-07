@@ -210,7 +210,16 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	}
 }
 
-func TestGitHubWorkItemsRouteDefaultsProjectsToTypedPendingWithoutFetching(t *testing.T) {
+// D18 replaced the policy_pending degradation with a construction guard. A
+// handler built without a Projects collector is a WIRING DEFECT, not a batch
+// that came back incomplete, and the two must not share a vocabulary: an
+// incomplete entry says the provider declined data, which would send whoever
+// reads it looking at GitHub instead of at the handler.
+//
+// The guard is at Collect entry, so it also spends nothing: the old
+// policy_pending path had already issued the repo-metadata REST call before
+// discovering the route could not run.
+func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollector(t *testing.T) {
 	claim := githubWorkItemsRESTClaim()
 	claim.DatasetOptions = map[string]any{
 		"include_issues": false, "include_pull_requests": false,
@@ -226,33 +235,92 @@ func TestGitHubWorkItemsRouteDefaultsProjectsToTypedPendingWithoutFetching(t *te
 		}},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{
-		Deriver: deriver,
-	}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
 	)
-	if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
-		t.Fatalf("error=%v", err)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("error=%v want ErrInvalidConfiguration", err)
+	}
+	if errors.Is(err, ErrGitHubWorkItemsIncomplete) {
+		t.Fatal("an unwired collector was reported as provider incompleteness")
 	}
 	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-		t.Fatalf("incomplete route returned batch=%+v or derived %d times", batch, deriver.calls)
+		t.Fatalf("misconstructed route returned batch=%+v or derived %d times", batch, deriver.calls)
+	}
+	if doer.graphqlCalls != 0 || len(doer.rest.requests) != 0 {
+		t.Fatalf("misconstructed route spent requests: graphql=%d rest=%d",
+			doer.graphqlCalls, len(doer.rest.requests))
+	}
+}
+
+// The guard does not wait for a tenant that happens to have configured a
+// project. A handler missing its collector is misconstructed for EVERY claim,
+// and gating the refusal on target presence would make a global build defect
+// surface as a tenant-specific data problem on whichever org configured
+// Projects v2 first.
+func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets(t *testing.T) {
+	claim := githubWorkItemsRESTClaim()
+	claim.IntegrationConfig = map[string]any{}
+	doer := &githubWorkItemsRouteDoer{
+		t:    t,
+		rest: &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()},
+	}
+	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+	_, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+	)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("error=%v want ErrInvalidConfiguration even with no targets configured", err)
+	}
+	if deriver.calls != 0 || len(doer.rest.requests) != 0 {
+		t.Fatalf("misconstructed route ran: derived=%d rest=%d", deriver.calls, len(doer.rest.requests))
+	}
+}
+
+// Route-level half of the D18 environment clause. The process has both
+// GITHUB_PROJECTS_V2 and GITHUB_TOKEN set and the integration has no durable
+// targets: the batch must succeed, report "disabled", and issue ZERO GraphQL
+// requests. Asserting the state ("disabled") without the counter would pass if
+// the route adopted the env targets and the fixture returned nothing.
+func TestGitHubWorkItemsRouteTreatsEnvironmentProjectsAsNoConfiguration(t *testing.T) {
+	t.Setenv("GITHUB_PROJECTS_V2", "acme:3,labs:12")
+	t.Setenv("GITHUB_TOKEN", "ghp_environment_token_that_must_never_be_used")
+	claim := githubWorkItemsRESTClaim()
+	// Pull requests off, so the social phase issues no GraphQL of its own and
+	// any GraphQL request at all is unambiguously a Projects v2 traversal.
+	claim.DatasetOptions = map[string]any{
+		"include_issues": false, "include_pull_requests": false,
+		"fetch_comments": false, "fetch_milestones": false,
+	}
+	claim.IntegrationConfig = map[string]any{}
+	doer := &githubWorkItemsRouteDoer{
+		t: t,
+		rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
+			"/repos/acme/api": {{body: `{"id":4567,"full_name":"Acme/API"}`}},
+		}},
+	}
+	projects := &githubWorkItemsRouteProjectPolicy{}
+	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: projects, Deriver: deriver}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projects.calls != 0 {
+		t.Fatalf("environment configuration invoked the collector %d time(s)", projects.calls)
 	}
 	if doer.graphqlCalls != 0 {
-		t.Fatalf("pending default fetched Projects v2 %d times", doer.graphqlCalls)
+		t.Fatalf("environment configuration issued %d GraphQL request(s)", doer.graphqlCalls)
 	}
-	routeErr := githubWorkItemsIncompleteError(t, err)
-	incomplete := routeErr.Incomplete
-	if !reflect.DeepEqual(incomplete, []GitHubWorkItemsIncomplete{{
-		Component: "projects_v2", Cause: "policy_pending",
-	}}) {
-		t.Fatalf("incomplete=%+v", incomplete)
-	}
-	if usage := routeErr.Usage; !reflect.DeepEqual(usage, []GitHubWorkItemsRequestUsage{{
-		Transport: "rest", RouteFamily: "work_items", Dimension: BudgetRESTCore, RequestCount: 1,
-	}}) {
-		t.Fatalf("usage=%+v", usage)
+	if state := batch.Result["projects_v2"]; state != "disabled" {
+		t.Fatalf("projects_v2=%v want disabled", state)
 	}
 }
 
@@ -275,7 +343,7 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{
-		Deriver: deriver,
+		Projects: GitHubProjectV2Fetcher{}, Deriver: deriver,
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -335,7 +403,7 @@ func TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects(t 
 		}},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -391,7 +459,7 @@ func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T)
 		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":1,"body":"c","createdAt":{"bad":true},"author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -422,28 +490,38 @@ func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T)
 	}
 }
 
-// A batch can mix optional degradation with a blocking entry, and projects_v2
-// is appended LAST -- the worst ordering for a classification loop that stops
-// early. Without this case a check-first loop reads clean on exactly the
-// ordering production produces.
+// A batch can mix optional degradation with a blocking entry, and the blocking
+// entry is appended LATER than the optional one -- the worst ordering for a
+// classification loop that stops early. Without this case a check-first loop
+// reads clean on exactly the ordering production produces.
+//
+// This case used to get its blocking entry from projects_v2 policy_pending,
+// which D18 removed. The property is not about Projects v2, so it keeps its
+// coverage from the pairing that still exists in production: REST milestones
+// record an OPTIONAL entry first, and the social phase appends a BLOCKING
+// pagination cause after it. Deleting the milestones failure (leaving only the
+// blocking entry) makes this pass without testing ordering at all -- which is
+// why the assertion pins both entries and their order, not just the outcome.
 func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *testing.T) {
 	claim := githubWorkItemsRESTClaim()
-	claim.DatasetOptions["include_pull_requests"] = false
-	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
-		map[string]any{"org_login": "acme", "project_number": 3},
-	}}
+	claim.DatasetOptions = map[string]any{
+		"include_issues": true, "include_pull_requests": true,
+		"fetch_comments": true, "fetch_milestones": true, "comments_limit": 500,
+	}
+	fixtures := githubWorkItemsRESTFixtures()
+	fixtures["/repos/acme/api/milestones"] = []githubWorkItemsRESTReply{
+		{status: http.StatusInternalServerError, body: `{"message":"down"}`},
+	}
+	// A comments cursor that claims a next page and supplies no cursor: the
+	// invalid_pagination class, blocking on the optional pr_social component.
+	stalled := `{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
 	doer := &githubWorkItemsRouteDoer{
-		t: t,
-		rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
-			"/repos/acme/api":                    {{body: `{"id":4567,"full_name":"Acme/API"}`}},
-			"/repos/acme/api/milestones":         {{status: http.StatusInternalServerError, body: `{"message":"down"}`}},
-			"/repos/acme/api/issues":             {{body: `[{"number":42,"title":"Issue","state":"open","created_at":"2026-07-02T00:00:00Z","updated_at":"2026-07-20T00:00:00Z"}]`}},
-			"/repos/acme/api/issues/42/events":   {{body: `[]`}},
-			"/repos/acme/api/issues/42/comments": {{body: `[]`}},
-		}},
+		t:              t,
+		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
+		graphqlReplies: []string{stalled, stalled},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -457,7 +535,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *
 	routeErr := githubWorkItemsIncompleteError(t, err)
 	if !reflect.DeepEqual(routeErr.Incomplete, []GitHubWorkItemsIncomplete{
 		{Component: "milestones", Cause: "transient"},
-		{Component: "projects_v2", Cause: "policy_pending"},
+		{Component: "pr_social", Cause: "invalid_pagination"},
 	}) {
 		t.Fatalf("incomplete=%+v (the optional entry must precede the blocking one)", routeErr.Incomplete)
 	}
@@ -506,7 +584,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 			}
 			deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 			batch, err := (GitHubWorkItemsRouteHandler{
-				Social: test.fetcher, Deriver: deriver,
+				Projects: GitHubProjectV2Fetcher{}, Social: test.fetcher, Deriver: deriver,
 			}).Collect(
 				context.Background(), claim,
 				providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -553,7 +631,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch(t *testing.T) {
 		graphqlStatus:  []int{http.StatusForbidden},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -581,7 +659,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments(t *testing.T)
 		}},
 	}
 	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
-	batch, err := (GitHubWorkItemsRouteHandler{Deriver: deriver}).Collect(
+	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, Deriver: deriver}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
 		gitHubPullRequestClient(t, doer, "https://api.github.com"), time.Now().UTC(),
@@ -615,7 +693,8 @@ func TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding(t *
 		}},
 	}
 	batch, err := (GitHubWorkItemsRouteHandler{
-		Deriver: &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
+		Projects: GitHubProjectV2Fetcher{},
+		Deriver:  &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -673,7 +752,8 @@ func TestGitHubWorkItemsRouteFailsBeforeFetchOnMalformedProjectsConfiguration(t 
 		t: t, rest: &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()},
 	}
 	_, err := (GitHubWorkItemsRouteHandler{
-		Deriver: &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
+		Projects: GitHubProjectV2Fetcher{},
+		Deriver:  &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},

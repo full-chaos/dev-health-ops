@@ -172,9 +172,9 @@
     {
       "id": "M09-timestamp-not-truncated-to-the-column-precision",
       "file": "internal/providersync/github_work_items_direct_effects_clickhouse.go",
-      "find": "func clickHouseMillis(value time.Time) time.Time {\n\treturn value.UTC().Truncate(time.Millisecond)\n}",
+      "find": "func clickHouseMillis(value time.Time) time.Time {\n\treturn value.UTC().Truncate(workItemColumnPrecision)\n}",
       "replace": "func clickHouseMillis(value time.Time) time.Time {\n\treturn value.UTC()\n}",
-      "rationale": "DateTime64(3) cannot hold the nanoseconds a wall-clock now() carries; an untruncated expectation is never satisfiable and replays forever",
+      "rationale": "DateTime64(3) cannot hold the nanoseconds a wall-clock now() carries; an untruncated expectation is never satisfiable and replays forever. Re-anchored: the literal time.Millisecond became the named workItemColumnPrecision, which left this anchor matching NOTHING -- a dead guard that still read as coverage.",
       "proof": [
         [
           "go",

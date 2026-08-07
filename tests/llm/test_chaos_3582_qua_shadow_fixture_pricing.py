@@ -40,6 +40,21 @@ the fix does not fail OPEN for anything else: a stem-sharing neighbour
 model id, a real model on a genuine custom/BYO endpoint, and a genuinely
 unpriced real model on the OFFICIAL endpoint (neither table has ever heard
 of it) must all still resolve to ``None``.
+
+Review finding (BLOCKING, confidence 90, fixed here): an earlier revision of
+the shape-1 carve-out matched on MODEL NAME alone, with no transport check.
+Confirmed live before the fix: a BYO tenant naming THEIR OWN model, on THEIR
+OWN real endpoint, literally ``"ask-dev-scripted-v1"`` got priced at the
+fixture's near-zero rate -- on the real OpenAI endpoint, with no base_url
+override at all, AND (a second leak the same review turned up) even via the
+generic ``_PRICE_PER_MILLION`` official-endpoint lookup once the fixture had
+an entry there. Fixed by requiring BOTH the model id AND the acceptance
+stack's own scripted transport (``_is_acceptance_scripted_transport``), and
+by keeping the fixture's price OUT of ``_PRICE_PER_MILLION`` entirely so
+there is no path back into the shared, name-only lookup.
+``test_a_byo_tenant_cannot_name_their_way_into_the_fixture_price`` and
+``test_the_fixture_transport_gate_requires_an_exact_match`` are the
+permanent regression coverage for this.
 """
 
 from __future__ import annotations
@@ -90,6 +105,64 @@ def test_the_acceptance_fixture_is_priced_on_its_own_non_official_endpoint() -> 
     assert input_rate > 0
     assert cached_input_rate > 0
     assert output_rate > 0
+
+
+@pytest.mark.parametrize(
+    ("case_id", "base_url"),
+    [
+        ("official_openai_endpoint", "https://api.openai.com"),
+        ("tenants_own_byo_gateway", "https://tenant-byo-gateway.example.com/v1"),
+        ("no_base_url_override_at_all", None),
+    ],
+)
+def test_a_byo_tenant_cannot_name_their_way_into_the_fixture_price(
+    case_id: str, base_url: str | None
+) -> None:
+    """Review finding (BLOCKING, confidence 90): model name alone is
+    tenant-controlled for a BYO configuration. Before the transport gate, a
+    tenant naming THEIR OWN model literally ``"ask-dev-scripted-v1"`` got
+    priced at the fixture's near-zero rate on every one of these three real
+    call shapes -- verified live, including through the generic
+    ``_PRICE_PER_MILLION`` official-endpoint lookup once the fixture had an
+    entry there. Not the acceptance stack's own transport in any of these
+    three cases, so all three must resolve to ``None``."""
+
+    assert (
+        reliable_price(
+            provider="openai", model=SCRIPTED_OPENAI_MODEL, base_url=base_url
+        )
+        is None
+    ), f"{case_id}: a non-acceptance transport must never get the fixture price"
+
+
+@pytest.mark.parametrize(
+    ("case_id", "base_url"),
+    [
+        # Right host and port, wrong (TLS) scheme.
+        (
+            "https_scheme_on_the_right_host_and_port",
+            "https://ask-dev-scripted-openai:8001/v1",
+        ),
+        # Right host and scheme, wrong port.
+        ("wrong_port_on_the_right_host", "http://ask-dev-scripted-openai:9999/v1"),
+        # Right scheme and port, wrong host.
+        ("wrong_host_on_the_right_port", "http://not-the-scripted-service:8001/v1"),
+    ],
+)
+def test_the_fixture_transport_gate_requires_an_exact_match(
+    case_id: str, base_url: str
+) -> None:
+    """The transport gate is an exact (scheme, host, port) match, not a
+    substring or partial one -- a near-miss must still fail closed, the
+    same discipline the model-id anti-widening tests already apply to the
+    OTHER half of the carve-out's condition."""
+
+    assert (
+        reliable_price(
+            provider="openai", model=SCRIPTED_OPENAI_MODEL, base_url=base_url
+        )
+        is None
+    ), f"{case_id}: a near-miss transport must never get the fixture price"
 
 
 @pytest.mark.parametrize(

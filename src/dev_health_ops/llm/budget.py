@@ -50,21 +50,29 @@ LICENSE_LIMIT_KEY: Final = "byo_llm_budget_micro_usd"
 # Integer micro-USD per one million tokens.  Only exact, server-certified
 # provider/model pairs are present.  An absent pair is unavailable, never zero.
 # Source snapshot: https://developers.openai.com/api/docs/models/gpt-5-mini
-#
-# CHAOS-3582: ``SCRIPTED_OPENAI_MODEL`` ("ask-dev-scripted-v1") is the Ask Dev
-# acceptance stack's deterministic, deliberately-free test double -- not a
-# real, billable model. Priced here (tiny, non-zero, same rate on all three
-# legs) rather than left absent, mirroring the SAME carve-out
-# ``llm.agent.openai_compatible`` already made for the live platform-cost path
-# (``_PLATFORM_MODEL_PRICES["ask-dev-scripted-v1"] = (1_000, 1_000)``,
-# CHAOS-3552) -- same model id, same "test double, not an unpriced production
-# model" reasoning, mirrored here for ``reliable_price``'s own callers
-# (``guard_qua_shadow_call``, CHAOS-3452/CHAOS-3532).
 _PRICE_PER_MILLION: Final[dict[tuple[str, str], tuple[int, int, int]]] = {
     # input, cached input, output
     ("openai", "gpt-5-mini"): (250_000, 25_000, 2_000_000),
-    ("openai", SCRIPTED_OPENAI_MODEL): (1_000, 1_000, 1_000),
 }
+
+# CHAOS-3582: ``SCRIPTED_OPENAI_MODEL`` ("ask-dev-scripted-v1") is the Ask Dev
+# acceptance stack's deterministic, deliberately-free test double -- not a
+# real, billable model. Priced (tiny, non-zero, same rate on all three legs)
+# rather than left absent, mirroring the SAME carve-out
+# ``llm.agent.openai_compatible`` already made for the live platform-cost path
+# (``_PLATFORM_MODEL_PRICES["ask-dev-scripted-v1"] = (1_000, 1_000)``,
+# CHAOS-3552).
+#
+# Deliberately NOT an entry in ``_PRICE_PER_MILLION`` above -- review finding
+# (CHAOS-3582, confidence 90, confirmed live): that dict backs the generic
+# "official endpoint, known real model" lookup ``reliable_price`` falls
+# through to, so a fixture entry THERE would be reachable by MODEL NAME
+# ALONE the instant a caller's base_url happens to be empty or
+# ``api.openai.com`` -- exactly the transport-gate bypass
+# ``_is_acceptance_scripted_transport`` exists to close. Kept as a separate
+# constant, returned ONLY from the transport-gated branch in
+# ``reliable_price``, so there is no path back into the shared dict at all.
+_ACCEPTANCE_SCRIPTED_PROVIDER_PRICE: Final[tuple[int, int, int]] = (1_000, 1_000, 1_000)
 
 BudgetReason = Literal[
     "available",
@@ -198,6 +206,46 @@ def _official_openai_endpoint(base_url: str | None) -> bool:
     return parsed.scheme == "https" and parsed.hostname == "api.openai.com"
 
 
+#: CHAOS-3582 review finding (BLOCKING, confidence 90, fixed here): an
+#: earlier revision of the fixture carve-out below matched on MODEL NAME
+#: alone. Model name is tenant-controlled for a BYO configuration -- a
+#: tenant could name THEIR OWN model, on THEIR OWN real endpoint, literally
+#: ``"ask-dev-scripted-v1"``, and every real call would then price at the
+#: fixture's near-zero rate through ``guard_byo_call`` (this module) or
+#: ``guard_qua_shadow_call`` (``llm/qua_shadow_budget.py``) alike --
+#: defeating their own license-capped budget. Verified live before this
+#: constant existed: ``reliable_price(provider="openai",
+#: model="ask-dev-scripted-v1", base_url="https://api.openai.com")``
+#: returned the fixture's tuple, unconditionally, on the REAL OpenAI
+#: endpoint.
+#:
+#: Gated here on the ONE transport the acceptance stack's scripted provider
+#: is ever actually served from (``tests/acceptance/compose.ask-dev.yml``'s
+#: ``ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL``) -- a plain (non-TLS), internal,
+#: Docker-network-only hostname:port a real BYO or production endpoint has
+#: no plausible reason to coincide with. A drift here (the compose service
+#: renamed, its port changed) fails SAFE: the acceptance stack reverts to
+#: this ticket's ORIGINAL unpriced-and-loud symptom, never a silent pricing
+#: hole -- the model-name match alone was the only thing that could fail
+#: unsafe, and it no longer stands alone.
+_ACCEPTANCE_SCRIPTED_PROVIDER_HOST: Final = "ask-dev-scripted-openai"
+_ACCEPTANCE_SCRIPTED_PROVIDER_PORT: Final = 8001
+
+
+def _is_acceptance_scripted_transport(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    try:
+        parsed = urlsplit(str(base_url))
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == _ACCEPTANCE_SCRIPTED_PROVIDER_HOST
+        and parsed.port == _ACCEPTANCE_SCRIPTED_PROVIDER_PORT
+    )
+
+
 def reliable_price(
     *, provider: str, model: str, base_url: str | None
 ) -> tuple[int, int, int] | None:
@@ -208,20 +256,28 @@ def reliable_price(
     # ``llm.agent.openai_compatible.platform_cost_metering`` already uses for
     # the SAME model id, for the SAME reason stated there: the Ask Dev
     # acceptance stack serves this model from its OWN scripted endpoint by
-    # construction (``tests/acceptance/compose.ask-dev.yml``), never from
-    # ``api.openai.com``, so an endpoint-first check would leave it
-    # permanently unpriced. Unpriced is what made ``guard_qua_shadow_call``
-    # (the isolated QUA shadow budget guard, CHAOS-3452) fail closed on
-    # every acceptance call, unconditionally -- the scripted QUA answer,
-    # contract-id routing, and commit/disclosure logic CHAOS-3532 built were
-    # never reachable as a result (see the CHAOS-3582 writeup for the full
-    # repro). Matched on the exact normalized model id only -- provider
-    # comparison and model normalization both already lowercase (this
-    # module's own house style, unlike ``openai_compatible``'s
-    # case-SENSITIVE carve-out), so this only ever exempts the one literal
-    # fixture id, never a real customer's differently-named model.
-    if normalized_provider == "openai" and normalized_model == SCRIPTED_OPENAI_MODEL:
-        return _PRICE_PER_MILLION[(normalized_provider, normalized_model)]
+    # construction, never from ``api.openai.com``, so an endpoint-first check
+    # would leave it permanently unpriced. Unpriced is what made
+    # ``guard_qua_shadow_call`` (the isolated QUA shadow budget guard,
+    # CHAOS-3452) fail closed on every acceptance call, unconditionally --
+    # the scripted QUA answer, contract-id routing, and commit/disclosure
+    # logic CHAOS-3532 built were never reachable as a result (see the
+    # CHAOS-3582 writeup for the full repro).
+    #
+    # Matched on the model id AND the acceptance stack's own scripted
+    # transport, both -- not model id alone (see
+    # ``_is_acceptance_scripted_transport``'s docstring for why that was a
+    # real, confirmed pricing hole). A real customer's differently-named
+    # model is never exempted by the model check; a real customer's own
+    # endpoint -- even one that happens to be named
+    # ``"ask-dev-scripted-v1"`` -- is never exempted by the transport check.
+    # Both must hold.
+    if (
+        normalized_provider == "openai"
+        and normalized_model == SCRIPTED_OPENAI_MODEL
+        and _is_acceptance_scripted_transport(base_url)
+    ):
+        return _ACCEPTANCE_SCRIPTED_PROVIDER_PRICE
     if normalized_provider != "openai" or not _official_openai_endpoint(base_url):
         return None
     own_price = _PRICE_PER_MILLION.get((normalized_provider, normalized_model))

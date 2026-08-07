@@ -466,6 +466,19 @@ async def test_a_proposal_cannot_clear_a_clarification_requirement() -> None:
         ("Where's the Meridian organization diagram?", frozenset()),
         # Possessive attributive use is excluded the same way.
         ("What's the Atlas organization's status?", frozenset()),
+        # CHAOS-3574 review round 3 (CONFIRMED): the LEADING form ("org/
+        # organization <Name>") is idiomatic too when the captured name is
+        # itself one of the closed continuation words, capitalized the way a
+        # question naturally capitalizes it mid-sentence -- "Org Chart" reads
+        # exactly like "the Atlas organization chart" backwards. `_NAME`
+        # requires only a leading capital, not a real proper noun, so
+        # "Chart"/"Structure" satisfy it exactly as "Orbit" does.
+        ("What's on the Org Chart?", frozenset()),
+        ("Can you show me the Organization Structure?", frozenset()),
+        # Positive control: a real org name after the noun still matches --
+        # the guard rejects the closed continuation words, not every name.
+        ('What is organization "Orbit" doing?', frozenset({"orbit"})),
+        ("Ask about org Meridian please", frozenset({"meridian"})),
         # Still fires when the noun is not followed by an idiom continuation,
         # even with trailing words after it.
         (

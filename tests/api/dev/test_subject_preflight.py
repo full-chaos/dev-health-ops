@@ -392,6 +392,44 @@ async def test_an_organization_idiom_is_not_mistaken_for_a_named_organization() 
 
 
 @pytest.mark.asyncio
+async def test_a_leading_form_organization_idiom_is_not_mistaken_for_a_named_organization() -> (
+    None
+):
+    """CHAOS-3574 review round 3 (CONFIRMED, blocking): the round-2 guard was
+    added only to the TRAILING form. The LEADING form ("org/organization
+    <Name>") is idiomatic too when the captured name IS itself a
+    continuation word, capitalized the way a question naturally capitalizes
+    it mid-sentence -- ``_NAME`` requires only a leading capital, not a real
+    proper noun, so "Chart" satisfies it exactly as "Orbit" does.
+
+    Phrased with a LOWERCASE "org" specifically ("the org Chart status"), not
+    "the Org Chart" -- a capitalized noun immediately adjacent to a
+    capitalized continuation word merges into ONE multi-word bare-name
+    mention ("Org Chart") under `untyped_name_candidates`'s own greedy
+    `_NAME` grammar, which never equals `organization_mention_spans`'s
+    noun-stripped single-word span ("chart") regardless of this guard --
+    verified directly by executing both functions side by side before
+    reaching for this test, per repro-first discipline. THIS phrasing is the
+    one that is actually reachable through the real mention extraction the
+    org-probe reads: the noun is lowercase (excluded from `_NAME`'s
+    leading-capital grammar), so only "Chart" is extracted as the untyped
+    mention, and it collides with `organization_mention_spans`'s "chart"
+    exactly the way "Orbit" collides with "orbit" in the genuine case. Before
+    this fix: TERMINATE not_found. After: falls back gracefully, same as any
+    other idiom.
+    """
+
+    result = await _run(
+        _preflight([(ORG_ID, ASK_DEV_PROJECT)]),
+        request_for("What's the org Chart status?"),
+    )
+
+    assert result.decision is PreflightDecision.PROCEED
+    assert result.diagnostic == "proceeded_unresolved_bare_name"
+    assert result.legacy_guard_required is True
+
+
+@pytest.mark.asyncio
 async def test_a_resolved_cohort_is_unsupported_not_partially_committed() -> None:
     """Two real subjects: v1 ``DevScope`` names one, so neither is guessed.
 

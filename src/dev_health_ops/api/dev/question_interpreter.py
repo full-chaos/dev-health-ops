@@ -408,6 +408,18 @@ _ORGANIZATION_NOUN_TRAILING = re.compile(
     rf"(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\b"
     rf"{_ORGANIZATION_ATTRIBUTIVE_GUARD}",
 )
+#: Same continuation list, applied to the LEADING form (CHAOS-3574 review
+#: round 3, CONFIRMED): there the idiom word is not something that FOLLOWS
+#: the noun, it IS the captured name -- "Org Chart" / "Organization
+#: Structure" satisfy ``_NAME`` (a leading capital is all it requires, not a
+#: real proper noun) exactly as a genuine org name like "Org Meridian" would.
+#: Filtered in :func:`organization_mention_spans` rather than the regex
+#: itself: a lookahead here would need to duplicate the alternation inside
+#: the existing capture group, and a plain post-match set check is simpler
+#: and exactly as precise.
+_ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS_SET = frozenset(
+    _ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS
+)
 
 
 def organization_mention_spans(question: str) -> frozenset[str]:
@@ -436,6 +448,12 @@ def organization_mention_spans(question: str) -> frozenset[str]:
             ]
             words = [word for word in words if word]
             if not words or all(word in _NAME_STOP_WORDS for word in words):
+                continue
+            if (
+                pattern is _ORGANIZATION_NOUN_LEADING
+                and len(words) == 1
+                and words[0] in _ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS_SET
+            ):
                 continue
             found.add(_normalize(span))
     return frozenset(found)

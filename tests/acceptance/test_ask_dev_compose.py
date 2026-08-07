@@ -175,6 +175,94 @@ def test_launcher_runs_the_not_found_smoke_before_bringing_up_web() -> None:
     assert 'PYTHONPATH="${ops_root}/src:${ops_root}"' in launcher
 
 
+def test_keep_stack_is_opt_in_and_skips_only_the_teardown() -> None:
+    """CHAOS-3219 Phase 5's keep-the-stack flag, clause by clause.
+
+    The CI lane runs this launcher and then run_wave4_corpus.sh against the
+    same containers, so the stack has to survive the launcher. The risk in any
+    "keep the stack" flag is that it becomes a way to skip WORK, so each
+    assertion below pins one clause of the guard.
+
+    These are text assertions on a shell script the unit tier cannot execute --
+    that is a real limitation and it is why they are clause-level rather than a
+    single "the block exists" check. The first version of this test asserted
+    only two string ORDERINGS, and adversarial review (2026-08-06) survived
+    five separate mutations against it: inverting the comparison so every hand
+    run leaked a stack, deleting the real teardown, deleting the early `exit
+    0`, deleting `trap - EXIT`, and appending a new guard BELOW the keep block
+    so the flag started skipping real work. Every assertion here was written
+    against one of those mutations. Behaviour, as opposed to text, is proven by
+    the local execution run and by the nightly lane itself.
+    """
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    teardown = '"${compose[@]}" down --volumes --remove-orphans'
+
+    # Given the flag, defaulting to off. A developer running this by hand must
+    # not leak a stack by not knowing the variable exists.
+    assert "ASK_DEV_ACCEPTANCE_KEEP_STACK:-0" in launcher
+
+    # And it must be an EQUALS-1 test. `!= "1"` inverts the flag: the default
+    # path would then keep the stack and the CI path would tear it down.
+    assert '"${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1"' in launcher
+
+    keep_index = launcher.index("ASK_DEV_ACCEPTANCE_KEEP_STACK")
+    playwright_index = launcher.index('"${web_root}/node_modules/.bin/playwright" test')
+
+    # Then the flag is read strictly AFTER the last thing the launcher proves.
+    # Every guard -- world-restore digest, per-boot login proof, the six
+    # ops-side smokes, the web Playwright leg -- runs before this point
+    # regardless of the flag, so an armed CI run and a developer's run execute
+    # an identical sequence and differ only in whether the containers survive.
+    assert playwright_index < keep_index
+
+    # And the real teardown command appears EXACTLY TWICE, and only twice: the
+    # pre-boot volume reset that makes the fixture deterministic, and the final
+    # teardown. The count is the load-bearing part. A help message that spelled
+    # the same command out in prose would make a third occurrence, and would
+    # then satisfy both the ordering below and the older
+    # `"down --volumes --remove-orphans" in launcher` assertion in
+    # test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle -- so
+    # DELETING the real final teardown would change no test. That is exactly
+    # what the first version of this commit did, and why the retained-stack
+    # hint is deliberately spelled `-p ... down -v` instead.
+    assert launcher.count(teardown) == 2
+    reset_index, final_index = (
+        launcher.index(teardown),
+        launcher.rindex(teardown),
+    )
+    assert reset_index < playwright_index < keep_index < final_index
+
+    # And the guarded branch must actually LEAVE the script. Without `exit 0`
+    # it falls through to the teardown it exists to skip.
+    keep_block = launcher[keep_index:final_index]
+    assert "exit 0" in keep_block
+
+    # And it must clear the EXIT trap on the way out. The trap installed
+    # earlier dumps `ps` + logs and re-exits; leaving it armed on the keep path
+    # turns a successful retained-stack run into a noisy failure.
+    assert "trap - EXIT" in keep_block
+    # Both exit paths clear it -- the keep path and the default path.
+    assert launcher.count("trap - EXIT") == 2
+
+    # And nothing that does WORK may follow the guard. Anything appended below
+    # it would be skipped whenever the flag is set, which would make the flag a
+    # way to skip a proof rather than a way to keep containers. The tail after
+    # the guard is allowed to contain only the teardown and the closing
+    # bookkeeping.
+    tail = launcher[keep_index:]
+    for forbidden in (
+        '"${compose[@]}" exec',
+        '"${compose[@]}" up',
+        "/.venv/bin/python",
+        "node_modules/.bin/playwright",
+    ):
+        assert forbidden not in tail, (
+            f"{forbidden!r} runs after the keep-stack guard, so setting "
+            "ASK_DEV_ACCEPTANCE_KEEP_STACK=1 now skips it -- the flag may skip the "
+            "teardown and nothing else"
+        )
+
+
 def test_oracle_is_versioned_and_requires_exact_grounded_answer_parts() -> None:
     oracle = json.loads(_ORACLE.read_text(encoding="utf-8"))
     assert oracle == {

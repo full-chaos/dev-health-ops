@@ -41,6 +41,38 @@ if [[ "${ASK_DEV_LIVE_ACCEPTANCE:-}" != "1" ]]; then
   exit 64
 fi
 
+# ASK_DEV_CORPUS_MIN_EXECUTED raises the executed-case floor. run_report's
+# default is 1, and 1 is the right default HERE -- an interactive `-k` run is a
+# legitimate reason to execute a single case. It is the wrong floor for an
+# unattended lane: adversarial review (2026-08-06, MEDIUM-HIGH, reproduced with
+# a synthetic JUnit report) showed a run that executes 1 of 144 cases exits 0
+# and reports green, because nothing between the case-file glob and that
+# assertion knows how many cases there are SUPPOSED to be. load_corpus_cases
+# documents an empty result as a deliberate non-failure and
+# check_script_inventory only catches cases missing a script, never scripts
+# whose case file vanished -- so a bad rebase or partial merge that drops most
+# case files certifies a fraction of the corpus as a pass.
+#
+# This is a COARSE ATTRITION FLOOR, not the closed expected-case registry the
+# execution plan's section 5 item 3 mandates ("expected - received = missing ->
+# red"). That registry is Lane 5a's scripts/acceptance/wave4_manifest.py, which
+# does not exist yet. A floor catches catastrophic loss while surviving the
+# corpus's own churn (144 -> 140 as cases are re-authored); it cannot catch a
+# handful of cases going missing. Raise it to an exact set-difference when 5a
+# lands, and until then do not read a green run as evidence every case ran.
+#
+# Validated HERE rather than beside its use below, so a bad value costs a
+# second instead of failing after a twelve-minute corpus run.
+min_executed_args=()
+if [[ -n "${ASK_DEV_CORPUS_MIN_EXECUTED:-}" ]]; then
+  if [[ ! "${ASK_DEV_CORPUS_MIN_EXECUTED}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ASK_DEV_CORPUS_MIN_EXECUTED must be a positive integer, not '${ASK_DEV_CORPUS_MIN_EXECUTED}'" >&2
+    echo "-- refusing to guess a floor, which would silently become the default of 1." >&2
+    exit 64
+  fi
+  min_executed_args=(--min-executed "${ASK_DEV_CORPUS_MIN_EXECUTED}")
+fi
+
 # Merge, never clobber: an operator debugging with their own
 # DEV_HEALTH_TEST_ENV_ALLOW keeps their exemption. arming.env_allow_value is the
 # single source of truth for the list.
@@ -100,9 +132,9 @@ echo "=== pytest exit: ${pytest_status} ==="
 # from "did it pass", and the answer matters most precisely when the run looks
 # suspiciously clean. This can only turn a green run red, never the reverse --
 # the pytest status is re-raised below if it was non-zero.
-echo "=== executed-case assertion ==="
+echo "=== executed-case assertion (floor: ${ASK_DEV_CORPUS_MIN_EXECUTED:-1}) ==="
 PYTHONPATH="${ops_root}/src:${ops_root}" "${venv_python}" -m \
-  scripts.acceptance.corpus.run_report "${report}"
+  scripts.acceptance.corpus.run_report "${report}" "${min_executed_args[@]+"${min_executed_args[@]}"}"
 report_status=$?
 
 if [[ ${report_status} -ne 0 ]]; then

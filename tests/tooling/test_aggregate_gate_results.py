@@ -503,6 +503,60 @@ def test_a_gate_given_nothing_to_judge_fails() -> None:
     assert "asked to judge nothing" in proc.stderr
 
 
+@pytest.mark.parametrize(
+    ("env", "expected_judged", "expected_supplied"),
+    [
+        pytest.param(
+            {
+                "GATED_JOB_1": "a|path-filtered|success",
+                "GATED_JOB_3": "b|path-filtered|failure",
+            },
+            1,
+            2,
+            id="gap-hides-a-failure",
+        ),
+        pytest.param(
+            {
+                "GATED_JOB_1": "a|path-filtered|success",
+                "GATED_JOB_2": "",
+                "GATED_JOB_3": "b|path-filtered|skipped",
+            },
+            1,
+            2,
+            id="empty-middle-entry-hides-a-skip",
+        ),
+    ],
+)
+def test_a_gap_in_the_job_numbering_fails_the_gate(
+    env: dict[str, str], expected_judged: int, expected_supplied: int
+) -> None:
+    # Given a gate handed non-consecutive GATED_JOB_<n> entries -- one typo in
+    # a workflow away, and test.yml already ships two of them
+    proc = subprocess.run(
+        ["bash", str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "GATE_NAME": "test",
+            "EVENT_NAME": "pull_request",
+            "CHANGES_RESULT": "success",
+            "CHANGES_CODE": "true",
+            **env,
+        },
+    )
+
+    # Then it refuses. The consecutive loop stops at the first gap, so before
+    # this check `GATED_JOB_1=success` + `GATED_JOB_3=failure` printed
+    # "gate passed" and exited 0 -- a required check going green while a job's
+    # failure was never read (adversarial review 2026-08-06, reproduced). A
+    # gate that silently judges a subset is the same defect class as one that
+    # judges nothing.
+    assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert f"judged {expected_judged} of {expected_supplied}" in proc.stderr
+
+
 def test_an_unrecognized_policy_fails_the_gate() -> None:
     # Given a job whose selection policy this script does not model
     proc = subprocess.run(
@@ -524,6 +578,178 @@ def test_an_unrecognized_policy_fails_the_gate() -> None:
     # silently become "this skip was fine".
     assert proc.returncode == 1
     assert "not recognized" in proc.stderr
+
+
+# --------------------------------------------------------------------------
+# The selector-less gate (CHAOS-3219 Phase 5).
+#
+# .github/workflows/ask-dev-acceptance.yml fires only on `schedule` and
+# `workflow_dispatch`, so it has no `changes` job and nothing can explain a
+# skip. That is the `unconditional` policy, and it is admitted only together
+# with GATE_HAS_SELECTOR=false. The rows below are the pairs that share a
+# literal result string and must reach opposite verdicts, plus the two wiring
+# mistakes that would let an empty selector result stand in for a decision.
+# --------------------------------------------------------------------------
+
+
+def _run_selectorless(
+    *,
+    result: str,
+    event: str = "schedule",
+    policy: str = "unconditional",
+    has_selector: str = "false",
+    changes_result: str | None = None,
+    changes_code: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "GATE_NAME": "ask-dev-acceptance",
+        "EVENT_NAME": event,
+        "GATE_HAS_SELECTOR": has_selector,
+        "GATED_JOB_1": f"acceptance-live|{policy}|{result}",
+    }
+    if changes_result is not None:
+        env["CHANGES_RESULT"] = changes_result
+    if changes_code is not None:
+        env["CHANGES_CODE"] = changes_code
+    return subprocess.run(
+        ["bash", str(SCRIPT)], capture_output=True, text=True, check=False, env=env
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "event", "expected_pass"),
+    [
+        pytest.param("success", "schedule", _PASS, id="nightly-ran-and-passed"),
+        pytest.param(
+            "success", "workflow_dispatch", _PASS, id="dispatch-ran-and-passed"
+        ),
+        # The whole point. On the other three gates a `skipped` job on
+        # workflow_dispatch or with an undecided filter can be legitimate; here
+        # it never is, because there is no condition that could have deselected
+        # it. A nightly that booted nothing is not a nightly that found nothing.
+        pytest.param("skipped", "schedule", _FAIL, id="nightly-booted-nothing"),
+        pytest.param(
+            "skipped", "workflow_dispatch", _FAIL, id="dispatch-booted-nothing"
+        ),
+        pytest.param("failure", "schedule", _FAIL, id="stack-or-corpus-failed"),
+        pytest.param("cancelled", "schedule", _FAIL, id="cancelled-is-unmeasured"),
+        pytest.param("", "schedule", _FAIL, id="empty-result-is-not-evidence"),
+        pytest.param("neutral", "schedule", _FAIL, id="unknown-result-is-not-evidence"),
+    ],
+)
+def test_selectorless_gate_verdict(
+    result: str, event: str, expected_pass: bool
+) -> None:
+    proc = _run_selectorless(result=result, event=event)
+
+    if expected_pass:
+        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert "ask-dev-acceptance gate passed" in proc.stdout
+    else:
+        assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert "ask-dev-acceptance gate failed" in proc.stderr
+        assert "gate passed" not in proc.stdout
+        # And it failed for the RIGHT reason. Asserting only the generic footer
+        # let a mutation that deleted the `unconditional` policy arm survive:
+        # the row still went red, but through the "unrecognized policy" path,
+        # which proves nothing about the policy this gate actually uses.
+        expected_reason = (
+            "was skipped, but its job condition selected it to run"
+            if result == "skipped"
+            else f"acceptance-live reported '{result or '<empty>'}'"
+        )
+        assert expected_reason in proc.stderr
+
+
+def test_a_selectorless_gate_may_not_also_report_a_selector() -> None:
+    # Given a gate that declares it has no `changes` job but passes one's result
+    proc = _run_selectorless(
+        result="success", changes_result="success", changes_code="true"
+    )
+
+    # Then it refuses: one of the two statements is wrong and the script cannot
+    # tell which, so it must not act on either.
+    assert proc.returncode == 1
+    assert "cannot both have no selector job and report one" in proc.stderr
+
+
+@pytest.mark.parametrize("result", ["success", "skipped", "failure"])
+@pytest.mark.parametrize("policy", ["totally-bogus", "uncondit1onal", ""])
+def test_an_unrecognized_policy_is_refused_whatever_the_result(
+    policy: str, result: str
+) -> None:
+    # Given a policy name this script does not implement -- a typo, or a name
+    # from a workflow that was never taught to this script
+    proc = _run_selectorless(result=result, policy=policy)
+
+    # Then it refuses on EVERY result, not only on a skip. Before this,
+    # is_selected() ran only on the `skipped` arm, so a mis-wired gate passed
+    # green on every run where nothing happened to skip and revealed itself
+    # only on the day the verdict mattered. Adversarial review 2026-08-06,
+    # reproduced: `acceptance-live|totally-bogus|success` exited 0.
+    assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "is not recognized" in proc.stderr
+
+
+def test_the_unconditional_policy_arm_is_load_bearing() -> None:
+    # Given the ONE combination this workflow actually ships
+    proc = _run_selectorless(result="skipped", policy="unconditional")
+
+    # Then the refusal names the unexplained skip, not an unknown policy.
+    # Without this assertion, deleting the `unconditional)` arm outright still
+    # turned every skipped row red -- via the "not recognized" arm -- and the
+    # rows only checked the generic footer, so the arm was unpinned
+    # (adversarial review 2026-08-06, MEDIUM-HIGH, reproduced).
+    assert proc.returncode == 1
+    assert "was skipped, but its job condition selected it to run" in proc.stderr
+    assert "is not recognized" not in proc.stderr
+
+
+def test_a_filter_policy_without_a_selector_is_refused() -> None:
+    # Given a job judged by the path filter, with no filter result to judge by.
+    # `path-filtered` reads CHANGES_CODE; unset, it would read as "undecided"
+    # and quietly call the job selected -- a verdict reached from an absent
+    # measurement rather than a decision.
+    proc = _run_selectorless(result="skipped", policy="path-filtered")
+
+    assert proc.returncode == 1
+    assert "no filter result to decide it with" in proc.stderr
+
+
+@pytest.mark.parametrize("value", ["", "yes", "FALSE", "1"])
+def test_a_non_literal_selector_declaration_is_refused(value: str) -> None:
+    # Given anything but the literal 'true'/'false' -- including the empty
+    # string a mistyped `${{ ... }}` expression produces
+    proc = _run_selectorless(result="success", has_selector=value)
+
+    # Then the gate fails rather than defaulting to the permissive reading.
+    assert proc.returncode == 1
+    assert "must be literally 'true' or 'false'" in proc.stderr
+
+
+def test_the_default_selector_declaration_is_unchanged_for_existing_gates() -> None:
+    # Given a caller that predates GATE_HAS_SELECTOR entirely (no such variable
+    # in its env), which is every gate in test.yml / lint.yml / typecheck.yml
+    proc = subprocess.run(
+        ["bash", str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "GATE_NAME": "lint",
+            "EVENT_NAME": "pull_request",
+            "CHANGES_RESULT": "cancelled",
+            "CHANGES_CODE": "",
+            "GATED_JOB_1": "lint-job|path-filtered|skipped",
+        },
+    )
+
+    # Then it still takes the selector path, and the CHAOS-3482 incident row
+    # still fails. The new input must not have widened the old gates.
+    assert proc.returncode == 1
+    assert "the job that decides what must run did not complete" in proc.stderr
 
 
 # --------------------------------------------------------------------------

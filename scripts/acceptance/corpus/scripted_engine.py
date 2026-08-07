@@ -75,6 +75,7 @@ class ScriptedEngineStatus:
     loaded: bool
     role: str
     cases: int
+    script_digest: str
     reason: str | None
     raw: Mapping[str, Any]
 
@@ -141,10 +142,35 @@ def scripted_engine_status(
             "the scripted provider's health payload carries no "
             f"'scripted_engine' block: {payload!r}"
         )
+    # `cases` is an int in every shape this service emits, but a malformed or
+    # truncated payload must still leave through THIS module's typed error --
+    # the caller (`test_wave4_corpus_runner_live._scripted_engine_precondition`)
+    # catches only ScriptedEngineUnavailableError, so a bare ValueError would
+    # escape as an opaque traceback instead of the diagnostic failure this
+    # module exists to produce. Found by probing the parser, not by review.
+    raw_cases = engine.get("cases")
+    if raw_cases is None:
+        # A degraded payload legitimately omits `cases` -- it never loaded a
+        # script to count. `loaded` is what rejects that shape, not this.
+        cases = 0
+    elif isinstance(raw_cases, bool) or not isinstance(raw_cases, int):
+        # Deliberately strict: `engine.get("cases") or 0` was the first
+        # attempt and it silently coerced falsy junk -- `[]`, `{}` -- into a
+        # perfectly valid 0, turning a malformed payload into a confident
+        # wrong answer. bool is excluded because it is an int subclass, so
+        # `True` would otherwise report one case.
+        raise ScriptedEngineUnavailableError(
+            f"the scripted provider reported a non-numeric case count "
+            f"{raw_cases!r} ({type(raw_cases).__name__})"
+        )
+    else:
+        cases = raw_cases
+
     return ScriptedEngineStatus(
         loaded=bool(engine.get("loaded")),
         role=str(engine.get("role", "")),
-        cases=int(engine.get("cases") or 0),
+        cases=cases,
+        script_digest=str(engine.get("script_digest") or ""),
         reason=(str(engine["reason"]) if engine.get("reason") else None),
         raw=payload,
     )
@@ -153,17 +179,33 @@ def scripted_engine_status(
 def require_scripted_engine_loaded(
     context: ComposeContext,
     *,
-    minimum_cases: int = 1,
+    expected_role: str,
+    expected_digest: str,
     service: str = "ask-dev-scripted-openai",
     runner: Any = subprocess.run,
 ) -> ScriptedEngineStatus:
-    """Fail the armed run unless the scripted engine is loaded with scripts.
+    """Fail the armed run unless the container serves EXACTLY the script this
+    run asserts against.
 
-    ``minimum_cases`` guards the second failure shape, which is why a bare
-    ``loaded`` boolean is not enough: a directory that exists but is empty,
-    or a role file naming zero cases, loads "successfully" and still serves
-    nothing. "Loaded with 0 cases" and "loaded with 93 cases" are different
-    kinds of ready, and only one of them can measure a corpus.
+    Identity, not quantity. An earlier revision compared only a case-count
+    floor and claimed in its own comment to catch stale, partial and
+    wrong-role mounts -- codex adversarial review (HIGH, confirmed against
+    source) showed that claim was FALSE: a wrong role, a stale compose
+    project, or an unrelated script with an equal or larger case count all
+    cleared a floor while serving different decisions than the corpus
+    asserts. ``status.role`` was parsed and then never compared at all.
+
+    So both halves are checked here:
+
+    * ``expected_role`` -- the container must be serving the role the host
+      loaded, not merely *a* role;
+    * ``expected_digest`` -- ``role_script_identity_digest`` over
+      ``by_fingerprint``, the map ``ScriptEngine.resolve`` actually routes
+      on, so the check fails if any question routes to a different case id.
+      A question edited by one word moves this digest; a count would not.
+
+    ``loaded`` is still checked first because it produces the far more
+    actionable message for the failure that actually happened in the field.
     """
 
     status = scripted_engine_status(context, service=service, runner=runner)
@@ -177,11 +219,26 @@ def require_scripted_engine_loaded(
             "compose.ask-dev.yml still mounts the provider-scripts directory "
             "and sets ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR."
         )
-    if status.cases < minimum_cases:
+    if status.role != expected_role:
         raise ScriptedEngineUnavailableError(
-            f"the scripted engine in {service!r} loaded role {status.role!r} "
-            f"with only {status.cases} case(s), below the required "
-            f"{minimum_cases} -- an empty or truncated script directory "
-            "serves nothing while reporting itself loaded."
+            f"{service!r} is serving role {status.role!r} but this run "
+            f"asserts against {expected_role!r} -- the container would answer "
+            "with a different decision matrix than the corpus expects."
+        )
+    if not status.script_digest:
+        raise ScriptedEngineUnavailableError(
+            f"{service!r} reported no script_digest, so its script identity "
+            "could not be verified. An unverifiable identity is not a "
+            "matching one -- refusing to proceed."
+        )
+    if status.script_digest != expected_digest:
+        raise ScriptedEngineUnavailableError(
+            f"{service!r} loaded role {status.role!r} with {status.cases} "
+            f"case(s) but its script identity digest {status.script_digest!r} "
+            f"does not match this run's {expected_digest!r}. The container is "
+            "serving a DIFFERENT script than the corpus asserts against -- a "
+            "stale mount, a stale compose project, or an edited question. A "
+            "case count cannot detect this, which is why it is not what is "
+            "compared."
         )
     return status

@@ -189,7 +189,24 @@ services:
     expose:
       - "8001"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8001/healthz"]
+      # CHAOS-3219 Phase 3 (codex adversarial review, MEDIUM, confirmed):
+      # `wget --spider` only checks the STATUS CODE, and /healthz answers 200
+      # even when the engine is dead -- so Docker health stayed green on a
+      # dead engine, `api` started against it, and the launcher's smoke/web
+      # leg ran happily against the unscripted heuristic. Only the Wave 4
+      # pytest precondition caught it, which left every boot path that does
+      # not run that step carrying the original false-health failure.
+      # This validates the BODY, so the stack refuses to come up at all when
+      # the scripted matrix is not actually loaded.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import json, sys, urllib.request
+          with urllib.request.urlopen("http://localhost:8001/healthz", timeout=3) as response:
+              engine = json.load(response).get("scripted_engine") or {}
+          sys.exit(0 if engine.get("loaded") else 1)
       interval: 2s
       timeout: 2s
       retries: 15

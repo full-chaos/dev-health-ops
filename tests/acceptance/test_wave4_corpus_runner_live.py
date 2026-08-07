@@ -120,7 +120,11 @@ from dev_health_ops.api.dev.contracts import (
     validate_stream,
 )
 from dev_health_ops.api.dev.terminal_frames import PUBLIC_OUTCOME_BY_ERROR_CODE
-from dev_health_ops.llm.agent.provider_scripts import current_role, load_role_script
+from dev_health_ops.llm.agent.provider_scripts import (
+    current_role,
+    load_role_script,
+    role_script_identity_digest,
+)
 from scripts.acceptance.corpus.arming import (
     ArmedButScrubbedError,
     NotArmedError,
@@ -316,16 +320,26 @@ def _scripted_engine_precondition(compose_context: ComposeContext, role_script) 
     PASSED, having exercised no fault at all. Nothing failed when the fault
     matrix stopped existing; this fixture is why it now would.
 
-    ``minimum_cases`` is the HOST's own role-script case count rather than a
-    hardcoded floor, which makes this a DIFFERENTIAL rather than a
-    threshold: the container must have loaded the same script this run
-    asserts against. A stale, partial, or wrong-role mount then fails here
-    instead of quietly serving a different matrix than the corpus expects.
+    The comparison is the HOST's own role and script-identity digest, making
+    this a DIFFERENTIAL rather than a threshold: the container must serve
+    the same script this run asserts against.
+
+    An earlier revision passed only ``minimum_cases=len(script.cases)`` and
+    claimed exactly that property -- codex adversarial review (HIGH,
+    confirmed) showed the claim was false, because a wrong role or a stale
+    mount with an equal or larger case count clears a floor while serving
+    different decisions. The digest is taken over ``by_fingerprint``, the
+    map ``ScriptEngine.resolve`` routes on, so a single edited question
+    fails here rather than silently routing a case to the default heuristic.
     """
 
-    _role, script = role_script
+    role, script = role_script
     try:
-        require_scripted_engine_loaded(compose_context, minimum_cases=len(script.cases))
+        require_scripted_engine_loaded(
+            compose_context,
+            expected_role=role,
+            expected_digest=role_script_identity_digest(script),
+        )
     except ScriptedEngineUnavailableError as exc:
         pytest.fail(str(exc), pytrace=False)
 

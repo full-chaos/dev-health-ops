@@ -37,11 +37,19 @@ _OBSERVED_DEGRADED_BODY = {
     },
 }
 
+#: A stand-in for the host-computed role-script identity digest.
+_DIGEST = "a" * 64
+
 #: The EXACT body after the fix, same image, mount + env var supplied.
 _OBSERVED_READY_BODY = {
     "status": "ready",
     "script": "ask-dev-scripted-v1",
-    "scripted_engine": {"loaded": True, "role": "legacy_agent", "cases": 93},
+    "scripted_engine": {
+        "loaded": True,
+        "role": "legacy_agent",
+        "cases": 93,
+        "script_digest": _DIGEST,
+    },
 }
 
 
@@ -115,6 +123,29 @@ class TestScriptedEngineStatus:
                 _context(), runner=_runner(stdout, returncode=returncode)
             )
 
+    @pytest.mark.parametrize("bad_cases", ("not-a-number", [], {}, True, "93"))
+    def test_a_non_numeric_case_count_raises_THIS_modules_typed_error(
+        self, bad_cases: object
+    ) -> None:
+        """Found by probing the parser, not by review. The caller
+        (``_scripted_engine_precondition``) catches only
+        ``ScriptedEngineUnavailableError``, so a bare ``ValueError``/
+        ``TypeError`` from ``int()`` would escape as an opaque traceback
+        instead of the diagnostic failure this module exists to produce.
+        The run still fails either way -- this is about staying diagnosable,
+        which is the whole point of the guard."""
+
+        body = {
+            "status": "ready",
+            "scripted_engine": {
+                "loaded": True,
+                "role": "legacy_agent",
+                "cases": bad_cases,
+            },
+        }
+        with pytest.raises(ScriptedEngineUnavailableError, match="non-numeric"):
+            scripted_engine_status(_context(), runner=_runner(json.dumps(body)))
+
     def test_a_missing_docker_binary_raises_rather_than_passing(self) -> None:
         def run(*_args: Any, **_kwargs: Any) -> Any:
             raise FileNotFoundError("docker")
@@ -162,7 +193,10 @@ class TestScriptedEngineStatus:
 class TestRequireScriptedEngineLoaded:
     def test_passes_when_the_engine_is_loaded_with_scripts(self) -> None:
         status = require_scripted_engine_loaded(
-            _context(), runner=_runner(json.dumps(_OBSERVED_READY_BODY))
+            _context(),
+            runner=_runner(json.dumps(_OBSERVED_READY_BODY)),
+            expected_role="legacy_agent",
+            expected_digest=_DIGEST,
         )
         assert status.cases == 93
 
@@ -172,7 +206,10 @@ class TestRequireScriptedEngineLoaded:
 
         with pytest.raises(ScriptedEngineUnavailableError) as excinfo:
             require_scripted_engine_loaded(
-                _context(), runner=_runner(json.dumps(_OBSERVED_DEGRADED_BODY))
+                _context(),
+                runner=_runner(json.dumps(_OBSERVED_DEGRADED_BODY)),
+                expected_role="legacy_agent",
+                expected_digest=_DIGEST,
             )
         message = str(excinfo.value)
         assert "NOT loaded" in message
@@ -181,26 +218,59 @@ class TestRequireScriptedEngineLoaded:
         assert "ASK_DEV_SCRIPTED_PROVIDER_SCRIPTS_DIR" in message
         assert "measured nothing" in message
 
-    def test_loaded_but_zero_cases_is_rejected(self) -> None:
-        """The second failure shape, and the reason a bare `loaded` boolean
-        is insufficient: a directory that exists but is empty loads
-        'successfully' and serves nothing."""
-
-        body = {
-            "status": "ready",
-            "script": "ask-dev-scripted-v1",
-            "scripted_engine": {"loaded": True, "role": "legacy_agent", "cases": 0},
+    def _body(self, **engine: Any) -> str:
+        block = {
+            "loaded": True,
+            "role": "legacy_agent",
+            "cases": 93,
+            "script_digest": _DIGEST,
         }
-        with pytest.raises(ScriptedEngineUnavailableError, match="only 0 case"):
-            require_scripted_engine_loaded(_context(), runner=_runner(json.dumps(body)))
+        block.update(engine)
+        return json.dumps(
+            {
+                "status": "ready",
+                "script": "ask-dev-scripted-v1",
+                "scripted_engine": block,
+            }
+        )
 
-    def test_a_truncated_script_directory_is_rejected(self) -> None:
-        body = {
-            "status": "ready",
-            "script": "ask-dev-scripted-v1",
-            "scripted_engine": {"loaded": True, "role": "legacy_agent", "cases": 5},
-        }
-        with pytest.raises(ScriptedEngineUnavailableError, match="below the required"):
+    def test_a_wrong_role_is_rejected_even_with_a_larger_case_count(self) -> None:
+        """Codex adversarial review, HIGH, confirmed. The previous revision
+        compared only a case-count FLOOR and its own comment claimed that
+        caught wrong-role mounts -- it did not. A wrong role with MORE cases
+        cleared the floor and served an entirely different decision matrix.
+        `status.role` was parsed and then never compared at all."""
+
+        with pytest.raises(ScriptedEngineUnavailableError, match="serving role"):
             require_scripted_engine_loaded(
-                _context(), runner=_runner(json.dumps(body)), minimum_cases=90
+                _context(),
+                runner=_runner(self._body(role="some_other_role", cases=500)),
+                expected_role="legacy_agent",
+                expected_digest=_DIGEST,
+            )
+
+    def test_a_stale_mount_with_an_identical_case_count_is_rejected(self) -> None:
+        """The exact case a count cannot catch: same role, same number of
+        cases, different content. Only an identity digest distinguishes
+        them."""
+
+        with pytest.raises(ScriptedEngineUnavailableError, match="does not match"):
+            require_scripted_engine_loaded(
+                _context(),
+                runner=_runner(self._body(script_digest="b" * 64)),
+                expected_role="legacy_agent",
+                expected_digest=_DIGEST,
+            )
+
+    def test_a_missing_digest_is_rejected_rather_than_skipped(self) -> None:
+        """An unverifiable identity is not a matching one. Treating an absent
+        digest as 'nothing to compare, carry on' would reopen the whole
+        false-green class this module exists to close."""
+
+        with pytest.raises(ScriptedEngineUnavailableError, match="no script_digest"):
+            require_scripted_engine_loaded(
+                _context(),
+                runner=_runner(self._body(script_digest="")),
+                expected_role="legacy_agent",
+                expected_digest=_DIGEST,
             )

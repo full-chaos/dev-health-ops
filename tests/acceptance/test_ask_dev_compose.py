@@ -67,8 +67,20 @@ def test_scripted_openai_service_is_profiled_internal_and_unpublished() -> None:
         "dev_health_ops.llm.agent.scripted_openai_service",
     ]
     healthcheck = service["healthcheck"]
-    assert healthcheck["test"][-1] == "http://localhost:8001/healthz"
+    probe = "\n".join(str(part) for part in healthcheck["test"])
+    assert "http://localhost:8001/healthz" in probe
     assert healthcheck["retries"] > 1
+    # CHAOS-3219 Phase 3 (codex adversarial review, MEDIUM, confirmed): this
+    # used to assert only that the probe named the URL. /healthz answers 200
+    # even with a dead engine, so a status-code-only probe reported the
+    # container healthy while it could serve no scripted case at all -- and
+    # `api` is gated on this healthcheck, so the whole stack came up and the
+    # launcher's smoke/web leg ran against the unscripted heuristic. The
+    # probe must inspect the BODY.
+    assert "loaded" in probe, (
+        "the healthcheck must verify the scripted engine actually LOADED, "
+        f"not merely that /healthz answers: {probe!r}"
+    )
 
 
 def test_scripted_provider_can_actually_reach_its_script_directory() -> None:

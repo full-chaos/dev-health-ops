@@ -421,6 +421,12 @@ def scripted_engine_health() -> dict[str, object]:
             "loaded": True,
             "role": role,
             "cases": len(engine.role_script.cases),
+            # WHICH script, not just how many. A count cannot distinguish a
+            # wrong role or a stale mount that happens to carry the same
+            # number of cases (codex adversarial review, HIGH, confirmed).
+            "script_digest": provider_scripts.role_script_identity_digest(
+                engine.role_script
+            ),
         },
     }
 

@@ -492,6 +492,30 @@ class RoleScript:
     by_fingerprint: Mapping[str, tuple[str, _CaseScript | str]]
 
 
+def role_script_identity_digest(script: RoleScript) -> str:
+    """A stable digest of WHICH script a loaded role actually serves.
+
+    CHAOS-3219 Phase 3. Computed over ``by_fingerprint`` -- the map
+    ``ScriptEngine.resolve`` genuinely routes on -- so two loaders agree iff
+    every question routes to the same case id. A digest over ``cases``
+    instead would miss a question edit, which is exactly the drift that
+    silently sends a corpus case to the unscripted default heuristic.
+
+    Exists so the acceptance runner can prove the CONTAINER loaded the same
+    script the run asserts against. A case COUNT cannot do that: a wrong
+    role, a stale mount, or an unrelated script with the same or larger
+    number of cases all satisfy a count floor while serving different
+    decisions (codex adversarial review, HIGH, confirmed -- an earlier
+    revision of that guard compared only the count while its own comment
+    claimed it caught wrong-role mounts, which was false).
+    """
+
+    hasher = hashlib.sha256()
+    for fingerprint, (case_id, _entry) in sorted(script.by_fingerprint.items()):
+        hasher.update(f"{fingerprint}:{case_id}\n".encode())
+    return hasher.hexdigest()
+
+
 def _entry_question(entry: _CaseScript | str, raw: Mapping[str, Any]) -> str:
     if isinstance(entry, _CaseScript):
         return entry.question
@@ -787,6 +811,7 @@ __all__ = [
     "load_role_script",
     "normalize_question_text",
     "question_fingerprint",
+    "role_script_identity_digest",
     "sleep_for_fault",
     "try_load_engine",
 ]

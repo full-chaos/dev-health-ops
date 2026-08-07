@@ -149,6 +149,14 @@ PREFLIGHT_DIAGNOSTICS: tuple[str, ...] = (
     # PROCEED diagnostics -- see the two call sites' own comments.
     "committed_cohort_portfolio_v1",
     "committed_portfolio_org_wide",
+    # CHAOS-3525: a subject the deterministic layer declined, committed from
+    # a verified QUA proposal. Lives in this closed tuple like every other
+    # branch's diagnostic even though the branch that sets it is in the
+    # orchestrator rather than this module -- the tuple is the vocabulary of
+    # `dev_runs.preflight_outcome`, not of this file, and a diagnostic
+    # persisted from outside it would be exactly the silent widening of a
+    # closed vocabulary these tests exist to catch.
+    "committed_qua_subject",
 )
 
 #: CHAOS-3366: how many closest matches one not-found fallback may offer.

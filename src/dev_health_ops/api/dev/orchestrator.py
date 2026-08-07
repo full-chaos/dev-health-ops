@@ -15,7 +15,7 @@ import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
@@ -43,6 +43,7 @@ from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
+    ASK_DEV_QUA_COMMIT_TOTAL,
     ASK_DEV_QUA_SHADOW_FAULT_TOTAL,
     ASK_DEV_QUA_SHADOW_LATENCY_SECONDS,
     ASK_DEV_QUA_SHADOW_TOTAL,
@@ -105,6 +106,7 @@ from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .no_match_terminal import (
     attested_strings,
     disclose_scope_widening,
+    disclose_subject_match,
     internal_token_leak_field,
     named_subject_not_found_answer,
     scrub_auxiliary_leaks,
@@ -119,7 +121,15 @@ from .preflight_outcomes import (
     project_preflight_error,
 )
 from .prompts import PromptComposer, PromptConversationTurn
+from .qua_promotion import (
+    QUA_COMMIT_DIAGNOSTIC,
+    QUAPromotion,
+    promotable_selection,
+    qua_committed_entry,
+    verify_still_authorized,
+)
 from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
+from .scope_service import MAX_CANDIDATES
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
@@ -129,7 +139,9 @@ from .status_answer_render import (
     status_snapshot_result,
 )
 from .subject_preflight import (
+    ALL_TOOLS,
     SUBJECT_BEARING_TOOLS,
+    CommittedSubjects,
     PreflightDecision,
     SubjectPreflight,
     SubjectPreflightResult,
@@ -414,6 +426,124 @@ class OrchestratorResult:
             raise ValueError(
                 "orchestrator result requires exactly one terminal payload"
             )
+
+
+def _deterministic_declined(result: SubjectPreflightResult) -> bool:
+    """Whether the deterministic layer failed to commit a NAMED subject.
+
+    The two shapes, and only these two (CHAOS-3525):
+
+    * a ``TERMINATE`` that carries a resolution ledger -- the preflight
+      resolved mentions and none of them committed. A ``TERMINATE`` with no
+      ledger (an uninterpretable question, an oversized mention set) never
+      reached the catalog at all, so there is no named subject for a model to
+      match and nothing it could be second-guessing;
+    * the bare-name ``PROCEED`` that widens to organization scope, which is a
+      *scope* commit standing in for a subject it could not resolve -- see
+      ``SubjectPreflightResult.has_committed_subject``, whose whole reason for
+      existing is that this branch commits a resolution but emphatically not a
+      subject.
+
+    Written as one predicate here rather than inline at the seam so the
+    "declined" vocabulary has a single definition, and so a future preflight
+    branch that also declines has one obvious place to be added.
+    """
+
+    if result.decision is PreflightDecision.TERMINATE:
+        return result.ledger is not None
+    return result.legacy_guard_required
+
+
+def _promoted_preflight_result(
+    result: SubjectPreflightResult,
+    *,
+    promotion: QUAPromotion,
+    scope_service: Any,
+    org_id: str,
+    base_scope: DevScope,
+    resolved_at: datetime,
+) -> tuple[SubjectPreflightResult, tuple[DevResolutionEntry, ...]]:
+    """Rewrite a declined preflight result into a QUA-committed PROCEED.
+
+    Returns the rewritten result AND the ledger entries the caller still has
+    to persist, because which ones those are depends on the branch being
+    replaced and only this function knows both halves:
+
+    * replacing a TERMINATE: nothing was persisted (the whole-ledger write
+      is PROCEED-only, and the terminating-entry write lives in the branch
+      the promotion now skips), so every entry must be written;
+    * replacing the bare-name PROCEED: the ledger already flushed, so only
+      the new entry may be written -- re-writing the rest would collide on
+      the ``(run_id, entry_ordinal)`` unique constraint.
+
+    Mints through ``committed_resolution_for`` -- the same function the
+    deterministic commit uses, whose docstring calls itself "the one
+    construction of an exact-match committed scope … so there is one notion
+    of committed scope rather than two that can drift". A QUA commit becomes
+    a third caller of it, never a second notion.
+
+    The ledger gains a real ``exact_match`` entry for the mention
+    (``qua_committed_entry``), stamped with QUA's own ``resolver_version``:
+    the run must not later read as though the mention was never resolved,
+    and it equally must not read as though the deterministic resolver
+    resolved it.
+
+    ``allowed_tools`` matches the deterministic committed-subject branch --
+    ``resolve_scope.v1`` is withheld because there is nothing left for the
+    model to resolve, which is also what keeps the ``forbidden_or_not_found``
+    tool-result leak channel (CHAOS-3421) unreachable here.
+    """
+
+    committed = scope_service.committed_resolution_for(
+        promotion.entity,
+        org_id=org_id,
+        base_scope=base_scope,
+        resolved_at=resolved_at,
+    )
+    ledger = result.ledger
+    committed_entry: DevResolutionEntry | None = None
+    if ledger is not None:
+        committed_entry = qua_committed_entry(
+            promotion,
+            entry_ordinal=len(ledger.entries),
+            query_version=committed.requested_scope.schema_version,
+            resolved_at=resolved_at,
+        )
+        ledger = ledger.model_copy(
+            update={
+                "entries": (*ledger.entries, committed_entry),
+                "updated_at": resolved_at,
+            }
+        )
+    pending: tuple[DevResolutionEntry, ...] = ()
+    if ledger is not None and committed_entry is not None:
+        pending = (
+            ledger.entries
+            if result.decision is PreflightDecision.TERMINATE
+            else (committed_entry,)
+        )
+    promoted = replace(
+        result,
+        decision=PreflightDecision.PROCEED,
+        ledger=ledger,
+        committed_resolution=committed,
+        committed_subjects=CommittedSubjects(
+            resolution=committed, subject_set=result.subject_set
+        ),
+        answer=None,
+        outcome=None,
+        allowed_tools=ALL_TOOLS - {ToolID.RESOLVE_SCOPE},
+        diagnostic=QUA_COMMIT_DIAGNOSTIC,
+        # The legacy named-entity backstop exists to catch an answer that
+        # narrates a name the run never resolved. This run DID resolve it, and
+        # discloses the match -- leaving the guard armed would terminate the
+        # very answer the promotion exists to produce.
+        legacy_guard_required=False,
+        unresolved_name_spans=frozenset(),
+        blocking_mention_ids=frozenset(),
+        terminating_resolution_entry=None,
+    )
+    return promoted, pending
 
 
 class ScopeResolver(Protocol):
@@ -862,6 +992,12 @@ class DevOrchestrator:
         # ambiguous "Atlas" and a not-found "Nightfall" both published
         # `inherited`, with zero candidates.
         preflight_terminal_resolution: DevScopeResolution | None = None
+        #: CHAOS-3525: ``(user's span, authorized entity label)`` for a subject
+        #: committed from a QUA proposal -- set at the promotion seam, read by
+        #: ``finish()``'s closure. A free variable rather than a parameter for
+        #: the same reason ``investigation_result`` is one: ``finish()`` has
+        #: ~35 call sites and none of them should have to remember this.
+        qua_subject_disclosure: tuple[str, str] | None = None
         selected_event_sink = event_sink or self._event_sink
         # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
         # by the CHAOS-3295 plan-execution block below when a plan actually
@@ -975,6 +1111,19 @@ class DevOrchestrator:
                 is ScopeResolutionOutcome.ORGANIZATION_FALLBACK
             ):
                 answer = disclose_scope_widening(answer)
+            # CHAOS-3525: a subject an LLM chose is never silent.
+            #
+            # Same channel as the widening disclosure immediately above, and
+            # placed in the same spot for the same reason: ahead of the leak
+            # scan and every record_*() write, so the sentence is scanned
+            # like any other user-visible copy and reaches the persisted
+            # answer, the frame's `limitations`, and the stream's `warning`
+            # frames together.
+            if answer is not None and qua_subject_disclosure is not None:
+                matched_span, matched_label = qua_subject_disclosure
+                answer = disclose_subject_match(
+                    answer, span=matched_span, label=matched_label
+                )
             # CHAOS-3367: the one place every terminal in this module passes
             # through, and therefore the only place a user-visible-copy rule
             # can be enforced structurally rather than by asking ~35 call
@@ -1852,6 +2001,101 @@ class DevOrchestrator:
                                 )
                                 ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
                                     exception_type=type(shadow_recovery_fault).__name__
+                                ).inc()
+
+                    # CHAOS-3525: the promotion seam.
+                    #
+                    # Deliberately HERE -- after the deterministic decision is
+                    # fully computed and persisted, before the branch that acts
+                    # on it. CHAOS-3389 built that ordering so the shadow could
+                    # observe without influencing; the same position is what lets
+                    # a promotion replace the decision without either
+                    # re-implementing the preflight or unwinding writes it has
+                    # already made.
+                    #
+                    # Everything below fails closed to "leave the run exactly as
+                    # the deterministic layer decided". That is the invariant the
+                    # CHAOS-3389 byte-identity tests certify and it must survive
+                    # commit mode: an absent, failing, slow, budget-exhausted,
+                    # low-confidence or out-of-slice proposal changes nothing.
+                    if (
+                        shadow_record is not None
+                        and self._qua_shadow is not None
+                        and self._qua_shadow.commit_enabled
+                    ):
+                        promotion = promotable_selection(
+                            shadow_record,
+                            deterministic_declined=_deterministic_declined(
+                                preflight_result
+                            ),
+                        )
+                        if promotion is not None and await verify_still_authorized(
+                            promotion,
+                            scope_service=self._qua_shadow.scope_service,
+                            org_id=org_id,
+                            permission_fingerprint=permission_fingerprint,
+                            limit=MAX_CANDIDATES,
+                        ):
+                            (
+                                preflight_result,
+                                pending_resolution_entries,
+                            ) = _promoted_preflight_result(
+                                preflight_result,
+                                promotion=promotion,
+                                scope_service=self._qua_shadow.scope_service,
+                                org_id=org_id,
+                                base_scope=authorized_scope,
+                                resolved_at=datetime.now(UTC),
+                            )
+                            # The disclosure the answer must carry. Held here and
+                            # applied in `finish()` rather than written now: the
+                            # answer does not exist yet, and a subject chosen by
+                            # a model that reached the user unannounced would be
+                            # a worse wrong-subject bug than the dead end this
+                            # promotion removes.
+                            qua_subject_disclosure = (
+                                promotion.text_span,
+                                promotion.entity.label,
+                            )
+                            # `allowed_tools` was captured from the ORIGINAL
+                            # decision, which for a TERMINATE is the empty
+                            # set. Re-read it here or the promoted run
+                            # proceeds with a committed subject and no tools
+                            # to answer about it -- which fails as an opaque
+                            # internal_error, not as anything a reader could
+                            # diagnose. (Found by the disclosure test: the
+                            # scope committed, the run still did not answer.)
+                            allowed_tools = preflight_result.allowed_tools
+                            ASK_DEV_QUA_COMMIT_TOTAL.labels(
+                                entity_kind=promotion.entity.kind.value
+                            ).inc()
+                            try:
+                                for pending_entry in pending_resolution_entries:
+                                    await self._recorder.append_resolution(
+                                        pending_entry
+                                    )
+                                await self._recorder.record_preflight(
+                                    preflight_outcome=preflight_result.diagnostic,
+                                    legacy_guard_reason=None,
+                                )
+                            except Exception as qua_commit_write_fault:
+                                # Best-effort, exactly like the shadow write
+                                # above: the promotion itself already happened in
+                                # memory and the run is coherent without this
+                                # row. Logged rather than swallowed silently so a
+                                # missing `committed_qua_subject` diagnostic is
+                                # never mistaken for a run that did not promote.
+                                logger.exception(
+                                    "ask_dev.orchestrator.qua_commit_write_fault",
+                                    extra={
+                                        "run_id": run_id,
+                                        "exception_type": type(
+                                            qua_commit_write_fault
+                                        ).__name__,
+                                    },
+                                )
+                                ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                                    exception_type=type(qua_commit_write_fault).__name__
                                 ).inc()
 
                 if preflight_result.decision is PreflightDecision.TERMINATE:

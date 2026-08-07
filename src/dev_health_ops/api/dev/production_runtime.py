@@ -663,6 +663,22 @@ def _qua_shadow_flag_enabled() -> bool:
     return os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1"
 
 
+def _qua_commit_flag_enabled() -> bool:
+    """Whether a verified QUA proposal may commit the run's subject (CHAOS-3525).
+
+    Requires BOTH flags. The commit flag alone is inert by construction --
+    with the shadow off no proposal is ever produced, so a commit gate that
+    read only its own variable would appear armed while doing nothing, which
+    is a worse operational state than plainly off.
+
+    A named predicate rather than an inline expression at the construction
+    site, mirroring ``_qua_shadow_flag_enabled`` above, so the rollout ladder
+    has one definition that tests can assert against instead of restating it.
+    """
+
+    return _qua_shadow_flag_enabled() and os.getenv("ASK_DEV_QUA_COMMIT_ENABLED") == "1"
+
+
 def _build_qua_shadow_provider(
     selected: AgentProviderCandidate, *, org_id: str
 ) -> AgentLLMProvider | None:
@@ -2485,7 +2501,17 @@ async def _assemble_production_runtime(
             provider=provider.qua_shadow_provider,
             scope_service=scope_service,
             config=QUAShadowConfig(
-                enabled=os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1"
+                enabled=os.getenv("ASK_DEV_QUA_SHADOW_ENABLED") == "1",
+                # CHAOS-3525: a SECOND flag, not a widening of the first.
+                # ``ASK_DEV_QUA_SHADOW_ENABLED`` keeps meaning exactly what
+                # CHAOS-3389's byte-identity tests certify -- the seam
+                # observes and never influences -- and this one is what
+                # allows a verified proposal to become the run's subject.
+                # Meaningless on its own: with the shadow off there is no
+                # proposal to promote, which is why it reads the shadow flag
+                # as its own precondition rather than being an independent
+                # third state.
+                commit_enabled=_qua_commit_flag_enabled(),
             ),
         )
         if wave_3_1_enabled

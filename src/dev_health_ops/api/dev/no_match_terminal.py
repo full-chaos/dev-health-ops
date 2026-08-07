@@ -69,9 +69,11 @@ __all__ = [
     "NEVER_ATTESTABLE_TOKENS",
     "REFUSED_WITH_GROUNDING_SUMMARY",
     "SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE",
+    "SUBJECT_MATCHED_BY_UNDERSTANDING_TEMPLATE",
     "WITHHELD_COPY",
     "attested_strings",
     "disclose_scope_widening",
+    "disclose_subject_match",
     "internal_token_leak",
     "internal_token_leak_field",
     "named_subject_not_found_answer",
@@ -79,6 +81,7 @@ __all__ = [
     "redact_persisted_answer",
     "redact_persisted_error",
     "scrub_auxiliary_leaks",
+    "subject_matched_disclosure",
     "user_supplied_subject_kind",
     "user_supplied_subject_label",
     "user_visible_strings",
@@ -285,6 +288,67 @@ def disclose_scope_widening(answer: DevAnswer) -> DevAnswer:
         return answer
     return answer.model_copy(
         update={"warnings": [*answer.warnings, SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE]}
+    )
+
+
+#: CHAOS-3525: the sentence that makes a model-chosen subject visible.
+#:
+#: Promotion is the first time an LLM decides WHAT a question is about, and a
+#: subject chosen this way must never be indistinguishable from one the
+#: catalog matched literally. The named span is the user's own text and the
+#: label is a catalog-confirmed authorized entity -- the two things the
+#: reader needs to check the match themselves, and nothing else.
+#:
+#: Named "matched" rather than "found": the run did not find a literal match,
+#: it interpreted. Overstating that would be the same class of error as the
+#: silent commit this sentence exists to prevent.
+SUBJECT_MATCHED_BY_UNDERSTANDING_TEMPLATE = (
+    "I matched '{span}' to {label}. If that is not what you meant, ask again "
+    "using the full name."
+)
+
+
+def subject_matched_disclosure(*, span: str, label: str) -> str:
+    """The disclosure sentence for one QUA-committed subject."""
+
+    return SUBJECT_MATCHED_BY_UNDERSTANDING_TEMPLATE.format(span=span, label=label)
+
+
+def disclose_subject_match(answer: DevAnswer, *, span: str, label: str) -> DevAnswer:
+    """Add the QUA-match disclosure to ``answer.warnings``, once.
+
+    Same channel and same bound discipline as ``disclose_scope_widening``
+    above -- one append reaches the stream's ``warning`` frames and the
+    frame's ``limitations`` together, so a reader of the rendered answer and
+    a reader of the wire see the same claim.
+
+    The label is authorized catalog content, so a legitimate entity whose
+    name happens to contain a denylisted token must not fail its own answer:
+    the caller attests it through ``finish()``'s ``extra_attested`` seam, the
+    same trust tier already granted to clarification-candidate labels.
+    """
+
+    sentence = subject_matched_disclosure(span=span, label=label)
+    if sentence in answer.warnings:
+        return answer
+    # Unlike the widening disclosure above, this one is NOT best-effort: it
+    # takes the last slot rather than yielding it.
+    #
+    # `warnings` is bounded at twenty. Yielding at that bound meant a
+    # QUA-committed subject could reach a reader with no disclosure at all
+    # while the commit still stood -- a silent, model-chosen subject, which
+    # is the precise failure this whole path is gated to prevent, reachable
+    # with no authorization failure anywhere (adversarial review finding,
+    # reproduced before fixing). Displacing a producer warning is the
+    # cheaper loss by a wide margin: an undisclosed subject is a claim the
+    # reader cannot check, and a dropped twentieth warning is not.
+    #
+    # The disclosure goes FIRST so it is the one a truncating renderer keeps,
+    # and the tail is cut to the contract bound.
+    return answer.model_copy(
+        update={
+            "warnings": [sentence, *answer.warnings][:_MAX_ANSWER_WARNINGS],
+        }
     )
 
 

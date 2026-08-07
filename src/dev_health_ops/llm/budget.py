@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.llm.agent.scripted_openai_service import SCRIPTED_OPENAI_MODEL
 from dev_health_ops.llm.errors import LLMError
 from dev_health_ops.llm.providers.base import CompletionResult, LLMProvider
 from dev_health_ops.models.licensing import OrgLicense
@@ -43,9 +44,20 @@ LICENSE_LIMIT_KEY: Final = "byo_llm_budget_micro_usd"
 # Integer micro-USD per one million tokens.  Only exact, server-certified
 # provider/model pairs are present.  An absent pair is unavailable, never zero.
 # Source snapshot: https://developers.openai.com/api/docs/models/gpt-5-mini
+#
+# CHAOS-3582: ``SCRIPTED_OPENAI_MODEL`` ("ask-dev-scripted-v1") is the Ask Dev
+# acceptance stack's deterministic, deliberately-free test double -- not a
+# real, billable model. Priced here (tiny, non-zero, same rate on all three
+# legs) rather than left absent, mirroring the SAME carve-out
+# ``llm.agent.openai_compatible`` already made for the live platform-cost path
+# (``_PLATFORM_MODEL_PRICES["ask-dev-scripted-v1"] = (1_000, 1_000)``,
+# CHAOS-3552) -- same model id, same "test double, not an unpriced production
+# model" reasoning, mirrored here for ``reliable_price``'s own callers
+# (``guard_qua_shadow_call``, CHAOS-3452/CHAOS-3532).
 _PRICE_PER_MILLION: Final[dict[tuple[str, str], tuple[int, int, int]]] = {
     # input, cached input, output
     ("openai", "gpt-5-mini"): (250_000, 25_000, 2_000_000),
+    ("openai", SCRIPTED_OPENAI_MODEL): (1_000, 1_000, 1_000),
 }
 
 BudgetReason = Literal[
@@ -184,9 +196,29 @@ def reliable_price(
     *, provider: str, model: str, base_url: str | None
 ) -> tuple[int, int, int] | None:
     normalized_provider = provider.strip().lower()
+    normalized_model = _normalized_model(model)
+    # CHAOS-3582: the fixture carve-out is checked FIRST, before the
+    # official-endpoint test -- mirroring the ordering
+    # ``llm.agent.openai_compatible.platform_cost_metering`` already uses for
+    # the SAME model id, for the SAME reason stated there: the Ask Dev
+    # acceptance stack serves this model from its OWN scripted endpoint by
+    # construction (``tests/acceptance/compose.ask-dev.yml``), never from
+    # ``api.openai.com``, so an endpoint-first check would leave it
+    # permanently unpriced. Unpriced is what made ``guard_qua_shadow_call``
+    # (the isolated QUA shadow budget guard, CHAOS-3452) fail closed on
+    # every acceptance call, unconditionally -- the scripted QUA answer,
+    # contract-id routing, and commit/disclosure logic CHAOS-3532 built were
+    # never reachable as a result (see the CHAOS-3582 writeup for the full
+    # repro). Matched on the exact normalized model id only -- provider
+    # comparison and model normalization both already lowercase (this
+    # module's own house style, unlike ``openai_compatible``'s
+    # case-SENSITIVE carve-out), so this only ever exempts the one literal
+    # fixture id, never a real customer's differently-named model.
+    if normalized_provider == "openai" and normalized_model == SCRIPTED_OPENAI_MODEL:
+        return _PRICE_PER_MILLION[(normalized_provider, normalized_model)]
     if normalized_provider != "openai" or not _official_openai_endpoint(base_url):
         return None
-    return _PRICE_PER_MILLION.get((normalized_provider, _normalized_model(model)))
+    return _PRICE_PER_MILLION.get((normalized_provider, normalized_model))
 
 
 def cost_micro_usd(

@@ -1,0 +1,17 @@
+# The mirror image, pinning that a FALSE priority is 0 and not 1.
+# Python: False == 0, so the false rule sorts before the priority-1 rule and
+# answers. A port decoding False as 1 would tie them, and the stable sort would
+# hand the answer to the rule written first -- the 1 rule.
+rules:
+  - id: one_rule
+    priority: 1
+    match:
+      always: true
+    output:
+      investment_area: one_area
+  - id: false_rule
+    priority: false
+    match:
+      always: true
+    output:
+      investment_area: false_area

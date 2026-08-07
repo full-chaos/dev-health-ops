@@ -345,6 +345,52 @@ func investmentOracleCases() []oracleCase {
 			},
 		},
 		{
+			// A BOOLEAN priority. Python's bool IS an int subclass, so `true`
+			// sorts as 1 -- BEFORE the 9 beside it -- rather than raising.
+			// Routing bool to "Python cannot order this" made the port claim a
+			// TypeError Python does not raise, which is the false-mirror class:
+			// PythonException is the load-bearing field of the refusal pair, so
+			// a wrong value there asserts Python does something it does not.
+			ID: "bool_priority_sorts_as_one",
+			Input: map[string]any{
+				"Config":   "bool_priorities",
+				"Artifact": map[string]any{"Labels": []any{}},
+			},
+		},
+		{
+			// Pins the VALUE of `true`, not merely that it is numeric. Python's
+			// True == 1, so the priority-0 rule sorts first and answers. File
+			// order is load-bearing: the true rule is written first, so a port
+			// decoding True as 0 would tie them and the stable sort would hand
+			// the answer to the true rule. bool_priorities.yaml cannot catch
+			// that -- 0 and 1 both sort before 9 -- and a wrong-value decode
+			// SURVIVED against it until this case existed.
+			ID: "bool_true_priority_is_exactly_one",
+			Input: map[string]any{
+				"Config":   "bool_true_is_one",
+				"Artifact": map[string]any{"Labels": []any{}},
+			},
+		},
+		{
+			// The mirror image: False == 0, not 1.
+			ID: "bool_false_priority_is_exactly_zero",
+			Input: map[string]any{
+				"Config":   "bool_false_is_zero",
+				"Artifact": map[string]any{"Labels": []any{}},
+			},
+		},
+		{
+			// The same path reached through THIS PORT's OWN normalisation:
+			// unquoted `yes` is a YAML 1.1 boolean, and the bool pass here
+			// manufactures the !!bool node. So the fix has to hold for a node
+			// this file created, not only for a literal `true` yaml.v3 tagged.
+			ID: "normalised_yes_priority_sorts_as_one",
+			Input: map[string]any{
+				"Config":   "yes_priorities",
+				"Artifact": map[string]any{"Labels": []any{}},
+			},
+		},
+		{
 			// `priority:` PRESENT and NULL with exactly ONE rule. sorted()
 			// computes every key up front but never compares a single element,
 			// so Python does NOT raise. The two-rule form is a refusal case;
@@ -577,6 +623,23 @@ func investmentRefusalCases() []oracleCase {
 			Input: map[string]any{"Config": "raises_mixed_priority_types"},
 		},
 		{
+			// A DATE priority beside an INT one. Python compares only within a
+			// type, so this raises -- while an ALL-date config sorts cleanly and
+			// is a declared divergence. The two together stop "date" from being
+			// one undifferentiated branch.
+			ID:    "raises_date_priority_beside_an_int",
+			Input: map[string]any{"Config": "raises_date_and_int_priorities"},
+		},
+		{
+			// A SEXAGESIMAL in a label list. PyYAML resolves `1:30` to the int
+			// 90, and an int has no .lower(). This was FAIL-OPEN before the
+			// literal was recognised: yaml.v3 leaves it a string, so the port
+			// lower-cased it, matched nothing, and quietly classified where
+			// Python refuses.
+			ID:    "raises_sexagesimal_label_entry",
+			Input: map[string]any{"Config": "raises_sexagesimal_label"},
+		},
+		{
 			// A `<<` whose value is neither a mapping nor a list of mappings.
 			// PyYAML raises while CONSTRUCTING the document, so this dies before
 			// _load_rules runs at all -- and it is the only case here whose
@@ -743,6 +806,28 @@ func investmentDeclaredDivergenceCases() []oracleCase {
 			// yaml.v3, so the two engines order the rules differently.
 			ID:    "declared_leading_zero_priority_is_octal_to_pyyaml",
 			Input: map[string]any{"Config": "declared_octal_priority"},
+		},
+		{
+			// Every priority is a DATE. PyYAML resolves plain `2024-01-02` to
+			// datetime.date and orders dates among themselves, so the 2023 rule
+			// answers; this port has no ordering to offer that is Python's.
+			ID:    "declared_all_date_priorities_order_among_dates",
+			Input: map[string]any{"Config": "declared_date_priorities"},
+		},
+		{
+			// A SEXAGESIMAL priority. `1:30` is the int 90 to PyYAML and a
+			// string to yaml.v3, so Python sorts 9 first and this port cannot
+			// reproduce the order. Note it is NOT a mixed-type raise -- 90 is an
+			// int, so it shares an ordering group with 9.
+			ID:    "declared_sexagesimal_priority_is_ninety_to_pyyaml",
+			Input: map[string]any{"Config": "declared_sexagesimal_priority"},
+		},
+		{
+			// The same literal as a rule ID, where Python's value is the NUMBER
+			// 90 and a *string cannot hold it. Refusing is loud; emitting
+			// "1:30" would be a silent wrong value.
+			ID:    "declared_sexagesimal_rule_id_is_a_number",
+			Input: map[string]any{"Config": "declared_sexagesimal_id"},
 		},
 		{
 			// A merge key pointing at its own mapping. PyYAML builds a

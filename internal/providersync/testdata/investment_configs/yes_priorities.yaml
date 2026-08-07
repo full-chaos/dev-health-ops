@@ -1,0 +1,17 @@
+# The same thing reached through THIS PORT S OWN normalisation: unquoted `yes`
+# is a YAML 1.1 boolean to PyYAML, and the bool pass here manufactures a !!bool
+# from it. So the bool priority path must work for a node this file created,
+# not only for a literal `true` yaml.v3 tagged itself.
+rules:
+  - id: yes_priority
+    priority: yes
+    match:
+      always: true
+    output:
+      investment_area: yes_area
+  - id: int_priority
+    priority: 9
+    match:
+      always: true
+    output:
+      investment_area: int_area

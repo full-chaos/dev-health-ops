@@ -3,6 +3,7 @@ package providersync
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -78,13 +79,22 @@ import (
 //     as octal and yaml.v3's 1.2 reads as decimal. Both engines sort; neither
 //     order is the mirror.
 //  4. A merge key whose anchor chain refers back to its own mapping.
+//  5. A SEXAGESIMAL priority (`1:30`), which PyYAML resolves to the number 90
+//     and yaml.v3 leaves as a string. Both engines sort; the orders differ.
+//     Note this is a divergence only for PRIORITY -- the same literal in a
+//     `label` list is a MIRRORED AttributeError (an int has no .lower()), and
+//     as an id or output value it is refused as unrepresentable, because
+//     Python's value there is the int 90.
+//  6. An all-DATE set of priorities. PyYAML resolves a plain `2024-01-02` to
+//     datetime.date and orders dates among themselves; a date beside an int
+//     still raises in Python and is mirrored as a TypeError.
 //
-// All four are Go-erroring-where-Python-proceeds, which is the loud/safe
+// All six are Go-erroring-where-Python-proceeds, which is the loud/safe
 // direction: the job fails visibly rather than emitting a row Python would not
 // have. None of them occurs in the checked-in config, and each is pinned by the
-// analytics/investment/declared_divergence oracle pair -- which asserts the
-// divergence STILL EXISTS, so making the engines agree without deleting the
-// declaration fails the build rather than leaving a stale note behind.
+// analytics/investment/divergence oracle pair -- which asserts the divergence
+// STILL EXISTS, so making the engines agree without deleting the declaration
+// fails the build rather than leaving a stale note behind.
 //
 // One residual is NOT a declared divergence because no instance of it is known:
 // the two YAML PARSERS could in principle disagree at the syntax level. Every
@@ -106,13 +116,14 @@ const (
 // YAML resolved tags this file distinguishes. Compared as strings rather than
 // re-derived per call site so a typo cannot silently make a branch dead.
 const (
-	yamlNullTag  = "!!null"
-	yamlBoolTag  = "!!bool"
-	yamlIntTag   = "!!int"
-	yamlFloatTag = "!!float"
-	yamlStrTag   = "!!str"
-	yamlSeqTag   = "!!seq"
-	yamlMapTag   = "!!map"
+	yamlNullTag      = "!!null"
+	yamlBoolTag      = "!!bool"
+	yamlIntTag       = "!!int"
+	yamlFloatTag     = "!!float"
+	yamlStrTag       = "!!str"
+	yamlSeqTag       = "!!seq"
+	yamlTimestampTag = "!!timestamp"
+	yamlMapTag       = "!!map"
 )
 
 // InvestmentConfigError is returned for every config/artifact combination on
@@ -354,7 +365,7 @@ func investmentResolvePriorities(rules []investmentRule) error {
 	// port CLAIM a mirrored TypeError for an all-string config Python sorts
 	// happily -- a false mirror, which is worse than an admitted divergence.
 	groups := map[string]bool{}
-	ambiguous := false
+	declared := ""
 	for _, rule := range rules {
 		if rule.priorityKind == investmentPriorityUnorderable {
 			return investmentTypeError(
@@ -363,8 +374,20 @@ func investmentResolvePriorities(rules []investmentRule) error {
 					"more than one rule to order",
 				investmentPythonTypeName(rule.priority))
 		}
-		if rule.priorityKind == investmentPriorityAmbiguousNumeric {
-			ambiguous = true
+		// Every kind below is one Python CAN order among its own type; what
+		// differs is whether this port can reproduce that order. Each records
+		// why not, and the mixed-type check still runs first, because a mixed
+		// config is a mirrored raise no matter which kinds are mixed.
+		switch rule.priorityKind {
+		case investmentPriorityAmbiguousNumeric:
+			declared = "a priority is written with a leading zero, which is octal to " +
+				"PyYAML's YAML 1.1 resolver and decimal to yaml.v3's 1.2 one"
+		case investmentPrioritySexagesimal:
+			declared = "a priority is written in YAML 1.1 sexagesimal (`1:30`), which " +
+				"PyYAML resolves to the number 90 and yaml.v3 leaves as a string"
+		case investmentPriorityDate:
+			declared = "every priority is a date, which PyYAML resolves to " +
+				"datetime.date and orders among its own type"
 		}
 		groups[investmentPriorityPythonType(rule.priorityKind)] = true
 	}
@@ -380,11 +403,9 @@ func investmentResolvePriorities(rules []investmentRule) error {
 				"this port orders only numbers, so it refuses rather than impose an "+
 				"order Python would not produce", investmentSortedQuoted(groups))
 	}
-	if ambiguous {
+	if declared != "" {
 		return investmentUnrepresentable(
-			"a priority is written with a leading zero, which is octal to PyYAML's " +
-				"YAML 1.1 resolver and decimal to yaml.v3's 1.2 one, so no ordering " +
-				"here is the mirror")
+			"%s, so no ordering here is the mirror", declared)
 	}
 	return nil
 }
@@ -413,6 +434,14 @@ const (
 	investmentPriorityString
 	// A sequence. Python orders these lexicographically among themselves too.
 	investmentPrioritySequence
+	// YAML 1.1 sexagesimal (`1:30`). PyYAML resolves it to the INT 90, so it
+	// groups with the other ints -- `1:30` beside `9` sorts in Python and must
+	// not be reported as a mixed-type raise -- but yaml.v3 sees a string, so
+	// the ORDER cannot be reproduced. Declared, like the octal case.
+	investmentPrioritySexagesimal
+	// A plain timestamp. PyYAML resolves it to datetime.date, which orders
+	// among dates and raises against an int.
+	investmentPriorityDate
 	// null or a mapping: Python raises on the first comparison, even against
 	// another value of the same type (`None < None` and `{} < {}` both raise).
 	investmentPriorityUnorderable
@@ -427,7 +456,12 @@ func investmentPriorityPythonType(kind investmentPriorityKind) string {
 		return "str"
 	case investmentPrioritySequence:
 		return "list"
+	case investmentPriorityDate:
+		return "date"
 	default:
+		// Numeric, ambiguous-numeric and sexagesimal are all `int` (or float)
+		// to Python, which is why a sexagesimal priority beside a plain one is
+		// NOT a mixed-type raise.
 		return "int"
 	}
 }
@@ -451,6 +485,38 @@ func investmentPrioritySortKey(node *yaml.Node) (float64, investmentPriorityKind
 		return 0, investmentPriorityUnorderable
 	}
 	switch node.Tag {
+	case yamlBoolTag:
+		// Python's bool IS an int subclass, so `priority: true` sorts as 1
+		// alongside ordinary ints rather than raising -- measured:
+		// sorted([True, 2]) succeeds, and a `priority: true` rule really does
+		// order before a `priority: 9` one. This case exists because
+		// node.Decode(&float64) REFUSES a !!bool, which sent every boolean
+		// priority to Unorderable and made this port CLAIM a Python TypeError
+		// that Python does not raise. The comment above said bool was numeric
+		// while the code disagreed; this is what makes the comment true.
+		var flag bool
+		if err := node.Decode(&flag); err != nil {
+			return 0, investmentPriorityUnorderable
+		}
+		if flag {
+			return 1, investmentPriorityNumeric
+		}
+		return 0, investmentPriorityNumeric
+	case yamlTimestampTag:
+		// PyYAML resolves a plain `2024-01-02` to datetime.date, and dates
+		// order fine AMONG THEMSELVES (measured: two date priorities sort;
+		// a date beside an int raises). Go has no ordering to offer that is
+		// Python's, so an all-date config is a declared divergence -- while a
+		// MIXED one still reaches the mirrored TypeError below, because the
+		// group check sees two types.
+		return 0, investmentPriorityDate
+	case investmentSexagesimalTag:
+		// `1:30` is the INT 90 to PyYAML's YAML 1.1 resolver and a plain
+		// string to yaml.v3's 1.2 one, so it sorts as a number on one side
+		// and not at all on the other. It groups with "int" because that is
+		// the Python TYPE -- `1:30` beside `9` sorts in Python and must not be
+		// reported as a mixed-type TypeError.
+		return 0, investmentPrioritySexagesimal
 	case yamlStrTag:
 		return 0, investmentPriorityString
 	case yamlIntTag:
@@ -463,7 +529,7 @@ func investmentPrioritySortKey(node *yaml.Node) (float64, investmentPriorityKind
 		if len(digits) > 1 && digits[0] == '0' {
 			return 0, investmentPriorityAmbiguousNumeric
 		}
-	case yamlFloatTag, yamlBoolTag:
+	case yamlFloatTag:
 	default:
 		// A null, or a scalar carrying some other tag (a plain timestamp, say).
 		return 0, investmentPriorityUnorderable
@@ -984,6 +1050,35 @@ var investmentPyYAMLBooleans = map[string]string{
 	"off": "false", "Off": "false", "OFF": "false",
 }
 
+// investmentSexagesimalInt and investmentSexagesimalFloat are PyYAML's own
+// resolver patterns, transcribed rather than approximated -- a broader pattern
+// would retag legitimate strings and a narrower one would miss real cases.
+// Measured against PyYAML: `1:30`->90, `99:59`->5999, `1:30.5`->90.5, while
+// `0:30` (leading zero), `1:60` (group above 59) and `:30` stay strings.
+var (
+	investmentSexagesimalInt   = regexp.MustCompile(`^[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+$`)
+	investmentSexagesimalFloat = regexp.MustCompile(`^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$`)
+)
+
+// investmentSexagesimalTag marks a plain scalar PyYAML reads as a NUMBER and
+// yaml.v3 leaves as a string. It is retagged during normalisation, once, rather
+// than sniffed at each read site, for the same reason the booleans are: the
+// read site added last would otherwise keep the YAML 1.2 reading.
+//
+// Retagging (rather than resolving the value) is what makes all three places
+// this literal can appear land where Python lands, and the three differ:
+//
+//   - as a `priority`, both engines can sort but would sort DIFFERENTLY, so it
+//     is a declared divergence (see investmentPrioritySexagesimal);
+//   - as a `label` entry, Python raises AttributeError because an int has no
+//     .lower() -- so the tag check in investmentLoweredStrings MIRRORS it
+//     exactly, where a bare string would have been lowered and silently
+//     matched nothing. That one was fail-open;
+//   - as an `id` or output value, Python yields the int 90 where a *string
+//     cannot, so it refuses as an unrepresentable value rather than silently
+//     emitting "1:30".
+const investmentSexagesimalTag = "!!pyyaml-sexagesimal"
+
 func investmentApplyPyYAMLBooleans(node *yaml.Node) {
 	if node == nil {
 		return
@@ -992,6 +1087,9 @@ func investmentApplyPyYAMLBooleans(node *yaml.Node) {
 		if canonical, ok := investmentPyYAMLBooleans[node.Value]; ok {
 			node.Tag = yamlBoolTag
 			node.Value = canonical
+		} else if investmentSexagesimalInt.MatchString(node.Value) ||
+			investmentSexagesimalFloat.MatchString(node.Value) {
+			node.Tag = investmentSexagesimalTag
 		}
 	}
 	// Aliases carry no Content, so this cannot cycle; the anchor itself is
@@ -1075,6 +1173,12 @@ func investmentPythonTypeName(node *yaml.Node) string {
 		return "list"
 	case yamlMapTag:
 		return "dict"
+	case investmentSexagesimalTag:
+		// PyYAML resolved it to a number, so a message about it must say what
+		// Python would say -- "'int' object has no attribute 'lower'".
+		return "int"
+	case yamlTimestampTag:
+		return "date"
 	default:
 		return strings.TrimPrefix(node.Tag, "!!")
 	}

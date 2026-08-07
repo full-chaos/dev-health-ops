@@ -1,5 +1,5 @@
 # `priority:` PRESENT and NULL, with a SECOND rule so sorted() actually has to
-# compare. See raises_priority_null_single.yaml for the same key with one rule,
+# compare. See priority_null_single.yaml for the same key with one rule,
 # where Python does NOT raise.
 rules:
   - id: null_priority

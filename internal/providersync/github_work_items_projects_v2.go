@@ -80,13 +80,38 @@ type GitHubProjectV2Fetcher struct{}
 
 func githubProjectV2Targets(claim Claim) ([]GitHubProjectV2Target, error) {
 	value, configured := claim.IntegrationConfig[gitHubProjectsV2IntegrationConfigKey]
-	if !configured || value == nil {
+	// Absent key: Projects v2 is simply not configured for this integration.
+	if !configured {
 		return []GitHubProjectV2Target{}, nil
+	}
+	// Present key holding JSON null. This FAILED OPEN until CHAOS-3123: it
+	// shared the branch above and returned empty targets with a nil error, so
+	// `{"github_projects_v2": null}` in the durable config was indistinguishable
+	// from never having configured Projects v2 at all. Postgres JSONB null
+	// decodes to an UNTYPED nil interface, so this is the shape production
+	// actually produces -- not a Go-literal typed nil. The operator wrote the
+	// key; refusing is the only answer that cannot silently drop their intent.
+	if value == nil {
+		return nil, ErrInvalidConfiguration
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, ErrInvalidConfiguration
 	}
+	// TRIPWIRE -- the case-insensitivity guarantee below is EMERGENT, not
+	// chosen. encoding/json matches field names case-insensitively, so a
+	// miscased duplicate key (`Org_Login` beside `org_login`) is a candidate to
+	// win. It cannot today only because `value` arrived as a map[string]any and
+	// json.Marshal emits map keys in sorted byte order: uppercase and `_` sort
+	// below lowercase, so the canonical spelling is emitted last and
+	// deterministically wins the decode.
+	//
+	// That holds ONLY while the value makes the map -> re-marshal round trip.
+	// If the one-fetch-per-integration follow-up ever decodes raw JSONB bytes
+	// straight from Postgres, operator key order wins instead, and a trailing
+	// miscased duplicate WOULD take effect. Anyone making that change owns
+	// re-deciding this -- DisallowUnknownFields does not catch it, because a
+	// miscased key MATCHES rather than being unknown.
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	var targets []GitHubProjectV2Target

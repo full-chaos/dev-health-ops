@@ -217,6 +217,11 @@ VERDICT_SURVIVED_DECLARED = "SURVIVED_DECLARED"
 VERDICT_BASELINE_FAILED = "BASELINE_FAILED"
 VERDICT_INVALID = "INVALID"
 VERDICT_STALE_DECLARATION = "STALE_DECLARATION"
+# A proof command that selects no test. Distinct from BASELINE_FAILED (the proof
+# ran and was already red) and from INVALID (the mutation never applied): here
+# the mutation is fine and the proof is empty, so the entry measured nothing
+# while exiting 0.
+VERDICT_PROOF_VACUOUS = "PROOF_VACUOUS"
 
 
 def _digest(data: bytes) -> str:
@@ -1277,6 +1282,36 @@ def _restore_after_apply(
         )
 
 
+# `go test -run <pattern>` whose pattern matches NOTHING exits 0. A proof
+# command in that state is not passing -- it is not running, and a mutation
+# measured by it is guaranteed to SURVIVE while the report reads as coverage.
+#
+# Same family as a skipped test reading as `ok`, and not hypothetical: a change
+# that deleted a route test left a LIVE-code mutation pointing at
+# `-run ^TestNameThatNoLongerExists$`. The pattern matched nothing, the command
+# exited 0, and a real fail-closed property lost its guard while the plan still
+# listed it as proven.
+_VACUOUS_PROOF_MARKERS = (
+    "no tests to run",
+    "no test files",
+)
+
+
+def _vacuous_proof_reason(tail: str) -> str | None:
+    """Return why this proof output proves nothing, or None if it ran something.
+
+    Matches Go's own wording rather than parsing counts: `go test` prints
+    `testing: warning: no tests to run` and marks the package
+    `ok ... [no tests to run]`, both alongside exit code 0.
+    """
+
+    lowered = tail.lower()
+    for marker in _VACUOUS_PROOF_MARKERS:
+        if marker in lowered:
+            return marker
+    return None
+
+
 def _proof_outcome(mutation: Mutation, root: Path) -> tuple[str | None, str]:
     """Run every proof command; return the first failing command and its tail."""
 
@@ -1285,6 +1320,23 @@ def _proof_outcome(mutation: Mutation, root: Path) -> tuple[str | None, str]:
         if code != 0:
             return _format_command(command), tail
     return None, ""
+
+
+def _vacuous_proof(mutation: Mutation, root: Path) -> tuple[str, str] | None:
+    """Return the first proof command that executes no test at all, and why.
+
+    Checked against the CLEAN tree, before anything is mutated: a proof that
+    selects no test cannot distinguish mutated source from unmutated, so the
+    honest verdict is that the entry was never measured -- not KILLED, and not a
+    survivor whose reason could be argued.
+    """
+
+    for command in mutation.proof:
+        _, tail = _run_command(command, root)
+        reason = _vacuous_proof_reason(tail)
+        if reason is not None:
+            return _format_command(command), reason
+    return None
 
 
 def run_plan(
@@ -1337,13 +1389,19 @@ def run_plan(
     )
 
     exit_code = 0
-    # BASELINE_FAILED and INVALID both mean a mutation was never measured. A
-    # drifted anchor, a doubled match, or a comment-line anchor silently
-    # measures nothing, so exiting 0 would report a plan as verified while part
-    # of it did not run -- the same false pass this tool exists to catch.
+    # BASELINE_FAILED, INVALID, STALE_DECLARATION and PROOF_VACUOUS all mean a
+    # mutation was never measured. A drifted anchor, a doubled match, a
+    # comment-line anchor, or a proof selecting no test silently measures
+    # nothing, so exiting 0 would report a plan as verified while part of it did
+    # not run -- the same false pass this tool exists to catch.
     if any(
         result.verdict
-        in {VERDICT_BASELINE_FAILED, VERDICT_INVALID, VERDICT_STALE_DECLARATION}
+        in {
+            VERDICT_BASELINE_FAILED,
+            VERDICT_INVALID,
+            VERDICT_STALE_DECLARATION,
+            VERDICT_PROOF_VACUOUS,
+        }
         for result in results
     ):
         exit_code = 1
@@ -1404,6 +1462,30 @@ def _run_one(root: Path, mutation: Mutation, snapshot_dir: Path) -> Result:
                 warnings=warnings,
                 failing_proof=_format_command(mutation.build),
             )
+
+    # Before asking whether the proofs PASS, ask whether they RUN. A `-run`
+    # pattern matching nothing exits 0, so it would sail through the check below
+    # and then guarantee a survivor -- or, worse, be read as a kill if anything
+    # else in the command happened to fail. Checked on the clean tree so the
+    # answer is a property of the plan entry, not of the mutation.
+    vacuous = _vacuous_proof(mutation, root)
+    if vacuous is not None:
+        vacuous_command, vacuous_reason = vacuous
+        _require_unchanged(target, original_sha, mutation, "the vacuity check ran")
+        return Result(
+            identifier=mutation.identifier,
+            verdict=VERDICT_PROOF_VACUOUS,
+            detail=(
+                f"proof command executes no test ({vacuous_reason}), so it cannot "
+                "tell mutated source from unmutated and this entry measured "
+                "NOTHING while exiting 0. Usually a -run pattern naming a test "
+                "that was renamed or deleted. Point it at a test that exists; "
+                "nothing was mutated.\n"
+                f"    {vacuous_command}"
+            ),
+            warnings=warnings,
+            failing_proof=vacuous_command,
+        )
 
     failing, tail = _proof_outcome(mutation, root)
     if failing is not None:
@@ -1748,6 +1830,7 @@ def main(argv: list[str] | None = None) -> int:
                 VERDICT_BASELINE_FAILED,
                 VERDICT_INVALID,
                 VERDICT_STALE_DECLARATION,
+                VERDICT_PROOF_VACUOUS,
             }:
                 print(f"\n{result.identifier} {result.verdict}:\n{result.detail}")
         return exit_code

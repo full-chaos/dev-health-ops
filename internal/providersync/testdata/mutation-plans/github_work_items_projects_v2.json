@@ -353,9 +353,9 @@
     {
       "id": "P18-environment-authored-claims-never-reach-a-collector",
       "file": "internal/providersync/lease.go",
-      "find": "\tif unit.AuthSource == \"environment\" || unit.CredentialID == \"\" {",
-      "replace": "\tif unit.CredentialID == \"\" {",
-      "rationale": "clause-level: D18 puts environment credentials outside the Go route, and this fence is where that is actually enforced -- a unit whose AuthSource is \"environment\" must never reach any collector. Found unmeasured by a surviving mutation on the collector's redundant credential.ID == \"\" clause, which was redundant only because this fence holds.",
+      "find": "\tif unit.AuthSource == \"environment\" {",
+      "replace": "\tif unit.AuthSource == \"not-a-real-auth-source\" {",
+      "rationale": "clause-level: D18 puts environment credentials outside the Go route, and this fence is where it is enforced for EVERY provider -- a unit whose AuthSource is \"environment\" must never reach any collector. Re-authored after F4 removed the unkillable `|| unit.CredentialID == \"\"` twin from the same line.",
       "proof": [
         [
           "go",
@@ -370,16 +370,33 @@
     {
       "id": "P22-present-but-null-target-list-is-refused",
       "file": "internal/providersync/github_work_items_projects_v2.go",
-      "find": "\tif err := decoder.Decode(&targets); err != nil || targets == nil {",
-      "replace": "\tif err := decoder.Decode(&targets); err != nil {",
-      "rationale": "clause-level: a present github_projects_v2 key holding a null/typed-nil list decodes cleanly to a nil slice. Without the nil clause that is indistinguishable from an empty list, so configuration the operator actually wrote is silently ignored instead of refused -- the fail-open-on-malformed-config class.",
+      "find": "\tif value == nil {\n\t\treturn nil, ErrInvalidConfiguration\n\t}\n",
+      "replace": "",
+      "rationale": "a present github_projects_v2 key holding JSON null must be REFUSED, not treated as absent. This path FAILED OPEN until CHAOS-3123: null shared the not-configured branch and returned empty targets with a nil error, silently discarding config the operator wrote. Postgres JSONB null decodes to an UNTYPED nil interface, so the test builds it from JSON bytes -- a Go-literal typed nil takes a different path and would leave this mutant alive.",
       "proof": [
         [
           "go",
           "test",
           "-count=1",
           "-run",
-          "^(TestGitHubProjectV2TargetsFailClosedOnMalformedDurableConfig)$",
+          "^(TestGitHubProjectV2TargetsSeparateNullConfigFromEmptyConfig)$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "P23-explicitly-empty-target-list-stays-valid",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "\tif !configured {\n\t\treturn []GitHubProjectV2Target{}, nil\n\t}",
+      "replace": "\tif !configured {\n\t\treturn nil, ErrInvalidConfiguration\n\t}",
+      "rationale": "the other side of the null/empty boundary: an absent key and an explicitly empty list are both valid ways to have no projects, and a fix that refused the null case by refusing emptiness generally would be caught here.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^(TestGitHubProjectV2TargetsSeparateNullConfigFromEmptyConfig|TestGitHubProjectV2EnvironmentTargetsAreNeverAFallback)$",
           "./internal/providersync/"
         ]
       ]

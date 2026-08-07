@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -170,18 +172,35 @@ func TestGitHubProjectV2RefusesClaimsAuthoredFromTheEnvironment(t *testing.T) {
 	}
 }
 
+// F4: an empty CredentialID is rejected by uuid.Parse, which is now the ONLY
+// clause enforcing it -- the separate `unit.CredentialID == ""` test was
+// removed as the unkillable twin of the fetcher clause removed earlier.
+// Asserting the property explicitly here means the removal cannot quietly
+// become a hole: if uuid.Parse were ever relaxed or reordered, this fails.
+func TestUnitValidateRejectsEmptyCredentialIDViaUUIDParse(t *testing.T) {
+	if _, err := uuid.Parse(""); err == nil {
+		t.Fatal("uuid.Parse accepts the empty string, so the clause removed in " +
+			"F4 was load-bearing after all and must be restored")
+	}
+	claim := githubWorkItemOracleClaim()
+	if err := claim.Validate(); err != nil {
+		t.Fatalf("baseline claim invalid, so the case below proves nothing: %v", err)
+	}
+	for _, credentialID := range []string{"", "   ", "not-a-uuid"} {
+		candidate := claim
+		candidate.CredentialID = credentialID
+		if err := candidate.Validate(); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("credential_id=%q validated: %v", credentialID, err)
+		}
+	}
+}
+
 func TestGitHubProjectV2TargetsFailClosedOnMalformedDurableConfig(t *testing.T) {
 	for _, value := range []any{
 		[]any{map[string]any{"org_login": "", "project_number": 1}},
 		[]any{map[string]any{"org_login": "acme", "project_number": 0}},
 		[]any{map[string]any{"org_login": "acme", "project_number": 1, "token": "forbidden"}},
 		"acme:1",
-		// A present key holding a typed nil slice decodes cleanly to a nil
-		// target list. Without the nil check this reads as "configured, with
-		// nothing in it" -- indistinguishable from a genuinely empty list, so
-		// a config the operator wrote would be silently ignored rather than
-		// rejected. The key being present at all is the signal that they meant
-		// something by it.
 		[]any(nil),
 		[]any{nil},
 		map[string]any{"org_login": "acme", "project_number": 1},
@@ -197,15 +216,75 @@ func TestGitHubProjectV2TargetsFailClosedOnMalformedDurableConfig(t *testing.T) 
 	}
 }
 
+// The two sides of the configured-but-empty boundary, both built FROM JSON
+// BYTES because that is the only way to get the shapes production emits.
+//
+// A Go-literal `[]any(nil)` is a TYPED nil and takes a different path through
+// json.Marshal than a JSONB null, which decodes to an UNTYPED nil interface.
+// Testing only the typed one is how the null path stayed fail-open while
+// looking covered -- the same mistake as testing int project numbers when
+// production only ever sends float64, one clause over.
+//
+//   - JSON `null` under a present key: the operator wrote the key, so silently
+//     returning "no projects configured" drops their intent. Must REFUSE.
+//   - JSON `[]`: an explicitly empty list is a valid way to say "configured,
+//     currently none". Must be accepted as validly empty, NOT refused.
+//
+// Both are pinned, because a fix for one that broke the other would otherwise
+// pass.
+func TestGitHubProjectV2TargetsSeparateNullConfigFromEmptyConfig(t *testing.T) {
+	decode := func(t *testing.T, raw string) map[string]any {
+		t.Helper()
+		var integrationConfig map[string]any
+		if err := json.Unmarshal([]byte(raw), &integrationConfig); err != nil {
+			t.Fatal(err)
+		}
+		return integrationConfig
+	}
+
+	t.Run("json null under a present key is refused", func(t *testing.T) {
+		integrationConfig := decode(t, `{"github_projects_v2":null}`)
+		value, configured := integrationConfig["github_projects_v2"]
+		// Guard the guard: if this ever stops being a present key holding an
+		// untyped nil, this test is no longer exercising the production shape.
+		if !configured || value != nil {
+			t.Fatalf("configured=%t value=%#v -- not the production JSONB null shape",
+				configured, value)
+		}
+		claim := githubWorkItemOracleClaim()
+		claim.IntegrationConfig = integrationConfig
+		targets, err := githubProjectV2Targets(claim)
+		if !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("a configured JSON null returned targets=%+v err=%v; until "+
+				"CHAOS-3123 this path returned empty targets and a nil error, "+
+				"silently discarding configuration the operator wrote", targets, err)
+		}
+	})
+
+	t.Run("json empty list is validly empty", func(t *testing.T) {
+		claim := githubWorkItemOracleClaim()
+		claim.IntegrationConfig = decode(t, `{"github_projects_v2":[]}`)
+		targets, err := githubProjectV2Targets(claim)
+		if err != nil {
+			t.Fatalf("an explicitly empty list was refused: %v", err)
+		}
+		if len(targets) != 0 {
+			t.Fatalf("targets=%+v want none", targets)
+		}
+	})
+}
+
 // Every test above builds IntegrationConfig as a Go literal, with `int` or
 // json.Number project numbers. PRODUCTION NEVER PRODUCES EITHER: the claim's
 // integration_config arrives as a Postgres JSONB column decoded by a plain
 // json.Unmarshal into map[string]any (repository_postgres.go), so every number
-// is a float64. A parser that happened to accept only int/json.Number would
-// pass this package's whole suite and reject every real tenant's configuration.
+// is a float64.
 //
-// This builds the config the way the repository does -- from JSON bytes -- so
-// the representation under test is the one production hands us.
+// This closes a COVERAGE gap, not a behavior gap: the parser has always
+// accepted float64, so nothing here changes what production does. What was
+// missing was any test that would notice if that stopped being true -- a
+// parser tightened to accept only int/json.Number would have passed this
+// package's entire suite while rejecting every real tenant's configuration.
 func TestGitHubProjectV2TargetsAcceptThePostgresJSONRepresentation(t *testing.T) {
 	var integrationConfig map[string]any
 	if err := json.Unmarshal([]byte(

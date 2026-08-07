@@ -1,7 +1,13 @@
 {
   "schema_version": 1,
   "name": "github/work-items unregistered composite route",
-  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "build": [
+    "go",
+    "test",
+    "-run",
+    "^$",
+    "./internal/providersync/"
+  ],
   "mutations": [
     {
       "id": "derivations-are-required-before-fetch",
@@ -9,7 +15,16 @@
       "find": "if handler.Deriver == nil {",
       "replace": "if false {",
       "rationale": "the composite must not spend provider budget or claim a batch while all nine derived surfaces are unavailable",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsBeforeFetchWithoutDerivedImplementation$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteFailsBeforeFetchWithoutDerivedImplementation$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "projects-config-is-validated-before-fetch",
@@ -17,7 +32,16 @@
       "find": "projectTargets, err := githubProjectV2Targets(claim)\n\tif err != nil {\n\t\treturn CompleteRouteBatch{}, err\n\t}",
       "replace": "projectTargets, err := githubProjectV2Targets(claim)\n\tif false {\n\t\treturn CompleteRouteBatch{}, err\n\t}",
       "rationale": "malformed durable Projects v2 configuration fails before any REST or GraphQL request",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsBeforeFetchOnMalformedProjectsConfiguration$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteFailsBeforeFetchOnMalformedProjectsConfiguration$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "rest-attempts-enter-actuals",
@@ -25,7 +49,16 @@
       "find": "RequestCount: restResult.Evidence.Requests,",
       "replace": "RequestCount: 0,",
       "rationale": "every physical REST attempt is retained in the work_items/rest_core usage bucket",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "rest-optional-degradation-reaches-composite-guard",
@@ -33,7 +66,16 @@
       "find": "for _, partial := range restResult.Incomplete {",
       "replace": "for _, partial := range []GitHubWorkItemsRESTIncomplete{} {",
       "rationale": "REST optional failures remain typed at the composite boundary and prevent any derivation or effect construction",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "social-incomplete-remains-typed",
@@ -41,7 +83,16 @@
       "find": "Component: \"pr_social\", Cause: socialResult.Incomplete.Cause,",
       "replace": "Component: \"\", Cause: socialResult.Incomplete.Cause,",
       "rationale": "an optional GraphQL social failure remains distinguishable from a complete empty PR result",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "pr-social-events-reach-semantic-normalizer",
@@ -49,7 +100,16 @@
       "find": "adapted.Events, adapted.Comments, handler.ResolveIdentity, normalizedAt,",
       "replace": "nil, adapted.Comments, handler.ResolveIdentity, normalizedAt,",
       "rationale": "adapted PR events must produce the Python-equivalent transition and reopen families",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "pr-social-comments-reach-semantic-normalizer",
@@ -57,7 +117,16 @@
       "find": "adapted.Events, adapted.Comments, handler.ResolveIdentity, normalizedAt,",
       "replace": "adapted.Events, nil, handler.ResolveIdentity, normalizedAt,",
       "rationale": "adapted PR comments must produce interaction and dependency signals instead of disappearing",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "normalized-pr-bundle-is-aggregated",
@@ -65,15 +134,33 @@
       "find": "appendGitHubWorkItemRows(&rows, bundle)",
       "replace": "_ = bundle",
       "rationale": "a fully normalized PR bundle must join the repository issue rows before derivation",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
-      "id": "configured-projects-default-to-visible-pending",
+      "id": "configured-projects-are-actually-fetched",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "incomplete = append(incomplete, GitHubWorkItemsIncomplete{\n\t\t\t\tComponent: \"projects_v2\", Cause: \"policy_pending\",\n\t\t\t})",
-      "replace": "incomplete = incomplete",
-      "rationale": "configured Projects v2 targets cannot be silently ignored while their activation policy is unresolved",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteDefaultsProjectsToTypedPendingWithoutFetching$", "./internal/providersync/"]]
+      "find": "\tprojectState := \"disabled\"\n\tif len(projectTargets) > 0 {",
+      "replace": "\tprojectState := \"disabled\"\n\tif false {",
+      "rationale": "configured Projects v2 targets cannot be silently ignored. Replaces the retired 'configured-projects-default-to-visible-pending', whose anchor was the policy_pending block D18 deleted; the property survives, expressed against the code that now exists.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "projects-actuals-enter-shared-graphql-bucket",
@@ -81,7 +168,16 @@
       "find": "Dimension: projectResult.Usage.Dimension, RequestCount: projectResult.Usage.RequestCount,",
       "replace": "Dimension: projectResult.Usage.Dimension, RequestCount: 0,",
       "rationale": "Projects v2 physical GraphQL attempts aggregate with PR-social under work_item_prs/graphql_cost",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "projects-last-wins-composition-is-applied",
@@ -89,15 +185,33 @@
       "find": "rows = mergeGitHubProjectV2Rows(rows, projectResult.Rows)",
       "replace": "rows = rows",
       "rationale": "Projects v2 values replace matching repository work items at their original position and append their transitions",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "blocking-incomplete-fails-before-derivation",
       "file": "internal/providersync/github_work_items_route.go",
       "find": "if !githubWorkItemsIncompleteIsOptional(partial) {",
       "replace": "if partial.Component == \"\" {",
-      "rationale": "an incomplete component Python never degrades past (projects_v2 policy_pending) must still fail with zero effects before the deriver runs",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteDefaultsProjectsToTypedPendingWithoutFetching$", "./internal/providersync/"]]
+      "rationale": "a blocking incomplete entry must fail with zero effects before the deriver runs, and EVERY entry decides rather than the first: the proof case pairs an optional milestones entry with a blocking pr_social one appended after it. Re-pointed after D18 deleted the policy_pending test this previously named -- that test's removal left this mutating live code with a -run pattern matching nothing, which exits 0 and reads as measured.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "optional-social-incomplete-mirrors-python-continuation",
@@ -105,7 +219,16 @@
       "find": "\t\"pr_social\":               true,",
       "replace": "\t\"pr_social\":               false,",
       "rationale": "provider.py:369-402 logs a failed optional PR-social batch and keeps every already-collected row; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "optional-rest-incomplete-mirrors-python-continuation",
@@ -113,7 +236,16 @@
       "find": "\t\"issue_comments\":          true,",
       "replace": "\t\"issue_comments\":          false,",
       "rationale": "provider.py:293-301 logs a failed per-issue comment fetch and keeps the issue; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "optional-milestone-incomplete-mirrors-python-continuation",
@@ -121,7 +253,16 @@
       "find": "\t\"milestones\":              true,",
       "replace": "\t\"milestones\":              false,",
       "rationale": "provider.py:202-217 logs a failed milestone fetch and keeps the issues; classifying it as blocking would withhold all 16 effects over an optional enrichment failure",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "every-incomplete-entry-decides-not-just-the-first",
@@ -129,7 +270,16 @@
       "find": "\tfor _, partial := range incomplete {",
       "replace": "\tfor _, partial := range incomplete[:min(1, len(incomplete))] {",
       "rationale": "projects_v2 is appended last, so a classification loop that stops after the first entry reads clean on exactly the ordering production produces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "blocking-cause-outranks-an-optional-component",
@@ -137,7 +287,16 @@
       "find": "\tif githubWorkItemsBlockingIncompleteCauses[partial.Cause] {\n\t\treturn false\n\t}\n",
       "replace": "",
       "rationale": "pagination_cap and invalid_pagination arrive on the optional pr_social component; classifying on Component alone would land a deterministically truncated batch as a clean success",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "pagination-cap-is-a-blocking-cause",
@@ -145,7 +304,16 @@
       "find": "\t\"pagination_cap\":     true,",
       "replace": "\t\"pagination_cap\":     false,",
       "rationale": "a capped social traversal is deterministically truncated, so landing it banks a subset every later run reproduces -- the recipe's never-both-capped-and-successful rule",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$/pagination_cap$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$/pagination_cap$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "invalid-pagination-is-a-blocking-cause",
@@ -153,7 +321,16 @@
       "find": "\t\"invalid_pagination\": true,",
       "replace": "\t\"invalid_pagination\": false,",
       "rationale": "a missing or stalled cursor is a defect in our own traversal with no Python analogue, and must surface as a failure rather than a routine degradation entry",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$/invalid_pagination$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses$/invalid_pagination$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "unprocessable-pull-request-does-not-fail-the-unit",
@@ -161,7 +338,16 @@
       "find": "\t\t\t\tincomplete = append(incomplete, GitHubWorkItemsIncomplete{\n\t\t\t\t\tComponent: \"pull_request_processing\", SubjectID: subject,\n\t\t\t\t\tCause: githubWorkItemsRESTFailureCause(adaptErr),\n\t\t\t\t})\n\t\t\t\tbreak",
       "replace": "\t\t\t\treturn CompleteRouteBatch{}, usage.wrap(adaptErr)",
       "rationale": "provider.py:503-507 warns and continues on a pull request it cannot process, keeping the issues and sprints already collected",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "degradation-reaches-the-durable-unit-row",
@@ -169,7 +355,16 @@
       "find": "\"incomplete\":        incomplete,",
       "replace": "\"incomplete\":        []GitHubWorkItemsIncomplete{},",
       "rationale": "continuing past an optional-data failure is only allowed because the omission is recorded; dropping the entries from the result would make a degraded run indistinguishable from a clean one in the durable unit row",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "pull-requests-survive-optional-social-failure",
@@ -177,7 +372,16 @@
       "find": "if !exists && socialComplete {",
       "replace": "if !exists {",
       "rationale": "Python reads the social batch with .get(number, ()), so a pull request whose social payload never arrived is still normalized from the REST payload already in hand",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "same-key-usage-is-summed",
@@ -185,7 +389,16 @@
       "find": "usage[key] += observation.RequestCount",
       "replace": "usage[key] = observation.RequestCount",
       "rationale": "PR-social and Projects v2 attempts sharing one budget identity are summed rather than last-wins",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "failed-required-phase-retains-actuals",
@@ -193,7 +406,16 @@
       "find": "return &GitHubWorkItemsRouteError{Cause: err, Usage: usage.snapshot()}",
       "replace": "return &GitHubWorkItemsRouteError{Cause: err, Usage: nil}",
       "rationale": "required-phase failures retain every physical request observation gathered before the error",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteErrorRetainsRequiredPhasePhysicalUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteErrorRetainsRequiredPhasePhysicalUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "fetch-evidence-sums-phase-requests",
@@ -201,7 +423,16 @@
       "find": "target.Requests += source.Requests",
       "replace": "target.Requests = source.Requests",
       "rationale": "composite evidence counts REST, PR-social, and Projects v2 physical attempts together",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "unregistered-composite-has-no-watermark",
@@ -209,7 +440,16 @@
       "find": "Watermark: nil,",
       "replace": "Watermark: claim.BeforeAt,",
       "rationale": "the unregistered foundation cannot advance a watermark before activation and crash-recovery approval",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "estimate-coverage-derived-rows-are-forwarded",
@@ -217,7 +457,16 @@
       "find": "EstimateCoverageMetricsDaily:   derived[\"estimate_coverage_metrics_daily\"],",
       "replace": "EstimateCoverageMetricsDaily:   nil,",
       "rationale": "the estimate coverage derivation is an owned destination, not optional metadata",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "investment-classification-derived-rows-are-forwarded",
@@ -225,7 +474,16 @@
       "find": "InvestmentClassificationsDaily: derived[\"investment_classifications_daily\"],",
       "replace": "InvestmentClassificationsDaily: nil,",
       "rationale": "investment classifications remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "investment-metrics-derived-rows-are-forwarded",
@@ -233,7 +491,16 @@
       "find": "InvestmentMetricsDaily:         derived[\"investment_metrics_daily\"],",
       "replace": "InvestmentMetricsDaily:         nil,",
       "rationale": "investment metrics remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "issue-type-derived-rows-are-forwarded",
@@ -241,7 +508,16 @@
       "find": "IssueTypeMetricsDaily:          derived[\"issue_type_metrics_daily\"],",
       "replace": "IssueTypeMetricsDaily:          nil,",
       "rationale": "issue type metrics remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "cycle-time-derived-rows-are-forwarded",
@@ -249,7 +525,16 @@
       "find": "WorkItemCycleTimes:             derived[\"work_item_cycle_times\"],",
       "replace": "WorkItemCycleTimes:             nil,",
       "rationale": "work-item cycle times remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "daily-metrics-derived-rows-are-forwarded",
@@ -257,7 +542,16 @@
       "find": "WorkItemMetricsDaily:           derived[\"work_item_metrics_daily\"],",
       "replace": "WorkItemMetricsDaily:           nil,",
       "rationale": "daily work-item metrics remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "state-duration-derived-rows-are-forwarded",
@@ -265,7 +559,16 @@
       "find": "WorkItemStateDurationsDaily:    derived[\"work_item_state_durations_daily\"],",
       "replace": "WorkItemStateDurationsDaily:    nil,",
       "rationale": "state duration metrics remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "team-attribution-derived-rows-are-forwarded",
@@ -273,7 +576,16 @@
       "find": "WorkItemTeamAttributions:       derived[\"work_item_team_attributions\"],",
       "replace": "WorkItemTeamAttributions:       nil,",
       "rationale": "team attribution rows remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "user-metrics-derived-rows-are-forwarded",
@@ -281,7 +593,16 @@
       "find": "WorkItemUserMetricsDaily:       derived[\"work_item_user_metrics_daily\"],",
       "replace": "WorkItemUserMetricsDaily:       nil,",
       "rationale": "per-user work-item metrics remain one of the nine required derived surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
     }
   ]
 }

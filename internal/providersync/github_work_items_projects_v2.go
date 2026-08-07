@@ -17,12 +17,26 @@ const gitHubProjectsV2IntegrationConfigKey = "github_projects_v2"
 
 // GitHubProjectV2Target is durable, non-secret integration configuration.
 //
-// ACTIVATION DECISION PENDING (CHAOS-3123): the active Python producer reads
-// these targets from process-global GITHUB_PROJECTS_V2 and creates a second
-// token client. The Go foundation deliberately chooses claim-owned
-// IntegrationConfig plus the already claim-resolved Credential/HTTPClient,
-// but remains unregistered until that ownership and fanout decision is
-// approved in Linear. It must not be used as route-readiness evidence.
+// RATIFIED (D18, cutover Decision Log): targets are durable integration-scoped
+// configuration read from the claim, and collection uses the already
+// claim-resolved Credential/HTTPClient. Environment target/token fallback is
+// not part of the Go route.
+//
+// Two deliberate divergences from the active Python producer follow from that,
+// and are divergences of record rather than porting defects:
+//
+//   - Python reads targets from process-global GITHUB_PROJECTS_V2
+//     (metrics/work_items.py:433) and swallows every malformed entry with a
+//     bare `except Exception: continue`. Go reads durable config and fails
+//     closed, because a silent-skip grammar over an operator-visible config
+//     column would hide a typo as "no projects configured".
+//   - Python builds a SECOND client from process-global GITHUB_TOKEN
+//     (metrics/work_items.py:403-409), ignoring both the resolved integration
+//     credential and its base URL. On GitHub Enterprise Server that client
+//     reaches github.com while this one honors the claim's base URL.
+//
+// Ratification is not activation: this collector still owns no registration,
+// readiness, watermark, or alias.
 type GitHubProjectV2Target struct {
 	OrgLogin      string `json:"org_login"`
 	ProjectNumber int    `json:"project_number"`
@@ -49,10 +63,19 @@ type GitHubProjectV2FetchResult struct {
 	Targets  int
 }
 
-// GitHubProjectV2Fetcher temporarily preserves Python's per-source fanout:
-// callers may invoke it once for each existing work-items claim, and each
-// invocation fetches the claim's complete durable target list. Registration
-// is blocked on the unresolved activation/de-amplification decision above.
+// GitHubProjectV2Fetcher preserves Python's per-source fanout: callers may
+// invoke it once for each existing work-items claim, and each invocation
+// fetches the claim's complete durable target list.
+//
+// That fanout is an AMPLIFICATION, not a mirror, and D18 accepts it only
+// temporarily. Python calls parse_github_projects_v2_env() once per JOB —
+// job_work_items.py sits it at the same indentation as
+// `for discovered_repo in discovered_repos`, i.e. OUTSIDE the repo loop — and
+// merges the result once at the end. The Go unit boundary is per-source, so
+// every claim refetches the same org-wide projects. Collapsing that to
+// one fetch per integration moves the D16 unit boundary and is therefore a
+// separately tracked follow-up with its own oracle strategy; it must not be
+// smuggled in here, and it must not gate the all-or-nothing alias activation.
 type GitHubProjectV2Fetcher struct{}
 
 func githubProjectV2Targets(claim Claim) ([]GitHubProjectV2Target, error) {

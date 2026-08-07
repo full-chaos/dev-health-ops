@@ -31,16 +31,98 @@ func TestGitHubProjectV2TargetsComeOnlyFromClaimIntegrationConfig(t *testing.T) 
 	}
 }
 
-func TestGitHubProjectV2ActivationDecisionRemainsPending(t *testing.T) {
+// D18 ratified the Projects v2 COLLECTOR contract. It did not activate the
+// route, and the two are easy to conflate now that nothing in the source says
+// "pending" any more. This pins the distinction: the collector is decided, the
+// five-alias family is still off, and activation remains the composite
+// all-or-nothing layer's job.
+func TestGitHubProjectV2RatificationIsNotActivation(t *testing.T) {
 	if got := ProviderExecutor("github", "work-items"); got != ExecutorNone {
-		t.Fatalf("Projects v2 foundation was registered before the Linear activation decision: %s", got)
+		t.Fatalf("ratifying the Projects v2 collector must not register the route: %s", got)
 	}
 	descriptor, known := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
 	if !known {
 		t.Fatal("github/work-items capability disappeared")
 	}
 	if descriptor.RouteReady || descriptor.RouteEnabled || len(descriptor.Destinations) != 0 {
-		t.Fatalf("unapproved Projects v2 route became active: %+v", descriptor)
+		t.Fatalf("ratifying the Projects v2 collector activated the route: %+v", descriptor)
+	}
+}
+
+// D18 puts the environment outside the Go route. The positive half of that
+// ("durable config wins") is pinned above; this is the negative half, and it
+// asserts the REQUEST COUNTER rather than the row set. An assertion on empty
+// rows would pass just as happily with the whole collector deleted, and would
+// also pass if Go quietly adopted the env targets and the fixture returned
+// nothing — the only observation that separates "ignored the environment" from
+// "used the environment and found nothing" is that no request was ever issued.
+func TestGitHubProjectV2EnvironmentTargetsAreNeverAFallback(t *testing.T) {
+	t.Setenv("GITHUB_PROJECTS_V2", "acme:3,labs:12")
+	t.Setenv("GITHUB_TOKEN", "ghp_environment_token_that_must_never_be_used")
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{}
+
+	targets, err := githubProjectV2Targets(claim)
+	if err != nil || len(targets) != 0 {
+		t.Fatalf("environment targets leaked into durable config: targets=%+v error=%v", targets, err)
+	}
+
+	// The whole fetch, not just the parser: a target list is only half the
+	// path, and a collector that re-read the environment further down would
+	// still be caught here.
+	doer := &gitHubProjectV2Doer{t: t}
+	result, err := (GitHubProjectV2Fetcher{}).Fetch(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		githubProjectV2TestClient(t, doer), time.Now().UTC(), nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doer.bodies) != 0 {
+		t.Fatalf("environment configuration issued %d GraphQL request(s); D18 puts the "+
+			"environment outside the Go route entirely", len(doer.bodies))
+	}
+	if result.Targets != 0 || result.Evidence.Requests != 0 || result.Usage.RequestCount != 0 {
+		t.Fatalf("environment configuration produced request accounting: %+v", result)
+	}
+}
+
+// The credential half of the same clause. An environment token is present and
+// the claim's resolved credential is not usable; the collector must refuse
+// rather than reach for the one lying around in the process. Each rejected
+// credential shape is asserted to issue ZERO requests, so "refused" cannot be
+// satisfied by fetching first and erroring afterwards.
+func TestGitHubProjectV2RefusesEnvironmentTokenWhenClaimCredentialIsUnusable(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_environment_token_that_must_never_be_used")
+	t.Setenv("GITHUB_PROJECTS_V2", "acme:3")
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+		map[string]any{"org_login": "acme", "project_number": 3},
+	}}
+	for _, test := range []struct {
+		name       string
+		credential providerfoundation.Credential
+	}{
+		{"absent", providerfoundation.Credential{}},
+		{"unresolved id", providerfoundation.Credential{Provider: "github"}},
+		{"other tenant's credential", providerfoundation.Credential{
+			Provider: "github", ID: "77777777-7777-4777-8777-777777777777",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &gitHubProjectV2Doer{t: t}
+			_, err := (GitHubProjectV2Fetcher{}).Fetch(
+				context.Background(), claim, test.credential,
+				githubProjectV2TestClient(t, doer), time.Now().UTC(), nil,
+			)
+			if !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("error=%v want ErrInvalidConfiguration", err)
+			}
+			if len(doer.bodies) != 0 {
+				t.Fatalf("refused credential still issued %d request(s)", len(doer.bodies))
+			}
+		})
 	}
 }
 

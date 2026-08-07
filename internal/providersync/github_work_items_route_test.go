@@ -283,9 +283,20 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets(t *
 
 // Route-level half of the D18 environment clause. The process has both
 // GITHUB_PROJECTS_V2 and GITHUB_TOKEN set and the integration has no durable
-// targets: the batch must succeed, report "disabled", and issue ZERO GraphQL
-// requests. Asserting the state ("disabled") without the counter would pass if
-// the route adopted the env targets and the fixture returned nothing.
+// targets: the batch must succeed and report "disabled".
+//
+// WHAT ACTUALLY HOLDS THE LINE, measured rather than assumed: `projects.calls`
+// and `validateGitHubWorkItemsProjectResult` (route.go:370). Re-applying an
+// env-adopting mutant kills this test THERE — the collector gets invoked with
+// targets the claim never configured, and its result fails validation against
+// len(projectTargets).
+//
+// The GraphQL counter below is NOT what fails. This case substitutes a stub
+// Projects policy, which issues no HTTP at all, so doer.graphqlCalls cannot
+// rise however the route behaves. It is kept as a backstop for a future
+// arrangement where a real collector reaches the wire, and is documented as
+// such rather than presented as the assertion doing the work — a counter that
+// cannot be tripped reads like stronger evidence than it is.
 func TestGitHubWorkItemsRouteTreatsEnvironmentProjectsAsNoConfiguration(t *testing.T) {
 	t.Setenv("GITHUB_PROJECTS_V2", "acme:3,labs:12")
 	t.Setenv("GITHUB_TOKEN", "ghp_environment_token_that_must_never_be_used")

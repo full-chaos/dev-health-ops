@@ -73,8 +73,10 @@ type GitHubWorkItemsIncomplete struct {
 // deliberately ahead of its source and D16's mirror rule does not apply.
 //
 // Components absent for a reason that is not an optional-data fetch failure at
-// all — projects_v2 policy_pending, an unported policy seam — are not listed
-// here and still fail the unit closed.
+// all are not listed here and still fail the unit closed. Projects v2 no longer
+// has an entry of that kind: D18 retired the policy_pending seam, so an
+// unwired Projects collector is a construction defect refused at Collect entry
+// rather than a degradation recorded per batch.
 var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 	"milestones":              true,
 	"issue_comments":          true,
@@ -137,9 +139,17 @@ func (routeErr *GitHubWorkItemsRouteError) Unwrap() error {
 	return routeErr.Cause
 }
 
-// githubWorkItemsProjectPolicy is the unresolved Projects v2 activation seam.
-// GitHubProjectV2Fetcher satisfies it, but the zero-value handler leaves it nil
-// and records configured targets as policy_pending without fetching them.
+// githubWorkItemsProjectPolicy is the Projects v2 collection seam, ratified by
+// D18: durable integration-scoped targets, the claim-resolved credential and
+// client only, and no environment token or target fallback.
+// GitHubProjectV2Fetcher is its production implementation.
+//
+// The seam remains an interface for test substitution, not for policy: there is
+// no longer a legitimate "not decided yet" state, so Collect refuses a nil
+// Projects outright instead of recording configured targets as an incomplete
+// batch. A handler that reaches production without one is a construction
+// defect, and "the code is not wired" must not be reported in the same
+// vocabulary the provider uses to decline data.
 type githubWorkItemsProjectPolicy interface {
 	Fetch(
 		context.Context,
@@ -212,6 +222,14 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	if handler.Deriver == nil {
 		return CompleteRouteBatch{}, ErrGitHubWorkItemsDerivationsUnavailable
+	}
+	// D18 retired the policy_pending seam. This is deliberately NOT gated on
+	// whether this particular claim happens to carry targets: a handler built
+	// without a Projects collector is misconstructed for every claim, and
+	// discovering that only on the first tenant that configured a project would
+	// make the defect look like a tenant-specific data problem.
+	if handler.Projects == nil {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	options, err := githubWorkItemsRESTOptionsForClaim(claim)
 	if err != nil {
@@ -321,36 +339,40 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		}
 	}
 
+	// "disabled" means this claim's integration configured no durable targets —
+	// the only remaining reason Projects v2 contributes nothing. It is NOT the
+	// state an operator lands in by setting GITHUB_PROJECTS_V2 in the process
+	// environment: D18 puts the environment outside the Go route entirely, so
+	// env-only configuration reads here as no configuration at all and issues
+	// zero GraphQL requests. CHAOS-3506 adds the startup-readiness warning that
+	// makes that silence audible at boot, which is where it belongs — reading
+	// the environment on this path to warn about it would reintroduce exactly
+	// the dependency the decision removes.
 	projectState := "disabled"
 	if len(projectTargets) > 0 {
-		if handler.Projects == nil {
-			projectState = "policy_pending"
-			incomplete = append(incomplete, GitHubWorkItemsIncomplete{
-				Component: "projects_v2", Cause: "policy_pending",
-			})
-		} else {
-			projectResult, projectErr := handler.Projects.Fetch(
-				ctx, claim, credential, client, normalizedAt, handler.ResolveIdentity,
-			)
-			usage.add(GitHubWorkItemsRequestUsage{
-				Transport: projectResult.Usage.Transport, RouteFamily: projectResult.Usage.RouteFamily,
-				Dimension: projectResult.Usage.Dimension, RequestCount: projectResult.Usage.RequestCount,
-			})
-			addGitHubWorkItemsEvidence(&evidence, projectResult.Evidence)
-			if projectErr != nil {
-				return CompleteRouteBatch{}, usage.wrap(projectErr)
-			}
-			if err := validateGitHubWorkItemsProjectResult(claim, projectResult, len(projectTargets)); err != nil {
-				return CompleteRouteBatch{}, usage.wrap(err)
-			}
-			rows = mergeGitHubProjectV2Rows(rows, projectResult.Rows)
-			projectState = "included"
+		projectResult, projectErr := handler.Projects.Fetch(
+			ctx, claim, credential, client, normalizedAt, handler.ResolveIdentity,
+		)
+		usage.add(GitHubWorkItemsRequestUsage{
+			Transport: projectResult.Usage.Transport, RouteFamily: projectResult.Usage.RouteFamily,
+			Dimension: projectResult.Usage.Dimension, RequestCount: projectResult.Usage.RequestCount,
+		})
+		addGitHubWorkItemsEvidence(&evidence, projectResult.Evidence)
+		if projectErr != nil {
+			return CompleteRouteBatch{}, usage.wrap(projectErr)
 		}
+		if err := validateGitHubWorkItemsProjectResult(claim, projectResult, len(projectTargets)); err != nil {
+			return CompleteRouteBatch{}, usage.wrap(err)
+		}
+		rows = mergeGitHubProjectV2Rows(rows, projectResult.Rows)
+		projectState = "included"
 	}
 	finishGitHubWorkItemsEvidence(&evidence, rows)
 	// EVERY entry decides, not the first: a batch can mix optional degradation
-	// with a blocking entry, and projects_v2 is appended last, so a check that
-	// stops early reads clean on exactly the ordering production produces.
+	// with a blocking entry, and the blocking one is appended LATER than the
+	// optional one (REST milestones record first; the per-PR and social phases
+	// append after), so a check that stops early reads clean on exactly the
+	// ordering production produces.
 	for _, partial := range incomplete {
 		if !githubWorkItemsIncompleteIsOptional(partial) {
 			return CompleteRouteBatch{}, usage.wrapRoute(

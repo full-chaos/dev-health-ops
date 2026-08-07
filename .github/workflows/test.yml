@@ -315,31 +315,36 @@ jobs:
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test"; the matrix above produces "test-matrix (3.14)"
-  # and the coverage job produces "coverage", neither of which match. This
-  # aggregator always runs, treating skipped (path filter, or coverage skipped
-  # on pull_request) as pass and failure/cancelled as fail. It is the single
-  # required check for both PRs and the merge queue. Do not remove.
+  # and the coverage job produces "coverage", neither of which match. It is the
+  # single required check for both PRs and the merge queue. Do not remove.
+  #
+  # The verdict lives in ci/aggregate_test_results.sh rather than inline here,
+  # so it can be driven through the whole result matrix by
+  # tests/tooling/test_aggregate_test_results.py. See that script's header for
+  # why `needs.changes.result` -- not the downstream results alone -- is what
+  # separates a legitimate skip from an upstream failure that skipped
+  # everything (CHAOS-3482).
   test:
     name: test
+    # Must remain `always()`. Under `!cancelled()` (or any condition that lets
+    # this job itself skip) a cancelled run leaves the REQUIRED check *skipped*,
+    # and branch protection counts a skipped required check as satisfied --
+    # which moves the silent pass one level up instead of closing it.
+    # Cancellation has to be reported by a job that actually ran, so this job
+    # runs unconditionally and the script fails the gate on `cancelled`.
     if: always()
-    needs: [test-matrix, coverage]
+    needs: [changes, test-matrix, coverage]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Aggregate test results
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_CODE: ${{ needs.changes.outputs.code }}
           MATRIX_RESULT: ${{ needs.test-matrix.result }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
-          echo "test-matrix result: ${MATRIX_RESULT}"
-          echo "coverage result: ${COVERAGE_RESULT}"
-          for result in "${MATRIX_RESULT}" "${COVERAGE_RESULT}"; do
-            case "${result}" in
-              success|skipped)
-                ;;
-              failure|cancelled|*)
-                echo "test gate failed (${result})"
-                exit 1
-                ;;
-            esac
-          done
-          echo "test gate passed"
+          chmod +x ci/aggregate_test_results.sh
+          ./ci/aggregate_test_results.sh

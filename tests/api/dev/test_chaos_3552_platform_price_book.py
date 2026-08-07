@@ -49,6 +49,8 @@ treatment:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from dev_health_ops.llm.agent.openai_compatible import (
@@ -416,3 +418,69 @@ def test_construction_admits_everything_that_is_not_a_misconfiguration(
     assert (
         _provider(_candidate(model, provider=provider, base_url=base_url)) is not None
     )
+
+
+def test_the_unpriced_warning_also_increments_the_operator_metric(monkeypatch) -> None:
+    """The metric is a separate signal from the log, so it needs its own assertion.
+
+    Caught by the mutation sweep: replacing the ``.inc()`` with ``pass`` left
+    every test green, because the loudness test above only read the log. An
+    operator alerts on the counter, not on grepping warnings, so a dropped
+    metric is a dropped guard -- and the commit message claimed this was
+    covered when it was not.
+    """
+
+    from dev_health_ops.api.dev import production_runtime
+
+    seen: list[str] = []
+
+    class _Spy:
+        def labels(self, **kwargs: str) -> _Spy:
+            seen.append(kwargs["model"])
+            return self
+
+        def inc(self) -> None:
+            seen.append("inc")
+
+    monkeypatch.setattr(
+        production_runtime, "ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL", _Spy()
+    )
+    production_runtime._provider(_candidate("gpt-6-imaginary"))
+
+    assert seen == ["gpt-6-imaginary", "inc"]
+
+
+def test_the_provider_threads_its_own_endpoint_into_the_cost_lookup() -> None:
+    """The classification is worthless if the call site drops ``base_url``.
+
+    Also caught by the sweep: hard-coding ``base_url=None`` at the call site
+    survived every test, because the self-hosted assertions all called
+    ``_estimated_cost_microusd`` directly. Driven through the real provider
+    instance here, so the wiring itself is covered rather than the function
+    it wires to.
+
+    A self-hosted provider must report 0 (unmetered); the same usage payload
+    on an official-endpoint provider running a priced model must report a real
+    cost. If the call site stops passing the endpoint, the first becomes a
+    priced figure for infrastructure we do not bill.
+    """
+
+    from dev_health_ops.llm.agent.openai_compatible import (
+        OpenAICompatibleAgentProvider,
+    )
+
+    # `_normalize_usage` reads ATTRIBUTES off the SDK's usage object, not dict
+    # keys -- a dict silently yields zero tokens and a meaningless zero cost,
+    # which would have made this test pass for the wrong reason.
+    usage = SimpleNamespace(prompt_tokens=10_000, completion_tokens=1_000)
+    response = SimpleNamespace(usage=usage)
+
+    self_hosted = OpenAICompatibleAgentProvider(
+        api_key="k", model="gpt-5-nano", base_url=SELF_HOSTED_URL, client=object()
+    )
+    official = OpenAICompatibleAgentProvider(
+        api_key="k", model="gpt-5-nano", base_url=None, client=object()
+    )
+
+    assert self_hosted._normalize_usage(response).estimated_cost_microusd == 0
+    assert official._normalize_usage(response).estimated_cost_microusd == 900

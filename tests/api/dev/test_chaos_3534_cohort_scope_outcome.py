@@ -76,6 +76,13 @@ async def test_a_fully_resolved_cohort_publishes_exact_not_unresolved() -> None:
     Asserts the state an auditor reads -- the resolution this run publishes on
     the wire -- not that a branch executed. ``unresolved`` here is a false
     statement about a run that committed both named subjects.
+
+    CHAOS-3551: this exact question now PROCEEDs and answers rather than
+    terminating (see ``test_chaos_3551_cohort_render.py`` for that half, RED-
+    first). The setup control below moved from the old TERMINATE diagnostic
+    to the new render one; every assertion after it is the CHAOS-3534 claim
+    this test still owns -- the published resolution stays EXACT, naming
+    both repositories -- unchanged by which branch produced it.
     """
 
     output = await run_preflight_orchestrator(
@@ -84,11 +91,13 @@ async def test_a_fully_resolved_cohort_publishes_exact_not_unresolved() -> None:
         script_id="chaos-3534-cohort",
     )
 
-    # Setup control: this really is the committed-cohort terminate. Without
-    # it a change that made the run fail earlier would satisfy the assertion
-    # below for entirely the wrong reason.
+    # Setup control: this really is the committed-cohort render path, not
+    # some other path that happens to also publish an EXACT resolution.
     assert output.recorder is not None
-    assert output.recorder.preflight_diagnostics == [("committed_cohort_v1_only", None)]
+    assert output.recorder.preflight_diagnostics == [
+        ("committed_cohort_v1_render", None)
+    ]
+    assert output.result.answer is not None
 
     resolution = output.result.scope_resolution
     assert resolution is not None, (
@@ -410,6 +419,11 @@ async def test_a_cohort_at_exactly_the_v1_limit_still_publishes_exact() -> None:
     sides of the bound are asserted, and the values were confirmed by
     execution rather than reasoning: 19 and 20 publish ``exact`` carrying
     every id, 21 falls back.
+
+    CHAOS-3551: a 20-repository cohort now PROCEEDs and renders (the same
+    V1_SCOPE_LIST_LIMIT bound gates the new render branch, not just the old
+    terminal-observability one) -- the setup control moved to the render
+    diagnostic; the published-resolution claim below is unchanged.
     """
 
     repositories = [
@@ -429,7 +443,10 @@ async def test_a_cohort_at_exactly_the_v1_limit_still_publishes_exact() -> None:
     )
 
     assert output.recorder is not None
-    assert output.recorder.preflight_diagnostics == [("committed_cohort_v1_only", None)]
+    assert output.recorder.preflight_diagnostics == [
+        ("committed_cohort_v1_render", None)
+    ]
+    assert output.result.answer is not None
 
     resolution = output.result.scope_resolution
     assert resolution is not None

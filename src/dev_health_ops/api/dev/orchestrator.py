@@ -256,6 +256,58 @@ def _named_entity_phrases(text: str) -> frozenset[str]:
     return frozenset(match.casefold() for match in phrases)
 
 
+#: CHAOS-3541: the closed set of ``AgentRefusal.code`` values a provider (the
+#: scripted acceptance provider today; a real model told the same vocabulary
+#: via its own instructions, tomorrow) uses to flag a request as genuinely
+#: PROHIBITED -- arbitrary execution or a write -- rather than merely
+#: unresolved or unsupported. ``AgentRefusal.code`` is otherwise a free-form,
+#: model-authored string with no wire-level enum (verified directly against
+#: openai_compatible.py's own JSON schema: ``"code": {"type": ["string",
+#: "null"]}``, no ``enum``) -- an UNRECOGNIZED code is deliberately NOT an
+#: error here, it just falls through to the existing generic refusal
+#: handling below, unchanged. Matching is intentionally exact-string, never
+#: substring/keyword -- a fuzzy match on free-form model text is exactly the
+#: kind of heuristic that misclassifies a legitimate refusal or, worse, an
+#: ordinary answer that happens to mention "write" or "execute".
+_PROHIBITED_ACTION_REFUSAL_CODES = frozenset(
+    {"prohibited_execution", "prohibited_write"}
+)
+
+#: The closed set of ``AgentRefusal.code`` values for a request whose SHAPE
+#: Ask Dev has no capability for at all (an arbitrary external fetch, an
+#: open-ended generation request) -- distinct from PROHIBITED above (a
+#: capability gap, not a categorical denial) and mapped to the existing
+#: ``PublicOutcome.UNSUPPORTED`` bucket, not a new one.
+_UNSUPPORTED_SHAPE_REFUSAL_CODES = frozenset(
+    {"unsupported_external_fetch", "unsupported_request"}
+)
+
+#: CHAOS-3541 (team-lead ruling 2026-08-07): the SAME sentence used for both
+#: the live v1 ``error().safe_message`` and the v2 canonical no-answer copy
+#: (``no_answer_policy.CANONICAL_NO_ANSWER_COPY["refused"]``) -- deliberately
+#: not a variant of each other. Never derived from ``decision.message``
+#: (model-authored, unvalidated free text) -- matches every other terminal
+#: in this branch, none of which ever surfaces a provider's own refusal
+#: text to the user.
+PROHIBITED_ACTION_COPY = (
+    "Ask Dev can only read and summarize your data; it can't run commands "
+    "or make changes."
+)
+
+#: CHAOS-3541: reuses the existing "feature_not_enabled" wire code (already
+#: mapped to PublicOutcome.UNSUPPORTED) rather than minting a second new v1
+#: code -- team-lead ruled one new code ("refused") for this ticket. Own
+#: message text, distinct from that code's OTHER call site
+#: (_provider_error's AgentProviderErrorCode.DISABLED classification, an
+#: operator/config-level "this provider is off" signal): the two causes are
+#: genuinely different operational events sharing one wire bucket, which is
+#: worth knowing if that code's own metrics/alerting ever need to
+#: distinguish them.
+UNSUPPORTED_SHAPE_COPY = (
+    "Ask Dev can't fetch external URLs or generate open-ended content -- "
+    "ask about your data instead."
+)
+
 #: The server-owned copy for the legacy CHAOS-3289 backstop, reachable only
 #: from the flag-off (no-preflight) path. Split out of the predicate so a
 #: telemetry-only firing on the preflight path cannot produce public copy.
@@ -2570,8 +2622,35 @@ class DevOrchestrator:
                     # is nothing to batch over without a committed
                     # DevSubjectSet, mirroring the SINGULAR branch's
                     # has_committed_subject gate one line up.
+                    #
+                    # CHAOS-3551: and the committed subject set's own KIND
+                    # must be one `plan` actually supports. Before this
+                    # ticket every intent whose vocabulary could classify as
+                    # PORTFOLIO_STATUS only ever reached here with a PROJECT
+                    # subject_set -- subject_preflight's own homogeneous-
+                    # cohort gate committed nothing else under that intent.
+                    # CHAOS-3551 adds a second PROCEED source for the SAME
+                    # (PORTFOLIO_STATUS-classified, PLURAL_COHORT) shape: a
+                    # REPOSITORY cohort, which intent classification alone
+                    # cannot rule out (it is lexical, not kind-aware -- see
+                    # subject_preflight's own PORTFOLIO_STATUS branch
+                    # comment). Without this check, a repository cohort
+                    # phrased like a status question would reach
+                    # `_project_scope_from_ref` -- documented as relying on
+                    # ITS CALLER to restrict `ref.entity_kind` to PROJECT --
+                    # and misrepresent each repository as a same-named
+                    # "project" scope to `PortfolioStatusService.
+                    # evaluate_portfolio`, exactly the "answer about one
+                    # entity under another's name" this module's own
+                    # docstring says it never does. `plan.
+                    # supported_subject_kinds` already declares the right
+                    # answer for every plan; nothing previously read it.
                     plan_eligible = (
-                        plan_eligible and preflight_result.subject_set is not None
+                        plan_eligible
+                        and plan is not None
+                        and preflight_result.subject_set is not None
+                        and preflight_result.subject_set.entity_kind
+                        in plan.supported_subject_kinds
                     )
                 if plan_eligible:
                     assert plan is not None
@@ -3597,6 +3676,35 @@ class DevOrchestrator:
                         ),
                     )
                 if isinstance(decision, AgentRefusal):
+                    # CHAOS-3541: a request the provider has flagged as
+                    # PROHIBITED or UNSUPPORTED-by-shape gets that exact
+                    # typed outcome, deterministically -- checked BEFORE the
+                    # CHAOS-3377 override below and bypassing it entirely,
+                    # never after. That override exists for an honest "I
+                    # don't have enough evidence" refusal, where reporting a
+                    # real, already-fetched result instead is strictly
+                    # better for the requester. A prohibited-action or
+                    # unsupported-shape refusal is a different kind of
+                    # claim -- not "insufficient evidence", a categorical
+                    # answer about what Ask Dev is allowed or able to do --
+                    # and silently swapping it for an unrelated status
+                    # snapshot would answer a question the requester did not
+                    # ask while burying the actual, security-relevant
+                    # signal. (In practice the override never fires for
+                    # these corpus cases anyway -- each is a single-decision
+                    # refusal script with zero tool calls -- but production
+                    # traffic is not guaranteed to share that shape, and the
+                    # bypass is the correct choice either way.)
+                    if decision.code in _PROHIBITED_ACTION_REFUSAL_CODES:
+                        return await finish(
+                            RunState.REFUSED,
+                            error=error("refused", PROHIBITED_ACTION_COPY),
+                        )
+                    if decision.code in _UNSUPPORTED_SHAPE_REFUSAL_CODES:
+                        return await finish(
+                            RunState.REFUSED,
+                            error=error("feature_not_enabled", UNSUPPORTED_SHAPE_COPY),
+                        )
                     # CHAOS-3377 HIGH 2 (codex adversarial review): a
                     # refusal reached AFTER a real status_snapshot.v1 result
                     # already exists for the run's current resolved scope is

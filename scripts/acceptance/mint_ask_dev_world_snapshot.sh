@@ -72,7 +72,16 @@ unset \
   WORKER_CONCURRENCY WORKER_HEAVY_CONCURRENCY \
   WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED WORKER_GITHUB_REPO_METADATA_ENABLED \
   DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER \
-  BUGSINK_BASE_URL BUGSINK_CREATE_SUPERUSER
+  BUGSINK_BASE_URL BUGSINK_CREATE_SUPERUSER \
+  ASK_DEV_QUA_SHADOW_ENABLED ASK_DEV_QUA_COMMIT_ENABLED
+# ^ CHAOS-3532: cleared here too, and this script deliberately has NO
+# opt-in to turn them back on. ops/.env exports both for the dev stack and
+# direnv carries them into every ops shell, so a mint run from a developer
+# shell would otherwise boot an ARMED stack -- and a snapshot minted from
+# one bakes QUA-influenced state into the fixture world every future
+# acceptance run then restores. Minting must never be armed; running an
+# armed stack is what run_ask_dev_compose.sh's ASK_DEV_ACCEPTANCE_QUA knob
+# is for.
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ops_root="$(cd -- "${script_dir}/../.." && pwd)"

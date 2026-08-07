@@ -345,7 +345,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "7e596208a1c2711a4d6b7d2e6ba202b971a1ae8eae0af215e06aa01511f3e07e"
+        "sha256": "21698013ea1dac591a15bcd965431c102d5a9e49a108ad97c08db748b5fdfd56"
       },
       "schema_version": "dev_tool_result.v1"
     },
@@ -383,7 +383,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "694eeacf026c3c6abe6363625d1188fa59c3b1d194713acd8754babeeaa0dfad"
+        "sha256": "379012a91746699a38240c4e679bc2d7100c7fb4ff0c99cb966cb55e46045e39"
       },
       "schema_version": "dev_stream_event.v1"
     },
@@ -402,7 +402,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_error.v1.schema.json",
-        "sha256": "eb78a38684caab42ef2c88c6a33f558330855b86b9b847024560dfeb68581514"
+        "sha256": "6e43d439599900021500f04158fe07a266885d9273c530008db8b8923c1f087b"
       },
       "schema_version": "dev_error.v1"
     }

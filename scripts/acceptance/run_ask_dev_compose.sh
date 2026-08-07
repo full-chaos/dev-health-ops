@@ -51,12 +51,46 @@ unset \
   WORKER_CONCURRENCY WORKER_HEAVY_CONCURRENCY \
   WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED WORKER_GITHUB_REPO_METADATA_ENABLED \
   DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER \
-  BUGSINK_BASE_URL BUGSINK_CREATE_SUPERUSER
+  BUGSINK_BASE_URL BUGSINK_CREATE_SUPERUSER \
+  ASK_DEV_QUA_SHADOW_ENABLED ASK_DEV_QUA_COMMIT_ENABLED
 
 web_root="$(cd -- "$2" && pwd)"
 if [[ ! -f "${web_root}/Dockerfile" || ! -f "${web_root}/package.json" ]]; then
   echo "--web-root must identify a dev-health-web checkout" >&2
   exit 64
+fi
+
+# CHAOS-3532: arming the QUA ladder is a deliberate act HERE, and nowhere
+# else.
+#
+# These two are the only ASK_DEV_-namespaced names this launcher clears
+# rather than letting through. That prefix normally means "this launcher's
+# own knob, cannot collide with an ambient dev .env by construction" -- the
+# third bucket of test_launcher_hardens_compose_interpolation_env_for_every
+# _var_it_boots. For these two the assumption behind that bucket is simply
+# false: ops/.env sets ASK_DEV_QUA_SHADOW_ENABLED=1 and
+# ASK_DEV_QUA_COMMIT_ENABLED=1 for the DEV stack, direnv exports that file
+# into every shell under the ops tree, and passing them through would boot
+# every acceptance stack from a developer shell silently ARMED.
+#
+# That is not a hypothetical leftover export. It was the live state of every
+# ops shell on this machine, verified directly, hours after the passthrough
+# version of this wiring was written -- which is why this reverses it.
+#
+# An armed stack is not merely "more feature on": the QUA shadow changes
+# what every baseline corpus case measures, and armed runs are graded
+# against predictions pre-registered on an UNARMED system. Silent arming
+# invalidates the comparison rather than extending it.
+#
+# So: cleared unconditionally above, then translated from this launcher's
+# own one-shot knob AFTER the clear. Setting the two flags directly cannot
+# arm anything; only ASK_DEV_ACCEPTANCE_QUA=1 can.
+if [[ "${ASK_DEV_ACCEPTANCE_QUA:-0}" == "1" ]]; then
+  export ASK_DEV_QUA_SHADOW_ENABLED=1
+  export ASK_DEV_QUA_COMMIT_ENABLED=1
+else
+  export ASK_DEV_QUA_SHADOW_ENABLED=0
+  export ASK_DEV_QUA_COMMIT_ENABLED=0
 fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

@@ -90,6 +90,20 @@ API_GATEWAY = AuthorizedEntity(
     EntityKind.REPOSITORY, "meridian/api-gateway", "meridian/api-gateway"
 )
 
+#: CHAOS-3551: a homogeneous, complete PROJECT cohort -- unlike the two
+#: repositories above, PROJECT has no v1 multi-entity scope representation
+#: (``committed_cohort_resolution_for`` refuses any kind but REPOSITORY), so
+#: this pair still terminates as ``committed_cohort_v1_only`` after CHAOS-3551
+#: renders repository cohorts. Distinct labels (unlike the shared-label
+#: ``ATLAS_PROJECT_ONE``/``ATLAS_PROJECT_TWO`` pair, which exists to test
+#: ambiguity) so both mentions resolve exactly rather than ambiguously.
+STILL_UNSUPPORTED_PROJECT_ONE = AuthorizedEntity(
+    EntityKind.PROJECT, "project-atlas-1", "Atlas One"
+)
+STILL_UNSUPPORTED_PROJECT_TWO = AuthorizedEntity(
+    EntityKind.PROJECT, "project-atlas-2", "Atlas Two"
+)
+
 
 def _recorder_factory(
     service: DevPersistenceService,
@@ -256,8 +270,8 @@ async def test_chaos_3533_committed_cohort_terminate_persists_every_entry(
     """CHAOS-3534's ledger half, and the reason that ticket's stated premise
     was wrong.
 
-    A question naming two real repositories resolves BOTH exactly and commits
-    a real ``dev_subject_set.v1``; D2 is never consulted, because D2 exists for
+    A question naming two real projects resolves BOTH exactly and commits a
+    real ``dev_subject_set.v1``; D2 is never consulted, because D2 exists for
     PARTIAL cohorts. The run then terminates on D1 -- ``committed_cohort_v1_
     only``, "we committed every resolvable member and the v1 surface cannot
     render it" -- and, on today's code, persists none of the two exact matches
@@ -273,19 +287,26 @@ async def test_chaos_3533_committed_cohort_terminate_persists_every_entry(
     ``exact_match`` entries must stay alongside the rest exactly as the ledger
     recorded them, or the persisted history is a different story from the one
     the preflight actually decided.
+
+    CHAOS-3551: a REPOSITORY cohort in this exact shape now PROCEEDs and
+    renders instead of terminating -- see ``test_chaos_3551_cohort_render``.
+    This test moved to a PROJECT cohort, which has no v1 multi-entity scope
+    representation and so still terminates on D1; the TERMINATE-ledger
+    mechanism under test here is unchanged and kind-independent.
     """
 
     maker, org_id, user_id = seeded
-    question = (
-        'What\'s the status of repo "meridian/web-app" and repo "meridian/api-gateway"?'
-    )
+    question = "Compare project Atlas One and project Atlas Two"
     conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
 
     async with maker() as session:
         service = DevPersistenceService(session)
         output = await run_preflight_orchestrator(
             question=question,
-            entities=[(str(org_id), WEB_APP), (str(org_id), API_GATEWAY)],
+            entities=[
+                (str(org_id), STILL_UNSUPPORTED_PROJECT_ONE),
+                (str(org_id), STILL_UNSUPPORTED_PROJECT_TWO),
+            ],
             org_id=str(org_id),
             user_id=str(user_id),
             conversation_id=str(conversation_id),
@@ -314,7 +335,7 @@ async def test_chaos_3533_committed_cohort_terminate_persists_every_entry(
         assert [row.outcome for row in rows] == ["exact_match", "exact_match"], (
             "CHAOS-3533/3534: a committed-cohort TERMINATE must persist every "
             "entry of the ledger it built, in ordinal order -- both named "
-            "repositories resolved exactly and the run must be able to say so. "
+            "projects resolved exactly and the run must be able to say so. "
             f"Got {[row.outcome for row in rows]!r}."
         )
         assert [row.entry_ordinal for row in rows] == [0, 1]
@@ -334,7 +355,7 @@ async def test_chaos_3533_committed_cohort_terminate_persists_every_entry(
         await _corpus_resolution_path(
             maker,
             run_id,
-            mention_texts=("meridian/web-app", "meridian/api-gateway"),
+            mention_texts=("Atlas One", "Atlas Two"),
         )
         == "deterministic-exact"
     )
@@ -621,12 +642,16 @@ async def test_chaos_3533_a_failed_ledger_write_does_not_discard_the_subject_set
     ``dev_subject_set.v1``, and could not render it on the v1 surface. Losing
     that set to an unrelated ledger fault would erase the only record that
     the cohort resolved at all, which is the same forensic hole one layer up.
+
+    CHAOS-3551: a REPOSITORY cohort in this exact shape now PROCEEDs and
+    renders instead of terminating. This test moved to a PROJECT cohort,
+    which still terminates on D1 (no v1 multi-entity scope representation for
+    that kind) -- the TERMINATE-branch ledger-fault handling under test here
+    is unchanged and kind-independent.
     """
 
     maker, org_id, user_id = seeded
-    question = (
-        'What\'s the status of repo "meridian/web-app" and repo "meridian/api-gateway"?'
-    )
+    question = "Compare project Atlas One and project Atlas Two"
     conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
 
     async with maker() as session:
@@ -644,7 +669,10 @@ async def test_chaos_3533_a_failed_ledger_write_does_not_discard_the_subject_set
 
         output = await run_preflight_orchestrator(
             question=question,
-            entities=[(str(org_id), WEB_APP), (str(org_id), API_GATEWAY)],
+            entities=[
+                (str(org_id), STILL_UNSUPPORTED_PROJECT_ONE),
+                (str(org_id), STILL_UNSUPPORTED_PROJECT_TWO),
+            ],
             org_id=str(org_id),
             user_id=str(user_id),
             conversation_id=str(conversation_id),

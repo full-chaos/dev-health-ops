@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from .contracts import (
+    V1_SCOPE_LIST_LIMIT,
     DevContractVersions,
     DevScope,
     DevScopeResolution,
@@ -149,6 +150,12 @@ PREFLIGHT_DIAGNOSTICS: tuple[str, ...] = (
     # PROCEED diagnostics -- see the two call sites' own comments.
     "committed_cohort_portfolio_v1",
     "committed_portfolio_org_wide",
+    # CHAOS-3551: a homogeneous, complete, v1-sized REPOSITORY cohort
+    # PROCEEDs and renders over the multi-repository scope
+    # `committed_cohort_resolution_for` (CHAOS-3534) already built --
+    # the render half of D1, mirroring `committed_cohort_portfolio_v1`
+    # for every non-portfolio intent.
+    "committed_cohort_v1_render",
     # CHAOS-3528: the CHAOS-3393 portfolio catalog-outage branch's own
     # diagnostic, emitted at a real call site but never added here -- the
     # exact CHAOS-3292 class this tuple exists to prevent.
@@ -194,11 +201,19 @@ class CommittedSubjects:
     """What the preflight committed for one run: a scope, a subject set, or both.
 
     CHAOS-3301. Exactly one of ``resolution``/``subject_set`` is set for a
-    singular commit or a cohort respectively, except the "duplicate aliases
-    collapse to one subject" case (N4), where both are set: the run proceeds
-    on ``resolution`` (there is only one *distinct* committed entity), and
-    ``subject_set`` still records that the question named it more than once
-    (``original_mention_count`` on the persisted ``dev_subject_set.v1``).
+    singular commit or a cohort respectively, with two exceptions where both
+    are set:
+
+    * the "duplicate aliases collapse to one subject" case (N4): the run
+      proceeds on ``resolution`` (there is only one *distinct* committed
+      entity), and ``subject_set`` still records that the question named it
+      more than once (``original_mention_count`` on the persisted
+      ``dev_subject_set.v1``).
+    * a homogeneous, complete REPOSITORY cohort (CHAOS-3551): more than one
+      distinct entity committed, and ``resolution`` is a real multi-
+      repository scope (``committed_cohort_resolution_for``) the run
+      proceeds on directly -- unlike N4, ``resolution`` here is NOT
+      audit-only.
     """
 
     resolution: DevScopeResolution | None
@@ -788,6 +803,74 @@ class SubjectPreflight:
                     allowed_tools=ALL_TOOLS,
                     blocking_mention_ids=blocking_ids,
                     diagnostic="committed_cohort_portfolio_v1",
+                )
+            # CHAOS-3551: a homogeneous, COMPLETE repository cohort has a
+            # faithful v1 direct-scope representation -- `DevScope.
+            # repositories` is a list, unlike every other kind's single
+            # `entity_ref` (see `committed_cohort_resolution_for`'s own
+            # docstring, CHAOS-3534). That function already built this
+            # resolution; until now it was only ever used to publish an
+            # honest scope outcome on a terminal that still refused to
+            # answer. Reusing it here to PROCEED, exactly like a singular
+            # commit but over N repositories, is the render half of the
+            # same fix: the model gets the multi-repository scope in its
+            # prompt and answers over it through the ordinary status-
+            # snapshot path, instead of terminating unsupported.
+            #
+            # Gated on `cohort_complete` (never for a partial cohort): a
+            # partial cohort did not resolve everything the question named,
+            # and `committed_cohort_resolution_for` unconditionally reports
+            # EXACT -- proceeding on a partial commit would render an
+            # answer while claiming a scope outcome the run does not
+            # actually have. Partial repository cohorts keep terminating
+            # UNSUPPORTED below, same as before this ticket.
+            #
+            # Gated on V1_SCOPE_LIST_LIMIT because DevScope.repositories and
+            # DevScopeResolution.authorized_repository_ids both cap at 20,
+            # while a DevSubjectSet may commit up to 25 -- see
+            # orchestrator.py's own oversized-cohort comment for the
+            # identical bound on the terminal-observability call site. An
+            # oversized cohort keeps terminating UNSUPPORTED: under-
+            # disclosure, never a truncated scope.
+            #
+            # Every other kind (a project or team cohort under an ordinary
+            # question) still has no v1 scope representation and keeps
+            # terminating below -- `committed_cohort_resolution_for` itself
+            # refuses any kind but REPOSITORY, so this is a structural
+            # guarantee, not a policy call made twice. In particular this
+            # can never open person-level output: no SEARCHABLE_ENTITY_KINDS
+            # member is a person, and the only kind this branch ever
+            # proceeds on is REPOSITORY.
+            if (
+                next(iter(unique_kinds)) is EntityKind.REPOSITORY
+                and subject_set.cohort_complete
+                and len(unique_entities) <= V1_SCOPE_LIST_LIMIT
+            ):
+                cohort_resolution = self._scope_service.committed_cohort_resolution_for(
+                    subject_set,
+                    org_id=org_id,
+                    base_scope=authorized_scope,
+                    resolved_at=generated_at,
+                )
+                return SubjectPreflightResult(
+                    decision=PreflightDecision.PROCEED,
+                    interpretation=interpretation,
+                    ledger=ledger,
+                    committed_resolution=cohort_resolution,
+                    committed_subjects=CommittedSubjects(
+                        resolution=cohort_resolution, subject_set=subject_set
+                    ),
+                    subject_set=subject_set,
+                    answer=None,
+                    outcome=None,
+                    # Mirrors the singular commit below: the subject is
+                    # already committed, so resolve_scope.v1 has nothing
+                    # left to do, and withholding it closes the same
+                    # forbidden_or_not_found leak channel that branch's own
+                    # comment describes.
+                    allowed_tools=ALL_TOOLS - {ToolID.RESOLVE_SCOPE},
+                    blocking_mention_ids=blocking_ids,
+                    diagnostic="committed_cohort_v1_render",
                 )
             return self._terminate(
                 interpretation=interpretation,

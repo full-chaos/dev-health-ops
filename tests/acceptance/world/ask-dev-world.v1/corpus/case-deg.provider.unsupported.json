@@ -3,8 +3,8 @@
   "id": "deg.provider.unsupported",
   "family": "deg",
   "group": 9,
-  "status": "active",
-  "blocked_by": null,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3588",
   "proves": [
     "group 9 family deg.provider (provider readiness layer -- structural unsupported_model bucket)"
   ],
@@ -13,31 +13,9 @@
   "user_alias": "primary.unsupported-model-user",
   "subject_class": "n/a",
   "subject_ref": null,
-  "expected_mention_texts": [
-    "meridian/web-app"
-  ],
-  "invariants": [
-    {
-      "category": "terminal-persists-assistant-row",
-      "check": "terminal_persists_assistant_row",
-      "args": {},
-      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "terminal-outcome-matches-profile",
-      "check": "public_outcome_in",
-      "args": {
-        "from_profile": "expected_public_outcome"
-      },
-      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
-      "executable_today": true,
-      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
-    }
-  ],
-  "resolution_profile_ref": "deterministic-v1",
+  "invariants": [],
+  "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "Reuses readiness.capabilities.unsupported-model's exact mechanism/user (world.json's unsupported-model-profile via user_alias primary.unsupported-model-user, readiness: unsupported_model, intent: readiness_probe -- DevCapabilitiesReadiness.unsupported_model) rather than inventing a new profile, per this batch's instructions, but asks a DIFFERENT, non-duplicate question ('Would you be able to summarize...' vs. readiness.capabilities.unsupported-model's 'Please give me the status of...'). This id's contribution to the deg.provider family is framing the SAME structural readiness gate as a 'provider degradation' scenario (group 9, degradation and trust) rather than a 'capability certification' scenario (group 1, readiness family) -- same underlying code path (production_runtime.py's _resolve_provider_selection raises DevRuntimeUnavailable(code='model_not_supported'); terminal_frames.py's PUBLIC_OUTCOME_BY_ERROR_CODE table maps 'model_not_supported' -> PublicOutcome.UNSUPPORTED), two registry vantage points over one real fixture, deliberately not re-derived. Subject is n/a for the same reason as readiness.capabilities.unsupported-model: the readiness/capability gate is evaluated before any subject mention is ever parsed, so no ScopeResolutionOutcome value is asserted.",
+  "notes": "BLOCKED (CHAOS-3546 -> CHAOS-3588): this case's mechanism was world.json's user-level provider_profile_override (unsupported-model-profile via user_alias primary.unsupported-model-user), retired by CHAOS-3546's fixture-field-consumer guard -- it was declared on two world.json users and read by zero production code, so both cases it drove were passing while proving nothing about unsupported-model handling. The underlying readiness gate IS real and structurally correct (policy.py:151-158's denied_providers/denied_models -> MODEL_NOT_SUPPORTED -> production_runtime.py's DevRuntimeUnavailable('model_not_supported'), firing before BoundedDevRuntime construction, i.e. before any subject preflight -- confirmed by trace, not assumed), but nothing populates the denial lists: AgentProviderPolicy is built in exactly one place and never receives a `denied` value, and no acceptance-boot step writes the generic settings table a denial would live in. CHAOS-3588 is that ticket: choose org-scoped-settings-seeding vs. a real per-user threading mechanism (this case's own user needs a DIFFERENT provider outcome than other primary org users, which a bare org-level denial cannot express), build it, and re-author this case to drive the gate through it. Formerly reused readiness.capabilities.unsupported-model's exact mechanism/user rather than inventing a new profile, framing the same structural gate as a 'provider degradation' scenario (group 9) instead of a 'capability certification' one (group 1, readiness family) -- that framing is preserved for whoever re-authors this once CHAOS-3588 lands.",
   "$comment_resolution_path_invariant": "FALSIFIED BY EXECUTION (CHAOS-3490, 2026-08-06). The adversarial-round-2 reasoning recorded here previously claimed resolution_path_in was RESTORED because 'the correctly quoted repo \"meridian/web-app\" mention takes the ordinary singular proceeded_committed_subject PROCEED and writes one row.' The Phase 2 exit evidence run executed this case against the real stack and observed resolution_path = None -- zero dev_run_resolutions rows. The claim was established by READING the question rather than running it, which is the same failure mode CHAOS-3462 B4 exists to correct. The check is removed and this note is kept, not deleted, so the corrected record survives."
 }

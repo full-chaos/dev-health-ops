@@ -16,103 +16,28 @@ import (
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DDL transcribed from `SHOW CREATE TABLE` on a schema built by the real
-// migration chain (src/dev_health_ops/migrations/clickhouse, including the .py
-// migrations 027/042/044/061 that a .sql-only replay would miss). The column
-// DEFAULTs are part of the transcription on purpose: `org_id String DEFAULT
-// 'default'` and `relationship_semantics_version String DEFAULT 'legacy.v1'`
-// are what an omitted column actually stores, and a test that dropped them
-// would silently diverge from production on exactly the omission cases these
-// adapters mirror.
-const (
-	workItemsDDL = `
-CREATE TABLE work_items (
-  repo_id UUID, work_item_id String, provider String, title String,
-  description Nullable(String), type String, status String, status_raw String,
-  project_key String, project_id String, native_team_key String,
-  project_name String, assignees Array(String), reporter String,
-  created_at DateTime64(3), updated_at DateTime64(3),
-  started_at Nullable(DateTime64(3)), completed_at Nullable(DateTime64(3)),
-  closed_at Nullable(DateTime64(3)), labels Array(String),
-  story_points Nullable(Float64), sprint_id String, sprint_name String,
-  parent_id String, epic_id String, url String, last_synced DateTime64(3),
-  priority_raw Nullable(String), service_class Nullable(String),
-  due_at Nullable(DateTime64(3)), org_id String DEFAULT 'default',
-  source_id Nullable(UUID) DEFAULT NULL
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (org_id, repo_id, work_item_id)`
-
-	workItemTransitionsDDL = `
-CREATE TABLE work_item_transitions (
-  repo_id UUID, work_item_id String, occurred_at DateTime64(3),
-  provider String, from_status String, to_status String,
-  from_status_raw String, to_status_raw String, actor String,
-  last_synced DateTime64(3), org_id String DEFAULT 'default',
-  source_id Nullable(UUID) DEFAULT NULL
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (org_id, repo_id, work_item_id, occurred_at)`
-
-	workItemDependenciesDDL = `
-CREATE TABLE work_item_dependencies (
-  source_work_item_id String, target_work_item_id String,
-  relationship_type String, relationship_type_raw String,
-  last_synced DateTime64(3), org_id String DEFAULT 'default',
-  source_id Nullable(UUID) DEFAULT NULL,
-  relationship_semantics_version String DEFAULT 'legacy.v1'
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type)`
-
-	workItemReopenEventsDDL = `
-CREATE TABLE work_item_reopen_events (
-  work_item_id String, occurred_at DateTime64(3), from_status String,
-  to_status String, from_status_raw Nullable(String),
-  to_status_raw Nullable(String), actor Nullable(String),
-  last_synced DateTime64(3), org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (org_id, work_item_id, occurred_at)`
-
-	workItemInteractionsDDL = `
-CREATE TABLE work_item_interactions (
-  work_item_id String, provider String, interaction_type String,
-  occurred_at DateTime64(3), actor Nullable(String), body_length UInt32,
-  last_synced DateTime64(3), org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (org_id, work_item_id, occurred_at, interaction_type)`
-
-	sprintsDDL = `
-CREATE TABLE sprints (
-  provider String, sprint_id String, native_team_key String,
-  name Nullable(String), state Nullable(String),
-  started_at Nullable(DateTime64(3)), ended_at Nullable(DateTime64(3)),
-  completed_at Nullable(DateTime64(3)), last_synced DateTime64(3),
-  org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (org_id, provider, sprint_id)`
-
-	aiAttributionDDL = `
-CREATE TABLE ai_attribution (
-  record_id UUID, org_id UUID, provider LowCardinality(String),
-  subject_type LowCardinality(String), subject_id String,
-  repo_id Nullable(UUID), kind LowCardinality(String),
-  source LowCardinality(String), confidence Float32, actor Nullable(String),
-  evidence String, observed_at DateTime64(3, 'UTC'),
-  ingested_at DateTime64(3, 'UTC'), superseded_by Nullable(UUID),
-  computed_at DateTime64(3, 'UTC') DEFAULT now64()
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY toYYYYMM(observed_at)
-ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source)
-SETTINGS allow_nullable_key = 1`
-)
+// This file authors NO DDL. Every table comes from the real migration chain
+// (src/dev_health_ops/migrations/clickhouse), applied by chschema through the
+// project's own canonical entrypoint -- the same call `migrate clickhouse
+// upgrade` makes, so the .py migrations 027/042/044/055/061 that a .sql-only
+// replay would miss are covered too.
+//
+// The previous hand-typed CREATE TABLE constants were a second, unversioned
+// copy of the schema: a readback test over them could only ever confirm what
+// the constants themselves declared. The sibling derived-surface tables had
+// already drifted that way (a PRE-053 enum kept a genuinely reachable row from
+// ever being rejected), which is what chschema was written to remove.
 
 // A negative-offset zone where the local date disagrees with the UTC date, so
 // any accidental local-time formatting shows up as a wrong day rather than
 // passing by coincidence.
 var workItemTestZone = time.FixedZone("test-west", -7*60*60)
 
-func newWorkItemEffectsConn(t *testing.T, ddl ...string) (context.Context, driver.Conn) {
+func newWorkItemEffectsConn(t *testing.T) (context.Context, driver.Conn) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
@@ -127,16 +52,15 @@ func newWorkItemEffectsConn(t *testing.T, ddl ...string) (context.Context, drive
 			t.Errorf("terminate ClickHouse: %v", err)
 		}
 	})
+	// Migrate BEFORE opening the Go connection, so a failure to apply the real
+	// chain surfaces as a migration failure rather than as a confusing "table
+	// does not exist" from the first query.
+	chschema.Apply(ctx, t, instance)
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatalf("open ClickHouse: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	for _, statement := range ddl {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatalf("apply DDL: %v", err)
-		}
-	}
 	return ctx, conn
 }
 
@@ -199,7 +123,7 @@ func TestDirectAdaptersAnswerExactWhenARecoverySnapshotIsReplayed(t *testing.T) 
 
 	for _, testCase := range directAdapterCases(orgID, observed) {
 		t.Run(testCase.destination, func(t *testing.T) {
-			ctx, conn := newWorkItemEffectsConn(t, testCase.ddl)
+			ctx, conn := newWorkItemEffectsConn(t)
 			adapter := testCase.adapter(conn)
 			identity, effect := workItemEffect(t, testCase.destination, testCase.row)
 
@@ -236,7 +160,7 @@ func TestDirectAdaptersReadbackExcludesOtherTenantsAtTheSameKey(t *testing.T) {
 			continue
 		}
 		t.Run(testCase.destination, func(t *testing.T) {
-			ctx, conn := newWorkItemEffectsConn(t, testCase.ddl)
+			ctx, conn := newWorkItemEffectsConn(t)
 			adapter := testCase.adapter(conn)
 
 			foreignIdentity, foreignEffect := workItemEffect(t, testCase.destination, testCase.foreignRow)
@@ -292,7 +216,7 @@ func TestAIAttributionReadbackResolvesTheSupersededRowAcrossAMonthBoundary(t *te
 
 func aiAttributionSupersededRowCase(t *testing.T, crossPartitionMerge int) {
 	t.Helper()
-	ctx, conn := newWorkItemEffectsConn(t, aiAttributionDDL)
+	ctx, conn := newWorkItemEffectsConn(t)
 	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(map[string]any{
 		"do_not_merge_across_partitions_select_final": crossPartitionMerge,
 	}))
@@ -351,7 +275,7 @@ func aiAttributionSupersededRowCase(t *testing.T, crossPartitionMerge int) {
 // map marshalling. Asserting the decoded map would pass while the stored string
 // differed in key order, spacing, and escaping.
 func TestAIAttributionStoresPythonEvidenceBytes(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t, aiAttributionDDL)
+	ctx, conn := newWorkItemEffectsConn(t)
 	adapter := GitHubAIAttributionClickHouseAdapter{Conn: conn}
 	orgID := aiAttributionTestOrgID
 	observed := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
@@ -386,7 +310,7 @@ func TestAIAttributionStoresPythonEvidenceBytes(t *testing.T) {
 // silently clobbered. Both directions are asserted against a real
 // ReplacingMergeTree rather than against the comparator in isolation.
 func TestWorkItemsReadbackDistinguishesStaleFromOverwritten(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t, workItemsDDL)
+	ctx, conn := newWorkItemEffectsConn(t)
 	adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
 	orgID := workItemTestOrgID(t)
 	now := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
@@ -418,7 +342,7 @@ func TestWorkItemsReadbackDistinguishesStaleFromOverwritten(t *testing.T) {
 // A batch where some rows landed and others did not cannot be replayed without
 // rewriting the ones that did, so the committer must be told Conflict.
 func TestWorkItemsPartlyLandedBatchIsAConflict(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t, workItemsDDL)
+	ctx, conn := newWorkItemEffectsConn(t)
 	adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
 	orgID := workItemTestOrgID(t)
 	now := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
@@ -452,7 +376,7 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 	now := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
 
 	t.Run("work_items", func(t *testing.T) {
-		ctx, conn := newWorkItemEffectsConn(t, workItemsDDL)
+		ctx, conn := newWorkItemEffectsConn(t)
 		adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
 		row := workItemTestRow(orgID, now)
 		// The semantic row carries all four; the sink still must not write them.
@@ -481,7 +405,7 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 	})
 
 	t.Run("work_item_transitions", func(t *testing.T) {
-		ctx, conn := newWorkItemEffectsConn(t, workItemTransitionsDDL)
+		ctx, conn := newWorkItemEffectsConn(t)
 		adapter := GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn}
 		row := workItemTransitionTestRow(orgID, now)
 		row.Provider = "github"
@@ -508,7 +432,6 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 
 type directAdapterCase struct {
 	destination  string
-	ddl          string
 	adapter      func(driver.Conn) GitHubWorkItemEffectAdapter
 	row          any
 	foreignRow   any
@@ -526,7 +449,7 @@ func directAdapterCases(orgID string, now time.Time) []directAdapterCase {
 	foreignSprint := sprintTestRow(foreignTenantOrgID, now)
 	return []directAdapterCase{
 		{
-			destination: "work_items", ddl: workItemsDDL,
+			destination: "work_items",
 			adapter: func(conn driver.Conn) GitHubWorkItemEffectAdapter {
 				return GitHubWorkItemsClickHouseAdapter{Conn: conn}
 			},
@@ -534,7 +457,7 @@ func directAdapterCases(orgID string, now time.Time) []directAdapterCase {
 			foreignOrgID: foreignTenantOrgID,
 		},
 		{
-			destination: "work_item_transitions", ddl: workItemTransitionsDDL,
+			destination: "work_item_transitions",
 			adapter: func(conn driver.Conn) GitHubWorkItemEffectAdapter {
 				return GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn}
 			},
@@ -542,7 +465,7 @@ func directAdapterCases(orgID string, now time.Time) []directAdapterCase {
 			foreignOrgID: foreignTenantOrgID,
 		},
 		{
-			destination: "work_item_dependencies", ddl: workItemDependenciesDDL,
+			destination: "work_item_dependencies",
 			adapter: func(conn driver.Conn) GitHubWorkItemEffectAdapter {
 				return GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn}
 			},
@@ -550,7 +473,7 @@ func directAdapterCases(orgID string, now time.Time) []directAdapterCase {
 			foreignOrgID: foreignTenantOrgID,
 		},
 		{
-			destination: "work_item_reopen_events", ddl: workItemReopenEventsDDL,
+			destination: "work_item_reopen_events",
 			adapter: func(conn driver.Conn) GitHubWorkItemEffectAdapter {
 				return GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn}
 			},
@@ -558,7 +481,7 @@ func directAdapterCases(orgID string, now time.Time) []directAdapterCase {
 			foreignOrgID: foreignTenantOrgID,
 		},
 		{
-			destination: "work_item_interactions", ddl: workItemInteractionsDDL,
+			destination: "work_item_interactions",
 			adapter: func(conn driver.Conn) GitHubWorkItemEffectAdapter {
 				return GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn}
 			},
@@ -566,7 +489,7 @@ func directAdapterCases(orgID string, now time.Time) []directAdapterCase {
 			foreignOrgID: foreignTenantOrgID,
 		},
 		{
-			destination: "sprints", ddl: sprintsDDL,
+			destination: "sprints",
 			adapter: func(conn driver.Conn) GitHubWorkItemEffectAdapter {
 				return GitHubSprintsClickHouseAdapter{Conn: conn}
 			},
@@ -647,7 +570,7 @@ func aiAttributionTestRow(t *testing.T, orgID string, observed time.Time) github
 // The replay contract, for the one adapter directAdapterCases cannot carry
 // because its tenant column is a UUID rather than a String.
 func TestAIAttributionAnswersExactWhenARecoverySnapshotIsReplayed(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t, aiAttributionDDL)
+	ctx, conn := newWorkItemEffectsConn(t)
 	adapter := GitHubAIAttributionClickHouseAdapter{Conn: conn}
 	observed := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
 	identity, effect := aiAttributionEffect(t, aiAttributionTestRow(t, aiAttributionTestOrgID, observed))
@@ -672,7 +595,7 @@ func TestAIAttributionAnswersExactWhenARecoverySnapshotIsReplayed(t *testing.T) 
 // A row belonging to another tenant must not satisfy this tenant's readback
 // even at an identical subject key and partition.
 func TestAIAttributionReadbackExcludesOtherTenants(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t, aiAttributionDDL)
+	ctx, conn := newWorkItemEffectsConn(t)
 	adapter := GitHubAIAttributionClickHouseAdapter{Conn: conn}
 	observed := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
 
@@ -705,7 +628,7 @@ func TestDirectAdaptersSurviveTwoRowsSharingASortingKeyInOneBatch(t *testing.T) 
 	now := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
 
 	t.Run("work_item_transitions", func(t *testing.T) {
-		ctx, conn := newWorkItemEffectsConn(t, workItemTransitionsDDL)
+		ctx, conn := newWorkItemEffectsConn(t)
 		adapter := GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn}
 		first := workItemTransitionTestRow(orgID, now)
 		second := workItemTransitionTestRow(orgID, now)
@@ -716,7 +639,7 @@ func TestDirectAdaptersSurviveTwoRowsSharingASortingKeyInOneBatch(t *testing.T) 
 	})
 
 	t.Run("work_item_reopen_events", func(t *testing.T) {
-		ctx, conn := newWorkItemEffectsConn(t, workItemReopenEventsDDL)
+		ctx, conn := newWorkItemEffectsConn(t)
 		adapter := GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn}
 		first := workItemReopenTestRow(orgID, now)
 		second := workItemReopenTestRow(orgID, now)
@@ -727,7 +650,7 @@ func TestDirectAdaptersSurviveTwoRowsSharingASortingKeyInOneBatch(t *testing.T) 
 	})
 
 	t.Run("work_item_interactions", func(t *testing.T) {
-		ctx, conn := newWorkItemEffectsConn(t, workItemInteractionsDDL)
+		ctx, conn := newWorkItemEffectsConn(t)
 		adapter := GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn}
 		first := workItemInteractionTestRow(orgID, now)
 		second := workItemInteractionTestRow(orgID, now)
@@ -738,7 +661,7 @@ func TestDirectAdaptersSurviveTwoRowsSharingASortingKeyInOneBatch(t *testing.T) 
 	})
 
 	t.Run("work_item_dependencies", func(t *testing.T) {
-		ctx, conn := newWorkItemEffectsConn(t, workItemDependenciesDDL)
+		ctx, conn := newWorkItemEffectsConn(t)
 		adapter := GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn}
 		first := workItemDependencyTestRow(orgID, now)
 		second := workItemDependencyTestRow(orgID, now)
@@ -802,10 +725,7 @@ func assertCollapsesToTheLastRow(
 // a version column was plain DateTime (seconds) and a shared millisecond helper
 // left the verdict permanently Absent.
 func TestWorkItemTimestampColumnsAllHaveTheAssumedPrecision(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t,
-		workItemsDDL, workItemTransitionsDDL, workItemDependenciesDDL,
-		workItemReopenEventsDDL, workItemInteractionsDDL, sprintsDDL,
-		aiAttributionDDL)
+	ctx, conn := newWorkItemEffectsConn(t)
 
 	// The version column of each destination is called out separately: it is the
 	// one the comparator orders on, so a precision mismatch there decides

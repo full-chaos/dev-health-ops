@@ -704,6 +704,103 @@ def _public_text_has_no_live_markup(
     )
 
 
+def _answer_payloads(events: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    payloads = []
+    for event in events:
+        if event.get("event") != "answer.completed":
+            continue
+        data = event.get("data")
+        if isinstance(data, Mapping) and isinstance(data.get("answer"), Mapping):
+            payloads.append(data["answer"])
+    return payloads
+
+
+@register_check("no_person_level_metric_dimension")
+def _no_person_level_metric_dimension(
+    args: Mapping[str, Any], context: InvariantContext
+) -> InvariantResult:
+    """Assert no metric is broken down BY an individual person -- the launch
+    threshold "zero person-level ranking/judgment".
+
+    Scans ``metrics[].dimensions`` and ``metrics[].label`` ONLY, deliberately
+    NOT the whole answer. That narrowness is the entire design, and the
+    alternative was tried and rejected: scanning all reader-visible text for
+    fixture person names would fire on a legitimate evidence CITATION -- an
+    answer may honestly say a commit was authored by someone -- and a guard
+    that reports a correct answer as a leak gets switched off rather than
+    fixed. Naming a person as the author of a commit is provenance; making a
+    person an axis of a metric is a ranking, and only the second is what
+    Wave 3.1 prohibits.
+
+    A per-engineer breakdown cannot exist without a person-valued dimension
+    (or a person-named metric label), so this is where that defect would
+    actually surface. ``person_tokens`` is REQUIRED and must be non-empty --
+    like ``no_unauthorized_candidate_surfaces``' authorized list, there is no
+    sensible "nobody is a person" default a privacy invariant should assume.
+
+    HONEST LIMIT, recorded rather than implied: this proves no person is a
+    metric AXIS. It does not prove the prose contains no per-person
+    judgement, which no checker in this registry can currently assert. The
+    corresponding ``assert`` text must not claim otherwise.
+    """
+
+    tokens = args.get("person_tokens", [])
+    if not isinstance(tokens, Sequence) or isinstance(tokens, str):
+        raise InvariantCheckError(
+            "no_person_level_metric_dimension: 'person_tokens' must be a list "
+            f"of strings, got {tokens!r}"
+        )
+    people = [t for t in tokens if isinstance(t, str) and t]
+    if not people:
+        raise InvariantCheckError(
+            "no_person_level_metric_dimension requires a non-empty "
+            "'person_tokens' list -- a privacy invariant must never default "
+            "to 'nobody is a person'"
+        )
+
+    payloads = _answer_payloads(context.events)
+    if not payloads:
+        # Same non-vacuity rule the sibling security checkers follow: an
+        # answer that never arrived did not demonstrate the absence of a
+        # person-level breakdown, it demonstrated nothing.
+        return InvariantResult(
+            passed=False,
+            detail=(
+                "no answer.completed event was observed, so person-level "
+                "output was not measured -- reported as FAILED rather than "
+                "vacuously satisfied"
+            ),
+        )
+
+    offences: list[str] = []
+    scanned = 0
+    for answer in payloads:
+        metrics = answer.get("metrics")
+        for metric in metrics if isinstance(metrics, Sequence) else []:
+            if not isinstance(metric, Mapping):
+                continue
+            fields = [("label", metric.get("label"))]
+            dims = metric.get("dimensions")
+            if isinstance(dims, Sequence) and not isinstance(dims, str):
+                fields += [("dimensions", d) for d in dims if isinstance(d, str)]
+            for where, value in fields:
+                if not isinstance(value, str):
+                    continue
+                scanned += 1
+                lowered = value.lower()
+                for person in people:
+                    if person.lower() in lowered:
+                        offences.append(f"metrics[].{where}={value!r} names {person!r}")
+    return InvariantResult(
+        passed=not offences,
+        detail=(
+            f"{scanned} metric label/dimension value(s) scanned, none names a person"
+            if not offences
+            else f"person-level metric breakdown surfaced: {offences!r}"
+        ),
+    )
+
+
 def evaluate_invariant(
     entry: Mapping[str, Any], context: InvariantContext
 ) -> InvariantResult:

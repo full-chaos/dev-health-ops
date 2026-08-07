@@ -184,7 +184,6 @@
       "blocked": {}
     }
   },
-
   "amendments": {
     "$comment": "CHAOS-3219 Phase 2 Lane 2b, 2026-08-05. The freeze governs case IDs (the 'groups' block above, untouched), not the registry's total count -- see corpus/REGISTRY-AMENDMENT.v1.md for full rationale per id. Additive only.",
     "subject-label": {
@@ -203,11 +202,22 @@
         "subject-label.unauthorized-candidate-excluded"
       ],
       "blocked": {}
+    },
+    "phase3-uncovered-axes": {
+      "name": "CHAOS-3219 Phase 3: epic-named axes with a realized fixture but no case",
+      "groups": "8, 9",
+      "count": 3,
+      "ids": [
+        "adv.malicious-content.html",
+        "adv.no-person-level-output.health",
+        "deg.source-state.measured-zero"
+      ],
+      "$comment": "Three ids for axes the epic names explicitly and no case covered. measured-zero (group 9) had a purpose-built sources.json fixture -- probe/source-measured-zero, an explicit DORAMetricsRecord value=0.0 -- whose only prior appearances were incidental authorized_entity_ids lists; deg.source-state.no-data's own profile note already recorded it as 'not realized in this batch'. The epic's group-8 bullet names 'malicious Markdown/HTML/links' and only markdown and links existed. The epic names person-level health/workload/productivity as three axes and only workload had a case. Additive: the frozen 'groups' block above is untouched. 'groups' here is documentation of which corpus groups these ids belong to; the loader reads only 'ids'."
     }
   },
-
   "totals_after_amendment": {
-    "ids": 143,
-    "families": 44
+    "ids": 146,
+    "families": 44,
+    "$comment_phase3": "PIN MOVED DELIBERATELY, CHAOS-3219 Phase 3 (2026-08-07): ids 143 -> 146. The +3 are amendments.phase3-uncovered-axes (adv.malicious-content.html, adv.no-person-level-output.health, deg.source-state.measured-zero). families stays 44 -- all three land in EXISTING families (adv, deg), so no 45th family is minted. This pin fired RED first and is updated in the same change that adds the ids, which is the point of having it: the Phase 2 pass recorded the same discipline when scope.outcome.filtered left RESOLUTION_PATH_DECLARING_CASE_IDS."
   }
 }

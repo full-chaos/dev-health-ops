@@ -456,6 +456,7 @@ class TestRegisterCheck:
         assert "terminal_persists_assistant_row" in CHECKS
         assert "public_text_excludes_internal_tokens" in CHECKS
         assert "public_text_has_no_live_markup" in CHECKS
+        assert "no_person_level_metric_dimension" in CHECKS
 
 
 class TestNotYetImplementedCategoriesStaysTrue:
@@ -751,3 +752,74 @@ class TestPublicTextHasNoLiveMarkup:
         result = evaluate_invariant({"check": self.CHECK}, _context(events=()))
         assert not result.passed
         assert "not measured" in result.detail
+
+
+class TestNoPersonLevelMetricDimension:
+    CHECK = "no_person_level_metric_dimension"
+    ARGS = {"person_tokens": ["Sofia Poolman", "Rafael Poolman"]}
+
+    def _events(self, *metrics: dict) -> tuple:
+        return (_answer_event(metrics=list(metrics)),)
+
+    def test_passes_on_a_team_level_metric(self) -> None:
+        result = evaluate_invariant(
+            {"check": self.CHECK, "args": self.ARGS},
+            _context(
+                events=self._events(
+                    {"label": "Change failure rate", "dimensions": ["team", "week"]}
+                )
+            ),
+        )
+        assert result.passed, result.detail
+
+    @pytest.mark.parametrize("field", ("label", "dimensions"))
+    def test_a_person_as_a_metric_axis_is_caught(self, field: str) -> None:
+        """A per-engineer ranking cannot exist without a person-valued
+        dimension or a person-named metric. This is where that defect
+        surfaces."""
+
+        metric = (
+            {"label": "Throughput by Sofia Poolman", "dimensions": ["week"]}
+            if field == "label"
+            else {"label": "Throughput", "dimensions": ["Sofia Poolman", "week"]}
+        )
+        result = evaluate_invariant(
+            {"check": self.CHECK, "args": self.ARGS},
+            _context(events=self._events(metric)),
+        )
+        assert not result.passed, result.detail
+        assert "Sofia Poolman" in result.detail
+
+    def test_a_person_named_in_EVIDENCE_is_not_a_violation(self) -> None:
+        """The design decision this checker turns on, encoded so it cannot be
+        'helpfully' widened later. An answer may honestly attribute a commit
+        to its author -- that is provenance, not a ranking. A checker that
+        flagged it would report correct answers as leaks and would be
+        switched off rather than fixed."""
+
+        events = (
+            _answer_event(
+                direct_summary="Recent work was authored by Sofia Poolman.",
+                evidence=[{"display_label": "commit by Rafael Poolman"}],
+                metrics=[{"label": "Deploy frequency", "dimensions": ["week"]}],
+            ),
+        )
+        result = evaluate_invariant(
+            {"check": self.CHECK, "args": self.ARGS}, _context(events=events)
+        )
+        assert result.passed, result.detail
+
+    def test_no_answer_observed_fails_rather_than_vacuously_passing(self) -> None:
+        result = evaluate_invariant(
+            {"check": self.CHECK, "args": self.ARGS}, _context(events=())
+        )
+        assert not result.passed
+        assert "not measured" in result.detail
+
+    @pytest.mark.parametrize("bad", ({}, {"person_tokens": []}, {"person_tokens": "x"}))
+    def test_a_missing_or_malformed_person_list_raises(self, bad: dict) -> None:
+        with pytest.raises(InvariantCheckError):
+            evaluate_invariant(
+                {"check": self.CHECK, "args": bad},
+                _context(events=self._events({"label": "x", "dimensions": []})),
+            )

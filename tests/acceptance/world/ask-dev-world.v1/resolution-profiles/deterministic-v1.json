@@ -523,6 +523,24 @@
       "expected_scope_resolution_outcome": "exact",
       "resolution_path": "deterministic-exact",
       "notes": "Team resolves cleanly (same quoted-full-label mechanism as workload.team.with-denominator); the gap is downstream in team_workload_service.py's NO-baseline-denominator path, disclosed rather than silently omitted."
+    },
+    "deg.source-state.measured-zero": {
+      "expected_public_outcome": "answered_with_gaps",
+      "expected_scope_resolution_outcome": "exact",
+      "resolution_path": "deterministic-exact",
+      "notes": "Mirrors deg.source-state.no-data's triple over the SIBLING fixture: probe/source-measured-zero is the metrics-layer realization (an explicit DORAMetricsRecord value=0.0) rather than the watermark-NULL one. Same quoted kind-noun mention shape, so the same exact/deterministic-exact resolution; answered_with_gaps per wrap_legacy_answer_as_frame, which maps every real DevAnswer terminal to ANSWERED_WITH_GAPS on today's stack."
+    },
+    "adv.malicious-content.html": {
+      "expected_public_outcome": "answered_with_gaps",
+      "expected_scope_resolution_outcome": "exact",
+      "resolution_path": "deterministic-exact",
+      "notes": "Same shape as its markdown/links siblings over a real, quoted repo mention -- an ordinary healthy answer whose composition surface is what the markup assertion inspects."
+    },
+    "adv.no-person-level-output.health": {
+      "expected_public_outcome": "answered_with_gaps",
+      "expected_scope_resolution_outcome": "exact",
+      "resolution_path": null,
+      "notes": "expected_public_outcome/scope mirror adv.no-person-level-output over the identical subject and full-literal-label mention shape. resolution_path is deliberately NULL and the case declares NO resolution_path_in invariant: its sibling's ledger write was live-falsified during CHAOS-3490 Part 2 (zero dev_run_resolutions rows, so derive_resolution_path returned None), and wiring an *_in checker onto a null profile value fails by construction -- the CHAOS-3462 B4 trap."
     }
   }
 }

@@ -96,6 +96,31 @@ async def _run_ask_dev_retention_cleanup(
     batches_run = 0
 
     try:
+        # CHAOS-3544: stamp stranded rows BEFORE sweeping, so anything
+        # repaired on this tick is collected by the same tick rather than
+        # waiting another day.
+        #
+        # This task previously called only `cleanup_expired`, and the
+        # backfill's only caller was a `dev-hops maintenance` command. That
+        # left the repair operator-dependent -- and "the CLI drain can simply
+        # not happen" is exactly the failure mode that let a retained-forever
+        # population stay invisible for the whole life of the defect. A
+        # scheduled repair is self-healing; a documented manual one is a
+        # promise about human behaviour.
+        #
+        # Bounded and idempotent like the purge loop below, and cheap once
+        # drained: the selection is one predicate that returns nothing when
+        # nothing is stranded.
+        for _ in range(max(1, int(max_batches))):
+            async with factory() as session:
+                stamp_service = DevPersistenceService(session)
+                stamped = await stamp_service.backfill_stranded_ephemeral_expiry(
+                    limit=limit
+                )
+                await session.commit()
+            if stamped < limit:
+                break
+
         for _ in range(max(1, int(max_batches))):
             batches_run += 1
             async with factory() as session:

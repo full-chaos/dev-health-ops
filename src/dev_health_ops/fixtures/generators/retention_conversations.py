@@ -78,11 +78,31 @@ def build_retention_aged_conversation(
     ``retention_days > 0``) and a fresh one for the SAME policy.
     """
 
+    from dev_health_ops.api.dev.persistence.service import (
+        EPHEMERAL_ABANDONED_GRACE,
+    )
     from dev_health_ops.models.dev_persistence import DevConversation
 
     created_at = pinned_now - timedelta(days=age_days)
+    # CHAOS-3544: a 0-day row is stamped here exactly as production stamps
+    # it, and this is a PAIRED fix rather than an optional tidy-up.
+    #
+    # This generator writes DevConversation rows DIRECTLY -- it never goes
+    # through DevPersistenceService.create_conversation -- so fixing the
+    # product does not fix the fixture. It does the opposite: it would leave
+    # the fixture emitting a shape production can no longer produce, which is
+    # the drift-from-the-producer failure this codebase treats as a defect in
+    # its own right. And every 0-day row this generator emits is also a
+    # zero-run row (``runs=()`` below) -- precisely CHAOS-3544's stranded
+    # shape (a) -- so the fixture world was seeding un-purgeable rows.
+    #
+    # The grace is IMPORTED rather than restated: a fixture hardcoding "one
+    # hour" would silently disagree with production the day that constant
+    # moves.
     expires_at = (
-        created_at + timedelta(days=retention_days) if retention_days > 0 else None
+        created_at + timedelta(days=retention_days)
+        if retention_days > 0
+        else created_at + EPHEMERAL_ABANDONED_GRACE
     )
     conversation = DevConversation(
         id=_uuid5("conversation", id_seed),

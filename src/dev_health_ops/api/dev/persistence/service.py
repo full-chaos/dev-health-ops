@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import and_, case, event, exists, func, or_, select
+from sqlalchemy import and_, case, event, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -107,6 +107,45 @@ def _wire_visible_message_condition():
         .in_(_REAL_ANSWER_SCHEMA_VERSIONS),
     )
 
+
+#: How long a 0-day (ephemeral) conversation that never completes a turn is
+#: kept before the sweep may collect it (CHAOS-3544).
+#:
+#: WHY A GRACE AT ALL, rather than stamping ``now`` at creation. ``cleanup_
+#: expired`` selects purely on ``expires_at IS NOT NULL AND expires_at <=
+#: now``; it has NO in-flight protection of any kind. That is safe only
+#: because a 0-day row is never stamped until its run reaches terminal.
+#: Stamping ``now`` at creation makes every ephemeral conversation deletable
+#: the instant it exists -- purging it while the user is still typing their
+#: first message, and deleting a live run's conversation out from under it.
+#: Observed, not theorised: against that implementation
+#: ``append_user_message_and_run`` raises ``conversation not found`` because
+#: the row is already gone.
+#:
+#: WHY ONE HOUR, derived rather than chosen. A run cannot outlive the grace:
+#: ``DevRunLimits.wall_seconds`` is 45 seconds (80x smaller), and
+#: ``router._STALE_NON_TERMINAL_RUN_THRESHOLD`` is 5 minutes (12x smaller) --
+#: the latter documented in its own comment as "comfortably longer than any
+#: run that is still genuinely in flight could take without something else
+#: already having failed it". Both bounds are asserted against this constant
+#: by ``test_the_grace_is_far_longer_than_any_run_can_live``, so growing
+#: either past the grace fails loudly instead of silently reintroducing the
+#: purged-while-in-use failure mode.
+#:
+#: A module constant rather than configuration, deliberately: a configurable
+#: grace invites being lowered back under the safety bound, and expressing a
+#: floor for it would mean importing two constants from other modules and
+#: silently clamping an operator's value -- a worse surprise than one number
+#: with its derivation written beside it.
+#:
+#: WHAT THIS CHANGES ABOUT THE PRODUCT PROMISE. 0-day retention now means
+#: "deleted at completion, or within an hour if abandoned". It previously
+#: meant "deleted at completion, or NEVER" -- a conversation that never
+#: completed a turn was retained indefinitely in the one tier whose entire
+#: promise is immediate deletion. The grace applies ONLY to conversations
+#: that never complete a turn: a completed one is still stamped to ``now`` at
+#: terminal and collected on the next tick, unchanged.
+EPHEMERAL_ABANDONED_GRACE = timedelta(hours=1)
 
 _TERMINAL_RUN_STATES = frozenset(
     {
@@ -1263,7 +1302,23 @@ class DevPersistenceService:
             retention_days=retention_days,
             created_at=now,
             updated_at=now,
-            expires_at=(now + timedelta(days=30)) if retention_days == 30 else None,
+            # CHAOS-3544: BOTH tiers are stamped at creation now. Creation is
+            # the one event guaranteed to happen -- a conversation exists the
+            # moment it is created, with no message and therefore no run
+            # required -- so it is the only stamp that cannot be missed.
+            #
+            # The 0-day stamp is graced (see EPHEMERAL_ABANDONED_GRACE); the
+            # run-terminal stamp is now a REFRESH that moves it earlier to
+            # `now`, preserving immediate deletion for any conversation that
+            # actually completes a turn. Before this, a 0-day conversation
+            # that never completed one -- abandoned before its first message,
+            # or holding a run left non-terminal by a crash -- was stamped by
+            # nothing and retained forever.
+            expires_at=(
+                now + timedelta(days=30)
+                if retention_days == 30
+                else now + EPHEMERAL_ABANDONED_GRACE
+            ),
         )
         self.session.add(conversation)
         await self.session.flush()
@@ -3632,9 +3687,17 @@ class DevPersistenceService:
         run still non-terminal) and stamps ``expires_at = now()`` on them,
         identically to the synchronous stamp -- the ordinary
         ``cleanup_expired`` sweep then collects them on its next tick, same
-        as any other now-due row. Deliberately narrow: a conversation with
-        zero runs (freshly created, no message posted yet) or ANY
-        non-terminal run (genuinely still in flight) is never touched.
+        as any other now-due row.
+
+        CHAOS-3544 WIDENED WHAT COUNTS AS STRANDED. This used to skip a
+        conversation with zero runs ("nothing to retire yet") or with any
+        non-terminal run ("genuinely still in flight"). Both exclusions were
+        wrong in the same way: they assumed something would eventually stamp
+        those rows, and nothing ever would. A 0-day conversation abandoned
+        before its first message, or holding a run left non-terminal by a
+        crash, was unreachable by every path -- retained forever in the tier
+        whose whole promise is immediate deletion. The selection is now by
+        AGE, which covers both and cannot touch anything still in flight.
 
         Bounded and idempotent -- returns the number stamped this call;
         safe to run repeatedly (a resumable one-time operator action, e.g.
@@ -3645,15 +3708,27 @@ class DevPersistenceService:
                 "backfill limit must be between 1 and 500"
             )
         now = self._now()
-        has_a_run = exists(
-            select(DevRun.id).where(DevRun.conversation_id == DevConversation.id)
-        )
-        has_a_non_terminal_run = exists(
-            select(DevRun.id).where(
-                DevRun.conversation_id == DevConversation.id,
-                DevRun.state.not_in(_TERMINAL_RUN_STATES),
-            )
-        )
+        # CHAOS-3544: an AGE predicate replaces the previous
+        # `has_a_run AND ~has_a_non_terminal_run` pair.
+        #
+        # That pair existed for one reason: to avoid stamping a conversation
+        # whose run might still be in flight. But it bought that safety by
+        # excluding BOTH stranded shapes this backfill now has to reach --
+        # a conversation with zero runs (excluded by `has_a_run`) and one
+        # whose run never terminates (excluded by `~has_a_non_terminal_run`).
+        # Neither was repairable by anything, in a tier that promises
+        # immediate deletion.
+        #
+        # Age subsumes the pair rather than joining it: past
+        # EPHEMERAL_ABANDONED_GRACE a live run is impossible by the same two
+        # bounds that justify the grace itself (a 45s wall limit, and a
+        # 5-minute threshold beyond which a non-terminal run is already
+        # considered dead). So this is one predicate, no run-state reasoning,
+        # and strictly more complete than the two it replaces.
+        #
+        # Still narrow in the way that matters: a conversation created within
+        # the grace is never touched, so an in-flight turn cannot be stamped
+        # out from under itself.
         stranded = (
             (
                 await self.session.execute(
@@ -3661,8 +3736,7 @@ class DevPersistenceService:
                     .where(
                         DevConversation.retention_days == 0,
                         DevConversation.expires_at.is_(None),
-                        has_a_run,
-                        ~has_a_non_terminal_run,
+                        DevConversation.created_at < now - EPHEMERAL_ABANDONED_GRACE,
                     )
                     .order_by(DevConversation.created_at, DevConversation.id)
                     .limit(limit)

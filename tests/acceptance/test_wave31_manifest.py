@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -423,6 +424,16 @@ def _assert_web_default_ci_row_is_honest(item: ManifestItem) -> None:
     assert contained_path(_ROOT, "scripts/../tests/acceptance") is not None
 
     # (3) the route out is producing proof, not widening what counts as it
+    # The conclusion must be the NARROW one. Codex round 3: saying a
+    # cross-repo claim is categorically "not expressible" contradicts clause
+    # (3) of this very reason, which describes the route by which it becomes
+    # expressible. What is true is that a DIRECT web path is not citable.
+    assert "a DIRECT " in reason and "path is not citable here" in reason
+    assert "not an impossibility" in reason
+    assert "not expressible" not in reason, (
+        "the categorical overclaim is back -- clause (2) must not deny what "
+        "clause (3) describes"
+    )
     assert "run_ask_dev_compose.sh:348" in reason
     assert "not by widening what counts as proof" in reason
 
@@ -511,6 +522,42 @@ def test_evidence_that_is_not_a_file_is_rejected(non_file: str) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "non_file",
+    [
+        pytest.param("", id="empty-string"),
+        pytest.param(".", id="repository-root"),
+        pytest.param("scripts/acceptance", id="a-real-directory"),
+    ],
+)
+def test_blocked_execution_artifact_that_is_not_a_file_is_rejected(
+    non_file: str,
+) -> None:
+    """Codex round 3 (MED): validate_blocked_execution_artifact was the one
+    path call site still using exists() rather than is_file(). A directory
+    passed the check and then raised IsADirectoryError out of read_text --
+    a crash instead of a manifest-integrity error. Probe before the fix:
+
+        blocked_execution_artifact="scripts/acceptance"
+        -> IsADirectoryError: [Errno 21] Is a directory
+
+    A validator that crashes on bad input cannot report on it, and this one
+    is the guard for `blocked` rows specifically.
+    """
+
+    item = ManifestItem(
+        id="probe.non-file-blocked-artifact",
+        category="gate",
+        description="probe",
+        status="blocked",
+        blocked_reason="probe",
+        blocked_execution_artifact=non_file,
+    )
+    # Must return errors, not raise.
+    errors = validate_manifest(_ROOT, (item,))
+    assert errors, f"{non_file!r} validated clean as a blocked artifact"
+
+
 def test_every_real_manifest_row_still_validates_after_containment() -> None:
     """Regression control: the containment fix must not break any of the 67
     landed rows, all of which cite ordinary in-repo relative paths.
@@ -552,13 +599,27 @@ def test_web_default_ci_force_flip_to_proven_is_actually_caught() -> None:
     # only demanded of proven_e2e.
     assert validate_manifest(_ROOT, (disguised,)) == []
 
-    # ...and the exact-id contract IS what catches it. Running the real
-    # assertions rather than re-stating the constructor is the difference
-    # between a proof and a tautology: if a future edit loosens
-    # _assert_web_default_ci_row_is_honest until a proven status slips
-    # through, this raises nothing and fails here.
-    with pytest.raises(AssertionError):
-        _assert_web_default_ci_row_is_honest(disguised)
+    # ...and the exact-id contract IS what catches it.
+    #
+    # Codex round 3 (MED): the first version of this proof ran the helper
+    # against `disguised`, which differs from the real row in status,
+    # evidence, test_nodeids, execution_artifact AND blocked_reason -- so
+    # the AssertionError could come from any clause, and deleting the
+    # status assertion alone left this test GREEN. Verified by probe.
+    # That is the "mutate clauses, not whole conditions" rule: a wholesale
+    # mutation reports KILLED while one clause inside it is unasserted.
+    #
+    # So the isolated mutation changes ONLY status, off the real row. Every
+    # other clause still matches, which means this raises if and only if
+    # the status assertion is what caught it.
+    real_row = {item.id: item for item in MANIFEST}["gate.web-default-ci"]
+    status_only = dataclasses.replace(real_row, status="proven_unit")
+    with pytest.raises(AssertionError) as caught:
+        _assert_web_default_ci_row_is_honest(status_only)
+    assert "deferred" in str(caught.value), (
+        "the status clause is not what rejected the status-only mutation: "
+        f"{caught.value}"
+    )
 
 
 def test_team_attribution_flipped_to_proven_after_chaos_3332_fix() -> None:

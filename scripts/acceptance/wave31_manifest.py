@@ -1664,11 +1664,14 @@ def _gates() -> tuple[ManifestItem, ...]:
                 "proven_e2e additionally requires an "
                 "in-repo execution artifact whose script is one of the "
                 "row's own evidence paths and whose recorded sha256 still "
-                "matches that file's current bytes. A cross-repo claim is "
-                "therefore not expressible -- the same constraint that "
-                "keeps attack.runtime-divergence deferred. Claiming proven "
-                "on evidence this repository cannot check would be a "
-                "claim, not proof. "
+                "matches that file's current bytes. So a DIRECT "
+                "dev-health-web path is not citable here. What could "
+                "support promotion is an in-repo wrapper or artifact whose "
+                "cross-repo provenance is explicit and checkable from this "
+                "tree -- which is route (3) below, not an impossibility. "
+                "The same constraint keeps attack.runtime-divergence "
+                "deferred. Claiming proven on evidence this repository "
+                "cannot check would be a claim, not proof. "
                 "(3) The route to proven_e2e is Phase 5's CI lane: "
                 "scripts/acceptance/run_ask_dev_compose.sh:348 already "
                 "invokes the web acceptance Playwright config, and once "
@@ -2470,7 +2473,7 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
             f"root: {item.blocked_execution_artifact}"
         ]
     artifact_path = contained_blocked
-    if not artifact_path.exists():
+    if not artifact_path.is_file():
         errors.append(
             f"{item.id}: blocked_execution_artifact does not exist: "
             f"{item.blocked_execution_artifact}"

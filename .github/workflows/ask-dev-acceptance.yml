@@ -196,6 +196,45 @@ jobs:
       # control), the six ops-side smokes, and the web Playwright leg. The
       # stack is kept because run_wave4_corpus.sh requires an already-booted
       # one and never boots or tears down a stack itself.
+      # ORDERING INVARIANT, load-bearing rather than stylistic.
+      #
+      # Nothing between the launcher's `fixtures world-restore` and the corpus
+      # may CREATE, DELETE, or CONTENT-MUTATE a row in a world ORG or a world
+      # USER row. The corpus verifies WORLD_DIGEST before it measures anything,
+      # and that digest covers dev_conversations / dev_runs /
+      # dev_run_subject_sets scoped by org_id, PLUS the world's own `users`
+      # rows scoped by id -- `users` has no org_id column, so compute_world_digest
+      # skips it in the per-org loop and digests it separately
+      # (src/dev_health_ops/fixtures/world.py, _POSTGRES_DIGEST_TABLES). Break
+      # this and EVERY case errors at setup with a digest mismatch that looks
+      # like infrastructure failure and is actually the guard being right. The
+      # fix then is another `fixtures world-restore` before measuring -- never
+      # suppressing the guard, which is the one check that knows the fixture is
+      # still trustworthy.
+      #
+      # AUTHENTICATION IS SAFE. Worth stating, because the rule above sounds
+      # stricter than it is: `users.last_login_at` is written on every login
+      # (api/services/users.py) and is deliberately in the digest's
+      # volatile-column exclusion set. That is why the boot's own
+      # `assert_world_principals_can_log_in --boot-subset` and the corpus's own
+      # logins drift nothing. Do NOT "fix" the login proof on the strength of
+      # this comment -- it exists to catch credential drift, and removing it
+      # would be a real loss for an imaginary problem.
+      #
+      # Why this lane is safe today: the six smokes and the web Playwright leg
+      # all authenticate as admin@devhealth.example inside fixture_org_id
+      # (0a155cab-...), which is none of the world's three orgs, so every
+      # `WHERE org_id = ...` the digest issues filters their rows out entirely.
+      # A future step running as a WORLD principal, or mutating a world user
+      # row outside the volatile columns, would drift the digest even without
+      # creating anything in a world org. That is the case this comment exists
+      # to stop someone adding.
+      #
+      # Established jointly with lane-corpus-authoring (2026-08-07), who lost a
+      # run to exactly this -- their probe ran as a world principal and drifted
+      # postgres.dev_conversations / postgres.dev_runs. Traced in the source by
+      # both lanes independently, and confirmed empirically by dispatch run 2,
+      # the first run to exercise the corpus-side digest check: clean.
       - name: Boot the acceptance stack (canonical launcher)
         working-directory: ops
         env:

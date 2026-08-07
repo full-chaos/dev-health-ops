@@ -21,6 +21,7 @@ from typing import Any, Literal, Protocol
 
 import annotated_types
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from dev_health_ops.llm.agent.contracts import (
     AgentDecisionResult,
@@ -2372,7 +2373,7 @@ class DevOrchestrator:
                                 else None
                             ),
                         )
-                    except Exception:
+                    except Exception as record_frame_fault:
                         # A database-layer failure here (constraint
                         # violation, dropped connection) marks the
                         # recorder's session rollback-only; the terminal()
@@ -2383,6 +2384,21 @@ class DevOrchestrator:
                         # back and finish as a coherent v1 terminal run
                         # instead -- a dropped frame is recoverable, a
                         # stranded run is not.
+                        #
+                        # CHAOS-3550: this used to be a bare `except
+                        # Exception`, so a PROGRAMMING error here (a
+                        # contract-signature drift, an AttributeError, a
+                        # KeyError) was indistinguishable from the database
+                        # fault the comment above actually describes -- the
+                        # run finished as an ordinary-looking terminal with
+                        # its frame silently absent and no signal anywhere.
+                        # The rollback + re-persist below are unconditional
+                        # (needed for EITHER cause, to keep the session
+                        # usable for whichever finish() eventually runs --
+                        # this one on the expected-fault path, or the
+                        # run-loop's own last-resort handler below on the
+                        # re-raise path); only the swallow-vs-surface
+                        # decision after them is now typed.
                         await self._recorder.rollback()
                         # The rollback above discards every unflushed write
                         # on this session, not just the poisoned frame --
@@ -2393,10 +2409,59 @@ class DevOrchestrator:
                         # preflight_outcome=None and silently loses the
                         # closed-vocabulary explanation of why it
                         # terminated (Codex review finding, CHAOS-3297).
+                        #
+                        # CHAOS-3550 / CHAOS-3544 interaction (team-lead
+                        # ruling): if THIS run's own dev_runs row was
+                        # cascade-deleted out from under it (a wedged run
+                        # whose 0-day conversation aged out and was purged
+                        # mid-flight -- CHAOS-3544), this re-persist call
+                        # itself raises DevPersistenceNotFound before the
+                        # typed check below ever runs, and that exception
+                        # (not record_frame_fault) is what the run-loop's
+                        # own last-resort handler (`except Exception as
+                        # unhandled` further down) logs and counts. That is
+                        # deliberate, not a gap this ticket closes: a run
+                        # whose row no longer exists must not report success
+                        # either way, and the zombie-run integration test
+                        # below exists to keep proving the last-resort
+                        # handler is what actually observes it.
                         await self._recorder.record_preflight(
                             preflight_outcome=preflight_result.diagnostic,
                             legacy_guard_reason=None,
                         )
+                        if not isinstance(record_frame_fault, SQLAlchemyError):
+                            logger.exception(
+                                "ask_dev.orchestrator.record_frame_programming_error",
+                                extra={
+                                    "run_id": run_id,
+                                    "exception_type": type(record_frame_fault).__name__,
+                                },
+                            )
+                            ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                                exception_type=type(record_frame_fault).__name__
+                            ).inc()
+                            raise
+                        # Expected path: a genuine database-layer fault,
+                        # recovered and swallowed exactly as before this
+                        # ticket. Previously this branch emitted NO signal
+                        # at all -- unlike its sibling ledger-write-fault
+                        # handler above (CHAOS-3533), which has always
+                        # logged and counted its own DB-adjacent faults
+                        # uniformly, expected or not. Matched here for the
+                        # same reason: a recovered fault is still a fault an
+                        # operator should be able to see happened, and a
+                        # log line costs nothing compared to the silence
+                        # this whole ticket exists to close.
+                        logger.warning(
+                            "ask_dev.orchestrator.record_frame_recovered_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(record_frame_fault).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(record_frame_fault).__name__
+                        ).inc()
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=preflight_error,

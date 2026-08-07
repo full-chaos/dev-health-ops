@@ -26,7 +26,7 @@ import uuid
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev import router as dev_router_module
@@ -50,7 +50,11 @@ from dev_health_ops.api.dev.scope_service import (
 )
 from dev_health_ops.api.dev.subject_preflight import SubjectPreflight
 from dev_health_ops.llm.agent.scripted import ScriptedAgentProvider
-from dev_health_ops.models.dev_persistence import DevAnswerFrame, DevRun
+from dev_health_ops.models.dev_persistence import (
+    DevAnswerFrame,
+    DevConversation,
+    DevRun,
+)
 from tests._chaos_3292_preflight import (
     ASK_DEV_PROJECT,
     SeededCatalog,
@@ -335,31 +339,70 @@ async def test_preflight_frame_flush_failure_reaches_terminal_state_not_stranded
     client_message_id then hits router.py's not-created branch, sees a
     non-terminal state, and 409s forever.
 
-    Poisons the session with a genuine CHECK-constraint violation on
-    record_frame -- an ``IntegrityError`` raised by the real flush, not a
-    bare Python raise -- so the session is actually marked rollback-only the
-    way the Codex repro's SQLAlchemy script demonstrated, and asserts the
-    run still reaches a terminal state with a safe error, and that a
-    duplicate POST replays (200) instead of 409ing.
+    Poisons the session with a genuine DB-level ``IntegrityError`` raised by
+    the real flush, not a bare Python raise, so the session is actually
+    marked rollback-only the way the Codex repro's SQLAlchemy script
+    demonstrated, and asserts the run still reaches a terminal state with a
+    safe error, and that a duplicate POST replays (200) instead of 409ing.
+
+    CHAOS-3550: this used to build a payload-less, invalid frame
+    (``payload={}``) meaning to hit ``dev_answer_frames``' public_outcome
+    CHECK constraint. It never did -- the row-level ``before_insert`` event
+    hook (``_validate_answer_frame_payload``, persistence/service.py)
+    validates the payload as a real ``dev_answer_frame.v1`` in PYTHON before
+    the INSERT statement ever reaches the DB engine, so an empty payload
+    raises ``DevPersistenceValidationError`` there, never the DB's own
+    ``IntegrityError``. Under CHAOS-3550's narrowed except (SQLAlchemyError
+    swallows; anything else surfaces loud, and DevPersistenceValidationError
+    is exactly "anything else" -- a caller-shaped bug, not an infrastructure
+    fault), this test's OLD trigger would now correctly surface loud instead
+    of being swallowed -- which is right for a malformed payload, but wrong
+    for THIS test, whose whole point is proving the swallow-and-continue
+    path for a genuine DB fault. Fixed to construct a fully VALID payload
+    (clears the Python-level hook) and violate ``uq_dev_answer_frames_run``
+    (one frame per run) instead -- a real DB-level UNIQUE-constraint
+    IntegrityError the Python layer has no opinion about.
     """
 
     org_id = dev_api_context.org_id
 
-    async def poisoned_record_frame(self: PersistenceRunRecorder, frame: Any) -> None:
-        del frame
-        # A real DB-layer failure: violates dev_answer_frames' public_outcome
-        # CHECK constraint at flush time, exactly the failure class the
-        # review confirmed (not a synthetic raise -- the session must
-        # actually become rollback-only).
-        bad = DevAnswerFrame(
-            run_id=self._run_id,
-            org_id=self._org_id,
-            user_id=self._user_id,
-            frame_id=uuid.uuid4(),
-            public_outcome="not_a_real_public_outcome",
-            payload={},
-        )
-        self._service.session.add(bad)
+    async def poisoned_record_frame(
+        self: PersistenceRunRecorder,
+        frame: Any,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
+        # CHAOS-3550: this fake's signature had drifted from the real
+        # record_frame's (missing CHAOS-3533's authorizing_mention_id
+        # keyword) -- a THIRD instance of exactly the class of bug CHAOS-3550
+        # is about, in the test suite's own "prove the expected-fault path
+        # recovers" fixture. The call below used to raise TypeError before
+        # ever reaching the constraint violation this test claims to
+        # simulate; the old bare `except Exception` swallowed it
+        # indistinguishably from the intended IntegrityError, so this test
+        # was accidentally passing for the wrong reason -- it exercised the
+        # signature-drift bug, not the database fault it describes. Found by
+        # running this test against CHAOS-3550's fix, which correctly
+        # refused to swallow the TypeError.
+        del authorizing_mention_id
+        # A genuine DB-layer failure: two rows for the same run_id, both
+        # carrying a fully VALID dev_answer_frame.v1 payload (so the Python
+        # before_insert hook has nothing to object to) -- the SECOND insert
+        # violates uq_dev_answer_frames_run at flush time, a real
+        # IntegrityError raised by the database engine itself, not a bare
+        # Python raise.
+        valid_payload = frame.model_dump(mode="json")
+        for _ in range(2):
+            self._service.session.add(
+                DevAnswerFrame(
+                    run_id=self._run_id,
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                    frame_id=uuid.UUID(frame.frame_id),
+                    public_outcome=frame.public_outcome.value,
+                    payload=valid_payload,
+                )
+            )
         await self._service.session.flush()
 
     monkeypatch.setattr(PersistenceRunRecorder, "record_frame", poisoned_record_frame)
@@ -424,6 +467,315 @@ async def test_preflight_frame_flush_failure_reaches_terminal_state_not_stranded
     assert duplicate.status_code == 200, duplicate.text
     duplicate_events = dict(_parse_sse_events(duplicate.text))
     assert "error" in duplicate_events
+
+
+async def test_preflight_frame_programming_error_surfaces_loud_not_swallowed(
+    dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """CHAOS-3550 RED/GREEN proof: a PROGRAMMING error in record_frame must
+    surface loudly, never read as an ordinary dropped-write.
+
+    Before the fix, the preflight TERMINATE branch's ``except Exception``
+    treated a plain ``RuntimeError`` (standing in for a contract-signature
+    drift, an AttributeError, a KeyError -- anything that is not a database
+    fault) exactly like the genuine ``IntegrityError`` the sibling test
+    above proves is safe to swallow: rollback, re-persist the preflight
+    diagnostic, finish as an ordinary v1 terminal, log nothing. The run
+    looked like a coherent, successful terminate with its frame simply
+    absent -- CHAOS-3550's central complaint, and exactly the shape that hid
+    CHAOS-3533's own three real signature-drift bugs until they were found
+    by reading a diff, not by any test or log line.
+
+    After the fix: the SAME RuntimeError is not swallowed. It is logged
+    once here (record_frame_programming_error) and once more by the
+    run-loop's own last-resort handler (unhandled_run_fault) once it
+    propagates there, which THEN writes the run's real terminal state
+    itself (FAILED) -- so the run still reaches a terminal (never hangs,
+    never 500s past the SSE layer -- ``stream_orchestrator``'s own
+    catch-all converts an uncaught exception to a client-visible
+    ``internal_error``), but now with two loud, typed log lines pointing
+    at the actual defect instead of zero.
+    """
+
+    org_id = dev_api_context.org_id
+
+    async def broken_record_frame(
+        self: PersistenceRunRecorder,
+        frame: Any,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
+        del self, frame, authorizing_mention_id
+        # Stands in for a programming error -- a contract-signature drift,
+        # an AttributeError, a KeyError -- anything that is NOT the
+        # database-layer fault the except clause's own comment names.
+        raise RuntimeError("frame storage unavailable")
+
+    monkeypatch.setattr(PersistenceRunRecorder, "record_frame", broken_record_frame)
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=_preflight_runtime(org_id=org_id)
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = _preflight_terminating_payload(conversation_id, org_id)
+
+    with caplog.at_level("ERROR"):
+        live = await client.post(
+            f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+        )
+    assert live.status_code == 200, live.text
+    live_events = dict(_parse_sse_events(live.text))
+    assert "answer.completed" not in live_events
+    assert "error" in live_events, (
+        "a programming error in record_frame must still reach a terminal "
+        "error, not hang or 500 past the SSE layer"
+    )
+
+    messages = [record.message for record in caplog.records]
+    assert "ask_dev.orchestrator.record_frame_programming_error" in messages, (
+        "the narrowed except must name the fault at its own site, not rely "
+        "solely on the run-loop's generic last-resort handler"
+    )
+    assert "ask_dev.orchestrator.unhandled_run_fault" in messages, (
+        "the re-raised programming error must still reach the run-loop's "
+        "last-resort handler, which is what actually writes this run's "
+        "terminal state once record_frame's own recovery re-raises"
+    )
+    fault_records = [
+        r
+        for r in caplog.records
+        if r.message
+        in {
+            "ask_dev.orchestrator.record_frame_programming_error",
+            "ask_dev.orchestrator.unhandled_run_fault",
+        }
+    ]
+    assert all(
+        getattr(r, "exception_type", None) == "RuntimeError" for r in fault_records
+    ), [getattr(r, "exception_type", None) for r in fault_records]
+
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        assert run is not None
+        # The run-loop's last-resort handler's own finish(FAILED, ...) is
+        # what actually wrote this -- record_frame's own recovery re-raised
+        # rather than finishing the run itself.
+        assert run.state == "failed", (
+            "a programming error must still reach a real terminal state via "
+            f"the last-resort handler, not strand the run (got {run.state!r})"
+        )
+        assert run.contract_generation == "v1", (
+            "no frame was ever validly recorded -- contract_generation must "
+            "not have been tagged v2"
+        )
+        frame_row = await session.scalar(
+            select(DevAnswerFrame).where(DevAnswerFrame.run_id == run.id)
+        )
+        assert frame_row is None, "record_frame never succeeded; no frame row"
+        assert run.preflight_outcome == "unresolved_no_authorized_match", (
+            "the record_preflight() diagnostic must still survive the "
+            f"rollback (got {run.preflight_outcome!r})"
+        )
+
+
+async def test_zombie_run_conversation_purged_mid_flight_degrades_cleanly(
+    dev_api_context,  # noqa: F811 -- pytest fixture imported from test_router
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """CHAOS-3550 team-lead ruling: the zombie-run interaction with CHAOS-3544.
+
+    A run wedged past the 0-day ephemeral conversation's idle grace can wake
+    to find ``cleanup_expired`` has purged its conversation while it was
+    still mid-flight. ``dev_runs.conversation_id`` carries a REAL
+    ``ondelete="CASCADE"`` foreign key (``fk_dev_runs_conversation_owner``,
+    ``models/dev_persistence.py``) -- the purge does not merely orphan the
+    run, it deletes the run's own row out from under it.
+
+    Under CHAOS-3550's narrowed except, record_frame's resulting
+    ``DevPersistenceNotFound`` ("run not found") is correctly NOT
+    swallowed -- a run whose own row no longer exists must not report
+    success either way. But the SAME except block's own recovery step
+    (``record_preflight``, re-persisting the diagnostic) does its own
+    ownership lookup and raises ITS OWN ``DevPersistenceNotFound`` first,
+    before the typed swallow/surface check ever runs -- so it is THAT
+    exception, not record_frame's, that reaches the run-loop's last-resort
+    handler (``except Exception as unhandled``).
+
+    MEASURED, not assumed (per team-lead's ruling): this test observes what
+    ACTUALLY happens next, rather than reasoning it out from reading the
+    code alone -- the first read of this chain (docstring history in this
+    module's earlier revisions) predicted a silent third exception; running
+    it against the real stack found three additional layers of defense
+    already in place, each logging its own name:
+
+    1. The last-resort handler's own recovery calls ``finish(FAILED, ...)``,
+       which itself calls ``record_error_message`` -- ALSO an ownership
+       lookup against the gone conversation, caught and logged by its own
+       long-standing best-effort handler (``error_message_write_fault``,
+       pre-existing, unrelated to this ticket).
+    2. ``finish()``'s own ``terminal()``/``update_run`` write fails too
+       (same reason), which is exactly the case router.py's
+       ``force_terminal_fallback`` exists for -- it retries on a fresh
+       session/connection, finds the run row already gone (idempotent
+       no-op per its own docstring), and STILL logs
+       ``force_terminal_fallback_failed`` because the ORIGINAL exception it
+       is wrapping re-raises regardless of the fallback's own outcome.
+    3. ``streaming.stream_orchestrator``'s top-level ``except Exception:``
+       (streaming.py) catches whatever finally propagates out of
+       ``DevOrchestrator.run()`` and converts it to a generic
+       client-visible ``internal_error`` SSE event, HTTP 200 -- the request
+       itself never hangs, 500s, or leaves a stranded lock/session (the
+       follow-up request below is the proof).
+
+    So the zombie-run case is NOT silent: THREE distinct log lines name it
+    (``unhandled_run_fault``, ``error_message_write_fault``,
+    ``force_terminal_fallback_failed``), each pointing at a different write
+    that failed for the same underlying reason. FINDING worth surfacing
+    anyway (not fixed here, per team-lead's explicit "report, don't
+    quietly patch" ruling): none of the three log lines say "conversation
+    was purged mid-flight" -- an operator reading them sees three generic
+    write failures, has to already know about CHAOS-3544's cascade delete
+    to connect them, and the run itself leaves no row at all (cascade-
+    deleted with its conversation) to look up afterward. The signal exists;
+    the diagnosis does not.
+    """
+
+    org_id = dev_api_context.org_id
+    conversation_deleted = {"done": False}
+    real_record_frame = PersistenceRunRecorder.record_frame
+
+    async def purge_conversation_then_record_frame(
+        self: PersistenceRunRecorder,
+        frame: Any,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
+        # Simulates cleanup_expired's concurrent sweep racing this wedged
+        # run: delete the conversation, then COMMIT it -- durable and
+        # un-undoable by this except block's later rollback(), exactly like
+        # a genuinely separate, already-completed sweep transaction would
+        # be. (A truly separate connection was tried first and rejected:
+        # aiosqlite/SQLite's single-writer lock makes a second connection's
+        # DELETE block against this request's own still-open transaction
+        # and raise `database is locked` -- a SQLAlchemyError this fix
+        # correctly swallows as an ordinary DB fault, which silently
+        # defeated the whole scenario. Committing on THIS session reaches
+        # the same durable end state -- the conversation and its
+        # cascade-deleted run are gone and cannot be rolled back -- without
+        # fighting SQLite's concurrency model in a single-process test.)
+        # The real FK CASCADE (fk_dev_runs_conversation_owner,
+        # ondelete="CASCADE") deletes the dev_runs row too -- not a
+        # synthetic raise, the same "real fault, not a bare Python raise"
+        # standard the sibling tests in this module hold to.
+        if not conversation_deleted["done"]:
+            conversation_deleted["done"] = True
+            # The ORM delete() construct, not raw SQL text -- the GUID
+            # column type stores UUIDs without dashes, and a hand-built
+            # `str(uuid_obj)` (with dashes) silently matched zero rows
+            # against a raw `DELETE ... WHERE id = :id`. Passing the UUID
+            # object through delete() lets the GUID type's own bind
+            # processor serialize it correctly, the same way every other
+            # write in this codebase does.
+            await self._service.session.execute(
+                delete(DevConversation).where(
+                    DevConversation.id == self._conversation_id
+                )
+            )
+            await self._service.session.commit()
+        # Now call the REAL implementation (captured before monkeypatching,
+        # to avoid recursing into this fake) -- _owned_run finds nothing
+        # (cascade-deleted), so this raises the genuine
+        # DevPersistenceNotFound production would raise here.
+        await real_record_frame(
+            self, frame, authorizing_mention_id=authorizing_mention_id
+        )
+
+    monkeypatch.setattr(
+        PersistenceRunRecorder, "record_frame", purge_conversation_then_record_frame
+    )
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_dev_execution_runtime
+    ] = lambda: dev_router_module.DevExecutionRuntimeResolution(
+        runtime=_preflight_runtime(org_id=org_id)
+    )
+
+    client = dev_api_context.client
+    created = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    conversation_id = created.json()["conversation_id"]
+    payload = _preflight_terminating_payload(conversation_id, org_id)
+
+    with caplog.at_level("ERROR"):
+        live = await client.post(
+            f"/api/v1/dev/conversations/{conversation_id}/messages", json=payload
+        )
+    # Degrades cleanly at the HTTP boundary: no hang, no 500 past the SSE
+    # layer, a sensible generic error -- streaming.py's own catch-all.
+    assert live.status_code == 200, live.text
+    live_events = dict(_parse_sse_events(live.text))
+    assert "answer.completed" not in live_events
+    assert "error" in live_events, (
+        "a zombie run (conversation cascade-deleted mid-flight) must still "
+        "produce a clean terminal error to the client, not hang or 500"
+    )
+    assert live_events["error"]["error"]["code"] == "internal_error"
+
+    # No stranded lock/session: the fixture's own session factory and a
+    # follow-up request against the SAME app both still work.
+    async with dev_api_context.maker() as session:
+        run = await session.scalar(
+            select(DevRun).where(DevRun.conversation_id == uuid.UUID(conversation_id))
+        )
+        # The run row itself is gone (cascade-deleted along with the
+        # conversation), so there is no "failed" state to observe --
+        # unlike the plain-programming-error sibling test above, where the
+        # last-resort handler's own finish(FAILED, ...) successfully wrote
+        # a real terminal row. Here every attempt to write ANY state for
+        # this run (record_preflight, record_error_message, terminal(),
+        # the router-level fallback) fails identically, for the identical
+        # reason: the row is not merely non-terminal, it does not exist.
+        assert run is None, (
+            "the run row is expected gone (cascade-deleted with its "
+            "conversation) -- if this ever finds a row, the zombie "
+            "scenario this test plants did not actually reproduce and the "
+            "test needs re-diagnosing, not the assertion loosened"
+        )
+
+    other_conversation = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    assert other_conversation.status_code == 201, (
+        "the app/session must still be usable after a zombie-run terminal "
+        "failure -- a stranded lock or poisoned shared session would fail "
+        "or hang this unrelated request"
+    )
+
+    # MEASURED (see docstring): three distinct layers each independently
+    # detect and log the same underlying cause -- not the single, silent
+    # last-resort-only signal an earlier reading of this code predicted.
+    messages = [record.message for record in caplog.records]
+    assert "ask_dev.orchestrator.unhandled_run_fault" in messages
+    assert "ask_dev.orchestrator.error_message_write_fault" in messages
+    assert "ask_dev.force_terminal_fallback_failed" in messages, [
+        r.message for r in caplog.records
+    ]
 
 
 async def test_replay_with_corrupted_frame_payload_falls_back_safely(

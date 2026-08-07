@@ -22,7 +22,7 @@ import pytest
 from scripts.acceptance.corpus.feature_flags import (
     WAVE_3_1_FEATURE_KEY,
     FeatureEnablementError,
-    enable_wave_3_1,
+    ensure_wave_3_1_enabled,
     verify_wave_3_1_enabled,
 )
 
@@ -84,7 +84,7 @@ class TestGloballyDisabledFlag:
     def test_enable_refuses_when_the_flag_is_globally_disabled(self) -> None:
         api = _FakeApi(flag_globally_enabled=False)
         with pytest.raises(FeatureEnablementError, match="globally disabled"):
-            enable_wave_3_1(api, org_id=_ORG)
+            ensure_wave_3_1_enabled(api, org_id=_ORG)
 
     def test_verify_refuses_when_the_flag_is_globally_disabled(self) -> None:
         """The killer shape: the ORG OVERRIDE says enabled, so the old
@@ -101,24 +101,38 @@ class TestGloballyDisabledFlag:
 class TestHappyPath:
     def test_creates_an_override_when_none_exists(self) -> None:
         api = _FakeApi(override_enabled=None)
-        enable_wave_3_1(api, org_id=_ORG)
+        ensure_wave_3_1_enabled(api, org_id=_ORG)
         verify_wave_3_1_enabled(api, org_id=_ORG)
         assert api.override_enabled is True
 
-    def test_is_idempotent_when_already_enabled(self) -> None:
+    def test_already_enabled_performs_ZERO_writes(self) -> None:
+        """The seeded-world path, and the whole point of verify-first: the
+        world now seeds this flag, so a clean boot must produce no write at
+        all. A write here would drift `org_feature_overrides` -- a table
+        WORLD_DIGEST hashes -- and break re-running without a restore."""
+
         api = _FakeApi(override_enabled=True)
-        enable_wave_3_1(api, org_id=_ORG)
+        wrote = ensure_wave_3_1_enabled(api, org_id=_ORG)
         verify_wave_3_1_enabled(api, org_id=_ORG)
+        assert wrote is False
         assert api.override_enabled is True
-        assert ("POST", f"/api/v1/admin/orgs/{_ORG}/feature-overrides") not in api.calls
+        assert [m for m, _ in api.calls if m in {"POST", "PATCH"}] == []
+
+    def test_writes_when_the_override_is_missing(self) -> None:
+        """The retained write path, for an org the world does not seed. Kept
+        deliberately so it cannot rot into dead code."""
+
+        api = _FakeApi(override_enabled=None)
+        assert ensure_wave_3_1_enabled(api, org_id=_ORG) is True
+        assert "POST" in [m for m, _ in api.calls]
 
     def test_patches_a_disabled_override(self) -> None:
         api = _FakeApi(override_enabled=False)
-        enable_wave_3_1(api, org_id=_ORG)
+        assert ensure_wave_3_1_enabled(api, org_id=_ORG) is True
         verify_wave_3_1_enabled(api, org_id=_ORG)
         assert api.override_enabled is True
 
     def test_raises_when_the_flag_is_not_registered(self) -> None:
         api = _FakeApi(flag_present=False)
         with pytest.raises(FeatureEnablementError, match="not registered"):
-            enable_wave_3_1(api, org_id=_ORG)
+            ensure_wave_3_1_enabled(api, org_id=_ORG)

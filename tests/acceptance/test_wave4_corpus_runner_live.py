@@ -140,7 +140,7 @@ from scripts.acceptance.corpus.db_verify import (
     verify_world_digest_via_exec,
 )
 from scripts.acceptance.corpus.feature_flags import (
-    enable_wave_3_1,
+    ensure_wave_3_1_enabled,
     verify_wave_3_1_enabled,
 )
 from scripts.acceptance.corpus.invariants import InvariantContext, evaluate_invariant
@@ -425,7 +425,7 @@ def wave_3_1_enabled_orgs(
         # caches, so these are the same sessions the cases go on to reuse --
         # not extra logins against AUTH_LOGIN_IP_LIMIT.
         session = principal_sessions.session_for_alias(user_alias, org_alias=org_alias)
-        enable_wave_3_1(admin_api, org_id=session.org_id)
+        ensure_wave_3_1_enabled(admin_api, org_id=session.org_id)
         verify_wave_3_1_enabled(admin_api, org_id=session.org_id)
         org_ids.add(session.org_id)
     if not org_ids:

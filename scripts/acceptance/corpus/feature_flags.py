@@ -91,8 +91,24 @@ def _require_globally_enabled_flag(api: Any) -> dict[str, Any]:
     return flag
 
 
-def enable_wave_3_1(api: Any, *, org_id: str) -> None:
-    """Ensure ``ask_dev_wave_3_1`` is ON for ``org_id``. Idempotent.
+def ensure_wave_3_1_enabled(api: Any, *, org_id: str) -> bool:
+    """VERIFY-FIRST: confirm ``ask_dev_wave_3_1`` is ON for ``org_id``, and
+    write an override ONLY if one is missing or disabled. Returns whether a
+    write was performed.
+
+    Verify-first, not enable-then-verify (team-lead ruling, CHAOS-3219 Phase 2
+    exit). ``org_feature_overrides`` is a table WORLD_DIGEST hashes, so an
+    unconditional write on every run drifted the live world away from the
+    pinned digest -- a second armed run against the same stack then failed
+    verification and needed a full restore, undoing re-runnability that
+    ``principal_sessions`` had deliberately won back.
+
+    The world now SEEDS this flag for its own orgs (``world._ENTITLEMENT_FIELDS``),
+    so against a clean world this function performs **zero writes** and the
+    digest still verifies after a full armed run. The write path is retained
+    and still exercised for any org the world does not seed -- it must not
+    become dead code that silently stops working, and a non-world org is a
+    legitimate future caller.
 
     ``api`` must be an ADMIN-authenticated client: the feature-override
     endpoints require superuser admin access, which is exactly why the
@@ -132,10 +148,12 @@ def enable_wave_3_1(api: Any, *, org_id: str) -> None:
             raise FeatureEnablementError(
                 f"failed to enable {WAVE_3_1_FEATURE_KEY} for org {org_id}: {created!r}"
             )
-        return
+        return True
 
     if existing.get("is_enabled") is True:
-        return
+        # Already on -- the seeded-world path. Zero writes, so WORLD_DIGEST
+        # still verifies after this run.
+        return False
 
     override_id = existing.get("id")
     if not isinstance(override_id, str):
@@ -152,6 +170,7 @@ def enable_wave_3_1(api: Any, *, org_id: str) -> None:
         raise FeatureEnablementError(
             f"failed to enable {WAVE_3_1_FEATURE_KEY} for org {org_id}: {updated!r}"
         )
+    return True
 
 
 def verify_wave_3_1_enabled(api: Any, *, org_id: str) -> None:

@@ -20,6 +20,7 @@
       "role": "primary",
       "ask_dev_entitlement": "enabled",
       "ask_dev_contextual_entrypoints_entitlement": "enabled",
+      "ask_dev_wave_3_1_entitlement": "enabled",
       "acr_evidence_adapter": "not_configured",
       "$comment_acr": "ACR is the SourceClass.SOURCE_HEALTH 'acr' key, which NativeDataHealthReader.read hardcodes as SourceHealthObservation(configured=False, required=False) for every org regardless of fixture state -- this is the sources.json 'not_applicable' realization (see sources.json deg.source-state.not-applicable), not something the fixture world needs to toggle per org.",
       "sync_providers": {
@@ -64,6 +65,7 @@
       "role": "sibling_tenant",
       "ask_dev_entitlement": "enabled",
       "ask_dev_contextual_entrypoints_entitlement": "enabled",
+      "ask_dev_wave_3_1_entitlement": "enabled",
       "acr_evidence_adapter": "not_configured",
       "sync_providers": {
         "local": {
@@ -107,6 +109,7 @@
       "role": "disabled_entitlement",
       "ask_dev_entitlement": "disabled",
       "ask_dev_contextual_entrypoints_entitlement": "disabled",
+      "ask_dev_wave_3_1_entitlement": "disabled",
       "acr_evidence_adapter": "not_configured",
       "sync_providers": {
         "local": {

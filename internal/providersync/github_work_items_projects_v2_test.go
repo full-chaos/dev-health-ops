@@ -126,6 +126,50 @@ func TestGitHubProjectV2RefusesEnvironmentTokenWhenClaimCredentialIsUnusable(t *
 	}
 }
 
+// The strongest expression of D18's no-environment-credentials clause lives one
+// layer above this collector: Unit.Validate refuses a claim whose AuthSource is
+// "environment" outright, so a unit whose credentials would come from process
+// state can never reach any Go collector at all.
+//
+// That fence had NO test anywhere in the package and no mutation covering it.
+// It was found by a SURVIVING mutation on this file's own `credential.ID == ""`
+// clause — which survived precisely BECAUSE this fence already guarantees a
+// resolved, non-empty credential id upstream. The redundant clause is gone; the
+// property it was pretending to cover is now asserted where it actually lives.
+//
+// This is the literal "environment configured, no integration credential"
+// scenario: it must fail, not fall back.
+func TestGitHubProjectV2RefusesClaimsAuthoredFromTheEnvironment(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_environment_token_that_must_never_be_used")
+	t.Setenv("GITHUB_PROJECTS_V2", "acme:3")
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+		map[string]any{"org_login": "acme", "project_number": 3},
+	}}
+	credential := providerfoundation.Credential{Provider: "github", ID: claim.CredentialID}
+
+	// Baseline: this exact claim is otherwise usable, so the refusal below is
+	// attributable to AuthSource alone and not to some other invalid field.
+	if err := claim.Validate(); err != nil {
+		t.Fatalf("baseline claim is not valid, so the AuthSource case proves nothing: %v", err)
+	}
+
+	claim.AuthSource = "environment"
+	if err := claim.Validate(); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("an environment-authored claim validated: %v", err)
+	}
+	doer := &gitHubProjectV2Doer{t: t}
+	if _, err := (GitHubProjectV2Fetcher{}).Fetch(
+		context.Background(), claim, credential,
+		githubProjectV2TestClient(t, doer), time.Now().UTC(), nil,
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("error=%v want ErrInvalidConfiguration", err)
+	}
+	if len(doer.bodies) != 0 {
+		t.Fatalf("environment-authored claim issued %d request(s)", len(doer.bodies))
+	}
+}
+
 func TestGitHubProjectV2TargetsFailClosedOnMalformedDurableConfig(t *testing.T) {
 	for _, value := range []any{
 		[]any{map[string]any{"org_login": "", "project_number": 1}},

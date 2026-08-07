@@ -405,6 +405,45 @@ measure something trustworthy instead of reporting a broken measurement.
 
 **CORRECTED 2026-08-07, before merge, and recorded rather than rewritten away: this section first said FIVE.** `scope.outcome.organization-fallback` was wrongly among them. It is class (b) — reachable, just not from its old question — and is re-authored in sec.10.6 instead. The trace-first rule caught it; a confident-but-wrong (a) would have deleted real coverage.
 
+> **CORRECTED AGAIN, 2026-08-07 (CHAOS-3219 Phase 3), and this one is a
+> correction to a mechanism, not a count. `FILTERED` IS REACHABLE. The
+> bullet below is wrong** where it says `team_filter_refs` comes only from
+> "a model-authored `DevScope.team_ids`". Executing
+> `production_runtime._scope_request` shows a **client-supplied** `DevScope`
+> with `direct_scope != team` and non-empty `team_ids` yields non-empty
+> `team_filter_refs` (`production_runtime.py:1141-1145`) — and that shape is
+> the canonical `dev_scope.v1` positive fixture itself, so no model
+> authoring is involved. `scope.outcome.filtered` is therefore **class (b),
+> reachable but not from this case's input shape**, not class (a). It stays
+> declared-blocked, but on an honest blocker: the runner hardcodes
+> `"team_ids": []` for every case (`test_wave4_corpus_runner_live.py:479`)
+> and the case schema has no scope field — filed as **CHAOS-3543**.
+>
+> Two lessons, both already written down and both re-learned here: the
+> original bullet read one producer (`scope_service.py`) and stopped, which
+> is the "grepped a directory, concluded absence" failure; and a class-(a)
+> ruling deletes a coverage claim, so the bar for it must be higher than for
+> (b). Sec.10.3's own opening paragraph warns about exactly this and the
+> warning still was not enough — the count was re-checked, the mechanisms
+> were not.
+>
+> **Undetermined, stated rather than assumed:** whether the whole-run scalar
+> still reports `FILTERED` after `subject_preflight` commits an exact repo
+> match. `scope_service.py:998-1008` rebuilds the committed scope with
+> `team_ids=[entity.canonical_id] if is_team else []`, i.e. it **drops** the
+> caller's team filter. That needs a live run to settle.
+>
+> `INHERITED` (next bullet) was re-verified at `a07d9ff35` and **is** still
+> genuinely unreachable — all 7 `ScopeResolveRequest(` construction sites in
+> `src/` pass neither context-ref field. Filed as **CHAOS-3542** (wire it or
+> retire the vocabulary). The two outcomes must not be re-conflated: one was
+> wrong, one was right.
+>
+> Also: all four cases in this section cited `blocked_by: CHAOS-3520`, which
+> is now **closed** — and closed with no product change. A case blocked on a
+> closed ticket is a false claim under the house rule, so all four were
+> repointed (3543, 3542, CHAOS-3429, CHAOS-3454 respectively).
+
 `scope.outcome.filtered`, `scope.outcome.inherited`, `scope.partially-resolved-subject`, `scope.stale-context-subject` all observed `exact`. `exact` is not a
 near-miss — it means the scenario each case is named for never occurred.
 Rewriting the expectation to `exact` would be the "rewrite an honest
@@ -461,6 +500,42 @@ CHAOS-3520, not five cases that pass while proving nothing.
   ACTIVE case in the disabled-entitlement org fails a run-validity assertion
   by construction. Unblocking is a Lane 2a runner seam, not more case
   authoring.
+
+> **CORRECTED 2026-08-07 (CHAOS-3219 Phase 3). The "by construction" claim
+> in the bullet immediately above is FALSE on today's runner.** It is not
+> true that an active case in the disabled-entitlement org must fail the
+> run-validity assertion. `wave_3_1_enabled_orgs`
+> (`test_wave4_corpus_runner_live.py:397-436`) derives its org set from
+> `_representative_alias_per_org()` (`:440-460`), which iterates `_CASES` —
+> **active cases only** (`:204`). Making `ops.kill-switch.global` active
+> would therefore *add* `('disabled', 'disabled.ordinary')` to that set,
+> `ensure_wave_3_1_enabled` would be called for it, and the assertion would
+> **pass**. The disabled org is not "by construction" outside that set; it
+> is outside it only while the case stays blocked, which makes the argument
+> circular.
+>
+> The conclusion (stay blocked) survives; the reasoning did not. The real
+> blocker is earlier and cruder: `_require_ask_dev` (`router.py:376-398`)
+> 403s **at `POST /conversations`** (`:1036-1045`), `AcceptanceApi.request`
+> converts any `HTTPError` into a failure
+> (`prepare_ask_dev_acceptance.py:70-74`), and the runner re-raises
+> (`:636-641`). The case aborts with **no receipt and zero assertions** —
+> it never reaches the `measured_wave_3_1_preflight_path` check at all.
+> What is needed is an `expected_http_refusal` case shape, filed as
+> **CHAOS-3549**.
+>
+> **A second, real hazard this correction surfaced:** if that org set were
+> widened, `ensure_wave_3_1_enabled` **writes** `org_feature_overrides`
+> (`feature_flags.py:186-215`), a table `WORLD_DIGEST` hashes
+> (`fixtures/world.py:1111-1123`). So activating the case naively would
+> drift the live world off its pinned digest and fail the *next* armed run's
+> verification. Any fix must exclude disabled-entitlement orgs from that
+> set rather than enable them.
+>
+> Both cases cited `blocked_by: CHAOS-3458`, now **closed** as superseded by
+> the single-flag ruling. Repointed: `.global` → CHAOS-3549, `.org` →
+> CHAOS-3454 (mid-run entitlement mutation, appended to that ticket's scope
+> rather than forked).
 
 ### 10.5 Registry totals after this pass
 

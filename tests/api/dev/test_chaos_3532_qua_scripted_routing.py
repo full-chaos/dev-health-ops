@@ -118,6 +118,23 @@ def _qua_request(question: str, *, mention_count: int = 1) -> dict[str, Any]:
     }
 
 
+def _qua_messages(question: str) -> tuple[Any, ...]:
+    """The message pair qua_shadow._build_messages produces, plain text and all."""
+
+    from dev_health_ops.llm.agent.contracts import AgentMessage, AgentMessageRole
+
+    return (
+        AgentMessage(role=AgentMessageRole.SYSTEM, content="Question understanding."),
+        AgentMessage(
+            role=AgentMessageRole.USER,
+            content=(
+                f'Question: "{question}"\n\nNamed mentions:\n'
+                '- "ACR" (requested kind: project):\n    [0] project: ACR'
+            ),
+        ),
+    )
+
+
 def _post(server: ScriptedOpenAIServer, body: dict[str, Any]) -> tuple[int, Any]:
     host, port = cast(tuple[str, int], server.server_address)
     request = urllib.request.Request(
@@ -221,3 +238,134 @@ def test_a_non_qua_request_is_untouched_by_the_qua_branch(
 
     assert status == 200, body
     assert "choices" in body
+
+
+def test_an_ordinary_corpus_request_with_a_response_format_is_not_seen_as_qua(
+    scripted_openai_server: ScriptedOpenAIServer,
+) -> None:
+    """The false-positive control that actually matches production traffic.
+
+    Every real corpus case sends a ``response_format`` --
+    ``openai_compatible._chat_completion_request`` attaches one whenever
+    ``allow_final_answer`` is set, which is the normal path. So the control
+    above (which sends none) does not exercise the risk that matters: QUA
+    detection reading an ordinary decision schema as a QUA call.
+
+    If that ever happened the blast radius is the whole corpus: every case
+    would take the QUA branch, find no scripted QUA question, and 422. This
+    sends the ordinary envelope -- same wrapper name, same strict flag, a
+    decision schema WITHOUT the QUA contract id -- and asserts it is
+    answered normally.
+    """
+
+    status, body = _post(
+        scripted_openai_server,
+        {
+            "model": "ask-dev-scripted-v1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": json.dumps({"question": "How is meridian/web-app?"}),
+                }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "ask_dev_decision",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {
+                                "enum": ["final_answer", "disambiguation", "refusal"]
+                            },
+                            "value": {
+                                "type": "object",
+                                "properties": {
+                                    "schema_version": {"const": "dev_answer.v1"}
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    )
+
+    assert status == 200, (
+        "an ordinary decision request carries a response_format too -- QUA "
+        "detection must key on the CONTRACT ID, not on the presence of a "
+        f"schema, or every corpus case 422s. Got {status}: {body}"
+    )
+    assert "choices" in body
+
+
+@pytest.mark.asyncio
+async def test_what_an_unscripted_qua_question_actually_looks_like_end_to_end(
+    scripted_openai_server: ScriptedOpenAIServer,
+) -> None:
+    """Codex adversarial review (HIGH): the 422 does NOT reach the run as a
+    distinct signal, and this pins what does.
+
+    The distinct error exists only at the HTTP boundary.
+    ``OpenAICompatibleAgentProvider`` normalises a 4xx into an
+    ``AgentProviderError``, and ``QuestionUnderstandingShadow.evaluate``
+    catches that and records a generic status. So at the stack level, "the
+    harness has no QUA script for this question" is **indistinguishable from
+    "the provider failed"** -- and the run continues either way.
+
+    That soft failure is DELIBERATE and must not be changed here: CHAOS-3389's
+    whole contract is that a shadow-mode bug never fails or rolls back the
+    run it shadows, certified by byte-identity tests. Making the shadow raise
+    would retire those proofs by redefinition.
+
+    So this test does not assert a fix. It pins the real behaviour, through
+    the real provider against the real service, so the residual is recorded
+    as a measured fact rather than an assumption -- and so anyone who later
+    makes an armed run assert on this has the exact status to key on.
+
+    The 422 is still worth having: it stops the heuristic from answering a
+    question-understanding call with a plausible ``tool_calls`` response,
+    which is a fabricated result rather than an absent one. This test marks
+    where that guarantee stops.
+    """
+
+    from dev_health_ops.api.dev.qua_shadow import QUAShadowStatus
+    from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
+
+    host, port = cast(tuple[str, int], scripted_openai_server.server_address)
+    provider = OpenAICompatibleAgentProvider(
+        api_key=_ACCEPTANCE_KEY,
+        model="ask-dev-scripted-v1",
+        base_url=f"http://{host}:{port}/v1",
+    )
+
+    # Drive the provider exactly as qua_shadow does: a QUA response schema,
+    # and a plain-text user message for a question no script answers.
+    with pytest.raises(Exception) as raised:  # noqa: B017 - the type IS the finding
+        await provider.decide(
+            messages=_qua_messages("A question no QUA script answers at all"),
+            tools=(),
+            response_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"const": QUESTION_UNDERSTANDING_SCHEMA_VERSION}
+                },
+            },
+            timeout_seconds=10.0,
+            max_output_tokens=512,
+            signal=None,
+        )
+
+    # The specific scripted_provider_unmapped_qua_question type is gone by
+    # here -- normalised into a provider error. That IS the residual.
+    assert "AgentProviderError" in type(raised.value).__name__, (
+        "the 422 reaches the caller as a generic provider error; if this "
+        "ever becomes a distinct type, the residual below can be closed"
+    )
+    assert QUAShadowStatus.SKIPPED_PROVIDER_ERROR.value == "skipped_provider_error", (
+        "the status an armed run would record for a missing QUA script -- "
+        "identical to a genuine provider failure. A runner-side assertion "
+        "keying on this is what would make the harness gap loud, and that "
+        "lives in files this change does not own."
+    )

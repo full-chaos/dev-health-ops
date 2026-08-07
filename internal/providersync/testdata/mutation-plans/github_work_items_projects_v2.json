@@ -368,11 +368,11 @@
       ]
     },
     {
-      "id": "P22-present-but-null-target-list-is-refused",
+      "id": "P22-null-config-must-not-share-the-not-configured-branch",
       "file": "internal/providersync/github_work_items_projects_v2.go",
-      "find": "\tif value == nil {\n\t\treturn nil, ErrInvalidConfiguration\n\t}\n",
-      "replace": "",
-      "rationale": "a present github_projects_v2 key holding JSON null must be REFUSED, not treated as absent. This path FAILED OPEN until CHAOS-3123: null shared the not-configured branch and returned empty targets with a nil error, silently discarding config the operator wrote. Postgres JSONB null decodes to an UNTYPED nil interface, so the test builds it from JSON bytes -- a Go-literal typed nil takes a different path and would leave this mutant alive.",
+      "find": "\tif !configured {\n\t\treturn []GitHubProjectV2Target{}, nil\n\t}",
+      "replace": "\tif !configured || value == nil {\n\t\treturn []GitHubProjectV2Target{}, nil\n\t}",
+      "rationale": "regression guard for the fail-open this PR fixed: while `value == nil` shared the not-configured early return, `{\"github_projects_v2\": null}` answered \"no projects configured\" and silently discarded config the operator wrote. This mutant restores exactly that line.",
       "proof": [
         [
           "go",
@@ -397,6 +397,23 @@
           "-count=1",
           "-run",
           "^(TestGitHubProjectV2TargetsSeparateNullConfigFromEmptyConfig|TestGitHubProjectV2EnvironmentTargetsAreNeverAFallback)$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "P24-nil-decoded-target-list-is-refused",
+      "file": "internal/providersync/github_work_items_projects_v2.go",
+      "find": "\tif err := decoder.Decode(&targets); err != nil || targets == nil {",
+      "replace": "\tif err := decoder.Decode(&targets); err != nil {",
+      "rationale": "clause-level, and the clause that now does the refusing: JSON null decodes cleanly to a nil target list with no error, so without `|| targets == nil` a configured null returns no targets and no error -- the fail-open re-entering by the back door after P22 closed the front.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^(TestGitHubProjectV2TargetsSeparateNullConfigFromEmptyConfig)$",
           "./internal/providersync/"
         ]
       ]

@@ -328,6 +328,115 @@ func TestGitHubWorkItemDerivedDaysFailsClosedOnUnusableWindows(t *testing.T) {
 	}
 }
 
+// TestGitHubWorkItemEngineSeamIsInvokedPerDay pins the shape PR-C has to fill.
+// All three engine destinations are per-day in Python and stamp `day=d`
+// (job_work_items.py:1346/:1387/:1433, inside the :1238 loop), so a seam called
+// once per window could not express them -- and a merge that assigned rather
+// than appended would keep only the last day once a real engine replaced the
+// stub. Both failures are invisible while the stub returns empty, which is why
+// this asserts the days reaching the seam and the accumulated row count.
+func TestGitHubWorkItemEngineSeamIsInvokedPerDay(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	since := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	claim.SinceAt, claim.BeforeAt = &since, &before
+	recorder := &githubWorkItemRecordingEngine{}
+	deriver := GitHubWorkItemDeriver{
+		Source: &fakeGitHubWorkItemDerivationContextSource{}, engine: recorder,
+	}
+
+	derived, err := deriver.Derive(
+		context.Background(), claim, githubWorkItemDeriverFixture(claim),
+		time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDays := []time.Time{
+		time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC),
+	}
+	if !reflect.DeepEqual(recorder.days, wantDays) {
+		t.Fatalf("engine saw days=%v want=%v", recorder.days, wantDays)
+	}
+	// Accumulated, not overwritten: one row per day per destination.
+	for _, destination := range githubWorkItemUnportedDestinations {
+		rows := derived[destination]
+		if len(rows) != len(wantDays) {
+			t.Fatalf("%s has %d rows over %d days; the merge is not accumulating",
+				destination, len(rows), len(wantDays))
+		}
+		for index, row := range rows {
+			want := `{"day":"` + wantDays[index].Format("2006-01-02") + `"}`
+			if string(row) != want {
+				t.Errorf("%s row[%d]=%s want=%s", destination, index, row, want)
+			}
+		}
+	}
+}
+
+type githubWorkItemRecordingEngine struct{ days []time.Time }
+
+func (engine *githubWorkItemRecordingEngine) Derive(
+	_ context.Context,
+	_ Claim,
+	_ githubWorkItemRows,
+	day time.Time,
+	_ time.Time,
+	_ githubWorkItemDerivationContext,
+) (map[string][]json.RawMessage, error) {
+	engine.days = append(engine.days, day)
+	produced := make(map[string][]json.RawMessage, len(githubWorkItemUnportedDestinations))
+	for _, destination := range githubWorkItemUnportedDestinations {
+		produced[destination] = []json.RawMessage{
+			json.RawMessage(`{"day":"` + day.Format("2006-01-02") + `"}`),
+		}
+	}
+	return produced, nil
+}
+
+// TestGitHubWorkItemDerivedDaysCapIsTheStatedThreeSixtySix asserts the cap's
+// VALUE, not merely that some cap exists.
+//
+// The window here is written from LITERAL DATES with no reference to
+// githubWorkItemDerivedMaxBackfillDays. Deriving the fixture from the constant
+// -- as the fail-closed table above does -- keeps passing if the constant is
+// changed to any other number, so it measures the mechanism and not the bound.
+func TestGitHubWorkItemDerivedDaysCapIsTheStatedThreeSixtySix(t *testing.T) {
+	t.Parallel()
+	normalizedAt := time.Date(2026, 8, 6, 9, 15, 0, 0, time.UTC)
+	instant := func(value time.Time) *time.Time { return &value }
+	// 2025-08-06 .. 2026-08-06 inclusive is 366 days (2026 is not a leap year).
+	atCap := time.Date(2025, 8, 6, 0, 0, 0, 0, time.UTC)
+	overCap := time.Date(2025, 8, 5, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+
+	claim := githubWorkItemOracleClaim()
+	claim.SinceAt, claim.BeforeAt = instant(atCap), instant(before)
+	days, err := githubWorkItemDerivedDays(claim, normalizedAt)
+	if err != nil {
+		t.Fatalf("a 366-day window must be accepted: %v", err)
+	}
+	if len(days) != 366 {
+		t.Fatalf("days=%d want=366", len(days))
+	}
+	if !days[0].Equal(atCap) {
+		t.Errorf("first day=%v want=%v", days[0], atCap)
+	}
+	if want := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC); !days[365].Equal(want) {
+		t.Errorf("last day=%v want=%v", days[365], want)
+	}
+
+	claim.SinceAt = instant(overCap)
+	if _, err := githubWorkItemDerivedDays(claim, normalizedAt); !errors.Is(
+		err, ErrInvalidConfiguration,
+	) {
+		t.Fatalf("a 367-day window must be refused: error=%v", err)
+	}
+}
+
 // githubWorkItemDeriverFixture is a corpus that produces rows on every ported
 // derived surface, so a multi-day assertion cannot pass by comparing empties.
 func githubWorkItemDeriverFixture(claim Claim) githubWorkItemRows {
@@ -459,6 +568,7 @@ func (engine githubWorkItemStubEngine) Derive(
 	_ context.Context,
 	_ Claim,
 	_ githubWorkItemRows,
+	day time.Time,
 	_ time.Time,
 	_ githubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
@@ -467,7 +577,12 @@ func (engine githubWorkItemStubEngine) Derive(
 	}
 	produced := make(map[string][]json.RawMessage, len(githubWorkItemUnportedDestinations))
 	for _, destination := range githubWorkItemUnportedDestinations {
-		produced[destination] = []json.RawMessage{}
+		// Stamped with the day it was handed: an engine call hoisted out of the
+		// loop, or a merge that assigned instead of appending, shows up as a
+		// missing or wrong-dated row rather than as an indistinguishable empty.
+		produced[destination] = []json.RawMessage{
+			json.RawMessage(`{"day":"` + day.Format("2006-01-02") + `"}`),
+		}
 	}
 	return produced, nil
 }
@@ -587,6 +702,7 @@ func (engine githubWorkItemOverreachingEngine) Derive(
 	_ Claim,
 	_ githubWorkItemRows,
 	_ time.Time,
+	_ time.Time,
 	_ githubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	produced := map[string][]json.RawMessage{
@@ -673,6 +789,7 @@ func (engine githubWorkItemSilentEngine) Derive(
 	_ context.Context,
 	_ Claim,
 	_ githubWorkItemRows,
+	_ time.Time,
 	_ time.Time,
 	_ githubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {

@@ -1,7 +1,13 @@
 {
   "schema_version": 1,
   "name": "github work-item 16-destination effect and readback foundation",
-  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "build": [
+    "go",
+    "test",
+    "-run",
+    "^$",
+    "./internal/providersync/"
+  ],
   "mutations": [
     {
       "id": "E1-all-sixteen-destinations-are-unique",
@@ -9,7 +15,16 @@
       "find": "{\"work_items\", rows.WorkItems},",
       "replace": "{\"work_item_user_metrics_daily\", rows.WorkItems},",
       "rationale": "the complete work-item unit must account for all sixteen unique Python write surfaces",
-      "proof": [["go", "test", "-count=1", "-run", "^TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E2-conditional-empty-effects-remain-accounted-for",
@@ -17,7 +32,16 @@
       "find": "effects = append(effects, effect)",
       "replace": "if len(value.rows) > 0 { effects = append(effects, effect) }",
       "rationale": "an empty destination is a durable evaluated outcome, not permission to omit it from the effect manifest",
-      "proof": [["go", "test", "-count=1", "-run", "^TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E3-every-surface-requires-semantic-readback",
@@ -25,7 +49,16 @@
       "find": "value.destination, EffectReadbackRequired, value.rows,",
       "replace": "value.destination, EffectReplaySafe, value.rows,",
       "rationale": "none of the sixteen multi-table effects may blind-replay after an ambiguous write acknowledgement",
-      "proof": [["go", "test", "-count=1", "-run", "^TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E4-readback-is-tenant-fenced",
@@ -33,7 +66,16 @@
       "find": "OrgID: claim.OrgID, Provider: claim.Provider, Dataset: claim.Dataset,",
       "replace": "OrgID: \"org-acme\", Provider: claim.Provider, Dataset: claim.Dataset,",
       "rationale": "effect inspection must use the claimed tenant rather than a constant or row-provided organization",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemClickHouseEffectsRoutesEverySurfaceWithFrozenIdentity$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemClickHouseEffectsRoutesEverySurfaceWithFrozenIdentity$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E5-readback-is-generation-fenced",
@@ -41,7 +83,16 @@
       "find": "Generation: claim.GenerationKey(), Destination: effect.Destination,",
       "replace": "Generation: \"sync-unit:wrong\", Destination: effect.Destination,",
       "rationale": "recovery must inspect the same stable sync-unit occurrence across lease owners",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemClickHouseEffectsRoutesEverySurfaceWithFrozenIdentity$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemClickHouseEffectsRoutesEverySurfaceWithFrozenIdentity$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E6-content-digest-is-recomputed-before-dispatch",
@@ -49,7 +100,16 @@
       "find": "rebuilt.ContentDigest != effect.ContentDigest ||",
       "replace": "false ||",
       "rationale": "a valid-looking digest from another batch cannot authorize different semantic rows",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E7-payload-size-is-recomputed-before-dispatch",
@@ -57,7 +117,16 @@
       "find": "rebuilt.PayloadBytes != effect.PayloadBytes {",
       "replace": "false {",
       "rationale": "manifest payload accounting cannot be trusted from a caller-mutated EffectBatch",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E8-incomplete-adapter-sets-fail-before-writing",
@@ -65,15 +134,33 @@
       "find": "if err != nil || !sink.complete() {",
       "replace": "if err != nil || false {",
       "rationale": "the dispatcher cannot start a generation unless all sixteen destination adapters are available",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E9-explicit-work-items-adapter-cannot-be-cross-wired",
       "file": "internal/providersync/github_work_items_effects_clickhouse.go",
-      "find": "case \"work_items\":\n\t\tadapter = sink.WorkItems",
-      "replace": "case \"work_items\":\n\t\tadapter = sink.WorkItemUserMetricsDaily",
-      "rationale": "each destination must reach its explicitly named table adapter",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemClickHouseEffectsRoutesEverySurfaceWithFrozenIdentity$", "./internal/providersync/"]]
+      "find": "case \"work_items\":\n\t\treturn sink.WorkItems, true",
+      "replace": "case \"work_items\":\n\t\treturn sink.WorkItemUserMetricsDaily, true",
+      "rationale": "each destination must reach its explicitly named table adapter. Anchor updated when the dispatch switch moved from resolve() into adapterForDestination (returns rather than assigns); the property and the proof are unchanged.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemClickHouseEffectsRoutesEverySurfaceWithFrozenIdentity$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E10-post-write-lease-fence-is-retained",
@@ -81,7 +168,16 @@
       "find": "return sink.Lease.Assert(ctx)\n}",
       "replace": "return nil\n}",
       "rationale": "a lease lost while a destination write is in flight must leave the effect ambiguous for exact readback recovery",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemEffectsFailClosedForTamperingMissingAdaptersAndLeaseLoss$",
+          "./internal/providersync/"
+        ]
+      ]
     },
     {
       "id": "E11-mid-write-exact-readback-prevents-duplicate-replay",
@@ -89,7 +185,16 @@
       "find": "case EffectExact, EffectAbsent, EffectConflict:\n\t\treturn inspection, nil",
       "replace": "case EffectExact, EffectAbsent, EffectConflict:\n\t\treturn EffectAbsent, nil",
       "rationale": "an exact destination already accepted before a crash must be marked committed instead of physically replayed",
-      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEffectsRecoverMidWriteAndAccountForEmptyDestinations$", "./internal/providersync/"]]
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemEffectsRecoverMidWriteAndAccountForEmptyDestinations$",
+          "./internal/providersync/"
+        ]
+      ]
     }
   ]
 }

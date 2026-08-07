@@ -105,11 +105,20 @@ func TestGitHubWorkItemTeamAttributionsAnswerExactForMultiDayDuplicates(t *testi
 	// And the storage side of the split: n identical rows in the manifest
 	// collapse to exactly ONE stored row. Asserted against the real table, not
 	// inferred from the ReplacingMergeTree declaration.
+	// The fence names the FULL sorting key -- (org_id, repo_id, work_item_id,
+	// ifNull(team_id,''), source) per 051_team_attribution_dimensions.sql:91.
+	// A partial fence cannot produce a false PASS here (this table has exactly
+	// one row), but fencing the whole key is the standard: a partial one stops
+	// being equivalent the moment a sibling row exists, and that is not a
+	// property a reader should have to re-derive.
 	var stored uint64
 	if err := conn.QueryRow(ctx, `
 SELECT count() FROM work_item_team_attributions FINAL
-WHERE org_id = ? AND work_item_id = ? AND provider = ? AND source = ?`,
-		githubDerivedIntegrationOrg, "acme/api#1", "github", "repo_ownership",
+WHERE org_id = ? AND repo_id = ? AND work_item_id = ?
+  AND ifNull(team_id, '') = ? AND source = ?`,
+		githubDerivedIntegrationOrg,
+		uuid.MustParse("11111111-1111-4111-8111-111111111111"),
+		"acme/api#1", "t1", "repo_ownership",
 	).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}

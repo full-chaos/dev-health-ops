@@ -309,3 +309,11 @@ func (sink GitHubWorkItemClickHouseEffects) MissingDestinations() []string {
 func (sink GitHubWorkItemClickHouseEffects) complete() bool {
 	return len(sink.MissingDestinations()) == 0
 }
+
+// The sibling-sink convention, and the reason it matters more here than
+// elsewhere: this composite is not registered yet, so nothing in the tree calls
+// it through either interface. Without these assertions a signature drift in
+// EffectSink or EffectReadback would compile cleanly and surface only when
+// activation first wires the sink up -- the most expensive moment to find it.
+var _ EffectSink = GitHubWorkItemClickHouseEffects{}
+var _ EffectReadback = GitHubWorkItemClickHouseEffects{}

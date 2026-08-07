@@ -199,6 +199,23 @@ class QUAShadowConfig:
     #: evidence. Two flags keep the rollout ladder (shadow -> commit) real:
     #: ``commit_enabled`` is meaningless unless ``enabled`` is also set, since
     #: there is no proposal to promote otherwise.
+    #:
+    #: **Before arming this in an environment, read
+    #: ``qua_promotion._structurally_admissible``'s generalization limit.**
+    #: CHAOS-3553 replaced the confidence floor with a structural predicate and
+    #: closed every false positive CHAOS-3539 measured, but it left TWO shapes
+    #: admitting, both stated there and both pinned by characterization tests:
+    #: a short acronym window from a genuine primary name ("AC", "OP", "API"),
+    #: and a multi-word parenthetical qualifier named in full ("Legacy
+    #: Operations"). Neither is a regression -- the previous confidence-only
+    #: gate admitted both -- and neither has a structural fix available without
+    #: an explicit catalog alias field.
+    #:
+    #: So landing CHAOS-3553 does NOT by itself authorize arming this flag.
+    #: Adversarial review was explicit that "not a regression" is not a safety
+    #: closure, and it is right. Arming is a product decision that owns those
+    #: two residuals, and it belongs to CHAOS-3525 with evidence, not to
+    #: whoever next edits this file.
     commit_enabled: bool = False
     #: Platform-spec hard cap (comment 6fa38d88, "Performance and budgets").
     #: Also bounded by the run's own remaining wall-clock budget at the call
@@ -229,6 +246,24 @@ class QUAShadowMentionAssessment:
     candidate_entities: tuple[AuthorizedEntity, ...]
     confidence: float
     rejected_reason: str | None = None
+    #: CHAOS-3553: this mention's OWN authorized slice, ``combined[start:end]``
+    #: -- everything the catalog offered for this span, whether or not the
+    #: model mentioned it.
+    #:
+    #: Distinct from ``candidate_entities`` above, and the distinction is the
+    #: whole reason this field exists. ``candidate_entities`` is the MODEL's
+    #: ``candidate_indices``, filtered to the slice; it says what the model
+    #: chose to name. This says what the span actually matched. A model that
+    #: names one index out of a five-entity slice produces
+    #: ``len(candidate_entities) == 1``, so a slice-size rule reading that
+    #: field would read a genuinely ambiguous span as unambiguous -- which is
+    #: precisely the false positive CHAOS-3553's predicate exists to refuse
+    #: (``neg.C1``, "Meridian", 4 of 12 observed). Verified by execution
+    #: before this field was added, not assumed.
+    #:
+    #: Empty for a mention past ``max_total_candidates``, which is the same
+    #: value an unauthorized-everything mention carries; both are refusals.
+    authorized_slice: tuple[AuthorizedEntity, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -846,6 +881,10 @@ class QuestionUnderstandingShadow:
                     outcome=proposed.outcome,
                     selected_entity=selected_entity,
                     candidate_entities=candidate_entities,
+                    # CHAOS-3553. Taken from the SAME ``start``/``end`` the
+                    # index checks above used, so the slice a promotion reads
+                    # and the slice ``_verify`` enforced can never disagree.
+                    authorized_slice=tuple(combined[start:end]),
                     confidence=proposed.confidence,
                     rejected_reason=rejected_reason,
                 )

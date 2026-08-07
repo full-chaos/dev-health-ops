@@ -184,6 +184,7 @@ class SeededCatalog:
         # re-implemented: a hand-mirrored copy is exactly how a fake drifts
         # from its producer and starts passing tests the live path fails.
         return merge_search_candidates(
+            query=query,
             alias_hits=alias_matches,
             substring_hits=matched,
             preferred_kinds=preferred_kinds,

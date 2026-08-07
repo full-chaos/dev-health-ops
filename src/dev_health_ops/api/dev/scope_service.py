@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .alias_matching import SpanMatch
 from .contracts import (
     DevDisambiguationCandidate,
     DevEntityRef,
@@ -169,6 +170,23 @@ class AuthorizedEntity:
     canonical_id: str
     label: str
     repository_id: str | None = None
+    #: CHAOS-3553: how the SEARCH SPAN that produced this row relates to the
+    #: label -- stamped by ``scope_catalog.merge_search_candidates``, the one
+    #: place that sees both the query and the ranked page.
+    #:
+    #: ``None`` on every entity that has no span to speak of: the catalog's
+    #: ``exact()`` path, the organization roster, the organization-fallback
+    #: entity, and anything a caller builds by hand. ``None`` means "not
+    #: classified", never "no match" -- every consumer must fail closed on it
+    #: rather than assume a class.
+    #:
+    #: Excluded from equality and hashing (``compare=False``) on purpose. This
+    #: is metadata about a QUERY, not about the entity: the same authorized
+    #: entity found by "MWA" and by "Web Application" is the same entity, and
+    #: letting the span decide identity would make ``==`` answer a different
+    #: question than every id-keyed dedupe in this module already answers.
+    #: Assert on ``.span_match`` directly rather than through entity equality.
+    span_match: SpanMatch | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         if not self.canonical_id or not self.label:

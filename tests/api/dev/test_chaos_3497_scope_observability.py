@@ -27,6 +27,7 @@ question was never widened away from anything) fails too.
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import UTC, datetime
 
 import pytest
@@ -37,9 +38,11 @@ from dev_health_ops.api.dev.contracts import (
     DevError,
     DevScope,
     DevScopeResolution,
+    DevToolResult,
     DirectScope,
     ScopeResolutionOutcome,
     StreamEventType,
+    ToolID,
 )
 from dev_health_ops.api.dev.contracts_v2 import PublicOutcome
 from dev_health_ops.api.dev.no_match_terminal import (
@@ -56,9 +59,17 @@ from dev_health_ops.api.dev.streaming import (
     stream_orchestrator,
     validate_completed_stream,
 )
-from dev_health_ops.llm.agent.contracts import AgentUsage
+from dev_health_ops.api.dev.tool_registry import AskDevToolRegistry
+from dev_health_ops.llm.agent.contracts import (
+    AgentFinalAnswer,
+    AgentToolRequest,
+    AgentUsage,
+)
+from dev_health_ops.llm.agent.scripted import ScriptedStep
 from tests._chaos_3292_preflight import (
     ASK_DEV_PROJECT,
+    ATLAS_PROJECT_ONE,
+    ATLAS_PROJECT_TWO,
     ORG_ID,
     run_preflight_orchestrator,
 )
@@ -145,6 +156,14 @@ def _answer_result() -> OrchestratorResult:
         model_fingerprint="model_01",
         scope_resolution=answer.resolved_scope,
     )
+
+
+def _bare_answer(script_id: str) -> dict:
+    """The shared answer fixture, model-fingerprinted for ``script_id``."""
+
+    from tests.api.dev.test_orchestrator import _answer
+
+    return _answer(script_id=script_id)
 
 
 async def _stream(result: OrchestratorResult, states: tuple[RunState, ...]):
@@ -372,6 +391,193 @@ async def test_the_deferred_corpus_invariants_become_satisfiable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 2b. the preflight TERMINATE path -- the shape MOST of the blocked corpus
+#     cases actually take, and the one a first cut of this fix got wrong
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_preflight_not_found_publishes_not_found_not_the_stale_scope() -> None:
+    """The run's OWN outcome for the subject the question named.
+
+    Reproduced before the fix: this published ``inherited`` -- the run's
+    original top-level resolve, which by construction can only ever be
+    healthy, because every unhealthy outcome already returned earlier. That
+    put "scope resolved: inherited" one frame ahead of an error saying the
+    named subject could not be found: the exact juxtaposition
+    ``no_match_terminal``'s module docstring says the PRD prohibits.
+    """
+
+    output = await run_preflight_orchestrator(
+        question="What's the status of the Nightfall project?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="chaos-3497-not-found",
+    )
+
+    assert output.preflight_outcomes() == ("unresolved_no_authorized_match",)
+    assert output.result.answer is None
+    published = output.result.scope_resolution
+    assert published is not None
+    assert published.outcome is ScopeResolutionOutcome.UNRESOLVED
+    assert published.resolved_scope is None
+
+
+@pytest.mark.asyncio
+async def test_an_ambiguous_preflight_publishes_the_candidates_it_showed() -> None:
+    """The security invariant gets a real measurement, not a vacuous one.
+
+    ``no_unauthorized_candidate_surfaces`` reads
+    ``scope_resolution.candidates``. Before the fix this terminal published
+    the stale healthy resolution, which v1 forbids from carrying candidates
+    at all -- so the check saw "one scope.resolved event, zero candidates"
+    and PASSED, having measured nothing. That is worse than the "not
+    measured" failure it replaced, and is the vacuity CHAOS-3219 removed.
+
+    The negative half matters as much as the positive: an authorized set
+    that excludes these candidates must FAIL, or "passed" means nothing.
+    """
+
+    from scripts.acceptance.corpus.invariants import CHECKS, InvariantContext
+
+    output = await run_preflight_orchestrator(
+        question="What's the status of the Atlas project?",
+        entities=[(ORG_ID, ATLAS_PROJECT_ONE), (ORG_ID, ATLAS_PROJECT_TWO)],
+        script_id="chaos-3497-ambiguous",
+    )
+
+    assert output.preflight_outcomes() == ("unresolved_ambiguous_candidates",)
+    published = output.result.scope_resolution
+    assert published is not None
+    assert published.outcome is ScopeResolutionOutcome.AMBIGUOUS
+    surfaced = sorted(
+        candidate.entity_ref.entity_id for candidate in published.candidates
+    )
+    assert surfaced == sorted(
+        [ATLAS_PROJECT_ONE.canonical_id, ATLAS_PROJECT_TWO.canonical_id]
+    ), "the candidates on the wire must be the ones the user was shown"
+
+    frames = [
+        event
+        async for event in stream_orchestrator(
+            run_id="run_01",
+            run_with_events=_replay(output.result),
+            cancellation=asyncio.Event(),
+        )
+    ]
+    validate_completed_stream(frames)
+    context = InvariantContext(
+        resolution_path=None,
+        public_outcome=None,
+        events=[
+            {"event": frame.event.value, "data": frame.model_dump(mode="json")}
+            for frame in frames
+        ],
+        expectations={},
+    )
+
+    authorized = CHECKS["no_unauthorized_candidate_surfaces"](
+        {"authorized_entity_ids": surfaced}, context
+    )
+    assert authorized.passed, authorized.detail
+    assert "was not measured" not in authorized.detail
+
+    # The discriminating half: if the check could not see these candidates
+    # it would pass here too, and would be worthless.
+    leaked = CHECKS["no_unauthorized_candidate_surfaces"](
+        {"authorized_entity_ids": ["some-other-entity"]}, context
+    )
+    assert not leaked.passed
+    assert "unauthorized candidate id(s) surfaced" in leaked.detail
+
+
+@pytest.mark.asyncio
+async def test_a_later_failed_lookup_does_not_overwrite_a_real_commit() -> None:
+    """A miss for one name must not be reported as the run's scope decision.
+
+    ``resolve_scope.v1`` records EVERY attempt that produced an outcome, but
+    only a successful one re-commits the run's scope. A run that committed a
+    real project and then failed to look up some other name still executed
+    under that project -- publishing the later miss would invent a
+    resolution failure that never happened, the mirror image of the defect
+    this ticket closes. Mirrors the diversion guard the answer path already
+    applies (organization scope only).
+    """
+
+    from tests.api.dev.test_orchestrator import (
+        _answer,
+        _not_found_resolution,
+        _orchestrator,
+        _organization_resolution,
+        _project_resolution,
+        _run,
+    )
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _organization_resolution()
+
+    committed = _project_resolution()
+    missed = _not_found_resolution()
+    results = [committed, missed]
+
+    async def execute(_context, request):
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+            }
+        )
+        if request.tool_id is ToolID.RESOLVE_SCOPE:
+            payload["scope_resolution"] = results.pop(0).model_dump(mode="json")
+        return DevToolResult.model_validate(payload)
+
+    script_id = "chaos-3497-stale-miss"
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Ask Dev project", "limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="resolve_scope.v1",
+                        arguments={"query": "Nightfall project", "limit": 25},
+                        call_id="tool_call_02",
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer(script_id=script_id, invalid_schema=True)
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer(script_id=script_id, invalid_schema=True)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            registry=AskDevToolRegistry({tool_id: execute for tool_id in ToolID}),
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.answer is None, "this run must reach a no-answer terminal"
+    assert result.scope_resolution is not None
+    assert result.scope_resolution.outcome is ScopeResolutionOutcome.EXACT, (
+        "the run executed under the committed project, not the later miss"
+    )
+    assert result.scope_resolution.model_dump(mode="json") == committed.model_dump(
+        mode="json"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 3. the prose disclosure
 # ---------------------------------------------------------------------------
 
@@ -417,6 +623,63 @@ async def test_a_widened_run_says_so_in_user_facing_prose() -> None:
     assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE in [
         event.warning for event in events if event.event is StreamEventType.WARNING
     ]
+
+
+@pytest.mark.asyncio
+async def test_the_widening_marker_alone_does_not_trigger_the_disclosure() -> None:
+    """The test that actually pins WHICH field the trigger reads.
+
+    The sibling organization-wide control does not discriminate this: that
+    scenario resolves ``inherited`` with empty ``fallbacks``, so a predicate
+    swapped to ``fallbacks`` would not fire there either and the control
+    would stay green while the copy became wrong. Measured, not assumed --
+    the swap was applied and every test still passed.
+
+    This one puts a run in the one state that separates the two predicates:
+    ``ORGANIZATION_FALLBACK`` with ``fallbacks == ["organization"]``, and NO
+    preflight (so ``legacy_guard_required`` is false because no bare name
+    went unresolved -- nothing was widened away from anything). Keyed on the
+    marker, this run would be told its subject was missed. It must not be.
+    """
+
+    from tests.api.dev.test_orchestrator import (
+        _answer_with_no_claims,
+        _orchestrator,
+        _run,
+    )
+
+    async def resolve(**_values) -> DevScopeResolution:
+        return _resolution(ScopeResolutionOutcome.ORGANIZATION_FALLBACK)
+
+    script_id = "chaos-3497-marker-only"
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    )
+                ),
+                ScriptedStep(
+                    decision=AgentFinalAnswer(
+                        _answer_with_no_claims(script_id=script_id)
+                    )
+                ),
+            ],
+            script_id=script_id,
+            scope_resolver=resolve,
+        )
+    )
+
+    assert result.answer is not None
+    assert (
+        result.answer.resolved_scope.outcome
+        is ScopeResolutionOutcome.ORGANIZATION_FALLBACK
+    )
+    assert result.answer.resolved_scope.fallbacks == ["organization"]
+    assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE not in result.answer.warnings
 
 
 def test_the_disclosure_reaches_the_frame_a_reader_actually_sees() -> None:

@@ -95,6 +95,7 @@ from .contracts_v2 import (
     QuestionIntentID,
 )
 from .contracts_v2.base import SourceRequirementState
+from .contracts_v2.compat import scope_resolution_from_frame
 from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
@@ -843,6 +844,24 @@ class DevOrchestrator:
         # up in the user's own question text.
         last_resolve_scope_resolution: DevScopeResolution | None = None
         last_resolve_scope_query: str | None = None
+        # CHAOS-3497: the resolution a preflight TERMINATE actually reached
+        # for the subject the question named -- set only on that branch, and
+        # the highest-priority thing `published_resolution()` reports.
+        #
+        # It has to be tracked separately because `_terminate()` commits
+        # NOTHING (`committed_resolution=None` on every one of its call
+        # sites), so `resolution` there is still the run's original top-level
+        # resolve. That value can only ever be healthy -- every unhealthy
+        # outcome already returned earlier -- so publishing it would put
+        # "scope resolved: exact" one frame ahead of an error saying the
+        # named subject could not be found, and would hand
+        # `no_unauthorized_candidate_surfaces` an object that STRUCTURALLY
+        # cannot carry candidates (v1 permits them only on candidate-bearing
+        # outcomes), flipping that security check from a loud "not measured"
+        # to a silent vacuous pass. Reproduced live before the fix: an
+        # ambiguous "Atlas" and a not-found "Nightfall" both published
+        # `inherited`, with zero candidates.
+        preflight_terminal_resolution: DevScopeResolution | None = None
         selected_event_sink = event_sink or self._event_sink
         # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
         # by the CHAOS-3295 plan-execution block below when a plan actually
@@ -873,6 +892,43 @@ class DevOrchestrator:
         #: internal denylisted token is never fail-closed over that
         #: collision.
         portfolio_attested_labels: tuple[str, ...] = ()
+
+        def published_resolution() -> DevScopeResolution | None:
+            """The scope decision a no-answer terminal reports on the wire.
+
+            Three sources, in priority order, and the order is the whole
+            point -- an auditor must be able to tell a run that resolved to
+            an exact subject from one that silently widened, and every
+            wrong choice here is a false answer to that question:
+
+            1. ``preflight_terminal_resolution`` -- the preflight
+               TERMINATE branch's own outcome for the subject the question
+               named. Nothing else describes that failure at all.
+            2. ``last_resolve_scope_resolution``, but ONLY while the run is
+               still on organization scope. This mirrors the diversion
+               guard the answer path already applies (see the
+               ``missed_subject_label`` branch): once a ``resolve_scope.v1``
+               call has committed a REAL narrower subject, a later failed
+               lookup for some other name did not change what this run
+               executed under, and reporting that miss as the run's scope
+               decision invents a resolution failure that never happened.
+            3. ``resolution`` -- the committed scope itself.
+
+            ``None`` only when the run ended before scope resolution
+            completed at all.
+            """
+
+            if preflight_terminal_resolution is not None:
+                return preflight_terminal_resolution
+            committed = resolution
+            still_organization_wide = (
+                committed is None
+                or committed.resolved_scope is None
+                or committed.resolved_scope.direct_scope is DirectScope.ORGANIZATION
+            )
+            if still_organization_wide and last_resolve_scope_resolution is not None:
+                return last_resolve_scope_resolution
+            return committed
 
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
@@ -1482,21 +1538,12 @@ class DevOrchestrator:
                 # ``streaming`` already published (``answer.resolved_scope``),
                 # so that path's wire output does not change at all.
                 #
-                # On a no-answer terminal it is the run's most recent
-                # COMPLETED resolution: ``last_resolve_scope_resolution``
-                # (every ``resolve_scope.v1`` attempt that produced an
-                # outcome, ambiguous/not-found included) when the model made
-                # one, else ``resolution`` (the initial resolve, or whatever
-                # the preflight committed over it). Preferring the tool
-                # attempt is deliberate and mirrors CHAOS-3367's own rule:
-                # publishing the committed organization ``resolution`` after a
-                # named subject failed to resolve is precisely the "scope
-                # outcome: exact while a named subject could not be found"
-                # juxtaposition the PRD prohibits.
+                # On a no-answer terminal it is ``published_resolution()``
+                # below -- the resolution this run actually executed under.
                 scope_resolution=(
                     answer.resolved_scope
                     if answer is not None
-                    else (last_resolve_scope_resolution or resolution)
+                    else published_resolution()
                 ),
             )
 
@@ -1840,6 +1887,21 @@ class DevOrchestrator:
                     candidate_attestation = tuple(
                         candidate.entity_ref.display_label
                         for candidate in preflight_result.answer.frame.clarification_candidates
+                    )
+                    # CHAOS-3497: built from the SAME frame the richer
+                    # terminal below persists, through the SAME projector
+                    # `compat` already uses for a replayed clarification --
+                    # so the resolution on the wire and the candidates the
+                    # user was shown can never be two different stories.
+                    # Set before every `finish()` in this branch, including
+                    # the leak-guard bail-out: a run whose terminal was
+                    # rewritten to `internal_error` still resolved what it
+                    # resolved, and hiding that is how the gap this ticket
+                    # closes got there in the first place.
+                    preflight_terminal_resolution = scope_resolution_from_frame(
+                        preflight_result.answer.frame,
+                        requested_scope=authorized_scope,
+                        resolved_at=datetime.now(UTC),
                     )
                     preflight_leak = internal_token_leak_field(
                         user_visible_strings_by_field(error=preflight_error),

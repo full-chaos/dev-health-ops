@@ -85,8 +85,10 @@ It mirrors the PR-time CI gates of the ops repo and MUST be green before `git pu
    `get_clickhouse_uri()` and need a reachable, migrated ClickHouse — the gate provisions
    an isolated **scratch db**, migrates it, and points `CLICKHOUSE_URI` at it before
    running the suite, exactly as CI provides one (a locked dev `default` user makes them
-   false-red otherwise). Without docker, the gate deselects that one module so the
-   pure-Python guards still run.
+   false-red otherwise). Without docker AND without `SKIP_CLICKHOUSE=1`, the gate now
+   hard-fails before the unit suite ever runs at all (see CHAOS-3571 below) — the
+   module-deselect behavior only fires under the explicit `SKIP_CLICKHOUSE=1` opt-out,
+   where the pure-Python guards still run but that one CH-dependent module is skipped.
 4. A **live-ClickHouse argMax proof** that CI's unit/ci tiers never run: after migrating
    the scratch db, it builds a real `ClickHouseDataLoader` and `await`s
    `load_team_attribution_context`, forcing the real engine to parse + EXECUTE every
@@ -110,7 +112,24 @@ a scratch db (default `ci_local_validate`) via `CLICKHOUSE_URI=…/ci_local_vali
 and **drops that scratch db on exit (trap cleanup)**. `CLICKHOUSE_URI` must never
 default to `…/default` for any `-m clickhouse` run, migrate, or `ensure_schema(force=True)`
 call. If you must run CH tests by hand, always export the scratch DSN first and unset
-it after. When docker / the CH container is unavailable, the CH stage cleanly SKIPs
-(or pass `SKIP_CLICKHOUSE=1`) — but the pure-Python gates 1–3 are always required.
+it after.
+
+**CHAOS-3571 (stage manifest — reversed a prior statement in this doc):** without
+`SKIP_CLICKHOUSE=1`, the gate no longer "cleanly SKIPs" when docker / the CH
+container is unavailable — that exact behavior let a FAILED docker probe read as
+"container not running" and silently drop 3 of 8 stages while still printing
+`GATE PASSED`. Every reason the CH stages might not run (docker missing, the probe
+itself failing/timing out, the container confirmed absent, a missing dev-hops CLI)
+is now a **hard failure** with a message naming the true mechanism. The **only**
+sanctioned way to run without the CH-dependent stages is the explicit, logged
+`SKIP_CLICKHOUSE=1` opt-out — a caller decision made up front, not a runtime probe
+result the gate trusts on its own. A machine-readable `GATE_STAGE_MANIFEST …` log
+line carries the literal `declared=<N> executed=<N>` counts plus the exact stage
+ids that ran, and the verdict line carries the same information formatted as
+`[executed/declared: ids]` (`GATE PASSED. [8/8: lint_format,…,ch_argmax_proof] safe
+to push.`, or `[4/4: …]` under `SKIP_CLICKHOUSE=1`), and a self-check fails the
+gate on any declared-but-not-executed gap even if every stage that did run passed.
+See the "STAGE MANIFEST" header comment in `ci/local_validate.sh` and
+`tests/tooling/test_local_validate_stage_manifest.py`.
 
 Do not push if `ci/local_validate.sh` prints `GATE FAILED`.

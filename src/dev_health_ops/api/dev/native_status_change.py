@@ -400,18 +400,68 @@ LIMIT {limit:UInt32}
 #: state once ``_read`` below catches the exception). ``declared_updated_at``
 #: stays a distinct alias from the raw ``updated_at`` column for exactly
 #: this reason.
+#:
+#: CHAOS-3563 review condition: "absent" must never conflate two DIFFERENT
+#: facts -- (a) this project genuinely has no declared-state history at all,
+#: and (b) history exists, but every retained row postdates ``as_of``,
+#: because ``as_of`` predates the backfill floor (migration 074 seeded
+#: history starting from each project's state at MIGRATION time; anything
+#: truly earlier was already discarded by ``projects``' own RMT collapse
+#: and cannot be recovered -- see the migration's own docstring). Silently
+#: returning "absent" for (b) is indistinguishable from (a) to a caller, and
+#: silently returning the EARLIEST retained row's state for (b) would
+#: misrepresent an unknown-because-unretained past as a known one. Neither
+#: is acceptable, so this query reports which case applies via two
+#: independent aggregates: ``bounded_count``/``provider_count`` (rows AT OR
+#: BEFORE ``as_of`` -- the normal, historically-accurate answer when
+#: exactly one provider has exactly one or more such rows) versus
+#: ``total_count``/``earliest_known_updated_at`` (ALL retained rows for this
+#: id, regardless of ``as_of`` -- computed by a second, unbounded
+#: aggregate). ``bounded_count == 0 and total_count > 0`` is case (b) --
+#: floor-breached, not absent -- and the caller (below) renders it as an
+#: explicit warning rather than silence. Both aggregates are single-row
+#: (no ``GROUP BY``), so the ``FROM bounded, unbounded`` cross join is
+#: always exactly one row, never zero -- ``_read`` below no longer relies
+#: on an empty result set to signal "nothing found"; the row's own counts
+#: carry that now.
 _PROJECT_DECLARED_FACTS_SQL = """
+WITH bounded AS (
+    SELECT
+        argMax(state, (updated_at, ingested_at)) AS state,
+        argMax(target_date, (updated_at, ingested_at)) AS target_date,
+        max(updated_at) AS declared_updated_at,
+        argMax(last_synced, (updated_at, ingested_at)) AS last_synced,
+        argMax(is_active, (updated_at, ingested_at)) AS is_active,
+        countDistinct(provider) AS provider_count,
+        count() AS bounded_count
+    FROM project_declared_state_history
+    WHERE org_id = {org_id:String} AND id = {entity_id:String}
+      AND updated_at <= {as_of:DateTime64(3, 'UTC')}
+), unbounded AS (
+    SELECT
+        count() AS total_count,
+        min(updated_at) AS earliest_known_updated_at
+    FROM project_declared_state_history
+    WHERE org_id = {org_id:String} AND id = {entity_id:String}
+)
 SELECT
-    argMax(state, (updated_at, ingested_at)) AS state,
-    argMax(target_date, (updated_at, ingested_at)) AS target_date,
-    max(updated_at) AS declared_updated_at,
-    argMax(last_synced, (updated_at, ingested_at)) AS last_synced,
-    argMax(is_active, (updated_at, ingested_at)) AS is_active,
-    countDistinct(provider) AS provider_count
-FROM project_declared_state_history
-WHERE org_id = {org_id:String} AND id = {entity_id:String}
-  AND updated_at <= {as_of:DateTime64(3, 'UTC')}
-HAVING count() > 0 AND provider_count = 1 AND is_active = 1
+    -- `bounded`'s aggregates are the type's empty-input default (e.g. epoch
+    -- for a non-Nullable DateTime64), NOT NULL, when bounded_count = 0 --
+    -- explicitly nulled out here rather than left for a caller to
+    -- mistake for a real value. `_read`'s shared watermark logic below
+    -- depends specifically on `last_synced` being NULL, not epoch, in
+    -- that case.
+    if(bounded.bounded_count > 0, bounded.state, NULL) AS state,
+    if(bounded.bounded_count > 0, bounded.target_date, NULL) AS target_date,
+    if(bounded.bounded_count > 0, bounded.declared_updated_at, NULL)
+        AS declared_updated_at,
+    if(bounded.bounded_count > 0, bounded.last_synced, NULL) AS last_synced,
+    if(bounded.bounded_count > 0, bounded.is_active, NULL) AS is_active,
+    bounded.provider_count AS provider_count,
+    bounded.bounded_count AS bounded_count,
+    unbounded.total_count AS total_count,
+    unbounded.earliest_known_updated_at AS earliest_known_updated_at
+FROM bounded, unbounded
 """
 
 _BLOCKER_WATERMARK_SQL = """
@@ -1712,16 +1762,50 @@ class ClickHouseStatusChangeSource:
                 warnings.append(warning)
             if project_rows:
                 row = project_rows[0]
-                state = str(row.get("state") or "").strip()
-                target_date = row.get("target_date")
-                if state or target_date is not None:
-                    declared_project_state = state or None
-                    declared_project_target_date = (
-                        target_date if target_date is not None else None
+                bounded_count = int(row.get("bounded_count") or 0)
+                total_count = int(row.get("total_count") or 0)
+                provider_count = int(row.get("provider_count") or 0)
+                if bounded_count == 0 and total_count > 0:
+                    # CHAOS-3563 review condition: `as_of` predates every
+                    # retained declared-state row for this project -- the
+                    # backfill floor (migration 074 seeded history starting
+                    # from each project's state AT MIGRATION time; anything
+                    # earlier was already discarded by `projects`' own RMT
+                    # collapse and is genuinely unrecoverable). This is NOT
+                    # the same fact as "no declared state was ever
+                    # recorded" (that case falls through below with
+                    # `total_count == 0`, unchanged from before this
+                    # ticket) -- it must render as an explicit signal, never
+                    # as silent absence, and MUST NOT fall back to serving
+                    # the earliest retained row's state as if it were true
+                    # at `as_of` (that would misrepresent an unknown past as
+                    # a known one).
+                    earliest = row.get("earliest_known_updated_at")
+                    earliest_display = (
+                        self._datetime(earliest, None).isoformat()
+                        if earliest
+                        else "unknown"
                     )
-                    declared_project_observed_at = self._datetime(
-                        row.get("declared_updated_at"), as_of
+                    warnings.append(
+                        "projects declared-state history predates the "
+                        "retained floor for this project (earliest "
+                        f"retained state is as of {earliest_display}); "
+                        "state as of the requested instant is unknown, "
+                        "not absent"
                     )
+                elif bounded_count > 0 and provider_count == 1:
+                    is_active = row.get("is_active")
+                    if is_active in (1, True):
+                        state = str(row.get("state") or "").strip()
+                        target_date = row.get("target_date")
+                        if state or target_date is not None:
+                            declared_project_state = state or None
+                            declared_project_target_date = (
+                                target_date if target_date is not None else None
+                            )
+                            declared_project_observed_at = self._datetime(
+                                row.get("declared_updated_at"), as_of
+                            )
 
         pull_requests = tuple(
             PullRequestFact(

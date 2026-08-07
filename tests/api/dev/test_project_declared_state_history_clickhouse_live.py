@@ -99,13 +99,22 @@ def raw_client() -> Any:
 
 async def _declared_facts(
     client: Any, *, org_id: str, project_id: str, as_of: datetime
-):
+) -> dict[str, Any]:
+    """The real query always returns exactly one row (a cross join of two
+    single-row, no-``GROUP BY`` aggregates -- see
+    ``_PROJECT_DECLARED_FACTS_SQL``'s own docstring), never an empty result
+    set. Callers distinguish outcomes via the row's own
+    ``bounded_count``/``total_count`` fields, not via row presence.
+    """
     rows = await query_dicts(
         client,
         _PROJECT_DECLARED_FACTS_SQL,
         {"org_id": org_id, "entity_id": project_id, "as_of": as_of},
     )
-    return rows[0] if rows else None
+    assert len(rows) == 1, (
+        "the bounded/unbounded cross join must always yield exactly one row"
+    )
+    return rows[0]
 
 
 @pytest.mark.asyncio
@@ -172,7 +181,7 @@ async def test_recovers_the_declared_state_as_of_an_instant_before_a_later_chang
     at_between = await _declared_facts(
         raw_client, org_id=org_id, project_id=project_id, as_of=between
     )
-    assert at_between is not None, (
+    assert at_between["bounded_count"] > 0, (
         "expected the FIRST declared state to be recoverable as of an "
         "instant before the second sync -- this is the whole point of "
         "CHAOS-3563"
@@ -183,18 +192,40 @@ async def test_recovers_the_declared_state_as_of_an_instant_before_a_later_chang
     at_second = await _declared_facts(
         raw_client, org_id=org_id, project_id=project_id, as_of=second_updated_at
     )
-    assert at_second is not None
+    assert at_second["bounded_count"] > 0
     assert at_second["state"] == "completed"
 
-    # 4. Strictly before the FIRST sync, nothing was declared yet -- absent,
-    #    not an anachronistic answer.
+    # 4. CHAOS-3563 review condition: strictly before the FIRST sync, every
+    #    retained row postdates `as_of` -- this is the explicit
+    #    floor-breach signal (bounded_count == 0, total_count > 0), NOT
+    #    plain absence, and the state must never be fabricated from the
+    #    earliest retained row.
     before_first = await _declared_facts(
         raw_client,
         org_id=org_id,
         project_id=project_id,
         as_of=first_updated_at - timedelta(days=1),
     )
-    assert before_first is None
+    assert before_first["bounded_count"] == 0
+    assert before_first["total_count"] > 0, (
+        "history DOES exist for this project -- it just postdates as_of, "
+        "which must read as an explicit floor breach, not as this project "
+        "having no history at all"
+    )
+    assert not before_first["state"]
+
+    # 5. A project this org has NEVER synced has genuinely NO history --
+    #    the other half of the same distinction: total_count == 0, not a
+    #    floor breach.
+    never_synced = await _declared_facts(
+        raw_client,
+        org_id=org_id,
+        project_id=str(uuid.uuid4()),
+        as_of=NOW,
+    )
+    assert never_synced["total_count"] == 0
+    assert never_synced["bounded_count"] == 0
+    assert not never_synced["state"]
 
 
 @pytest.mark.asyncio

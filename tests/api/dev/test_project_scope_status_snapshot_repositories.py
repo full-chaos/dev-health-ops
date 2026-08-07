@@ -1183,9 +1183,33 @@ def _install_status_client_with_project_row(
     ignores this predicate could not catch a regression that dropped it
     from the real SQL and started leaking a future-dated declared state
     into an as-of snapshot.
+
+    Models the real query's ``bounded``/``unbounded`` two-CTE contract
+    (CHAOS-3563 review condition: an explicit floor-breach signal, never
+    silent absence) from this single synthetic ``project_row``:
+    ``project_row=None`` simulates NO retained history at all
+    (``total_count=0``); a ``project_row`` whose own ``updated_at`` is
+    strictly after ``as_of`` simulates history that exists but does not
+    reach back far enough (``total_count=1, bounded_count=0``) -- the
+    floor-breach case, distinguishable from genuine absence by
+    ``bounded_count``/``total_count`` alone, exactly as the real query's
+    row shape lets ``status_snapshot`` distinguish them.
     """
 
     fake = _FakeWorkItems()
+
+    def _absent_row(*, total_count: int, earliest: Any) -> dict[str, Any]:
+        return {
+            "state": None,
+            "target_date": None,
+            "declared_updated_at": None,
+            "last_synced": None,
+            "is_active": None,
+            "provider_count": 0,
+            "bounded_count": 0,
+            "total_count": total_count,
+            "earliest_known_updated_at": earliest,
+        }
 
     async def wrapped(_client: object, sql: str, params: dict[str, Any]) -> Any:
         if "FROM project_declared_state_history" in sql:
@@ -1196,14 +1220,28 @@ def _install_status_client_with_project_row(
                 or params.get("org_id") != ORG_ID
                 or params.get("entity_id") != PROJECT_ID
             ):
-                return []
-            if (
-                "updated_at <= {as_of:DateTime64(3, 'UTC')}" in sql
-                and project_row.get("updated_at") is not None
-                and project_row["updated_at"] > params["as_of"]
-            ):
-                return []
-            return [project_row]
+                return [_absent_row(total_count=0, earliest=None)]
+            in_bound = (
+                project_row.get("updated_at") is None
+                or project_row["updated_at"] <= params["as_of"]
+            )
+            if not in_bound:
+                return [
+                    _absent_row(total_count=1, earliest=project_row.get("updated_at"))
+                ]
+            return [
+                {
+                    "state": project_row.get("state"),
+                    "target_date": project_row.get("target_date"),
+                    "declared_updated_at": project_row.get("updated_at"),
+                    "last_synced": project_row.get("last_synced"),
+                    "is_active": project_row.get("is_active", 1),
+                    "provider_count": 1,
+                    "bounded_count": 1,
+                    "total_count": 1,
+                    "earliest_known_updated_at": project_row.get("updated_at"),
+                }
+            ]
         return await fake(_client, sql, params)
 
     monkeypatch.setattr(native_status_change, "query_dicts", wrapped)
@@ -1259,6 +1297,12 @@ async def test_committed_project_scope_declared_state_absent_when_catalog_row_mi
     column data exists since #1450 but nothing reads it) must render as an
     absent fact, never a fabricated one, and must not disturb the derived
     tree.
+
+    CHAOS-3563 review condition: genuine no-history-at-all (``total_count ==
+    0``) is a DIFFERENT fact from a floor breach (history exists but
+    predates ``as_of``, ``total_count > 0`` -- see
+    ``test_committed_project_scope_declared_state_absent_for_future_dated_
+    row`` immediately above) and must NOT carry that warning.
     """
 
     _install_catalog_client(monkeypatch)
@@ -1273,6 +1317,9 @@ async def test_committed_project_scope_declared_state_absent_when_catalog_row_mi
 
     assert snapshot.declared_project_state is None
     assert snapshot.declared_project_target_date is None
+    assert not any(
+        "predates the retained floor" in warning for warning in snapshot.warnings
+    )
     assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS
 
 
@@ -1360,10 +1407,17 @@ async def test_committed_project_scope_declared_state_absent_for_future_dated_ro
     read the current ``FINAL`` row with no ``updated_at <= as_of`` bound --
     an as-of snapshot strictly BEFORE the project's last declared-state
     update would have reported that (not-yet-true-at-as_of) state anyway.
-    Since ``FINAL`` collapses all history, there is nothing earlier to
-    answer with; the correct behavior is absence, not an anachronistic
-    answer -- asserted here with an update timestamp strictly after the
-    snapshot's own ``as_of`` (which defaults to ``scope.time_range.end``).
+    The correct behavior is absence, not an anachronistic answer -- asserted
+    here with an update timestamp strictly after the snapshot's own ``as_of``
+    (which defaults to ``scope.time_range.end``).
+
+    CHAOS-3563 review condition sharpens this further: the ONLY retained
+    history for this project is dated after ``as_of``, so this is now the
+    floor-breach case, not a silent one -- it must carry the explicit
+    "predates the retained floor" signal alongside the absence, exactly
+    like ``test_native_project_scope_declared_state_is_explicit_floor_breach_
+    not_silent_absence`` in ``test_native_status_change.py`` proves through
+    the other (fake-client) entry point.
     """
 
     _install_catalog_client(monkeypatch)
@@ -1387,5 +1441,8 @@ async def test_committed_project_scope_declared_state_absent_for_future_dated_ro
 
     assert snapshot.declared_project_state is None
     assert snapshot.declared_project_target_date is None
+    assert any(
+        "predates the retained floor" in warning for warning in snapshot.warnings
+    ), "history exists for this project but postdates as_of -- must not be silent"
     # The rest of the tree (bounded by the same as_of) is unaffected.
     assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS

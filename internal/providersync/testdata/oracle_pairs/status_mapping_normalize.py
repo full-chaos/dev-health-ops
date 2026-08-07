@@ -70,6 +70,12 @@ def _reflected_fields() -> frozenset[str]:
 
 
 def _labels(case: dict[str, Any]) -> list[str]:
+    """Python str()s every label; the Go harness must not SKIP non-strings.
+
+    `normalize_*` does `_norm_key(str(label))`, so a numeric or boolean label is
+    a real, indexable value rather than something to drop. The Go side mirrors
+    this in pythonStrOfCaseValue.
+    """
     return [str(label) for label in case.get("labels") or []]
 
 
@@ -79,23 +85,44 @@ def _optional(case: dict[str, Any], key: str) -> str | None:
 
 
 def _build_row(case: dict[str, Any]) -> dict[str, Any]:
-    mapping = load_mapping_for_case(case)
+    """Build one row, carrying the PHASE and exception type when Python raises.
+
+    LOAD and NORMALIZE are separate phases on purpose: a config that fails to
+    load and an input that fails to normalize are different defects, and a row
+    that recorded only "it raised" would let one silently move into the other.
+    """
+    try:
+        mapping = load_mapping_for_case(case)
+    except Exception as exc:  # noqa: BLE001 -- the exception IS the observation
+        return {
+            "outcome": f"load:{type(exc).__name__}",
+            "normalize_status": None,
+            "normalize_type": None,
+        }
     provider = case["provider"]
     labels = _labels(case)
     sink = io.StringIO()
-    with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+    try:
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            return {
+                "outcome": "ok",
+                "normalize_status": mapping.normalize_status(
+                    provider=provider,
+                    status_raw=_optional(case, "status_raw"),
+                    labels=labels,
+                    state=_optional(case, "state"),
+                ),
+                "normalize_type": mapping.normalize_type(
+                    provider=provider,
+                    type_raw=_optional(case, "type_raw"),
+                    labels=labels,
+                ),
+            }
+    except Exception as exc:  # noqa: BLE001
         return {
-            "normalize_status": mapping.normalize_status(
-                provider=provider,
-                status_raw=_optional(case, "status_raw"),
-                labels=labels,
-                state=_optional(case, "state"),
-            ),
-            "normalize_type": mapping.normalize_type(
-                provider=provider,
-                type_raw=_optional(case, "type_raw"),
-                labels=labels,
-            ),
+            "outcome": f"normalize:{type(exc).__name__}",
+            "normalize_status": None,
+            "normalize_type": None,
         }
 
 

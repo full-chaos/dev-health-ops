@@ -62,8 +62,8 @@
     {
       "id": "T4-engine-fills-the-empty-type-index",
       "file": "internal/providersync/status_mapping.go",
-      "find": "\t\ttypeIndex, err := buildCategoryIndex(\n\t\t\tproviderConfig, \"types\", validWorkItemTypes)",
-      "replace": "\t\ttypeIndex, err := buildCategoryIndex(\n\t\t\tproviderConfig, \"type_labels\", validWorkItemTypes)",
+      "find": "\t\ttypeIndex, err := buildCategoryIndex(\n\t\t\tproviderConfig, provider, \"types\", validWorkItemTypes)",
+      "replace": "\t\ttypeIndex, err := buildCategoryIndex(\n\t\t\tproviderConfig, provider, \"type_labels\", validWorkItemTypes)",
       "rationale": "Reading the wrong section makes github/gitlab's type_by_provider non-empty, reviving the dead type_raw arm. The structural-deadness tripwire must fail.",
       "proof": [
         [

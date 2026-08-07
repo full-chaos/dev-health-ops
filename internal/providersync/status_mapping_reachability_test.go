@@ -38,6 +38,18 @@ func loadRealStatusMapping(t *testing.T) *StatusMapping {
 	return mapping
 }
 
+// mustMappingValue is mappingValue with the error surfaced as a test failure:
+// these tripwires assert against a config that must parse cleanly, so a lookup
+// error is a broken fixture, never something to skip past.
+func mustMappingValue(t *testing.T, node *yaml.Node, key string) *yaml.Node {
+	t.Helper()
+	value, err := mappingValue(node, key)
+	if err != nil {
+		t.Fatalf("mappingValue(%q): %v", key, err)
+	}
+	return value
+}
+
 func realConfigProviderSection(t *testing.T, provider string) *yaml.Node {
 	t.Helper()
 	contents, err := os.ReadFile(resolveStatusMappingConfig(t, "real"))
@@ -51,7 +63,7 @@ func realConfigProviderSection(t *testing.T, provider string) *yaml.Node {
 	if len(document.Content) == 0 {
 		t.Fatal("the real config is empty")
 	}
-	section := mappingValue(mappingValue(document.Content[0], "providers"), provider)
+	section := mustMappingValue(t, mustMappingValue(t, document.Content[0], "providers"), provider)
 	if section == nil {
 		t.Fatalf("the real config has no %q provider section -- these tripwires pin "+
 			"behaviour that depends on it, so its removal must fail loudly rather "+
@@ -66,8 +78,12 @@ func TestRealConfigDeclaresLinearButTheLoaderIgnoresIt(t *testing.T) {
 	// the section is deleted or renamed, this pin stops describing anything and
 	// must fail rather than pass vacuously.
 	linear := realConfigProviderSection(t, "linear")
-	labels := mappingValue(linear, "type_labels")
-	if len(mappingEntries(labels)) == 0 {
+	labels := mustMappingValue(t, linear, "type_labels")
+	labelEntries, err := mappingEntries(labels, "providers.linear.type_labels")
+	if err != nil {
+		t.Fatalf("reading the real config's linear type_labels: %v", err)
+	}
+	if len(labelEntries) == 0 {
 		t.Fatal("the real config's linear section no longer declares type_labels; " +
 			"CHAOS-3505 is about those rules being silently ignored, so this pin " +
 			"is now meaningless and needs revisiting")
@@ -162,7 +178,11 @@ func TestTypePriorityOmitsExactlyPrAndMergeRequest(t *testing.T) {
 // AND on a Go-side change, so the two halves cannot land out of step.
 func TestRealConfigGithubTypeBugLabelIsAMisparsedMapping(t *testing.T) {
 	github := realConfigProviderSection(t, "github")
-	bugValues := sequenceItems(mappingValue(mappingValue(github, "type_labels"), "bug"))
+	bugNode := mustMappingValue(t, mustMappingValue(t, github, "type_labels"), "bug")
+	bugValues := []*yaml.Node(nil)
+	if resolved := resolveAlias(bugNode); resolved != nil && resolved.Kind == yaml.SequenceNode {
+		bugValues = resolved.Content
+	}
 	if len(bugValues) == 0 {
 		t.Fatal("the real config's github type_labels.bug list is gone; this pin " +
 			"depends on it")
@@ -211,7 +231,7 @@ func TestRealConfigTypeSectionsThatDoNotExist(t *testing.T) {
 	mapping := loadRealStatusMapping(t)
 
 	for _, provider := range []string{"github", "gitlab"} {
-		if mappingValue(realConfigProviderSection(t, provider), "types") != nil {
+		if mustMappingValue(t, realConfigProviderSection(t, provider), "types") != nil {
 			t.Errorf("%s now declares a `types` section; its type_raw arm was dead and "+
 				"NormalizeType's default was the only reachable answer for a raw type",
 				provider)
@@ -221,7 +241,7 @@ func TestRealConfigTypeSectionsThatDoNotExist(t *testing.T) {
 		}
 	}
 
-	if mappingValue(realConfigProviderSection(t, "jira"), "type_labels") != nil {
+	if mustMappingValue(t, realConfigProviderSection(t, "jira"), "type_labels") != nil {
 		t.Error("jira now declares `type_labels`; NormalizeType's label arm could not " +
 			"fire for jira before, and any test relying on that is now weaker")
 	}

@@ -1,0 +1,57 @@
+# PyYAML-1.1 vs go-yaml-1.2 scalar resolution. Every entry here was executed on
+# BOTH engines before being written down; the comment on each line is the
+# PyYAML result, which is what str() -- and therefore the index key -- becomes.
+version: 1
+status_categories:
+  todo:
+    - yes          # PyYAML bool True  -> key "true"   (go-yaml: string "yes")
+    - no           # PyYAML bool False -> key "false"  (go-yaml: string "no")
+    - on           # True
+    - off          # False
+    - Yes          # True  (case variants resolve too)
+    - OFF          # False
+    - true         # True  -- both engines agree here
+    - "yes"        # QUOTED: string "yes" in BOTH engines. Style is why.
+  in_progress:
+    - 010          # PyYAML octal -> 8      (go-yaml also 8: agrees)
+    - 0o10         # PyYAML STRING "0o10"   (go-yaml: int 8 -- diverges)
+    - 0x10         # 16
+    - 0b101        # 5
+    - 1_000        # 1000 (underscores are digit separators)
+    - 12:00:00     # PyYAML sexagesimal int -> 43200 (go-yaml: string)
+    - 12:00        # 720
+    - '010'        # QUOTED: string "010"
+  in_review:
+    - 1e3          # PyYAML STRING "1e3"  -- exponent needs an explicit sign
+    - 1e+3         # PyYAML STRING "1e+3" TOO: the sign is present but the DOT is
+                   # missing, and PyYAML's float pattern requires BOTH. This row is
+                   # what makes the dot clause separately observable from the sign
+                   # clause -- without it, either rule alone still blocks 1e3.
+    - 1.5e8        # PyYAML STRING "1.5e8"
+    - 1.5e-8       # float -> "1.5e-08"
+    - 1.5e+8       # float -> "150000000.0" (fixed, not scientific: exp < 16)
+    - 1.0          # float -> "1.0"
+    - .5           # float -> "0.5"
+    - 12:00:00.5   # sexagesimal float -> "43200.5"
+    - 1.0e+15      # "1000000000000000.0" -- FIXED: exponent 15 is below the switch
+    - 1.0e+16      # "1e+16" -- SCIENTIFIC: CPython switches at exponent >= 16
+    - 1.0e-4       # "0.0001" -- fixed
+    - 1.0e-5       # "1e-05" -- scientific: exponent < -4
+  blocked:
+    - .inf         # float inf  -> "inf"   (Go %g would say "+Inf")
+    - .nan         # float nan  -> "nan"   (Go %g would say "NaN" -> "NaN.0")
+    - -.inf        # "-inf"
+    - .INF         # "inf"
+  done:
+    - null         # None -> "None"
+    - ~            # None -> "None"
+  canceled:
+    # Nested containers are repr()'d, and repr uses SINGLE quotes with a space
+    # after the colon. This is the same shape as the CHAOS-3512 misparse.
+    - {a: 1, b: yes}
+    - [1, 2.0, no]
+    - {nested: {deep: .inf}}
+    # repr() escapes control characters; str() on a bare string would not, so
+    # this only exercises the escape because it is NESTED inside a mapping.
+    - {ctl: "a\u0001b"}
+providers: {}

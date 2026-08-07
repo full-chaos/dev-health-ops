@@ -91,3 +91,5 @@ Use [Diagnose no or incomplete data](../troubleshooting/no-or-incomplete-data.md
 - [Read Quadrants](quadrants.md)
 - [Investigate review pressure](review-pressure.md)
 - [Follow relationships in Work Graph](../code-and-relationships/work-graph.md)
+
+Use this view to compare review latency across teams and spot the slowest reviewers.

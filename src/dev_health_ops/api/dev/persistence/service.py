@@ -1072,6 +1072,7 @@ async def _authorize_clarification_candidates(
     org_id: uuid.UUID,
     user_id: uuid.UUID,
     validated: DevAnswerFrameContract,
+    authorizing_mention_id: uuid.UUID | None,
 ) -> None:
     """CHAOS-3325 Codex review (NO-SHIP, confirmed medium): a schema-valid
     ``clarification_candidates`` entry only proves *shape*, not provenance --
@@ -1085,28 +1086,50 @@ async def _authorize_clarification_candidates(
     test pair can prove this specific check, not the whole of
     ``record_frame``, is what rejects an unauthorized candidate.
 
-    The run's ``ambiguous_candidates`` resolution-ledger entry is **always**
-    fetched, regardless of whether the frame's own
-    ``clarification_candidates`` is empty (Codex review round 2, confirmed
-    medium: the round-1 early return on an empty frame tuple let an internal
-    caller silently *downgrade* canonical state -- persist ``needs_
-    clarification`` with zero candidates for a run whose ledger genuinely
-    recorded several, hiding the real choices the resolver offered from
-    every future reader of this "canonical" v2 row):
+    ``authorizing_mention_id`` is the mention whose ambiguity actually
+    terminated the run -- ``SubjectPreflightResult.terminating_resolution_
+    entry.mention_id``, threaded from the one caller that has it. It is
+    named rather than inferred (CHAOS-3533).
 
-    * **No ledger entry recorded at all** (e.g. the question could not be
-      interpreted -- ``build_preflight_answer`` never calls
-      ``append_resolution`` for that case): the frame's candidates must be
-      empty too. Non-empty here means the frame is claiming candidates
-      nothing authorized, and is rejected exactly like a mismatch below.
-    * **A ledger entry exists**: the frame's candidates must equal it
-      exactly, in the same order, element for element -- including
-      non-emptiness. An empty frame against a non-empty ledger entry is now
-      rejected (the round-2 fix): under-disclosure is no longer assumed
+    Until CHAOS-3533 this function guessed: it took the HIGHEST-ordinal
+    ``ambiguous_candidates`` row for the run. That guess was only ever
+    correct because a preflight TERMINATE persisted at most ONE ledger row,
+    so at most one ambiguous row could exist. Once the TERMINATE branch
+    began persisting the whole ledger -- so that a run which declined to
+    answer can evidence what it resolved -- a run can hold an ambiguous row
+    for a mention that was NOT the one it terminated on, and the guess
+    silently authorized the frame against the wrong mention. Naming the
+    mention makes the check strictly stronger than the ordinal heuristic it
+    replaces: it can no longer be satisfied by any ambiguous row that
+    happens to sort last.
+
+    The frame's ``clarification_candidates`` is checked in **both**
+    directions whenever a terminating mention is named, regardless of
+    whether that tuple is empty (Codex review round 2, confirmed medium:
+    the round-1 early return on an empty frame tuple let an internal caller
+    silently *downgrade* canonical state -- persist ``needs_clarification``
+    with zero candidates for a run whose ledger genuinely recorded several,
+    hiding the real choices the resolver offered from every future reader of
+    this "canonical" v2 row):
+
+    * **No terminating mention named** (``authorizing_mention_id`` is
+      ``None``): the run offered no clarification, so the frame's candidates
+      must be empty too. Non-empty here means the frame is claiming
+      candidates nothing authorized, and is rejected exactly like a mismatch
+      below. This covers both the question that could not be interpreted
+      (no ledger at all) and, since CHAOS-3533, every terminal whose ledger
+      holds ambiguous rows for mentions the run never offered.
+    * **A terminating mention is named**: that mention's own
+      ``ambiguous_candidates`` row must exist, and the frame's candidates
+      must equal it exactly, in the same order, element for element --
+      including non-emptiness. An empty frame against a non-empty ledger
+      entry is rejected (the round-2 fix): under-disclosure is not assumed
       safe once a real ledger row exists to compare against, because that
-      row is exactly the canonical-state-downgrade signal above.
+      row is exactly the canonical-state-downgrade signal above. A named
+      mention with no matching row is rejected too -- an offer whose
+      authorizing record is missing is not an offer.
 
-    ``orchestrator.run`` persists the ledger entry via ``append_resolution``
+    ``orchestrator.run`` persists the ledger via ``append_resolution``
     immediately before calling ``record_frame`` for this outcome (see
     ``SubjectPreflightResult.terminating_resolution_entry``), so both fetch
     outcomes above correspond to a real caller state, never an artifact of
@@ -1127,24 +1150,72 @@ async def _authorize_clarification_candidates(
     (``xfail(strict=True)``, flips loudly once CHAOS-3330 lands).
     """
 
+    if authorizing_mention_id is None:
+        # No mention terminated this run with a candidate offer, so there is
+        # nothing for a candidate list to be authorized against and a
+        # non-empty one is a claim nothing backs.
+        #
+        # CHAOS-3533: this branch is reached by runs whose ledger DOES hold
+        # ambiguous_candidates rows -- a cohort that omitted an ambiguous
+        # member (subject_preflight's ambiguous_mention_ids partition), or a
+        # not-found mention at a lower ordinal than an ambiguous one. Since
+        # the TERMINATE branch began persisting its whole ledger, those rows
+        # are real and visible here, and the previous "highest-ordinal
+        # ambiguous row for this run" query would have compared the frame
+        # against a mention the run never offered the user -- rejecting the
+        # frame and rolling back an ordinary not-found terminal. Observed,
+        # not theorized: test_chaos_3533_ambiguous_non_terminating_mention_
+        # never_poisons_the_frame fails with an empty ledger AND zero frame
+        # rows against the whole-ledger write alone.
+        if validated.clarification_candidates:
+            raise DevPersistenceValidationError(
+                "frame_payload.clarification_candidates is non-empty but this "
+                "run recorded no terminating ambiguous_candidates resolution "
+                "ledger entry to authorize it"
+            )
+        if validated.public_outcome.value != "needs_clarification":
+            # Not an offer, so an ambiguous row belonging to some OTHER
+            # mention says nothing about this frame. This is the branch the
+            # whole-ledger write made reachable.
+            return
+        # A needs_clarification frame IS an offer. One that shows nothing and
+        # names no mention, for a run whose ledger recorded an offer, is the
+        # CHAOS-3325 round-2 canonical-state downgrade -- preserved here
+        # rather than lost to the mention_id refactor. Deliberately keyed on
+        # the frame's own outcome and not on "does any ambiguous row exist",
+        # which is what would falsely reject the not-found terminal above.
+        downgraded = await session.scalar(
+            select(DevRunResolution).where(
+                DevRunResolution.run_id == run_id,
+                DevRunResolution.org_id == org_id,
+                DevRunResolution.user_id == user_id,
+                DevRunResolution.outcome == "ambiguous_candidates",
+            )
+        )
+        if downgraded is not None:
+            raise DevPersistenceValidationError(
+                "frame_payload.clarification_candidates is empty and names no "
+                "terminating mention, but this run recorded an "
+                "ambiguous_candidates resolution ledger entry -- persisting it "
+                "would hide the choices the resolver actually offered"
+            )
+        return
+
     ledger_row = await session.scalar(
-        select(DevRunResolution)
-        .where(
+        select(DevRunResolution).where(
             DevRunResolution.run_id == run_id,
             DevRunResolution.org_id == org_id,
             DevRunResolution.user_id == user_id,
             DevRunResolution.outcome == "ambiguous_candidates",
+            DevRunResolution.mention_id == authorizing_mention_id,
         )
-        .order_by(DevRunResolution.entry_ordinal.desc())
     )
     if ledger_row is None:
-        if validated.clarification_candidates:
-            raise DevPersistenceValidationError(
-                "frame_payload.clarification_candidates is non-empty but this "
-                "run has no recorded ambiguous_candidates resolution ledger "
-                "entry to authorize it"
-            )
-        return
+        raise DevPersistenceValidationError(
+            "frame_payload.clarification_candidates names a terminating "
+            "mention with no matching ambiguous_candidates resolution ledger "
+            "entry to authorize it"
+        )
     try:
         ledger_entry = DevResolutionEntryContract.model_validate(ledger_row.payload)
     except PydanticValidationError as exc:
@@ -2964,6 +3035,7 @@ class DevPersistenceService:
         frame_id: uuid.UUID,
         public_outcome: str,
         payload: Mapping[str, Any],
+        authorizing_mention_id: uuid.UUID | None = None,
     ) -> DevAnswerFrame:
         """Persist the canonical ``dev_answer_frame.v1`` for one run.
 
@@ -3097,6 +3169,7 @@ class DevPersistenceService:
                 org_id=org_id,
                 user_id=user_id,
                 validated=validated,
+                authorizing_mention_id=authorizing_mention_id,
             )
             record = await self._construct_validated_payload_row(
                 model_cls=DevAnswerFrame,

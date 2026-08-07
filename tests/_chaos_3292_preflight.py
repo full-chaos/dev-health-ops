@@ -393,6 +393,10 @@ class Recorder:
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
         self.resolutions: list[Any] = []
+        #: CHAOS-3533: the ``authorizing_mention_id`` passed alongside each
+        #: recorded frame -- ``None`` for every terminal that made no
+        #: clarification offer, which is itself the assertable claim.
+        self.record_frame_authorizing_mention_ids: list[str | None] = []
         #: CHAOS-3389: every QUA shadow record this recorder was asked to
         #: persist. Empty whenever the shadow seam is unwired/disabled --
         #: exactly the RED test's own assertion surface.
@@ -434,8 +438,18 @@ class Recorder:
         self.resolutions.append(entry)
         self.call_order.append("append_resolution")
 
-    async def record_frame(self, frame: Any) -> None:
+    async def record_frame(
+        self, frame: Any, *, authorizing_mention_id: str | None = None
+    ) -> None:
         self.frames.append(frame)
+        #: CHAOS-3533: captured, not discarded -- this is the mention whose
+        #: ambiguity terminated the run, and a test that wants to prove the
+        #: orchestrator names the RIGHT one (rather than merely names one)
+        #: needs it here. Note the orchestrator wraps this call in a broad
+        #: `except Exception` intended for database faults, so a fake that
+        #: rejected this keyword would have its TypeError swallowed and would
+        #: report a missing frame instead of a signature mismatch.
+        self.record_frame_authorizing_mention_ids.append(authorizing_mention_id)
         self.call_order.append("record_frame")
 
     async def rollback(self) -> None:

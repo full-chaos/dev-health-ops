@@ -95,7 +95,16 @@ class Recorder:
     async def append_resolution(self, entry: Any) -> None:
         self.resolutions.append(entry)
 
-    async def record_frame(self, frame: Any) -> None:
+    async def record_frame(
+        self, frame: Any, *, authorizing_mention_id: str | None = None
+    ) -> None:
+        # CHAOS-3533: accepted so this fake keeps structurally satisfying the
+        # real RunRecorder protocol -- which mypy checks here, and which is
+        # the only reason the signature drift was caught at all: the
+        # orchestrator wraps record_frame in a broad `except Exception` meant
+        # for database faults, so a fake that rejected this keyword would
+        # have had its TypeError swallowed and reported a missing frame.
+        del authorizing_mention_id
         if self.fail_frame_write:
             raise RuntimeError("frame storage unavailable")
         self.frames.append(frame)

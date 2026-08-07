@@ -954,6 +954,13 @@ async def test_record_frame_accepts_clarification_candidates_matching_the_ledger
             frame_id=uuid.UUID(frame_payload["frame_id"]),
             public_outcome="needs_clarification",
             payload=frame_payload,
+            # CHAOS-3533: the offer's own mention is now NAMED rather than
+            # inferred from "the highest-ordinal ambiguous row for this run".
+            # What this test asserts is unchanged -- candidates matching the
+            # run's own ledger entry persist cleanly -- but the entry is now
+            # identified, so this positive control can no longer be satisfied
+            # by an unrelated ambiguous row that happens to sort last.
+            authorizing_mention_id=mention_id,
         )
         assert record.public_outcome == "needs_clarification"
         assert record.payload["clarification_candidates"] == candidates
@@ -1076,6 +1083,12 @@ async def test_record_frame_persists_the_authorized_snapshot_not_the_caller_mapp
             frame_id=uuid.UUID(frame_payload["frame_id"]),
             public_outcome="needs_clarification",
             payload=frame_payload,
+            # CHAOS-3533: names the mention whose row the wrapped-but-real
+            # authorization above authorizes against. The mutation window
+            # this test reproduces is unchanged -- authorization genuinely
+            # runs and returns, and only then is the caller's mapping
+            # mutated.
+            authorizing_mention_id=mention_id,
         )
 
         # The caller's mapping really was mutated -- otherwise the test is
@@ -1354,6 +1367,13 @@ async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_
         # This SHOULD raise once CHAOS-3330 validates append_resolution's
         # payload against the authorized catalog. It does not today, which
         # is exactly the residual seam this test documents.
+        #
+        # CHAOS-3533: the forged mention MUST be named here. Omitting it
+        # would make this test XPASS -- rejected for naming no terminating
+        # mention rather than for the forgery -- and a strict xfail flipping
+        # for the wrong reason reads exactly like CHAOS-3330 landing. The
+        # forged pair must still be presented as a fully self-consistent
+        # offer, which is the whole point of the seam.
         with pytest.raises(DevPersistenceValidationError):
             await service.record_frame(
                 org_id=org_id,
@@ -1362,6 +1382,7 @@ async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_
                 frame_id=uuid.UUID(forged_frame["frame_id"]),
                 public_outcome="needs_clarification",
                 payload=forged_frame,
+                authorizing_mention_id=mention_id,
             )
 
 

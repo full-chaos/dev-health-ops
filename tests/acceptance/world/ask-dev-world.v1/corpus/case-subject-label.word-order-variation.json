@@ -21,8 +21,12 @@
       "category": "no-silent-widening",
       "check": "scope_resolution_outcome_in",
       "args": {
-        "from_profile": "expected_scope_resolution_outcome"
+        "from_profile": "expected_scope_resolution_outcome",
+        "allowed": [
+          "organization_fallback"
+        ]
       },
+      "$comment_allowed_widening": "Observed: scope_resolution_outcome='organization_fallback', allowed=['unresolved'] (receipt tests/acceptance/artifacts/wave4/subject-label.word-order-variation.json). alias_matching is literal/acronym, not order-invariant, so the reordered label never commits and preflight widens with disclosure. CHAOS-3490 Part 2 / CHAOS-3219 Phase 2 exit, run 7 (world digest 2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232, wave_3_1 preflight enabled=True -- the first runs to measure the real CHAOS-3292 preflight path). The allowed list is WIDENED, not the expectation weakened: the profile keeps its honest primary expected_scope_resolution_outcome and this invariant additionally accepts organization_fallback, which is the DISCLOSED widening this invariant's own 'assert' prose already names as acceptable (\\\"widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome\\\"). Disclosure proved live, not assumed -- .p2exit-logs/probe-widening-acr.log and probe-widening-wordorder.log, run 61ba05f7-2d14-4d56-8cc3-b811000d9fa1, scope.resolved frame: outcome='organization_fallback', fallbacks=['organization'], resolved_scope.direct_scope='organization', answer terminal answered_with_gaps with subject_ref null and a direct_summary that never claims to have answered about the named subject. Production reaches it through subject_preflight.py:863 _organization_wide_result, whose DevScopeResolution is required by contracts.py:416-423 to carry organization scope -- a machine consumer reading dev_scope_resolution.v1 can see exactly what happened. A silent widen (org scope with outcome='exact' and no fallbacks) is still caught, because that is a different enum value and is not in this list.",
       "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."

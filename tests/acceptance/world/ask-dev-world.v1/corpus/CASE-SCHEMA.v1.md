@@ -400,7 +400,7 @@ anchors this at the start of the string and raises `CaseSchemaError` on
 anything else. An earlier draft of this doc described a second, free-text
 form (`"runner: <capability gap>"`) for a blocker with no ticket to cite —
 that form is REJECTED by the real loader, not merely discouraged; following
-it would fail the entire corpus load, not just the one case. All 50
+it would fail the entire corpus load, not just the one case. All 53
 declared-blocked cases in this corpus already satisfy the real pattern
 (every "runner capability gap" category was filed as a real ticket instead
 — see `REGISTRY-AMENDMENT.v1.md`'s ticket table, e.g.

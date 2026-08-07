@@ -13,6 +13,11 @@
   "user_alias": "primary.ordinary-5",
   "subject_class": "exact",
   "subject_ref": null,
+  "expected_mention_texts": [
+    "meridian/web-app",
+    "ci"
+  ],
+  "$comment_expected_mention_texts": "Producer output for 'Is the repo \"meridian/web-app\"'s CI passing, definitively?': mention 0 = 'meridian/web-app' (requested_entity_kind=repository), mention 1 = 'ci' (untyped bare name, defaulted to project). CHAOS-3490 Part 2 / CHAOS-3219 Phase 2 exit, run 7 (world digest 2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232). This case declared NO expected_mention_texts, so the runner never called attach_mention_texts and the ledger's single-shot exact_match entry reached derive_resolution_path with mention_text=None: resolution_path_classifiable FAILED with \"resolved to exact_match on its first entry with no prior candidate offer, but no mention_text/committed_label was supplied\", and resolution_path_measured FAILED with absence reason 'unclassifiable-resolution-ledger'. The two existing guards could not catch it: case_schema.py:243-256 only requires spans from cases that declare a resolution_path_in invariant (removed from this case by the CHAOS-3462 B6 ruling), and TestDeclaredMentionTextsMatchTheProducer only checks cases that already declare spans. Values below are GENERATED FROM THE PRODUCER, never hand-authored: QuestionInterpreter().interpret(request) was executed against this case's exact question text and the values are [m.normalized_lookup_text for m in interpreted.mentions], in interpreter order -- which is the same equality the corpus guard test now asserts for this case. Declaring them does NOT force the run green: mention 2 still never commits, so derive_resolution_path returns 'miss-clarification' rather than the profile's honest 'deterministic-exact'. That is the whole-run-scalar limitation the CHAOS-3462 B6 team-lead ruling already dispositioned by REMOVING resolution_path_in from this case while keeping the honest expectation. What changes is only that the ledger becomes CLASSIFIABLE, so the case measures something trustworthy instead of reporting a broken measurement.",
   "invariants": [
     {
       "category": "terminal-persists-assistant-row",

@@ -88,10 +88,20 @@ func (unit Unit) Validate() error {
 	if unit.SinceAt != nil && unit.BeforeAt != nil && unit.SinceAt.After(*unit.BeforeAt) {
 		return ErrInvalidConfiguration
 	}
-	if unit.AuthSource == "environment" || unit.CredentialID == "" {
+	if unit.AuthSource == "environment" {
 		// Go execution never hydrates credentials through process-global state.
+		// This is where D18's "environment target/token fallback is not part of
+		// the Go route" is actually enforced for every provider, not just
+		// Projects v2: a unit whose credentials would come from process state
+		// never reaches a collector at all.
 		return ErrInvalidConfiguration
 	}
+	// A resolved credential id is REQUIRED, and this is the only clause that
+	// enforces it: uuid.Parse rejects "" as readily as it rejects garbage. The
+	// separate `unit.CredentialID == ""` test that used to sit above was the
+	// twin of one removed from the Projects v2 fetcher for the same reason --
+	// it could never decide on its own, so its mutation was unkillable and it
+	// read as coverage while proving nothing.
 	if _, err := uuid.Parse(unit.CredentialID); err != nil {
 		return ErrInvalidConfiguration
 	}

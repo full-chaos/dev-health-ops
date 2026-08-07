@@ -39,7 +39,9 @@ not in the orchestrator.
 
 from __future__ import annotations
 
+import logging
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -116,6 +118,19 @@ def _recorder_factory(
         )
 
     return factory
+
+
+class _LedgerWriteFailsRecorder(PersistenceRunRecorder):
+    """A real recorder whose ledger write raises, and nothing else.
+
+    Deliberately a REAL ``PersistenceRunRecorder`` subclass rather than a
+    fake: everything except ``append_resolution`` must behave exactly as
+    production does, or the test proves something about a stub instead of
+    about the orchestrator's failure handling.
+    """
+
+    async def append_resolution(self, entry: Any) -> None:
+        raise RuntimeError("resolution ledger storage unavailable")
 
 
 async def _ledger_rows(session, run_id: uuid.UUID) -> list[DevRunResolution]:
@@ -483,3 +498,106 @@ async def test_chaos_3325_ambiguous_terminate_still_authorizes_its_candidates(
             candidate["entity_ref"]["entity_id"]
             for candidate in rows[0].payload["candidates"]
         ]
+
+
+@pytest.mark.asyncio
+async def test_chaos_3533_a_failed_ledger_write_still_leaves_a_terminal_frame(
+    seeded,  # noqa: F811
+    caplog,
+) -> None:
+    """Codex adversarial review, HIGH, CONFIRMED BY EXECUTION and fixed here.
+
+    The TERMINATE branch wrote the ledger and the frame inside ONE
+    try/except, then called ``finish(frame_already_recorded=True)``
+    unconditionally. So if an ``append_resolution`` raised, control jumped to
+    the ``except``, ``record_frame`` never ran -- and ``finish`` was still
+    told the frame had already been recorded, so it skipped building the v1
+    compatibility frame too. The run landed with no ledger AND no
+    ``dev_answer_frames`` row.
+
+    Reachability is what this change introduced: before it, a not-found or
+    committed-cohort terminate called ``append_resolution`` ZERO times, so it
+    could not fail there and always got its frame. Widening the ledger write
+    to every terminate widened this failure mode to every terminate with it
+    -- turning a hardening change into a new way to lose a terminal under
+    stress, which is precisely the class CHAOS-3533 exists to close.
+
+    The two writes are now separated. A ledger fault is logged and counted
+    like its PROCEED-branch sibling (CHAOS-3424 round 3 made exactly this
+    argument: "a lost ledger left no log line and no metric, so the exact
+    forensic gap this exists to close could itself go unnoticed"), and
+    ``frame_already_recorded`` now reports what actually happened, so
+    ``finish`` builds the compatibility frame CHAOS-3297 P1 says every
+    terminal path must have "structurally rather than by caller discipline".
+
+    Asserted on observable state -- a frame row exists, and an operational
+    signal was emitted -- never on the absence of an exception, which a
+    swallowed rollback would satisfy while losing everything.
+    """
+
+    maker, org_id, user_id = seeded
+    question = "What is the status of the Nightfall project?"
+    conversation_id, run_id = await _seed_run(maker, org_id, user_id, question=question)
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+
+        def recorder_factory() -> Recorder:
+            return _LedgerWriteFailsRecorder(  # type: ignore[return-value]
+                service,
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                provider_source="platform",
+            )
+
+        with caplog.at_level(logging.ERROR):
+            output = await run_preflight_orchestrator(
+                question=question,
+                entities=[(str(org_id), ASK_DEV_PROJECT)],
+                org_id=str(org_id),
+                user_id=str(user_id),
+                conversation_id=str(conversation_id),
+                run_id=str(run_id),
+                answer_id=str(uuid.uuid4()),
+                script_id="chaos-3533-ledger-fault",
+                recorder_factory=recorder_factory,
+            )
+        await session.commit()
+
+        # Setup control: the ledger write really did fail, so the assertions
+        # below are about the failure path and not the happy one.
+        assert await _ledger_rows(session, run_id) == []
+
+        # The run is still a coherent terminal, not stranded.
+        assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
+        assert output.result.error is not None
+
+        frame_rows = (
+            await session.scalars(
+                select(DevAnswerFrame).where(DevAnswerFrame.run_id == run_id)
+            )
+        ).all()
+        assert len(frame_rows) == 1, (
+            "CHAOS-3297 P1: every terminal path persists a dev_answer_frame.v1. "
+            "A ledger-write fault must cost the ledger, never the frame as "
+            f"well -- got {len(frame_rows)} frame rows."
+        )
+
+        # And the dropped ledger must be visible to an operator rather than
+        # silent -- the CHAOS-3424 round-3 argument, applied to this branch.
+        assert any(
+            "resolution_ledger_write_fault" in record.message
+            for record in caplog.records
+        ), (
+            "a dropped resolution ledger must emit its own operational "
+            "signal; silence here is how the forensic gap CHAOS-3533 closes "
+            "would itself go unnoticed"
+        )
+
+        # The closed-vocabulary explanation of WHY the run terminated must
+        # survive the rollback that discarded it.
+        run_row = await session.get(DevRun, run_id)
+        assert run_row is not None
+        assert run_row.preflight_outcome == "unresolved_no_authorized_match"

@@ -2242,6 +2242,51 @@ class DevOrchestrator:
                         if preflight_result.ledger is not None:
                             for resolution_entry in preflight_result.ledger.entries:
                                 await self._recorder.append_resolution(resolution_entry)
+                    except Exception as terminate_ledger_write_fault:
+                        # Codex adversarial review (HIGH, CONFIRMED BY
+                        # EXECUTION): the ledger write and the frame write
+                        # shared ONE try/except, and the finish() below was
+                        # told `frame_already_recorded=True` unconditionally.
+                        # A failing append_resolution therefore skipped
+                        # record_frame AND suppressed the v1 compatibility
+                        # frame finish() would otherwise build -- the run
+                        # landed with no ledger and no dev_answer_frames row.
+                        #
+                        # Reachability is what THIS change introduced: before
+                        # it a not-found or committed-cohort terminate called
+                        # append_resolution zero times, so it could not fail
+                        # here and always kept its frame. Widening the ledger
+                        # write to every terminate would have widened that
+                        # failure mode with it -- a hardening change that
+                        # invents a new way to lose a terminal under stress is
+                        # the very class CHAOS-3533 exists to close.
+                        #
+                        # Split out, and given the same operational signal its
+                        # PROCEED-branch sibling already carries (CHAOS-3424
+                        # round 3: a lost ledger that logs nothing means the
+                        # forensic gap it closes can itself go unnoticed).
+                        logger.exception(
+                            "ask_dev.orchestrator.resolution_ledger_write_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(
+                                    terminate_ledger_write_fault
+                                ).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(terminate_ledger_write_fault).__name__
+                        ).inc()
+                        await self._recorder.rollback()
+                        # The rollback discards the record_preflight()
+                        # diagnostic flushed above, which shares this same
+                        # transaction -- re-persisted for exactly the reason
+                        # the frame handler below re-persists it.
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
+                    try:
                         await self._recorder.record_frame(
                             preflight_result.answer.frame,
                             authorizing_mention_id=(
@@ -2279,6 +2324,22 @@ class DevOrchestrator:
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=preflight_error,
+                        # Deliberately still unconditional, and NOT switched to
+                        # "did the frame actually land". Making it honest was
+                        # tried and reverted: when record_frame ITSELF is what
+                        # failed, finish() would retry the same doomed insert,
+                        # fail again, and roll back the record_preflight()
+                        # diagnostic the handler above just re-persisted --
+                        # regressing the CHAOS-3297 guarantee that a run never
+                        # loses its closed-vocabulary reason for terminating
+                        # (caught by test_preflight_frame_flush_failure_reaches
+                        # _terminal_state_not_stranded, which is exactly why
+                        # that test exists). The Codex HIGH is closed by the
+                        # SPLIT above instead: a ledger fault no longer skips
+                        # record_frame, so the frame lands on the path that
+                        # previously lost it. A frame-write fault remains what
+                        # CHAOS-3297 decided it should be -- a dropped frame,
+                        # never a stranded run and never a lost diagnostic.
                         frame_already_recorded=True,
                         extra_attested=candidate_attestation,
                     )

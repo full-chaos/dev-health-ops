@@ -1171,13 +1171,29 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
 ):
     """The other half of the same guard: a ledger entry does exist for this
     run, but the frame's candidates diverge from it (a different entity, or
-    a different order) -- rejected exactly like the missing-entry case."""
+    a different order) -- rejected exactly like the missing-entry case.
+
+    CHAOS-3533, Codex adversarial review (MEDIUM, confirmed): this test had
+    gone VACUOUS. Once ``record_frame`` began taking an explicit
+    ``authorizing_mention_id``, omitting it meant the ``None`` guard rejected
+    the frame before the ledger row was ever fetched -- so the test still
+    passed while proving nothing about the equality comparison it exists for.
+    A regression in either the mention-bound query or the candidate
+    comparison would have gone unnoticed. The mention is now named.
+
+    A SECOND ambiguous row is seeded at a HIGHER ordinal whose candidates
+    match the frame exactly. Under the pre-CHAOS-3533 "highest-ordinal
+    ambiguous row for this run" heuristic that row would be selected and the
+    frame would be ACCEPTED -- so this test now also proves the service
+    consults the mention it was given rather than whichever row sorts last.
+    """
 
     maker, org_id, _other_org, user_id, _other_user = persistence
     async with maker() as session:
         service = DevPersistenceService(session)
         _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
         mention_id = uuid.uuid4()
+        other_mention_id = uuid.uuid4()
 
         frame_payload = _needs_clarification_frame_payload(
             run_id=run_id, with_candidates=True
@@ -1198,6 +1214,21 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
                 mention_id=mention_id, candidates=ledger_candidates
             ),
         )
+        # The decoy: a later, unrelated ambiguous mention whose candidates DO
+        # match the frame. Selecting by ordinal would find this one and pass.
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            entry_ordinal=1,
+            mention_id=other_mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=other_mention_id,
+                candidates=deepcopy(frame_payload["clarification_candidates"]),
+            ),
+        )
 
         with pytest.raises(
             DevPersistenceValidationError, match="clarification_candidates"
@@ -1209,6 +1240,7 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
                 frame_id=uuid.UUID(frame_payload["frame_id"]),
                 public_outcome="needs_clarification",
                 payload=frame_payload,
+                authorizing_mention_id=mention_id,
             )
 
         frame_count = await session.scalar(

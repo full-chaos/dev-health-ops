@@ -331,9 +331,25 @@ def disclose_subject_match(answer: DevAnswer, *, span: str, label: str) -> DevAn
     sentence = subject_matched_disclosure(span=span, label=label)
     if sentence in answer.warnings:
         return answer
-    if len(answer.warnings) >= _MAX_ANSWER_WARNINGS:
-        return answer
-    return answer.model_copy(update={"warnings": [*answer.warnings, sentence]})
+    # Unlike the widening disclosure above, this one is NOT best-effort: it
+    # takes the last slot rather than yielding it.
+    #
+    # `warnings` is bounded at twenty. Yielding at that bound meant a
+    # QUA-committed subject could reach a reader with no disclosure at all
+    # while the commit still stood -- a silent, model-chosen subject, which
+    # is the precise failure this whole path is gated to prevent, reachable
+    # with no authorization failure anywhere (adversarial review finding,
+    # reproduced before fixing). Displacing a producer warning is the
+    # cheaper loss by a wide margin: an undisclosed subject is a claim the
+    # reader cannot check, and a dropped twentieth warning is not.
+    #
+    # The disclosure goes FIRST so it is the one a truncating renderer keeps,
+    # and the tail is cut to the contract bound.
+    return answer.model_copy(
+        update={
+            "warnings": [sentence, *answer.warnings][:_MAX_ANSWER_WARNINGS],
+        }
+    )
 
 
 #: The noun used when the question gave no entity noun of its own. Never

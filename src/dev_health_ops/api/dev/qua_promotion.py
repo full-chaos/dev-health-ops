@@ -38,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from .contracts import ScopeResolutionOutcome
 from .contracts_v2.base import Cardinality
 from .contracts_v2.question_understanding import QUAOutcome
 from .contracts_v2.subject import DevResolutionEntry, ResolutionOutcome
@@ -46,8 +47,9 @@ from .scope_service import (
     SEARCHABLE_ENTITY_KINDS,
     AuthorizedEntity,
     EntityKind,
+    ScopeRef,
     ScopeResolutionService,
-    ScopeSearchRequest,
+    ScopeResolveRequest,
 )
 
 # The single producer of the AuthorizedEntity -> DevEntityRefV2 projection.
@@ -175,23 +177,32 @@ async def verify_still_authorized(
     permission_fingerprint: str,
     limit: int,
 ) -> bool:
-    """Re-fetch the authorized shortlist and confirm the entity is in it.
+    """Re-resolve the entity by IDENTITY and confirm this caller may see it.
 
-    Deliberately a fresh authorized lookup rather than a re-read of the
-    record's own ``candidate_entities``. Re-reading the record would only
-    prove the record is self-consistent -- it would pass just as happily if
-    the shortlist that produced it had been built for the wrong tenant, or if
-    a later change let a proposal carry an entity its slice never contained.
-    The question this must answer is "is this entity authorized for THIS
-    caller, right now", and only asking the authorization boundary again
-    answers it.
+    Deliberately an identity resolution, not a re-read of the record's own
+    ``candidate_entities`` and not a fuzzy re-search:
 
-    ``search`` is the same boundary the deterministic resolver uses and it
-    rejects an empty ``org_id``/``permission_fingerprint`` outright, so the
-    tenancy filter cannot be bypassed by an empty argument. The call is
-    served from the request-scoped, ``permission_fingerprint``-keyed cache in
-    the common case, so this costs a dictionary lookup rather than a second
-    catalog round trip.
+    * re-reading the record would only prove the record is self-consistent --
+      it would pass just as happily if the shortlist that produced it had
+      been built for the wrong tenant;
+    * re-searching by the user's text makes authorization depend on how the
+      entity ranked against everything else matching that text. Adversarial
+      review could not rule out a legitimate entity sitting below the
+      candidate cap among enough same-kind matches and being refused. Asking
+      for the entity BY ITS OWN ID removes the question rather than bounding
+      it.
+
+    ``resolve`` is the same authorization boundary the deterministic resolver
+    uses; it rejects an empty ``org_id``/``permission_fingerprint`` outright,
+    and every catalog query behind it is ``WHERE org_id = ...``, so an entity
+    belonging to another tenant resolves as unresolved rather than exact.
+    ``allow_organization_fallback=False`` so an unresolvable ref can never
+    quietly become an organization-scoped "success".
+
+    On the singular path this is the ONLY receipt -- ``committed_resolution_for``
+    mints no ``subject_set_fingerprint`` and the executor's fingerprint
+    cross-check covers only set batches, so nothing downstream re-verifies a
+    singular committed entity.
 
     Returns ``False`` on ANY failure, including an exception from the catalog:
     a verification that could not be performed is not a verification, and the
@@ -202,23 +213,21 @@ async def verify_still_authorized(
     if kind not in SEARCHABLE_ENTITY_KINDS:
         return False
     try:
-        result = await scope_service.search(
-            org_id,
-            permission_fingerprint,
-            ScopeSearchRequest(
-                query=promotion.text_span,
-                kinds=(kind,),
-                limit=limit,
-                allowed_kinds=SEARCHABLE_ENTITY_KINDS,
-                include_alias_matches=True,
+        resolution = await scope_service.resolve(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            request=ScopeResolveRequest(
+                explicit_refs=(ScopeRef(kind, promotion.entity.canonical_id),),
+                allow_organization_fallback=False,
             ),
         )
     except Exception:
         return False
+    if resolution.outcome is not ScopeResolutionOutcome.EXACT:
+        return False
     return any(
-        candidate.kind is kind
-        and candidate.canonical_id == promotion.entity.canonical_id
-        for candidate in result.candidates
+        entity.kind is kind and entity.canonical_id == promotion.entity.canonical_id
+        for entity in resolution.entities
     )
 
 

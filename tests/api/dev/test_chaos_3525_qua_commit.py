@@ -654,3 +654,97 @@ async def test_a_failed_commit_time_check_blocks_the_commit_end_to_end() -> None
         "exactly where the deterministic layer left it"
     )
     assert qua_promotion.QUA_COMMIT_DIAGNOSTIC not in refused.preflight_outcomes()
+
+
+async def test_the_disclosure_survives_a_full_warning_list() -> None:
+    """ "Never silent" has to mean never, including at the contract's bound.
+
+    ``DevAnswer.warnings`` caps at 20. The first cut returned the answer
+    unchanged once that bound was spent, so a QUA-committed subject could
+    reach the user with no disclosure at all while the commit still stood --
+    the exact silent model-chosen subject this design exists to prevent,
+    reachable without any authorization failure. (Adversarial review finding;
+    reproduced directly before fixing.)
+
+    The disclosure wins the last slot. A producer warning is displaced rather
+    than the server's own statement of what the answer is ABOUT, because an
+    undisclosed subject is a claim the reader cannot check and a dropped
+    twentieth warning is not.
+    """
+
+    from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
+    from dev_health_ops.api.dev.contracts import DevAnswer
+    from dev_health_ops.api.dev.no_match_terminal import (
+        disclose_subject_match,
+        subject_matched_disclosure,
+    )
+
+    answer = DevAnswer.model_validate(positive_fixtures()["dev_answer.v1"])
+    saturated = answer.model_copy(
+        update={"warnings": [f"producer warning {index}" for index in range(20)]}
+    )
+
+    disclosed = disclose_subject_match(saturated, span="ACR", label=ACR_PROJECT.label)
+    expected = subject_matched_disclosure(span="ACR", label=ACR_PROJECT.label)
+
+    assert expected in disclosed.warnings
+    assert len(disclosed.warnings) == 20, "the contract bound still holds"
+    # Idempotent at the bound too: disclosing twice must not displace a
+    # second producer warning for a sentence that is already present.
+    assert disclose_subject_match(
+        disclosed, span="ACR", label=ACR_PROJECT.label
+    ).warnings == list(disclosed.warnings)
+
+
+async def test_authorization_is_checked_by_identity_not_by_search_rank() -> None:
+    """A legitimate entity must not be refused for ranking below a cap.
+
+    The re-check used to re-run a fuzzy search and look for the entity among
+    the results, which makes authorization depend on how the entity happened
+    to rank against everything else matching the same text. Adversarial
+    review could not close that: with enough same-kind matches, a genuinely
+    authorized entity can sit below the limit and be refused.
+
+    Resolving the entity by its own identity removes the question entirely --
+    the answer no longer depends on what else matched. Proven with a catalog
+    deliberately stuffed past the candidate cap.
+    """
+
+    from dev_health_ops.api.dev.qua_promotion import (
+        QUAPromotion,
+        verify_still_authorized,
+    )
+
+    # Same-kind entities that match "ACR" the SAME way the real project does
+    # (as an acronym, so they land in the same ranking tier) and whose labels
+    # sort ahead of it, so the real project falls past the candidate cap.
+    crowd = [
+        (
+            ORG_ID,
+            AuthorizedEntity(
+                EntityKind.PROJECT,
+                f"project-crowd-{index:02d}",
+                f"Alpha Content Repository {index:02d}",
+            ),
+        )
+        for index in range(40)
+    ]
+    catalog = SeededCatalog([*crowd, (ORG_ID, ACR_PROJECT)])
+    scope_service = ScopeResolutionService(catalog, cache=ScopeRequestCache())
+
+    authorized = await verify_still_authorized(
+        QUAPromotion(
+            mention_id="mention_01",
+            text_span="ACR",
+            entity=ACR_PROJECT,
+            confidence=0.99,
+        ),
+        scope_service=scope_service,
+        org_id=ORG_ID,
+        permission_fingerprint="permissions_01",
+        limit=25,
+    )
+    assert authorized is True, (
+        "an authorized entity must verify regardless of how many other "
+        "same-kind entities match the same text"
+    )

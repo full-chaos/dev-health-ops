@@ -2570,8 +2570,35 @@ class DevOrchestrator:
                     # is nothing to batch over without a committed
                     # DevSubjectSet, mirroring the SINGULAR branch's
                     # has_committed_subject gate one line up.
+                    #
+                    # CHAOS-3551: and the committed subject set's own KIND
+                    # must be one `plan` actually supports. Before this
+                    # ticket every intent whose vocabulary could classify as
+                    # PORTFOLIO_STATUS only ever reached here with a PROJECT
+                    # subject_set -- subject_preflight's own homogeneous-
+                    # cohort gate committed nothing else under that intent.
+                    # CHAOS-3551 adds a second PROCEED source for the SAME
+                    # (PORTFOLIO_STATUS-classified, PLURAL_COHORT) shape: a
+                    # REPOSITORY cohort, which intent classification alone
+                    # cannot rule out (it is lexical, not kind-aware -- see
+                    # subject_preflight's own PORTFOLIO_STATUS branch
+                    # comment). Without this check, a repository cohort
+                    # phrased like a status question would reach
+                    # `_project_scope_from_ref` -- documented as relying on
+                    # ITS CALLER to restrict `ref.entity_kind` to PROJECT --
+                    # and misrepresent each repository as a same-named
+                    # "project" scope to `PortfolioStatusService.
+                    # evaluate_portfolio`, exactly the "answer about one
+                    # entity under another's name" this module's own
+                    # docstring says it never does. `plan.
+                    # supported_subject_kinds` already declares the right
+                    # answer for every plan; nothing previously read it.
                     plan_eligible = (
-                        plan_eligible and preflight_result.subject_set is not None
+                        plan_eligible
+                        and plan is not None
+                        and preflight_result.subject_set is not None
+                        and preflight_result.subject_set.entity_kind
+                        in plan.supported_subject_kinds
                     )
                 if plan_eligible:
                     assert plan is not None

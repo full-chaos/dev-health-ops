@@ -307,6 +307,21 @@ RELATIONSHIP_MATRIX: dict[SourceClass, RelationshipMatrixEntry] = {
             freshness_policy="deficiency_inventory_freshness.v1",
             evidence_expansion_capability=False,
         ),
+        # CHAOS-3567 (flag-off scaffold, no runtime behavior change): same
+        # "not yet landed, honest empty vocabulary" posture as CODE_CHANGE/
+        # REVIEW/TEST_REPORT/OPERATIONAL_CONTROL/COGNITIVE_LOAD/
+        # INVESTMENT_ALLOCATION above -- no plan or step mints content under
+        # TEMPORAL_CONTEXT yet, so it carries no relationship vocabulary and
+        # is not evidence-expansion capable. Amend when the post-ADR
+        # implementation issue actually wires a plan against it (see
+        # design/CHAOS-3567-ask-dev-temporal-source-design.md).
+        _entry(
+            SourceClass.TEMPORAL_CONTEXT,
+            role="supporting",
+            requirement="not_applicable",
+            freshness_policy="unversioned",
+            evidence_expansion_capability=False,
+        ),
     )
 }
 
@@ -429,6 +444,10 @@ APPROVED_CONTENT_SLOTS: dict[SourceClass, frozenset[str]] = {
         {"health_findings", "portfolio_project_statuses"}
     ),
     SourceClass.DEFICIENCY_INVENTORY: frozenset({"deficiency_findings"}),
+    # CHAOS-3567 (flag-off scaffold) -- no registered step mints content
+    # under TEMPORAL_CONTEXT yet; see the matching RELATIONSHIP_MATRIX entry
+    # above for the full rationale.
+    SourceClass.TEMPORAL_CONTEXT: frozenset(),
 }
 
 _missing_content_slots = set(SourceClass) - set(APPROVED_CONTENT_SLOTS)

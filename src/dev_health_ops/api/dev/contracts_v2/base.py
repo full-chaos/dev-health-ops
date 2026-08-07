@@ -281,6 +281,21 @@ class SourceClass(StrEnum):
     #: ``DeficiencyCategoryStatus``'s per-category evaluated/unevaluated
     #: split) has no ``HealthRuleFinding`` equivalent.
     DEFICIENCY_INVENTORY = "deficiency_inventory"
+    #: CHAOS-3567 (flag-off scaffold, no runtime behavior change): reserves
+    #: the wire vocabulary for the optional temporal-context source class
+    #: CHAOS-3502 (amended 2026-08-07) authorizes designing. Deliberately
+    #: inert as of this member's introduction: no ``DevInvestigationPlan``
+    #: declares a ``DevSourceRequirement`` against it, no ``StepRegistry``
+    #: entry emits content under it, and ``data_health_service.
+    #: NATIVE_EVIDENCE_SOURCES`` does not name it -- see
+    #: ``tests/api/dev/test_chaos_3567_temporal_context_source_class_stub.py``
+    #: for the guard that keeps it that way, and
+    #: ``design/CHAOS-3567-ask-dev-temporal-source-design.md`` for the full
+    #: registry-impact design. Real recognizer/plan/source wiring (the
+    #: acr-precedented ``required=False`` ``DataHealthService`` branch, a
+    #: dedicated plan document, registered steps) stays blocked on the
+    #: CHAOS-3499 ADR and CHAOS-3500/3501 contracts.
+    TEMPORAL_CONTEXT = "temporal_context"
 
 
 #: A **server-minted opaque handle**: the canonical hyphenated UUID form.

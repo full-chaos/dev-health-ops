@@ -525,6 +525,24 @@ class QuestionUnderstandingShadow:
                     limit=self._config.max_candidates_per_mention,
                     allowed_kinds=SEARCHABLE_ENTITY_KINDS,
                     include_alias_matches=True,
+                    # CHAOS-3525: a TYPED mention's own kind ranks first, the
+                    # same key CHAOS-3422 added for the deterministic close-
+                    # match search.
+                    #
+                    # Set now because the shortlist stopped being audit-only.
+                    # While nothing read the record, ordering was cosmetic;
+                    # now the model picks from this list and the list is
+                    # truncated at a cap, so an unranked shortlist can push
+                    # the one real project below issue/PR substring hits --
+                    # which is CHAOS-3422's exact defect re-entering through
+                    # the QUA door after being fixed at the deterministic
+                    # one. An untyped mention names no kind, so it gets no
+                    # preference rather than an invented one.
+                    preferred_kinds=(
+                        frozenset()
+                        if mention.mention_id in untyped_ids
+                        else frozenset(kinds)
+                    ),
                 ),
             )
             return mention.mention_id, result.candidates

@@ -598,3 +598,59 @@ def test_production_requires_both_flags_to_commit(monkeypatch) -> None:
         "the proposal it promotes"
     )
     assert _commit_enabled("1", "1") is True
+
+
+async def test_a_failed_commit_time_check_blocks_the_commit_end_to_end() -> None:
+    """The singular path's ONLY receipt, exercised as the sole guard.
+
+    ``committed_resolution_for`` mints no ``subject_set_fingerprint``, and the
+    executor's fingerprint cross-check covers only SET batches -- so on a
+    singular commit nothing downstream re-verifies the entity. This check is
+    therefore not defence in depth; if it passes something it should not, the
+    subject is committed unverified and no later stage will catch it.
+
+    Asserted end to end rather than as a unit call on the verifier, because
+    the claim is about the ORCHESTRATOR refusing to commit, not about the
+    function returning False. The proposal here is otherwise perfect: right
+    outcome, right entity, confidence well over the floor.
+    """
+
+    from dev_health_ops.api.dev import qua_promotion
+
+    refusals: list[str] = []
+
+    async def _always_refuse(promotion, **_kwargs) -> bool:
+        refusals.append(promotion.entity.canonical_id)
+        return False
+
+    shadow = _selecting_shadow(text_span="ACR", script_id="qua-verify-refuse")
+
+    baseline = await run_preflight_orchestrator(
+        question=ACR_QUESTION,
+        entities=[(ORG_ID, ACR_PROJECT)],
+        script_id="verify-refuse-baseline",
+    )
+
+    import dev_health_ops.api.dev.orchestrator as orchestrator_module
+
+    original = orchestrator_module.verify_still_authorized
+    orchestrator_module.verify_still_authorized = _always_refuse
+    try:
+        refused = await run_preflight_orchestrator(
+            question=ACR_QUESTION,
+            entities=[(ORG_ID, ACR_PROJECT)],
+            script_id="verify-refuse-live",
+            qua_shadow=shadow,
+        )
+    finally:
+        orchestrator_module.verify_still_authorized = original
+
+    assert refusals == [ACR_PROJECT.canonical_id], (
+        "the commit-time check must actually be consulted -- if it were "
+        "skipped this test would pass for the wrong reason"
+    )
+    assert refused.outcome_tuple() == baseline.outcome_tuple(), (
+        "a proposal that failed commit-time authorization must leave the run "
+        "exactly where the deterministic layer left it"
+    )
+    assert qua_promotion.QUA_COMMIT_DIAGNOSTIC not in refused.preflight_outcomes()

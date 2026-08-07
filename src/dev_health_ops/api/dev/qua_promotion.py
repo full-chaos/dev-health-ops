@@ -133,6 +133,15 @@ def promotable_selection(
     # subject answer wearing a confident label.
     if len(record.mentions) != 1:
         return None
+    # Stated rather than left to be discovered: the shortlist is capped at
+    # ``max_total_candidates`` (50) across the WHOLE call, and a mention past
+    # that bound gets an EMPTY slice -- never a partial one straddling the
+    # truncation. So for a question with many mentions, a later mention is
+    # structurally unable to carry a selection: the per-call JSON Schema
+    # bounds its index range to ``[0, -1]``, which no integer satisfies.
+    # That is the correct fail-closed direction (no proposal rather than a
+    # proposal over a truncated list), and it is one more reason a
+    # multi-mention question falls through to clarification above.
     # An organization-wide proposal can name no entity to verify, so there is
     # nothing here to commit even when corroborated; a singular commit is the
     # only shape this promotion has. Checked explicitly rather than left to

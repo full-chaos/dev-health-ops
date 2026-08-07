@@ -39,16 +39,23 @@ explicit alias field distinct from this label-splitting, that field's
 values -- not this module's derived ``literal_aliases`` -- would be the
 input eligible for a different policy.
 
-**Amendment (CHAOS-3525, team-lead ruling 2026-08-07).** The rule above still
-binds every caller in this module's reach, and nothing here auto-commits. One
-narrow path outside it may now commit over a candidate this module derived:
-the Question Understanding Agent's verified proposal (``qua_promotion.py``),
-reached only after the deterministic layer has already declined.
+**Amendment (CHAOS-3525, team-lead ruling 2026-08-07) -- an evidence-class
+distinction, NOT a repeal.** The rule above is unchanged and permanent: a
+DETERMINISTIC alias or acronym match is forbidden from auto-commit, forever.
+Nothing in this module auto-commits, and no future caller of it may.
 
-Recorded here because it amends the default this docstring sets. The
-CHAOS-3289 incident was a *derived string match* standing in for intent --
-"the Legacy project" committing onto whichever entity carried ``(Legacy)`` --
-and a string overlap is not evidence about what a person meant. A model that
+What the amendment adds is a different KIND of evidence, not a relaxation of
+this one. The Question Understanding Agent's verified proposal
+(``qua_promotion.py``) may commit over a candidate this module derived --
+reached only after the deterministic layer has already declined, so the two
+never compete for the same decision.
+
+Recorded here, beside the rule, because a reader who finds only one of the two
+would draw the wrong conclusion either way. The CHAOS-3289 incident was a
+*derived string match* standing in for intent -- "the Legacy project"
+committing onto whichever entity carried ``(Legacy)`` -- and a string overlap
+is not evidence about what a person meant. That reasoning still holds exactly
+as written, which is why the deterministic rule stands. A model that
 has read the question and the candidate labels is a different class of
 evidence, and it is gated as such: the deterministic layer must decline
 first, the proposal must clear a confidence floor, and the entity is

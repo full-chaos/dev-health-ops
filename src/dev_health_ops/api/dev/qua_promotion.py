@@ -138,10 +138,20 @@ def promotable_selection(
     # Stated rather than left to be discovered: the shortlist is capped at
     # ``max_total_candidates`` (50) across the WHOLE call, and a mention past
     # that bound gets an EMPTY slice -- never a partial one straddling the
-    # truncation. So for a question with many mentions, a later mention is
-    # structurally unable to carry a selection: the per-call JSON Schema
-    # bounds its index range to ``[0, -1]``, which no integer satisfies.
-    # That is the correct fail-closed direction (no proposal rather than a
+    # truncation. So for a question with many mentions, a later mention
+    # cannot carry a selection that survives verification.
+    #
+    # CHAOS-3536 corrected the mechanism claimed here. This used to say the
+    # per-call JSON Schema bounded such a mention's index range to
+    # ``[0, -1]``, "which no integer satisfies" -- i.e. that the provider
+    # could not express it. It could: ``_structural_schema`` strips
+    # ``minimum``/``maximum`` before dispatch (CHAOS-3537). The empty
+    # zero-candidate slice is now sent as ``{"type": "null"}``, which does
+    # survive projection, so the schema half is real again for THIS shape --
+    # but the guarantee that has always held is ``_verify``'s, which rejects
+    # any index not in the mention's own slice.
+    #
+    # Either way the direction is fail-closed (no proposal rather than a
     # proposal over a truncated list), and it is one more reason a
     # multi-mention question falls through to clarification above.
     # An organization-wide proposal can name no entity to verify, so there is

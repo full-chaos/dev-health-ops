@@ -16,19 +16,35 @@ class only checks *shape*: is ``selected_candidate_index`` an int or null,
 is ``confidence`` a probability, is ``outcome`` one of three closed values.
 Whether a given index actually falls within the specific shortlist shown for
 that mention is a **per-call** fact this static schema cannot know (two
-different questions show different candidate counts) -- that bound is
-enforced two other ways, both in ``qua_shadow.py``:
+different questions show different candidate counts).
 
-1. The wire-level JSON Schema handed to the provider (``_response_schema``)
-   bounds every index field to ``[0, total_candidates - 1]`` for THIS call,
-   built fresh per call. A provider honoring the schema cannot even
-   *generate* an out-of-range integer, and when there are zero authorized
-   candidates the bound is ``[0, -1]`` -- empty, so no integer satisfies it.
-2. ``_verify`` re-checks every index against the exact per-mention slice
-   after parsing, in case a provider does not honor the schema strictly.
-   A violation there marks that one mention's proposal ``rejected``, never
-   the whole record, and it is never a live-path decision either way --
-   shadow mode never acts on any of this.
+**That bound is enforced in exactly ONE place: ``qua_shadow._verify``.**
+This docstring used to list two enforcement points and present them as
+defence in depth. That was wrong, and CHAOS-3536 corrected it:
+
+1. ``_verify`` re-checks every index against the exact per-mention slice
+   after parsing, independent of whether the provider honored anything.
+   A violation marks that one mention's proposal ``rejected``, never the
+   whole record. CHAOS-3525 additionally hardened the singular commit path
+   to resolve by identity, so this is a strong check -- but it is the only
+   one, and a change that weakens it is not backstopped by anything.
+2. The wire-level JSON Schema was the claimed second enforcement point:
+   ``_response_schema`` bounds every index field to
+   ``[0, total_candidates - 1]``, so a provider honoring the schema could
+   not generate an out-of-range integer. **Those bounds never reached a
+   provider.** ``OpenAICompatibleAgentProvider`` projects every schema
+   through ``_structural_schema``, which keeps only
+   ``_STRUCTURAL_SCHEMA_KEYS`` -- ``minimum``/``maximum``/``minItems``/
+   ``maxItems``/``maxLength`` are not in it and are stripped before
+   dispatch. Verified by executing ``build_completion_request``, not by
+   reading it. Tracked as CHAOS-3537.
+
+The one structural bound that DOES survive projection is the zero-candidate
+case: with nothing authorized, ``selected_candidate_index`` is sent as
+``{"type": "null"}``, so no index is expressible at all. ``candidate_indices``
+has no equivalent -- it is a non-optional tuple here, so a null would fail
+parsing -- and is therefore unbounded on the wire and rejected only by
+``_verify``.
 """
 
 from __future__ import annotations
@@ -49,9 +65,13 @@ __all__ = [
 
 QUESTION_UNDERSTANDING_SCHEMA_VERSION = "dev_question_understanding.v1"
 
-#: Bound applied to every candidate-index field regardless of shortlist size
-#: (belt: the wire schema's own per-call bound is tighter; this is the
-#: absolute ceiling a hand-authored ``max_length``/``le`` must never exceed).
+#: Bound applied to every candidate-index field regardless of shortlist size.
+#:
+#: CHAOS-3536: this used to call itself the "belt" to the wire schema's
+#: tighter per-call bound. There is no such braces -- the wire bound is
+#: stripped by the provider projection (CHAOS-3537), so for a non-empty
+#: shortlist this ceiling and ``_verify`` are what exist. Kept as the
+#: absolute ceiling a hand-authored ``max_length``/``le`` must never exceed.
 _MAX_MENTIONS = 25
 _MAX_CANDIDATE_INDICES = 25
 

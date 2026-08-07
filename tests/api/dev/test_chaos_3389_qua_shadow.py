@@ -334,7 +334,16 @@ async def test_a_shadow_component_that_raises_outright_still_never_affects_the_r
 
 
 # ---------------------------------------------------------------------------
-# Never-widen holds structurally, even against a malicious/buggy provider
+# Never-widen holds AT RUNTIME, against a malicious/buggy provider
+#
+# CHAOS-3536 corrected this heading. It used to say "structurally", on the
+# strength of _response_schema's per-call index bounds -- but those bounds
+# are stripped by the provider's _structural_schema projection and have
+# never reached a decoder (CHAOS-3537). Every test below drives a scripted
+# provider that ignores the schema entirely, which is exactly the right
+# shape for the guarantee that actually exists: _verify is the sole guard,
+# and these are its proofs. Nothing here ever demonstrated a wire-level
+# bound, so nothing below changes -- only the claim above it.
 # ---------------------------------------------------------------------------
 
 
@@ -421,10 +430,22 @@ async def test_an_index_outside_the_mentions_own_shortlist_is_rejected_not_trust
 async def test_zero_authorized_candidates_makes_every_index_structurally_inexpressible() -> (
     None
 ):
-    """When a mention has no authorized candidates at all, the wire schema's
-    own bound is [0, -1] -- no integer satisfies it. A provider that ignores
-    the schema and returns index 0 anyway is still caught by the runtime
-    verifier."""
+    """A provider that returns index 0 with nothing authorized is rejected.
+
+    The name is accurate, but CHAOS-3536 changed WHY. This docstring used to
+    say the wire schema's bound was ``[0, -1]``, an empty range no integer
+    satisfies. That range never reached a provider -- ``_structural_schema``
+    strips ``minimum``/``maximum`` before dispatch, so the wire said
+    ``{"type": ["integer", "null"]}`` and any integer was expressible
+    (CHAOS-3537). The zero-candidate case is now encoded as
+    ``{"type": "null"}``, which survives the projection, so the index really
+    is structurally inexpressible -- see
+    ``test_chaos_3536_qua_strict_schema.py``, which asserts that on the
+    PROJECTED schema rather than the generator's output.
+
+    What THIS test proves is the runtime half, and it is the half that has
+    always been load-bearing: the scripted provider ignores the schema
+    completely and returns index 0 anyway, and ``_verify`` rejects it."""
 
     catalog = _catalog([])  # nothing authorized in this org at all
     scope_service = ScopeResolutionService(catalog, cache=ScopeRequestCache())

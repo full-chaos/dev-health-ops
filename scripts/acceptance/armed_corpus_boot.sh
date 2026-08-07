@@ -47,10 +47,28 @@ unset \
 # a DIFFERENT checkout than the one under test -- the compose
 # --project-directory decides the /app bind mount.
 ops_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-web_root="${ASK_DEV_WEB_CONTEXT:-$(cd -- "${ops_root}/../web" 2>/dev/null && pwd || true)}"
+# Locating the web checkout has TWO layouts to satisfy, and the obvious one is
+# wrong for the case this script is actually used in. `${ops_root}/../web` holds
+# for the main checkout (ops/../web), but a git WORKTREE lives at
+# ops-worktrees/<name>/, so the same expression resolves to the non-existent
+# ops-worktrees/web -- and the armed run is normally driven FROM a worktree.
+# Found by running it: the first boot on 2026-08-07 died exit 64 here.
+#
+# So fall back to the repo's COMMON dir, which points at the main checkout's
+# .git regardless of which worktree is running: <common>/../../web.
+web_root="${ASK_DEV_WEB_CONTEXT:-}"
+if [[ -z "${web_root}" ]]; then
+  web_root="$(cd -- "${ops_root}/../web" 2>/dev/null && pwd || true)"
+fi
 if [[ -z "${web_root}" || ! -d "${web_root}" ]]; then
-  echo "cannot locate the web checkout (looked for ${ops_root}/../web);" >&2
-  echo "set ASK_DEV_WEB_CONTEXT to its path." >&2
+  _common="$(git -C "${ops_root}" rev-parse --git-common-dir 2>/dev/null || true)"
+  if [[ -n "${_common}" ]]; then
+    web_root="$(cd -- "${_common}/../../web" 2>/dev/null && pwd || true)"
+  fi
+fi
+if [[ -z "${web_root}" || ! -d "${web_root}" ]]; then
+  echo "cannot locate the web checkout (tried ${ops_root}/../web and the" >&2
+  echo "git common-dir sibling); set ASK_DEV_WEB_CONTEXT to its path." >&2
   exit 64
 fi
 project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}"

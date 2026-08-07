@@ -14,6 +14,10 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.derived_store_registry import (
+    EXTERNAL_DERIVED_STORES,
+    unregistered_clickhouse_tables,
+)
 from dev_health_ops.core.encryption import decrypt_value
 from dev_health_ops.db import get_clickhouse_uri
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -454,6 +458,7 @@ class OrganizationDeletionService:
             await self.session.flush()
 
         await self._purge_clickhouse(org_id_str, dry_run=dry_run, result=result)
+        await self._purge_external_stores(org_id_str, dry_run=dry_run, result=result)
 
         logger.info(
             "Organization deletion finished org_id=%s dry_run=%s postgres_rows=%s clickhouse_rows=%s",
@@ -547,6 +552,17 @@ class OrganizationDeletionService:
         if not tables:
             result.warnings.append("ClickHouse migration table catalog is empty.")
             return
+
+        # CHAOS-3566: this scan stays the deletion-time source of truth (no
+        # behavior change below), but drift against the explicit, reviewed
+        # derived_store_registry is surfaced rather than silently swallowed.
+        unregistered = unregistered_clickhouse_tables(tables)
+        if unregistered:
+            result.warnings.append(
+                "ClickHouse table(s) discovered but not covered by "
+                "derived_store_registry.CLICKHOUSE_DERIVED_STORES (update the "
+                f"registry): {sorted(unregistered)}"
+            )
 
         client, close_client = self._resolve_clickhouse_client(result)
         if client is None:
@@ -650,6 +666,42 @@ class OrganizationDeletionService:
                 org_id,
                 table,
                 exc,
+            )
+
+    async def _purge_external_stores(
+        self, org_id: str, *, dry_run: bool, result: DeletionResult
+    ) -> None:
+        """CHAOS-3566: visit every registered non-ClickHouse derived store.
+
+        `EXTERNAL_DERIVED_STORES` is empty in production today (no such store
+        exists yet), so this is a no-op there. It exists so a future derived
+        store (e.g. the CHAOS-3499/3500 discovery-lane shadow store) only has
+        to register a `DerivedStore(kind=EXTERNAL, visit=...)` entry -- this
+        method, and the rest of `delete()`, do not need to change.
+        """
+        for store in EXTERNAL_DERIVED_STORES:
+            if store.visit is None:
+                result.warnings.append(
+                    f"Derived store '{store.name}' is registered but not wired "
+                    "for deletion (no visit callable)."
+                )
+                continue
+            try:
+                count = await store.visit(org_id, dry_run)
+            except Exception as exc:
+                logger.warning(
+                    "Unable to visit derived store for org deletion org_id=%s store=%s error=%s",
+                    org_id,
+                    store.name,
+                    exc,
+                )
+                result.warnings.append(
+                    f"Derived store '{store.name}' deletion failed: {exc}"
+                )
+                continue
+            result.warnings.append(
+                f"Derived store '{store.name}': {count} row(s) "
+                f"{'would be deleted' if dry_run else 'deleted'}."
             )
 
 

@@ -103,6 +103,7 @@ from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .no_match_terminal import (
     attested_strings,
+    disclose_scope_widening,
     internal_token_leak_field,
     named_subject_not_found_answer,
     scrub_auxiliary_leaks,
@@ -388,6 +389,22 @@ class OrchestratorResult:
     tool_call_count: int
     provider_fingerprint: str | None
     model_fingerprint: str | None
+    #: CHAOS-3497: the run's OWN most recent completed scope resolution,
+    #: carried on every terminal -- not only the answering ones.
+    #:
+    #: ``streaming.stream_orchestrator`` used to read the resolution off
+    #: ``answer.resolved_scope``, which exists only when the run produced an
+    #: answer, so a run that resolved scope and then terminated without one
+    #: (insufficient_evidence, a refusal, a not-found) emitted no
+    #: ``scope.resolved`` frame at all. Its scope decision -- including a
+    #: silent widening from a named subject to organization scope -- was then
+    #: permanently unobservable on the wire, which is exactly the run shape
+    #: the no-silent-widening audit family exists to catch.
+    #:
+    #: ``None`` only when the run terminated BEFORE scope resolution
+    #: completed (a cancellation on the accepted state, the outer catch-all
+    #: on a fault raised before ``_resolve_with_cancellation`` returned).
+    scope_resolution: DevScopeResolution | None = None
 
     def __post_init__(self) -> None:
         if self.state not in TERMINAL_STATES:
@@ -876,6 +893,32 @@ class DevOrchestrator:
             nonlocal terminal_written
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+            # CHAOS-3497 part 2: disclose a widening in PROSE, not only in
+            # `dev_scope_resolution.v1.fallbacks`.
+            #
+            # `legacy_guard_required` is true on exactly one branch: a bare
+            # name in the question went unresolved and `subject_preflight`
+            # committed the organization in its place so no page-derived
+            # subject could be narrated as the named one. That run then
+            # answers organization-wide, and until this the only trace was
+            # machine-readable -- a person reading the answer saw two
+            # unrelated limitations and no hint their subject was missed.
+            #
+            # Placed here, ahead of the leak scan and every record_*() write,
+            # so the sentence is scanned like any other user-visible copy and
+            # reaches the persisted answer, the persisted frame's
+            # `limitations`, and the stream's `warning` frames alike. The
+            # committed outcome is re-checked rather than assumed: the
+            # disclosure must state something that is actually true of the
+            # scope this answer was computed under.
+            if (
+                answer is not None
+                and preflight_result is not None
+                and preflight_result.legacy_guard_required
+                and answer.resolved_scope.outcome
+                is ScopeResolutionOutcome.ORGANIZATION_FALLBACK
+            ):
+                answer = disclose_scope_widening(answer)
             # CHAOS-3367: the one place every terminal in this module passes
             # through, and therefore the only place a user-visible-copy rule
             # can be enforced structurally rather than by asking ~35 call
@@ -1433,6 +1476,28 @@ class DevOrchestrator:
                 tool_call_count=len(tool_results),
                 provider_fingerprint=provider_fingerprint,
                 model_fingerprint=model_fingerprint,
+                # CHAOS-3497: the run's own scope decision, on EVERY terminal.
+                #
+                # On the answer path this is byte-identical to what
+                # ``streaming`` already published (``answer.resolved_scope``),
+                # so that path's wire output does not change at all.
+                #
+                # On a no-answer terminal it is the run's most recent
+                # COMPLETED resolution: ``last_resolve_scope_resolution``
+                # (every ``resolve_scope.v1`` attempt that produced an
+                # outcome, ambiguous/not-found included) when the model made
+                # one, else ``resolution`` (the initial resolve, or whatever
+                # the preflight committed over it). Preferring the tool
+                # attempt is deliberate and mirrors CHAOS-3367's own rule:
+                # publishing the committed organization ``resolution`` after a
+                # named subject failed to resolve is precisely the "scope
+                # outcome: exact while a named subject could not be found"
+                # juxtaposition the PRD prohibits.
+                scope_resolution=(
+                    answer.resolved_scope
+                    if answer is not None
+                    else (last_resolve_scope_resolution or resolution)
+                ),
             )
 
         def error(code: str, message: str, *, retryable: bool = False) -> DevError:

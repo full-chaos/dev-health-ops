@@ -111,6 +111,67 @@ against live HEAD.
     to `SourceClass` without a regen run fails that check, which is exactly the
     "totality check" this registry enforces mechanically rather than by review.
 
+#### 2.1.1 Two more `SourceClass`-keyed totality tables (found during stub implementation, not in the original survey above)
+
+`SourceClass` is closed *and* exhaustively consumed in more than the schema
+layer §2.1 covers above. Implementing the flag-off stub (adding
+`TEMPORAL_CONTEXT` to the enum) immediately surfaced two more import-time
+completeness checks in `src/dev_health_ops/api/dev/investigation_plans/relationship_matrix.py`,
+neither of which this design's original registry survey listed. Recorded
+here so this doc stays the accurate registry-impact map for the post-ADR
+implementation issue, rather than silently relying on the reader to
+rediscover them the same way — same discipline as the corrections already
+threaded through the amended PRD itself.
+
+* **`RELATIONSHIP_MATRIX: dict[SourceClass, RelationshipMatrixEntry]`**
+  (`relationship_matrix.py:126-311`) — built as a dict comprehension over one
+  `_entry(...)` call per `SourceClass` member, then asserted complete at
+  import time (`relationship_matrix.py:313-317`):
+  ```python
+  _missing = set(SourceClass) - set(RELATIONSHIP_MATRIX)
+  if _missing:
+      raise RuntimeError(f"relationship_matrix.v1 is missing entries for: {sorted(_missing)}")
+  ```
+  Every `SourceClass` member not yet wired to a real adapter (`CODE_CHANGE`,
+  `REVIEW`, `TEST_REPORT`, `OPERATIONAL_CONTROL`, `COGNITIVE_LOAD`,
+  `INVESTMENT_ALLOCATION` — `relationship_matrix.py:226-267`) already carries
+  this exact "not yet landed, honest empty vocabulary" placeholder shape:
+  `role="supporting", requirement="not_applicable", freshness_policy="unversioned",
+  evidence_expansion_capability=False`, empty `approved_relationship_types`.
+  `TEMPORAL_CONTEXT` gets the identical placeholder — implemented in this
+  issue's PR, not deferred, because the module fails to *import at all*
+  otherwise (this is a harder gate than a test: nothing that imports
+  `relationship_matrix` — which is most of `investigation_plans/`, transitively
+  most of the orchestrator — can load).
+* **`APPROVED_CONTENT_SLOTS: dict[SourceClass, frozenset[str]]`**
+  (`relationship_matrix.py:169-380` region) — the same posture, one entry per
+  `SourceClass` naming which `DevSourceContent` fields that class's steps may
+  populate, with its own import-time completeness assertion
+  (`relationship_matrix.py:449-453`, `_missing_content_slots = set(SourceClass)
+  - set(APPROVED_CONTENT_SLOTS)`). `TEMPORAL_CONTEXT` gets `frozenset()` —
+  no step mints content under it, matching every other not-yet-landed class.
+
+**Checked and confirmed out of scope — `persistence/service.py`'s
+`_SOURCE_CLASSES` allowlist (CHAOS-3337).** This is a *third*
+`SourceClass`-related table (`persistence/service.py:264`,
+`if source_class not in _SOURCE_CLASSES` at `:3000`), but its own totality
+check (`wave_3_1_plans._source_classes_missing_from_persistence_allowlist`,
+`wave_3_1_plans.py:93-124`, invoked at that module's own import time,
+`wave_3_1_plans.py:886-895`) is scoped differently: it diffs the allowlist
+against `{requirement.source_class for plan in registered_plans.values() for
+requirement in plan.source_requirements}` — source classes an actually
+*registered plan* emits — never against the full `SourceClass` enum. Because
+the flag-off stub registers no plan or step against `TEMPORAL_CONTEXT`
+(§4), this table's own totality check never sees the new member and needs
+no edit. Confirmed two ways: by reading `wave_3_1_plans.py`'s check directly,
+and empirically — the flag-off stub's fault-injection proof (§4) planted a
+`DevSourceRequirement` against `SourceClass.TEMPORAL_CONTEXT` on a real
+registered plan specifically to verify this table's guard *would* fire if
+the source class were ever actually wired, and it did (this exact
+`RuntimeError`, before the stub's own guard test even reached collection) —
+strong first-hand confirmation of the boundary this note describes, not an
+inference from reading code alone.
+
 ### 2.2 `ToolID` (`contracts.py:187`) + executor exact-set-equality
 
 * **Registry:** `class ToolID(StrEnum)`, `src/dev_health_ops/api/dev/contracts.py:187-196`.
@@ -303,6 +364,8 @@ class is actually wired into a plan.
 |---|---|---|
 | `SourceClass` | Yes — one new disabled member, `TEMPORAL_CONTEXT` | schema regen already covers it |
 | Schema regen (`contracts/ask-dev/v2/schemas/*`) | Yes — mechanical consequence of the enum add | — |
+| `RELATIONSHIP_MATRIX` / `APPROVED_CONTENT_SLOTS` (§2.1.1) | Yes — one inert placeholder entry each, mandatory (module fails to import otherwise) | Yes — real entries once a plan/step wires the class |
+| `persistence/service.py` `_SOURCE_CLASSES` allowlist (§2.1.1) | No — confirmed both by reading its narrower totality check and empirically via the fault-injection proof (§4) | Yes — once a registered plan actually emits `TEMPORAL_CONTEXT` |
 | `ToolID` + executor | No | Only if a dedicated tool is later justified (§2.2) |
 | `PLAN_REGISTRY` / `StepRegistry` / plan documents | No | Yes — five new intents, five new plan docs, new steps |
 | `native_evidence._SPECS` | No (never applicable, §2.4) | No |

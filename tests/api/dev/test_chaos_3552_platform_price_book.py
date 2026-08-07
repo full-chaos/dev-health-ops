@@ -1,4 +1,4 @@
-"""CHAOS-3552: an unpriced platform model must fail loudly, not book the reservation.
+"""CHAOS-3552: an unmeterable platform model must never be booked SILENTLY.
 
 ``ProviderBudget.require`` reserves US$1 per model call. ``ProviderBudget.add``
 reconciles that reservation down to the real cost -- but only when a real cost

@@ -364,6 +364,12 @@
       "expected_scope_resolution_outcome": "unresolved",
       "resolution_path": "miss-clarification"
     },
+    "scope.outcome.organization-fallback": {
+      "expected_public_outcome": "answered_with_gaps",
+      "expected_scope_resolution_outcome": "organization_fallback",
+      "resolution_path": "miss-clarification",
+      "notes": "RESTORED with the case (CHAOS-3490 Part 2, 2026-08-07). All three values are LIVE-OBSERVED for the new question, not carried over: scope outcome organization_fallback (probe, digest 2e1e254d); public_outcome answered_with_gaps because the run reaches a real DevAnswer terminal and test_wave4_corpus_runner_live._public_outcome_from_events maps every such terminal there unconditionally on today's stack; resolution_path miss-clarification because the single 'zephyr' mention never commits, so derive_resolution_path short-circuits before it ever needs a mention span."
+    },
     "scope.outcome.unresolved": {
       "expected_public_outcome": "not_found",
       "expected_scope_resolution_outcome": "unresolved",

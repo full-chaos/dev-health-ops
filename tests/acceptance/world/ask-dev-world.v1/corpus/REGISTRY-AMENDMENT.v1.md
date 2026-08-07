@@ -401,11 +401,11 @@ the derived path stays `miss-clarification` against the profile's honest
 `deterministic-exact`. Only the ledger becomes *classifiable*, so the cases
 measure something trustworthy instead of reporting a broken measurement.
 
-### 10.3 Five cases declared blocked — CHAOS-3520 (unreachable outcomes)
+### 10.3 Four cases declared blocked — CHAOS-3520 (unreachable outcomes)
 
-`scope.outcome.filtered`, `scope.outcome.inherited`,
-`scope.outcome.organization-fallback`, `scope.partially-resolved-subject`,
-`scope.stale-context-subject` all observed `exact`. `exact` is not a
+**CORRECTED 2026-08-07, before merge, and recorded rather than rewritten away: this section first said FIVE.** `scope.outcome.organization-fallback` was wrongly among them. It is class (b) — reachable, just not from its old question — and is re-authored in sec.10.6 instead. The trace-first rule caught it; a confident-but-wrong (a) would have deleted real coverage.
+
+`scope.outcome.filtered`, `scope.outcome.inherited`, `scope.partially-resolved-subject`, `scope.stale-context-subject` all observed `exact`. `exact` is not a
 near-miss — it means the scenario each case is named for never occurred.
 Rewriting the expectation to `exact` would be the "rewrite an honest
 expectation to force green" anti-pattern and would delete the coverage claim
@@ -434,7 +434,7 @@ distinction recorded: its `resolution_path_in` **passed**; the check left the
 set because the whole case is blocked, not because it was condemned.
 
 **Residual risk, stated rather than assumed away:** `FILTERED` and
-`INHERITED` now have ZERO corpus coverage. That is an honest gap on
+`INHERITED` now have ZERO corpus coverage (`ORGANIZATION_FALLBACK` does NOT — see sec.10.6). That is an honest gap on
 CHAOS-3520, not five cases that pass while proving nothing.
 
 ### 10.4 Kill-switch family re-scoped — CHAOS-3458 (chris ruling, 2026-08-06)
@@ -469,9 +469,10 @@ CHAOS-3520, not five cases that pass while proving nothing.
 | Before (exit run 7) | 143 | 91 | 52 |
 | Kill-switch retirement | −4 | 0 | −4 |
 | CHAOS-3520 blocks | 0 | −5 | +5 |
-| **After** | **139** | **86** | **53** |
+| `scope.outcome.organization-fallback` re-authored (sec.10.6) | 0 | +1 | −1 |
+| **After** | **139** | **87** | **52** |
 
-Armed-run pytest item count is therefore **140** (86 + 53 + the
+Armed-run pytest item count is therefore **140** (87 + 52 + the
 `test_at_least_one_corpus_case_is_collected` collection guard).
 
 Principal spreading still holds with room to spare — max **12** cases on any
@@ -481,3 +482,38 @@ dated provenance of the CHAOS-3490 assignment and are not rewritten.
 
 `world.json` was deliberately **not touched** — editing it would change
 `WORLD_DIGEST` and force a re-mint for a documentation-only reason.
+
+### 10.6 `scope.outcome.organization-fallback` re-authored, not blocked (2026-08-07)
+
+Class (b) under the team-lead's three-way rule: an outcome that is REACHABLE
+but not from this question's shape gets its **question** re-authored and keeps
+its expectation; only genuinely unreachable outcomes are declared-blocked.
+
+Proved by execution against the live stack post-CHAOS-3497 (digest
+`2e1e254d…`): the bare unresolvable name `"What's the status of Zephyr?"`
+yields `outcome='organization_fallback'`, `fallbacks=['organization']`, and
+CHAOS-3497's disclosure sentence in `warnings`.
+
+The old question, `"How is everything going?"`, extracts **zero** subject
+mentions, and both producers of `ORGANIZATION_FALLBACK` need a *named* subject
+that fails. So the QUESTION was wrong, not the expectation — which is exactly
+the distinction sec.10.3's rule turns on.
+
+`Zephyr` is deliberately absent from `subjects.json` and the world catalog, so
+it is unresolvable **by construction**, not by accident. Its question
+fingerprint collides with no other corpus case and no `role-legacy_agent.json`
+entry (checked by executing `question_fingerprint`, not by eye), and the
+provider-script entry's question moved with it — routing is by fingerprint, so
+leaving it behind would have silently dropped the case to the unscripted
+default heuristic. `expected_mention_texts: ["zephyr"]` is producer-generated.
+
+### 10.7 CHAOS-3497 landed under this branch (2026-08-07)
+
+Rebased onto `fe69de46c`. It is a pure product change — **zero corpus cases
+touched** — so re-adjudicating the ~14 previously-deferred cases belongs here.
+Two consequences already observed live: non-answer terminals now emit
+`scope.resolved` (`scope.no-match` reports `outcome='unresolved'`, which is
+what its profile already expected), and the widening now says itself out loud
+in `warnings`. Per the team-lead's framing: a case that starts passing after
+this rebase passes on NEW EVIDENCE, not on loosening — and anything still
+failing afterwards is a genuine finding.

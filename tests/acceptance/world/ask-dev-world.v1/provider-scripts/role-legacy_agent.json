@@ -404,9 +404,9 @@
       "comment": "CHAOS-3219 Phase 2 Lane 2b (2026-08-06), codex round-1 finding #2 remediation: script_inventory.py requires every corpus case id to have an entry here. This case's interesting behavior is subject/scope resolution (extract_mentions/alias_matching/scope_catalog), not provider decision-making -- scope resolution runs before the provider is ever invoked, so delegate_default (the existing, unscripted default heuristic) is the honest choice: no bespoke decision sequence changes what this case actually tests."
     },
     "scope.outcome.organization-fallback": {
-      "question": "How is everything going?",
+      "question": "What's the status of Zephyr?",
       "kind": "delegate_default",
-      "comment": "CHAOS-3219 Phase 2 Lane 2b (2026-08-06), codex round-1 finding #2 remediation: script_inventory.py requires every corpus case id to have an entry here. This case's interesting behavior is subject/scope resolution (extract_mentions/alias_matching/scope_catalog), not provider decision-making -- scope resolution runs before the provider is ever invoked, so delegate_default (the existing, unscripted default heuristic) is the honest choice: no bespoke decision sequence changes what this case actually tests."
+      "comment": "CHAOS-3490 Part 2 (2026-08-07): question re-authored from 'How is everything going?' to a bare unresolvable name, because the old one extracted zero subject mentions and therefore could never reach ORGANIZATION_FALLBACK -- see the case file's notes. Routing is by question fingerprint, so this entry MUST move with the case's question or the case would fall through to the unscripted default heuristic. kind stays delegate_default: the interesting behaviour is subject/scope resolution, which runs before the provider is invoked."
     },
     "scope.outcome.unresolved": {
       "question": "Could you check the status of the Ask Dev project?",

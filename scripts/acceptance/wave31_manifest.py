@@ -1655,10 +1655,13 @@ def _gates() -> tuple[ManifestItem, ...]:
                 "three required shards, so this is default, gating "
                 "coverage rather than an opt-in tier. (2) Why still "
                 "deferred. validate_manifest requires every evidence path "
-                "to resolve INSIDE this repository's root -- see "
-                "contained_path, which rejects absolute and '..'-traversing "
-                "paths outright -- so a dev-health-web spec path is not "
-                "citable as evidence; proven_e2e additionally requires an "
+                "to RESOLVE inside this repository's root and to be a real "
+                "file -- see contained_path, which rejects any path whose "
+                "resolved location falls outside the tree, however it is "
+                "spelled (absolute or '..'-traversing); a path that leaves "
+                "and returns is fine, because it lands inside -- so a "
+                "dev-health-web spec path is not citable as evidence; "
+                "proven_e2e additionally requires an "
                 "in-repo execution artifact whose script is one of the "
                 "row's own evidence paths and whose recorded sha256 still "
                 "matches that file's current bytes. A cross-repo claim is "
@@ -2288,7 +2291,7 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
             f"{item.execution_artifact}"
         )
         return errors
-    if not artifact_path.exists():
+    if not artifact_path.is_file():
         errors.append(
             f"{item.id}: execution artifact does not exist: {item.execution_artifact}"
         )
@@ -2419,7 +2422,7 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
                 " -- the artifact must belong to a script this row cites"
             )
         script_path = contained_path(root, script_relative)
-        if script_path is None or not script_path.exists():
+        if script_path is None or not script_path.is_file():
             errors.append(
                 f"{item.id}: execution artifact's script no longer exists: "
                 f"{script_relative}"
@@ -2589,7 +2592,7 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
                 f"paths {item.evidence!r}"
             )
         script_path = contained_path(root, script_relative)
-        if script_path is None or not script_path.exists():
+        if script_path is None or not script_path.is_file():
             errors.append(
                 f"{item.id}: blocked_execution_artifact's script no longer "
                 f"exists: {script_relative}"
@@ -2689,14 +2692,18 @@ def validate_manifest(
                     "repository can check out and check; a path outside the "
                     "tree is a claim, not proof"
                 )
-            elif not contained.exists():
+            elif not contained.is_file():
+                # is_file(), not exists(): "" and "." resolve to the repo
+                # root, and a directory satisfies exists() while proving
+                # nothing and crashing the content_markers read below. All
+                # 95 landed evidence paths are files.
                 errors.append(
                     f"{item.id}: evidence file does not exist: {relative_path}"
                 )
 
         if item.content_markers and item.evidence:
             first_evidence = contained_path(root, item.evidence[0])
-            if first_evidence is not None and first_evidence.exists():
+            if first_evidence is not None and first_evidence.is_file():
                 text = first_evidence.read_text(encoding="utf-8", errors="replace")
                 for marker in item.content_markers:
                     if marker not in text:

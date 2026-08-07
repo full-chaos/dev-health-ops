@@ -409,8 +409,18 @@ def _assert_web_default_ci_row_is_honest(item: ManifestItem) -> None:
     assert "claim, not proof" in reason
     # The reason must name the mechanism that actually enforces this, not
     # merely assert the conclusion -- codex refuted an earlier wording that
-    # claimed containment the validator did not yet perform.
+    # claimed containment the validator did not yet perform, and then a
+    # second wording that said absolute and ".."-traversing paths are
+    # rejected "outright" when what is actually rejected is a path whose
+    # RESOLVED location leaves the tree. Pin the accurate semantics so the
+    # prose cannot drift back to either overclaim.
     assert "contained_path" in reason
+    assert "RESOLVE inside this repository's root" in reason
+    assert "resolved location falls outside the tree" in reason
+    # ...and the accuracy is real, not just asserted: a path that leaves and
+    # comes back lands inside and IS accepted, which is exactly what the
+    # earlier "outright" wording denied.
+    assert contained_path(_ROOT, "scripts/../tests/acceptance") is not None
 
     # (3) the route out is producing proof, not widening what counts as it
     assert "run_ask_dev_compose.sh:348" in reason
@@ -469,6 +479,36 @@ def test_contained_path_accepts_real_in_repo_paths() -> None:
     # And a non-existent but contained path resolves -- the caller reports it
     # as missing, which is a different (and more useful) error than an escape.
     assert contained_path(_ROOT, "tests/acceptance/not-a-real-file.json") is not None
+
+
+@pytest.mark.parametrize(
+    "non_file",
+    [
+        pytest.param("", id="empty-string-resolves-to-the-repo-root"),
+        pytest.param(".", id="dot-resolves-to-the-repo-root"),
+        pytest.param("scripts/acceptance", id="a-real-directory"),
+    ],
+)
+def test_evidence_that_is_not_a_file_is_rejected(non_file: str) -> None:
+    """Containment alone is not enough. "" and "." resolve to the repo root
+    itself and a directory satisfies exists(), so an evidence tuple could
+    point at a directory -- contained, present, and proving nothing. It would
+    also crash the content_markers read, which calls read_text on
+    evidence[0]. All 95 landed evidence paths are files, so is_file() is the
+    honest check.
+    """
+
+    item = ManifestItem(
+        id="probe.non-file-evidence",
+        category="gate",
+        description="probe",
+        status="proven_unit",
+        requires_live_infra=True,
+        evidence=(non_file,),
+    )
+    assert validate_manifest(_ROOT, (item,)), (
+        f"{non_file!r} validated clean -- a non-file is not evidence"
+    )
 
 
 def test_every_real_manifest_row_still_validates_after_containment() -> None:

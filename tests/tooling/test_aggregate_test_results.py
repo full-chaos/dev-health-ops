@@ -70,6 +70,31 @@ _MATRIX: list[tuple[str, str, str, str, str, str, bool]] = [
         "cancelled",
         _FAIL,
     ),
+    # A job that fails at a late step still publishes the outputs its earlier
+    # steps set, so `changes: failure` can arrive WITH a usable-looking
+    # `code=false`. These two rows exist because a mutation sweep found the
+    # `changes`-result guard otherwise unpinned at the verdict level: every
+    # other failure row is also caught by the undecided-`code` rule, so
+    # deleting the guard entirely changed no verdict. Here it is the only
+    # thing standing between a dead gating job and a green gate.
+    (
+        "changes-failure-with-published-code",
+        "pull_request",
+        "failure",
+        "false",
+        "skipped",
+        "skipped",
+        _FAIL,
+    ),
+    (
+        "changes-cancelled-with-published-code",
+        "push",
+        "cancelled",
+        "false",
+        "skipped",
+        "skipped",
+        _FAIL,
+    ),
     # `changes` has no `if:`, so a skip means something stranger still went
     # wrong upstream. Unknown state is not evidence.
     ("changes-skipped", "pull_request", "skipped", "", "skipped", "skipped", _FAIL),
@@ -125,6 +150,30 @@ _MATRIX: list[tuple[str, str, str, str, str, str, bool]] = [
         "skipped",
         _FAIL,
     ),
+    # The merge queue selects coverage through its own clause, independent of
+    # `code` -- so a merge-queue coverage skip is illegitimate even when the
+    # filter said false. (Added because a mutation that deleted only that
+    # clause changed no verdict in an earlier version of this table.)
+    (
+        "merge-queue-coverage-skipped-code-false",
+        "merge_group",
+        "success",
+        "false",
+        "success",
+        "skipped",
+        _FAIL,
+    ),
+    # And the same undecided-`code` rule applies to coverage: on a push where
+    # the filter published no decision, its skip cannot be attributed to one.
+    (
+        "push-code-empty-coverage-skipped",
+        "push",
+        "success",
+        "",
+        "success",
+        "skipped",
+        _FAIL,
+    ),
     # The hole Codex found in the first version of this fix: a manual
     # `gh workflow run test.yml` whose path filter reported code=false skipped
     # both jobs and the gate went green with zero tests. The filter no longer
@@ -147,6 +196,44 @@ _MATRIX: list[tuple[str, str, str, str, str, str, bool]] = [
         "skipped",
         "skipped",
         _FAIL,
+    ),
+    # Codex round 3: `changes` succeeded but published no usable decision --
+    # a renamed output, a filter step made conditional, a filter that produced
+    # no key. "Not 'true'" used to read as "docs-only", so an undecided filter
+    # bought a green check with nothing run. Only a literal 'false' explains a
+    # skip.
+    ("pr-code-empty", "pull_request", "success", "", "skipped", "skipped", _FAIL),
+    (
+        "pr-code-not-a-boolean",
+        "pull_request",
+        "success",
+        "neutral",
+        "skipped",
+        "skipped",
+        _FAIL,
+    ),
+    ("push-code-empty", "push", "success", "", "skipped", "skipped", _FAIL),
+    # ... but an undecided `code` on a run where the jobs DID execute is not a
+    # gate failure. Fail-closed must not mean fail-noisy: these two would be
+    # red if the rule above were a hard validation of `code` instead of a
+    # question about whether a skip can be explained.
+    (
+        "pr-code-empty-but-matrix-ran",
+        "pull_request",
+        "success",
+        "",
+        "success",
+        "skipped",
+        _PASS,
+    ),
+    (
+        "merge-queue-code-empty",
+        "merge_group",
+        "success",
+        "",
+        "success",
+        "success",
+        _PASS,
     ),
     # Same `coverage: skipped` as normal-pr, opposite verdict: off a PR with
     # gated paths touched, the coverage job was selected.

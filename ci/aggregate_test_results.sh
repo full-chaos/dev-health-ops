@@ -22,8 +22,9 @@
 #                                as `failure` (both were observed producing the
 #                                false green) and `skipped`/empty.
 #   test-matrix skipped       -> legitimate ONLY when the path filter actually
-#                                decided against it (changes code == 'false')
-#                                on an event where the filter governs. The
+#                                decided against it -- changes code LITERALLY
+#                                'false', not merely "not 'true'" -- on an
+#                                event where the filter governs. The
 #                                merge queue has no base/head diff for
 #                                dorny/paths-filter, and workflow_dispatch does
 #                                not run the filter at all, so on both of those
@@ -84,16 +85,30 @@ if [[ "${CHANGES_RESULT}" != "success" ]]; then
   gate_failed
 fi
 
-matrix_selected="false"
-if [[ "${EVENT_NAME}" == "merge_group" ||
-  "${EVENT_NAME}" == "workflow_dispatch" ||
-  "${CHANGES_CODE}" == "true" ]]; then
-  matrix_selected="true"
+# Selection is deliberately asymmetric with the `if:` expressions it mirrors.
+# Those ask "did this evaluate true?"; this asks "can the skip be EXPLAINED?",
+# and only a literal `false` from the path filter explains one. `code` is the
+# empty string whenever the filter did not publish a decision -- a renamed
+# output, a step made conditional, a filter that succeeded without producing
+# the key -- and every one of those used to read as "not 'true'", i.e. as a
+# docs-only change, which is a green required check with nothing run
+# (CHAOS-3482 Codex round 3). Treating an undecided `code` as SELECTED costs
+# nothing when the jobs actually ran, and fails the gate when they did not.
+matrix_selected="true"
+if [[ "${EVENT_NAME}" != "merge_group" ]] &&
+  [[ "${EVENT_NAME}" != "workflow_dispatch" ]] &&
+  [[ "${CHANGES_CODE}" == "false" ]]; then
+  matrix_selected="false"
 fi
 
+# coverage is excluded outright from pull_request (CHAOS-2586) and from
+# workflow_dispatch (no path filter runs there, so its condition can never
+# select it); otherwise the merge queue always selects it, and elsewhere the
+# same explain-the-skip rule applies.
 coverage_selected="false"
 if [[ "${EVENT_NAME}" != "pull_request" ]] &&
-  [[ "${EVENT_NAME}" == "merge_group" || "${CHANGES_CODE}" == "true" ]]; then
+  [[ "${EVENT_NAME}" != "workflow_dispatch" ]] &&
+  [[ "${EVENT_NAME}" == "merge_group" || "${CHANGES_CODE}" != "false" ]]; then
   coverage_selected="true"
 fi
 

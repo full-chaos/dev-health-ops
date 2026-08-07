@@ -11,8 +11,8 @@
     {
       "id": "P1-credential-matches-claimed-credential",
       "file": "internal/providersync/github_work_items_projects_v2.go",
-      "find": "credential.ID == \"\" || credential.ID != claim.CredentialID || client == nil ||",
-      "replace": "credential.ID == \"\" || credential.ID == claim.CredentialID || client == nil ||",
+      "find": "\t\tcredential.ID != claim.CredentialID || client == nil ||",
+      "replace": "\t\tcredential.ID == claim.CredentialID || client == nil ||",
       "rationale": "Projects v2 must use the credential resolved for this claim, never a global or unrelated descriptor",
       "proof": [
         [

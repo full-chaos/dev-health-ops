@@ -679,7 +679,13 @@ async def test_the_widening_marker_alone_does_not_trigger_the_disclosure() -> No
         is ScopeResolutionOutcome.ORGANIZATION_FALLBACK
     )
     assert result.answer.resolved_scope.fallbacks == ["organization"]
-    assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE not in result.answer.warnings
+    assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE not in result.answer.warnings, (
+        "the disclosure trigger moved from the preflight's "
+        "`legacy_guard_required` to the `fallbacks` marker. This run named no "
+        "subject, so nothing was widened away from anything -- telling this "
+        "reader their subject could not be matched states something false. "
+        "Fix the predicate in orchestrator.finish(), not this test."
+    )
 
 
 def test_the_disclosure_reaches_the_frame_a_reader_actually_sees() -> None:
@@ -765,10 +771,21 @@ async def test_the_widening_marker_alone_would_be_the_wrong_predicate() -> None:
         permission_fingerprint="perm-a",
         request=ScopeResolveRequest(allow_organization_fallback=True),
     )
-    assert subject_free.outcome is ScopeResolutionOutcome.ORGANIZATION_FALLBACK
+    assert subject_free.outcome is ScopeResolutionOutcome.ORGANIZATION_FALLBACK, (
+        "HALF ONE MOVED: scope_service no longer produces the widening marker "
+        "for a subject-free request. If that producer is genuinely gone, the "
+        "marker has one producer again and keying the disclosure on it would "
+        "become safe -- re-derive the trigger deliberately, do not delete this."
+    )
     assert "organization" in subject_free.fallbacks
 
-    assert _scope_request(_scope()).allow_organization_fallback is False
+    assert _scope_request(_scope()).allow_organization_fallback is False, (
+        "HALF TWO MOVED: production now ASKS for the organization fallback, so "
+        "the second producer is reachable from Ask Dev and an ordinary "
+        "org-wide answer can carry fallbacks==['organization'] with no subject "
+        "ever missed. The disclosure must stay keyed on the preflight's "
+        "`legacy_guard_required`; anything reading the marker now lies."
+    )
 
 
 def _replay(result: OrchestratorResult):

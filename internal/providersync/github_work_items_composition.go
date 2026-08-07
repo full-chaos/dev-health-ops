@@ -33,8 +33,15 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 //
 // The returned sink is USABLE ONLY when the error is nil. On an incomplete
 // build the sink is returned alongside the error rather than zeroed, because
-// the caller that wants to report the gap needs MissingDestinations from it;
-// every write and readback still fails closed through complete().
+// the caller that wants to report the gap needs MissingDestinations from it.
+//
+// A caller that drops the error is still safe THROUGH THE COMMITTER, and the
+// claim stops exactly there: WriteEffect and InspectEffect are the only methods
+// EffectSink and EffectReadback expose, both go through resolve, and resolve is
+// the only caller of complete -- so every write and readback on that surface
+// fails closed. The adapter fields are exported and independently usable, so a
+// caller holding the struct can invoke one directly and never reach complete.
+// That is by design, and it is not a path the committer has.
 //
 // Lease flow mirrors the established BuildExecutor pattern: one ClickHouse
 // connection and the LeaseSession that owns the claim, passed to every adapter

@@ -592,3 +592,59 @@ what its profile already expected), and the widening now says itself out loud
 in `warnings`. Per the team-lead's framing: a case that starts passing after
 this rebase passes on NEW EVIDENCE, not on loosening — and anything still
 failing afterwards is a genuine finding.
+
+## 11. Nine non-question-shaped ids routed OUT of the corpus (2026-08-07, CHAOS-3219 Phase 3)
+
+Team-lead ruling, applying chris's corpus boundary rule: **the corpus is user
+questions over INGESTED data** (the customer's CI, deploys, incidents,
+migrations). A claim that is not question-shaped does not become one by being
+written as a case file, and force-fitting it produces a file that reads as
+coverage while asserting nothing.
+
+CHAOS-3460 was **Canceled** with a note routing *"a non-question-shaped case
+type for persistence/ops claims"* into the Phase 3 design brief. That note is
+honoured by **routing the claims to the subsystems that own them**, not by
+inventing a second case schema inside the corpus.
+
+Retired here (case files deleted; ids stay in the frozen
+`registry-ids.v1.json` `groups` block, exactly as the sec.10.4 kill-switch
+retirement established — the freeze governs ids, and no guard requires a
+registry id to have a case file):
+
+| id | why it is not question-shaped | owning module, for the subsystem test |
+|---|---|---|
+| `deg.false-green-aggregate` | a CI-aggregator property | `ci/aggregate_gate_results.sh` — **already covered** by `tests/tooling/test_aggregate_gate_results.py` |
+| `pers.usage-cost-idempotent` | billing-layer idempotency | `models/llm_budget.py:58-64` unique constraint, enforced `llm/budget.py:485` — **already covered** |
+| `ops.quota-cost-reconcile` | billing-layer reconciliation | three independently-computed cost tracks with **no cross-check** — `llm/budget.py`, `orchestrator.py:793`, `admin/routers/ask_dev.py:344`. Filed **CHAOS-3545** |
+| `ops.content-security-scan` | a scan job over deployed telemetry | no runtime scanner exists; `tracing.py` / `metrics/prometheus.py` have zero redaction. Manifest already declares it deferred (`wave31_manifest.py:1685`) |
+| `ops.alert-test-recover` | alert delivery/recovery | `alerts/rules.yml` is static rules only; no Alertmanager config anywhere, and **no worker-side metrics scrape** (`workers/ask_dev_retention.py:39-46` admits this itself) |
+| `ops.rollback-preserves-state` | deployment-level rollback | `.gitlab-ci.yml` has **no deploy stage at all**; `internal/jobroute/control.go:180` is route-level, not deployment |
+| `pers.migration-rollback-preserves-state` | migration data survival | Postgres `migrate.py:283` `_run_downgrade`; **ClickHouse has no downgrade subcommand at all** across 82 migration files, and the one PG round-trip test asserts the table is GONE after downgrade (`test_byo_llm_budget_migration.py:68-72`) — schema shape, not data survival |
+| `pers.purge-after-disable` | a job, not a turn | `cleanup_expired` has exactly two callers, the Celery task and the CLI; **no `/api/v1/dev/**` route invokes it** |
+| `ops.cleanup-purge-recover` | a job, not a turn | its `question` field is literally `"n/a"`, which answers the classification by itself |
+
+**Two of the nine are already proven elsewhere** (`deg.false-green-aggregate`,
+`pers.usage-cost-idempotent`) — they were never uncovered, only covered in the
+wrong place. That is worth stating plainly, because "routed out" and
+"unproven" are different words and only one of them is true here.
+
+**Residual risk, stated rather than assumed away:** the other seven now have
+**no automated coverage anywhere** until their subsystem tests are written.
+That is a real, named gap — and it is a smaller lie than nine files that
+report green while proving nothing. Two findings surfaced while mapping the
+owners deserve their own attention regardless of the corpus: the **absent
+ClickHouse downgrade path**, and the **three unreconciled cost tracks**.
+
+### Totals after this pass
+
+| | files | active | declared-blocked |
+|---|---|---|---|
+| Before (sec.10.5) | 139 | 87 | 52 |
+| Non-question-shaped retirement | −9 | 0 | −9 |
+| **After** | **130** | **87** | **43** |
+
+Armed-run pytest item count is therefore **131** (87 + 43 + the
+`test_at_least_one_corpus_case_is_collected` collection guard).
+
+No active case was touched, so the measured behaviour of the corpus is
+unchanged by this pass — only claims that were never measurable are gone.

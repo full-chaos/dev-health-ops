@@ -216,6 +216,21 @@ def _official_openai_endpoint(base_url: str | None) -> bool:
     return parsed.scheme == "https" and parsed.hostname == "api.openai.com"
 
 
+def _normalized_model_id(model: str) -> str:
+    """The one normalization both classification and pricing must share.
+
+    CHAOS-3552, adversarial review MEDIUM: the carve-out check stripped the
+    model id and the price lookup did not, so ``LLM_MODEL="ask-dev-scripted-v1 "``
+    (a trailing space in an env var -- entirely ordinary) classified as
+    ``FIXTURE`` while ``_estimated_cost_microusd`` returned ``None``. The
+    classifier said "carved out, proceed" and the pricer left the reservation
+    standing on every call. Two paths that must agree, normalizing differently
+    -- the same class of defect as the two price books this ticket is about.
+    """
+
+    return model.strip()
+
+
 def _canonical_priced_model(model: str) -> str | None:
     """The price-book key ``model`` resolves to, honouring dated variants.
 
@@ -231,6 +246,7 @@ def _canonical_priced_model(model: str) -> str | None:
     honour: an id that is not exactly the fixture is not the fixture.
     """
 
+    model = _normalized_model_id(model)
     return next(
         (
             known
@@ -265,7 +281,7 @@ def platform_cost_metering(
     near-zero price that keeps its reservation reconciled.
     """
 
-    if model.strip() in _CARVE_OUT_MODELS:
+    if _normalized_model_id(model) in _CARVE_OUT_MODELS:
         return PlatformCostMetering.FIXTURE
     if provider.strip().lower() in _SELF_HOSTED_PROVIDERS:
         return PlatformCostMetering.UNMETERED_SELF_HOSTED

@@ -1102,7 +1102,7 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
         raise DevRuntimeUnavailable(
             "model_not_supported", "The configured Ask Dev model is not supported."
         )
-    # CHAOS-3552: an unpriced model must not reach the runtime.
+    # CHAOS-3552: an unmeterable model must never be booked SILENTLY.
     #
     # ProviderBudget reserves US$1 per model call and reconciles it down to the
     # real cost afterwards -- but ONLY when a real cost exists.
@@ -1114,13 +1114,17 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
     # allowance after 25 runs, against a 1,000-run request cap. That is what
     # CHAOS-3523's "bounds sized for BYO are gating platform runs" actually was.
     #
-    # Refused HERE, at construction, rather than left to surface as wrong
-    # numbers at runtime: it is an operator configuration fault, and a fault
-    # that reports itself as plausible cost data is worse than one that stops
-    # the process. Only the genuine misconfiguration raises -- self-hosted
-    # deployments are unpriceable by design and pass through unmetered, and the
-    # deterministic acceptance fixture is carved out. See
-    # ``platform_cost_metering``.
+    # Reported HERE, at construction, rather than per call: once per provider
+    # build is enough to tell an operator, and per-call would be log spam on
+    # exactly the deployments already paying for the defect.
+    #
+    # NOTHING RAISES. An earlier revision refused construction; measured
+    # availability evidence retired that (see the branch history): with a
+    # three-entry price book, refusing would have removed Ask Dev from every
+    # organization running gpt-4o, gpt-5, o3 or any other unlisted model --
+    # far larger harm than an overstated allowance. Self-hosted providers pass
+    # through genuinely unmetered, and the acceptance fixture is carved out.
+    # See ``platform_cost_metering``.
     metering = platform_cost_metering(
         provider=candidate.provider,
         model=candidate.model,

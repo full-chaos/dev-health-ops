@@ -37,11 +37,20 @@ The correct invariant, which replaces it:
 It splits by WHY the price is missing, and the two halves want opposite
 treatment:
 
-* ``openai`` on an official endpoint with an unpriced model -- a genuine
-  operator misconfiguration. **Fail loud at construction.**
-* anything self-hosted (``local``/``ollama``/``lmstudio``, or a non-official
-  endpoint) -- genuinely unpriceable in dollars, and correctly so. Must **not**
-  fail construction, and must **not** book the reservation either.
+* ``openai`` on an official endpoint with an unpriced model -- an operator
+  misconfiguration. Books the conservative reservation, **loudly** (warning
+  with model + remedy, and a metric). It does NOT refuse construction: with a
+  three-entry price book, refusing would have removed Ask Dev from every
+  organization running gpt-4o, gpt-5 or o3, which is far larger harm than an
+  overstated allowance.
+* ``openai`` on a NON-official endpoint (Azure, OpenRouter, a corporate
+  gateway) -- billability **unknown**, so it also books the reservation
+  loudly, and never reports zero. Reporting these as free was a fail-OPEN
+  defect an earlier revision shipped; see
+  ``test_a_billable_gateway_is_never_reported_as_free``.
+* self-hosted BY PROVIDER (``local``/``ollama``/``lmstudio``) -- the
+  operator's own hardware, genuinely free. Cost is an explicit **0**, so the
+  reservation reconciles away and no charge is booked.
 * ``ask-dev-scripted-v1`` -- a deterministic test double, not a production
   model. Carved out explicitly, keyed to the exact id, and guarded below
   against widening.
@@ -545,4 +554,32 @@ def test_only_a_self_hosted_PROVIDER_earns_a_zero_cost() -> None:
                 provider=provider,
             )
             == 0
+        )
+
+
+def test_the_classifier_and_the_pricer_agree_on_a_whitespace_model_id() -> None:
+    """Two paths that must agree, normalizing differently.
+
+    ``LLM_MODEL="ask-dev-scripted-v1 "`` -- a trailing space in an env var,
+    entirely ordinary -- classified as FIXTURE (the carve-out stripped) while
+    the price lookup returned None (it did not). The classifier said "carved
+    out, proceed" and the pricer left the US$1 reservation standing on every
+    call, so the acceptance stack would have drained an allowance while
+    reporting itself carved out.
+
+    Found by adversarial review. It is the same defect class as the two price
+    books this ticket exists to unify: not a wrong answer, but two answers.
+    """
+
+    from dev_health_ops.llm.agent.openai_compatible import _estimated_cost_microusd
+
+    for raw in ("ask-dev-scripted-v1 ", " ask-dev-scripted-v1", "  gpt-5-nano  "):
+        classified = platform_cost_metering(provider="openai", model=raw, base_url=None)
+        priced = _estimated_cost_microusd(
+            model=raw, input_tokens=10_000, output_tokens=1_000
+        )
+        assert classified is not PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR
+        assert priced is not None, (
+            f"{raw!r} classified {classified.value} but priced None -- the "
+            "reservation would stand on a model the classifier admitted"
         )

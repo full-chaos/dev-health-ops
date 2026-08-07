@@ -26,6 +26,7 @@ reported as INVALID rather than passing quietly.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -65,6 +66,28 @@ CORPUS_RUNNER = "scripts/acceptance/run_wave4_corpus.sh"
 # dict[Any, Any], not dict[str, Any]: PyYAML resolves the bare key `on` to
 # the BOOLEAN True under YAML 1.1, so a workflow mapping genuinely has a
 # non-str key and claiming otherwise would be a type that lies.
+CORPUS_DIR = ROOT / "tests" / "acceptance" / "world" / "ask-dev-world.v1" / "corpus"
+
+
+def _active_corpus_case_count() -> int:
+    """How many cases run_report will actually count.
+
+    NOT the file count. 143 files, 91 of them status='active' and 52
+    status='declared-blocked' -- and declared-blocked cases execute without
+    touching the product, so run_report deliberately excludes them. Reading the
+    file count instead is what produced an unsatisfiable floor of 100.
+    """
+    active = 0
+    for path in sorted(CORPUS_DIR.glob("case-*.json")):
+        try:
+            case = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:  # pragma: no cover - a malformed case is another test's job
+            continue
+        if case.get("status") == "active":
+            active += 1
+    return active
+
+
 def _load(text: str) -> dict[Any, Any]:
     doc = yaml.safe_load(text)
     assert isinstance(doc, dict)
@@ -412,12 +435,69 @@ def check_corpus_has_an_attrition_floor(text: str) -> list[str]:
             "back to run_report's floor of 1 and a corpus that lost most of its case "
             "files would still report green"
         ]
-    if int(raw) < 2:
+    floor = int(raw)
+    if floor < 2:
         return [
             f"{CORPUS_STEP} pins ASK_DEV_CORPUS_MIN_EXECUTED={raw}, which is the default "
             "floor this check exists to raise"
         ]
+    active = _active_corpus_case_count()
+    if floor > active:
+        return [
+            f"{CORPUS_STEP} pins ASK_DEV_CORPUS_MIN_EXECUTED={floor}, but only {active} "
+            "corpus cases are status='active' and run_report counts no others -- this "
+            "floor is UNSATISFIABLE and would fail every run however healthy. Dispatch "
+            "run 1 failed exactly this way at 91 < 100."
+        ]
     return []
+
+
+DRAIN_STEP = "Drain the per-IP login window before the corpus"
+
+
+def check_the_login_window_is_drained_before_the_corpus(text: str) -> list[str]:
+    """The corpus cannot log in inside the boot's own rate-limit window.
+
+    Dispatch run 1 (31146779949): all 91 active cases errored in setup on
+    ``HTTP 429: Rate limit exceeded``. ``AUTH_LOGIN_IP_LIMIT`` is
+    ``20/15minutes`` and PER IP; a CI job is one IP, and boot + corpus exceed
+    20 logins in one window when they run back to back. Locally they are
+    minutes apart, so no local run could have found this.
+
+    A workaround, pinned so it cannot be quietly shortened into
+    uselessness -- and so its removal is a deliberate act once session reuse
+    lands, not an accident.
+    """
+    doc = _load(text)
+    step = _step(doc, LIVE_JOB, DRAIN_STEP)
+    if step is None:
+        return [f"{LIVE_JOB} has no step named {DRAIN_STEP!r}"]
+    violations = []
+    run = str(step.get("run", ""))
+    match = re.search(r"sleep\s+(\d+)", run)
+    if match is None:
+        violations.append(f"{DRAIN_STEP} does not wait at all")
+    elif int(match.group(1)) < 900:
+        violations.append(
+            f"{DRAIN_STEP} waits {match.group(1)}s, under the 900s the "
+            "20/15minutes window needs -- a partial drain still 429s, and does it "
+            "after paying most of the wait"
+        )
+    if "if" in step:
+        violations.append(f"{DRAIN_STEP} carries an `if:` and can therefore be skipped")
+
+    names = [candidate.get("name") for candidate in _steps(doc, LIVE_JOB)]
+    if BOOT_STEP in names and CORPUS_STEP in names:
+        if (
+            not names.index(BOOT_STEP)
+            < names.index(DRAIN_STEP)
+            < names.index(CORPUS_STEP)
+        ):
+            violations.append(
+                f"{DRAIN_STEP} must run after {BOOT_STEP} (whose logins fill the window) "
+                f"and before {CORPUS_STEP} (which needs it drained)"
+            )
+    return violations
 
 
 def check_teardown_and_capture_always_run(text: str) -> list[str]:
@@ -588,11 +668,17 @@ def check_a_failing_run_is_announced(text: str) -> list[str]:
         violations.append(
             f"{NOTIFY_JOB} neither creates nor comments on an issue, so nothing is announced"
         )
-    if "armed run executed" not in run:
-        violations.append(
-            f"{NOTIFY_JOB}'s message does not tell the reader how to tell a run that "
-            "executed cases and failed from one that never reached the corpus"
-        )
+    # The message must teach the reader to distinguish the failure shapes.
+    # Exit 66 acquired a SECOND meaning when the attrition floor was added --
+    # "executed nothing" and "executed below the floor" are different findings
+    # and dispatch run 1 was the second -- so the message has to name both, not
+    # just the executed-count line.
+    for phrase in ("Exit 66", "attrition floor", "Exit 67", "unmeasured, not failing"):
+        if phrase not in run:
+            violations.append(
+                f"{NOTIFY_JOB}'s message omits {phrase!r}, so a reader cannot tell which "
+                "kind of red this was"
+            )
     return violations
 
 
@@ -608,6 +694,7 @@ CHECKS: dict[str, Callable[[str], list[str]]] = {
     "api-port": check_corpus_talks_to_the_port_the_stack_published,
     "quota-budget": check_corpus_is_budgeted_from_the_running_stack,
     "attrition-floor": check_corpus_has_an_attrition_floor,
+    "login-drain": check_the_login_window_is_drained_before_the_corpus,
     "always-cleanup": check_teardown_and_capture_always_run,
     "artifact-uploads": check_artifact_uploads_fail_on_an_empty_set,
     "web-checkout": check_web_checkout_is_wired_for_the_playwright_leg,
@@ -779,7 +866,7 @@ _MUTATIONS: list[tuple[str, str, str]] = [
     ),
     (
         "attrition-floor",
-        '          ASK_DEV_CORPUS_MIN_EXECUTED: "100"',
+        '          ASK_DEV_CORPUS_MIN_EXECUTED: "75"',
         '          ASK_DEV_CORPUS_MIN_EXECUTED: "1"',
     ),
     (
@@ -836,6 +923,26 @@ _MUTATIONS: list[tuple[str, str, str]] = [
         "failure-announced",
         "            gh issue create --repo",
         "            echo would-create --repo",
+    ),
+    (
+        "failure-announced",
+        '            "Exit 66 has TWO meanings; the message text distinguishes them." \\',
+        '            "Something went wrong." \\',
+    ),
+    (
+        "login-drain",
+        "          sleep 960",
+        "          sleep 5",
+    ),
+    (
+        "login-drain",
+        "      - name: Drain the per-IP login window before the corpus\n        run: |",
+        "      - name: Drain the per-IP login window before the corpus\n        if: false\n        run: |",
+    ),
+    (
+        "attrition-floor",
+        '          ASK_DEV_CORPUS_MIN_EXECUTED: "75"',
+        '          ASK_DEV_CORPUS_MIN_EXECUTED: "100"',
     ),
 ]
 

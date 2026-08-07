@@ -267,7 +267,7 @@ if _PROMETHEUS_AVAILABLE:
         "-- CHAOS-3552 measured 222x on gpt-5-nano. Non-zero means an operator "
         "must price the model or change LLM_MODEL; it is a configuration "
         "defect, not a provider fault.",
-        ["model"],
+        ["model", "reason"],
     )
     ASK_DEV_QUA_SHADOW_FAULT_TOTAL = _prometheus_client_module.Counter(
         "devhealth_ask_dev_qua_shadow_fault_total",

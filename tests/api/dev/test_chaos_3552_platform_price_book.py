@@ -129,11 +129,6 @@ def test_an_unpriced_openai_model_on_the_official_endpoint_is_a_config_error() -
         ("local", SELF_HOSTED_URL),
         ("ollama", SELF_HOSTED_URL),
         ("lmstudio", SELF_HOSTED_URL),
-        # openai-the-client-library pointed at someone else's endpoint is
-        # still self-hosted for pricing purposes -- the rates are not ours to
-        # assume. This is the case `budget.reliable_price` already refuses and
-        # the agent price book does not.
-        ("openai", SELF_HOSTED_URL),
     ],
 )
 def test_self_hosted_is_unmetered_rather_than_a_config_error(
@@ -167,7 +162,7 @@ def test_a_self_hosted_endpoint_claiming_an_openai_model_name_is_not_priced() ->
         platform_cost_metering(
             provider="openai", model="gpt-5-mini", base_url=SELF_HOSTED_URL
         )
-        is PlatformCostMetering.UNMETERED_SELF_HOSTED
+        is PlatformCostMetering.UNKNOWN_BILLABILITY
     )
 
 
@@ -374,6 +369,7 @@ def test_self_hosted_books_no_reservation_at_all() -> None:
         input_tokens=10_000,
         output_tokens=1_000,
         base_url=SELF_HOSTED_URL,
+        provider="ollama",
     )
     assert cost == 0, "self-hosted must be unmetered, not unknown"
     assert cost is not None, "None would leave the US$1 reservation booked"
@@ -476,7 +472,11 @@ def test_the_provider_threads_its_own_endpoint_into_the_cost_lookup() -> None:
     response = SimpleNamespace(usage=usage)
 
     self_hosted = OpenAICompatibleAgentProvider(
-        api_key="k", model="gpt-5-nano", base_url=SELF_HOSTED_URL, client=object()
+        api_key="k",
+        model="gpt-5-nano",
+        base_url=SELF_HOSTED_URL,
+        cost_provider="ollama",
+        client=object(),
     )
     official = OpenAICompatibleAgentProvider(
         api_key="k", model="gpt-5-nano", base_url=None, client=object()
@@ -484,3 +484,65 @@ def test_the_provider_threads_its_own_endpoint_into_the_cost_lookup() -> None:
 
     assert self_hosted._normalize_usage(response).estimated_cost_microusd == 0
     assert official._normalize_usage(response).estimated_cost_microusd == 900
+
+
+@pytest.mark.parametrize(
+    ("label", "base_url"),
+    [
+        ("Azure OpenAI", "https://myco.openai.azure.com/openai/deployments/gpt-5"),
+        ("OpenRouter", "https://openrouter.ai/api/v1"),
+        ("corporate gateway", "https://llm-gateway.corp.example/v1"),
+        ("forwarding proxy", "https://openai-proxy.corp.example/v1"),
+    ],
+)
+def test_a_billable_gateway_is_never_reported_as_free(
+    label: str, base_url: str
+) -> None:
+    """THE fail-open regression control.
+
+    An earlier revision classified self-hosted by URL -- "not api.openai.com"
+    implied "free" -- and reported every one of these BILLABLE endpoints at
+    cost 0. That is strictly worse than the stuck-reservation overcharge it
+    replaced: the overcharge is fail-closed (the org gets throttled early and
+    complains), zero is fail-open (real spend accrues against an allowance
+    that never moves, and nobody is throttled or told).
+
+    Only the PROVIDER NAME can say "the operator's own hardware". A URL cannot,
+    and `openai` + a custom base_url is exactly how Azure and every proxy are
+    wired.
+    """
+
+    from dev_health_ops.llm.agent.openai_compatible import _estimated_cost_microusd
+
+    assert (
+        platform_cost_metering(provider="openai", model="gpt-5-mini", base_url=base_url)
+        is PlatformCostMetering.UNKNOWN_BILLABILITY
+    ), f"{label} classified as free"
+    assert (
+        _estimated_cost_microusd(
+            model="gpt-5-mini",
+            input_tokens=10_000,
+            output_tokens=1_000,
+            base_url=base_url,
+            provider="openai",
+        )
+        is None
+    ), f"{label} reported a cost of zero -- real spend would go unbilled"
+
+
+def test_only_a_self_hosted_PROVIDER_earns_a_zero_cost() -> None:
+    """Zero is licensed by the provider name, never by the URL."""
+
+    from dev_health_ops.llm.agent.openai_compatible import _estimated_cost_microusd
+
+    for provider in ("local", "ollama", "lmstudio"):
+        assert (
+            _estimated_cost_microusd(
+                model="llama-3.1-70b",
+                input_tokens=10_000,
+                output_tokens=1_000,
+                base_url="http://localhost:11434/v1",
+                provider=provider,
+            )
+            == 0
+        )

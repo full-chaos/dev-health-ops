@@ -153,6 +153,12 @@ SCRIPTED_FIXTURE_MODEL = "ask-dev-scripted-v1"
 #: each such neighbour still fails loud.
 _CARVE_OUT_MODELS = frozenset({SCRIPTED_FIXTURE_MODEL})
 
+#: Providers that run on the operator's OWN hardware, so a call genuinely
+#: costs nothing on our platform key. Mirrors
+#: ``policy._LOCAL_PLATFORM_PROVIDERS``. This -- not the endpoint URL -- is
+#: what licenses reporting a cost of zero.
+_SELF_HOSTED_PROVIDERS = frozenset({"local", "ollama", "lmstudio"})
+
 
 class PlatformCostMetering(StrEnum):
     """Whether a platform provider's cost can be metered, and if not, why not.
@@ -172,8 +178,21 @@ class PlatformCostMetering(StrEnum):
     #: error -- the run proceeds unmetered.
     UNMETERED_SELF_HOSTED = "unmetered_self_hosted"
     #: A real OpenAI model on the official endpoint that this build has no
-    #: price for. Operator misconfiguration, and the only case that fails.
+    #: price for. Operator misconfiguration; books the reservation, loudly.
     UNPRICED_CONFIGURATION_ERROR = "unpriced_configuration_error"
+    #: An openai-compatible endpoint that is NOT OpenAI's own -- Azure OpenAI,
+    #: OpenRouter, a corporate gateway, a forwarding proxy. Billability is
+    #: UNKNOWN, so it books the reservation loudly rather than reporting zero.
+    #:
+    #: Distinct from ``UNMETERED_SELF_HOSTED`` and the distinction is the whole
+    #: point. An earlier revision classified by URL -- "not api.openai.com"
+    #: implied "free" -- and reported Azure, OpenRouter and every paid gateway
+    #: at cost 0. That is fail-OPEN: real spend accrues against an allowance
+    #: that never moves and nobody is throttled or told, which is strictly
+    #: worse than the stuck-reservation overcharge it replaced. Only the
+    #: PROVIDER NAME can say "this is the operator's own hardware"; a URL
+    #: cannot.
+    UNKNOWN_BILLABILITY = "unknown_billability"
 
 
 def _official_openai_endpoint(base_url: str | None) -> bool:
@@ -248,8 +267,10 @@ def platform_cost_metering(
 
     if model.strip() in _CARVE_OUT_MODELS:
         return PlatformCostMetering.FIXTURE
-    if provider.strip().lower() != "openai" or not _official_openai_endpoint(base_url):
+    if provider.strip().lower() in _SELF_HOSTED_PROVIDERS:
         return PlatformCostMetering.UNMETERED_SELF_HOSTED
+    if not _official_openai_endpoint(base_url):
+        return PlatformCostMetering.UNKNOWN_BILLABILITY
     if _canonical_priced_model(model) is None:
         return PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR
     return PlatformCostMetering.PRICED
@@ -260,7 +281,12 @@ def _fingerprint(*parts: str) -> str:
 
 
 def _estimated_cost_microusd(
-    *, model: str, input_tokens: int, output_tokens: int, base_url: str | None = None
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    base_url: str | None = None,
+    provider: str = "openai",
 ) -> int | None:
     """Cost for one call, or ``None`` when it genuinely cannot be known.
 
@@ -270,7 +296,8 @@ def _estimated_cost_microusd(
     ``None``, so returning ``None`` for both meant self-hosted deployments
     booked US$4/run for infrastructure the operator already owns.
 
-    * Self-hosted (any non-official endpoint) -> explicit **0**. Unmetered, and
+    * Self-hosted BY PROVIDER (``local``/``ollama``/``lmstudio``) -> explicit
+      **0**. Unmetered, and
       unmetered is the honest answer: the run costs the operator nothing on our
       platform key. Zero reconciles, so no reservation is booked.
     * OpenAI-official with an unpriced model -> ``None``. The reservation
@@ -281,8 +308,13 @@ def _estimated_cost_microusd(
       construction, naming the model and the remedy.
     """
 
-    if not _official_openai_endpoint(base_url):
+    if provider.strip().lower() in _SELF_HOSTED_PROVIDERS:
         return 0
+    if not _official_openai_endpoint(base_url):
+        # Billable-or-not is UNKNOWN here (Azure, OpenRouter, a paid gateway).
+        # Unknown fails CLOSED: the reservation stands, loudly. Returning 0
+        # would report real spend as free -- see UNKNOWN_BILLABILITY.
+        return None
     canonical_model = _canonical_priced_model(model)
     if canonical_model is None:
         return None
@@ -303,12 +335,17 @@ class OpenAICompatibleAgentProvider:
         client: Any | None = None,
         disclosure_key: str = "openai_compatible",
         context_window_tokens: int | None = None,
+        cost_provider: str = "openai",
         organization: str = "",
         project: str = "",
         custom_headers: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self.model = model
         self.base_url = base_url or ""
+        #: CHAOS-3552: which PROVIDER this instance speaks for, so cost
+        #: reporting can tell the operator's own hardware from a paid gateway.
+        #: A URL cannot answer that; only the configured provider name can.
+        self.cost_provider = cost_provider
         self.organization = organization
         self.project = project
         self.custom_headers = custom_headers
@@ -543,6 +580,7 @@ class OpenAICompatibleAgentProvider:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 base_url=self.base_url,
+                provider=self.cost_provider,
             ),
         )
 

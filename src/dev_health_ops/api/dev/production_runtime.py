@@ -1126,7 +1126,10 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
         model=candidate.model,
         base_url=candidate.credentials.base_url,
     )
-    if metering is PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR:
+    if metering in (
+        PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR,
+        PlatformCostMetering.UNKNOWN_BILLABILITY,
+    ):
         # LOUD, not fatal (team-lead ruling, revising an earlier fail-loud
         # ruling on measured availability evidence). Refusing construction
         # would have taken Ask Dev away from every organization running an
@@ -1152,16 +1155,29 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
             extra={
                 "model": candidate.model,
                 "provider": candidate.provider,
+                "reason": metering.value,
+                # Two different operators, two different remedies: a typo'd
+                # or new OpenAI model needs a price entry; an Azure/OpenRouter
+                # /gateway deployment needs its endpoint priced (CHAOS-3560),
+                # and telling them the same thing sends one of them chasing
+                # the wrong fix.
                 "remedy": (
                     "price the model in _PLATFORM_MODEL_PRICES or set "
                     "LLM_MODEL to a priced model"
+                    if metering is PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR
+                    else "this endpoint is not api.openai.com, so its billing "
+                    "rates are unknown and runs book the conservative "
+                    "reservation; pricing known gateways is CHAOS-3560"
                 ),
             },
         )
-        ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL.labels(model=candidate.model).inc()
+        ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL.labels(
+            model=candidate.model, reason=metering.value
+        ).inc()
     return OpenAICompatibleAgentProvider(
         api_key=candidate.credentials.api_key or "platform-openai-compatible",
         model=candidate.model,
+        cost_provider=candidate.provider,
         base_url=candidate.credentials.base_url or None,
         disclosure_key=(
             _ACCEPTANCE_OPENAI_DISCLOSURE_KEY

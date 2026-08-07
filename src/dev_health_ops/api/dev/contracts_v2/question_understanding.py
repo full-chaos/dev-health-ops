@@ -38,18 +38,22 @@ exist (CHAOS-3536), then, while that was true, understated what came back
    ``rejected``, never the whole record. CHAOS-3525 additionally hardened the
    singular commit path to resolve by identity.
 
-**Neither subsumes the other, which is why both are listed.** The schema is
-built once per call from the COMBINED shortlist, so all mentions share one
-index space: it can stop an index that exists nowhere in the call, and it
-cannot stop an index belonging to a *different mention* of the same call.
-Only ``_verify`` knows about per-mention slices. Treating either as
-redundant would be a real reduction in coverage.
+**These are two STAGES, not two coverages.** Every mention slice is a subset
+of ``[0, len(combined))``, so any index the enum rejects is outside every
+mention's slice and ``_verify`` rejects it too -- ``_verify``'s rejection set
+strictly SUBSUMES the schema's. The enum earns its place by acting before
+generation (an unauthorized index is never produced, so the proposal survives
+rather than being discarded) and by ending ``_verify``'s status as a single
+point of failure. Per-mention ownership is ``_verify``'s alone: the schema is
+built once per call from the COMBINED shortlist and cannot express which
+mention an index belongs to.
 
-With zero candidates authorized, both index fields are closed structurally:
-``selected_candidate_index`` is sent as ``{"type": "null"}``, and
-``candidate_indices`` keeps its array type (a null would fail parsing here --
-the field is a non-optional tuple) with an EMPTY item enum, so no element
-value is admissible.
+With zero candidates authorized, ``selected_candidate_index`` is sent as
+``{"type": "null"}``. ``candidate_indices`` stays a plain integer array --
+a null would fail parsing here (non-optional tuple), and the ``enum: []``
+that would close it structurally is an unsatisfiable choice set that has not
+been certified against the local/ollama/lmstudio decoders. It is bounded by
+``_verify`` alone. See ``qua_shadow._response_schema``.
 """
 
 from __future__ import annotations

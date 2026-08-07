@@ -30,7 +30,9 @@ bound stripped in transit (``minimum``/``maximum`` are not in
 ``_STRUCTURAL_SCHEMA_KEYS``); CHAOS-3537 restored it as an ``enum``, which
 survives the projection. So today the wire schema bounds indices to what the
 CALL authorized, and ``qua_shadow._verify`` bounds them to what the MENTION
-authorized -- different scopes, neither redundant.
+authorized. Those are different STAGES rather than different coverage --
+``_verify``'s rejection set subsumes the schema's, and the schema's value is
+that an unauthorized index is never generated in the first place.
 
 Promotion's ``verify_still_authorized`` is the third check, and on the
 singular path it is not redundancy -- it is the ONLY receipt.

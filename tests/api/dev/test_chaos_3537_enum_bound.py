@@ -104,25 +104,33 @@ def test_the_index_after_the_last_authorized_one_is_not_expressible(
     assert candidate_count not in properties["candidate_indices"]["items"]["enum"]
 
 
-def test_no_index_at_all_is_expressible_when_nothing_was_authorized() -> None:
-    """The zero-candidate case, now closed on BOTH fields.
+def test_no_selected_index_is_expressible_when_nothing_was_authorized() -> None:
+    """The zero-candidate case, and the residual deliberately left open.
 
-    CHAOS-3536 could only close ``selected_candidate_index`` (via
-    ``{"type": "null"}``) and had to leave ``candidate_indices`` unbounded,
-    because it is a non-optional tuple that a null would fail to parse and
-    ``maxItems: 0`` is stripped by the projection.
+    ``selected_candidate_index`` is closed structurally, unchanged from
+    CHAOS-3536.
 
-    An EMPTY enum solves it: the array stays an array (so it parses as the
-    empty tuple), and no element value is admissible. Verified live -- strict
-    mode accepts the empty enum and the model returned ``[]`` on both runs.
+    ``candidate_indices`` is NOT, and that is a decision rather than an
+    oversight. An empty item enum (``{"type": "integer", "enum": []}``) would
+    close it -- measured live against OpenAI, accepted, model returned ``[]``
+    on both runs. It was dropped anyway on review: ``enum: []`` is an
+    unsatisfiable choice set, and ``CERTIFIED_PLATFORM_AGENT_PROVIDERS`` also
+    contains ``local``, ``ollama`` and ``lmstudio``, whose constrained
+    decoders were never probed. One that rejects it would turn every
+    zero-candidate call into a provider error and silently lose exactly the
+    no-match evidence the shadow exists to collect -- strictly worse than the
+    residual, which ``_verify`` already covers.
+
+    So this asserts the SHIPPED shape, including the open half, and is the
+    thing to change first if per-endpoint certification is ever obtained.
     """
 
     properties = _wire_mention_properties(candidate_count=0)
 
     assert properties["selected_candidate_index"] == {"type": "null"}
-    assert properties["candidate_indices"]["items"]["enum"] == [], (
-        "with nothing authorized, no index may be admissible in the array "
-        "either -- this is the residual CHAOS-3536 had to leave open"
+    assert properties["candidate_indices"]["items"] == {"type": "integer"}, (
+        "the empty-enum closure is NOT shipped -- see the docstring; adopting "
+        "it needs certification evidence for the local/ollama/lmstudio decoders"
     )
 
 

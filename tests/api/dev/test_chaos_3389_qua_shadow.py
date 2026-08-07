@@ -336,14 +336,22 @@ async def test_a_shadow_component_that_raises_outright_still_never_affects_the_r
 # ---------------------------------------------------------------------------
 # Never-widen holds AT RUNTIME, against a malicious/buggy provider
 #
-# CHAOS-3536 corrected this heading. It used to say "structurally", on the
-# strength of _response_schema's per-call index bounds -- but those bounds
-# are stripped by the provider's _structural_schema projection and have
-# never reached a decoder (CHAOS-3537). Every test below drives a scripted
-# provider that ignores the schema entirely, which is exactly the right
-# shape for the guarantee that actually exists: _verify is the sole guard,
-# and these are its proofs. Nothing here ever demonstrated a wire-level
-# bound, so nothing below changes -- only the claim above it.
+# This heading has been corrected twice; the assertions below have never
+# changed, because they only ever tested one thing and tested it correctly.
+#
+# It first said "structurally", on the strength of _response_schema's
+# minimum/maximum index bounds. CHAOS-3536 found those stripped in transit by
+# _structural_schema -- they reached no decoder, leaving _verify the sole
+# guard. CHAOS-3537 then restored a real wire-level bound as an `enum`, which
+# does survive the projection, so a structural half exists again (see
+# test_chaos_3537_enum_bound.py, which asserts it on the PROJECTED schema).
+#
+# The heading still says RUNTIME because that is what THIS block proves.
+# Every test below drives a scripted provider that ignores the schema
+# entirely -- the correct shape for _verify's guarantee, and silent about the
+# wire either way. Note also that _verify's rejection set SUBSUMES the
+# enum's: every mention slice is a subset of the call-wide index space, so
+# these tests cover the strictly larger property.
 # ---------------------------------------------------------------------------
 
 

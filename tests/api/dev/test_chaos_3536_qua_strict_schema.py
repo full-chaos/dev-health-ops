@@ -446,26 +446,26 @@ def test_the_range_keywords_still_do_not_survive_the_projection() -> None:
         assert keyword not in wire_mention["selected_candidate_index"]
 
 
-def test_candidate_indices_are_now_bounded_on_the_wire() -> None:
-    """The residual CHAOS-3536 documented is CLOSED, by a different keyword.
+def test_candidate_indices_stay_unbounded_when_nothing_was_authorized() -> None:
+    """The residual CHAOS-3536 documented is still open, on purpose.
 
-    This test previously asserted the OPPOSITE, and the reversal is the
-    record worth keeping. CHAOS-3536 could not bound ``candidate_indices``:
-    the contract field is a non-optional ``tuple[_StrictIndex, ...]`` so
-    ``{"type": "null"}`` would fail parsing, and ``maxItems: 0`` is stripped.
-    The conclusion drawn then -- "``_verify`` is the only thing that rejects
-    an out-of-range entry here" -- was right for the encodings considered at
-    the time and wrong as a permanent property of the field.
+    CHAOS-3537 bounded every index field with an ``enum`` for the non-empty
+    case, and could have closed this one too with an EMPTY item enum --
+    measured live against OpenAI and accepted. It was dropped on review:
+    ``enum: []`` is unsatisfiable, and ``local``/``ollama``/``lmstudio`` are
+    certified platform providers whose decoders were never probed. One that
+    rejects it turns every zero-candidate call into a provider error, losing
+    the no-match evidence the shadow exists to gather.
 
-    An EMPTY item enum closes it: the field stays an array, so it still
-    parses as the empty tuple, and no element value is admissible. Verified
-    live -- strict mode accepts the empty enum and the model returned ``[]``.
+    ``_verify`` covers this case regardless -- with nothing authorized every
+    mention slice is empty, so any index at all is rejected.
     """
 
     items = _qua_branch(_wire_schema(candidate_count=0))["properties"]["mentions"][
         "items"
     ]["properties"]["candidate_indices"]["items"]
 
-    assert items == {"type": "integer", "enum": []}, (
-        "with nothing authorized, no element value may be admissible"
+    assert items == {"type": "integer"}, (
+        "if this becomes structurally bounded, the certification evidence "
+        "for every supported decoder must land with it"
     )

@@ -50,14 +50,20 @@ adversarial critique, comment 7d1368d9):
   ``max_total_candidates``) still sees the call's full range. CHAOS-3525
   additionally hardened the singular path to resolve by identity.
 
-  **Neither subsumes the other.** The schema stops "an index that exists
-  nowhere in this call"; ``_verify`` stops "an index that belongs to a
-  different mention". Weakening either is a real reduction in coverage, not
-  the removal of a redundancy.
+  **These are two STAGES, not two coverages** -- the first version of this
+  bullet claimed the latter and was wrong. Every mention slice is a subset of
+  ``[0, len(combined))``, so any index the enum rejects is also outside every
+  mention's slice: ``_verify``'s rejection set strictly SUBSUMES the enum's.
+  The enum is worth having because it acts BEFORE generation (an unauthorized
+  index is never produced, rather than produced and then rejected, which also
+  means the proposal survives instead of being discarded) and because it ends
+  ``_verify``'s status as a single point of failure. Per-mention ownership is
+  ``_verify``'s alone and always will be: the schema cannot express it.
 
-  With zero candidates authorized, both index fields are closed structurally:
-  ``selected_candidate_index`` is ``{"type": "null"}`` and
-  ``candidate_indices`` carries an empty item enum. See ``_response_schema``.
+  With zero candidates authorized, ``selected_candidate_index`` is
+  ``{"type": "null"}``. ``candidate_indices`` stays a plain integer array and
+  is bounded only by ``_verify`` -- see ``_response_schema`` for the
+  empty-enum option that was measured and deliberately not adopted.
 * **LLM unavailable degrades to silent skip, never a block.** Every branch
   of ``evaluate()`` returns a ``QUAShadowRecord`` (never raises); the
   orchestrator's own call site additionally wraps the call and the
@@ -658,19 +664,31 @@ class QuestionUnderstandingShadow:
         ``selected_candidate_index: 7`` at confidence 0.92 in 3 runs of 3,
         while the enum-bound schema could not express it in any of 3.
 
-        Zero candidates gets both fields closed, which the previous encoding
-        could not manage. ``selected_candidate_index`` is ``{"type": "null"}``
-        (parseable -- the contract field is ``_StrictIndex | None``), and
-        ``candidate_indices`` keeps its array type, so it still parses as the
-        empty tuple, but with an EMPTY item enum so no element value is
-        admissible. That closes the residual CHAOS-3536 had to leave open,
-        where ``maxItems: 0`` was stripped and any integer stayed expressible.
+        With zero candidates, ``selected_candidate_index`` is
+        ``{"type": "null"}`` (parseable -- the contract field is
+        ``_StrictIndex | None``). ``candidate_indices`` deliberately stays a
+        plain integer array. An EMPTY item enum would close it structurally,
+        and was measured working against OpenAI -- but ``enum: []`` is an
+        unsatisfiable choice set, and ``CERTIFIED_PLATFORM_AGENT_PROVIDERS``
+        also includes ``local``/``ollama``/``lmstudio``, whose constrained
+        decoders were NOT probed. A decoder that rejects it would turn every
+        zero-candidate call into a provider error and silently lose exactly
+        the no-match evidence the shadow exists to collect -- a worse failure
+        than the residual it closes. Adopt it only with per-endpoint
+        certification evidence (CHAOS-3538 is the natural home).
 
-        Still NOT closed here, and still ``_verify``'s job: the schema is
-        built once per call from the COMBINED shortlist, so the enum bounds
-        indices to what the CALL authorized, never to what the MENTION
-        authorized. A mention whose own slice is empty still sees the call's
-        full range. Neither guard subsumes the other.
+        What the enum does NOT do, stated because the first version of this
+        docstring got it wrong: it does not add coverage ``_verify`` lacks.
+        Every mention's slice is a subset of ``[0, len(combined))``, so an
+        index the enum would reject is outside every mention's slice and
+        ``_verify`` rejects it too -- ``_verify``'s rejection set strictly
+        SUBSUMES the enum's. The enum earns its place by acting at a
+        different STAGE, not over a different set: it constrains generation,
+        so an unauthorized index is never produced rather than produced and
+        then rejected, and a ``_verify`` regression is no longer a
+        single point of failure. Per-mention ownership remains ``_verify``'s
+        alone -- the schema is built once per call from the COMBINED
+        shortlist and cannot express it.
 
         ``maxItems``/``maxLength`` below are stripped in transit and are kept
         only as intent, and as a real bound for any future provider that does
@@ -700,11 +718,15 @@ class QuestionUnderstandingShadow:
                 "candidate_indices": {
                     "type": "array",
                     "maxItems": 25,
-                    # Empty enum when nothing was authorized: the array still
-                    # parses as the empty tuple, but no element value is
-                    # admissible. See the docstring -- this is the half
-                    # CHAOS-3536 could not close.
-                    "items": {"type": "integer", "enum": authorized_indices},
+                    # Enumerated when there is anything to enumerate. With
+                    # NOTHING authorized this stays a plain integer array
+                    # rather than carrying an empty enum -- see the docstring
+                    # for why that exotic shape was measured, then dropped.
+                    "items": (
+                        {"type": "integer", "enum": authorized_indices}
+                        if authorized_indices
+                        else {"type": "integer"}
+                    ),
                 },
                 "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             },

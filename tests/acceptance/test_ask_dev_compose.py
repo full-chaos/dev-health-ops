@@ -1584,3 +1584,47 @@ def test_snapshot_manifest_alembic_heads_are_current_for_this_checkout() -> None
         f"scripts/acceptance/mint_ask_dev_world_snapshot.sh (they are only "
         f"ever valid as a pair). See CHAOS-3488."
     )
+
+
+def test_mint_script_refuses_a_container_serving_another_checkout() -> None:
+    """CHAOS-3544: the mint must assert the container is serving THIS checkout.
+
+    `fixtures world` runs INSIDE the api container, so the world is generated
+    by whatever code that image carries -- not by the checkout the script was
+    invoked from. The script previously stated `up -d --build` as a
+    prerequisite in a header comment, which is a dead guard: nothing checked
+    it and skipping it is invisible.
+
+    That is the worst failure this ticket can produce. Measured on
+    2026-08-07, before this assert existed, against the running container:
+
+        container has TTL cap: False
+        container has old literal: True
+
+    Minting in that state would have regenerated the decaying world,
+    snapshotted it, re-pinned WORLD_DIGEST, and printed "mint: done" -- a
+    snapshot that fails its own content oracle again within days, wearing a
+    fresh digest that makes it look deliberate.
+    """
+
+    mint = (
+        _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "mint: verifying the api container is serving this checkout" in mint, (
+        "the mint script must verify the running container serves the "
+        "invoking checkout before generating anything"
+    )
+    assert "REFUSING" in mint and "exit 70" in mint, (
+        "and it must REFUSE on mismatch -- warning and continuing would still "
+        "produce the snapshot, which is the whole failure"
+    )
+    assert "up -d --build --wait api" in mint, (
+        "the refusal must carry the remedy; an operator who hits this needs "
+        "the rebuild command, not a diagnosis"
+    )
+
+    # The check must run BEFORE any generation, or it certifies nothing.
+    assert mint.index("verifying the api container is serving") < mint.index(
+        "dev-hops fixtures world "
+    ), "the container-currency check must precede world generation"

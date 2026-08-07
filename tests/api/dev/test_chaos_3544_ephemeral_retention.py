@@ -436,3 +436,123 @@ async def test_the_grace_is_far_longer_than_any_run_can_live(retention) -> None:
     assert (
         EPHEMERAL_ABANDONED_GRACE.total_seconds() >= 50 * DevRunLimits().wall_seconds
     ), "and far beyond a single run's own wall-clock limit"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_started_late_in_the_grace_is_not_purged_under_it(
+    retention,
+) -> None:
+    """Codex adversarial review, HIGH: the creation stamp is anchored to
+    CREATION, but a turn can start at any point afterwards.
+
+    Open an ephemeral conversation, leave it idle 55 minutes, then ask a
+    question. The run is legitimately in flight -- but the expiry was set at
+    T0 and comes due at T0+1h, and ``cleanup_expired`` has no run-state
+    guard. The live run's own conversation is deleted out from under it,
+    five minutes into a turn.
+
+    This is the same purged-while-in-use failure the grace exists to
+    prevent, arriving through a door the original in-flight test could not
+    see: that test starts its run at creation time, so the whole grace is
+    still ahead of it. Anchoring on creation was the mistake -- the stamp has
+    to track ACTIVITY.
+    """
+
+    maker, org_id, user_id = retention
+    clock = Clock(_START)
+
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        await session.commit()
+
+    # 55 minutes later the user finally asks something.
+    clock.value = _START + timedelta(minutes=55)
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Asked 55 minutes after opening the panel.",
+            scope_snapshot={},
+        )
+        await session.commit()
+
+    # Five minutes into that turn, the original creation-anchored expiry is
+    # due. The run is still in flight.
+    clock.value = _START + timedelta(minutes=60)
+    assert await _sweep(maker, clock) == 0, (
+        "a conversation whose turn started late in the grace must not be "
+        "purged while that turn is in flight -- the expiry has to track "
+        "activity, not creation"
+    )
+    assert await _exists(maker, conversation.id)
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_pre_fix_conversation_is_not_stamped_and_purged(
+    retention,
+) -> None:
+    """Codex adversarial review, HIGH: the backfill must not stamp a
+    conversation somebody has just resumed.
+
+    A row created before this fix still carries ``expires_at IS NULL`` and
+    stays perfectly readable, so a user can come back to it after deploy and
+    ask something. If the repair selects purely on how OLD the conversation
+    is, it stamps that row to ``now`` for no reason but its age, and the same
+    sweep tick purges it with a live run attached -- reintroducing precisely
+    the in-flight protection the replaced run-state pair used to provide.
+
+    The conversation here is days old and NULL-stamped: unambiguously a
+    pre-fix stranded row by age alone. The only thing that makes it
+    ineligible is that someone is using it right now.
+    """
+
+    maker, org_id, user_id = retention
+    clock = Clock(_START)
+
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}, retention_days=0
+        )
+        await session.commit()
+
+    # Rewrite it into the genuine pre-fix shape: NULL expiry, days old.
+    async with maker() as session:
+        row = await session.get(DevConversation, conversation.id)
+        assert row is not None
+        row.expires_at = None
+        row.created_at = _START - timedelta(days=3)
+        row.updated_at = _START - timedelta(days=3)
+        await session.commit()
+
+    # The user resumes it and asks a question.
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Resumed an old ephemeral conversation.",
+            scope_snapshot={},
+        )
+        await session.commit()
+
+    # A beat tick fires while that turn is in flight: stamp, then sweep.
+    async with maker() as session:
+        service = DevPersistenceService(session, now=clock)
+        await service.backfill_stranded_ephemeral_expiry(limit=100)
+        await session.commit()
+    purged = await _sweep(maker, clock)
+
+    assert purged == 0, (
+        "a resumed pre-fix conversation with a live run must not be stamped "
+        "and purged for being old -- age alone is not idleness"
+    )
+    assert await _exists(maker, conversation.id)

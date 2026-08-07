@@ -93,6 +93,7 @@ async def _run_ask_dev_retention_cleanup(
         factory = session_factory
 
     total_purged = 0
+    total_stamped = 0
     batches_run = 0
 
     try:
@@ -111,6 +112,7 @@ async def _run_ask_dev_retention_cleanup(
         # Bounded and idempotent like the purge loop below, and cheap once
         # drained: the selection is one predicate that returns nothing when
         # nothing is stranded.
+        stamp_backlog_cleared = False
         for _ in range(max(1, int(max_batches))):
             async with factory() as session:
                 stamp_service = DevPersistenceService(session)
@@ -118,7 +120,14 @@ async def _run_ask_dev_retention_cleanup(
                     limit=limit
                 )
                 await session.commit()
+            total_stamped += stamped
             if stamped < limit:
+                # A short batch means the selection ran out of stranded rows.
+                # Unlike cleanup_expired's own short batch below this is
+                # conclusive: the backfill's SELECT ... FOR UPDATE SKIP
+                # LOCKED can only skip rows another stamper holds, and a row
+                # another stamper is holding is a row being repaired.
+                stamp_backlog_cleared = True
                 break
 
         for _ in range(max(1, int(max_batches))):
@@ -147,6 +156,18 @@ async def _run_ask_dev_retention_cleanup(
         # uncontended tick actually verifies the backlog is clear.
         async with factory() as session:
             drained = await DevPersistenceService(session).count_expired() == 0
+        # CHAOS-3544, Codex adversarial review (MEDIUM): `count_expired`
+        # counts rows with a DUE expires_at, so it is structurally blind to
+        # the stranded population this task now repairs -- those still carry
+        # expires_at IS NULL. With more stranded rows than
+        # max_batches * limit, the stamp loop hits its cap, the purge loop
+        # finds nothing left, and the task would report "completed" and
+        # advance the last-success gauge while an older backlog remained.
+        # That is the same false-drained claim CHAOS-3404 round 2 closed for
+        # the purge half, reintroduced through the repair half.
+        #
+        # Only a stamp loop that ran out of work may contribute to drained.
+        drained = drained and stamp_backlog_cleared
     except Exception:
         logger.exception(
             "ask_dev_retention_sweep.failed",
@@ -174,6 +195,7 @@ async def _run_ask_dev_retention_cleanup(
             "purged": total_purged,
             "batches": batches_run,
             "drained": drained,
+            "stamped": total_stamped,
         },
     )
     record_ask_dev_retention_sweep(status=status, purged=total_purged)

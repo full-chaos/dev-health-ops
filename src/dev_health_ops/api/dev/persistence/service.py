@@ -3736,7 +3736,20 @@ class DevPersistenceService:
                     .where(
                         DevConversation.retention_days == 0,
                         DevConversation.expires_at.is_(None),
-                        DevConversation.created_at < now - EPHEMERAL_ABANDONED_GRACE,
+                        # Codex adversarial review (HIGH): keyed on
+                        # updated_at, not created_at. The reachable version
+                        # of that finding -- a user resuming a pre-fix row
+                        # and having it stamped out from under a live run --
+                        # is already closed by _touch stamping the NULL
+                        # expiry on admission, and a test proves it. This is
+                        # the belt-and-braces half: "idle for a full grace"
+                        # is the condition that actually matters, and
+                        # updated_at says it directly rather than relying on
+                        # the invariant that every touch also stamps. A
+                        # future path that touches without stamping would
+                        # strand and then purge a live conversation under
+                        # created_at; under updated_at it cannot.
+                        DevConversation.updated_at < now - EPHEMERAL_ABANDONED_GRACE,
                     )
                     .order_by(DevConversation.created_at, DevConversation.id)
                     .limit(limit)
@@ -3944,6 +3957,31 @@ class DevPersistenceService:
         conversation.updated_at = now
         if conversation.retention_days == 30:
             conversation.expires_at = now + timedelta(days=30)
+        else:
+            # CHAOS-3544, Codex adversarial review (HIGH, REPRODUCED): the
+            # ephemeral expiry must track ACTIVITY, not creation.
+            #
+            # Anchoring on creation alone is a data-loss path. Open an
+            # ephemeral conversation, leave it idle 55 minutes, then ask a
+            # question: the run is legitimately in flight, but the expiry set
+            # at T0 falls due at T0+1h and `cleanup_expired` has no run-state
+            # guard -- so the live turn's own conversation is deleted out
+            # from under it, five minutes in. The first in-flight test could
+            # not see this: it starts its run at creation time, with the
+            # whole grace still ahead of it.
+            #
+            # Refreshing here restores the invariant the grace was meant to
+            # provide -- an ephemeral conversation is never collectable until
+            # it has been idle for a full grace period. It also repairs a
+            # pre-fix row (`expires_at IS NULL`) the moment anyone touches
+            # it, which is what stops the age-based backfill from stamping a
+            # conversation somebody just resumed.
+            #
+            # It never DELAYS the completed case:
+            # `_stamp_ephemeral_expiry_if_terminal` still moves the expiry
+            # back to `now` when the run reaches terminal, and runs after
+            # this.
+            conversation.expires_at = now + EPHEMERAL_ABANDONED_GRACE
 
     async def _purge_conversation(
         self,

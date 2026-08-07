@@ -1075,6 +1075,10 @@ async def test_backfill_stranded_ephemeral_expiry_repairs_pre_fix_rows(persisten
         # is still starting, which is exactly what the age predicate refuses
         # to touch.
         stranded.created_at = datetime.now(UTC) - timedelta(days=2)
+        # ...and untouched since. The repair keys on updated_at, because
+        # "idle for a full grace" is the real condition -- a row someone
+        # resumed minutes ago is not stranded no matter how old it is.
+        stranded.updated_at = datetime.now(UTC) - timedelta(days=2)
         await session.flush()
 
         still_in_flight = await service.create_conversation(

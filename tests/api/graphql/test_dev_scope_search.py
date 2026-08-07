@@ -55,6 +55,7 @@ class FakeCatalog:
         # (CHAOS-3422), so a double that returned rows in seeded order would
         # be asserting an order the real catalog never emits.
         return merge_search_candidates(
+            query=query,
             alias_hits=(),
             substring_hits=[
                 AuthorizedEntity(EntityKind.PROJECT, "project-z", "Ask Dev"),

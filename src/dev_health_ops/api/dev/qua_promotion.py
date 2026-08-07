@@ -16,11 +16,23 @@ else. That is what keeps CHAOS-3388's deterministic layer the fast path
 rather than a suggestion.
 
 **It fails closed on every ambiguity.** Wrong outcome, missing entity, a
-rejected proposal, confidence under the floor, more than one mention, a
-cohort, an uncorroborated organization-wide cardinality -- each returns
+rejected proposal, more than one mention, a cohort, an uncorroborated
+organization-wide cardinality, an under-specified span -- each returns
 ``None``, and ``None`` means the run proceeds exactly as it would have
 without the seam. There is no branch here that repairs a partial proposal
 into a usable one.
+
+**What decides admission is structure, not a number (CHAOS-3553).** The gate
+used to be a confidence floor, described in this module and in
+``alias_matching`` as the control that kept a wrong subject from committing.
+CHAOS-3539 measured that claim over 336 rows and refuted it: confidence
+barely separates a correct commit from a wrong one (AUC 0.617, and 0.72 is
+the modal value for both classes), so no threshold both admits the positives
+and refuses the negatives. ``_structurally_admissible`` replaces it, reading
+facts the shortlist already contained -- how many authorized entities the
+span matched, and whether the span names an entity or its family.
+``QUA_COMMIT_MIN_CONFIDENCE`` survives only as a coarse sanity bound; read
+its own comment before attributing any safety property to it.
 
 **It re-authorizes at commit time.** The shadow does bound proposals two ways
 before promotion sees them -- but read ``qua_shadow``'s module docstring for
@@ -48,11 +60,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from .alias_matching import SpanMatchClass
 from .contracts import ScopeResolutionOutcome
 from .contracts_v2.base import Cardinality
 from .contracts_v2.question_understanding import QUAOutcome
 from .contracts_v2.subject import DevResolutionEntry, ResolutionOutcome
-from .qua_shadow import QUAShadowRecord, QUAShadowStatus
+from .qua_shadow import QUAShadowMentionAssessment, QUAShadowRecord, QUAShadowStatus
 from .scope_service import (
     SEARCHABLE_ENTITY_KINDS,
     AuthorizedEntity,
@@ -94,17 +107,72 @@ QUA_COMMIT_DIAGNOSTIC = "committed_qua_subject"
 #: stronger provenance than the run actually had.
 QUA_COMMIT_RESOLVER_VERSION = "qua.v1"
 
-#: The confidence floor a proposal must clear to commit.
+#: A coarse sanity bound on the proposal's self-reported confidence.
 #:
-#: PROVISIONAL, and deliberately conservative (team-lead ruling, 2026-08-07):
-#: pinned as a constant now rather than blocking the capability on a
-#: calibration study, with every commit-mode decision recording the observed
-#: confidence so the data to justify or move this number accumulates from the
-#: first run. It is a floor, not a threshold to tune upward casually -- the
-#: cost of a wrong commit is a confidently wrong subject, which is the exact
-#: failure CHAOS-3289 and ``alias_matching``'s never-auto-commit rule were
-#: written about.
-QUA_COMMIT_MIN_CONFIDENCE = 0.85
+#: **This is not a safety control, and nothing may describe it as one.** It
+#: was one until CHAOS-3539 measured it (336 rows over 42 mention shapes,
+#: ``.remember/chaos-3539-sweep-data.jsonl``) and the measurement came back a
+#: clean null: among rows that actually committed, confidence separates a
+#: correct commit from a wrong one with AUC 0.617, and 0.72 is the MODAL value
+#: for true and false positives alike -- 50 of 79 true positives and 6 of 12
+#: false positives. Driving the false-positive rate to zero required 0.95,
+#: where the true-positive rate is 1.0%. There is no value of this number that
+#: does the job the number was introduced to do.
+#:
+#: 0.6 is retained only so that a degenerate near-zero proposal is not treated
+#: as evidence. It sits beneath every true positive the sweep observed, so it
+#: costs nothing measured, and it decides nothing: ``_structurally_admissible``
+#: below is what actually separates the cases.
+#:
+#: The previous value was 0.85, documented as the control that prevented a
+#: wrong commit. 8 of the 12 observed false positives cleared it.
+QUA_COMMIT_MIN_CONFIDENCE = 0.6
+
+#: How many of an entity's own label tokens a merely-partial span must account
+#: for before the span is treated as naming that entity.
+#:
+#: **Structural, not tuned.** The reasoning does not come from the sweep and
+#: does not move with it: a partial match is by definition a match on a proper
+#: subset of the label, so the question is whether the part the user said can
+#: distinguish the entity from its neighbours. A ONE-token partial cannot, and
+#: not as a matter of frequency -- a single token that appears in a label is
+#: the kind of token that appears in SIBLING labels too, because that is what
+#: makes a family a family ("Meridian" over four Meridian entities, an org
+#: prefix; a product line; a team's parent name). Naming one token of a
+#: multi-token label is naming the family and leaving the entity's own
+#: distinguishing words unsaid. Two is simply the smallest span that can carry
+#: a distinction at all.
+#:
+#: The case where one token IS the whole identity -- a single-word label named
+#: in full -- is not a partial match; it is ``EXACT_LABEL``, admitted by the
+#: clause above this one. So this bound never refuses a span that named its
+#: entity completely.
+#:
+#: Raising or lowering it would not be a recalibration, it would be a
+#: different claim about what a span means, and it needs the argument redone
+#: rather than a number edited.
+_STRUCTURALLY_DISTINGUISHING_TOKENS = 2
+
+#: The span-match classes that name an entity outright rather than brushing
+#: against its label. An exact label is the entity's whole name; a
+#: parenthetical alias and an acronym are derived forms, but each is a form of
+#: the WHOLE name rather than a fragment of it, so neither leaves
+#: distinguishing words unsaid the way a partial does.
+#:
+#: Admitting alias and acronym here is what keeps CHAOS-3525's literal
+#: acceptance -- "What's the status of the ACR project" -- an auto-commit
+#: instead of a clarification round trip. It does NOT repeal
+#: ``alias_matching``'s never-auto-commit rule for the DETERMINISTIC layer:
+#: that rule stands unchanged, and this path is reached only after the
+#: deterministic layer has already declined. See ``alias_matching``'s
+#: "Amendment (CHAOS-3525)" paragraph.
+_SPAN_NAMES_THE_ENTITY = frozenset(
+    {
+        SpanMatchClass.EXACT_LABEL,
+        SpanMatchClass.ALIAS,
+        SpanMatchClass.ACRONYM,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +183,89 @@ class QUAPromotion:
     text_span: str
     entity: AuthorizedEntity
     confidence: float
+
+
+def _structurally_admissible(assessment: QUAShadowMentionAssessment) -> bool:
+    """CHAOS-3553: may this proposal matter, on the STRUCTURE of the match?
+
+    Three clauses. Each refuses on its own, and each is observed refusing on
+    its own in ``tests/api/dev/test_chaos_3553_admission.py`` -- a clause that
+    is never seen failing alone is a clause nothing proves is load-bearing.
+
+    Refusal is not an error. It falls through to the ranked clarification
+    CHAOS-3525 already built, which is the correct product behaviour for an
+    under-specified reference: ask, rather than guess and disclose the guess.
+
+    **1. The mention's own authorized slice holds exactly one candidate.** A
+    span that matched several authorized entities is ambiguous by
+    construction, and a model choosing among them is breaking a tie on
+    evidence it does not have. The shortlist already contained this proof and
+    nothing consulted it -- that is the defect CHAOS-3553 was filed for. An
+    EMPTY slice refuses here too: "the catalog offered nothing" is not
+    "nothing was ambiguous".
+
+    **2. The selection is that one candidate.** Clause 1 is evidence about the
+    entity IN the slice and about no other. Without this, a proposal naming
+    something else inherits an unambiguity it was never part of. Compared by
+    ``(kind, canonical_id)`` -- the same identity key every dedupe in
+    ``scope_service`` uses -- rather than by object equality, so a difference
+    in label formatting or span provenance cannot decide authorization.
+
+    **3. The span identifies the entity rather than its family.** See
+    ``_SPAN_NAMES_THE_ENTITY`` and
+    ``_STRUCTURALLY_DISTINGUISHING_TOKENS``. This clause is the one a
+    slice-size rule alone would omit, and omitting it costs the majority of
+    the observed damage: ``neg.C2`` ("the Meridian projects") has a slice of
+    EXACTLY ONE -- typed to ``project``, "Meridian" matched a single
+    authorized project -- and produced 8 of the 12 false positives CHAOS-3539
+    measured. Clause 1 admits it; only this clause refuses it.
+
+    **Generalization limit, stated here because this is where the rule
+    lives.** The three clauses are structural and hold for any model: a span
+    matching several authorized entities is under-specified regardless of who
+    reads it, and a span naming one word of a multi-word label leaves the rest
+    unsaid regardless of who reads it. What is NOT general is the evidence
+    that these three suffice. That comes from 24 distinct mention shapes
+    against one synthetic 8-entity catalog, evaluated by one model
+    (``gpt-5-nano``) through one prompt path, and it is a claim about the
+    false positives that population produced -- not a proof that no other
+    shape can slip through. A different model will distribute confidence
+    differently, which is irrelevant here precisely because nothing below
+    reads confidence. A different CATALOG can produce span/label shapes this
+    set does not contain, and that is the real residual.
+
+    When a new false positive is found, it is amended the same way this one
+    was: reproduce the shape, add the clause the structure justifies, observe
+    it failing on its own. Never by reaching for a confidence tiebreak --
+    CHAOS-3539 measured that road and it does not go anywhere.
+    """
+
+    authorized_slice = assessment.authorized_slice
+    selected = assessment.selected_entity
+    if selected is None:
+        return False
+    # Clause 1.
+    if len(authorized_slice) != 1:
+        return False
+    # Clause 2.
+    only_candidate = authorized_slice[0]
+    if (only_candidate.kind, only_candidate.canonical_id) != (
+        selected.kind,
+        selected.canonical_id,
+    ):
+        return False
+    # Clause 3. Read off the entity in the SLICE rather than the selected one:
+    # they are the same entity by clause 2, and the slice row is the one the
+    # catalog stamped, so its provenance cannot have been rewritten in transit.
+    span_match = only_candidate.span_match
+    if span_match is None:
+        # Not classified. Every search-path entity carries a ``SpanMatch``;
+        # one that does not reached here from a path with no span to classify,
+        # and an unclassified match is not an admissible one.
+        return False
+    if span_match.match_class in _SPAN_NAMES_THE_ENTITY:
+        return True
+    return span_match.label_tokens_covered >= _STRUCTURALLY_DISTINGUISHING_TOKENS
 
 
 def promotable_selection(
@@ -195,6 +346,8 @@ def promotable_selection(
     if assessment.selected_entity is None:
         return None
     if assessment.confidence < min_confidence:
+        return None
+    if not _structurally_admissible(assessment):
         return None
     return QUAPromotion(
         mention_id=assessment.mention_id,

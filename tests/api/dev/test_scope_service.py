@@ -114,6 +114,7 @@ class FakeCatalog:
         # double returning rows in seeded order would pin an order the real
         # catalog never emits.
         return merge_search_candidates(
+            query=query,
             alias_hits=(),
             substring_hits=[
                 entity

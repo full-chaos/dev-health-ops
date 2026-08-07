@@ -58,8 +58,16 @@ is not evidence about what a person meant. That reasoning still holds exactly
 as written, which is why the deterministic rule stands. A model that
 has read the question and the candidate labels is a different class of
 evidence, and it is gated as such: the deterministic layer must decline
-first, the proposal must clear a confidence floor, and the entity is
-re-authorized against the catalog at commit time. Crucially the commit is
+first, the span must be structurally unambiguous -- it must have matched
+exactly one authorized entity, and must name that entity rather than its
+family (``qua_promotion._structurally_admissible``, CHAOS-3553) -- and the
+entity is re-authorized against the catalog at commit time.
+
+This paragraph used to name a confidence floor as the middle gate. CHAOS-3539
+measured that floor over 336 rows and found it separates a correct commit
+from a wrong one barely at all, so the claim is removed rather than softened:
+a reader who believes a threshold is holding the line will reason about this
+module's amendment on a guarantee that was never there. Crucially the commit is
 never silent -- ``no_match_terminal.disclose_subject_match`` names the span
 and the label in the user-facing answer, so a reader can catch exactly the
 mistake 3289 produced. A derived alias may now be *selected*; it can never be
@@ -80,11 +88,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 
 __all__ = [
     "NameAliasForms",
+    "SpanMatch",
+    "SpanMatchClass",
     "acronym_candidates",
     "alias_forms",
+    "classify_span_match",
     "strip_parentheticals",
 ]
 
@@ -175,3 +187,104 @@ def alias_forms(name: str) -> NameAliasForms:
         literal_aliases=frozenset(alias.casefold() for alias in parenthetical_aliases),
         acronyms=frozenset(acronym.casefold() for acronym in acronyms),
     )
+
+
+class SpanMatchClass(StrEnum):
+    """How a mention's span relates to one catalog label (CHAOS-3553).
+
+    Deliberately a property of the PAIR ``(span, label)``, not a record of
+    which search pass returned the row. The two are close but not the same,
+    and the difference is what makes this useful: the alias pass
+    (``scope_catalog._alias_matches``) returns parenthetical-alias and acronym
+    hits in one undifferentiated bucket, and the substring pass returns an
+    exact whole-label match and an incidental fragment in another. A consumer
+    that needs to know whether the user NAMED the entity or merely brushed
+    against its label cannot recover that from the bucket.
+
+    Ordered from most to least specific; ``classify_span_match`` applies them
+    in that order, so a span that qualifies two ways gets the stronger class.
+    """
+
+    #: The span is the whole label, modulo case and surrounding whitespace.
+    EXACT_LABEL = "exact_label"
+    #: The span equals a parenthetical segment of the label ("(Context
+    #: Fabric)"). A *derived* signal -- see this module's docstring on why a
+    #: parenthetical is no more authoritative than an acronym.
+    ALIAS = "alias"
+    #: The span equals an acronym of the label or of one of its parentheticals
+    #: ("ACR" for "... Agent Context Runtime ..."). Also derived.
+    ACRONYM = "acronym"
+    #: None of the above: the label merely contains the span, which is every
+    #: hit the catalog's ``LIKE '%query%'`` returns and nothing more.
+    SUBSTRING_PARTIAL = "substring_partial"
+
+
+@dataclass(frozen=True, slots=True)
+class SpanMatch:
+    """The typed provenance of one ``(span, label)`` pair.
+
+    CHAOS-3422's lesson, quoted verbatim in
+    ``scope_service._dedupe_preserving_rank``: "an ``AuthorizedEntity``
+    carries no match provenance for a later layer to recover". That absence is
+    why a downstream dedupe silently destroyed alias precedence -- the
+    information had to be re-derived and the re-derivation was wrong. This
+    type is that provenance, carried rather than re-derived.
+
+    Both fields are computed together, from the same span, so a consumer can
+    never pair a class from one query with a coverage count from another.
+    """
+
+    match_class: SpanMatchClass
+    #: How many DISTINCT tokens of the label the span accounts for. Zero for a
+    #: match that shares no word with the label at all -- which is the normal
+    #: case for ``ACRONYM``, where the span is initials rather than words.
+    label_tokens_covered: int
+
+
+def _distinct_tokens(text: str) -> frozenset[str]:
+    return frozenset(word.casefold() for word in _words(text))
+
+
+def classify_span_match(*, span: str, label: str) -> SpanMatch:
+    """Classify how ``span`` identifies ``label``, and how much of it it covers.
+
+    Pure and catalog-independent, like everything else in this module: it
+    decides nothing about commit policy, it only reports the shape of the
+    match. ``qua_promotion`` is the layer that attaches consequences.
+
+    The classification is computed from the pair rather than read off the
+    search pass that produced the row, so it is stable whether or not
+    ``include_alias_matches`` was set on the search -- a row found only by
+    substring containment against a label whose parenthetical happens to equal
+    the span really IS an alias match, and reporting it as incidental
+    containment would understate it.
+
+    One boundary worth stating because it is invisible from the outside: the
+    catalog's per-kind SQL also matches on identifiers (``id``,
+    ``project_key``, a repository's ``toString(id)``), not only on the label.
+    A row found that way and whose label is unrelated to the span classifies
+    as ``SUBSTRING_PARTIAL`` with low coverage, which is a conservative answer
+    rather than a correct one. It costs nothing today: CHAOS-3525's recorded
+    scope note bounds every consumer to the spans the deterministic
+    interpreter extracts (title-case forms and acronyms, never slug or id
+    forms), so an id-shaped span does not reach this function on the paths
+    that read the result. Should that population ever widen, this is the line
+    that needs an identifier class of its own.
+    """
+
+    normalized_span = span.strip().casefold()
+    normalized_label = label.strip().casefold()
+    span_tokens = _distinct_tokens(span)
+    covered = len({token for token in _distinct_tokens(label) if token in span_tokens})
+
+    if normalized_span and normalized_span == normalized_label:
+        match_class = SpanMatchClass.EXACT_LABEL
+    else:
+        forms = alias_forms(label)
+        if normalized_span in forms.literal_aliases:
+            match_class = SpanMatchClass.ALIAS
+        elif normalized_span in forms.acronyms:
+            match_class = SpanMatchClass.ACRONYM
+        else:
+            match_class = SpanMatchClass.SUBSTRING_PARTIAL
+    return SpanMatch(match_class=match_class, label_tokens_covered=covered)

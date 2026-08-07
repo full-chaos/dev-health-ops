@@ -659,6 +659,7 @@ def test_inside_the_preferred_kind_alias_precision_still_decides() -> None:
         repository_id=None,
     )
     ranked = merge_search_candidates(
+        query="acr",
         alias_hits=[ACR_PROJECT],
         substring_hits=[aardvark, *ACR_SUBSTRING_ISSUES],
         preferred_kinds=frozenset({EntityKind.PROJECT}),
@@ -682,6 +683,7 @@ def test_merging_without_a_preference_keeps_the_chaos_3388_order() -> None:
         repository_id=None,
     )
     ranked = merge_search_candidates(
+        query="acr",
         alias_hits=[ACR_PROJECT],
         substring_hits=[aardvark, *ACR_SUBSTRING_ISSUES],
         preferred_kinds=frozenset(),

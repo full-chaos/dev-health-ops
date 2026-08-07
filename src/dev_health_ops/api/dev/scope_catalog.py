@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -11,7 +12,7 @@ from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.api.queries.scopes import resolve_repo_id
 from dev_health_ops.api.services.identity import resolve_scope_display_names
 
-from .alias_matching import alias_forms
+from .alias_matching import alias_forms, classify_span_match
 from .scope_service import AuthorizedEntity, EntityKind, ScopeRef
 
 #: CHAOS-3388. Kinds whose display name is a stable proper noun an acronym or
@@ -81,12 +82,16 @@ def _entity_sort_key(entity: AuthorizedEntity) -> tuple[str, str, str]:
 
 def merge_search_candidates(
     *,
+    query: str,
     alias_hits: Iterable[AuthorizedEntity],
     substring_hits: Iterable[AuthorizedEntity],
     preferred_kinds: frozenset[EntityKind],
     limit: int,
 ) -> list[AuthorizedEntity]:
     """The one ranking of a search page, applied *before* its truncation.
+
+    Also the one place that stamps each surviving row with its
+    ``SpanMatch`` provenance (CHAOS-3553) -- see "Provenance" below.
 
     Three keys, in this order:
 
@@ -107,6 +112,29 @@ def merge_search_candidates(
     cannot recover a same-kind entity that the truncation already discarded.
     An empty ``preferred_kinds`` collapses key 1 to a constant, which is
     byte-for-byte the alias-then-substring order this replaced.
+
+    **Provenance (CHAOS-3553).** Every returned row carries a ``SpanMatch``
+    describing how ``query`` identifies its label. This function is where it
+    is stamped because this function is the only place that holds the query
+    and the ranked page at once -- every layer above it (``scope_service``'s
+    dedupe and preferred-kind partition, the QUA shortlist, the promotion
+    predicate) receives entities and no longer has the query in hand, which is
+    exactly the shape of the CHAOS-3422 defect: provenance that a later layer
+    had to re-derive, and re-derived wrongly.
+
+    The stamp is a ``dataclasses.replace`` applied to the ALREADY-ORDERED
+    list, and that ordering is the CHAOS-3422 hard constraint. Nothing here
+    sorts, filters, or re-keys on the new field; ``span_match`` is also
+    ``compare=False`` on ``AuthorizedEntity``, so it cannot leak into a
+    downstream equality or dict key either. Ranking is unchanged
+    byte-for-byte -- the classification is computed after ``ordered`` is
+    final, never as a fourth sort key.
+
+    Note the class is derived from ``(query, label)``, not from which of the
+    two arguments a row arrived in. The buckets are coarser than the truth:
+    ``alias_hits`` merges parenthetical-alias with acronym matches, and
+    ``substring_hits`` merges a whole-label match with an incidental fragment.
+    See ``alias_matching.classify_span_match``.
     """
 
     alias_by_key: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
@@ -127,7 +155,10 @@ def merge_search_candidates(
             _entity_sort_key(item[1]),
         ),
     )
-    return [entity for _, entity in ordered[:limit]]
+    return [
+        replace(entity, span_match=classify_span_match(span=query, label=entity.label))
+        for _, entity in ordered[:limit]
+    ]
 
 
 _WATERMARK_TABLES: dict[EntityKind, tuple[str, str]] = {
@@ -238,6 +269,7 @@ class ClickHouseAuthorizedEntityCatalog:
         # up: the surviving page was still kind-blind, so the one real
         # *project* the user asked for ranked 5th of 5 behind four issues.
         return merge_search_candidates(
+            query=query,
             alias_hits=alias_entities,
             substring_hits=entities,
             preferred_kinds=preferred_kinds,

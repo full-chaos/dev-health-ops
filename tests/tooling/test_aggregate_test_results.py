@@ -455,6 +455,29 @@ def test_paths_filter_covers_every_file_the_test_jobs_install() -> None:
     )
 
 
+def test_paths_filter_covers_the_acceptance_runtime_dependencies() -> None:
+    # Given the acceptance suite hashes a fixed set of runtime inputs and
+    # asserts on them, a change to any of them can turn the suite red
+    from scripts.acceptance.acceptance_artifact import RUNTIME_DEPENDENCY_PATHS
+
+    patterns = _code_filter_patterns()
+
+    # Then the filter selects on all of them. Read from the production tuple,
+    # not restated here: a path added there must reach this gate without
+    # anyone remembering to update a list in a test. (docker/Dockerfile was
+    # the entry this found missing -- CHAOS-3482 Codex round 4.)
+    assert RUNTIME_DEPENDENCY_PATHS, "empty inventory -- this guard measured nothing"
+    uncovered = sorted(
+        path for path in RUNTIME_DEPENDENCY_PATHS if not _is_covered(path, patterns)
+    )
+    assert not uncovered, (
+        f"the acceptance suite depends on {uncovered}, but the `code` path "
+        f"filter does not select on them: a PR touching only those files "
+        f"skips every test job and the required gate goes green with nothing "
+        f"run. Filter patterns: {patterns}"
+    )
+
+
 def test_aggregator_consumes_the_changes_job() -> None:
     # Given the required gate
     test_job = _job("test")

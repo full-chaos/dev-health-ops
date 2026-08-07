@@ -29,6 +29,7 @@ from typing import Any
 
 from internal.providersync.testdata import oracle_registry
 from internal.providersync.testdata.oracle_pairs.status_mapping_load import (
+    MIRRORED_EXCEPTIONS,
     load_mapping_for_case,
 )
 
@@ -93,7 +94,7 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     """
     try:
         mapping = load_mapping_for_case(case)
-    except Exception as exc:  # noqa: BLE001 -- the exception IS the observation
+    except MIRRORED_EXCEPTIONS as exc:
         return {
             "outcome": f"load:{type(exc).__name__}",
             "normalize_status": None,
@@ -118,7 +119,7 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
                     labels=labels,
                 ),
             }
-    except Exception as exc:  # noqa: BLE001
+    except MIRRORED_EXCEPTIONS as exc:
         return {
             "outcome": f"normalize:{type(exc).__name__}",
             "normalize_status": None,

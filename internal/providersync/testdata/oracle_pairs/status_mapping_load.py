@@ -107,6 +107,20 @@ def _plain(index: Mapping[str, Mapping[str, str]]) -> dict[str, dict[str, str]]:
 D20_PYTHON_BEHAVIOUR = "python:resolves-timestamp-and-str()s-it"
 
 
+# The ONLY exception classes that are part of the mirrored contract. The Python
+# loader raises AttributeError for a truthy non-mapping section and TypeError
+# for a non-iterable category value; those are observations to compare.
+#
+# Everything else -- a RuntimeError from the harness's producer-provenance
+# guard, an OSError from a missing fixture, an ImportError -- is INFRASTRUCTURE
+# FAILING, and must crash the run rather than being encoded as a row. This was
+# not hypothetical: while proving the provenance guard fires, a deliberately
+# wrong producer path turned every case into a tidy `load:RuntimeError` row
+# instead of stopping the run. A measurement that did not happen must fail
+# loudly, not arrive as data.
+MIRRORED_EXCEPTIONS = (AttributeError, TypeError)
+
+
 def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     """Build one row, carrying the PHASE and exception type when Python raises.
 
@@ -118,7 +132,7 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     """
     try:
         mapping = load_mapping_for_case(case)
-    except Exception as exc:  # noqa: BLE001 -- the exception IS the observation
+    except MIRRORED_EXCEPTIONS as exc:
         return {
             "outcome": f"load:{type(exc).__name__}",
             "status_by_provider": None,

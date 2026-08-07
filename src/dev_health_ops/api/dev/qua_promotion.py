@@ -253,10 +253,33 @@ def _structurally_admissible(assessment: QUAShadowMentionAssessment) -> bool:
     reads confidence. A different CATALOG can produce span/label shapes this
     set does not contain, and that is the real residual.
 
-    When a new false positive is found, it is amended the same way this one
-    was: reproduce the shape, add the clause the structure justifies, observe
-    it failing on its own. Never by reaching for a confidence tiebreak --
-    CHAOS-3539 measured that road and it does not go anywhere.
+    **One such shape is known, reachable, and NOT closed here -- recorded
+    rather than left for someone to rediscover.** ``acronym_candidates``
+    generates every contiguous window of two or more words, so a long label
+    yields many acronyms, including short ones: "Dev Health Agent Context
+    Runtime Platform Services Team" yields 28 windows, 7 of them two letters
+    ("AC", "DH", "PS", "ST", ...). The interpreter does extract a two-letter
+    mention ("What is the status of the AC project" -> span "AC"), so a user
+    who means something the catalog does not hold can land on the sole entity
+    whose label happens to contain two consecutive words with those initials,
+    and this predicate admits it on the derivation arm.
+
+    Not closed, for two reasons, and the reasons are the interesting part.
+    First, it is not a regression: the previous gate admitted the same shape
+    on confidence alone, with no slice or class check at all, so nothing here
+    widens it. Second, the obvious fix -- a minimum acronym length -- is
+    exactly the tuned number this ticket exists to stop introducing. There is
+    no measured false positive of this shape, and inventing a bound to
+    forestall an unmeasured one would repeat CHAOS-3539's mistake in a new
+    currency. ``alias_matching`` already drew the only line it had evidence
+    for: a window is two or more WORDS, because a one-word initial would
+    collide with every name starting with that letter.
+
+    So it is stated, not claimed closed. If it is ever measured, it amends the
+    same way everything else here does: reproduce the shape, add the clause
+    the structure justifies, observe it failing on its own. Never by reaching
+    for a confidence tiebreak -- CHAOS-3539 measured that road and it does not
+    go anywhere.
     """
 
     authorized_slice = assessment.authorized_slice

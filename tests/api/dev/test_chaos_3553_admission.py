@@ -440,6 +440,40 @@ def test_unclassified_provenance_fails_closed() -> None:
     assert promotable_selection(record, deterministic_declined=True) is None
 
 
+def test_a_short_acronym_window_still_admits_which_is_a_known_residual() -> None:
+    """CHARACTERIZATION, not an endorsement. This shape is NOT closed.
+
+    ``acronym_candidates`` generates every contiguous window of >= 2 words, so
+    a long label yields short acronyms -- the label below yields 28 windows, 7
+    of them two letters. The interpreter does extract a two-letter mention
+    ("What is the status of the AC project" gives the span "AC"), so a user
+    meaning something the catalog does not hold can land on the one entity
+    whose label happens to contain two consecutive words with those initials.
+
+    Asserted so the behaviour is VISIBLE and any future change to it is
+    deliberate, and so nobody reads the corpus test's "refuses all 12 observed
+    false positives" as "refuses everything". See
+    ``qua_promotion._structurally_admissible``'s generalization-limit
+    paragraph for why it is not closed here: it is not a regression (the
+    previous gate admitted it on confidence alone), and the obvious fix is a
+    minimum acronym length, which is precisely the unmeasured tuned number
+    CHAOS-3539 exists to stop introducing.
+
+    If this shape is ever MEASURED as a false positive, this test is the one
+    to invert, together with the clause that earns the change.
+    """
+
+    label = "Dev Health Agent Context Runtime Platform Services Team"
+    entity = _entity(label, span="AC", canonical_id="acme/dh")
+    record = _record(authorized_slice=(entity,), selected=entity)
+
+    assert entity.span_match is not None
+    assert entity.span_match.match_class is SpanMatchClass.ACRONYM
+    assert entity.span_match.is_acronym_of_label is True
+    assert entity.span_match.label_tokens_covered == 0
+    assert promotable_selection(record, deterministic_declined=True) is not None
+
+
 # --------------------------------------------------------------------------
 # The floor is demoted, and says so.
 # --------------------------------------------------------------------------

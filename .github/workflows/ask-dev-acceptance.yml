@@ -206,6 +206,35 @@ jobs:
           ./scripts/acceptance/run_ask_dev_compose.sh --web-root "${WEB_ROOT}" \
             2>&1 | tee "${LOG_DIR}/boot.log"
 
+      # Dispatch run 1 (31146779949): all 91 active cases errored in setup with
+      # `POST /api/v1/auth/login returned HTTP 429: Rate limit exceeded` -- 273
+      # login calls in one run. AUTH_LOGIN_IP_LIMIT is "20/15minutes" and it is
+      # keyed PER IP (src/dev_health_ops/api/middleware/rate_limit.py). A CI job
+      # is one IP, and the boot's per-principal login proof plus
+      # prepare_ask_dev_acceptance.py plus the corpus's own logins exceed 20
+      # inside a single window when they run back to back. Locally they are
+      # minutes apart, which is why this could not surface before a CI run
+      # existed.
+      #
+      # This is the PROVEN local recipe, not a sleep-until-it-works: the Phase 2
+      # exit run script (.p2exit_run.sh) carries exactly this wait, with the
+      # same reasoning -- "Deliberate and stated, not a sleep-until-it-works:
+      # skip it and the run fails loudly on 429 rather than silently
+      # under-measuring." 16 minutes on a nightly is free.
+      #
+      # A WORKAROUND with a known replacement: CHAOS-3529 (session/token reuse
+      # across corpus cases) removes the need for it. DELETE THIS STEP when that
+      # lands -- its acceptance criteria say so explicitly -- and do
+      # not leave a 16-minute sleep in a workflow whose reason has gone away.
+      # Production's limit is deliberately NOT relaxed for CI: it is a security
+      # control, and an acceptance-only override would make this lane stop
+      # proving production's shape.
+      - name: Drain the per-IP login window before the corpus
+        run: |
+          set -euo pipefail
+          echo "waiting 16m for the per-IP login window to drain (AUTH_LOGIN_IP_LIMIT=20/15minutes)"
+          sleep 960
+
       # The corpus runner's QuotaBudget refuses to start un-budgeted: without
       # ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX and
       # ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD in ITS OWN process
@@ -251,13 +280,24 @@ jobs:
           ASK_DEV_ACCEPTANCE_API_URL: http://127.0.0.1:18080
           # A coarse attrition floor, not a registry -- see the long comment on
           # this variable in run_wave4_corpus.sh. run_report's default of 1
-          # means a run executing ONE of ~144 cases exits 0 and this lane goes
-          # green having certified 0.7% of the corpus (reproduced by
-          # adversarial review with a synthetic JUnit report). 100 catches
-          # catastrophic loss while surviving the corpus's own churn; it does
-          # NOT prove every case ran, and this lane must not be read as
-          # claiming that until Lane 5a's expected-case registry lands.
-          ASK_DEV_CORPUS_MIN_EXECUTED: "100"
+          # means a run executing ONE case exits 0 and this lane reports green
+          # having certified a fraction of the corpus.
+          #
+          # 75 is derived from the MEASURED active-case count, not a file count.
+          # Dispatch run 1 (31146779949) failed this guard at 91 < 100: the
+          # first value came from a stale "144 cases" figure in an old run log,
+          # but only 91 of the 143 case-*.json files are status='active' -- the
+          # other 52 are status='declared-blocked', which run_report
+          # deliberately does not count (its own docstring says so). A floor of
+          # 100 was therefore UNSATISFIABLE: it could never pass on any run,
+          # however healthy, and a guard that cannot pass is worse than no guard
+          # because it teaches people to ignore the lane.
+          #
+          # 75 is ~82% of 91 -- catches catastrophic attrition, survives the
+          # corpus's own re-authoring churn. Re-derive it from the count of
+          # status='active' cases when the corpus changes shape, never from the
+          # file count, which is the mistake that produced 100.
+          ASK_DEV_CORPUS_MIN_EXECUTED: "75"
           TEST_SUPERUSER_EMAIL: admin@devhealth.example
           TEST_SUPERUSER_PASSWORD: devhealth123
         run: |
@@ -384,11 +424,17 @@ jobs:
             "- acceptance-live: ${LIVE_RESULT}" \
             "- acceptance-live-gate: ${GATE_RESULT}" \
             "" \
-            "Read the corpus.log artifact before judging this a regression. The" \
-            "line \"armed run executed N case(s)\" distinguishes a run that" \
-            "executed cases and failed some from one that never reached the" \
-            "corpus at all; its ABSENCE means the step died first and the run is" \
-            "unmeasured, not failing.")"
+            "Read the corpus.log artifact before judging this a regression." \
+            "" \
+            "Exit 66 has TWO meanings; the message text distinguishes them." \
+            "\"executed 0 real corpus case(s)\" is a run that never reached the" \
+            "product. \"executed N ... at least M must execute\" is a run that" \
+            "DID run and fell under the attrition floor. Exit 67 means nothing" \
+            "was measurable at all. Exit 1 WITH an executed-count line is the" \
+            "ordinary case-failure arm." \
+            "" \
+            "Absence of any executed-count line means the step died before the" \
+            "corpus ran: unmeasured, not failing.")"
           # No `|| true` anywhere in here on purpose: this job is the thing
           # that makes a red nightly visible, so a notifier that quietly
           # half-worked is worse than one that fails and turns the run red.

@@ -290,6 +290,15 @@ def _disclosed(answer: DevAnswer, sentence: str) -> DevAnswer:
     An answer carrying twenty warnings is already degenerate; the disclosure
     is the one entry whose absence changes what the answer MEANS.
 
+    That judgement rests on a checked property of today's producers, stated
+    so a future change can notice it: every server-authored writer of
+    ``warnings`` emits at MOST one entry (the server-grounded notice, the
+    budget-exhaustion notice, these disclosures), so the only way to reach
+    the bound is model-authored free text -- displacement evicts model prose,
+    never a server safety signal. If a deterministic producer ever starts
+    emitting many machine warnings here, revisit this trade rather than
+    assuming it still holds.
+
     The sentence goes FIRST so a truncating renderer keeps it, and the
     function is idempotent -- disclosing twice costs one slot, not two.
     """

@@ -186,3 +186,60 @@ def test_an_unsaturated_answer_loses_nothing(disclose, sentence: str) -> None:
     assert sentence in disclosed.warnings
     assert "one real warning" in disclosed.warnings
     assert len(disclosed.warnings) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_two_disclosures_can_never_both_fire_on_one_run() -> None:
+    """Mutual exclusion, pinned rather than left to a code reading.
+
+    Adversarial review traced that these two can never both apply -- the QUA
+    promotion sets ``legacy_guard_required=False`` and commits an EXACT
+    resolution, and the widening disclosure requires that flag true AND an
+    ``organization_fallback`` outcome -- but nothing tested it. Two
+    independent guards holding today is exactly the kind of property that
+    quietly stops holding when someone touches one of them.
+
+    It matters because the two sentences contradict each other: one says the
+    named subject could not be matched and the answer went organization-wide,
+    the other says it WAS matched to a specific entity. A reader shown both
+    learns nothing except that the system is unsure.
+
+    Asserted end to end through the real promotion path rather than by
+    re-checking the guards in isolation.
+
+    What this test does and does NOT catch, measured rather than assumed:
+    removing EITHER guard alone leaves it green, because the other still
+    holds -- verified by mutating each in turn. It fails when BOTH go
+    (verified). That is the honest scope of a test over a double-guarded
+    property: it is a regression guard on the observable outcome, not a
+    proof that each guard individually matters. Stated here so nobody reads
+    a green run as evidence that both guards are still load-bearing.
+    """
+
+    from dev_health_ops.api.dev.contracts import ScopeResolutionOutcome
+    from tests._chaos_3292_preflight import ORG_ID, run_preflight_orchestrator
+    from tests.api.dev.test_chaos_3525_qua_commit import (
+        ACR_PROJECT,
+        ACR_QUESTION,
+        _selecting_shadow,
+    )
+
+    output = await run_preflight_orchestrator(
+        question=ACR_QUESTION,
+        entities=[(ORG_ID, ACR_PROJECT)],
+        script_id="3531-mutual-exclusion",
+        qua_shadow=_selecting_shadow(text_span="ACR", script_id="3531-mx"),
+    )
+
+    answer = output.result.answer
+    assert answer is not None, "the promotion must have produced an answer"
+    assert answer.resolved_scope.outcome is ScopeResolutionOutcome.EXACT
+
+    assert (
+        subject_matched_disclosure(span="ACR", label=ACR_PROJECT.label)
+        in answer.warnings
+    )
+    assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE not in answer.warnings, (
+        "a run that committed a specific subject must not also claim it "
+        "could not match one -- the two disclosures contradict each other"
+    )

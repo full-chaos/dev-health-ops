@@ -731,14 +731,21 @@ def test_the_disclosure_is_added_once_and_keeps_every_warning_it_can() -> None:
     for the full statement of that rule and why the trade is the right one.
     """
 
-    answer = DevAnswer.model_validate(positive_fixtures()["dev_answer.v1"])
+    # A REAL producer warning, not the fixture's empty list: asserting
+    # `set(answer.warnings) <= set(once.warnings)` against `[]` is vacuously
+    # true and would pass even if the helper discarded everything below the
+    # bound (adversarial review, LOW).
+    answer = DevAnswer.model_validate(positive_fixtures()["dev_answer.v1"]).model_copy(
+        update={"warnings": ["a warning the producer chose"]}
+    )
     once = disclose_scope_widening(answer)
     twice = disclose_scope_widening(once)
     assert once.warnings == twice.warnings
     assert SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE in once.warnings
-    assert set(answer.warnings) <= set(once.warnings), (
+    assert "a warning the producer chose" in once.warnings, (
         "below the bound nothing a producer wrote may be lost"
     )
+    assert len(once.warnings) == 2
 
     full = answer.model_copy(update={"warnings": [f"w{index}" for index in range(20)]})
     disclosed = disclose_scope_widening(full)

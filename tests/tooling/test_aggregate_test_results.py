@@ -88,7 +88,9 @@ _MATRIX: list[tuple[str, str, str, str, str, str, bool]] = [
     ("docs-only-push", "push", "success", "false", "skipped", "skipped", _PASS),
     ("main-push", "push", "success", "true", "success", "success", _PASS),
     ("merge-queue", "merge_group", "success", "false", "success", "success", _PASS),
-    ("dispatch", "workflow_dispatch", "success", "true", "success", "success", _PASS),
+    # A manual run does not run the path filter at all, so `code` is empty and
+    # `coverage` is not selected; test-matrix carries the proof.
+    ("dispatch", "workflow_dispatch", "success", "", "success", "skipped", _PASS),
     # --- skips that share the literal string but are NOT legitimate ----------
     # Same `test-matrix: skipped` as docs-only-pr, opposite verdict: the path
     # filter selected the job to run.
@@ -119,6 +121,29 @@ _MATRIX: list[tuple[str, str, str, str, str, str, bool]] = [
         "success",
         "true",
         "success",
+        "skipped",
+        _FAIL,
+    ),
+    # The hole Codex found in the first version of this fix: a manual
+    # `gh workflow run test.yml` whose path filter reported code=false skipped
+    # both jobs and the gate went green with zero tests. The filter no longer
+    # runs on dispatch (so `code` is empty), and either way a dispatch run that
+    # skipped test-matrix is not evidence.
+    (
+        "dispatch-matrix-skipped",
+        "workflow_dispatch",
+        "success",
+        "",
+        "skipped",
+        "skipped",
+        _FAIL,
+    ),
+    (
+        "dispatch-matrix-skipped-filter-false",
+        "workflow_dispatch",
+        "success",
+        "false",
+        "skipped",
         "skipped",
         _FAIL,
     ),
@@ -343,8 +368,25 @@ def test_script_mirrors_the_test_matrix_selection_condition() -> None:
     # script's model is stale: fix ci/aggregate_test_results.sh, do not just
     # update the string.
     assert _normalize(_job("test-matrix")["if"]) == (
-        "github.event_name == 'merge_group' || needs.changes.outputs.code == 'true'"
+        "github.event_name == 'merge_group' || "
+        "github.event_name == 'workflow_dispatch' || "
+        "needs.changes.outputs.code == 'true'"
     )
+
+
+def test_path_filter_does_not_run_on_manual_dispatch() -> None:
+    # Given a manual run has no base/head diff worth filtering
+    filter_step = next(
+        step
+        for step in _steps("changes")
+        if isinstance(step, dict) and step.get("id") == "filter"
+    )
+
+    # Then the filter is not consulted there. If it were, its verdict would
+    # reach `code`, and `code == 'true'` is one of the ways a job gets
+    # selected -- which is how a manual run once skipped both test jobs and
+    # still reported a green required check.
+    assert _normalize(filter_step["if"]) == "github.event_name != 'workflow_dispatch'"
 
 
 def test_script_mirrors_the_coverage_selection_condition() -> None:

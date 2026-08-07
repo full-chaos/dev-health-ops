@@ -26,6 +26,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
+        # A manual run is a request to test THIS ref, and it has no base/head
+        # diff to filter against; computing one against the default branch
+        # would let `gh workflow run test.yml` produce a run where every test
+        # job skipped and the required `test` check still went green
+        # (CHAOS-3482 Codex round 1). Leaving the filter unrun makes `code`
+        # empty, which the job conditions below and
+        # ci/aggregate_test_results.sh both read as "not 'true'" -- so the
+        # dispatch clause, not the path filter, is what selects the jobs.
+        # Same construction as lint.yml and typecheck.yml.
+        if: github.event_name != 'workflow_dispatch'
         with:
           filters: |
             code:
@@ -61,8 +71,13 @@ jobs:
     # On merge_group, dorny/paths-filter has no PR base/head diff to compute and
     # can report code=false, which would skip every test job; the `test`
     # aggregator then treats the skip as a pass and an untested change reaches
-    # main. Always run in the merge queue regardless of the path filter.
-    if: github.event_name == 'merge_group' || needs.changes.outputs.code == 'true'
+    # main. Always run in the merge queue regardless of the path filter, and
+    # likewise on workflow_dispatch, where the filter is deliberately not run
+    # (see the `changes` job) so a manual run cannot test nothing.
+    if: >-
+      github.event_name == 'merge_group' ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04-arm
     # Test matrix needs package read access for dependency installs.
     permissions:
@@ -186,6 +201,14 @@ jobs:
   # verification + Codecov upload), never on pull_request. Reassigned from the
   # retired 3.11 leg to 3.12 and parallelized with xdist (CHAOS-2586); moved to
   # 3.14 to match the shipped interpreter (CHAOS-3419).
+  #
+  # It also does not run on workflow_dispatch, because the path filter that
+  # `code` comes from is not run there (see `changes`) and this condition is
+  # unchanged: a manual run is the fast-suite path, proved by test-matrix,
+  # which workflow_dispatch now always selects. The aggregator accepts this
+  # skip for the same reason it accepts the pull_request one -- the job's own
+  # condition did not select it -- and ci/aggregate_test_results.sh derives
+  # that from this exact expression.
   coverage:
     needs: [changes]
     if: >-

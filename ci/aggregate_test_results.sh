@@ -21,17 +21,25 @@
 #                                This deliberately covers `cancelled` as well
 #                                as `failure` (both were observed producing the
 #                                false green) and `skipped`/empty.
-#   test-matrix skipped       -> legitimate ONLY on a non-merge_group event
-#                                with changes code == 'false' (a genuine
-#                                docs-only change). The merge queue has no
-#                                base/head diff for dorny/paths-filter, so the
-#                                job runs there unconditionally and a skip is
-#                                never legitimate.
+#   test-matrix skipped       -> legitimate ONLY when the path filter actually
+#                                decided against it (changes code == 'false')
+#                                on an event where the filter governs. The
+#                                merge queue has no base/head diff for
+#                                dorny/paths-filter, and workflow_dispatch does
+#                                not run the filter at all, so on both of those
+#                                the job runs unconditionally and a skip is
+#                                never legitimate. (workflow_dispatch was a
+#                                surviving zero-test green until Codex round 1
+#                                on this branch: a manual run whose filter said
+#                                code=false skipped both jobs and passed.)
 #   coverage skipped          -> legitimate whenever the job's own condition
 #                                did not select it: on every pull_request (by
 #                                design, CHAOS-2586 -- the coverage-gated suite
 #                                runs at merge time and on main, not in the
-#                                iterative PR loop), and on a docs-only push.
+#                                iterative PR loop), on a docs-only push, and
+#                                on workflow_dispatch. In all three the proof
+#                                comes from test-matrix, which those events do
+#                                select.
 #   anything else             -> FAIL, including an unrecognized or empty
 #                                result string. Unknown state is not evidence.
 #
@@ -77,7 +85,9 @@ if [[ "${CHANGES_RESULT}" != "success" ]]; then
 fi
 
 matrix_selected="false"
-if [[ "${EVENT_NAME}" == "merge_group" || "${CHANGES_CODE}" == "true" ]]; then
+if [[ "${EVENT_NAME}" == "merge_group" ||
+  "${EVENT_NAME}" == "workflow_dispatch" ||
+  "${CHANGES_CODE}" == "true" ]]; then
   matrix_selected="true"
 fi
 

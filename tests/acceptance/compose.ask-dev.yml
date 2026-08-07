@@ -37,6 +37,36 @@ services:
       ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL: http://ask-dev-scripted-openai:8001/v1
       ASK_DEV_ACCEPTANCE_OPENAI_API_KEY: ask-dev-acceptance-local-v1
       JWT_SECRET_KEY: ask-dev-acceptance-jwt-secret-key-v1
+      # CHAOS-3532: the QUA ladder (off -> shadow -> commit), settable from
+      # the invoking shell and OFF by default, so no existing armed run
+      # changes behaviour and an operator can arm one deliberately.
+      #
+      # Deliberately NOT added to run_ask_dev_compose.sh's `unset` block.
+      # That block exists to stop an ambient shell value reaching compose
+      # interpolation -- but these two ARE the operator's deliberate input,
+      # and unsetting them would strip the very export that arms the run,
+      # leaving a stack that still cannot exercise QUA commit while looking
+      # correctly wired. They need no triage there in any case: they are
+      # ASK_DEV_-namespaced, which is bucket (c) of
+      # test_launcher_hardens_compose_interpolation_env_for_every_var_it_
+      # boots (tests/acceptance/test_ask_dev_compose.py:608-610), where an
+      # ASK_DEV_ prefix is accounted for by construction because it cannot
+      # collide with an unrelated ambient dev `.env`.
+      #
+      # "0" rather than "" as the default only for readability: production
+      # reads both with a strict `os.getenv(...) == "1"`
+      # (production_runtime.py:663,679), so unset, empty, "0" and even
+      # "true" are ALL off. That strictness is what makes these two immune
+      # to the empty-permissive default class (a `:-true` style default) -- an
+      # empty value fails closed here rather than reading as enabled.
+      #
+      # No interlock is needed between them: commit already implies shadow
+      # at production_runtime.py:679
+      # (`_qua_shadow_flag_enabled() and ...COMMIT_ENABLED == "1"`), so
+      # arming commit alone cannot produce a commit without a shadow
+      # evaluation behind it.
+      ASK_DEV_QUA_SHADOW_ENABLED: "${ASK_DEV_QUA_SHADOW_ENABLED:-0}"
+      ASK_DEV_QUA_COMMIT_ENABLED: "${ASK_DEV_QUA_COMMIT_ENABLED:-0}"
       # CHAOS-3219 Wave 4 quota plumbing: these are the ONLY two Ask Dev
       # settings production code actually reads from the environment
       # (org_policy.py platform_operator_request_limit /

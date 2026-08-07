@@ -168,6 +168,15 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         # just that case, not this shared default.
         "ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX": "1000",
         "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD": "200000000",
+        # CHAOS-3532: the QUA ladder, off by default and overridable from the
+        # invoking shell. The DEFAULT is the load-bearing half -- an armed
+        # corpus run that silently gained a QUA shadow evaluation would
+        # change what every existing case measures, and the pre-registered
+        # predictions those runs are graded against would be comparing to a
+        # different system. Exact-set here on purpose: flipping either
+        # default has to be a deliberate edit to this assertion.
+        "ASK_DEV_QUA_SHADOW_ENABLED": "${ASK_DEV_QUA_SHADOW_ENABLED:-0}",
+        "ASK_DEV_QUA_COMMIT_ENABLED": "${ASK_DEV_QUA_COMMIT_ENABLED:-0}",
     }
     assert api["networks"] == ["default", "ask-dev-acceptance"]
     assert api["depends_on"]["ask-dev-scripted-openai"] == {
@@ -1628,3 +1637,60 @@ def test_mint_script_refuses_a_container_serving_another_checkout() -> None:
     assert mint.index("verifying the api container is serving") < mint.index(
         "dev-hops fixtures world "
     ), "the container-currency check must precede world generation"
+
+
+def test_acceptance_overlay_wires_the_qua_ladder_off_by_default() -> None:
+    """CHAOS-3532: the stack must be ABLE to exercise QUA commit, and must
+    not do so unless someone asked for it.
+
+    Before this, neither flag appeared anywhere in the acceptance tooling, so
+    the shadow never evaluated and the promotion never engaged -- the stack
+    demonstrated pre-CHAOS-3525 behaviour by construction, whatever the code
+    did. A live probe against it would have faithfully reproduced the old
+    dead-end and been read as a negative result about the fix.
+
+    Both halves are asserted, and the default matters as much as the
+    presence: an armed corpus run that silently gained a QUA shadow
+    evaluation would change what every existing case measures, and the
+    pre-registered predictions those runs are graded against would be
+    comparing to a different system.
+    """
+
+    overlay = _OVERLAY.read_text(encoding="utf-8")
+
+    for flag in ("ASK_DEV_QUA_SHADOW_ENABLED", "ASK_DEV_QUA_COMMIT_ENABLED"):
+        assert f'{flag}: "${{{flag}:-0}}"' in overlay, (
+            f"{flag} must be wired into the acceptance overlay, defaulting "
+            "OFF and overridable from the invoking shell -- without it the "
+            "stack cannot exercise the QUA path at all"
+        )
+
+
+def test_the_qua_flags_are_not_stripped_by_the_launcher() -> None:
+    """The other half, and the one that is easy to get backwards.
+
+    The launcher's `unset` block exists to stop an ambient shell value
+    reaching compose interpolation. These two are the exception that proves
+    the rule: they ARE the operator's deliberate input, so unsetting them
+    would strip the export that arms the run and leave a stack that cannot
+    exercise QUA commit while looking correctly wired.
+
+    CHAOS-3532's own scope text originally instructed the opposite. This
+    asserts the correct behaviour so the instruction cannot be followed by a
+    later reader.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    unset_match = re.search(r"\nunset \\\n(.*?)\n\nweb_root=", launcher, re.S)
+    assert unset_match is not None
+    unset_vars = set(re.findall(r"[A-Z_][A-Z0-9_]*", unset_match.group(1)))
+
+    for flag in ("ASK_DEV_QUA_SHADOW_ENABLED", "ASK_DEV_QUA_COMMIT_ENABLED"):
+        assert flag not in unset_vars, (
+            f"{flag} must NOT be in the launcher's unset list -- unsetting it "
+            "strips the operator's own export and makes an armed QUA run "
+            "impossible. It needs no triage there regardless: ASK_DEV_-"
+            "namespaced vars are bucket (c) of "
+            "test_launcher_hardens_compose_interpolation_env_for_every_var_"
+            "it_boots."
+        )

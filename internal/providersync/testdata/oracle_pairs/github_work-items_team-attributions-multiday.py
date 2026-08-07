@@ -47,7 +47,7 @@ _LOOP = "for d in days:"
 
 
 def _assert_producer_still_calls_inside_the_day_loop() -> int:
-    """Assert the DEFECT still exists in the producer, and return its day count.
+    """Assert the DEFECT still exists in the producer; return the loop's line number.
 
     This pair's loop is authored HERE, not read out of the producer, so on its
     own it would keep passing after CHAOS-3494 was fixed: hoisting the call out

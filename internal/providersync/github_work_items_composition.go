@@ -109,16 +109,44 @@ var githubWorkItemDerivedOwnedDestinations = func() []string {
 	return owned
 }()
 
+// githubWorkItemDerivedEngineDestinations is what the unported engines owe: the
+// canonical derived set minus what the ported builders already speak for.
+// Derived rather than hand-listed, so it cannot disagree with either.
+var githubWorkItemDerivedEngineDestinations = func() []string {
+	owed := make([]string, 0, len(githubWorkItemDerivedDestinations))
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if !slices.Contains(githubWorkItemDerivedOwnedDestinations, destination) {
+			owed = append(owed, destination)
+		}
+	}
+	return owed
+}()
+
 // githubWorkItemEngineDeriver is the PR-C seam for the three engine-dependent
 // destinations. It is deliberately UNEXPORTED and has no production setter: the
 // only thing that can install one is a test inside this package, which is what
 // lets the composition be proven end-to-end without fabricating the engines'
 // output in production. When the engines land they replace this seam.
+//
+// IT TAKES A DAY AND IS CALLED ONCE PER DAY. All three destinations it will
+// serve are per-day in Python and stamp `day=d` on every row: issue-type
+// metrics (job_work_items.py:1346), investment classifications (:1387) and
+// investment metrics (:1433) are all built inside the :1238 day loop, from
+// state that resets each iteration. A seam invoked once for the whole window
+// could not express that shape -- and a merge that ASSIGNED rather than
+// appended would silently keep only the last day's rows the moment a real
+// per-day engine replaced the stub. Shaped correctly now, while the only
+// implementation is a test double and the change costs nothing.
+//
+// PR-C OBLIGATION: the ported engines emit rows for the day they are handed,
+// not for the window. The per-day merge accumulates across days exactly as it
+// does for the ported builders.
 type githubWorkItemEngineDeriver interface {
 	Derive(
 		context.Context,
 		Claim,
 		githubWorkItemRows,
+		time.Time,
 		time.Time,
 		githubWorkItemDerivationContext,
 	) (map[string][]json.RawMessage, error)
@@ -151,7 +179,7 @@ const githubWorkItemDerivedMaxBackfillDays = 366
 
 // githubWorkItemDerivedDays mirrors resolve_date_range (utils/cli.py:81-117)
 // composed with _date_range (job_work_items.py:112-117), which together produce
-// the `days` list that job_work_items.py:1210 iterates.
+// the `days` list that job_work_items.py:1238 iterates.
 //
 // Python works in whole dates; a sync unit carries instants. The mapping:
 //
@@ -210,7 +238,7 @@ func githubWorkItemDerivedUTCDate(value time.Time) time.Time {
 // Derive runs every ported derived builder once per day in the unit's window.
 //
 // The derivation context is loaded ONCE, outside the loop. That mirrors
-// job_work_items.py:1195-1209, where the context and the linked-issue resolver
+// job_work_items.py:1216-1236, where the context and the linked-issue resolver
 // are built before `for d in days`, and it is what
 // buildGitHubWorkItemDerivedSurfaces documents as its caller's contract. A
 // per-day reload would also re-read donor facts that cannot change within a
@@ -218,7 +246,7 @@ func githubWorkItemDerivedUTCDate(value time.Time) time.Time {
 //
 // CHAOS-3494 IS MIRRORED, NOT FIXED. buildGitHubWorkItemTeamAttributions takes
 // no day, and Python calls it INSIDE the day loop
-// (job_work_items.py:1232-1239), so an n-day window recomputes and re-emits
+// (job_work_items.py:1260), so an n-day window recomputes and re-emits
 // byte-identical attribution rows n times. The call stays inside this loop for
 // the same reason: D16 requires the port to mirror the producer bug-for-bug so
 // the differential oracle can prove parity, and hoisting it out would silently
@@ -286,25 +314,17 @@ func (deriver GitHubWorkItemDeriver) Derive(
 		if err := githubWorkItemMergeDerivedRows(derived, surfaceRows); err != nil {
 			return nil, err
 		}
-	}
-	if deriver.engine != nil {
+		if deriver.engine == nil {
+			continue
+		}
 		engineRows, err := deriver.engine.Derive(
-			ctx, claim, rows, normalizedAt, derivationContext,
+			ctx, claim, rows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
 			return nil, err
 		}
-		for destination, rows := range engineRows {
-			if !slices.Contains(githubWorkItemDerivedDestinations, destination) {
-				return nil, ErrInvalidConfiguration
-			}
-			if _, owned := derived[destination]; owned {
-				// The engine seam may not restate a destination a ported
-				// builder already owns; two producers for one destination
-				// could disagree with nothing comparing them.
-				return nil, ErrInvalidConfiguration
-			}
-			derived[destination] = rows
+		if err := githubWorkItemMergeEngineRows(derived, engineRows); err != nil {
+			return nil, err
 		}
 	}
 	if missing := githubWorkItemMissingDerivedDestinations(derived); len(missing) > 0 {
@@ -336,6 +356,32 @@ func githubWorkItemMergeDerivedRows(
 			return ErrInvalidConfiguration
 		}
 		derived[destination] = append(existing, rows...)
+	}
+	return nil
+}
+
+// githubWorkItemMergeEngineRows accumulates the engine seam's per-day output.
+//
+// It deliberately does NOT pre-open the engine's destinations. A key is created
+// only by an engine that actually emitted for it, so a destination the engine
+// never produced stays ABSENT and the missing-destination check fails the run
+// closed. Pre-opening them would hand every unported destination an empty slice
+// -- indistinguishable from "evaluated, produced nothing", which is exactly the
+// fabrication this deriver exists to refuse.
+//
+// Membership is checked against the ENGINE's destinations rather than against
+// presence in `derived`, so an engine restating a ported builder's destination
+// is rejected instead of giving that surface two producers with nothing
+// comparing them.
+func githubWorkItemMergeEngineRows(
+	derived map[string][]json.RawMessage,
+	produced map[string][]json.RawMessage,
+) error {
+	for destination, rows := range produced {
+		if !slices.Contains(githubWorkItemDerivedEngineDestinations, destination) {
+			return ErrInvalidConfiguration
+		}
+		derived[destination] = append(derived[destination], rows...)
 	}
 	return nil
 }

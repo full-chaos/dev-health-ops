@@ -1578,6 +1578,157 @@ async def test_agent_refusal_after_status_snapshot_is_never_refused() -> None:
     assert "not ready" in result.answer.direct_summary.casefold()
 
 
+# --- CHAOS-3541: typed refusal for prohibited execution/write requests ----
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["prohibited_execution", "prohibited_write"])
+async def test_prohibited_action_refusal_produces_the_typed_refused_outcome(
+    code: str,
+) -> None:
+    """CHAOS-3541 RED/GREEN: before the fix, EVERY AgentRefusal.code --
+    "prohibited_execution"/"prohibited_write" included -- fell through to
+    the generic ``RunState.REFUSED`` / ``error("insufficient_evidence", ...)``
+    terminal, indistinguishable from an honest "not enough evidence"
+    refusal. ``PublicOutcome.DENIED``/``REFUSED`` was unreachable from any
+    provider refusal by construction (traced, not inferred -- see the
+    ticket). After the fix, a request the provider flags as PROHIBITED gets
+    its own typed wire code ("refused", not "insufficient_evidence") and
+    the exact copy chris ruled on -- not the provider's own free-form
+    ``decision.message``, matching every other terminal in this branch.
+    """
+
+    result = await _run(
+        _orchestrator(
+            [ScriptedStep(decision=AgentRefusal(code=code, message="ignored"))],
+            script_id=f"prohibited-{code}",
+        )
+    )
+    assert result.state is RunState.REFUSED
+    assert result.error is not None
+    assert result.error.code == "refused"
+    assert result.error.safe_message == (
+        "Ask Dev can only read and summarize your data; it can't run "
+        "commands or make changes."
+    )
+    # Never the provider's own free-form text -- matches every other
+    # terminal in this branch (CHAOS-3367).
+    assert "ignored" not in result.error.safe_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["unsupported_external_fetch", "unsupported_request"])
+async def test_unsupported_shape_refusal_produces_the_existing_unsupported_outcome(
+    code: str,
+) -> None:
+    """The second of CHAOS-3541's two new closed refusal-code sets -- a
+    request Ask Dev has no CAPABILITY for at all (an arbitrary external
+    fetch, an open-ended generation request), distinct from PROHIBITED
+    above. Maps to the EXISTING ``feature_not_enabled`` wire code (already
+    bucketed to ``PublicOutcome.UNSUPPORTED`` -- no new v1 code for this
+    class, per team-lead's ruling), with its own message text distinct from
+    that code's other call site (``_provider_error``'s
+    ``AgentProviderErrorCode.DISABLED`` -- an operator/config-level signal,
+    a genuinely different cause sharing the same wire bucket).
+    """
+
+    result = await _run(
+        _orchestrator(
+            [ScriptedStep(decision=AgentRefusal(code=code, message="ignored"))],
+            script_id=f"unsupported-{code}",
+        )
+    )
+    assert result.state is RunState.REFUSED
+    assert result.error is not None
+    assert result.error.code == "feature_not_enabled"
+    assert result.error.safe_message == (
+        "Ask Dev can't fetch external URLs or generate open-ended content "
+        "-- ask about your data instead."
+    )
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_refusal_code_keeps_the_existing_behavior_unchanged() -> (
+    None
+):
+    """Negative control: CHAOS-3541 must not widen WHAT counts as a
+    prohibited/unsupported refusal beyond the two closed code sets. A
+    refusal the provider tags with anything else -- including today's
+    "unsupported" used throughout this file's OTHER tests -- must keep
+    reaching the exact pre-existing terminal, unchanged. Matching is
+    exact-string only (module docstring in orchestrator.py): no fuzzy or
+    substring match that could reclassify an ordinary refusal.
+    """
+
+    result = await _run(
+        _orchestrator(
+            [ScriptedStep(decision=AgentRefusal(code="unsupported", message="no"))],
+            script_id="unrecognized-refusal-code",
+        )
+    )
+    assert result.state is RunState.REFUSED
+    assert result.error is not None
+    assert result.error.code == "insufficient_evidence"
+    assert result.error.safe_message == "The request is not supported by Ask Dev."
+
+
+@pytest.mark.asyncio
+async def test_prohibited_action_refusal_bypasses_the_deterministic_status_override() -> (
+    None
+):
+    """CHAOS-3541 (team-lead-approved bypass): a PROHIBITED-action refusal
+    must terminate REFUSED/"refused" even when a real status_snapshot.v1
+    result already exists for the run's current resolved scope -- never
+    silently swapped for the CHAOS-3377 deterministic answer the way an
+    honest "insufficient evidence" refusal legitimately is (see
+    ``test_agent_refusal_after_status_snapshot_is_never_refused`` directly
+    above: same setup, opposite refusal code, opposite outcome). A
+    categorical "I won't run this" is not an evidence gap a bound result
+    can fill, and answering an unrelated status snapshot instead would bury
+    the actual, security-relevant signal.
+    """
+
+    script_id = "status-snapshot-then-prohibited-refusal"
+
+    async def status_snapshot(_context, request: DevToolRequest) -> DevToolResult:
+        payload = deepcopy(positive_fixtures()["dev_tool_result.v1"])
+        payload.update(
+            {
+                "run_id": request.run_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_id": request.tool_id.value,
+                "actual_completion": _scope_shaped_status_completion(
+                    direct_scope=request.scope.direct_scope.value
+                ),
+            }
+        )
+        return DevToolResult.model_validate(payload)
+
+    registry = AskDevToolRegistry({tool_id: status_snapshot for tool_id in ToolID})
+    result = await _run(
+        _orchestrator(
+            [
+                ScriptedStep(
+                    decision=AgentToolRequest(
+                        tool_id="status_snapshot.v1",
+                        arguments={"limit": 25},
+                        call_id="tool_call_01",
+                    ),
+                ),
+                ScriptedStep(
+                    decision=AgentRefusal(code="prohibited_execution", message="no")
+                ),
+            ],
+            script_id=script_id,
+            registry=registry,
+        )
+    )
+
+    assert result.state is RunState.REFUSED
+    assert result.error is not None
+    assert result.error.code == "refused"
+
+
 @pytest.mark.asyncio
 async def test_status_snapshot_declared_project_state_reaches_the_final_verdict() -> (
     None

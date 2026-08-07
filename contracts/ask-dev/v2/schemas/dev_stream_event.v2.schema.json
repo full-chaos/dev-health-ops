@@ -1282,7 +1282,8 @@
             "answer_validation_failed",
             "cancelled",
             "provider_contract_violation",
-            "internal_error"
+            "internal_error",
+            "refused"
           ],
           "title": "Code",
           "type": "string"
@@ -3416,7 +3417,7 @@
       "type": "string"
     },
     "PublicOutcome": {
-      "description": "The exact dev_answer.v2 public outcome vocabulary (PRD v2 \u00a78).\n\n``refused`` is deliberately absent: it is reserved for genuinely\nprohibited requests (writes, arbitrary execution, secret extraction,\ncross-tenant access) and is never a Wave 3.1 answer-frame outcome for a\nnormal status/health question that could not be resolved.",
+      "description": "The exact dev_answer.v2 public outcome vocabulary (PRD v2 \u00a78).\n\n``REFUSED`` (CHAOS-3541) is reserved for genuinely prohibited requests\n(writes, arbitrary execution, secret extraction, cross-tenant access) --\ndistinct from ``DENIED`` (an authorization claim: this scope is not\nyours) and from every evidence-gap outcome (``NOT_FOUND`` et al: ask\nagain with more to go on). A refusal asserts neither -- the requester\nhas access, and no amount of additional evidence changes the answer.\nWas previously never producible from any answer-frame outcome; this\ndocstring itself predates the implementation that finally reaches it.",
       "enum": [
         "answered",
         "answered_with_gaps",
@@ -3425,7 +3426,8 @@
         "temporarily_unavailable",
         "unsupported",
         "denied",
-        "failed"
+        "failed",
+        "refused"
       ],
       "title": "PublicOutcome",
       "type": "string"

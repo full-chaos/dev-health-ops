@@ -8,13 +8,13 @@
   "proves": [
     "group 11 bullet 4"
   ],
-  "question": "n/a",
-  "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "question": "What's the status of the repo \"meridian/web-app\"?",
+  "org_alias": "disabled",
+  "user_alias": "disabled.ordinary",
   "subject_class": "n/a",
   "subject_ref": null,
   "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "Grepped src/dev_health_ops/ for 'kill_switch'/'KillSwitch' -- ZERO matches anywhere in production code. world.json's `kill_switches` field (global/org/provider/role/surface/contextual_entry, all 'enabled' today for every one of the 3 fixture orgs) is a Lane 1a fixture-schema field with no enforcing production code behind it yet -- there is nothing for a corpus case to exercise: no request path reads that field and no org fixture variant has any switch disabled to test the off-state against. Not a case-authoring gap; a real, confirmed absence of the feature this corpus case would need to prove. [blocked_by WIRED to CHAOS-3458 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no production kill-switch enforcement code exists yet'.]"
+  "notes": "RE-AUTHORED as a FLAG-OFF BEHAVIOR case (CHAOS-3458, chris ruling 2026-08-06: \"single feature flag is the kill mechanism -- no per-scope kill switches. We don't need to kill pieces of a feature when it's not working, and it's simplicity here.\"). The org-level Ask Dev feature flag / entitlement gate IS the kill mechanism, so this case no longer waits on kill-switch enforcement code that will never be built; the four per-scope siblings (ops.kill-switch.{provider,role,surface,contextual-entry}) were RETIRED in the same changeset. WHAT THIS CASE NOW SPECIFIES: an ordinary member of world.json's 'disabled' org (ask_dev_entitlement='disabled', ask_dev_contextual_entrypoints_entitlement='disabled', ask_dev_wave_3_1_entitlement='disabled') asks an ordinary, well-formed, fully-resolvable question, and the route must REFUSE it (feature_not_enabled / UNSUPPORTED or equivalent) rather than answer it. The principal exists and is real: world.json seeds 'disabled.ordinary' with a working credential through password_for_alias, exactly like every other world principal, so the case needs no fixture or product change to be addressable. STILL BLOCKED, and the reason is now a PROVEN runner gap rather than the superseded 'no kill-switch code exists' premise: tests/acceptance/test_wave4_corpus_runner_live.py:825-833 records measured_wave_3_1_preflight_path on EVERY receipt with condition=(org_id in wave_3_1_enabled_orgs), unconditionally. The 'disabled' org is by construction not in that set, so any ACTIVE case in it fails a run-validity assertion whose whole purpose is to prove the run measured the CHAOS-3292 path -- an intentional flag-off case and an accidentally-legacy run are indistinguishable to it today. Unblocking needs a runner seam that lets a case declare 'this run is SUPPOSED to be on the disabled path' (Lane 2a), after which this case becomes active with no further authoring. Also note the case must stay declared-blocked to avoid a script-inventory entry: check_script_inventory (test_wave4_corpus_runner_live.py:270) requires a role-legacy_agent.json entry for active cases only. [blocked_by stays CHAOS-3458; original pre-ruling free-text reason preserved verbatim for provenance: 'runner: no production kill-switch enforcement code exists yet'.]"
 }

@@ -3,8 +3,8 @@
   "id": "scope.partially-resolved-subject",
   "family": "scope",
   "group": 1,
-  "status": "active",
-  "blocked_by": null,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3520",
   "proves": [
     "plan §3 subjects.json class"
   ],
@@ -13,21 +13,10 @@
   "user_alias": "primary.ordinary-3",
   "subject_class": "partially-resolved",
   "subject_ref": "subject.partially-resolved.platform-mobile-squad",
-  "invariants": [
-    {
-      "category": "no-silent-widening",
-      "check": "scope_resolution_outcome_in",
-      "args": {
-        "from_profile": "expected_scope_resolution_outcome"
-      },
-      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    }
-  ],
-  "resolution_profile_ref": "deterministic-v1",
+  "invariants": [],
+  "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "Teams catalog is flat (no sub-team edge) -- 'mobile squad' cannot resolve narrower than its parent 'platform' team. This IS the partially-resolved condition, not a fixture gap.",
+  "notes": "DECLARED-BLOCKED against CHAOS-3520 (CHAOS-3490 Part 2 corpus-authoring lane, 2026-08-07). Live evidence: CHAOS-3219 Phase 2 exit run 7, world digest 2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232, wave_3_1 preflight enabled=True -- receipt tests/acceptance/artifacts/wave4/scope.partially-resolved-subject.json recorded \"scope_resolution_outcome='exact', allowed=['filtered']\". 'exact' is not a near-miss: it means the scenario this case is NAMED for never occurred on the run. The expectation is NOT rewritten to 'exact' -- that would be the 'rewrite an honest expectation to force green' anti-pattern, and it would delete this case's coverage claim while reading as green. WHY IT CANNOT BE REALIZED: Doubly unrealizable. FILTERED needs a non-empty team_filter_refs, which only a model-authored DevScope.team_ids on a resolve_scope.v1 call can supply (scope_service.py:711/:749/:753; production_runtime.py:1125-1129), and the scripted acceptance provider never offers that tool. AND the partial resolution itself never happens: producer executed, interpret(\"What's the status of the platform team's mobile squad?\") yields ZERO mentions, so there is no partially-resolved subject to observe either -- the run resolves the plain org scope to 'exact' via scope_service.py:755. The case's prior note that \"'mobile squad' cannot resolve narrower than its parent 'platform' team\" describes a narrowing that is never even attempted. NO UNIQUE ASSERTION COVERAGE IS LOST BY BLOCKING: the invariants dropped here besides scope_resolution_outcome_in (none -- scope_resolution_outcome_in was this case's ONLY invariant) are asserted by many other active cases; only this case's own named-outcome claim goes uncovered, which is exactly what CHAOS-3520 records. Retired profile entry preserved verbatim: {\"expected_public_outcome\": \"answered_with_gaps\", \"expected_scope_resolution_outcome\": \"filtered\", \"resolution_path\": \"deterministic-exact\"}. Full authored invariant list before the block is in git history for this file. [ORIGINAL NOTES, preserved verbatim: Teams catalog is flat (no sub-team edge) -- 'mobile squad' cannot resolve narrower than its parent 'platform' team. This IS the partially-resolved condition, not a fixture gap.]",
   "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462, adversarial round 2). Established by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- not by reading the question. interpret returns ZERO mentions, so preflight takes the proceeded_organization_wide PROCEED with ledger=None, orchestrator's append_resolution sites require a non-None ledger, and zero dev_run_resolutions rows exist. derive_resolution_path([]) is None and resolution_path_in never matches None, so this check could not pass in ANY catalog world. The profile's declared value is left untouched: it is wrong for a separate, larger reason tracked as the mention_text blocker, and silently rewriting it here to force green would falsify the expectation rather than fix it.",
   "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 58 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

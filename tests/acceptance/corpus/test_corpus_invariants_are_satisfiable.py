@@ -721,6 +721,21 @@ class TestEveryActiveCaseStillAssertsSomething:
 #: UNMEASURED. They are pinned here rather than pre-emptively stripped,
 #: because stripping on inference is exactly the read-don't-execute mistake
 #: that produced the 18.
+#:
+#: CHAOS-3490 Part 2 / CHAOS-3520 (2026-08-07), exit run 7 -- the first run in
+#: which all of these were actually MEASURED, on the real CHAOS-3292 preflight
+#: path. One id left this set, deliberately and on live evidence, so the pin
+#: shrank 42 -> 41: ``scope.outcome.filtered`` is now declared-blocked against
+#: CHAOS-3520 because ``ScopeResolutionOutcome.FILTERED`` needs a non-empty
+#: ``team_filter_refs``, which only a model-authored ``DevScope.team_ids`` on a
+#: ``resolve_scope.v1`` call supplies, and the scripted acceptance provider
+#: never offers that tool. Note its ``resolution_path_in`` was NOT the failing
+#: half -- it PASSED, with ``resolution_path='deterministic-exact'``. The check
+#: left this set because the whole case is blocked, not because the check was
+#: found wanting; it returns with the case when CHAOS-3520 unblocks. Recorded
+#: here rather than silently deleted, because the distinction between "this
+#: declarer was condemned" and "this declarer went away with its case" is
+#: exactly what the pin exists to keep legible.
 RESOLUTION_PATH_DECLARING_CASE_IDS: frozenset[str] = frozenset(
     {
         "deficiency.team.not-applicable-rule",
@@ -745,7 +760,6 @@ RESOLUTION_PATH_DECLARING_CASE_IDS: frozenset[str] = frozenset(
         "scope.bounded-subject-set",
         "scope.deleted-subject",
         "scope.no-match",
-        "scope.outcome.filtered",
         "scope.outcome.unresolved",
         "scope.prohibited-write",
         "status.single-project.exact-subject",

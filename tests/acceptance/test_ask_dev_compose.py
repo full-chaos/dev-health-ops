@@ -1194,6 +1194,78 @@ def test_beat_sentinel_date_parsing_handles_naive_and_aware_timestamps() -> None
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-3572: ordinary-boot wrong-worktree guard
+# ---------------------------------------------------------------------------
+
+
+def test_launcher_sources_the_shared_container_source_guard() -> None:
+    """CHAOS-3572: an ordinary boot has the SAME exposure the mint guard
+    (#1582, CHAOS-3544) closed for the one-off mint flow -- `compose.yml` is
+    launched with `--project-directory <ops_root>` and bind-mounts that
+    directory at /app, so the launcher's own stack can just as easily serve
+    a different worktree's source. `docker ps`, the API, and every later
+    test all look healthy regardless of which worktree booted the container
+    -- nothing else in the launcher would ever report this.
+
+    Sourced from container_source_guard.sh (a shared function), NOT a
+    per-entrypoint copy -- CHAOS-3572 explicitly calls out avoiding
+    per-entrypoint duplication so a future boot entrypoint (e.g. the
+    corpus-lane armed-boot script) inherits the same check rather than
+    growing its own that can drift.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    guard_script = _ROOT / "scripts" / "acceptance" / "container_source_guard.sh"
+    assert guard_script.exists(), (
+        "the shared guard script must exist for the launcher to source"
+    )
+    assert 'source "${script_dir}/container_source_guard.sh"' in launcher, (
+        "the launcher must source the SHARED guard, not reimplement its own "
+        "copy of the signature check"
+    )
+    assert "container_source_guard_check" in launcher, (
+        "the launcher must actually CALL the guard, not merely source the "
+        "file that defines it"
+    )
+
+
+def test_launcher_runs_the_container_source_guard_immediately_after_boot() -> None:
+    """Ordering is load-bearing, exactly like the world-restore check below:
+    the guard must run BEFORE `fixtures world-restore` (or anything else)
+    touches the stack -- a mismatch discovered after data has already been
+    restored/generated against the wrong container is a mismatch discovered
+    too late to matter."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    boot_index = launcher.index('up -d --build --wait "${boot_services[@]}"')
+    guard_call_index = launcher.index("container_source_guard_check ")
+    restore_index = launcher.index("dev-hops fixtures world-restore")
+
+    assert boot_index < guard_call_index < restore_index, (
+        "the container-source guard must run immediately after boot and "
+        "before the world is restored into the (possibly wrong) container"
+    )
+
+
+def test_launcher_container_source_guard_is_not_gated_by_acr_arming() -> None:
+    """The guard call must sit OUTSIDE the `if [[ "${acr_armed}" == "1" ]]`
+    block -- an ACR-armed boot has exactly the same bind-mount exposure as a
+    plain one, and a guard that only ran when ACR happened to be armed would
+    read as coverage it does not have on the (default, far more common)
+    unarmed path."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    acr_block_start = launcher.index('if [[ "${acr_armed}" == "1" ]]; then')
+    acr_block_end = launcher.index("\nfi\n", acr_block_start)
+    acr_block = launcher[acr_block_start:acr_block_end]
+
+    assert "container_source_guard_check" not in acr_block, (
+        "the guard must run unconditionally, not only inside the ACR-armed branch"
+    )
+    assert "container_source_guard_check" in launcher
+
+
+# ---------------------------------------------------------------------------
 # CHAOS-3463: world seeding wiring
 # ---------------------------------------------------------------------------
 

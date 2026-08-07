@@ -197,6 +197,19 @@ trap report_failure EXIT
 "${compose[@]}" down --volumes --remove-orphans
 "${compose[@]}" up -d --build --wait "${boot_services[@]}"
 
+# CHAOS-3572: refuse to proceed unless the api container we just booted is
+# serving THIS checkout. Runs immediately after boot and before anything --
+# world-restore, fixtures, any smoke/corpus script -- reads or writes through
+# it, so a wrong-worktree stack is refused here rather than discovered mid-
+# measurement (or not discovered at all: docker ps, the API, and every test
+# all look healthy regardless of which worktree booted the container). Same
+# mechanism and exit code (70) as the mint guard #1582 added for the one-off
+# mint flow; see container_source_guard.sh for why it is a shared function
+# rather than a copy in every entrypoint.
+# shellcheck source=container_source_guard.sh
+source "${script_dir}/container_source_guard.sh"
+container_source_guard_check "${ops_root}" "${compose[@]}"
+
 # CHAOS-3463 (Phase 2 exit blockers B2 + B3): seed the pinned
 # ask-dev-world.v1 into the databases this stack's API actually serves.
 #

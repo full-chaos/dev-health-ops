@@ -1279,5 +1279,20 @@ def test_docs_tests_installs_what_the_docs_suite_imports() -> None:
         for step in _docs_tests_job()["steps"]
         if isinstance(step, dict)
     )
-    assert "requirements-docs.txt" in runs
-    assert "pytest" in runs
+    # requirements.txt is `-e .[dev]`, which is where pytest AND the root
+    # conftest's imports (GitPython) come from. Omitting it is not a
+    # theoretical risk: the first version of this job installed only
+    # requirements-docs.txt and failed in CI at collection with
+    # `ModuleNotFoundError: No module named 'git'` -- tests/conftest.py is
+    # loaded even when only tests/docs is selected. Locally it passed,
+    # because the dev environment already had everything.
+    assert "requirements.txt" in runs, (
+        "docs-tests must install requirements.txt (-e .[dev]); without it "
+        "tests/conftest.py cannot even be imported and the job fails at "
+        "collection"
+    )
+    assert "requirements-docs.txt" in runs, (
+        "docs-tests must install requirements-docs.txt; test_built_site_links "
+        "shells out to `mkdocs build --strict` and without mkdocs the failure "
+        "reads like a docs regression (ci/local_validate.sh:635)"
+    )

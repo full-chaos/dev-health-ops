@@ -377,7 +377,8 @@ jobs:
   # everything (CHAOS-3482).
   docs-tests:
     name: docs-tests
-    # CHAOS-3514. Runs `pytest tests/docs` alone (~10s measured) so the 113
+    # CHAOS-3514. Runs `pytest tests/docs` alone (16s measured in a clean
+    # py3.14 env, excluding install) so the 116
     # docs guards execute on a docs-content-only PR, which previously ran
     # none of them: `code` selects on `tests/**` but not `docs/**`, so
     # editing a docs TEST ran it while editing the page it asserts on did
@@ -416,8 +417,8 @@ jobs:
       - name: Install docs test dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install -r requirements.txt
           pip install -r requirements-docs.txt
-          pip install pytest pyyaml
       - name: Run the docs guards
         run: pytest tests/docs -q
 

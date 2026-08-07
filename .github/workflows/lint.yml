@@ -96,6 +96,14 @@ jobs:
           pip install ruff
           pip install -r requirements.txt
 
+      # Before the two steps whose exit status IS the `lint` gate: prove ruff
+      # still has something to check. Over an empty file set `ruff check .`
+      # exits 0, so a swallowed tree reads as a clean gate (CHAOS-3513).
+      - name: Check lint scope
+        run: |
+          chmod +x ci/check_lint_scope.sh
+          ./ci/check_lint_scope.sh
+
       - name: Run ruff (format check)
         run: |
           ruff format --check .

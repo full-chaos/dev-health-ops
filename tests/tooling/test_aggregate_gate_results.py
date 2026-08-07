@@ -831,37 +831,118 @@ def test_filter_selects_on_the_inputs_that_define_tool_scope(path: Path) -> None
     )
 
 
-def test_ruff_still_sees_the_source_and_test_trees() -> None:
-    # Given `ruff check .` -- whose exit status IS the lint gate -- silently
-    # honours .gitignore/.ignore for file discovery
-    ruff = ROOT / ".venv" / "bin" / "ruff"
-    if not ruff.exists():  # pragma: no cover - depends on local env layout
-        pytest.skip(f"ruff not present at {ruff}")
+LINT_SCOPE_SCRIPT = ROOT / "ci" / "check_lint_scope.sh"
 
-    listed = subprocess.run(
-        [str(ruff), "check", "--show-files", "."],
-        cwd=ROOT,
+
+def _fake_ruff(tmp_path: Path, listed: list[str]) -> Path:
+    """A stand-in `ruff` that prints a chosen file set.
+
+    The scope check is exercised through a shim rather than the real binary on
+    purpose. ruff is installed by lint.yml alone (`pip install ruff`; it is in
+    no requirements file), so a test that needed the real ruff would SKIP in
+    the CI job that runs this suite -- silently, while reading as coverage.
+    That is the failure this whole ticket is about, and the first version of
+    this test committed it (CHAOS-3513 Codex round 2).
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    shim = bin_dir / "ruff"
+    body = "\n".join(listed)
+    shim.write_text(f"#!/usr/bin/env bash\ncat <<'FILES'\n{body}\nFILES\n")
+    shim.chmod(0o755)
+    return bin_dir
+
+
+def _run_scope(
+    tmp_path: Path, listed: list[str] | None
+) -> subprocess.CompletedProcess[str]:
+    env = {"PATH": "/usr/bin:/bin", "LINT_SCOPE_MIN_FILES": "5"}
+    if listed is not None:
+        env["PATH"] = f"{_fake_ruff(tmp_path, listed)}:{env['PATH']}"
+    return subprocess.run(
+        ["bash", str(LINT_SCOPE_SCRIPT)],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
-    assert listed.returncode == 0, listed.stdout + listed.stderr
-    files = [line for line in listed.stdout.splitlines() if line.strip()]
 
-    # Then the trees the gate exists to lint are actually in its file set.
-    # A scope collapse makes `ruff check` pass over nothing, which reads as a
-    # clean gate; this fails loudly instead.
-    assert any("/src/" in name for name in files), (
-        "ruff would check no files under src/ -- the lint gate would pass "
-        "having inspected none of the source. Check .gitignore/.ignore and "
-        "any ruff config for an exclusion that swallowed the tree."
+
+_HEALTHY = [f"/repo/src/mod_{index}.py" for index in range(6)] + [
+    f"/repo/tests/test_{index}.py" for index in range(6)
+]
+
+
+def test_lint_scope_check_accepts_a_healthy_tree(tmp_path: Path) -> None:
+    proc = _run_scope(tmp_path, _HEALTHY)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "check_lint_scope OK" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    ("case", "listed", "expected"),
+    [
+        # The measured defect: `src/` in .gitignore. Note the file COUNT stays
+        # healthy -- only the src/ membership assertion catches this, which is
+        # why the floor alone would not have been enough.
+        (
+            "src-swallowed",
+            [f"/repo/tests/test_{i}.py" for i in range(20)],
+            "no files under src/",
+        ),
+        (
+            "tests-swallowed",
+            [f"/repo/src/mod_{i}.py" for i in range(20)],
+            "no files under tests/",
+        ),
+        (
+            "almost-everything-gone",
+            ["/repo/src/a.py", "/repo/tests/b.py"],
+            "below the floor",
+        ),
+    ],
+)
+def test_lint_scope_check_rejects_a_collapsed_file_set(
+    tmp_path: Path, case: str, listed: list[str], expected: str
+) -> None:
+    proc = _run_scope(tmp_path, listed)
+    assert proc.returncode == 1, f"{case}: {proc.stdout + proc.stderr}"
+    assert expected in proc.stderr
+
+
+def test_lint_scope_check_fails_when_ruff_is_absent(tmp_path: Path) -> None:
+    # Given ruff cannot be found at all
+    proc = _run_scope(tmp_path, None)
+
+    # Then the check FAILS rather than passing or skipping. A scope that was
+    # never measured is not a measured scope, and this runs in the job whose
+    # exit status is the lint gate.
+    assert proc.returncode == 1
+    assert "not on PATH" in proc.stderr
+
+
+def test_lint_workflow_measures_scope_before_it_lints() -> None:
+    # Given the authoritative measurement lives in the lint job (that is where
+    # ruff exists), this is what makes the shim tests above coverage rather
+    # than decoration: it pins the real invocation, unconditionally.
+    steps = _steps_of(LINT_PATH, "lint-job")
+    names = [str(step.get("name", "")) for step in steps if isinstance(step, dict)]
+    runs = {
+        str(step.get("name", "")): str(step.get("run", ""))
+        for step in steps
+        if isinstance(step, dict)
+    }
+
+    assert "Check lint scope" in names, (
+        "lint.yml no longer measures ruff's file set; a swallowed tree would "
+        "make `ruff check .` pass over nothing and the gate report green"
     )
-    assert any("/tests/" in name for name in files), (
-        "ruff would check no files under tests/ -- same failure, one tree over."
-    )
-    # And the count is sane rather than a handful of stragglers left behind by
-    # a partial exclusion. The floor is deliberately far below today's ~2100.
-    assert len(files) > 500, f"ruff would check only {len(files)} files"
+    assert "ci/check_lint_scope.sh" in runs["Check lint scope"]
+
+    # And it runs BEFORE the steps whose exit status is the gate -- after them
+    # it would still report, but the gate would already have been decided.
+    assert names.index("Check lint scope") < names.index("Run ruff (format check)")
+    assert names.index("Check lint scope") < names.index("Run ruff (linting)")
 
 
 def test_mypy_configuration_comes_from_the_file_the_filter_gates() -> None:

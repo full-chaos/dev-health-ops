@@ -59,6 +59,19 @@ jobs:
               # green. test_paths_filter_covers_every_file_the_test_jobs_install
               # derives this list from the jobs' own install commands.
               - 'requirements-docs.txt'
+              # The guards for these live in this workflow's suite
+              # (tests/tooling/test_aggregate_gate_results.py), so a PR
+              # touching only one of them must not skip that suite --
+              # otherwise the check that would notice a collapsed lint or
+              # typecheck scope is the one that does not run
+              # (CHAOS-3513 Codex round 2).
+              - '.gitignore'
+              - '.ignore'
+              - 'ruff.toml'
+              - '.ruff.toml'
+              - 'mypy.ini'
+              - '.mypy.ini'
+              - 'setup.cfg'
               - 'pyproject.toml'
               - 'pytest.ini'
               - 'alembic.ini'

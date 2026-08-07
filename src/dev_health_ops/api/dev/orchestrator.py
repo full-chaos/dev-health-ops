@@ -63,6 +63,7 @@ from .answer_validator import (
     validate_answer_candidate,
 )
 from .contracts import (
+    V1_SCOPE_LIST_LIMIT,
     AnswerStatus,
     DevAnswer,
     DevClaim,
@@ -95,6 +96,7 @@ from .contracts_v2 import (
     DevSubjectSet,
     QuestionIntentID,
 )
+from .contracts_v2 import EntityKind as ContractEntityKind
 from .contracts_v2.base import SourceRequirementState
 from .contracts_v2.compat import scope_resolution_from_frame
 from .contracts_v2.frame import DevAnswerFrame
@@ -129,7 +131,7 @@ from .qua_promotion import (
     verify_still_authorized,
 )
 from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
-from .scope_service import MAX_CANDIDATES
+from .scope_service import MAX_CANDIDATES, ScopeResolutionService
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
@@ -2173,11 +2175,72 @@ class DevOrchestrator:
                     # rewritten to `internal_error` still resolved what it
                     # resolved, and hiding that is how the gap this ticket
                     # closes got there in the first place.
-                    preflight_terminal_resolution = scope_resolution_from_frame(
-                        preflight_result.answer.frame,
-                        requested_scope=authorized_scope,
-                        resolved_at=datetime.now(UTC),
-                    )
+                    #
+                    # CHAOS-3534: a COMPLETE committed cohort is the one
+                    # terminal the frame cannot describe. `scope_resolution_
+                    # from_frame` has three branches -- candidates, a single
+                    # `subject_ref`, else UNRESOLVED -- and a cohort frame
+                    # carries neither of the first two, so it fell through and
+                    # published "unresolved" for a run that resolved EVERY
+                    # named subject exactly and committed a real
+                    # dev_subject_set.v1. That is the same defect CHAOS-3497
+                    # exists to fix (a non-answer terminal misreporting its
+                    # own scope decision), one branch short.
+                    #
+                    # Sourced from the preflight's own subject set rather than
+                    # re-derived from the frame, because the frame
+                    # STRUCTURALLY cannot carry a cohort -- re-deriving from
+                    # it could only ever produce the wrong answer.
+                    #
+                    # Gated on `cohort_complete`, whose own contract validator
+                    # guarantees it is False whenever any mention was omitted:
+                    # a partial cohort did NOT resolve everything the question
+                    # named, and calling it exact would be the same false
+                    # statement pointing the other way.
+                    #
+                    # Restricted to REPOSITORY cohorts because v1 cannot
+                    # represent any other kind as a multi-entity scope --
+                    # DevScope requires exactly one entity_ref for
+                    # project/team/issue/PR/work-unit, while `repositories`
+                    # is a list. A project cohort therefore keeps today's
+                    # frame-derived outcome; that residual is real, is NOT
+                    # fixed here, and is tracked rather than papered over.
+                    #
+                    # And bounded by V1_SCOPE_LIST_LIMIT, because the subject
+                    # set's own bound is LARGER than v1's: a DevSubjectSet may
+                    # commit up to 25 refs, while DevScope.repositories and
+                    # DevScopeResolution.authorized_repository_ids both cap at
+                    # 20. Without this a fully-resolved, fully-authorized
+                    # 21-25 repository cohort raises during terminal
+                    # construction -- the SAME "legal upstream, illegal
+                    # downstream" defect as the project-kind case above, at a
+                    # different boundary, and it would have turned an honest
+                    # feature_not_enabled into an opaque internal_error.
+                    # (Codex adversarial review, HIGH; reproduced before
+                    # fixing.) An oversized cohort keeps the frame-derived
+                    # outcome: under-disclosure is the honest failure here,
+                    # since v1 genuinely cannot list what was committed.
+                    cohort = preflight_result.subject_set
+                    if (
+                        cohort is not None
+                        and cohort.cohort_complete
+                        and cohort.entity_kind is ContractEntityKind.REPOSITORY
+                        and len(cohort.committed_entity_refs) <= V1_SCOPE_LIST_LIMIT
+                    ):
+                        preflight_terminal_resolution = (
+                            ScopeResolutionService.committed_cohort_resolution_for(
+                                cohort,
+                                org_id=org_id,
+                                base_scope=authorized_scope,
+                                resolved_at=datetime.now(UTC),
+                            )
+                        )
+                    else:
+                        preflight_terminal_resolution = scope_resolution_from_frame(
+                            preflight_result.answer.frame,
+                            requested_scope=authorized_scope,
+                            resolved_at=datetime.now(UTC),
+                        )
                     preflight_leak = internal_token_leak_field(
                         user_visible_strings_by_field(error=preflight_error),
                         attested=attested_strings(None, request.question)

@@ -1024,6 +1024,106 @@ class ScopeResolutionService:
             resolved_at=resolved_at,
         )
 
+    @classmethod
+    def committed_cohort_resolution_for(
+        cls,
+        subject_set: DevSubjectSet,
+        *,
+        org_id: str,
+        base_scope: DevScope,
+        resolved_at: datetime,
+    ) -> DevScopeResolution:
+        """The committed-scope construction for a COHORT (CHAOS-3534).
+
+        Deliberately a sibling of ``committed_resolution_for`` in this same
+        module rather than a second notion built elsewhere: that function's
+        docstring exists to keep exactly one idea of "committed scope", and a
+        cohort is the same idea over more than one entity. The conventions are
+        inherited rather than reinvented -- most importantly that a REPOSITORY
+        commit carries its ids in ``authorized_repository_ids`` and leaves
+        ``authorized_entity_ids`` empty, which is exactly the detail a second
+        producer written from scratch gets backwards.
+
+        WHY IT EXISTS: a question naming several subjects that ALL resolve
+        exactly commits a real ``dev_subject_set.v1`` and then terminates,
+        because the v1 surface cannot render a cohort (D1). The resolution
+        published on that terminal used to be re-derived from the answer
+        FRAME, which structurally cannot carry a cohort -- so it fell through
+        to ``UNRESOLVED`` and told an auditor the run resolved nothing, for a
+        run that resolved everything it was asked about.
+
+        ``cohort_complete`` is the CALLER's gate, not this function's
+        business: an incomplete cohort genuinely did not resolve everything
+        the question named, and calling that ``exact`` would be the same false
+        statement pointing the other way.
+        """
+
+        kind = EntityKind(subject_set.entity_kind.value)
+        if kind is not EntityKind.REPOSITORY:
+            # v1 CANNOT express a multi-entity direct scope for any other
+            # kind, and that is a contract fact rather than a policy choice:
+            # DevScope.validate_direct_scope requires EXACTLY ONE matching
+            # entity_ref for PROJECT/WORK_UNIT/ISSUE/PULL_REQUEST/TEAM
+            # ("direct entity scope requires one matching entity"), while
+            # `repositories` is a list with a >= 1 bound. So a repository
+            # cohort has a faithful v1 representation and no other kind does.
+            #
+            # Refused loudly HERE rather than left to fail deep inside
+            # DevScope construction: the first cut of CHAOS-3534 did exactly
+            # that, and turned a two-project cohort's honest
+            # `feature_not_enabled` into an opaque `internal_error` -- a
+            # strictly worse outcome than the disclosure defect being fixed.
+            # The caller is responsible for not asking; this is the backstop
+            # that makes a future caller's mistake loud rather than silent.
+            raise ValueError(
+                f"a {kind.value} cohort has no multi-entity v1 scope "
+                "representation; only repository cohorts can be published as "
+                "an exact committed scope"
+            )
+        is_repository = True
+        is_team = False
+        entities = [
+            AuthorizedEntity(
+                kind=EntityKind(ref.entity_kind.value),
+                canonical_id=ref.entity_id,
+                label=ref.display_label,
+                repository_id=ref.repository_id,
+            )
+            for ref in subject_set.committed_entity_refs
+        ]
+        canonical_ids = [entity.canonical_id for entity in entities]
+        resolved_scope = DevScope(
+            schema_version="dev_scope.v1",
+            organization_id=org_id,
+            direct_scope=DirectScope(kind.value),
+            repositories=list(canonical_ids) if is_repository else [],
+            entity_refs=(
+                []
+                if is_repository
+                else [cls._contract_entity_ref(entity) for entity in entities]
+            ),
+            team_ids=list(canonical_ids) if is_team else [],
+            time_range=base_scope.time_range,
+            comparison_range=base_scope.comparison_range,
+            surface_context=None,
+        )
+        repository_ids = sorted(
+            (set(canonical_ids) if is_repository else set())
+            | {entity.repository_id for entity in entities if entity.repository_id}
+        )
+        return DevScopeResolution(
+            schema_version="dev_scope_resolution.v1",
+            requested_scope=base_scope,
+            resolved_scope=resolved_scope,
+            outcome=ScopeResolutionOutcome.EXACT,
+            authorized_repository_ids=repository_ids,
+            authorized_entity_ids=[] if is_repository else list(canonical_ids),
+            candidates=[],
+            fallbacks=[],
+            warnings=[],
+            resolved_at=resolved_at,
+        )
+
     def committed_subject_set_for(
         self,
         entities: Sequence[AuthorizedEntity],

@@ -1,0 +1,28 @@
+# PyYAML assigns duplicate mapping keys in turn: the LAST value wins, and the key
+# keeps the POSITION of its FIRST appearance
+# (`d={}; d['a']=1; d['b']=2; d['a']=3` leaves order [a, b] with a==3).
+# go-yaml keeps BOTH pairs in the node, so a naive port applies a duplicated
+# category TWICE (a union) or reads the first value outright.
+#
+# Both halves are made observable on purpose:
+#   * "alpha" must be ABSENT -- proving the duplicate REPLACED [Alpha] rather
+#     than being unioned with it.
+#   * "charlie" appears under the duplicated `todo` AND under `done`, so the
+#     surviving category depends on which position `todo` occupies. With the
+#     first-appearance position (correct) todo comes BEFORE done, so last-wins
+#     indexing resolves charlie to `done`. A port that gave the duplicate its
+#     LAST position would resolve charlie to `todo` instead -- which is why the
+#     collision is here rather than a tidier fixture that could not tell them
+#     apart.
+version: 1
+status_categories:
+  todo:  [Alpha]
+  done:  [Bravo, Charlie]
+  todo:  [Charlie]
+providers:
+  jira:
+    statuses:
+      todo: [First]
+  jira:                # the whole first jira block is replaced, not merged
+    statuses:
+      done: [Second]

@@ -101,13 +101,39 @@ def _plain(index: Mapping[str, Mapping[str, str]]) -> dict[str, dict[str, str]]:
     return {provider: dict(entries) for provider, entries in index.items()}
 
 
+# The value both engines report for the D20 timestamp divergence. It is
+# deliberately DIFFERENT on each side and therefore declared in excluded_fields:
+# see the registration below for why a differential case cannot express it.
+D20_PYTHON_BEHAVIOUR = "python:resolves-timestamp-and-str()s-it"
+
+
 def _build_row(case: dict[str, Any]) -> dict[str, Any]:
-    mapping = load_mapping_for_case(case)
+    """Build one row, carrying the PHASE and exception type when Python raises.
+
+    A config Python REJECTS and a config Python merely finds empty are wildly
+    different outcomes that a bare "four empty maps" row would render
+    identical. Carrying `outcome` as "<phase>:<ExceptionType>" makes an error
+    that moves phases, or changes class, compare unequal -- which is the whole
+    point of pinning the structural cases at all.
+    """
+    try:
+        mapping = load_mapping_for_case(case)
+    except Exception as exc:  # noqa: BLE001 -- the exception IS the observation
+        return {
+            "outcome": f"load:{type(exc).__name__}",
+            "status_by_provider": None,
+            "label_status_by_provider": None,
+            "type_by_provider": None,
+            "label_type_by_provider": None,
+            "d20_timestamp_probe": D20_PYTHON_BEHAVIOUR,
+        }
     return {
+        "outcome": "ok",
         "status_by_provider": _plain(mapping.status_by_provider),
         "label_status_by_provider": _plain(mapping.label_status_by_provider),
         "type_by_provider": _plain(mapping.type_by_provider),
         "label_type_by_provider": _plain(mapping.label_type_by_provider),
+        "d20_timestamp_probe": D20_PYTHON_BEHAVIOUR,
     }
 
 
@@ -116,5 +142,21 @@ oracle_registry.register(
         id="status/mapping/load",
         build_row=_build_row,
         reflected_fields=_reflected_fields,
+        excluded_fields={
+            "d20_timestamp_probe": (
+                "Decision Log D20, declared divergence: PyYAML resolves a plain "
+                "`2026-01-01` scalar to a datetime.date and str()s it into an "
+                "index key, while the Go port REFUSES LOUDLY rather than "
+                "carrying a second, unversioned date formatter. The two sides "
+                "therefore report different values here BY DESIGN, which is "
+                "exactly why this is a declared exclusion and not a comparison: "
+                "a differential case cannot both diverge and pass. The "
+                "divergence is asserted, not merely described -- "
+                "TestTimestampScalarIsDeclaredDivergenceD20 fails if Go ever "
+                "stops erroring on testdata/status_mapping_configs/"
+                "timestamp_d20.yaml, and this field records what Python does "
+                "in every proof run so the claim stays visible on both sides."
+            ),
+        },
     )
 )

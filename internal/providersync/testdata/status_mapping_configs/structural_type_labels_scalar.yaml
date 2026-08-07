@@ -1,0 +1,5 @@
+version: 1
+status_categories: {}
+providers:
+  github:
+    type_labels: oops

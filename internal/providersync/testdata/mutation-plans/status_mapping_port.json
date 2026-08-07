@@ -6,13 +6,13 @@
     "build",
     "./..."
   ],
-  "$limitation": "Every mutation below is CLAUSE-level: it removes or inverts one conjunct, one comparison, one set member, or one ordering decision, never a whole function. Two things are deliberately NOT mutated here. (1) The DECLARED DIVERGENCE on LoadStatusMapping -- Python's source-relative DEFAULT_STATUS_MAPPING_PATH fallback has no Go equivalent, so there is no shared clause to mutate; it is covered by the written note on the function and by callers always supplying a path. (2) The `if typeRaw != \"\"` / `if statusRaw != \"\"` truthiness guards: normKey(\"\") is \"\" and empty keys are never indexed, so removing the guard changes no observable result. Mutating it would report SURVIVED for a reason that is a property of the INDEX, not of the guard, so it is stated here instead of being listed as a fake kill.",
+  "$limitation": "Every mutation below is CLAUSE-level: it removes or inverts one conjunct, one comparison, one set member, or one ordering decision, never a whole function. Two things are deliberately NOT mutated here. (1) The DECLARED DIVERGENCE on LoadStatusMapping -- Python's source-relative DEFAULT_STATUS_MAPPING_PATH fallback has no Go equivalent, so there is no shared clause to mutate; it is covered by the written note on the function and by callers always supplying a path. (2) The `if typeRaw != \"\"` / `if statusRaw != \"\"` truthiness guards: normKey(\"\") is \"\" and empty keys are never indexed, so removing the guard changes no observable result. Mutating it would report SURVIVED for a reason that is a property of the INDEX, not of the guard, so it is stated here instead of being listed as a fake kill. THIRD DECLARED EXCLUSION (added with the PyYAML-compatibility work): a mutation that changes the CAPITALISATION of a rendered scalar -- \"True\"->\"true\", \"None\"->\"none\" -- will SURVIVE, and that is a property of normKey rather than a coverage gap: normKey lowercases AFTER pythonStr, so the two spellings collapse to the same index key before anything can observe them. Listing such a mutation would be a FAKE KILL. The repr-branch mutations above are therefore aimed at tag DISPATCH (M21-M27: whether a scalar is a bool/int/float/string at all) and at the NUMERIC FORMATTERS (M28-M32), which are the places where a divergence survives normalization and reaches an index key.",
   "mutations": [
     {
       "id": "M1-norm-key-internal-whitespace-collapse",
       "file": "internal/providersync/status_mapping.go",
-      "find": "\treturn strings.Join(strings.Fields(strings.ToLower(value)), \" \")",
-      "replace": "\treturn strings.TrimSpace(strings.ToLower(value))",
+      "find": "\treturn strings.Join(strings.Fields(normKeyLower(value)), \" \")",
+      "replace": "\treturn strings.TrimSpace(normKeyLower(value))",
       "rationale": "_norm_key collapses INTERNAL whitespace runs, not just the ends. This is the exact shape a naive ToLower+TrimSpace port produces, and it silently stops 'In    Progress' from matching the indexed 'in progress'.",
       "proof": [
         [
@@ -31,7 +31,7 @@
     {
       "id": "M2-norm-key-lowercases",
       "file": "internal/providersync/status_mapping.go",
-      "find": "\treturn strings.Join(strings.Fields(strings.ToLower(value)), \" \")",
+      "find": "\treturn strings.Join(strings.Fields(normKeyLower(value)), \" \")",
       "replace": "\treturn strings.Join(strings.Fields(value), \" \")",
       "rationale": "The case-folding clause, isolated from M1's whitespace clause. Jira's index holds 'bug'; a raw '  BUG  ' must still find it.",
       "proof": [
@@ -70,9 +70,9 @@
     },
     {
       "id": "M4-python-repr-string-quote-style",
-      "file": "internal/providersync/status_mapping.go",
-      "find": "\treturn \"'\" + escaped + \"'\"",
-      "replace": "\treturn \"\\\"\" + escaped + \"\\\"\"",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tquote := byte('\\'')\n\tif hasSingle && !hasDouble {\n\t\tquote = '\"'\n\t}",
+      "replace": "\tquote := byte('\"')\n\tif hasSingle && !hasDouble {\n\t\tquote = '\"'\n\t}",
       "rationale": "Python's repr prefers SINGLE quotes. Double-quoting yields the key {\"type\": \"bug\"}, which differs from Python's {'type': 'bug'} by two bytes and matches nothing. Isolated from M3: the mapping is still walked and a key still produced. Part of the CHAOS-3512 pin set.",
       "proof": [
         [
@@ -111,8 +111,8 @@
     {
       "id": "M6-mapping-entries-preserve-file-order",
       "file": "internal/providersync/status_mapping.go",
-      "find": "\t\tentries = append(entries, mappingEntry{Key: key.Value, Value: node.Content[i+1]})\n\t}\n\treturn entries",
-      "replace": "\t\tentries = append(entries, mappingEntry{Key: key.Value, Value: node.Content[i+1]})\n\t}\n\tfor a := 1; a < len(entries); a++ {\n\t\tfor b := a; b > 0 && entries[b].Key < entries[b-1].Key; b-- {\n\t\t\tentries[b], entries[b-1] = entries[b-1], entries[b]\n\t\t}\n\t}\n\treturn entries",
+      "find": "\t\tposition[key] = len(entries)\n\t\tentries = append(entries, entry)\n\t}\n\treturn entries, nil",
+      "replace": "\t\tposition[key] = len(entries)\n\t\tentries = append(entries, entry)\n\t}\n\tfor a := 1; a < len(entries); a++ {\n\t\tfor b := a; b > 0 && entries[b].Key < entries[b-1].Key; b-- {\n\t\t\tentries[b], entries[b-1] = entries[b-1], entries[b]\n\t\t}\n\t}\n\treturn entries, nil",
       "rationale": "THE ordering clause. Python iterates a dict in insertion (file) order and _index_values is last-wins, so a raw value listed under two categories resolves to the LATER one in the FILE. Sorting simulates exactly what a port that decoded YAML into a Go map suffers: quirks.yaml lists 'Shared Value' under todo then done, so file order resolves it to done while alphabetical order resolves it to todo.",
       "proof": [
         [
@@ -171,9 +171,9 @@
     {
       "id": "M9-base-categories-applied-before-provider-overrides",
       "file": "internal/providersync/status_mapping.go",
-      "find": "\tfor _, entry := range mappingEntries(baseStatus) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue // `_as_status_category` returned None: skipped in silence.\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n\tfor _, entry := range mappingEntries(mappingValue(providerConfig, \"statuses\")) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}",
-      "replace": "\tfor _, entry := range mappingEntries(mappingValue(providerConfig, \"statuses\")) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n\tfor _, entry := range mappingEntries(baseStatus) {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue // `_as_status_category` returned None: skipped in silence.\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}",
-      "rationale": "Base first, provider second -- that ordering is what makes a provider `statuses` entry an OVERRIDE. Swapping the two passes lets the shared base silently win, so jira's in_progress override of 'Shared Value' reverts to the base category.",
+      "find": "\tfor _, entry := range baseEntries {\n\t\tif !validStatusCategories[entry.Key] {\n\t\t\tcontinue // `_as_status_category` returned None: skipped in silence.\n\t\t}\n\t\tif err := indexValues(indexed, entry.Value, entry.Key); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}\n",
+      "replace": "\t_ = baseEntries\n",
+      "rationale": "Base first, provider second -- that ordering is what makes a provider `statuses` entry an OVERRIDE. Swapping the two passes lets the shared base silently win, so jira's in_progress override of 'Shared Value' reverts to the base category. Re-anchored after the PyYAML rewrite: the mutation now DROPS the base pass entirely, which is the same clause (base categories participate, and do so BEFORE the provider override) expressed against the current control flow. The `_ = baseEntries` keeps the binding used so the mutant BUILDS; without it the compiler rejects the file and the harness reports INVALID, which measures nothing.",
       "proof": [
         [
           "env",
@@ -211,8 +211,8 @@
     {
       "id": "M11-invalid-work-item-type-skipped-silently",
       "file": "internal/providersync/status_mapping.go",
-      "find": "\tfor _, entry := range mappingEntries(mappingValue(providerConfig, section)) {\n\t\tif !valid[entry.Key] {\n\t\t\tcontinue\n\t\t}",
-      "replace": "\tfor _, entry := range mappingEntries(mappingValue(providerConfig, section)) {\n\t\tif false {\n\t\t\tcontinue\n\t\t}",
+      "find": "\tfor _, entry := range entries {\n\t\tif !valid[entry.Key] {\n\t\t\tcontinue\n\t\t}",
+      "replace": "\tfor _, entry := range entries {\n\t\tif false {\n\t\t\tcontinue\n\t\t}",
       "rationale": "The `_as_work_item_type` half of M10, on the shared single-section builder that serves status_labels, types and type_labels. A separate clause in a separate function: M10 cannot reach it.",
       "proof": [
         [
@@ -404,6 +404,427 @@
           "-count=1",
           "-run",
           "^TestStatusMappingNormalizeMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M21-plain-scalar-style-gate",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tif node.Style != 0 {\n\t\treturn pyScalarString\n\t}",
+      "replace": "\tif false {\n\t\treturn pyScalarString\n\t}",
+      "rationale": "Only PLAIN scalars get implicit resolution; a QUOTED \"yes\" is the string \"yes\" in both engines. Dropping the style gate re-resolves quoted scalars, so '\"yes\"' becomes the bool key \"true\". This is the clause that separates `- yes` from `- \"yes\"`, and no other mutation reaches it.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M22-yaml11-bool-spellings",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "`^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$`",
+      "replace": "`^(?:true|True|TRUE|false|False|FALSE)$`",
+      "rationale": "R3 tag DISPATCH: PyYAML 1.1 resolves yes/no/on/off as booleans; go-yaml 1.2 calls them strings. Restricting the pattern to the 1.2 spellings reverts exactly that, turning the key \"false\" back into \"no\". Targeted at dispatch rather than at True/False capitalisation, which normKey would flatten (see $limitation).",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M23-sexagesimal-int",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\t\tpyIntDecimal.MatchString(value), pyIntHex.MatchString(value),\n\t\tpyIntSexagesimal.MatchString(value):",
+      "replace": "\t\tpyIntDecimal.MatchString(value), pyIntHex.MatchString(value):",
+      "rationale": "R3: `12:00:00` is the integer 43200 to PyYAML and a plain string to go-yaml. Dropping the sexagesimal branch indexes \"12:00:00\" instead of \"43200\".",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M24-float-needs-a-literal-dot",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tpyFloatFixed       = regexp.MustCompile(`^[-+]?(?:[0-9][0-9_]*)?\\.[0-9_]*(?:[eE][-+][0-9]+)?$`)",
+      "replace": "\tpyFloatFixed       = regexp.MustCompile(`^[-+]?(?:[0-9][0-9_]*)?\\.?[0-9_]*(?:[eE][-+][0-9]+)?$`)",
+      "rationale": "The dotless-exponent resolver rule: PyYAML's float pattern REQUIRES a literal dot, which is why `1e3` is the STRING '1e3'. Making the dot optional floats it to 1000.0. This is the resolver, not the formatter -- R4 could not catch it.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M25-float-exponent-needs-a-sign",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tpyFloatFixed       = regexp.MustCompile(`^[-+]?(?:[0-9][0-9_]*)?\\.[0-9_]*(?:[eE][-+][0-9]+)?$`)",
+      "replace": "\tpyFloatFixed       = regexp.MustCompile(`^[-+]?(?:[0-9][0-9_]*)?\\.[0-9_]*(?:[eE][-+]?[0-9]+)?$`)",
+      "rationale": "The other half of the same rule, isolated: PyYAML's exponent requires an explicit SIGN, so `1.5e8` is a string while `1.5e+8` is a float. Making the sign optional floats 1.5e8. M24 keeps the sign requirement and M25 keeps the dot requirement, so neither subsumes the other.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M26-leading-zero-is-octal",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tcase len(value) > 1 && strings.HasPrefix(value, \"0\"):\n\t\tparsed, err = strconv.ParseInt(value[1:], 8, 64)",
+      "replace": "\tcase false:\n\t\tparsed, err = strconv.ParseInt(value[1:], 8, 64)",
+      "rationale": "PyYAML reads `010` as OCTAL 8. Falling through to the decimal branch indexes \"10\". The review's note that octal was 'already right' held only because go-yaml happens to agree here; nothing pinned it until now.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M27-0o-prefix-is-not-an-int-to-pyyaml",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tpyIntOctal         = regexp.MustCompile(`^[-+]?0[0-7_]+$`)",
+      "replace": "\tpyIntOctal         = regexp.MustCompile(`^[-+]?0o?[0-7_]+$`)",
+      "rationale": "PyYAML 1.1 does NOT recognise the YAML-1.2 `0o10` spelling: it is the STRING '0o10'. go-yaml resolves it to 8. Accepting the 0o form here reintroduces go-yaml's reading of a scalar the real resolver leaves alone.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M28-nan-spelling",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tcase math.IsNaN(value):\n\t\treturn \"nan\"",
+      "replace": "\tcase math.IsNaN(value):\n\t\treturn \"NaN\"",
+      "rationale": "R4 numeric formatter, NaN half. Declared expected survivor -- see expected_survivor_reason.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ],
+      "expected_survivor_reason": "MEASURED, not assumed. The input class is 'a float scalar that resolves to NaN' -- in this corpus the `.nan` entry of pyyaml_scalars.yaml. normKey lowercases AFTER pythonStr, so Python's 'nan' and Go's 'NaN' both fold to the index key 'nan' and no comparison can separate them. Removing the branch outright does not help either: FormatFloat yields 'NaN', the exponent Cut finds no 'e' and returns early, so the old 'NaN.0' shape cannot reappear through this path. NaN spelling is therefore genuinely unobservable at the index, and listing it as a kill would be a fake kill. The observable half of R4 is pinned by M29 (the '+' in '+Inf' survives folding) and M32 (the missing '.0')."
+    },
+    {
+      "id": "M29-inf-spelling",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tcase math.IsInf(value, 1):\n\t\treturn \"inf\"",
+      "replace": "\tcase math.IsInf(value, 1):\n\t\treturn \"+Inf\"",
+      "rationale": "R4: Python renders positive infinity as 'inf'; Go's %g renders '+Inf'. The leading '+' survives normKey's lowercasing, so this is a genuine key divergence rather than a capitalisation one.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M30-float-scientific-threshold",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tif exponent < -4 || exponent >= 16 {",
+      "replace": "\tif exponent < -4 || exponent >= 17 {",
+      "rationale": "R4: CPython switches to scientific notation at exponent >= 16. Moving the threshold to 17 renders 1.0e+16 as '10000000000000000.0' instead of '1e+16'. The fixture carries 1.0e+15 AND 1.0e+16 precisely so the boundary is observable from both sides.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M31-float-negative-exponent-threshold",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tif exponent < -4 || exponent >= 16 {",
+      "replace": "\tif exponent < -3 || exponent >= 16 {",
+      "rationale": "The other end of the same switch, isolated from M30: 1.0e-4 must stay fixed ('0.0001') while 1.0e-5 goes scientific. Moving the low bound renders 0.0001 as '1e-04'.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M32-integral-float-trailing-dot-zero",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\tif !strings.Contains(fixed, \".\") {\n\t\tfixed += \".0\"\n\t}",
+      "replace": "\tif false {\n\t\tfixed += \".0\"\n\t}",
+      "rationale": "Python renders an integral float as '1.0', not '1'. Dropping the suffix collapses the float 1.0 onto the same key as the integer 1 -- two different YAML scalars becoming one index entry.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M33-duplicate-key-last-value-wins",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tif at, seen := position[key]; seen {\n\t\t\tentries[at] = entry // last value wins, first position kept\n\t\t\tcontinue\n\t\t}",
+      "replace": "\t\tif _, seen := position[key]; seen {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "R2: PyYAML assigns duplicate keys in turn, so the LAST value wins. Keeping the first makes the replaced [Alpha] survive -- 'alpha' reappears in the index, which is the silent-wrong-value shape the ruling said could not be merely declared.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M34-duplicate-key-keeps-first-position",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tif at, seen := position[key]; seen {\n\t\t\tentries[at] = entry // last value wins, first position kept\n\t\t\tcontinue\n\t\t}",
+      "replace": "\t\tif at, seen := position[key]; seen {\n\t\t\tentries = append(append(entries[:at:at], entries[at+1:]...), entry)\n\t\t\tcontinue\n\t\t}",
+      "rationale": "The POSITION half of R2, which the value half cannot reach: a Python dict keeps a duplicated key at its FIRST appearance. Moving it to the end reorders todo after done, and because the fixture puts 'Charlie' under both, last-wins indexing then resolves charlie to todo instead of done.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M35-truthy-non-mapping-raises",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\tif node.Kind != yaml.MappingNode {\n\t\treturn nil, attributeError(fmt.Sprintf(",
+      "replace": "\tif false {\n\t\treturn nil, attributeError(fmt.Sprintf(",
+      "rationale": "R1 BLOCKER: `statuses: [a, b]` -- the classic indentation slip -- raises AttributeError in Python. Swallowing it builds four empty indexes and classifies every work item as issue/unknown while reporting success: silent metric corruption during coexistence.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M36-falsy-non-mapping-is-not-an-error",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\tcase yaml.MappingNode, yaml.SequenceNode:\n\t\treturn len(node.Content) > 0",
+      "replace": "\tcase yaml.MappingNode, yaml.SequenceNode:\n\t\treturn true",
+      "rationale": "The COUNTERPART to M35, and the reason `or {}` matters: an EMPTY list is falsy and must be swallowed silently, not rejected. Treating every container as truthy over-applies the R1 fix and turns a valid config into an error -- a failure mode the blocker fix could otherwise introduce unnoticed.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M37-string-iterates-characters",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tif resolvePyScalar(node) == pyScalarString {\n\t\t\trunes := []rune(node.Value)",
+      "replace": "\t\tif false {\n\t\t\trunes := []rune(node.Value)",
+      "rationale": "Python's `for raw in values` over a STRING yields its characters, so `todo: notalist` indexes n, o, t, a, l, i, s. Removing the branch turns that into a TypeError -- a loud failure where Python quietly indexes seven keys.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M38-mapping-iterates-keys",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\tkeys := make([]string, 0, len(entries))\n\t\tfor _, entry := range entries {\n\t\t\tkeys = append(keys, entry.Key)\n\t\t}\n\t\treturn keys, nil",
+      "replace": "\t\tkeys := make([]string, 0, len(entries))\n\t\treturn keys, nil",
+      "rationale": "Iterating a MAPPING yields its KEYS. Returning nothing silently drops every value under a category written as a mapping instead of a list.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M39-non-iterable-raises-typeerror",
+      "file": "internal/providersync/status_mapping.go",
+      "find": "\t\treturn nil, typeError(fmt.Sprintf(\n\t\t\t\"%q at line %d is a %s, which is not iterable\",\n\t\t\tnode.Value, node.Line, nodeKindName(node)))",
+      "replace": "\t\treturn nil, nil",
+      "rationale": "`todo: 5` raises TypeError ('int' object is not iterable). Returning nothing instead reports a healthy load for a config Python rejects -- and the outcome field is what makes the difference visible, since both would otherwise show an empty index.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMappingLoadMatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M40-full-unicode-case-mapping",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\treturn cases.Lower(language.Und).String(value)",
+      "replace": "\t_ = cases.Lower(language.Und)\n\treturn strings.ToLower(value)",
+      "rationale": "R5: Python's str.lower() is FULL case mapping. strings.ToLower folds '\u0130' (U+0130) to a bare 'i' while Python produces 'i' + U+0307, so the label '\u0130SSUE' MATCHES in Go and MISSES in Python. Labels are user-controlled provider text; no malice required. The discarded caser keeps the import used: without it the mutated file fails to BUILD, which the harness reports as INVALID -- a mutation that never ran, not a kill.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMapping(Load|Normalize)MatchesPythonOracle$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "M41-case-mapping-locale-is-undetermined",
+      "file": "internal/providersync/status_mapping_pyyaml.go",
+      "find": "\treturn cases.Lower(language.Und).String(value)",
+      "replace": "\treturn cases.Lower(language.Turkish).String(value)",
+      "rationale": "The locale choice, pinned explicitly because it is a TRAP: cases.Lower(language.Turkish) is byte-identical to the broken strings.ToLower on '\u0130', so picking Turkish -- which looks reasonable when the motivating character is Turkish -- silently reproduces the very defect M40 fixes. Python's str.lower() is locale-independent; Und is the locale-independent caser.",
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp",
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestStatusMapping(Load|Normalize)MatchesPythonOracle$",
           "./internal/providersync/"
         ]
       ]

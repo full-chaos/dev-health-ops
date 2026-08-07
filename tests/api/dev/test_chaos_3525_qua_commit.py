@@ -506,3 +506,95 @@ async def test_the_commit_is_auditable_as_a_model_decision() -> None:
         "a model-committed entry must be distinguishable from a "
         f"deterministically-committed one; both stamped {qua_versions}"
     )
+
+
+async def test_a_widened_bare_name_commits_instead_of_answering_org_wide() -> None:
+    """The OTHER decline shape, and the one with different persistence.
+
+    A bare name with no kind noun does not terminate -- it widens to
+    organization scope and answers about everything (``proceeded_unresolved_
+    bare_name``). That is a wrong-subject answer wearing a disclosure, and it
+    is the second thing this promotion exists to replace.
+
+    It also exercises a different write path: this branch already flushed its
+    whole ledger, so promotion may append only the new entry. Writing the
+    others again would collide on the ``(run_id, entry_ordinal)`` unique
+    constraint -- a failure that would surface as a poisoned session rather
+    than as anything legible.
+    """
+
+    from dev_health_ops.api.dev.qua_promotion import QUA_COMMIT_DIAGNOSTIC
+
+    shadow = _selecting_shadow(text_span="ACR", script_id="qua-bare-name")
+
+    baseline = await run_preflight_orchestrator(
+        question="How is ACR doing?",
+        entities=[(ORG_ID, ACR_PROJECT)],
+        script_id="bare-name-baseline",
+    )
+    assert baseline.preflight_outcomes() == ("proceeded_unresolved_bare_name",), (
+        "the control must actually take the widening branch, or this test "
+        "proves nothing about it"
+    )
+
+    promoted = await run_preflight_orchestrator(
+        question="How is ACR doing?",
+        entities=[(ORG_ID, ACR_PROJECT)],
+        script_id="bare-name-live",
+        qua_shadow=shadow,
+    )
+
+    assert QUA_COMMIT_DIAGNOSTIC in promoted.preflight_outcomes()
+    published = promoted.result.scope_resolution
+    assert published is not None
+    assert published.outcome is ScopeResolutionOutcome.EXACT
+    assert published.authorized_entity_ids == [ACR_PROJECT.canonical_id]
+
+    # No entry may be written twice: the ordinals the run persisted must be
+    # exactly the ledger's own contiguous sequence.
+    assert promoted.recorder is not None
+    ordinals = [entry.entry_ordinal for entry in promoted.recorder.resolutions]
+    assert len(ordinals) == len(set(ordinals)), (
+        f"an entry was persisted twice (ordinals={ordinals}) -- the "
+        "(run_id, entry_ordinal) unique constraint would reject this live"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. the production gate
+# ---------------------------------------------------------------------------
+
+
+def test_production_requires_both_flags_to_commit(monkeypatch) -> None:
+    """The ladder, asserted where production actually reads it.
+
+    ``ASK_DEV_QUA_COMMIT_ENABLED`` alone must not arm commit mode: with the
+    shadow off there is no proposal to promote, and a flag that appeared to
+    work while silently doing nothing is worse than one that is plainly off.
+    Parametrized over all four combinations rather than only the happy one --
+    the three that must stay off are the whole point.
+    """
+
+    from dev_health_ops.api.dev.production_runtime import _qua_commit_flag_enabled
+
+    def _commit_enabled(shadow: str | None, commit: str | None) -> bool:
+        for name, value in (
+            ("ASK_DEV_QUA_SHADOW_ENABLED", shadow),
+            ("ASK_DEV_QUA_COMMIT_ENABLED", commit),
+        ):
+            if value is None:
+                monkeypatch.delenv(name, raising=False)
+            else:
+                monkeypatch.setenv(name, value)
+        # Production's OWN predicate, not a restatement of it here: a test
+        # that re-implements the expression it checks passes for any
+        # production behaviour whatsoever.
+        return _qua_commit_flag_enabled()
+
+    assert _commit_enabled(None, None) is False
+    assert _commit_enabled("1", None) is False
+    assert _commit_enabled(None, "1") is False, (
+        "the commit flag must be inert without the shadow flag that produces "
+        "the proposal it promotes"
+    )
+    assert _commit_enabled("1", "1") is True

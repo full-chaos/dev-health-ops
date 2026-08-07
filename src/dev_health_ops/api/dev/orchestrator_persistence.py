@@ -255,7 +255,12 @@ class PersistenceRunRecorder:
             relationship_closure_verified=result.relationship_closure_verified,
         )
 
-    async def record_frame(self, frame: DevAnswerFrame) -> None:
+    async def record_frame(
+        self,
+        frame: DevAnswerFrame,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
         await self._service.record_frame(
             org_id=self._org_id,
             user_id=self._user_id,
@@ -263,6 +268,16 @@ class PersistenceRunRecorder:
             frame_id=uuid.UUID(frame.frame_id),
             public_outcome=frame.public_outcome.value,
             payload=frame.model_dump(mode="json"),
+            # CHAOS-3533: the mention whose ambiguity terminated the run, so
+            # the service authorizes this frame's candidates against THAT
+            # mention's ledger row rather than guessing by ordinal. Absent on
+            # every other terminal, which is itself the assertion "this run
+            # made no clarification offer".
+            authorizing_mention_id=(
+                uuid.UUID(authorizing_mention_id)
+                if authorizing_mention_id is not None
+                else None
+            ),
         )
 
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:

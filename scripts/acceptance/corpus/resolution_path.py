@@ -423,11 +423,28 @@ def derive_resolution_path(
 
 
 #: ``resolution_path`` is absent because the run really was queried and its
-#: ``dev_run_resolutions`` ledger really was empty. HONEST: a zero-mention
-#: question (``portfolio.*``, ``investment.*``, and any question whose text
-#: carries no extractable subject span) appends nothing, and reporting a
-#: path for it would be fabrication. Not a defect in the measurement.
+#: ``dev_run_resolutions`` ledger really was empty, for a question that named
+#: NO subjects. HONEST: a zero-mention question (``portfolio.*``,
+#: ``investment.*``, and any question whose text carries no extractable
+#: subject span) appends nothing, and reporting a path for it would be
+#: fabrication. Not a defect in the measurement.
 ABSENCE_EMPTY_LEDGER = "empty-resolution-ledger"
+
+#: ``resolution_path`` is absent because the ledger was queried and was
+#: empty -- but the case DECLARED subject mention spans, so the question
+#: named subjects the preflight had to resolve.
+#:
+#: CHAOS-3533: this used to collapse into ``ABSENCE_EMPTY_LEDGER`` and read
+#: as an honest absence. That was defensible only while a preflight
+#: TERMINATE persisted at most one ledger row, which made an empty ledger
+#: the NORMAL outcome for any run terminating without an ambiguity -- eight
+#: corpus cases sat red on exactly that for three rounds, each looking
+#: merely unlucky rather than unmeasured. Now that every terminate persists
+#: its whole ledger, an empty one for a question that named subjects can
+#: only mean the run never reached resolution, the ledger read failed, or
+#: the persistence fix regressed. Each is a measurement that did not happen,
+#: and must fail loudly rather than pass quietly as an absence.
+ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS = "empty-resolution-ledger-despite-mentions"
 
 #: ``resolution_path`` is absent because the stream never yielded a run_id,
 #: so the ledger was NEVER QUERIED. This is a broken measurement, not an
@@ -452,6 +469,7 @@ def resolution_path_absence_reason(
     run_id: str | None,
     path: ResolutionPath | None,
     classification_failed: bool = False,
+    named_subject_mentions: bool = False,
 ) -> str | None:
     """Why this case has no ``resolution_path`` -- or ``None`` if it has one.
 
@@ -483,6 +501,8 @@ def resolution_path_absence_reason(
         return ABSENCE_RUN_ID_NOT_OBSERVED
     if classification_failed:
         return ABSENCE_UNCLASSIFIABLE_LEDGER
+    if named_subject_mentions:
+        return ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS
     return ABSENCE_EMPTY_LEDGER
 
 
@@ -495,6 +515,15 @@ def absence_is_a_broken_measurement(reason: str | None) -> bool:
     nobody revisited. (That inequality would, by luck, have handled the Codex
     MEDIUM finding correctly -- and would equally have mislabelled the next
     honest reason someone adds. The explicit set is still right.)
+
+    CHAOS-3533 adds the third broken reason. Note what it does NOT do:
+    ``ABSENCE_EMPTY_LEDGER`` stays honest, because a zero-mention question
+    genuinely appends nothing. Only the mention-declaring case's empty ledger
+    became a defect, and only once every terminate started persisting one.
     """
 
-    return reason in {ABSENCE_RUN_ID_NOT_OBSERVED, ABSENCE_UNCLASSIFIABLE_LEDGER}
+    return reason in {
+        ABSENCE_RUN_ID_NOT_OBSERVED,
+        ABSENCE_UNCLASSIFIABLE_LEDGER,
+        ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS,
+    }

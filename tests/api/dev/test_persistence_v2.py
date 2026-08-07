@@ -954,6 +954,13 @@ async def test_record_frame_accepts_clarification_candidates_matching_the_ledger
             frame_id=uuid.UUID(frame_payload["frame_id"]),
             public_outcome="needs_clarification",
             payload=frame_payload,
+            # CHAOS-3533: the offer's own mention is now NAMED rather than
+            # inferred from "the highest-ordinal ambiguous row for this run".
+            # What this test asserts is unchanged -- candidates matching the
+            # run's own ledger entry persist cleanly -- but the entry is now
+            # identified, so this positive control can no longer be satisfied
+            # by an unrelated ambiguous row that happens to sort last.
+            authorizing_mention_id=mention_id,
         )
         assert record.public_outcome == "needs_clarification"
         assert record.payload["clarification_candidates"] == candidates
@@ -1076,6 +1083,12 @@ async def test_record_frame_persists_the_authorized_snapshot_not_the_caller_mapp
             frame_id=uuid.UUID(frame_payload["frame_id"]),
             public_outcome="needs_clarification",
             payload=frame_payload,
+            # CHAOS-3533: names the mention whose row the wrapped-but-real
+            # authorization above authorizes against. The mutation window
+            # this test reproduces is unchanged -- authorization genuinely
+            # runs and returns, and only then is the caller's mapping
+            # mutated.
+            authorizing_mention_id=mention_id,
         )
 
         # The caller's mapping really was mutated -- otherwise the test is
@@ -1158,13 +1171,29 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
 ):
     """The other half of the same guard: a ledger entry does exist for this
     run, but the frame's candidates diverge from it (a different entity, or
-    a different order) -- rejected exactly like the missing-entry case."""
+    a different order) -- rejected exactly like the missing-entry case.
+
+    CHAOS-3533, Codex adversarial review (MEDIUM, confirmed): this test had
+    gone VACUOUS. Once ``record_frame`` began taking an explicit
+    ``authorizing_mention_id``, omitting it meant the ``None`` guard rejected
+    the frame before the ledger row was ever fetched -- so the test still
+    passed while proving nothing about the equality comparison it exists for.
+    A regression in either the mention-bound query or the candidate
+    comparison would have gone unnoticed. The mention is now named.
+
+    A SECOND ambiguous row is seeded at a HIGHER ordinal whose candidates
+    match the frame exactly. Under the pre-CHAOS-3533 "highest-ordinal
+    ambiguous row for this run" heuristic that row would be selected and the
+    frame would be ACCEPTED -- so this test now also proves the service
+    consults the mention it was given rather than whichever row sorts last.
+    """
 
     maker, org_id, _other_org, user_id, _other_user = persistence
     async with maker() as session:
         service = DevPersistenceService(session)
         _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
         mention_id = uuid.uuid4()
+        other_mention_id = uuid.uuid4()
 
         frame_payload = _needs_clarification_frame_payload(
             run_id=run_id, with_candidates=True
@@ -1185,6 +1214,21 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
                 mention_id=mention_id, candidates=ledger_candidates
             ),
         )
+        # The decoy: a later, unrelated ambiguous mention whose candidates DO
+        # match the frame. Selecting by ordinal would find this one and pass.
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            entry_ordinal=1,
+            mention_id=other_mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=other_mention_id,
+                candidates=deepcopy(frame_payload["clarification_candidates"]),
+            ),
+        )
 
         with pytest.raises(
             DevPersistenceValidationError, match="clarification_candidates"
@@ -1196,6 +1240,7 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
                 frame_id=uuid.UUID(frame_payload["frame_id"]),
                 public_outcome="needs_clarification",
                 payload=frame_payload,
+                authorizing_mention_id=mention_id,
             )
 
         frame_count = await session.scalar(
@@ -1354,6 +1399,13 @@ async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_
         # This SHOULD raise once CHAOS-3330 validates append_resolution's
         # payload against the authorized catalog. It does not today, which
         # is exactly the residual seam this test documents.
+        #
+        # CHAOS-3533: the forged mention MUST be named here. Omitting it
+        # would make this test XPASS -- rejected for naming no terminating
+        # mention rather than for the forgery -- and a strict xfail flipping
+        # for the wrong reason reads exactly like CHAOS-3330 landing. The
+        # forged pair must still be presented as a fully self-consistent
+        # offer, which is the whole point of the seam.
         with pytest.raises(DevPersistenceValidationError):
             await service.record_frame(
                 org_id=org_id,
@@ -1362,6 +1414,7 @@ async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_
                 frame_id=uuid.UUID(forged_frame["frame_id"]),
                 public_outcome="needs_clarification",
                 payload=forged_frame,
+                authorizing_mention_id=mention_id,
             )
 
 

@@ -607,21 +607,37 @@ class RunRecorder(Protocol):
         ...
 
     async def append_resolution(self, entry: DevResolutionEntry) -> None:
-        """Persist one ``dev_resolution_ledger.v1`` entry (CHAOS-3325).
+        """Persist one ``dev_resolution_ledger.v1`` entry (CHAOS-3325/3424/3533).
 
-        Called only for the terminating ``ambiguous_candidates`` entry of a
-        preflight ambiguity — the exact entry
-        ``SubjectPreflightResult.terminating_resolution_entry`` carries —
-        always immediately before ``record_frame`` for the same outcome, so
-        the persisted frame's ``clarification_candidates`` always has a
-        matching ledger row to be authorized against
+        Called for every entry of the ledger the preflight built, on BOTH
+        decisions:
+
+        * ``PROCEED`` — CHAOS-3424, so a widening/wrong-subject incident is
+          auditable from data rather than a container log line;
+        * ``TERMINATE`` — CHAOS-3533, the same argument for the half where the
+          run declined to answer. Until then only the terminating
+          ``ambiguous_candidates`` entry was written, so a not-found, an
+          unavailable catalog, an unsupported kind, and a committed cohort
+          that v1 cannot render all left ZERO rows — and the eight corpus
+          cases asserting a resolution path over them were unsatisfiable by
+          construction.
+
+        On the ambiguity path the terminating entry is always persisted
+        before ``record_frame`` for the same outcome, so the frame's
+        ``clarification_candidates`` always has its own mention's ledger row
+        to be authorized against
         (``persistence.service._authorize_clarification_candidates``, a
         Codex-review NO-SHIP finding: a schema-valid frame could otherwise
         name an entity the ledger never authorized).
         """
         ...
 
-    async def record_frame(self, frame: DevAnswerFrame) -> None:
+    async def record_frame(
+        self,
+        frame: DevAnswerFrame,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
         """Persist one already-built ``dev_answer_frame.v1`` (CHAOS-3297).
 
         Called from the preflight TERMINATE branch with the frame
@@ -629,6 +645,16 @@ class RunRecorder(Protocol):
         the run tags ``contract_generation = 'v2'`` and the CHAOS-3299 v2
         replay branch (``router._replayed_result``) becomes reachable for a
         preflight-terminated run, not just a full model-round completion.
+
+        ``authorizing_mention_id`` (CHAOS-3533) names the mention whose
+        ambiguity terminated the run — the one whose ledger row authorizes
+        this frame's ``clarification_candidates``. ``None`` on every other
+        terminal, and that absence is itself an assertion: the frame must
+        then carry no candidates at all. It has to be named rather than
+        inferred now that a TERMINATE persists its whole ledger, because a
+        run can legitimately hold an ambiguous row for a mention it never
+        offered the user (an omitted cohort member, or an ambiguous mention
+        at a higher ordinal than the not-found one that actually terminated).
         """
         ...
 
@@ -734,8 +760,13 @@ class NullRunRecorder:
     async def append_resolution(self, entry: DevResolutionEntry) -> None:
         del entry
 
-    async def record_frame(self, frame: DevAnswerFrame) -> None:
-        del frame
+    async def record_frame(
+        self,
+        frame: DevAnswerFrame,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
+        del frame, authorizing_mention_id
 
     async def rollback(self) -> None:
         return None
@@ -2188,11 +2219,96 @@ class DevOrchestrator:
                         # (_authorize_clarification_candidates) always has a
                         # real ledger row to authorize against rather than
                         # racing it.
-                        if preflight_result.terminating_resolution_entry is not None:
-                            await self._recorder.append_resolution(
-                                preflight_result.terminating_resolution_entry
+                        #
+                        # CHAOS-3533: the WHOLE ledger is written here now,
+                        # not only that one entry -- the same forensic
+                        # argument CHAOS-3424 made for the PROCEED branch
+                        # (see its comment above), applied to the half where
+                        # the run declined to answer. A terminate that
+                        # resolved "no authorized match", could not reach the
+                        # catalog, or committed a cohort v1 cannot render
+                        # previously left NO trace of any of it. Ordinals come
+                        # from the same ledger, so the (run_id, entry_ordinal)
+                        # unique constraint is satisfied by construction, and
+                        # the QUA promotion above has already converted any
+                        # run it rewrote to PROCEED -- so neither branch can
+                        # double-insert.
+                        #
+                        # The terminating mention is passed EXPLICITLY rather
+                        # than left for the persistence layer to infer: with a
+                        # whole ledger on disk, "the highest-ordinal ambiguous
+                        # row" is no longer a synonym for "the mention this
+                        # run offered the user".
+                        if preflight_result.ledger is not None:
+                            for resolution_entry in preflight_result.ledger.entries:
+                                await self._recorder.append_resolution(resolution_entry)
+                    except Exception as terminate_ledger_write_fault:
+                        # Codex adversarial review (HIGH, CONFIRMED BY
+                        # EXECUTION): the ledger write and the frame write
+                        # shared ONE try/except, and the finish() below was
+                        # told `frame_already_recorded=True` unconditionally.
+                        # A failing append_resolution therefore skipped
+                        # record_frame AND suppressed the v1 compatibility
+                        # frame finish() would otherwise build -- the run
+                        # landed with no ledger and no dev_answer_frames row.
+                        #
+                        # Reachability is what THIS change introduced: before
+                        # it a not-found or committed-cohort terminate called
+                        # append_resolution zero times, so it could not fail
+                        # here and always kept its frame. Widening the ledger
+                        # write to every terminate would have widened that
+                        # failure mode with it -- a hardening change that
+                        # invents a new way to lose a terminal under stress is
+                        # the very class CHAOS-3533 exists to close.
+                        #
+                        # Split out, and given the same operational signal its
+                        # PROCEED-branch sibling already carries (CHAOS-3424
+                        # round 3: a lost ledger that logs nothing means the
+                        # forensic gap it closes can itself go unnoticed).
+                        logger.exception(
+                            "ask_dev.orchestrator.resolution_ledger_write_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(
+                                    terminate_ledger_write_fault
+                                ).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(terminate_ledger_write_fault).__name__
+                        ).inc()
+                        await self._recorder.rollback()
+                        # The rollback discards every unflushed write on this
+                        # session, not only the poisoned ledger -- including
+                        # the record_preflight() diagnostic AND the committed
+                        # subject set flushed above, which share this same
+                        # transaction. Both are re-persisted, exactly as the
+                        # PROCEED-branch handler already does for both.
+                        #
+                        # The subject set matters most on the committed-cohort
+                        # terminate: that run resolved every named member
+                        # exactly and committed a real dev_subject_set.v1, so
+                        # losing it to an unrelated ledger fault would erase
+                        # the only surviving record that the cohort resolved
+                        # at all -- the same forensic hole one layer up.
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
+                        if preflight_result.subject_set is not None:
+                            await self._recorder.record_subject_set(
+                                preflight_result.subject_set
                             )
-                        await self._recorder.record_frame(preflight_result.answer.frame)
+                    try:
+                        await self._recorder.record_frame(
+                            preflight_result.answer.frame,
+                            authorizing_mention_id=(
+                                preflight_result.terminating_resolution_entry.mention_id
+                                if preflight_result.terminating_resolution_entry
+                                is not None
+                                else None
+                            ),
+                        )
                     except Exception:
                         # A database-layer failure here (constraint
                         # violation, dropped connection) marks the
@@ -2221,6 +2337,22 @@ class DevOrchestrator:
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=preflight_error,
+                        # Deliberately still unconditional, and NOT switched to
+                        # "did the frame actually land". Making it honest was
+                        # tried and reverted: when record_frame ITSELF is what
+                        # failed, finish() would retry the same doomed insert,
+                        # fail again, and roll back the record_preflight()
+                        # diagnostic the handler above just re-persisted --
+                        # regressing the CHAOS-3297 guarantee that a run never
+                        # loses its closed-vocabulary reason for terminating
+                        # (caught by test_preflight_frame_flush_failure_reaches
+                        # _terminal_state_not_stranded, which is exactly why
+                        # that test exists). The Codex HIGH is closed by the
+                        # SPLIT above instead: a ledger fault no longer skips
+                        # record_frame, so the frame lands on the path that
+                        # previously lost it. A frame-write fault remains what
+                        # CHAOS-3297 decided it should be -- a dropped frame,
+                        # never a stranded run and never a lost diagnostic.
                         frame_already_recorded=True,
                         extra_attested=candidate_attestation,
                     )

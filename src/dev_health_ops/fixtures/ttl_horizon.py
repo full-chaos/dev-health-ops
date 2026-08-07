@@ -72,7 +72,19 @@ def clickhouse_ttl_horizons(migrations_dir: Path | None = None) -> dict[str, int
 
     directory = migrations_dir or _migrations_dir()
     horizons: dict[str, int] = {}
-    for path in sorted(directory.glob("*.sql")):
+    # BOTH suffixes. This repo's ClickHouse migrations are .sql AND .py, and
+    # a .py migration carries its DDL as SQL strings -- so a TTL can arrive
+    # through either. Globbing *.sql alone is a known way to reach a
+    # wrong-schema conclusion here, and it would defeat this helper's entire
+    # purpose: a future TTL table that the parser cannot see rejoins the
+    # decay class in silence, which is the failure this exists to prevent.
+    # Proven by a control that feeds it a .py-sourced TTL, rather than
+    # asserted.
+    sources = sorted(
+        [*directory.glob("*.sql"), *directory.glob("*.py")],
+        key=lambda path: path.name,
+    )
+    for path in sources:
         for match in _TTL_PATTERN.finditer(path.read_text(encoding="utf-8")):
             days = int(match.group("days"))
             # The tightest clause in a file is the one that binds it.

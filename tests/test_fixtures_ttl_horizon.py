@@ -196,3 +196,134 @@ class TestSnapshotShelfLife:
         assert source.index("_assert_snapshot_within_shelf_life") < source.index(
             "_assert_content_identity"
         ), "the staleness preflight must precede the content oracle"
+
+
+class TestShelfLifeAccountsForPinnedNowDrift:
+    """The recorded shelf life must be the REAL one, not the nominal margin.
+
+    Generators place history relative to the world's ``pinned_now``, but
+    ClickHouse evaluates TTLs against the wall clock. Every day between
+    ``pinned_now`` and the mint is margin already spent.
+
+    Measured on the first re-mint under CHAOS-3544: 60-day history cap, a
+    ``pinned_now`` of 2026-08-05, minted 2026-08-07 -- oldest row 62 days old
+    against a 90-day TTL, so 28 days of real shelf life against a nominal 30.
+    Recording 30 would leave a two-day window where rows decay while the
+    preflight still reports the snapshot fresh: the exact cryptic failure the
+    preflight exists to replace, reintroduced by an optimistic constant.
+    """
+
+    @staticmethod
+    def _manifest(pinned_now: datetime):
+        class _M:
+            world = {"pinned_now": pinned_now.isoformat()}
+
+        return _M()
+
+    def test_days_since_pinned_now_are_deducted(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _shelf_life_days
+
+        spent = 2
+        recorded = _shelf_life_days(
+            self._manifest(datetime.now(UTC) - timedelta(days=spent))
+        )
+        assert recorded == TTL_SAFETY_MARGIN.days - spent, (
+            "the gap between pinned_now and the mint is margin already spent "
+            "and must be deducted, or the snapshot claims a shelf life it "
+            "does not have"
+        )
+
+    def test_a_world_minted_on_its_pinned_now_gets_the_full_margin(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _shelf_life_days
+
+        assert (
+            _shelf_life_days(self._manifest(datetime.now(UTC)))
+            == TTL_SAFETY_MARGIN.days
+        )
+
+    def test_a_world_older_than_the_margin_reports_no_shelf_life(self) -> None:
+        """It must not go negative and read as "fresh" through a comparison."""
+
+        from dev_health_ops.fixtures.world_snapshot import _shelf_life_days
+
+        assert (
+            _shelf_life_days(
+                self._manifest(
+                    datetime.now(UTC) - timedelta(days=TTL_SAFETY_MARGIN.days + 10)
+                )
+            )
+            == 0
+        )
+
+
+class TestParseSurfaceCoversPyMigrations:
+    """The parser must see .py migrations, not only .sql.
+
+    This repo's ClickHouse migrations are BOTH (72 .sql, 10 .py today), and a
+    .py migration carries its DDL as SQL strings. A parser that globs *.sql
+    alone would miss a TTL arriving that way -- and this helper exists
+    precisely so that a future TTL table cannot silently rejoin the decay
+    class.
+
+    No .py migration declares a TTL today, so the coverage cannot be
+    demonstrated against the real tree: it would pass whether or not .py were
+    parsed. These feed the parser a .py-sourced TTL directly, so the claim is
+    OBSERVED rather than asserted.
+    """
+
+    @staticmethod
+    def _write(directory, name: str, body: str) -> None:
+        (directory / name).write_text(body, encoding="utf-8")
+
+    def test_a_ttl_declared_in_a_py_migration_is_found(self, tmp_path) -> None:
+        self._write(
+            tmp_path,
+            "099_added_via_python.py",
+            'SQL = """\n'
+            "CREATE TABLE late_arrival (ts DateTime) ENGINE = MergeTree()\n"
+            "ORDER BY ts\n"
+            "TTL toDateTime(ts) + INTERVAL 45 DAY DELETE;\n"
+            '"""\n',
+        )
+
+        horizons = clickhouse_ttl_horizons(tmp_path)
+
+        assert horizons == {"099_added_via_python.py": 45}, (
+            "a TTL declared inside a .py migration must be found -- missing "
+            "it is how a future table rejoins the decay class in silence, "
+            "which is the exact failure this helper exists to prevent"
+        )
+
+    def test_a_py_sourced_ttl_can_become_the_binding_horizon(self, tmp_path) -> None:
+        """The consequence that matters: it must be able to TIGHTEN the cap.
+
+        Finding the clause but not letting it bind would leave generators
+        writing history past a horizon the parser can see.
+        """
+
+        self._write(
+            tmp_path,
+            "001_loose.sql",
+            "TTL toDateTime(a) + INTERVAL 200 DAY DELETE;",
+        )
+        self._write(
+            tmp_path,
+            "099_tight.py",
+            'SQL = "TTL toDateTime(b) + INTERVAL 45 DAY DELETE;"',
+        )
+
+        assert tightest_ttl_days(tmp_path) == 45
+        assert max_generated_history_days(tmp_path) == 45 - TTL_SAFETY_MARGIN.days
+
+    def test_the_real_tree_actually_contains_py_migrations(self) -> None:
+        """Rule 4: if the .py migrations ever vanish, the controls above are
+        still green but no longer describe this repo -- so the coverage claim
+        would quietly stop meaning anything."""
+
+        from dev_health_ops.fixtures.ttl_horizon import _migrations_dir
+
+        assert list(_migrations_dir().glob("*.py")), (
+            "no .py ClickHouse migrations found -- the .py parse surface was "
+            "added because this repo has them; if that changed, revisit "
+            "whether these controls still describe reality"
+        )

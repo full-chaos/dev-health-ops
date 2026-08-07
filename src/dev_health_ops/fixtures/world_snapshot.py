@@ -928,7 +928,7 @@ async def snapshot_world(
         # restore can fail on STALENESS rather than on the cryptic content
         # mismatch staleness eventually causes.
         "minted_at": datetime.now(UTC).isoformat(),
-        "shelf_life_days": TTL_SAFETY_MARGIN.days,
+        "shelf_life_days": _shelf_life_days(manifest),
         # CHAOS-3463, Codex adversarial review (MEDIUM, confirmed): the two
         # fields above were stamped and then never read by anything -- a
         # recorded value nobody checks is a claim, not a guard. They are now
@@ -1398,6 +1398,37 @@ class RestoreResult:
     postgres_tables: int
     digest: str
     minted: bool
+
+
+def _shelf_life_days(manifest: WorldManifest) -> int:
+    """How long THIS snapshot actually restores cleanly, in days.
+
+    Not simply ``TTL_SAFETY_MARGIN``. The generators place history relative to
+    the world's ``pinned_now``, but ClickHouse evaluates TTLs against the
+    WALL CLOCK -- so every day between ``pinned_now`` and the moment of
+    minting is a day of margin already spent before the snapshot is even
+    written.
+
+    Measured on the first re-mint under CHAOS-3544: history capped at 60 days
+    before a ``pinned_now`` of 2026-08-05, minted on 2026-08-07, left the
+    oldest row 62 days old against a 90-day TTL -- 28 days of real shelf
+    life, not the nominal 30. Recording the nominal figure would have left a
+    two-day window in which rows decay while the expiry preflight still says
+    the snapshot is fresh, which is exactly the cryptic-content-mismatch
+    failure this preflight exists to replace.
+
+    The gap grows as a world's ``pinned_now`` ages, so this cannot be a
+    constant.
+    """
+
+    pinned_raw = manifest.world.get("pinned_now")
+    if not pinned_raw:
+        return TTL_SAFETY_MARGIN.days
+    pinned = datetime.fromisoformat(str(pinned_raw))
+    if pinned.tzinfo is None:
+        pinned = pinned.replace(tzinfo=UTC)
+    spent = (datetime.now(UTC) - pinned).days
+    return max(0, TTL_SAFETY_MARGIN.days - max(0, spent))
 
 
 def _assert_snapshot_within_shelf_life(document: dict) -> None:

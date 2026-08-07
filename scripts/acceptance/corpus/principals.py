@@ -239,10 +239,17 @@ class PrincipalDirectory:
 class PrincipalSessions:
     """Lazily provisions and caches one authenticated session per alias.
 
-    Cached because the corpus runs ~137 cases as the same
-    ``primary.ordinary`` principal; re-logging-in per case would add ~137
-    pointless round trips and put the login rate limiter in the path of a
-    normal run.
+    Cached because the corpus runs many cases per principal; re-logging-in
+    per case would add one pointless round trip each and put the login rate
+    limiter in the path of a normal run.
+
+    (This used to read "~137 cases as the same ``primary.ordinary``
+    principal", which stopped being true at CHAOS-3490: cases are now spread
+    round-robin over 7 ordinary-primary principals at <=12 each, precisely so
+    no single alias approaches the hard 20-requests-per-15-minutes cap.
+    Corrected 2026-08-07 -- the caching rationale is unchanged and if anything
+    stronger per alias, but a stale number in a docstring is the kind of thing
+    a reader takes as current fact.)
 
     KNOWN LIMIT, stated rather than discovered later: the access token has a
     60-minute TTL (``api/services/auth.py``) and these sessions are cached
@@ -284,8 +291,11 @@ class PrincipalSessions:
         # NEGATIVE caching, deliberately (Codex adversarial round-1, MEDIUM):
         # only successes were cached before, so a transient login failure left
         # nothing cached and every later case using that alias retried it.
-        # With 137 cases on `primary.ordinary` against a rate-limited login,
+        # With many cases sharing one alias against a rate-limited login,
         # one blip turned into a storm of 429s that buried the original error.
+        # (Read "137 cases on `primary.ordinary`" before CHAOS-3490 spread the
+        # corpus over a 7-principal pool; the failure mode is identical at any
+        # per-alias count above one.)
         # The first failure is now final for that alias and is re-raised
         # verbatim, so the run fails on the REAL cause.
         previous = self._failures.get(principal.user_alias)

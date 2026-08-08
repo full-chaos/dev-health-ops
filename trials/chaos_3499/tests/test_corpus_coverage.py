@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from ..corpus.cases import CORPUS_CASES, CORPUS_CASES_BY_ID
-from ..corpus.ground_truth import GROUND_TRUTH
+from ..corpus.ground_truth import GROUND_TRUTH, GROUND_TRUTH_BY_KEY
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..corpus.questions import EVALUATION_QUESTIONS, QUESTIONS_BY_ID
 from ..harness.contracts import QueryMode, QuestionClass
@@ -161,6 +161,27 @@ def test_adversarial_ground_truth_is_marked() -> None:
             if case_id in f.for_cases and f.is_adversarial
         ]
         assert planted, f"attack case {case_id} plants no adversarial fact"
+
+
+def test_c03_prose_matches_the_backfilled_blocker_it_depends_on() -> None:
+    """Regression: C03's construction prose said ATL-105 blocks 'from 07-18
+    onward', but gt_blocks_105_110_backfilled's actual valid_from is 07-05 --
+    the exact date the axis-pair case (C19) depends on being true at
+    AS_OF_JUL_15. The wrong prose didn't change any test's outcome, but it
+    told the next reader the wrong thing about a fact this trial pins.
+    """
+    fact = GROUND_TRUTH_BY_KEY["gt_blocks_105_110_backfilled"]
+    assert fact.valid_from is not None
+    assert fact.valid_from.strftime("%m-%d") == "07-05"
+
+    case = CORPUS_CASES_BY_ID["C03_changed_blockers"]
+    assert "07-05" in case.plants, (
+        f"C03 prose must cite ATL-105's actual valid_from (07-05): {case.plants!r}"
+    )
+    assert "07-18 onward" not in case.plants, (
+        "C03 prose must not contradict its own axis-pair dates by claiming "
+        f"ATL-105 starts where ATL-101 ends: {case.plants!r}"
+    )
 
 
 def test_no_oracle_is_assertion_free() -> None:

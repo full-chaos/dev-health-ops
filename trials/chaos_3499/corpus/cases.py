@@ -79,7 +79,8 @@ CORPUS_CASES: tuple[CorpusCase, ...] = (
         title="Changed blockers and dependency state",
         plants=(
             "ATL-101 blocks ATL-110 from 07-02 to 07-18; ATL-105 blocks "
-            "ATL-110 from 07-18 onward."
+            "ATL-110 from 07-05 onward but is not ingested until 07-20 -- "
+            "the backfilled blocker the axis-pair case (C19) depends on."
         ),
         catches=(
             "An arm that reports the current blocker for a past as-of date, "

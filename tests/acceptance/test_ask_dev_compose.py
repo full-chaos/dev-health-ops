@@ -1848,52 +1848,68 @@ def test_launcher_runs_the_wave4_access_matrix_with_its_own_arming_contract() ->
     assert "|| true" not in launcher[preflight_index:wave4_invocation_index]
 
 
-def test_launcher_skips_the_wave4_matrix_loudly_when_the_web_config_is_absent() -> None:
-    """CHAOS-3586 follow-up: the presence guard, and why it is a SKIP.
+def test_launcher_requires_the_wave4_config_and_never_skips_the_matrix() -> None:
+    """CHAOS-3510: the wave4 leg is MANDATORY now that the config is on web main.
 
-    The wave4 config lives in dev-health-web and landed there after this leg
-    did. Until it is on web main, `playwright test -c <missing>` exits 1 and
-    `set -e` kills the run after a full boot -- breaking every launcher
-    invocation whose --web-root lacks the config, including the nightly.
+    History this pins deliberately. The ops half of this feature merged before
+    the web half, so an interim revision SKIPPED the leg (with a loud marker)
+    when the config was absent -- otherwise every launcher run, including the
+    nightly, died on a dangling cross-repo path. That condition is gone:
+    playwright.ask-dev-wave4.config.ts is on dev-health-web main.
 
-    A skip is the right behaviour for an absent optional config, but a skip
-    that reads like a pass is the exact false green this lane exists to
-    prevent. So the guard must emit a single greppable marker naming the
-    outcome, and the assertions below pin that it does.
+    The skip is REMOVED rather than left dormant. A skip path that is correct
+    today and unreachable tomorrow is how a gate quietly stops gating -- it
+    survives precisely because nothing fails when it fires. So this test
+    asserts the skip is GONE, not merely that a fail path exists beside it.
     """
     launcher = _LAUNCHER.read_text(encoding="utf-8")
 
-    # Guarded on the file, not on an env flag: an env flag would still let a
-    # caller arm a config that does not exist.
+    # Guarded on the file, not on an env flag: a flag would still let a caller
+    # arm a config that does not exist.
     assert 'wave4_config="${web_root}/playwright.ask-dev-wave4.config.ts"' in launcher
     assert 'if [[ ! -f "${wave4_config}" ]]; then' in launcher
 
-    # The marker is machine-greppable and states the outcome, not just a
-    # reason. A log scraper must be able to tell a skipped run from a run that
-    # exercised the matrix without parsing prose.
-    assert "WAVE4_ACCESS_MATRIX=NOT_RUN reason=config-absent" in launcher
+    # Absent config ABORTS. The marker names the outcome so a log scraper can
+    # classify the run without parsing prose.
+    assert "WAVE4_ACCESS_MATRIX=FAILED reason=config-absent" in launcher
     assert "WAVE4_ACCESS_MATRIX=RUNNING" in launcher
-    assert (
-        "proves NOTHING about the Context Fabric Validation access matrix" in launcher
-    )
 
-    # The skip marker must come BEFORE the invocation, i.e. it is the
-    # else-branch, not dead text after a leg that already ran.
-    not_run_index = launcher.index("WAVE4_ACCESS_MATRIX=NOT_RUN")
+    # The scaffolding must be GONE, not dormant. This is the assertion that
+    # distinguishes "mandatory" from "a fail branch that some other path can
+    # still route around".
+    assert "WAVE4_ACCESS_MATRIX=NOT_RUN" not in launcher
+    assert "proves NOTHING about the Context Fabric" not in launcher
+
+    # The failure branch must actually exit, and do so BEFORE the invocation.
+    failed_index = launcher.index("WAVE4_ACCESS_MATRIX=FAILED")
     running_index = launcher.index("WAVE4_ACCESS_MATRIX=RUNNING")
     invocation_index = launcher.index('-c "${wave4_config}"')
-    assert not_run_index < running_index < invocation_index
+    assert failed_index < running_index < invocation_index
 
-    # When the config IS present the leg stays mandatory: a real matrix
-    # failure must still abort the run.
+    # Scope the abort check to the CONFIG-ABSENT BRANCH ITSELF -- up to its own
+    # closing `fi`, not onward to the RUNNING marker.
     #
-    # The slice deliberately runs to the END of the guarded block, not merely
-    # to the invocation. A first version of this assertion checked only
+    # Widening it to [FAILED, RUNNING) is not merely sloppy, it is
+    # unfalsifiable: the org-ids preflight sits inside that span and carries
+    # its OWN `exit 1`, so deleting this branch's abort still leaves a matching
+    # string in the region. A mutation removing it SURVIVED exactly that way.
+    # Second time a region assertion in this guard was satisfied by something
+    # other than the thing it names -- the region must end where the construct
+    # ends.
+    absent_branch_end = launcher.index("\nfi\n", failed_index)
+    absent_branch = launcher[failed_index:absent_branch_end]
+    assert "exit 1" in absent_branch
+
+    # No `else` may re-introduce a continue-anyway path in that branch.
+    assert "else" not in absent_branch
+
+    # The leg itself stays mandatory: a real matrix failure must still abort.
+    # The slice runs to the END of the invocation block, not merely to the
+    # invocation line. An earlier version of this assertion checked only
     # [marker, invocation) and a mutation appending `|| true` to the
-    # invocation itself SURVIVED -- the swallow lands after the anchor, in the
-    # region that version never looked at. Mutation testing caught it; the
-    # lesson is that a region assertion is only as good as the region.
-    block_end = launcher.index("\nfi\n", invocation_index)
-    guarded_block = launcher[running_index:block_end]
-    assert "|| true" not in guarded_block
-    assert "set +e" not in guarded_block
+    # invocation SURVIVED -- the swallow lands after the anchor, in the region
+    # that version never examined. A region assertion is only as good as its
+    # region, so that mutation stays in this guard's permanent set.
+    tail = launcher[running_index : invocation_index + 400]
+    assert "|| true" not in tail
+    assert "set +e" not in tail

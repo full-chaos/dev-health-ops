@@ -24,7 +24,59 @@ Assumed **NOT** merged, checked at time of writing:
 
 * **CHAOS-3546** — `provider_profile_override` still has **zero readers in `src/`**, so the
   readiness gate still cannot fire. (Checked by grep, not assumed.)
-* **CHAOS-3574** — not on `main`, no open PR found.
+
+### AMENDMENT 1 — merge-set changed before the run (2026-08-07, pre-run)
+
+The document's own rule ("if the assumed merge-set differs at run time, re-derive
+before grading") fired. Four more PRs merged; `main` is now `3e4e24650`:
+
+| merged since v2 was written | effect on predictions |
+|---|---|
+| **CHAOS-3574** `9efd3f309` (#1593) cross-tenant → `not_found` | **Section E's conditional now resolves to its GREEN branch.** |
+| CHAOS-3573 (#1589) reconcile NULL-cost terminals | allowance internals; still predicted non-interfering |
+| CHAOS-3572 (#1592) boot guard | boot-time guard; non-interfering |
+| CHAOS-3582 (#1594) QUA shadow pricing | see AMENDMENT 3 |
+
+**CHAOS-3546 re-checked and still unmerged**, so Section D is unchanged.
+
+### AMENDMENT 2 — the identity literal is NOT stale (correction)
+
+It was suggested pre-run that `12b96199…` had gone stale because #1593/#1594 "touched
+engine files". **Verified false, by checking rather than accepting:** neither merge
+touches `provider-scripts/role-legacy_agent.json`, and
+`role_script_identity_digest` is computed over that document (content digest +
+routing pairs), **not** over `src/`. Recomputed on the synced tree: still
+`12b961997a122ff6e7a711db0a3a5724bdb668a28c262f2fdf94c88be3675e59`, role
+`legacy_agent`, 96 cases.
+
+The operative invariant remains **host == container**, which the boot's precondition B
+checks differentially. The literal is recorded as a tripwire, not as the check: if the
+container reports something else, that is a stale mount — and if the HOST value itself
+has moved, the role script changed and the corpus must be re-derived before grading.
+
+### AMENDMENT 3 — QUA shadow is OUT OF SCOPE for this run, deliberately
+
+CHAOS-3582 (#1594) makes QUA shadow evaluation priceable, and it was suggested this run
+should observe `status=evaluated` with real reservations, treating `budget_unavailable`
+as a MISS. **This run cannot test that, and arming it would invalidate the run:**
+
+* QUA shadow is gated on `ASK_DEV_QUA_SHADOW_ENABLED == "1"`
+  (`production_runtime.py:668`); with the flag unset, construction is **skipped
+  entirely** and no QUA rows of any status are produced.
+* **"QUA flags unset" is a run-validity precondition of THIS document** (above), and the
+  boot hard-aborts (exit 75) if either flag is armed. Arming QUA would void the run
+  against the pre-registration it is being graded by.
+* **Zero corpus cases reference the QUA feature.** Verified: every `qua` substring match
+  across the 133 case files is `quals` / `qualification` / `quality` / `quad`, not the
+  feature. Nothing in the graded set depends on it.
+* Arming it would introduce **real reservations against the platform allowance during a
+  measured corpus run** — the precise mechanism that degraded the 10:03 run to
+  UNMEASURED, and which this document elsewhere declares makes ANY 429 a MISS.
+
+So: QUA stays **disarmed**, no QUA row of any status is expected, and the
+`budget_unavailable` clause is **NOT MEASURED by this run** rather than passed. It needs
+its own verification on a non-corpus stack. Recorded here so a reader cannot mistake the
+absence of QUA rows for evidence that QUA shadow works.
 
 Expected non-interfering, and this is itself a prediction:
 
@@ -128,6 +180,22 @@ Written as two explicit branches so **neither outcome can be folded in**:
 * **If it does NOT merge** → predicted RED on `public_outcome_in`
   (`answered_with_gaps` vs allowed `['not_found']`), a **third** identical reproduction.
 
+**RESOLVED PRE-RUN (Amendment 1): CHAOS-3574 MERGED as `9efd3f309`. The GREEN branch
+applies — `adv.cross-tenant.organization-id` is predicted GREEN on `not_found`.**
+
+**And the two bystanders are now the thing to watch.** #1593 changed the resolution
+route itself (`question_interpreter.py`, `subject_preflight.py`), not just the one
+case's outcome. The family is 7 cases: **four are declared-blocked and execute nothing**,
+so they cannot move. The other two active cases —
+`adv.cross-tenant.project-id` and `adv.cross-tenant.repository-id` — **already reached
+`not_found` in the measured run via the PRE-3574 route**, and all three now share
+`expected_scope_resolution_outcome='unresolved'` / `resolution_path='miss-clarification'`.
+
+Both are predicted to **stay GREEN**. If `organization-id` goes green while either
+bystander goes red, that is a MISS and specifically a **route regression**: the fix
+reached its target by changing a path other cases depended on. Checking only the named
+case would read that as "the fix worked".
+
 Either way this is **not a leak**: `no_unauthorized_candidate_surfaces` passed in both
 prior runs and is predicted to pass again. A failure of THAT check would be a new and far
 more serious finding than the outcome classification.
@@ -151,10 +219,13 @@ These are different observations and must not be conflated.
 
 ```
 134 collected · 0 skipped · 90 executed · 90 receipts · missing: 0
-expected RED: 1   (deg.provider.unsupported)
-              +1  conditionally (adv.cross-tenant.organization-id, if CHAOS-3574 unmerged)
-expected GREEN: everything else, including all 6 flips
+expected RED: 1   (deg.provider.unsupported -- CHAOS-3546 still unmerged)
+              (cross-tenant conditional RESOLVED GREEN: CHAOS-3574 merged 9efd3f309)
+expected GREEN: everything else, including all 6 flips and adv.cross-tenant.organization-id
 discriminator: adv.injection-request.url + scope.unsupported-request stay `unsupported`
+bystander watch: adv.cross-tenant.project-id + .repository-id must STAY green
+                 (#1593 changed the resolution route, not just the one outcome)
+NOT MEASURED:  QUA shadow (disarmed by validity precondition) -- see Amendment 3
 ```
 
 Anything else red, any 429, any count delta, or `missing: 0` failing = **MISS or

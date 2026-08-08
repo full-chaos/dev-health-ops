@@ -47,10 +47,28 @@ unset \
 # a DIFFERENT checkout than the one under test -- the compose
 # --project-directory decides the /app bind mount.
 ops_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-web_root="${ASK_DEV_WEB_CONTEXT:-$(cd -- "${ops_root}/../web" 2>/dev/null && pwd || true)}"
+# Locating the web checkout has TWO layouts to satisfy, and the obvious one is
+# wrong for the case this script is actually used in. `${ops_root}/../web` holds
+# for the main checkout (ops/../web), but a git WORKTREE lives at
+# ops-worktrees/<name>/, so the same expression resolves to the non-existent
+# ops-worktrees/web -- and the armed run is normally driven FROM a worktree.
+# Found by running it: the first boot on 2026-08-07 died exit 64 here.
+#
+# So fall back to the repo's COMMON dir, which points at the main checkout's
+# .git regardless of which worktree is running: <common>/../../web.
+web_root="${ASK_DEV_WEB_CONTEXT:-}"
+if [[ -z "${web_root}" ]]; then
+  web_root="$(cd -- "${ops_root}/../web" 2>/dev/null && pwd || true)"
+fi
 if [[ -z "${web_root}" || ! -d "${web_root}" ]]; then
-  echo "cannot locate the web checkout (looked for ${ops_root}/../web);" >&2
-  echo "set ASK_DEV_WEB_CONTEXT to its path." >&2
+  _common="$(git -C "${ops_root}" rev-parse --git-common-dir 2>/dev/null || true)"
+  if [[ -n "${_common}" ]]; then
+    web_root="$(cd -- "${_common}/../../web" 2>/dev/null && pwd || true)"
+  fi
+fi
+if [[ -z "${web_root}" || ! -d "${web_root}" ]]; then
+  echo "cannot locate the web checkout (tried ${ops_root}/../web and the" >&2
+  echo "git common-dir sibling); set ASK_DEV_WEB_CONTEXT to its path." >&2
   exit 64
 fi
 project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}"
@@ -101,6 +119,43 @@ echo "=== down --volumes --remove-orphans (THIS project only) ==="
 
 echo "=== up -d --build --wait (boot services, no jobs fleet) ==="
 "${compose[@]}" up -d --build --wait "${boot_services[@]}"
+
+# CHAOS-3575: pin the api container's IDENTITY so a competing boot is named,
+# not merely suffered. On 2026-08-07 a second lane ran run_ask_dev_compose.sh
+# against this same project while this boot was in its jobs-fleet stage; compose
+# recreated the api out from under it and the run died four stages later with
+# `service "api" is not running`. That message names a symptom, and identifying
+# the real cause took cross-lane forensics over docker events.
+#
+# The container id is recorded here and re-checked at each stage boundary below.
+# A CHANGED id means someone else recreated it; an EMPTY id means someone tore it
+# down. Both are reported as what they are.
+api_cid_at_boot="$("${compose[@]}" ps -q api 2>/dev/null | head -1)"
+if [[ -z "${api_cid_at_boot}" ]]; then
+  echo "the api container is not running immediately after 'up --wait'." >&2
+  exit 75
+fi
+echo "API_CONTAINER_PINNED=${api_cid_at_boot:0:12}"
+
+assert_api_is_the_one_we_booted() {
+  local where="$1" now
+  now="$("${compose[@]}" ps -q api 2>/dev/null | head -1)"
+  if [[ -z "${now}" ]]; then
+    echo "STACK STOLEN (${where}): the api container this boot started is GONE." >&2
+    echo "Expected ${api_cid_at_boot:0:12}; nothing is running now." >&2
+    echo "Another process ran 'compose down' against project '${project_name}'." >&2
+    exit 75
+  fi
+  if [[ "${now}" != "${api_cid_at_boot}" ]]; then
+    echo "STACK STOLEN (${where}): the api container was RECREATED mid-boot." >&2
+    echo "Expected ${api_cid_at_boot:0:12}, found ${now:0:12}." >&2
+    echo "Another process ran 'compose up' against project '${project_name}' --" >&2
+    echo "typically run_ask_dev_compose.sh from a different checkout. This run's" >&2
+    echo "earlier preconditions were verified against a container that no longer" >&2
+    echo "exists, so nothing measured after this point could be trusted." >&2
+    exit 75
+  fi
+}
 
 echo "=== PRECONDITION A: QUA flags UNSET/OFF inside the api container's own env ==="
 # `printenv NAME` exits 1 when unset, so the ${VAR:-<unset>} form is expanded
@@ -165,6 +220,7 @@ echo "=== PROOF 2: assert_world_principals_can_log_in.py ==="
 echo "=== up -d --build --wait (jobs fleet) ==="
 "${compose[@]}" up -d --build --wait "${jobs_services[@]}"
 
+assert_api_is_the_one_we_booted "after the jobs-fleet build"
 echo "=== fixtures generate (--overwrite-real-users) ==="
 "${compose[@]}" exec -T api dev-hops fixtures generate \
   --sink clickhouse://ch:ch@clickhouse:8123/default \
@@ -180,6 +236,7 @@ echo "=== fixtures generate (--overwrite-real-users) ==="
   --with-metrics \
   --with-work-graph
 
+assert_api_is_the_one_we_booted "before readiness preparation"
 echo "=== prepare_ask_dev_acceptance.py ==="
 ASK_DEV_LIVE_ACCEPTANCE=1 \
 ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
@@ -219,5 +276,6 @@ if [[ -n "${counter_dump}" ]]; then
 fi
 echo "ALLOWANCE_COUNTER_VERIFIED=absent (fresh window, nothing spent)"
 
+assert_api_is_the_one_we_booted "at STACK READY"
 echo "=== STACK READY ==="
 "${compose[@]}" ps

@@ -281,7 +281,11 @@ def test_fabricated_evidence_ref_survives_verbatim_and_fails_the_oracle(
             config: LLMConfig | None = None,
             _content: str = fake_content,
         ) -> LLMResponse:
-            return LLMResponse(content=_content, model="fake-smoke-model")
+            return LLMResponse(
+                content=_content,
+                model="fake-smoke-model",
+                served_model="fake-smoke-model",
+            )
 
         monkeypatch.setattr(llm_client, "complete", _fake_complete)
 
@@ -372,7 +376,11 @@ def test_malformed_rows_are_dropped_not_repaired(
         config: LLMConfig | None = None,
         _content: str = fake_content,
     ) -> LLMResponse:
-        return LLMResponse(content=_content, model="fake-smoke-model")
+        return LLMResponse(
+            content=_content,
+            model="fake-smoke-model",
+            served_model="fake-smoke-model",
+        )
 
     monkeypatch.setattr(llm_client, "complete", _fake_complete)
 
@@ -482,7 +490,11 @@ def _install_fake_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict]) -> Non
         config: LLMConfig | None = None,
         _content: str = fake_content,
     ) -> LLMResponse:
-        return LLMResponse(content=_content, model="fake-smoke-model")
+        return LLMResponse(
+            content=_content,
+            model="fake-smoke-model",
+            served_model="fake-smoke-model",
+        )
 
     monkeypatch.setattr(llm_client, "complete", _fake_complete)
 

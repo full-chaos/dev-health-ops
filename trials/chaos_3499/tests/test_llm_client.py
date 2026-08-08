@@ -173,9 +173,12 @@ class _FakeOpenAIClient:
 def _install_fake_openai(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    chat_response: _FakeChoicesResponse | None = None,
+    chat_response: object | None = None,
     chat_error: Exception | None = None,
-    responses_response: _FakeResponsesResult | None = None,
+    # `object`, not _FakeResponsesResult: one test deliberately installs a
+    # response WITHOUT model metadata to exercise the fail-closed identity
+    # path, and it must not be forced to inherit the compliant double.
+    responses_response: object | None = None,
     responses_error: Exception | None = None,
 ) -> None:
     def _factory(**init_kwargs):

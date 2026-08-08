@@ -280,8 +280,11 @@ class LLMResponse:
     #: rather than assumed. Equal to ``model`` on every verified call --
     #: :func:`complete` raises :class:`ModelIdentityMismatch` otherwise, so a
     #: result can never be labelled with a model that did not produce it.
-    #: ``None`` means the provider returned no model metadata at all.
-    served_model: str | None = None
+    #: Never None on a value returned by :func:`complete`: absent metadata
+    #: raises :class:`ModelIdentityMismatch` rather than being recorded as
+    #: agreement. Typed as required so no caller re-derives that invariant
+    #: (or, worse, papers over it with a fallback to the requested id).
+    served_model: str = ""
     #: Wall-clock seconds the provider call itself took. Recorded so the
     #: sweep artifact can show WHY a tier behaved as it did: the local tier
     #: answers an order of magnitude more slowly than the cloud tiers, and
@@ -324,7 +327,7 @@ def _supports_temperature(model: str) -> bool:
     return not (model or "").strip().lower().startswith(_NO_TEMPERATURE_MODEL_PREFIXES)
 
 
-def _verify_served_model(cfg: LLMConfig, response: object) -> str | None:
+def _verify_served_model(cfg: LLMConfig, response: object) -> str:
     """Read back which model actually answered, and refuse a mismatch.
 
     A tier table is a claim about WHICH MODEL produced each row. Nothing

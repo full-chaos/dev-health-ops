@@ -512,12 +512,17 @@ Run 3 removes that confound by measuring the same corpus, the same prompt
 version (`extraction.v2`), and the same oracles against four explicitly
 named tiers:
 
-| Tier | Role | Why it is in the matrix |
-|---|---|---|
-| `gpt-5-nano` | **DEPLOYED PARITY — primary scored tier** | The configured model. Parity claims must be read from here and nowhere else. |
-| `gpt-5-mini` | Ceiling / comparative | One tier up. Shows what the technique does when model quality is not the binding constraint, and keeps runs 1–2 comparable to this round. |
-| `google/gemma-4-e4b` (local) | Local cost floor | A small locally-hosted model — the cheapest regime a cost-driven architecture could operate in. Not parity; no parity claim rests on it. |
-| `google/gemma-4-31b` (local) | **Flash-class quality proxy — NOT a deployment candidate** | Stands in for hosted mid-tier models (Gemini 3.5-flash / flash-lite, 3.6-flash) that this trial did not call directly. Its **answer quality** is the datum. It is not proposed for deployment in any environment — its latency disqualifies it, and that latency is expected for a locally-hosted 31B model, not a defect being reported. |
+The `tier key` column is the identifier the generated artifact
+(`docs/measured-trial-results.md`) keys its summary table and section
+headings on — given here so a reader can cross-reference this ADR against
+the artifact without guessing.
+
+| Model | Tier key | Role | Why it is in the matrix |
+|---|---|---|---|
+| `gpt-5-nano` | `gpt-5-nano` | **DEPLOYED PARITY — primary scored tier** | The configured model. Parity claims must be read from here and nowhere else. |
+| `gpt-5-mini` | `gpt-5-mini` | Ceiling / comparative | One tier up. Shows what the technique does when model quality is not the binding constraint, and keeps runs 1–2 comparable to this round. |
+| `google/gemma-4-e4b` | `gemma-4-e4b-local` | Local cost floor | A small locally-hosted model — the cheapest regime a cost-driven architecture could operate in. Not parity; no parity claim rests on it. |
+| `google/gemma-4-31b` | `gemma-4-31b-local` | **Flash-class quality proxy — NOT a deployment candidate** | Stands in for hosted mid-tier models (Gemini 3.5-flash / flash-lite, 3.6-flash) that this trial did not call directly. Its **answer quality** is the datum. It is not proposed for deployment in any environment — its latency disqualifies it, and that latency is expected for a locally-hosted 31B model, not a defect being reported. |
 
 **Reading the 31b row correctly matters**, because it is the row most
 easily misread. It is in the matrix to answer *"what would flash-class
@@ -553,22 +558,37 @@ experiment (`/tmp/ask-dev-how-are-pipelines-running.json`, model
 `google/gemma-4-e4b`, LM Studio). The model emitted a single `final_answer`
 payload that is internally self-contradictory:
 
+The `direct_summary` string, **verbatim** (one line, unwrapped — it is
+quoted exactly so a reader can grep the source file for it):
+
+> The repository saw 12 items completed in the current window, compared to a baseline of 10 items completed in the comparison window. One work item ('Implement contract baseline') is currently in progress.
+
+And the payload structure it sits in. `arguments`, `call_id`, and `prompt`
+are elided; `<SUMMARY>` marks a field whose value is **byte-identical** to
+the string quoted above, verified by comparison rather than by eye:
+
 ```json
-{"kind": "final_answer", "tool_id": "change_summary.v1",
- "value": {
-   "direct_summary": "The repository saw 12 items completed in the current
-     window, compared to a baseline of 10 items completed in the comparison
-     window. One work item ('Implement contract baseline') is currently in
-     progress.",
-   "status": "insufficient_evidence"}}
+{
+  "kind": "final_answer",
+  "tool_id": "change_summary.v1",
+  "value": {"direct_summary": "<SUMMARY>", "status": "insufficient_evidence"},
+  "candidates": ["<SUMMARY>"],
+  "code": "<SUMMARY>",
+  "message": "<SUMMARY>"
+}
 ```
+
+Note the nesting: `status` sits *beside* `direct_summary` inside `value`,
+while `candidates` / `code` / `message` are siblings of `value` itself.
 
 The payload simultaneously asserts a confident, specific, quantified answer
 (12 vs 10 completions, a named in-flight work item) **and** declares
 `status: "insufficient_evidence"`. Those two fields cannot both be true.
-The same answer string is additionally duplicated into three sibling fields
-(`candidates`, `code`, `message`) that have different meanings in the
-schema — `code` in particular is being filled with prose.
+The same answer string is additionally duplicated, byte-for-byte, into
+three sibling fields (`candidates`, `code`, `message`) that have different
+meanings in the schema — `code` in particular is being filled with prose.
+The model is not populating a structured envelope so much as writing its
+answer into every slot that will accept a string.
 
 Why this matters more than a pass/fail count:
 

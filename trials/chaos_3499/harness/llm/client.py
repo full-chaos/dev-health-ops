@@ -118,6 +118,18 @@ _NO_TEMPERATURE_MODEL_PREFIXES = _RESPONSES_API_MODEL_PREFIXES + ("o1", "o3")
 _LOCAL_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "host.docker.internal"})
 
 
+class ModelIdentityMismatch(Exception):
+    """The provider served a different model than the one requested.
+
+    Its own type because the consequence differs from every other failure
+    here: it is not retryable, and it invalidates the LABEL on a result
+    rather than the result itself. A tier table whose rows are named by the
+    requested model is worthless if the server quietly answered with
+    something else -- which a local server with a different model loaded
+    will happily do.
+    """
+
+
 class LLMUnavailable(Exception):
     """The configured provider could not be reached, is misconfigured, or is
     not implemented.
@@ -128,7 +140,19 @@ class LLMUnavailable(Exception):
     :mod:`harness.arms.extraction`'s handling: this exception propagates all
     the way to ``ArmResponse.not_run``, the same loud-NOT_RUN path every
     other arm uses when it cannot be measured.
+
+    ``infra`` is True ONLY for a failure to REACH the provider (connection
+    refused, DNS, or a request that exceeded its configured window). It is
+    the TYPED signal the sweep's bounded re-attempt policy consumes.
+    Nothing may substring-match a reason string to decide whether to retry:
+    a parse-failure reason embeds model-controlled output, so a model that
+    emitted the marker phrase could otherwise buy itself a retry of a
+    genuine quality failure.
     """
+
+    def __init__(self, message: str, *, infra: bool = False) -> None:
+        super().__init__(message)
+        self.infra = infra
 
 
 def _check_local_host(base_url: str) -> None:
@@ -250,7 +274,14 @@ class LLMConfig:
 @dataclass(frozen=True)
 class LLMResponse:
     content: str
+    #: The model the caller ASKED for.
     model: str
+    #: The model id the provider said it served, read back from the response
+    #: rather than assumed. Equal to ``model`` on every verified call --
+    #: :func:`complete` raises :class:`ModelIdentityMismatch` otherwise, so a
+    #: result can never be labelled with a model that did not produce it.
+    #: ``None`` means the provider returned no model metadata at all.
+    served_model: str | None = None
     #: Wall-clock seconds the provider call itself took. Recorded so the
     #: sweep artifact can show WHY a tier behaved as it did: the local tier
     #: answers an order of magnitude more slowly than the cloud tiers, and
@@ -291,6 +322,35 @@ def _supports_temperature(model: str) -> bool:
     the two cannot silently drift (see ``_NO_TEMPERATURE_MODEL_PREFIXES``).
     """
     return not (model or "").strip().lower().startswith(_NO_TEMPERATURE_MODEL_PREFIXES)
+
+
+def _verify_served_model(cfg: LLMConfig, response: object) -> str | None:
+    """Read back which model actually answered, and refuse a mismatch.
+
+    A tier table is a claim about WHICH MODEL produced each row. Nothing
+    verified that claim before: the response object was discarded and the
+    row was labelled with the requested id. A local server with a different
+    model loaded answers happily, and an alias/snapshot id can differ from
+    the requested one -- so the check accepts a served id that starts with
+    the requested one (``gpt-5-mini`` -> ``gpt-5-mini-2025-08-07``) and
+    rejects anything else.
+
+    Returns the served id, or None when the provider reported none (which is
+    recorded honestly rather than treated as agreement).
+    """
+    served = getattr(response, "model", None)
+    if not isinstance(served, str) or not served:
+        return None
+    requested = (cfg.model or "").strip().lower()
+    actual = served.strip().lower()
+    if actual == requested or actual.startswith(requested):
+        return served
+    raise ModelIdentityMismatch(
+        f"requested model {cfg.model!r} but {cfg.provider} provider at "
+        f"{cfg.base_url} served {served!r}. Refusing to record this as a "
+        "measurement: a row labelled with a model that did not produce it "
+        "is worse than a missing row."
+    )
 
 
 def complete(
@@ -355,7 +415,9 @@ def complete(
             # is a SUBCLASS of it, so ordering these the other way round
             # would swallow every timeout into the generic unreachable
             # message and lose the configured-window detail a reader needs.
-            raise LLMUnavailable(_timeout_message(cfg, "responses API", exc)) from exc
+            raise LLMUnavailable(
+                _timeout_message(cfg, "responses API", exc), infra=True
+            ) from exc
         except APIConnectionError as exc:
             # Genuine unreachability (network, DNS) -- shares the "could
             # not reach" marker the sweep's bounded-infra-retry policy
@@ -363,7 +425,8 @@ def complete(
             raise LLMUnavailable(
                 f"could not reach {cfg.provider} provider at {cfg.base_url} "
                 f"(model={cfg.model}, responses API): "
-                f"{type(exc).__name__}: {exc}"
+                f"{type(exc).__name__}: {exc}",
+                infra=True,
             ) from exc
         except APIStatusError as exc:
             # A real response the provider actively returned -- auth,
@@ -401,6 +464,7 @@ def complete(
         return LLMResponse(
             content=content,
             model=cfg.model,
+            served_model=_verify_served_model(cfg, response),
             latency_seconds=time.monotonic() - started,
         )
 
@@ -423,7 +487,8 @@ def complete(
         raise LLMUnavailable(
             _timeout_message(cfg, "chat completions", exc)
             + " If this is LM Studio: a large local model on a loaded "
-            "machine can legitimately exceed a cloud-sized window."
+            "machine can legitimately exceed a cloud-sized window.",
+            infra=True,
         ) from exc
     except APIConnectionError as exc:
         raise LLMUnavailable(
@@ -432,7 +497,8 @@ def complete(
             "LM Studio: confirm it is running and serving at that address "
             "-- host processes use localhost, containers use "
             "host.docker.internal, and swapping the two looks exactly like "
-            "the provider being down."
+            "the provider being down.",
+            infra=True,
         ) from exc
     except APIStatusError as exc:
         raise LLMUnavailable(
@@ -453,6 +519,7 @@ def complete(
     return LLMResponse(
         content=content,
         model=cfg.model,
+        served_model=_verify_served_model(cfg, chat_response),
         latency_seconds=time.monotonic() - started,
     )
 

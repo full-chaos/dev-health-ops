@@ -75,6 +75,8 @@ point of the exercise:
 
 from __future__ import annotations
 
+import argparse
+import dataclasses
 import os
 import sys
 import time
@@ -87,6 +89,7 @@ from trials.chaos_3499.corpus.oracles import ALL_ORACLES
 from trials.chaos_3499.harness.arms import episode_readback, extraction, native
 from trials.chaos_3499.harness.arms.extraction import _PROJECTION_VERSION
 from trials.chaos_3499.harness.arms.source_documents import (
+    NOT_AUTHORABLE_CATEGORIES,
     NOT_AUTHORABLE_REASONS,
     SOURCE_DOCUMENTS,
 )
@@ -186,13 +189,35 @@ MODEL_TIERS: tuple[ModelTier, ...] = (
         key="gpt-5-mini",
         model="gpt-5-mini",
         provider="cloud",
-        label="gpt-5-mini (ceiling / comparative)",
+        label="gpt-5-mini (mid-tier comparative)",
         role=(
-            "CEILING -- a tier above deployed parity, measured to show what "
-            "the technique can do when model quality is not the binding "
-            "constraint. Runs 1 and 2 used this tier; keeping it in the "
-            "matrix is what makes those historical numbers comparable to "
-            "this round's."
+            "MID-TIER COMPARATIVE -- one step above deployed parity. Runs 1 "
+            "and 2 used this tier, so keeping it in the matrix is what makes "
+            "those historical numbers comparable to this round's. NOT the "
+            "ceiling: gpt-5-nano and gpt-5-mini were both selected for "
+            "CATEGORIZATION and landscape-shape explanation in the app, not "
+            "for multi-turn, fuzzy-lookup, or interpretive question "
+            "answering -- so neither tier establishes what a model can do at "
+            "the top of the capability axis this corpus actually exercises. "
+            "That is what the frontier tier below is for."
+        ),
+        timeout=DEFAULT_CLOUD_TIMEOUT_SECONDS,
+    ),
+    ModelTier(
+        key="gpt-5.6-luna",
+        model="gpt-5.6-luna",
+        provider="cloud",
+        label="gpt-5.6-luna (frontier discriminator)",
+        role=(
+            "FRONTIER DISCRIMINATOR -- present to answer exactly ONE "
+            "question: is the class-(c) deficit a MODEL ceiling or a "
+            "FRAMEWORK limitation? A flat result here (~2/4, matching "
+            "gpt-5-mini and gemma-4-31b) says the binding constraint is the "
+            "extraction contract and harness, and that no model purchase "
+            "buys past it. A jump toward 4/4 says there is a real capability "
+            "curve with a known top, and the tier table becomes a genuine "
+            "cost/quality frontier. It is a DISCRIMINATOR, not a deployment "
+            "proposal."
         ),
         timeout=DEFAULT_CLOUD_TIMEOUT_SECONDS,
     ),
@@ -229,6 +254,34 @@ MODEL_TIERS: tuple[ModelTier, ...] = (
         optional=True,
     ),
 )
+
+
+def select_tiers(keys: Sequence[str] | None) -> list[ModelTier]:
+    """The tiers to measure this run, in DECLARED order.
+
+    ``None`` means every declared tier. A subset exists so a newly-added
+    tier can be measured without re-spending on tiers already measured and
+    without re-running the slow local ones -- but see
+    :func:`_render_artifact`, which is required to announce a subset run as
+    PARTIAL and name what it skipped.
+
+    An unknown key is fatal, deliberately. Silently selecting nothing would
+    produce an empty artifact that still looks like a successful run, which
+    is the same "measurement that did not happen reads as fine" failure the
+    NOT_RUN discipline exists to prevent.
+    """
+    if keys is None:
+        return list(MODEL_TIERS)
+    known = {t.key: t for t in MODEL_TIERS}
+    unknown = [k for k in keys if k not in known]
+    if unknown:
+        raise SystemExit(
+            f"unknown tier key(s) {unknown}; declared tiers are "
+            f"{sorted(known)}. Refusing to run: a typo here would measure "
+            "nothing and still exit successfully."
+        )
+    wanted = set(keys)
+    return [t for t in MODEL_TIERS if t.key in wanted]
 
 
 def resolve_tier_config(tier: ModelTier) -> LLMConfig:
@@ -270,11 +323,28 @@ def probe_provider(config: LLMConfig) -> str | None:
             timeout=min(30.0, config.timeout),
             max_retries=0,
         )
-        client.models.list()
+        listing = client.models.list()
     except Exception as exc:  # noqa: BLE001 - any failure IS the answer
         return (
             f"provider at {config.base_url} did not answer a models.list() "
             f"probe: {type(exc).__name__}: {exc}"
+        )
+    # Reachability is not enough. "The server answered" and "the server has
+    # the model this tier claims to measure" are different facts, and a
+    # local server will happily answer with whatever it has loaded. If the
+    # endpoint enumerates models at all, the requested id must be in it.
+    try:
+        served_ids = {m.id for m in listing}
+    except Exception:  # noqa: BLE001 - endpoint may not enumerate
+        served_ids = set()
+    if served_ids and not any(
+        i == config.model or i.startswith(config.model) for i in served_ids
+    ):
+        return (
+            f"provider at {config.base_url} is reachable but does not list "
+            f"the requested model {config.model!r}. Refusing to measure: a "
+            "tier row labelled with a model the server does not have would "
+            "be attributing results to the wrong model."
         )
     return None
 
@@ -297,7 +367,21 @@ class CallRecord:
     """
 
     called_at: str
-    latency_seconds: float
+    #: None when NO provider call happened (no source material, not
+    #: authorable, or a baseline arm). Renders "n/a" -- never 0.00s, which
+    #: would read as "answered instantly", a measurement claim nobody made.
+    latency_seconds: float | None
+    #: Provider calls actually made for this oracle, including the bounded
+    #: re-attempt. 0 means the arm returned before reaching a provider.
+    provider_attempts: int = 0
+    #: True when at least one attempt exceeded its configured window.
+    #: Persisted so the timeout story is auditable from the COMMITTED
+    #: artifact rather than only from a run's stderr.
+    timed_out: bool = False
+    #: True when a timed-out/unreachable call was recovered by the single
+    #: bounded re-attempt -- the difference between "this tier failed" and
+    #: "this tier needed a second try".
+    recovered_after_retry: bool = False
 
 
 def _log(message: str) -> None:
@@ -314,23 +398,41 @@ def _with_bounded_infra_retry(arm_fn):
 
     def wrapped(oracle):
         response = arm_fn(oracle)
-        if response.outcome is not ArmOutcome.NOT_RUN or not response.degraded_reasons:
+        if response.outcome is not ArmOutcome.NOT_RUN:
             return response
-        reason = response.degraded_reasons[0]
-        if _INFRA_FAILURE_MARKER not in reason:
+        # TYPED, never a substring match. The previous predicate searched
+        # for a marker phrase inside the reason string -- and a parse
+        # failure's reason embeds up to 500 characters of MODEL-CONTROLLED
+        # output, so a model that emitted the phrase could buy itself a
+        # retry of a genuine quality failure. See ArmResponse.infra_failure.
+        if not response.infra_failure:
             return response  # not infra -- no retry, stays loud as-is.
+        reason = response.degraded_reasons[0] if response.degraded_reasons else ""
         _log(
             f"{oracle.oracle_id}: infra-level NOT_RUN ({reason!r}) -- "
             f"one bounded re-attempt (max {_MAX_INFRA_RETRIES})"
         )
         retried = arm_fn(oracle)
-        if retried.outcome is ArmOutcome.NOT_RUN:
+        timed_out = "timed out" in reason
+        recovered = retried.outcome is not ArmOutcome.NOT_RUN
+        if not recovered:
             _log(
                 f"{oracle.oracle_id}: still NOT_RUN after bounded "
                 "re-attempt -- no further retries, staying loud"
             )
         else:
             _log(f"{oracle.oracle_id}: bounded re-attempt recovered the call")
+        # Stamp the infra story onto the response so _with_call_record can
+        # PERSIST it into the committed artifact. Before this, the only
+        # trace of a timeout-and-recovery was a stderr line that no reader
+        # of the artifact ever sees.
+        retried = dataclasses.replace(
+            retried,
+            provider_attempts=(response.provider_attempts or 1)
+            + (retried.provider_attempts or 1),
+        )
+        object.__setattr__(retried, "timed_out_at_least_once", timed_out)
+        object.__setattr__(retried, "recovered_after_retry", recovered)
         return retried
 
     wrapped.declared_role = arm_fn.declared_role  # type: ignore[attr-defined]
@@ -350,12 +452,26 @@ def _with_call_record(arm_name: str, arm_fn, sink: dict[tuple[str, str], CallRec
     def wrapped(oracle):
         started = time.monotonic()
         called_at = datetime.now(timezone.utc).isoformat()
+        response = None
         try:
-            return arm_fn(oracle)
+            response = arm_fn(oracle)
+            return response
         finally:
+            attempts = getattr(response, "provider_attempts", 0) if response else 0
+            elapsed = time.monotonic() - started
             sink[(oracle.oracle_id, arm_name)] = CallRecord(
                 called_at=called_at,
-                latency_seconds=time.monotonic() - started,
+                # No provider call -> no latency. Recording the microseconds
+                # the arm spent deciding it had nothing to call would render
+                # as 0.00s and read as a real measurement.
+                latency_seconds=elapsed if attempts else None,
+                provider_attempts=attempts,
+                timed_out=getattr(response, "timed_out_at_least_once", False)
+                if response
+                else False,
+                recovered_after_retry=getattr(response, "recovered_after_retry", False)
+                if response
+                else False,
             )
 
     declared_role = getattr(arm_fn, "declared_role", None)
@@ -559,7 +675,7 @@ def _latency_cell(record: CallRecord | None) -> str:
     claim nobody made -- the arm returned NOT_RUN before any provider call
     happened at all.
     """
-    if record is None:
+    if record is None or record.latency_seconds is None:
         return "n/a"
     return f"{record.latency_seconds:.2f}s"
 
@@ -583,6 +699,14 @@ def _render_per_oracle_table(oracles, reports: Mapping, call_records: Mapping) -
             verdict = result.verdict.value
             when = record.called_at if record is not None else "n/a"
             cell = f"`{verdict}` @ `{when}` / `{_latency_cell(record)}`"
+            if record is not None and record.provider_attempts > 1:
+                cell += f" [attempts={record.provider_attempts}]"
+            if record is not None and record.timed_out:
+                cell += (
+                    " **[TIMED OUT — infra, recovered by bounded re-attempt]**"
+                    if record.recovered_after_retry
+                    else " **[TIMED OUT — infra, NOT recovered]**"
+                )
             if result.verdict is Verdict.NOT_MEASURED:
                 cell += f" ({_oracle_reason(result)})"
             cells.append(cell)
@@ -703,13 +827,33 @@ def _render_coverage_statement() -> str:
         "",
         "Authored (measurable by this arm): " + ", ".join(f"`{o}`" for o in authored),
         "",
-        "Not authorable, with reason:",
+        "Not authorable, with reason AND category. The category is what "
+        "makes this list readable as evidence: only `structural` entries "
+        "say something about the technique (extraction architecturally "
+        "cannot answer these, or they live downstream of extraction "
+        "entirely). `source_shape` means prose-ifying the data would "
+        "measure the author, not the model. `deferred` is scope -- a "
+        "future round could close it -- and must NOT be cited as a "
+        "limitation of the technique.",
         "",
-        "| Oracle | Reason |",
-        "|---|---|",
+        "| Oracle | Category | Reason |",
+        "|---|---|---|",
     ]
     for oracle_id in not_authorable:
-        lines.append(f"| `{oracle_id}` | `{NOT_AUTHORABLE_REASONS[oracle_id]}` |")
+        category = NOT_AUTHORABLE_CATEGORIES.get(oracle_id, "UNCATEGORIZED")
+        lines.append(
+            f"| `{oracle_id}` | `{category}` | `{NOT_AUTHORABLE_REASONS[oracle_id]}` |"
+        )
+    counts: dict[str, int] = {}
+    for oracle_id in not_authorable:
+        key = NOT_AUTHORABLE_CATEGORIES.get(oracle_id, "UNCATEGORIZED")
+        counts[key] = counts.get(key, 0) + 1
+    lines += [
+        "",
+        "Category totals: "
+        + ", ".join(f"`{k}` {v}" for k, v in sorted(counts.items()))
+        + ".",
+    ]
     return "\n".join(lines)
 
 
@@ -742,6 +886,34 @@ def _render_artifact(
         "its model from the environment, so a section's label and the model",
         "that produced it cannot disagree.",
         "",
+    ]
+
+    # A subset run must announce itself. An artifact holding 1 of 5 declared
+    # tiers is indistinguishable from a complete matrix to a reader who does
+    # not already know how many tiers exist -- exactly the silent-cap
+    # failure this trial's own no-silent-caps rule forbids.
+    measured_keys = {o.tier.key for o in outcomes}
+    omitted = [t for t in MODEL_TIERS if t.key not in measured_keys]
+    if omitted:
+        lines += [
+            "> **PARTIAL RUN — this artifact does NOT contain every declared",
+            f"> tier.** {len(measured_keys)} of {len(MODEL_TIERS)} declared",
+            "> tiers were measured here. The tiers NOT measured in this run,",
+            "> and therefore absent below, are:",
+            "",
+        ]
+        for tier in omitted:
+            lines.append(f"> - `{tier.key}` (`{tier.model}`)")
+        lines += [
+            "",
+            "> Their results, if any, live in a different run's artifact --",
+            "> do not read the table below as the whole matrix, and do not",
+            "> compare a tier measured here against one measured in another",
+            "> run without carrying the run identity with it.",
+            "",
+        ]
+
+    lines += [
         _render_tier_matrix_summary(outcomes),
         "",
         "## Corpus coverage",
@@ -790,11 +962,45 @@ def _render_artifact(
     return "\n".join(lines)
 
 
-def main() -> int:
-    run_started_at = datetime.now(timezone.utc).isoformat()
-    _log(f"run-3 matrix: {len(MODEL_TIERS)} tiers, started {run_started_at}")
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--tiers",
+        default=None,
+        help=(
+            "Comma-separated tier keys to measure. Default: every declared "
+            "tier. A subset run writes a PARTIAL artifact that names the "
+            "tiers it skipped -- use --artifact to keep it out of the "
+            "full run's file."
+        ),
+    )
+    parser.add_argument(
+        "--artifact",
+        default=None,
+        help=(
+            "Artifact path. Default docs/measured-trial-results.md. Point a "
+            "subset run at its own file rather than overwriting a complete "
+            "matrix with a partial one."
+        ),
+    )
+    args = parser.parse_args(argv)
 
-    outcomes = [run_tier(tier) for tier in MODEL_TIERS]
+    tiers = select_tiers(
+        [k.strip() for k in args.tiers.split(",") if k.strip()] if args.tiers else None
+    )
+
+    run_started_at = datetime.now(timezone.utc).isoformat()
+    _log(
+        f"matrix: measuring {len(tiers)} of {len(MODEL_TIERS)} declared "
+        f"tiers ({', '.join(t.key for t in tiers)}), started {run_started_at}"
+    )
+    if len(tiers) < len(MODEL_TIERS):
+        _log(
+            "PARTIAL RUN -- the artifact will name the skipped tiers; do not "
+            "read it as the whole matrix"
+        )
+
+    outcomes = [run_tier(tier) for tier in tiers]
 
     run_finished_at = datetime.now(timezone.utc).isoformat()
     for outcome in outcomes:
@@ -804,7 +1010,11 @@ def main() -> int:
         else:
             print(f"\n=== {outcome.tier.label} === NOT_RUN: {outcome.not_run_reason}")
 
-    artifact_path = Path(__file__).parent / "docs" / "measured-trial-results.md"
+    artifact_path = (
+        Path(args.artifact)
+        if args.artifact
+        else Path(__file__).parent / "docs" / "measured-trial-results.md"
+    )
     artifact_path.write_text(
         _render_artifact(
             outcomes=outcomes,

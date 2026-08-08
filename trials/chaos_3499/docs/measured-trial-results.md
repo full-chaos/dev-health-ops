@@ -5,8 +5,8 @@ trial artifact -- the rendered per-class comparison, per model tier,
 committed. It is NOT a headline number -- there isn't one;
 `ComparisonReport` cannot render one by construction.
 
-- run started: `2026-08-08T12:42:01.260430+00:00`
-- run finished: `2026-08-08T13:27:44.560821+00:00`
+- run started: `2026-08-08T14:45:00.367764+00:00`
+- run finished: `2026-08-08T15:22:05.171915+00:00`
 - dependency state for class (b): `CHAOS-3563 declared-state history MERGED as 33a7f85d0 (ops feature/chaos-3498-context-fabric, 2026-08-08): project_declared_state_history + durable floor table live via migrations 074/075, argMax read path with content-hash tie-break, three-outcome floor contract.`
 - temperature: API default (gpt-5-family rejects a caller-selected
   value -- see `harness/llm/client.py`'s module docstring and
@@ -24,6 +24,7 @@ that produced it cannot disagree.
 |---|---|---|---|---|---|
 | `gpt-5-nano` | `gpt-5-nano` | `measured` | `held` | 9/20 |  |
 | `gpt-5-mini` | `gpt-5-mini` | `measured` | `held` | 9/20 |  |
+| `gpt-5.6-luna` | `gpt-5.6-luna` | `measured` | `held` | 9/20 |  |
 | `gemma-4-e4b-local` | `google/gemma-4-e4b` | `measured` | `held` | 9/20 |  |
 | `gemma-4-31b-local` | `google/gemma-4-31b` | `measured` | `held` | 9/20 |  |
 
@@ -33,21 +34,23 @@ that produced it cannot disagree.
 
 Authored (measurable by this arm): `O2_blocking_observed`, `O2_blocking_valid`, `O3_supersession`, `O5_conflicts`, `O5_conflicts_injected`, `O6_recurring_pattern`, `O7_null_valid_from`, `O7_unpinned`, `O7_valid`
 
-Not authorable, with reason:
+Not authorable, with reason AND category. The category is what makes this list readable as evidence: only `structural` entries say something about the technique (extraction architecturally cannot answer these, or they live downstream of extraction entirely). `source_shape` means prose-ifying the data would measure the author, not the model. `deferred` is scope -- a future round could close it -- and must NOT be cited as a limitation of the technique.
 
-| Oracle | Reason |
-|---|---|
-| `O1_ci_prior_attempts` | `structured_episode_data_has_no_natural_prose_form` |
-| `O1_ci_prior_attempts_squash` | `tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content` |
-| `O1_ci_prior_attempts_stale` | `staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time` |
-| `O3_supersession_deterministic_only` | `requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content` |
-| `O3_supersession_extraction_down` | `requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content` |
-| `O4_prior_attempts` | `structured_episode_data_has_no_natural_prose_form` |
-| `O4_prior_attempts_after_redaction` | `redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states` |
-| `O4_prior_attempts_after_revocation` | `repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states` |
-| `O4_prior_attempts_graph_outage` | `tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture` |
-| `O4_prior_attempts_manipulated` | `needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope` |
-| `O5_conflicts_poisoned` | `entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round` |
+| Oracle | Category | Reason |
+|---|---|---|
+| `O1_ci_prior_attempts` | `source_shape` | `structured_episode_data_has_no_natural_prose_form` |
+| `O1_ci_prior_attempts_squash` | `structural` | `tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content` |
+| `O1_ci_prior_attempts_stale` | `structural` | `staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time` |
+| `O3_supersession_deterministic_only` | `structural` | `requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content` |
+| `O3_supersession_extraction_down` | `structural` | `requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content` |
+| `O4_prior_attempts` | `source_shape` | `structured_episode_data_has_no_natural_prose_form` |
+| `O4_prior_attempts_after_redaction` | `structural` | `redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states` |
+| `O4_prior_attempts_after_revocation` | `structural` | `repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states` |
+| `O4_prior_attempts_graph_outage` | `structural` | `tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture` |
+| `O4_prior_attempts_manipulated` | `deferred` | `needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope` |
+| `O5_conflicts_poisoned` | `deferred` | `entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round` |
+
+Category totals: `deferred` 2, `source_shape` 2, `structural` 7.
 
 ## Tier: gpt-5-nano (deployed parity)
 
@@ -62,8 +65,8 @@ Not authorable, with reason:
 
 - base URL: `https://api.openai.com/v1`
 - prompt/schema version: `extraction.v2`
-- started: `2026-08-08T12:42:01.260628+00:00`
-- finished: `2026-08-08T12:45:59.540968+00:00`
+- started: `2026-08-08T14:45:00.367947+00:00`
+- finished: `2026-08-08T14:48:28.764974+00:00`
 - 20 oracles total; 9 measured by the extraction candidate arm; 11 NOT_RUN
 - class (a) control status: `held`
 
@@ -82,97 +85,42 @@ Every arm x oracle verdict, the wall-clock instant that arm was called, and the 
 
 | Oracle | Class | native (verdict @ called / Latency) | episode_readback (verdict @ called / Latency) | extraction_llm (verdict @ called / Latency) |
 |---|---|---|---|---|
-| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T12:42:02.318910+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319288+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:42:02.319580+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T12:42:02.318988+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319300+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:42:02.319591+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T12:42:02.319010+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319308+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:42:02.319598+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
-| O2_blocking_valid | b | `fail` @ `2026-08-08T12:42:02.319031+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319317+00:00` / `0.00s` | `pass` @ `2026-08-08T12:42:02.319603+00:00` / `23.13s` |
-| O2_blocking_observed | b | `fail` @ `2026-08-08T12:42:02.319089+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319327+00:00` / `0.00s` | `pass` @ `2026-08-08T12:42:25.450825+00:00` / `19.14s` |
-| O3_supersession | c | `fail` @ `2026-08-08T12:42:02.319112+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319336+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:44.595853+00:00` / `45.81s` |
-| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T12:42:02.319123+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319344+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:43:30.403909+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T12:42:02.319136+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319354+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:43:30.403927+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O4_prior_attempts | c | `fail` @ `2026-08-08T12:42:02.319146+00:00` / `0.00s` | `pass` @ `2026-08-08T12:42:02.319363+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:43:30.403935+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T12:42:02.319157+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319408+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:43:30.403942+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T12:42:02.319167+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319435+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:43:30.403948+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T12:42:02.319176+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319463+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:43:30.403953+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T12:42:02.319185+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319489+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:43:30.403959+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
-| O5_conflicts | c | `fail` @ `2026-08-08T12:42:02.319189+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319504+00:00` / `0.00s` | `fail` @ `2026-08-08T12:43:30.403964+00:00` / `14.34s` |
-| O5_conflicts_injected | c | `fail` @ `2026-08-08T12:42:02.319199+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319515+00:00` / `0.00s` | `fail` @ `2026-08-08T12:43:44.743197+00:00` / `27.60s` |
-| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T12:42:02.319208+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319523+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:44:12.346467+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
-| O6_recurring_pattern | c | `fail` @ `2026-08-08T12:42:02.319217+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319541+00:00` / `0.00s` | `fail` @ `2026-08-08T12:44:12.346480+00:00` / `19.17s` |
-| O7_valid | a | `pass` @ `2026-08-08T12:42:02.319227+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319552+00:00` / `0.00s` | `fail` @ `2026-08-08T12:44:31.517612+00:00` / `36.72s` |
-| O7_null_valid_from | a | `fail` @ `2026-08-08T12:42:02.319252+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319561+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:08.242059+00:00` / `18.53s` |
-| O7_unpinned | a | `fail` @ `2026-08-08T12:42:02.319264+00:00` / `0.00s` | `fail` @ `2026-08-08T12:42:02.319569+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:26.772096+00:00` / `32.77s` |
+| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T14:45:01.079594+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.079949+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:45:01.080243+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T14:45:01.079659+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.079960+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:45:01.080252+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T14:45:01.079680+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.079968+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:45:01.080257+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
+| O2_blocking_valid | b | `fail` @ `2026-08-08T14:45:01.079707+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.079978+00:00` / `n/a` | `pass` @ `2026-08-08T14:45:01.080262+00:00` / `21.65s` |
+| O2_blocking_observed | b | `fail` @ `2026-08-08T14:45:01.079756+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.079989+00:00` / `n/a` | `pass` @ `2026-08-08T14:45:22.733164+00:00` / `20.87s` |
+| O3_supersession | c | `fail` @ `2026-08-08T14:45:01.079780+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080000+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:43.602905+00:00` / `19.68s` |
+| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T14:45:01.079793+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080010+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:03.278862+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T14:45:01.079805+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080020+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:03.278875+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O4_prior_attempts | c | `fail` @ `2026-08-08T14:45:01.079815+00:00` / `n/a` | `pass` @ `2026-08-08T14:45:01.080030+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:03.278880+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T14:45:01.079828+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080074+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:03.278886+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T14:45:01.079839+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080103+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:03.278890+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T14:45:01.079850+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080133+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:03.278895+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T14:45:01.079859+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080162+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:03.278900+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
+| O5_conflicts | c | `fail` @ `2026-08-08T14:45:01.079863+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080176+00:00` / `n/a` | `fail` @ `2026-08-08T14:46:03.278904+00:00` / `16.49s` |
+| O5_conflicts_injected | c | `fail` @ `2026-08-08T14:45:01.079870+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080185+00:00` / `n/a` | `fail` @ `2026-08-08T14:46:19.764941+00:00` / `25.65s` |
+| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T14:45:01.079879+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080193+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:46:45.411995+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
+| O6_recurring_pattern | c | `fail` @ `2026-08-08T14:45:01.079887+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080202+00:00` / `n/a` | `fail` @ `2026-08-08T14:46:45.412006+00:00` / `26.13s` |
+| O7_valid | a | `pass` @ `2026-08-08T14:45:01.079895+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080212+00:00` / `n/a` | `fail` @ `2026-08-08T14:47:11.542165+00:00` / `32.36s` |
+| O7_null_valid_from | a | `fail` @ `2026-08-08T14:45:01.079915+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080222+00:00` / `n/a` | `fail` @ `2026-08-08T14:47:43.901116+00:00` / `18.50s` |
+| O7_unpinned | a | `fail` @ `2026-08-08T14:45:01.079925+00:00` / `n/a` | `fail` @ `2026-08-08T14:45:01.080232+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:02.402496+00:00` / `26.36s` |
 
 
-## Tier: gpt-5-mini (ceiling / comparative)
+## Tier: gpt-5-mini (mid-tier comparative)
 
 - tier key: `gpt-5-mini`
 - model: `gpt-5-mini`
 - provider: `cloud`
 - configured timeout: `120.0s`
-- role: CEILING -- a tier above deployed parity, measured to show what the technique can do when model quality is not the binding constraint. Runs 1 and 2 used this tier; keeping it in the matrix is what makes those historical numbers comparable to this round's.
+- role: MID-TIER COMPARATIVE -- one step above deployed parity. Runs 1 and 2 used this tier, so keeping it in the matrix is what makes those historical numbers comparable to this round's. NOT the ceiling: gpt-5-nano and gpt-5-mini were both selected for CATEGORIZATION and landscape-shape explanation in the app, not for multi-turn, fuzzy-lookup, or interpretive question answering -- so neither tier establishes what a model can do at the top of the capability axis this corpus actually exercises. That is what the frontier tier below is for.
 
 **STATUS: MEASURED**
 
 - base URL: `https://api.openai.com/v1`
 - prompt/schema version: `extraction.v2`
-- started: `2026-08-08T12:45:59.541108+00:00`
-- finished: `2026-08-08T12:48:50.791156+00:00`
-- 20 oracles total; 9 measured by the extraction candidate arm; 11 NOT_RUN
-- class (a) control status: `held`
-
-### Per-class comparison
-
-```
-baseline: baseline   vs   arm: extraction_llm
-  class a: baseline 1/3, arm 0/3, delta -1
-  class b: baseline 0/2, arm 2/2, delta +2
-  class c: baseline 1/15, arm 2/15, delta +1  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED
-```
-
-### Per-oracle results
-
-Every arm x oracle verdict, the wall-clock instant that arm was called, and the call's latency. Latency renders `n/a` -- never `0.00s` -- when the arm returned NOT_RUN before any provider call happened.
-
-| Oracle | Class | native (verdict @ called / Latency) | episode_readback (verdict @ called / Latency) | extraction_llm (verdict @ called / Latency) |
-|---|---|---|---|---|
-| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T12:45:59.993867+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994117+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:45:59.994349+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T12:45:59.993904+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994126+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:45:59.994356+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T12:45:59.993916+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994133+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:45:59.994360+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
-| O2_blocking_valid | b | `fail` @ `2026-08-08T12:45:59.993928+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994140+00:00` / `0.00s` | `pass` @ `2026-08-08T12:45:59.994364+00:00` / `14.57s` |
-| O2_blocking_observed | b | `fail` @ `2026-08-08T12:45:59.993954+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994149+00:00` / `0.00s` | `pass` @ `2026-08-08T12:46:14.559688+00:00` / `20.57s` |
-| O3_supersession | c | `fail` @ `2026-08-08T12:45:59.993968+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994157+00:00` / `0.00s` | `pass` @ `2026-08-08T12:46:35.134263+00:00` / `34.58s` |
-| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T12:45:59.993976+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994164+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:09.714436+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T12:45:59.993989+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994173+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:09.714446+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O4_prior_attempts | c | `fail` @ `2026-08-08T12:45:59.993999+00:00` / `0.00s` | `pass` @ `2026-08-08T12:45:59.994181+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:09.714450+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T12:45:59.994009+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994211+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:09.714454+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T12:45:59.994018+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994233+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:09.714458+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T12:45:59.994028+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994255+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:09.714461+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T12:45:59.994035+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994280+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:09.714464+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
-| O5_conflicts | c | `fail` @ `2026-08-08T12:45:59.994039+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994294+00:00` / `0.00s` | `fail` @ `2026-08-08T12:47:09.714467+00:00` / `8.66s` |
-| O5_conflicts_injected | c | `fail` @ `2026-08-08T12:45:59.994047+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994302+00:00` / `0.00s` | `pass` @ `2026-08-08T12:47:18.376736+00:00` / `16.23s` |
-| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T12:45:59.994055+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994310+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:47:34.609486+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
-| O6_recurring_pattern | c | `fail` @ `2026-08-08T12:45:59.994063+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994317+00:00` / `0.00s` | `fail` @ `2026-08-08T12:47:34.609497+00:00` / `18.87s` |
-| O7_valid | a | `pass` @ `2026-08-08T12:45:59.994072+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994326+00:00` / `0.00s` | `fail` @ `2026-08-08T12:47:53.476713+00:00` / `26.38s` |
-| O7_null_valid_from | a | `fail` @ `2026-08-08T12:45:59.994089+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994333+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:19.858348+00:00` / `8.52s` |
-| O7_unpinned | a | `fail` @ `2026-08-08T12:45:59.994098+00:00` / `0.00s` | `fail` @ `2026-08-08T12:45:59.994341+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:28.377232+00:00` / `22.41s` |
-
-
-## Tier: google/gemma-4-e4b (local cost-regime arm)
-
-- tier key: `gemma-4-e4b-local`
-- model: `google/gemma-4-e4b`
-- provider: `local`
-- configured timeout: `900.0s`
-- role: COST REGIME, NOT PARITY -- a locally-hosted small model, informative for the ADR's cost-architecture input only. It is not the deployed configuration and no parity claim rests on it. Optional: if LM Studio is not serving, this tier records NOT_RUN and the run continues.
-- OPTIONAL tier -- informative only; its absence is recorded, not fatal.
-
-**STATUS: MEASURED**
-
-- base URL: `http://localhost:1234/v1`
-- prompt/schema version: `extraction.v2`
-- started: `2026-08-08T12:48:50.791281+00:00`
-- finished: `2026-08-08T12:54:15.131132+00:00`
+- started: `2026-08-08T14:48:28.765110+00:00`
+- finished: `2026-08-08T14:52:32.603289+00:00`
 - 20 oracles total; 9 measured by the extraction candidate arm; 11 NOT_RUN
 - class (a) control status: `held`
 
@@ -191,26 +139,135 @@ Every arm x oracle verdict, the wall-clock instant that arm was called, and the 
 
 | Oracle | Class | native (verdict @ called / Latency) | episode_readback (verdict @ called / Latency) | extraction_llm (verdict @ called / Latency) |
 |---|---|---|---|---|
-| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T12:48:50.798297+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798509+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:48:50.801281+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T12:48:50.798321+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798520+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:48:50.801287+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T12:48:50.798330+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798526+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:48:50.801291+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
-| O2_blocking_valid | b | `fail` @ `2026-08-08T12:48:50.798341+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798534+00:00` / `0.00s` | `pass` @ `2026-08-08T12:48:50.801295+00:00` / `17.28s` |
-| O2_blocking_observed | b | `fail` @ `2026-08-08T12:48:50.798362+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798543+00:00` / `0.00s` | `pass` @ `2026-08-08T12:49:08.086404+00:00` / `19.14s` |
-| O3_supersession | c | `fail` @ `2026-08-08T12:48:50.798374+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798551+00:00` / `0.00s` | `fail` @ `2026-08-08T12:49:27.228921+00:00` / `37.94s` |
-| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T12:48:50.798382+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798558+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:50:05.171365+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T12:48:50.798392+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798566+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:50:05.171386+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O4_prior_attempts | c | `fail` @ `2026-08-08T12:48:50.798400+00:00` / `0.00s` | `pass` @ `2026-08-08T12:48:50.798575+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:50:05.171397+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T12:48:50.798409+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.798603+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:50:05.171406+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T12:48:50.798417+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801154+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:50:05.171415+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T12:48:50.798426+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801184+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:50:05.171423+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T12:48:50.798433+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801208+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:50:05.171432+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
-| O5_conflicts | c | `fail` @ `2026-08-08T12:48:50.798436+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801221+00:00` / `0.00s` | `fail` @ `2026-08-08T12:50:05.171440+00:00` / `26.09s` |
-| O5_conflicts_injected | c | `fail` @ `2026-08-08T12:48:50.798444+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801231+00:00` / `0.00s` | `pass` @ `2026-08-08T12:50:31.256974+00:00` / `43.27s` |
-| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T12:48:50.798451+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801239+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:51:14.527594+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
-| O6_recurring_pattern | c | `fail` @ `2026-08-08T12:48:50.798459+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801247+00:00` / `0.00s` | `fail` @ `2026-08-08T12:51:14.527625+00:00` / `59.34s` |
-| O7_valid | a | `pass` @ `2026-08-08T12:48:50.798468+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801256+00:00` / `0.00s` | `fail` @ `2026-08-08T12:52:13.868472+00:00` / `54.97s` |
-| O7_null_valid_from | a | `fail` @ `2026-08-08T12:48:50.798483+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801265+00:00` / `0.00s` | `fail` @ `2026-08-08T12:53:08.841135+00:00` / `21.42s` |
-| O7_unpinned | a | `fail` @ `2026-08-08T12:48:50.798492+00:00` / `0.00s` | `fail` @ `2026-08-08T12:48:50.801272+00:00` / `0.00s` | `fail` @ `2026-08-08T12:53:30.262343+00:00` / `44.87s` |
+| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T14:48:29.266497+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266741+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:48:29.266981+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T14:48:29.266531+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266751+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:48:29.266988+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T14:48:29.266542+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266758+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:48:29.266992+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
+| O2_blocking_valid | b | `fail` @ `2026-08-08T14:48:29.266553+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266766+00:00` / `n/a` | `pass` @ `2026-08-08T14:48:29.266996+00:00` / `24.89s` |
+| O2_blocking_observed | b | `fail` @ `2026-08-08T14:48:29.266577+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266775+00:00` / `n/a` | `pass` @ `2026-08-08T14:48:54.160296+00:00` / `22.91s` |
+| O3_supersession | c | `fail` @ `2026-08-08T14:48:29.266591+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266783+00:00` / `n/a` | `pass` @ `2026-08-08T14:49:17.071366+00:00` / `40.85s` |
+| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T14:48:29.266600+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266791+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:49:57.920222+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T14:48:29.266610+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266800+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:49:57.920233+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O4_prior_attempts | c | `fail` @ `2026-08-08T14:48:29.266619+00:00` / `n/a` | `pass` @ `2026-08-08T14:48:29.266808+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:49:57.920238+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T14:48:29.266629+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266838+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:49:57.920242+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T14:48:29.266638+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266861+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:49:57.920246+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T14:48:29.266648+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266884+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:49:57.920250+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T14:48:29.266656+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266907+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:49:57.920254+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
+| O5_conflicts | c | `fail` @ `2026-08-08T14:48:29.266660+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266921+00:00` / `n/a` | `fail` @ `2026-08-08T14:49:57.920258+00:00` / `10.16s` |
+| O5_conflicts_injected | c | `fail` @ `2026-08-08T14:48:29.266668+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266929+00:00` / `n/a` | `fail` @ `2026-08-08T14:50:08.076005+00:00` / `24.59s` |
+| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T14:48:29.266677+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266938+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:50:32.663344+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
+| O6_recurring_pattern | c | `fail` @ `2026-08-08T14:48:29.266686+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266946+00:00` / `n/a` | `fail` @ `2026-08-08T14:50:32.663357+00:00` / `28.46s` |
+| O7_valid | a | `pass` @ `2026-08-08T14:48:29.266695+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266955+00:00` / `n/a` | `fail` @ `2026-08-08T14:51:01.122374+00:00` / `36.88s` |
+| O7_null_valid_from | a | `fail` @ `2026-08-08T14:48:29.266713+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266964+00:00` / `n/a` | `fail` @ `2026-08-08T14:51:37.998428+00:00` / `13.18s` |
+| O7_unpinned | a | `fail` @ `2026-08-08T14:48:29.266722+00:00` / `n/a` | `fail` @ `2026-08-08T14:48:29.266972+00:00` / `n/a` | `fail` @ `2026-08-08T14:51:51.181937+00:00` / `41.42s` |
+
+
+## Tier: gpt-5.6-luna (frontier discriminator)
+
+- tier key: `gpt-5.6-luna`
+- model: `gpt-5.6-luna`
+- provider: `cloud`
+- configured timeout: `120.0s`
+- role: FRONTIER DISCRIMINATOR -- present to answer exactly ONE question: is the class-(c) deficit a MODEL ceiling or a FRAMEWORK limitation? A flat result here (~2/4, matching gpt-5-mini and gemma-4-31b) says the binding constraint is the extraction contract and harness, and that no model purchase buys past it. A jump toward 4/4 says there is a real capability curve with a known top, and the tier table becomes a genuine cost/quality frontier. It is a DISCRIMINATOR, not a deployment proposal.
+
+**STATUS: MEASURED**
+
+- base URL: `https://api.openai.com/v1`
+- prompt/schema version: `extraction.v2`
+- started: `2026-08-08T14:52:32.603555+00:00`
+- finished: `2026-08-08T14:53:09.441853+00:00`
+- 20 oracles total; 9 measured by the extraction candidate arm; 11 NOT_RUN
+- class (a) control status: `held`
+
+### Per-class comparison
+
+```
+baseline: baseline   vs   arm: extraction_llm
+  class a: baseline 1/3, arm 0/3, delta -1
+  class b: baseline 0/2, arm 2/2, delta +2
+  class c: baseline 1/15, arm 1/15, delta +0  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED
+```
+
+### Per-oracle results
+
+Every arm x oracle verdict, the wall-clock instant that arm was called, and the call's latency. Latency renders `n/a` -- never `0.00s` -- when the arm returned NOT_RUN before any provider call happened.
+
+| Oracle | Class | native (verdict @ called / Latency) | episode_readback (verdict @ called / Latency) | extraction_llm (verdict @ called / Latency) |
+|---|---|---|---|---|
+| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T14:52:32.956766+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957006+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:32.957245+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T14:52:32.956799+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957016+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:32.957251+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T14:52:32.956810+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957023+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:32.957255+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
+| O2_blocking_valid | b | `fail` @ `2026-08-08T14:52:32.956820+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957031+00:00` / `n/a` | `pass` @ `2026-08-08T14:52:32.957260+00:00` / `3.78s` |
+| O2_blocking_observed | b | `fail` @ `2026-08-08T14:52:32.956844+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957040+00:00` / `n/a` | `pass` @ `2026-08-08T14:52:36.737805+00:00` / `2.75s` |
+| O3_supersession | c | `fail` @ `2026-08-08T14:52:32.956857+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957048+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:39.488992+00:00` / `4.92s` |
+| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T14:52:32.956866+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957055+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:44.411998+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T14:52:32.956876+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957064+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:44.412008+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O4_prior_attempts | c | `fail` @ `2026-08-08T14:52:32.956885+00:00` / `n/a` | `pass` @ `2026-08-08T14:52:32.957073+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:44.412013+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T14:52:32.956895+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957103+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:44.412018+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T14:52:32.956903+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957125+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:44.412023+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T14:52:32.956913+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957148+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:44.412027+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T14:52:32.956923+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957171+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:44.412032+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
+| O5_conflicts | c | `fail` @ `2026-08-08T14:52:32.956927+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957185+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:44.412037+00:00` / `2.50s` |
+| O5_conflicts_injected | c | `fail` @ `2026-08-08T14:52:32.956935+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957194+00:00` / `n/a` | `pass` @ `2026-08-08T14:52:46.909182+00:00` / `3.09s` |
+| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T14:52:32.956944+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957202+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:52:49.998024+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
+| O6_recurring_pattern | c | `fail` @ `2026-08-08T14:52:32.956953+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957211+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:49.998034+00:00` / `4.85s` |
+| O7_valid | a | `pass` @ `2026-08-08T14:52:32.956962+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957220+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:54.852692+00:00` / `6.60s` |
+| O7_null_valid_from | a | `fail` @ `2026-08-08T14:52:32.956979+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957228+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:01.450127+00:00` / `3.87s` |
+| O7_unpinned | a | `fail` @ `2026-08-08T14:52:32.956989+00:00` / `n/a` | `fail` @ `2026-08-08T14:52:32.957236+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:05.316449+00:00` / `4.13s` |
+
+
+## Tier: google/gemma-4-e4b (local cost-regime arm)
+
+- tier key: `gemma-4-e4b-local`
+- model: `google/gemma-4-e4b`
+- provider: `local`
+- configured timeout: `900.0s`
+- role: COST REGIME, NOT PARITY -- a locally-hosted small model, informative for the ADR's cost-architecture input only. It is not the deployed configuration and no parity claim rests on it. Optional: if LM Studio is not serving, this tier records NOT_RUN and the run continues.
+- OPTIONAL tier -- informative only; its absence is recorded, not fatal.
+
+**STATUS: MEASURED**
+
+- base URL: `http://localhost:1234/v1`
+- prompt/schema version: `extraction.v2`
+- started: `2026-08-08T14:53:09.441988+00:00`
+- finished: `2026-08-08T14:57:17.399285+00:00`
+- 20 oracles total; 9 measured by the extraction candidate arm; 11 NOT_RUN
+- class (a) control status: `held`
+
+### Per-class comparison
+
+```
+baseline: baseline   vs   arm: extraction_llm
+  class a: baseline 1/3, arm 0/3, delta -1
+  class b: baseline 0/2, arm 2/2, delta +2
+  class c: baseline 1/15, arm 0/15, delta -1  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED
+```
+
+### Per-oracle results
+
+Every arm x oracle verdict, the wall-clock instant that arm was called, and the call's latency. Latency renders `n/a` -- never `0.00s` -- when the arm returned NOT_RUN before any provider call happened.
+
+| Oracle | Class | native (verdict @ called / Latency) | episode_readback (verdict @ called / Latency) | extraction_llm (verdict @ called / Latency) |
+|---|---|---|---|---|
+| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T14:53:09.449291+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449550+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:53:09.449812+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T14:53:09.449324+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449567+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:53:09.449819+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T14:53:09.449335+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449575+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:53:09.449825+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
+| O2_blocking_valid | b | `fail` @ `2026-08-08T14:53:09.449346+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449583+00:00` / `n/a` | `pass` @ `2026-08-08T14:53:09.449830+00:00` / `17.57s` |
+| O2_blocking_observed | b | `fail` @ `2026-08-08T14:53:09.449370+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449592+00:00` / `n/a` | `pass` @ `2026-08-08T14:53:27.024055+00:00` / `24.00s` |
+| O3_supersession | c | `fail` @ `2026-08-08T14:53:09.449385+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449601+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:51.023943+00:00` / `41.41s` |
+| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T14:53:09.449396+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449608+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:54:32.435755+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T14:53:09.449407+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449617+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:54:32.435780+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O4_prior_attempts | c | `fail` @ `2026-08-08T14:53:09.449416+00:00` / `n/a` | `pass` @ `2026-08-08T14:53:09.449626+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:54:32.435792+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T14:53:09.449427+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449661+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:54:32.435801+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T14:53:09.449437+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449689+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:54:32.435810+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T14:53:09.449448+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449713+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:54:32.435818+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T14:53:09.449459+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449737+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:54:32.435827+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
+| O5_conflicts | c | `fail` @ `2026-08-08T14:53:09.449463+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449751+00:00` / `n/a` | `fail` @ `2026-08-08T14:54:32.435835+00:00` / `23.28s` |
+| O5_conflicts_injected | c | `fail` @ `2026-08-08T14:53:09.449472+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449760+00:00` / `n/a` | `fail` @ `2026-08-08T14:54:55.718721+00:00` / `33.23s` |
+| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T14:53:09.449481+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449768+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:55:28.952727+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
+| O6_recurring_pattern | c | `fail` @ `2026-08-08T14:53:09.449490+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449776+00:00` / `n/a` | `fail` @ `2026-08-08T14:55:28.952752+00:00` / `32.98s` |
+| O7_valid | a | `pass` @ `2026-08-08T14:53:09.449499+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449786+00:00` / `n/a` | `fail` @ `2026-08-08T14:56:01.933114+00:00` / `32.73s` |
+| O7_null_valid_from | a | `fail` @ `2026-08-08T14:53:09.449518+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449795+00:00` / `n/a` | `fail` @ `2026-08-08T14:56:34.664534+00:00` / `13.84s` |
+| O7_unpinned | a | `fail` @ `2026-08-08T14:53:09.449531+00:00` / `n/a` | `fail` @ `2026-08-08T14:53:09.449803+00:00` / `n/a` | `fail` @ `2026-08-08T14:56:48.503803+00:00` / `28.89s` |
 
 
 ## Tier: google/gemma-4-31b (local scaling comparator)
@@ -226,8 +283,8 @@ Every arm x oracle verdict, the wall-clock instant that arm was called, and the 
 
 - base URL: `http://localhost:1234/v1`
 - prompt/schema version: `extraction.v2`
-- started: `2026-08-08T12:54:15.131583+00:00`
-- finished: `2026-08-08T13:27:44.560245+00:00`
+- started: `2026-08-08T14:57:17.399545+00:00`
+- finished: `2026-08-08T15:22:05.171207+00:00`
 - 20 oracles total; 9 measured by the extraction candidate arm; 11 NOT_RUN
 - class (a) control status: `held`
 
@@ -237,7 +294,7 @@ Every arm x oracle verdict, the wall-clock instant that arm was called, and the 
 baseline: baseline   vs   arm: extraction_llm
   class a: baseline 1/3, arm 0/3, delta -1
   class b: baseline 0/2, arm 2/2, delta +2
-  class c: baseline 1/15, arm 2/15, delta +1  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED
+  class c: baseline 1/15, arm 1/15, delta +0  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED
 ```
 
 ### Per-oracle results
@@ -246,26 +303,26 @@ Every arm x oracle verdict, the wall-clock instant that arm was called, and the 
 
 | Oracle | Class | native (verdict @ called / Latency) | episode_readback (verdict @ called / Latency) | extraction_llm (verdict @ called / Latency) |
 |---|---|---|---|---|
-| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T12:54:15.149507+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169200+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:54:15.169970+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T12:54:15.149578+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169227+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:54:15.169987+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
-| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T12:54:15.149599+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169247+00:00` / `0.00s` | `not_measured` @ `2026-08-08T12:54:15.169996+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
-| O2_blocking_valid | b | `fail` @ `2026-08-08T12:54:15.149623+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169268+00:00` / `0.00s` | `pass` @ `2026-08-08T12:54:15.170007+00:00` / `161.64s` |
-| O2_blocking_observed | b | `fail` @ `2026-08-08T12:54:15.149694+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169292+00:00` / `0.00s` | `pass` @ `2026-08-08T12:56:56.807193+00:00` / `156.53s` |
-| O3_supersession | c | `fail` @ `2026-08-08T12:54:15.149725+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169313+00:00` / `0.00s` | `pass` @ `2026-08-08T12:59:33.310777+00:00` / `128.02s` |
-| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T12:54:15.149746+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169427+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:01:41.328218+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T12:54:15.149769+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169459+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:01:41.328248+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
-| O4_prior_attempts | c | `fail` @ `2026-08-08T12:54:15.149790+00:00` / `0.00s` | `pass` @ `2026-08-08T12:54:15.169489+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:01:41.328264+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T12:54:15.149813+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169573+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:01:41.328279+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T12:54:15.149834+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169628+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:01:41.328289+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T12:54:15.149855+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169685+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:01:41.328298+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
-| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T12:54:15.168867+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169757+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:01:41.328306+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
-| O5_conflicts | c | `fail` @ `2026-08-08T12:54:15.168934+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169790+00:00` / `0.00s` | `fail` @ `2026-08-08T13:01:41.328315+00:00` / `103.77s` |
-| O5_conflicts_injected | c | `fail` @ `2026-08-08T12:54:15.168972+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169811+00:00` / `0.00s` | `pass` @ `2026-08-08T13:03:25.102140+00:00` / `103.28s` |
-| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T12:54:15.169013+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169860+00:00` / `0.00s` | `not_measured` @ `2026-08-08T13:05:08.385914+00:00` / `0.00s` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
-| O6_recurring_pattern | c | `fail` @ `2026-08-08T12:54:15.169041+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169883+00:00` / `0.00s` | `fail` @ `2026-08-08T13:05:08.385937+00:00` / `132.44s` |
-| O7_valid | a | `pass` @ `2026-08-08T12:54:15.169067+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169906+00:00` / `0.00s` | `fail` @ `2026-08-08T13:07:20.827535+00:00` / `1009.43s` |
-| O7_null_valid_from | a | `fail` @ `2026-08-08T12:54:15.169123+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169927+00:00` / `0.00s` | `fail` @ `2026-08-08T13:24:10.247743+00:00` / `71.97s` |
-| O7_unpinned | a | `fail` @ `2026-08-08T12:54:15.169148+00:00` / `0.00s` | `fail` @ `2026-08-08T12:54:15.169947+00:00` / `0.00s` | `fail` @ `2026-08-08T13:25:22.219176+00:00` / `142.30s` |
+| O1_ci_prior_attempts | c | `fail` @ `2026-08-08T14:57:17.417799+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418429+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:57:17.419046+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_stale | c | `fail` @ `2026-08-08T14:57:17.417888+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418453+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:57:17.419062+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:staleness_is_a_projector_watermark_concept_this_arm_has_no_equivalent_of_it_always_reads_at_call_time); an unmeasured oracle is never a pass) |
+| O1_ci_prior_attempts_squash | c | `fail` @ `2026-08-08T14:57:17.417912+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418470+00:00` / `n/a` | `not_measured` @ `2026-08-08T14:57:17.419072+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_declared_pr_commit_linkage_coverage_gap_a_property_of_the_structured_source_not_of_any_document_content); an unmeasured oracle is never a pass) |
+| O2_blocking_valid | b | `fail` @ `2026-08-08T14:57:17.417940+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418491+00:00` / `n/a` | `pass` @ `2026-08-08T14:57:17.419083+00:00` / `116.91s` |
+| O2_blocking_observed | b | `fail` @ `2026-08-08T14:57:17.418000+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418516+00:00` / `n/a` | `pass` @ `2026-08-08T14:59:14.332133+00:00` / `296.98s` |
+| O3_supersession | c | `fail` @ `2026-08-08T14:57:17.418033+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418537+00:00` / `n/a` | `pass` @ `2026-08-08T15:04:11.315731+00:00` / `232.28s` |
+| O3_supersession_extraction_down | c | `fail` @ `2026-08-08T14:57:17.418056+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418558+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:08:03.596928+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_outage_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O3_supersession_deterministic_only | c | `fail` @ `2026-08-08T14:57:17.418082+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418580+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:08:03.596949+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:requires_a_self_declared_coverage_gap_under_a_simulated_provider_policy_forbidden_scenario_detection_not_prose_content); an unmeasured oracle is never a pass) |
+| O4_prior_attempts | c | `fail` @ `2026-08-08T14:57:17.418106+00:00` / `n/a` | `pass` @ `2026-08-08T14:57:17.418602+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:08:03.596959+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:structured_episode_data_has_no_natural_prose_form); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_manipulated | c | `fail` @ `2026-08-08T14:57:17.418130+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418690+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:08:03.596968+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:needs_max_results_truncation_logic_this_adapter_does_not_implement_carried_forward_from_step_2_scope); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_redaction | c | `fail` @ `2026-08-08T14:57:17.418155+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418743+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:08:03.596977+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:redaction_is_a_downstream_deletion_operation_on_already_extracted_facts_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_after_revocation | c | `fail` @ `2026-08-08T14:57:17.418178+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418800+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:08:03.596984+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:repo_visibility_revocation_is_an_authorization_scoped_filter_applied_after_extraction_not_something_source_prose_states); an unmeasured oracle is never a pass) |
+| O4_prior_attempts_graph_outage | c | `fail` @ `2026-08-08T14:57:17.418199+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418855+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:08:03.596992+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:tests_a_graph_backend_outage_this_arm_has_no_graph_backend_dependency_to_go_down_the_scenario_does_not_apply_to_its_architecture); an unmeasured oracle is never a pass) |
+| O5_conflicts | c | `fail` @ `2026-08-08T14:57:17.418208+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418887+00:00` / `n/a` | `fail` @ `2026-08-08T15:08:03.597000+00:00` / `100.13s` |
+| O5_conflicts_injected | c | `fail` @ `2026-08-08T14:57:17.418231+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418908+00:00` / `n/a` | `fail` @ `2026-08-08T15:09:43.725772+00:00` / `211.65s` |
+| O5_conflicts_poisoned | c | `fail` @ `2026-08-08T14:57:17.418253+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418929+00:00` / `n/a` | `not_measured` @ `2026-08-08T15:13:15.375970+00:00` / `n/a` (arm reported NOT_RUN (measurement_not_run:not_authorable_for_extraction_arm:entity_linking_poisoning_is_a_distinct_security_dimension_needing_dedicated_adversarial_design_deferred_this_round); an unmeasured oracle is never a pass) |
+| O6_recurring_pattern | c | `fail` @ `2026-08-08T14:57:17.418275+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418950+00:00` / `n/a` | `fail` @ `2026-08-08T15:13:15.375998+00:00` / `178.49s` |
+| O7_valid | a | `pass` @ `2026-08-08T14:57:17.418302+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.418983+00:00` / `n/a` | `fail` @ `2026-08-08T15:16:13.865067+00:00` / `116.77s` |
+| O7_null_valid_from | a | `fail` @ `2026-08-08T14:57:17.418360+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.419003+00:00` / `n/a` | `fail` @ `2026-08-08T15:18:10.637567+00:00` / `79.74s` |
+| O7_unpinned | a | `fail` @ `2026-08-08T14:57:17.418384+00:00` / `n/a` | `fail` @ `2026-08-08T14:57:17.419023+00:00` / `n/a` | `fail` @ `2026-08-08T15:19:30.378891+00:00` / `154.79s` |
 
 
 ## Interpretation notes

@@ -43,6 +43,7 @@ from ..run_measured_sweep import (
     CallRecord,
     ModelTier,
     TierOutcome,
+    _latency_cell,
     _render_artifact,
     _render_per_oracle_table,
     _render_tier_section,
@@ -77,7 +78,7 @@ def _poison_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
 
 
-def test_declared_tiers_are_exactly_the_four_named() -> None:
+def test_declared_tiers_are_exactly_the_five_named() -> None:
     """The matrix is a decision input, so its membership is pinned, not
     incidental: nano = deployed parity, mini = ceiling, and two local
     tiers of different size = the cost regime plus a LOCAL SCALING
@@ -87,6 +88,7 @@ def test_declared_tiers_are_exactly_the_four_named() -> None:
     assert tuple(t.key for t in MODEL_TIERS) == (
         "gpt-5-nano",
         "gpt-5-mini",
+        "gpt-5.6-luna",
         "gemma-4-e4b-local",
         "gemma-4-31b-local",
     )
@@ -95,6 +97,7 @@ def test_declared_tiers_are_exactly_the_four_named() -> None:
     assert by_key["gpt-5-mini"].model == "gpt-5-mini"
     assert by_key["gemma-4-e4b-local"].model == "google/gemma-4-e4b"
     assert by_key["gemma-4-31b-local"].model == "google/gemma-4-31b"
+    assert by_key["gpt-5.6-luna"].model == "gpt-5.6-luna"
     assert by_key["gpt-5-nano"].primary, (
         "nano is the DEPLOYED configuration -- it is the tier the ADR's "
         "parity claims rest on, and the artifact must say so"
@@ -102,6 +105,7 @@ def test_declared_tiers_are_exactly_the_four_named() -> None:
     assert not by_key["gpt-5-mini"].primary
     assert not by_key["gemma-4-e4b-local"].primary
     assert not by_key["gemma-4-31b-local"].primary
+    assert not by_key["gpt-5.6-luna"].primary
     for local_key in ("gemma-4-e4b-local", "gemma-4-31b-local"):
         assert by_key[local_key].optional, (
             "the local tiers are informative for the cost regime, not "
@@ -433,3 +437,242 @@ def test_local_probe_reports_a_reason_when_the_provider_is_down(
     reason = probe_provider(LLMConfig.for_local(model="google/gemma-4-e4b"))
     assert reason is not None
     assert "localhost:1234" in reason
+
+
+# --------------------------------------------------------------------------
+# Run 3b: a SUBSET run (one tier, to add the frontier discriminator without
+# re-spending on tiers already measured). New dishonesty risk this creates:
+# an artifact holding 1 of 5 declared tiers looks exactly like a complete
+# matrix to anyone who does not already know how many tiers exist.
+# --------------------------------------------------------------------------
+
+
+def test_subset_artifact_names_every_tier_it_did_not_measure() -> None:
+    """The guard for the run-3b shape. If only some declared tiers ran, the
+    artifact must say so and name the missing ones -- otherwise a partial
+    matrix reads as the whole matrix, which is the "silent cap" failure
+    this trial's own no-silent-caps rule exists to prevent.
+    """
+    only = MODEL_TIERS[2]  # the frontier tier, run alone
+    artifact = _render_artifact(
+        outcomes=(_measured_outcome(only),),
+        run_started_at="2026-08-08T14:00:00+00:00",
+        run_finished_at="2026-08-08T14:10:00+00:00",
+    )
+    assert "PARTIAL" in artifact, (
+        "a subset run must announce itself as partial in the artifact"
+    )
+    for tier in MODEL_TIERS:
+        if tier.key == only.key:
+            continue
+        assert tier.key in artifact, (
+            f"tier {tier.key} was declared but not measured in this run, and "
+            "the artifact does not name it -- a reader cannot tell this is "
+            "1 of 5 rather than 1 of 1"
+        )
+
+
+def test_a_complete_run_carries_no_partial_banner() -> None:
+    """Control for the test above. If the banner rendered unconditionally,
+    that test would pass while proving nothing.
+    """
+    artifact = _render_artifact(
+        outcomes=_mixed_outcomes(),
+        run_started_at="2026-08-08T00:00:00+00:00",
+        run_finished_at="2026-08-08T00:30:00+00:00",
+    )
+    assert "PARTIAL" not in artifact
+
+
+def test_tier_selection_rejects_an_unknown_key() -> None:
+    """A typo in --tiers must fail loudly. Silently selecting nothing would
+    produce an empty artifact that still looks like a successful run.
+    """
+    from ..run_measured_sweep import select_tiers
+
+    with pytest.raises(SystemExit):
+        select_tiers(["gpt-5.6-lunar"])
+
+
+def test_tier_selection_returns_the_requested_tiers_in_declared_order() -> None:
+    from ..run_measured_sweep import select_tiers
+
+    picked = select_tiers(["gemma-4-31b-local", "gpt-5-nano"])
+    assert [t.key for t in picked] == ["gpt-5-nano", "gemma-4-31b-local"]
+
+
+def test_tier_selection_defaults_to_every_declared_tier() -> None:
+    from ..run_measured_sweep import select_tiers
+
+    assert select_tiers(None) == list(MODEL_TIERS)
+
+
+# --------------------------------------------------------------------------
+# Codex round (2026-08-08): four scoring-integrity holes in the run-3
+# harness. Each test below pins the fix for one CONFIRMED finding.
+# --------------------------------------------------------------------------
+
+
+def test_a_parse_failure_is_never_retried_even_if_it_says_could_not_reach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[M1] The retry predicate used to substring-match "could not reach"
+    against the NOT_RUN reason -- and a parse-failure reason embeds up to
+    500 characters of MODEL-CONTROLLED output. A model emitting that phrase
+    could buy itself a re-roll of a genuine quality failure, which is
+    retry-shopping with extra steps. The predicate must be the typed
+    `infra_failure` field and nothing else.
+    """
+    from ..run_measured_sweep import _with_bounded_infra_retry
+
+    hostile = "I could not reach a conclusion, so here is prose not JSON."
+    _install_fake_openai(
+        monkeypatch, responses_response=_FakeResponsesResult(output_text=hostile)
+    )
+    arm = extraction.make_answer(LLMConfig.for_cloud(model="gpt-5-mini", api_key="x"))
+
+    calls = {"n": 0}
+
+    def counting(oracle):
+        calls["n"] += 1
+        return arm(oracle)
+
+    setattr(counting, "declared_role", ArmRole.CANDIDATE_ARM)  # noqa: B010
+    wrapped = _with_bounded_infra_retry(counting)
+    response = wrapped(ORACLES_BY_ID["O3_supersession"])
+
+    assert response.outcome is ArmOutcome.NOT_RUN
+    assert "could not reach" in response.degraded_reasons[0], (
+        "precondition: the reason must actually contain the old marker, "
+        "or this test proves nothing"
+    )
+    assert not response.infra_failure
+    assert calls["n"] == 1, (
+        "a model-quality parse failure was retried because its text "
+        "contained the infra marker phrase"
+    )
+
+
+def test_a_genuine_timeout_is_still_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """[M1] Control: tightening the predicate must not disable the real
+    bounded re-attempt, which run 3 depended on.
+    """
+    from ..run_measured_sweep import _with_bounded_infra_retry
+
+    _install_fake_openai(monkeypatch, responses_error=_timeout_error())
+    arm = extraction.make_answer(LLMConfig.for_cloud(model="gpt-5-mini", api_key="x"))
+    calls = {"n": 0}
+
+    def counting(oracle):
+        calls["n"] += 1
+        return arm(oracle)
+
+    setattr(counting, "declared_role", ArmRole.CANDIDATE_ARM)  # noqa: B010
+    response = _with_bounded_infra_retry(counting)(ORACLES_BY_ID["O3_supersession"])
+    assert response.infra_failure
+    assert calls["n"] == 2, "a real timeout must still get its one re-attempt"
+
+
+def test_a_served_model_mismatch_is_not_run_not_a_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[H3] The tier table is a claim about WHICH MODEL produced each row.
+    Nothing verified it: the response was discarded and the row labelled
+    with the requested id, so a server answering with a different model
+    (routine for a local server with something else loaded) would have its
+    answers silently attributed to the requested one.
+    """
+
+    class _WrongModel(_FakeResponsesResult):
+        def __init__(self) -> None:
+            super().__init__(output_text="[]")
+            self.model = "some-entirely-different-model"
+
+    _install_fake_openai(monkeypatch, responses_response=_WrongModel())
+    arm = extraction.make_answer(LLMConfig.for_cloud(model="gpt-5-mini", api_key="x"))
+    oracle = ORACLES_BY_ID["O3_supersession"]
+    response = arm(oracle)
+
+    assert response.outcome is ArmOutcome.NOT_RUN
+    assert "served_model_identity_mismatch" in response.degraded_reasons[0]
+    assert not response.infra_failure, "a wrong model is not retryable"
+    assert oracle.evaluate(response).verdict is Verdict.NOT_MEASURED
+
+
+def test_a_matching_served_model_is_recorded_from_the_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[H3] Control, and the positive half: the recorded model must come
+    from the provider's own metadata, including a dated snapshot id that
+    legitimately extends the requested alias.
+    """
+
+    class _SnapshotModel(_FakeResponsesResult):
+        def __init__(self) -> None:
+            super().__init__(output_text="[]")
+            self.model = "gpt-5-mini-2025-08-07"
+
+    _install_fake_openai(monkeypatch, responses_response=_SnapshotModel())
+    arm = extraction.make_answer(LLMConfig.for_cloud(model="gpt-5-mini", api_key="x"))
+    response = arm(ORACLES_BY_ID["O3_supersession"])
+    assert response.outcome is ArmOutcome.ANSWERED
+    assert response.versions["extraction"] == "gpt-5-mini-2025-08-07"
+    assert response.versions["extraction_requested"] == "gpt-5-mini"
+
+
+def test_an_arm_that_never_called_a_provider_has_no_latency() -> None:
+    """[L1] The shipped run-3 artifact rendered `0.00s` for oracles the arm
+    returned on before any provider call, because the record was written in
+    a `finally` regardless. `0.00s` reads as "answered instantly" -- a
+    measurement claim nobody made. The previous guard passed a record-less
+    dict, so it never exercised the real path and could not have caught it.
+    """
+    from ..run_measured_sweep import _with_call_record
+
+    sink: dict = {}
+    arm = extraction.make_answer(LLMConfig.for_cloud(model="gpt-5-mini", api_key="x"))
+    recorded = _with_call_record("extraction_llm", arm, sink)
+    # O1_ci_prior_attempts is NOT AUTHORABLE -> returns before any call.
+    recorded(ORACLES_BY_ID["O1_ci_prior_attempts"])
+
+    record = sink[("O1_ci_prior_attempts", "extraction_llm")]
+    assert record.provider_attempts == 0
+    assert record.latency_seconds is None
+    assert _latency_cell(record) == "n/a"
+
+
+def test_a_timeout_and_its_recovery_are_persisted_for_the_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[H2] Run 3's one timeout survived only as a stderr line. The
+    committed artifact showed a plain FAIL at 1009.43s with no indication a
+    window was exceeded or a re-attempt made -- so the whole "the timeout
+    machinery worked" claim was unauditable from the artifact.
+    """
+    from ..run_measured_sweep import _with_bounded_infra_retry, _with_call_record
+
+    state = {"first": True}
+
+    def flaky(oracle):
+        if state["first"]:
+            state["first"] = False
+            _install_fake_openai(monkeypatch, responses_error=_timeout_error())
+        else:
+            _install_fake_openai(
+                monkeypatch, responses_response=_FakeResponsesResult(output_text="[]")
+            )
+        return extraction.make_answer(
+            LLMConfig.for_cloud(model="gpt-5-mini", api_key="x")
+        )(oracle)
+
+    setattr(flaky, "declared_role", ArmRole.CANDIDATE_ARM)  # noqa: B010
+    sink: dict = {}
+    recorded = _with_call_record(
+        "extraction_llm", _with_bounded_infra_retry(flaky), sink
+    )
+    recorded(ORACLES_BY_ID["O3_supersession"])
+
+    record = sink[("O3_supersession", "extraction_llm")]
+    assert record.timed_out, "the timeout must be persisted, not only logged"
+    assert record.recovered_after_retry
+    assert record.provider_attempts == 2

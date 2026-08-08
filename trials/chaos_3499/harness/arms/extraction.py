@@ -83,7 +83,7 @@ from ..contracts import (
     TimeAxis,
 )
 from ..llm import client as llm_client
-from ..llm.client import LLMConfig, LLMUnavailable
+from ..llm.client import LLMConfig, LLMUnavailable, ModelIdentityMismatch
 from ..oracle import Oracle
 from ..runner import ArmRole
 from .source_documents import NOT_AUTHORABLE_REASONS, SOURCE_DOCUMENTS, SourceDocument
@@ -498,8 +498,22 @@ def answer(oracle: Oracle, *, config: LLMConfig | None = None) -> ArmResponse:
         # Covers an unreachable provider AND a request that exceeded its
         # configured window (see client.py's APITimeoutError branches):
         # both land here as NOT_RUN, so a slow tier can never be recorded
-        # as a model-quality PASS or FAIL.
-        return ArmResponse.not_run(ARM_NAME, str(exc))
+        # as a model-quality PASS or FAIL. The infra flag is propagated as
+        # TYPED data -- the sweep's retry policy reads that field and never
+        # substring-matches this reason string.
+        return ArmResponse.not_run(
+            ARM_NAME, str(exc), infra=exc.infra, provider_attempts=1
+        )
+    except ModelIdentityMismatch as exc:
+        # The provider answered, but not as the model this tier claims to
+        # measure. NOT an infra failure (retrying gets the same wrong
+        # model) and never a score -- the label, not the answer, is what
+        # is broken.
+        return ArmResponse.not_run(
+            ARM_NAME,
+            f"served_model_identity_mismatch: {exc}",
+            provider_attempts=1,
+        )
 
     raw_json = llm_client.extract_json_array(completion.content)
     try:
@@ -509,10 +523,13 @@ def answer(oracle: Oracle, *, config: LLMConfig | None = None) -> ArmResponse:
             ARM_NAME,
             f"model_output_not_parseable_json: {exc} "
             f"(raw content: {completion.content[:500]!r})",
+            provider_attempts=1,
         )
     if not isinstance(rows, list):
         return ArmResponse.not_run(
-            ARM_NAME, f"model_output_not_a_json_array: {type(rows).__name__}"
+            ARM_NAME,
+            f"model_output_not_a_json_array: {type(rows).__name__}",
+            provider_attempts=1,
         )
 
     parsed: list[tuple[TemporalFact, dict]] = []
@@ -531,7 +548,14 @@ def answer(oracle: Oracle, *, config: LLMConfig | None = None) -> ArmResponse:
         query=oracle.query,
         facts=facts,
         indexed_through=gt.TRIAL_NOW,
-        versions={"extraction": completion.model},
+        provider_attempts=1,
+        # The SERVED model, verified against the request by the client --
+        # not the requested id. See client._verify_served_model: a row must
+        # be labelled with the model that actually produced it.
+        versions={
+            "extraction": completion.served_model or completion.model,
+            "extraction_requested": completion.model,
+        },
     )
 
 

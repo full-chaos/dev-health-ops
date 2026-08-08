@@ -348,6 +348,42 @@ SOURCE_DOCUMENTS: dict[str, tuple[SourceDocument, ...]] = {
 #: cross-referencing a second document. Every entry states WHY, because a
 #: bare exclusion list reads as an oversight and an explained one reads as
 #: a decision.
+#: Why an oracle cannot be given source prose, split by WHETHER MORE WORK
+#: WOULD CLOSE IT. Codex round finding M4: the flat registry let all 11
+#: not-authorable oracles be cited as evidence about the technique, when
+#: only some of them say anything about it.
+#:
+#: STRUCTURAL   -- no amount of authoring closes this. The scenario tests a
+#:                 property this arm architecturally cannot have (a graph
+#:                 backend to fail, a projector watermark), or a concern
+#:                 that lives downstream of extraction entirely
+#:                 (authorization, deletion). These ARE evidence: they say
+#:                 extraction alone does not answer the question.
+#: SOURCE_SHAPE -- the underlying data has no natural prose form, so
+#:                 authoring it would measure the trial author's writing
+#:                 rather than the model's extraction.
+#: DEFERRED     -- a future round could genuinely close this with work.
+#:                 These are NOT evidence about the technique; they are
+#:                 scope.
+STRUCTURAL = "structural"
+SOURCE_SHAPE = "source_shape"
+DEFERRED = "deferred"
+
+#: oracle_id -> category, for every entry in NOT_AUTHORABLE_REASONS.
+NOT_AUTHORABLE_CATEGORIES: dict[str, str] = {
+    "O1_ci_prior_attempts": SOURCE_SHAPE,
+    "O4_prior_attempts": SOURCE_SHAPE,
+    "O1_ci_prior_attempts_stale": STRUCTURAL,
+    "O1_ci_prior_attempts_squash": STRUCTURAL,
+    "O3_supersession_extraction_down": STRUCTURAL,
+    "O3_supersession_deterministic_only": STRUCTURAL,
+    "O4_prior_attempts_after_redaction": STRUCTURAL,
+    "O4_prior_attempts_after_revocation": STRUCTURAL,
+    "O4_prior_attempts_graph_outage": STRUCTURAL,
+    "O4_prior_attempts_manipulated": DEFERRED,
+    "O5_conflicts_poisoned": DEFERRED,
+}
+
 NOT_AUTHORABLE_REASONS: dict[str, str] = {
     # -- Q1/Q4: structured agent-episode data. "touched" relationships
     # between an episode and a repo are what episode_readback's own

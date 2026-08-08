@@ -42,6 +42,7 @@ from ..contracts import (
     TemporalFact,
 )
 from ..oracle import Oracle
+from ..runner import ArmRole
 
 ARM_NAME = "native"
 _PROJECTION_VERSION = "native.v1"
@@ -191,3 +192,9 @@ def answer(oracle: Oracle) -> ArmResponse:
         oracle.question_id, "native_arm_has_no_mapping_for_this_question"
     )
     return _degraded(oracle, reason)
+
+
+# The one role this arm may ever be registered under -- see
+# ArmRegistry.register's enforcement (harness/runner.py) and finding 10's
+# ruling on harness/arms/extraction.py.
+answer.declared_role = ArmRole.BASELINE_COMPONENT  # type: ignore[attr-defined]

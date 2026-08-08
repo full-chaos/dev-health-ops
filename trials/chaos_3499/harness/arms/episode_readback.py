@@ -40,6 +40,7 @@ from __future__ import annotations
 from ...corpus import ground_truth as gt
 from ..contracts import ArmOutcome, ArmResponse, TemporalFact
 from ..oracle import Oracle
+from ..runner import ArmRole
 
 ARM_NAME = "episode_readback"
 _PROJECTION_VERSION = "episode_readback.v1"
@@ -155,3 +156,9 @@ def answer(oracle: Oracle) -> ArmResponse:
         # silent-emptiness failure mode).
         return _degraded(oracle, "no_signature_to_episode_association")
     return _degraded(oracle)
+
+
+# The one role this arm may ever be registered under -- see
+# ArmRegistry.register's enforcement (harness/runner.py) and finding 10's
+# ruling on harness/arms/extraction.py.
+answer.declared_role = ArmRole.BASELINE_COMPONENT  # type: ignore[attr-defined]

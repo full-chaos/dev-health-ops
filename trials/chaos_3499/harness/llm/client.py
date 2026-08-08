@@ -26,22 +26,37 @@ Env vars:
     ``http://host.docker.internal:1234/v1``, or you will get a
     connection-refused that looks exactly like LM Studio being down when it
     is only the address that is wrong.
+
+    Under ``LLM_PROVIDER=local`` the base URL's host is checked against an
+    allowlist (``localhost``, ``127.0.0.1``, ``host.docker.internal``) --
+    without this, pointing ``LOCAL_LLM_BASE_URL`` at a real paid endpoint
+    would bill through a code path this trial's cost authorization never
+    covered (``LLM_PROVIDER=local`` is meant to name "no spend", not "no
+    provider name check"). A host outside the allowlist raises
+    :class:`LLMUnavailable` naming the reason.
 ``LOCAL_LLM_MODEL``
     Defaults to ``"google/gemma-4-e4b"``.
 """
 
 from __future__ import annotations
 
+import json
 import os
-import re
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 DEFAULT_LOCAL_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_LOCAL_MODEL = "google/gemma-4-e4b"
 
+#: Hosts LLM_PROVIDER=local is permitted to reach. Anything else is a real
+#: (possibly billable) endpoint, which "local" must never silently become a
+#: pass-through name for.
+_LOCAL_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "host.docker.internal"})
+
 
 class LLMUnavailable(Exception):
-    """The configured provider could not be reached, or is not implemented.
+    """The configured provider could not be reached, is misconfigured, or is
+    not implemented.
 
     Callers must never catch this to fall back to a mock -- an unreachable
     provider is a real, reportable smoke finding ("LM Studio isn't up"), not
@@ -63,9 +78,21 @@ class LLMConfig:
     def from_env(cls) -> LLMConfig:
         provider = os.environ.get("LLM_PROVIDER", "local").strip().lower()
         if provider == "local":
+            base_url = os.environ.get("LOCAL_LLM_BASE_URL", DEFAULT_LOCAL_BASE_URL)
+            host = urlparse(base_url).hostname
+            if host not in _LOCAL_ALLOWED_HOSTS:
+                raise LLMUnavailable(
+                    f"LLM_PROVIDER=local but LOCAL_LLM_BASE_URL={base_url!r} "
+                    f"resolves to host {host!r}, which is not in the local "
+                    f"allowlist {sorted(_LOCAL_ALLOWED_HOSTS)}. A real "
+                    "endpoint behind LLM_PROVIDER=local would bill through a "
+                    "path step 2's cost authorization never covered -- if "
+                    "this is intentional, that is exactly what "
+                    "LLM_PROVIDER=cloud is for (not wired yet)."
+                )
             return cls(
                 provider="local",
-                base_url=os.environ.get("LOCAL_LLM_BASE_URL", DEFAULT_LOCAL_BASE_URL),
+                base_url=base_url,
                 model=os.environ.get("LOCAL_LLM_MODEL", DEFAULT_LOCAL_MODEL),
                 # LM Studio does not check the key; the OpenAI SDK requires a
                 # non-empty string regardless.
@@ -95,10 +122,12 @@ def complete(
     config: LLMConfig | None = None,
 ) -> LLMResponse:
     """One chat completion, raising :class:`LLMUnavailable` on any failure
-    to reach the provider.
+    to reach the provider, or on a response with nothing to read.
 
     Deliberately no retry loop: per step-2 direction, a smoke that cannot
     reach its provider is a reportable finding, not something to poll past.
+    ``max_retries=0`` on the client makes that explicit rather than relying
+    on the SDK default.
     """
     cfg = config or LLMConfig.from_env()
     try:
@@ -106,7 +135,9 @@ def complete(
     except ImportError as exc:  # pragma: no cover - openai is a pinned dep
         raise LLMUnavailable(f"openai package not importable: {exc}") from exc
 
-    client = OpenAI(base_url=cfg.base_url, api_key=cfg.api_key, timeout=60.0)
+    client = OpenAI(
+        base_url=cfg.base_url, api_key=cfg.api_key, timeout=60.0, max_retries=0
+    )
     try:
         response = client.chat.completions.create(
             model=cfg.model,
@@ -125,20 +156,40 @@ def complete(
             "host.docker.internal, and swapping the two looks exactly like "
             "the provider being down."
         ) from exc
+    if not response.choices:
+        raise LLMUnavailable(
+            f"{cfg.provider} provider at {cfg.base_url} (model={cfg.model}) "
+            "returned no choices -- nothing to read as a completion"
+        )
     content = response.choices[0].message.content or ""
     return LLMResponse(content=content, model=cfg.model)
 
 
-_JSON_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
-
-
 def extract_json_array(text: str) -> str:
-    """Best-effort strip of prose/markdown fences around a JSON array.
+    """Find the first substring starting at a ``[`` that parses as valid
+    JSON, ignoring everything else (prose, markdown fences, a stray ``[``
+    inside unrelated text that is not itself valid JSON).
 
     Small local models often wrap structured output in explanation or
-    ```json fences despite being told not to. This does not attempt to fix
-    malformed JSON -- a response that still fails to parse after this is a
-    real extraction-quality finding, not something to paper over here.
+    ```json fences despite being told not to; a response can also contain a
+    bracket character inside prose that has nothing to do with the intended
+    array (e.g. "the answer is [1, 2] but also see [not json] for context").
+    A greedy regex over the outermost brackets would grab past the real
+    array into unrelated trailing content; scanning candidates with
+    ``json.JSONDecoder.raw_decode`` and taking the first one that actually
+    parses does not have that failure mode. This does not attempt to fix
+    malformed JSON otherwise -- a response with no parseable array at all is
+    a real extraction-quality finding, not something to paper over here.
     """
-    match = _JSON_ARRAY_RE.search(text)
-    return match.group(0) if match else text
+    decoder = json.JSONDecoder()
+    start = 0
+    while True:
+        idx = text.find("[", start)
+        if idx == -1:
+            return text
+        try:
+            _, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            start = idx + 1
+            continue
+        return text[idx:end]

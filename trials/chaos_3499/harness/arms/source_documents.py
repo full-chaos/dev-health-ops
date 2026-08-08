@@ -53,11 +53,13 @@ ADR_021_TEXT = """\
 [document_id: ev1_adr_021]
 Architecture Decision Record ADR-021 -- Migrate Payments to the Async Worker Pool
 
-This decision supersedes ADR-014. Load testing showed p99 latency
-violations under peak traffic when payments were processed synchronously
-inside the API request handler, exactly as ADR-014 specified. Going
-forward, payment processing runs asynchronously through the worker pool
-instead.
+Decided: 2026-07-09
+
+This decision supersedes ADR-014, effective on the date above. Load testing
+showed p99 latency violations under peak traffic when payments were
+processed synchronously inside the API request handler, exactly as ADR-014
+specified. Going forward, payment processing runs asynchronously through
+the worker pool instead.
 """
 
 INCIDENT_503_TEXT = """\

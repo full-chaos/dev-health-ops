@@ -21,12 +21,19 @@ that needs the model forces ``LLM_PROVIDER=local`` for its own scope
 (regardless of ambient environment -- this repo's shells have been observed
 with ``LLM_PROVIDER=openai`` set for unrelated purposes) and SKIPS loudly,
 with the connection failure as the skip reason, if the model cannot be
-reached. Nothing here mocks the LLM to fake a result: an unreachable
-provider is a reportable finding, and an unrun smoke reads as NOT RUN, the
-same discipline every other arm in this harness already holds.
+reached. Nothing here mocks the LLM to fake a PASSING smoke result: an
+unreachable provider is a reportable finding, and an unrun smoke reads as
+NOT RUN, the same discipline every other arm in this harness already holds.
+One test below (``test_fabricated_evidence_ref_survives_verbatim_and_fails_
+the_oracle``) does feed a fake, deliberately-invalid client response through
+the real adapter -- but only to prove the adapter does NOT sanitize or
+repair bad model output, which is the opposite of faking a pass, and needs
+no live model at all.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -34,22 +41,47 @@ from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..harness.arms import extraction, native
 from ..harness.arms.source_documents import SMOKE_SOURCE_DOCUMENTS
 from ..harness.contracts import ArmOutcome, QuestionClass
-from ..harness.llm.client import LLMUnavailable, complete
+from ..harness.llm import client as llm_client
+from ..harness.llm.client import (
+    DEFAULT_LOCAL_BASE_URL,
+    DEFAULT_LOCAL_MODEL,
+    LLMConfig,
+    LLMResponse,
+    LLMUnavailable,
+    complete,
+)
 from ..harness.oracle import Verdict
 from ..harness.runner import ArmRegistry, ArmRole, compare
 
 
-def _configure_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force LLM_PROVIDER=local for this test, regardless of ambient env."""
+def _configure_local(monkeypatch: pytest.MonkeyPatch) -> LLMConfig:
+    """Force the FULL local-provider config for this test, regardless of
+    ambient env.
+
+    Not just LLM_PROVIDER: this repo's shells have been observed with
+    LOCAL_LLM_BASE_URL/LOCAL_LLM_MODEL set to something other than the
+    documented defaults too (for unrelated local work), and a smoke test
+    that only pinned LLM_PROVIDER would silently talk to whatever those
+    ambient values happened to be -- both wrong (an untested address) and
+    unreportable (the printed smoke observation would not match what the
+    test actually exercised). Pinning all three makes the config the smoke
+    result is attributed to exactly what this test declares, not whatever
+    the environment happened to contain.
+    """
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", DEFAULT_LOCAL_BASE_URL)
+    monkeypatch.setenv("LOCAL_LLM_MODEL", DEFAULT_LOCAL_MODEL)
+    monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+    return LLMConfig.from_env()
 
 
-def _require_local_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    _configure_local(monkeypatch)
+def _require_local_model(monkeypatch: pytest.MonkeyPatch) -> LLMConfig:
+    cfg = _configure_local(monkeypatch)
     try:
-        complete("Reply with exactly: OK", "Say OK and nothing else.")
+        complete("Reply with exactly: OK", "Say OK and nothing else.", config=cfg)
     except LLMUnavailable as exc:
         pytest.skip(f"local model not reachable -- skipping smoke: {exc}")
+    return cfg
 
 
 # --------------------------------------------------------------------------
@@ -113,7 +145,7 @@ def test_oracle_with_no_source_material_is_not_run_not_silently_skipped() -> Non
 def test_extraction_arm_round_trips_through_real_oracles(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _require_local_model(monkeypatch)
+    cfg = _require_local_model(monkeypatch)
 
     observations: dict[str, str] = {}
     model_name = None
@@ -136,8 +168,8 @@ def test_extraction_arm_round_trips_through_real_oracles(
     with capsys.disabled():
         print(
             "\n[SMOKE -- UNSCORED, NOT a measured trial result] "
-            f"local model ({model_name or 'unknown'}) extraction quality: "
-            f"{passed}/{total} oracles passed"
+            f"provider=local base_url={cfg.base_url} model={model_name or cfg.model} "
+            f"extraction quality: {passed}/{total} oracles passed"
         )
         for oracle_id, verdict in sorted(observations.items()):
             print(f"  {oracle_id}: {verdict}")
@@ -149,46 +181,83 @@ def test_extraction_arm_round_trips_through_real_oracles(
     ), f"unexpected verdict shape in smoke observations: {observations}"
 
 
-def test_extraction_never_invents_or_substitutes_evidence_refs(
+def test_fabricated_evidence_ref_survives_verbatim_and_fails_the_oracle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Requirement 2: the arm must pass through whatever evidence_ref the
-    model cites, unmodified -- never validated against a known-good set,
-    never patched. Confirmed directly against the real facts.source_documents
-    document ids: every non-empty evidence_ref on a returned fact must be
-    one of the document ids the model was actually shown (an invented ref
-    would still be allowed through; this only proves nothing is being
-    substituted).
+    """Requirement 2, pinned POSITIVELY rather than vacuously, and for every
+    smoke oracle with no early return (the previous version of this test
+    only checked ref *shape* and returned after the first oracle that
+    happened to cite a real document id -- neither is a genuine pin of
+    pass-through).
+
+    Needs no live model: a FAKE client response containing an INVENTED
+    evidence_ref is fed through the REAL adapter directly. The invented ref
+    must survive verbatim into the fact the oracle evaluates -- proving the
+    adapter neither validates nor substitutes it -- and the resulting
+    response must FAIL. The fake fact deliberately supplies only ONE
+    required identity with none of its other qualifiers (no closure, no
+    flags): for O3_supersession this fails on the fabricated ref directly
+    (`require_evidence_refs` demands the real one); for O5_conflicts_injected,
+    which has no `require_evidence_refs` of its own, it fails on the missing
+    required flags instead -- the ref-survival assertion is unconditional
+    either way and does not depend on which qualifier catches the response.
     """
-    _require_local_model(monkeypatch)
-    for oracle_id, documents in SMOKE_SOURCE_DOCUMENTS.items():
+    fabricated_ref = "ev_fabricated_never_planted_by_any_corpus_fixture"
+
+    for oracle_id in sorted(SMOKE_SOURCE_DOCUMENTS):
         oracle = ORACLES_BY_ID[oracle_id]
+        required = oracle.must_include[0]
+        fake_row = {
+            "subject_kind": required.subject.kind,
+            "subject_id": required.subject.id,
+            "predicate": required.predicate,
+            "object_kind": required.object.kind,
+            "object_id": required.object.id,
+            "claim_kind": "observed",
+            "evidence_ref": fabricated_ref,
+            "flags": {"conflicting": False, "untrusted_content": False},
+        }
+        fake_content = json.dumps([fake_row])
+
+        def _fake_complete(
+            system_prompt: str,
+            user_prompt: str,
+            *,
+            config: LLMConfig | None = None,
+            _content: str = fake_content,
+        ) -> LLMResponse:
+            return LLMResponse(content=_content, model="fake-smoke-model")
+
+        monkeypatch.setattr(llm_client, "complete", _fake_complete)
+
         response = extraction.answer(oracle)
-        if response.outcome is ArmOutcome.NOT_RUN:
-            continue
-        shown_ids = {doc.document_id for doc in documents}
-        for fact in response.facts:
-            for ref in fact.evidence_refs:
-                # Not asserting membership -- an invented ref is a REAL
-                # possible (and valid) model failure this test must not
-                # hide. Only asserting the ref survived verbatim, i.e. it
-                # is a plain string the adapter did not rewrite.
-                assert isinstance(ref, str) and ref, (
-                    f"{oracle_id}: evidence_ref was mangled into a "
-                    f"non-string or empty value: {ref!r}"
-                )
-        # The specific, meaningful case: at least one oracle's model run
-        # should demonstrate the ref round-tripped from a real shown
-        # document (proves the pass-through path is live, not just typed
-        # correctly).
-        if any(
-            ref in shown_ids for fact in response.facts for ref in fact.evidence_refs
-        ):
-            return
-    pytest.skip(
-        "no extraction response cited any of its shown document ids -- "
-        "cannot demonstrate the pass-through path fired this run"
-    )
+        assert response.outcome is ArmOutcome.ANSWERED, (
+            f"{oracle_id}: fake response should have been accepted as "
+            f"parseable, got {response.outcome}"
+        )
+        matching = [
+            f
+            for f in response.facts
+            if f.subject_ref == required.subject
+            and f.predicate == required.predicate
+            and f.object_ref == required.object
+        ]
+        assert matching, (
+            f"{oracle_id}: the fabricated fact did not survive to the "
+            "response at all -- cannot demonstrate ref pass-through"
+        )
+        assert matching[0].evidence_refs == (fabricated_ref,), (
+            f"{oracle_id}: evidence_ref was not passed through verbatim -- "
+            f"got {matching[0].evidence_refs!r}, expected exactly "
+            f"({fabricated_ref!r},). The adapter must never validate or "
+            "substitute this value."
+        )
+
+        result = oracle.evaluate(response)
+        assert result.verdict is Verdict.FAIL, (
+            f"{oracle_id}: a response built from one incompletely-qualified "
+            "fake fact must not pass the real oracle"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -235,3 +304,35 @@ def test_extraction_candidate_registers_as_candidate_never_baseline() -> None:
     registry = _registry_with_extraction_candidate()
     assert registry.roles["extraction_llm"] is ArmRole.CANDIDATE_ARM
     assert "extraction_llm" not in registry.names_with_role(ArmRole.BASELINE_COMPONENT)
+
+
+# --------------------------------------------------------------------------
+# Finding 10: an arm's role is fixed by its own module (`answer.declared_
+# role`), not chosen by the call site. ArmRegistry.register must reject a
+# mismatch in BOTH directions.
+# --------------------------------------------------------------------------
+
+
+def test_registry_rejects_extraction_arm_registered_as_baseline() -> None:
+    registry = ArmRegistry()
+    with pytest.raises(ValueError, match="declares role 'candidate_arm'"):
+        registry.register(
+            "extraction_wrong_role", extraction.answer, ArmRole.BASELINE_COMPONENT
+        )
+
+
+def test_registry_rejects_baseline_arm_registered_as_candidate() -> None:
+    registry = ArmRegistry()
+    with pytest.raises(ValueError, match="declares role 'baseline_component'"):
+        registry.register("native_wrong_role", native.answer, ArmRole.CANDIDATE_ARM)
+
+
+def test_registry_accepts_arms_registered_under_their_declared_role() -> None:
+    """Control for the two tests above: the enforcement must not reject the
+    correct pairing.
+    """
+    registry = ArmRegistry()
+    registry.register("native", native.answer, ArmRole.BASELINE_COMPONENT)
+    registry.register("extraction_llm", extraction.answer, ArmRole.CANDIDATE_ARM)
+    assert registry.roles["native"] is ArmRole.BASELINE_COMPONENT
+    assert registry.roles["extraction_llm"] is ArmRole.CANDIDATE_ARM

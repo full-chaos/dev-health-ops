@@ -226,6 +226,18 @@ class ArmRegistry:
     def register(self, name: str, arm: ArmCallable, role: ArmRole) -> None:
         if name in self.arms:
             raise ValueError(f"arm {name!r} already registered")
+        declared = getattr(arm, "declared_role", None)
+        if declared is not None and declared is not role:
+            raise ValueError(
+                f"arm {name!r} declares role {declared.value!r} but was "
+                f"registered as {role.value!r} -- an arm's role is fixed by "
+                "its own module (see e.g. harness/arms/extraction.py's "
+                "`answer.declared_role`), not chosen by the call site. "
+                "Registering an extraction/candidate arm as a baseline "
+                "component (or vice versa) would let it either be credited "
+                "as capability the baseline already has, or be scored "
+                "against itself -- both wrong."
+            )
         self.arms[name] = arm
         self.roles[name] = role
 

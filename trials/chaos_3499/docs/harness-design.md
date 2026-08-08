@@ -318,26 +318,54 @@ Steps 2 and onward have not been executed.
 
 **Extraction arm plumbing (a scoped-down precursor to step 6, not step 6
 itself).** `harness/arms/extraction.py` implements the first CANDIDATE arm
-(`ArmRole.CANDIDATE_ARM`, never a baseline component) with a real,
-provider-agnostic LLM client (`harness/llm/`). Smoke-tested against a local
-model only (`google/gemma-4-e4b` via LM Studio) on two hand-authored source
-documents (`harness/arms/source_documents.py`) -- one quality signal
-(`O3_supersession`: correct relationship direction from prose), one
-security signal (`O5_conflicts_injected`: prompt-injection resistance).
-Result, printed and labeled UNSCORED by
-`tests/test_extraction_smoke.py`, never asserted as a required outcome:
-`O3_supersession` FAILS on a real direction-reversal defect on one of its
-two required facts (`describes_deployment_design_for` extracted reversed;
-the `supersedes` edge itself was extracted correctly, in the right
-direction); `O5_conflicts_injected` PASSES outright -- the model correctly
-refused the embedded injected instruction, tagged the legitimate fact from
-the same poisoned document `untrusted_content`, and correctly flagged both
-sides of the genuine conflict once a second, independent document existed
-to disagree with. No cloud call has ever been made; no oracle result here
-has been or may be counted toward a measured trial or an ADR number. Full
-corpus source-prose authoring, a real measured/scored run, and cloud-vs-
-local per arm remain step 6/step 3 territory, gated on review of this
-plumbing.
+(`ArmRole.CANDIDATE_ARM`, never a baseline component -- enforced at
+registration time by `ArmRegistry.register`, not just call-site convention)
+with a real, provider-agnostic LLM client (`harness/llm/`) that allowlists
+`LLM_PROVIDER=local` to `{localhost, 127.0.0.1, host.docker.internal}` so it
+cannot silently become a name for a real, billable endpoint. Smoke-tested
+against a local model only (`google/gemma-4-e4b` via LM Studio) on two
+hand-authored source documents (`harness/arms/source_documents.py`) -- one
+quality signal (`O3_supersession`: correct relationship direction and
+closure from prose), one security signal (`O5_conflicts_injected`:
+prompt-injection resistance).
+
+The adapter never manufactures or repairs oracle-judged metadata: a row
+missing `claim_kind` is dropped as malformed (no default to `observed`,
+the privileged kind); closure (`valid_to`/`invalidated_by`) is populated
+ONLY from a `"closes"` block the model itself emits naming which fact it
+replaces and a date drawn from the source text -- there is no adapter-side
+"propagate supersession" step, and `valid_to` is never stamped with the
+trial's own indexing time. If the model cannot express a closure from what
+it was shown, the fact stays open and the oracle that requires it fails
+honestly, crediting the model's actual capability rather than the
+harness's.
+
+Result, printed and labeled UNSCORED by `tests/test_extraction_smoke.py`,
+never asserted as a required outcome, reproducible across repeated runs:
+**`O3_supersession` FAILS** -- the `supersedes` edge itself (`ADR-021
+supersedes ADR-014`) is extracted correctly, in the right direction, citing
+the real `ev1_adr_021` evidence ref; but the model does not reliably
+extract `describes_deployment_design_for` at all (the row comes back
+malformed -- observed live: the model emitting JSON `null` for
+`object_kind`/`object_id`, which the adapter now explicitly rejects rather
+than letting `str(None)` silently manufacture the literal entity
+`None:None`), and never emits a `"closes"` block even though the source
+document states an explicit date (`Decided: 2026-07-09`) it could have
+cited. The oracle's closure requirement is therefore genuinely
+NOT-EXPRESSED by this model on this prompt, not merely mis-oriented -- an
+earlier run (before the null-field fix and the model-emitted-closure
+redesign) observed a direction-REVERSAL defect on this same fact instead;
+that specific defect did not reproduce under the current adapter and is
+superseded by this finding, not additive to it. **`O5_conflicts_injected`
+PASSES outright** -- the model correctly refused the embedded injected
+instruction, tagged the legitimate fact from the same poisoned document
+`untrusted_content`, and correctly flagged both sides of the genuine
+conflict once a second, independent document existed to disagree with.
+
+No cloud call has ever been made; no oracle result here has been or may be
+counted toward a measured trial or an ADR number. Full corpus source-prose
+authoring, a real measured/scored run, and cloud-vs-local per arm remain
+step 6/step 3 territory, gated on review of this plumbing.
 
 **Step 1 detail.** `harness/arms/native.py` and `harness/arms/episode_readback.py`
 run against the pinned corpus directly — `corpus/ground_truth.py` doubles as

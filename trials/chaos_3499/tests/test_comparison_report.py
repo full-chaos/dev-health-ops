@@ -19,6 +19,7 @@ from ..harness.runner import (
     ArmRegistry,
     ArmRole,
     ComparisonReport,
+    ControlStatus,
     DependencyState,
     compare,
     compose_baseline,
@@ -216,6 +217,9 @@ def test_class_a_control_failure_is_shouted_not_buried() -> None:
     )
     assert not report.native_control_holds()
     assert "class (a) control did NOT hold" in report.render()
+    # Authoring-round addition: the DISTINCT-status method must agree with
+    # the rendered banner, not just the collapsed bool.
+    assert report.native_control_status() is ControlStatus.LOST
 
 
 def test_class_a_control_holds_when_baseline_ties() -> None:
@@ -233,6 +237,38 @@ def test_class_a_control_holds_when_baseline_ties() -> None:
         },
     )
     assert report.native_control_holds()
+    assert report.native_control_status() is ControlStatus.HELD
+    rendered = report.render()
+    assert "did NOT hold" not in rendered
+    assert "NOT MEASURED" not in rendered
+
+
+def test_class_a_control_not_measured_renders_distinctly_from_lost() -> None:
+    """Authoring-round fix, pinned directly: a candidate that has not been
+    measured against class (a) at all must render as NOT MEASURED, never
+    with the "did NOT hold" banner a genuine loss gets -- the two are
+    different findings (a scope gap versus a harness-suspect regression)
+    and a reader must be able to tell them apart from the report text
+    alone, not have to cross-reference native_control_holds()'s bool.
+    """
+    registry = _registry(
+        native=(_perfect_arm, ArmRole.BASELINE_COMPONENT),
+        graphiti=(_dead_arm("graphiti"), ArmRole.CANDIDATE_ARM),
+    )
+    (report,) = compare(
+        ALL_ORACLES,
+        registry,
+        dependencies={
+            QuestionClass.NEEDS_DECLARED_STATE_HISTORY: DependencyState(
+                issue="CHAOS-3563", state="recorded for this test"
+            )
+        },
+    )
+    assert not report.native_control_holds()
+    assert report.native_control_status() is ControlStatus.NOT_MEASURED
+    rendered = report.render()
+    assert "class (a) control NOT MEASURED" in rendered
+    assert "did NOT hold" not in rendered
 
 
 def test_report_never_emits_a_single_headline_number() -> None:
@@ -274,3 +310,45 @@ def test_both_baseline_components_are_registerable_as_baseline() -> None:
     assert len(reports) == 2, "one comparison per candidate arm"
     assert {r.arm.arm for r in reports} == {"graphiti", "direct_store"}
     assert all(r.baseline.arm == "baseline" for r in reports)
+
+
+def test_class_score_denominator_excludes_unmeasured_oracles() -> None:
+    """[codex M1] `0/15` where 11 were never run reads as a measured
+    15-case score. The denominator must be what was actually measured, with
+    the unmeasured count reported beside it rather than folded in.
+    """
+    from ..harness.contracts import QuestionClass
+    from ..harness.runner import ClassScore
+
+    score = ClassScore(
+        question_class=QuestionClass.NEEDS_EXTRACTION_OR_ASSOCIATION,
+        passed=0,
+        failed=4,
+        not_measured=11,
+    )
+    assert score.measured == 4
+    rendered = score.render()
+    assert "0/4 measured" in rendered
+    assert "0/15" not in rendered, "the unmeasured rows are back in the denominator"
+    assert "11 NOT MEASURED" in rendered
+
+
+def test_not_comparable_rows_render_no_numeric_delta() -> None:
+    """[codex M1] A signed delta on a row the report is simultaneously
+    declaring NOT COMPARABLE invites the exact comparison being disclaimed;
+    readers quote the number and drop the caveat.
+    """
+    from ..harness.contracts import QuestionClass
+    from ..harness.runner import ClassComparison, ClassScore
+
+    klass = QuestionClass.NEEDS_EXTRACTION_OR_ASSOCIATION
+    comparison = ClassComparison(
+        question_class=klass,
+        baseline=ClassScore(klass, passed=1, failed=3, not_measured=11),
+        arm=ClassScore(klass, passed=0, failed=4, not_measured=11),
+        dependency=None,
+    )
+    assert not comparison.is_comparable
+    rendered = comparison.render()
+    assert "delta" not in rendered
+    assert "NOT COMPARABLE" in rendered

@@ -285,8 +285,12 @@ def test_comparison_report_renders_per_class_against_the_composed_baseline() -> 
     for klass in ALL_QUESTION_CLASSES:
         assert not by_class[klass].is_comparable
         assert "NOT COMPARABLE" in by_class[klass].render()
+    # Authoring-round fix: a fully-unmeasured candidate is NOT MEASURED,
+    # never rendered as a "did NOT hold" loss -- see runner.py's
+    # ControlStatus.
     assert not report.native_control_holds()
-    assert "class (a) control did NOT hold" in rendered
+    assert "class (a) control NOT MEASURED" in rendered
+    assert "did NOT hold" not in rendered
 
 
 def test_class_b_stays_not_comparable_until_chaos_3563_state_is_supplied() -> None:

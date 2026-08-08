@@ -87,6 +87,22 @@ class OracleResult:
 # --------------------------------------------------------------------------
 
 
+#: Wildcard object for a ``FactExpectation``. Deliberately an explicit
+#: sentinel rather than ``None``: ``object`` is compared positionally and a
+#: default of None would let an author who simply FORGOT the field create a
+#: silent wildcard. It also has to be a sentinel rather than "omit the
+#: field", because a must_exclude that matches nothing is invisible -- the
+#: first attempt at a generic exclusion in O5_conflicts_injected passed
+#: ``object=None``, matched nothing, and read as a guard while catching
+#: neither the shape it named nor any other.
+#:
+#: Use ONLY where the PREDICATE itself is the thing being forbidden for a
+#: subject, regardless of what it points at -- e.g. an injected instruction
+#: trying to manufacture an approval, where enumerating fake object ids is
+#: a game the oracle cannot win.
+ANY_OBJECT = EntityRef("<any>", "<any>")
+
+
 @dataclass(frozen=True)
 class FactExpectation:
     """One relationship a correct answer must (or must not) contain.
@@ -118,11 +134,14 @@ class FactExpectation:
         return (
             fact.subject_ref == self.subject
             and fact.predicate == self.predicate
-            and fact.object_ref == self.object
+            and (self.object is ANY_OBJECT or fact.object_ref == self.object)
         )
 
     def describe(self) -> str:
-        return self.label or f"{self.subject} -{self.predicate}-> {self.object}"
+        if self.label:
+            return self.label
+        obj = "<ANY>" if self.object is ANY_OBJECT else self.object
+        return f"{self.subject} -{self.predicate}-> {obj}"
 
     def qualify(self, fact: TemporalFact) -> list[str]:
         """Return the reasons *this* fact fails the expectation's qualifiers."""

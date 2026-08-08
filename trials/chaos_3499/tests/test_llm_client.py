@@ -8,6 +8,8 @@ on a reachable provider; nothing here should be.
 
 from __future__ import annotations
 
+import dataclasses
+
 import httpx
 import openai
 import pytest
@@ -98,14 +100,24 @@ def test_extract_json_array_returns_original_text_when_nothing_parses() -> None:
 
 
 class _FakeChoicesResponse:
-    def __init__(self, choices: list) -> None:
+    """Real OpenAI-compatible providers always echo the served model, so
+    the double does too. A double that omitted it would be modelling a
+    provider that does not exist, and would exercise the fail-closed
+    identity path in every test rather than the behaviour under test.
+    """
+
+    def __init__(self, choices: list, model: str = "fake") -> None:
         self.choices = choices
+        self.model = model
 
 
 class _FakeResponsesResult:
-    def __init__(self, output_text: str) -> None:
+    """See _FakeChoicesResponse on why this echoes a model id."""
+
+    def __init__(self, output_text: str, model: str = "gpt-5-mini") -> None:
         self.output_text = output_text
         self.output: list = []
+        self.model = model
 
 
 class _RaisingOrReturning:
@@ -161,9 +173,12 @@ class _FakeOpenAIClient:
 def _install_fake_openai(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    chat_response: _FakeChoicesResponse | None = None,
+    chat_response: object | None = None,
     chat_error: Exception | None = None,
-    responses_response: _FakeResponsesResult | None = None,
+    # `object`, not _FakeResponsesResult: one test deliberately installs a
+    # response WITHOUT model metadata to exercise the fail-closed identity
+    # path, and it must not be forced to inherit the compliant double.
+    responses_response: object | None = None,
     responses_error: Exception | None = None,
 ) -> None:
     def _factory(**init_kwargs):
@@ -306,7 +321,8 @@ def test_o3_mini_chat_completions_call_omits_temperature(
     fake_message = type("Msg", (), {"content": "[]"})()
     fake_choice = type("Choice", (), {"message": fake_message})()
     _install_fake_openai(
-        monkeypatch, chat_response=_FakeChoicesResponse(choices=[fake_choice])
+        monkeypatch,
+        chat_response=_FakeChoicesResponse(choices=[fake_choice], model="o3-mini"),
     )
     cfg = LLMConfig(
         provider="cloud",
@@ -356,3 +372,124 @@ def test_gpt5_responses_api_call_never_sends_temperature(
     kwargs = _FakeOpenAIClient.last_instance.responses.create_kwargs
     assert kwargs is not None
     assert "temperature" not in kwargs
+
+
+# --------------------------------------------------------------------------
+# Run-3 amendment (chris, 2026-08-08): the local tier answers far more
+# slowly than the cloud tiers, and a slow answer read as a failure would
+# manufacture a false negative for the cheapest arm in the matrix. Three
+# things have to hold, and none of them held before this round:
+#
+#   1. the timeout is CONFIGURED PER MODEL, not one hardcoded number;
+#   2. a timeout is classified as INFRA (the sweep's retryable NOT_RUN
+#      marker) and says so in words a reader of the artifact can act on;
+#   3. a call's latency is measurable at all.
+# --------------------------------------------------------------------------
+
+
+def _timeout_error(message: str = "timed out") -> openai.APITimeoutError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return openai.APITimeoutError(request=request)
+
+
+def test_local_config_gets_a_longer_timeout_than_cloud() -> None:
+    """The whole point of the per-model timeout: a locally-hosted model on
+    a developer laptop needs a materially longer window than a cloud API
+    call, and giving both the same window is what turns local slowness into
+    a fabricated failure.
+    """
+    local = LLMConfig.for_local(model="google/gemma-4-e4b")
+    cloud = LLMConfig.for_cloud(model="gpt-5-nano", api_key="x")
+    assert local.timeout > cloud.timeout
+
+
+def test_complete_passes_the_configured_timeout_to_the_sdk_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard: the timeout was hardcoded to 120.0 at the client
+    construction site, so a config carrying a longer window had no effect
+    whatsoever on the actual call.
+    """
+    fake_message = type("Msg", (), {"content": "[]"})()
+    fake_choice = type("Choice", (), {"message": fake_message})()
+    _install_fake_openai(
+        monkeypatch, chat_response=_FakeChoicesResponse(choices=[fake_choice])
+    )
+    cfg = LLMConfig(
+        provider="local",
+        base_url="http://localhost:1234/v1",
+        model="fake",
+        api_key="x",
+        timeout=987.0,
+    )
+    complete("system", "user", config=cfg)
+    assert _FakeOpenAIClient.last_instance is not None
+    assert _FakeOpenAIClient.last_instance.init_kwargs["timeout"] == 987.0
+
+
+@pytest.mark.parametrize("branch", ["chat", "responses"])
+def test_timeout_is_classified_as_infra_and_names_the_window(
+    monkeypatch: pytest.MonkeyPatch, branch: str
+) -> None:
+    """A timeout must (a) carry the sweep's infra marker so it becomes a
+    retryable NOT_RUN rather than a scored result, and (b) name the window
+    it exceeded, so a reader of the artifact can tell "the model is slower
+    than the window we gave it" from "the machine was unreachable" -- the
+    exact false-positive risk the local tier introduces.
+    """
+    if branch == "chat":
+        _install_fake_openai(monkeypatch, chat_error=_timeout_error())
+        cfg = LLMConfig(
+            provider="local",
+            base_url="http://localhost:1234/v1",
+            model="fake",
+            api_key="x",
+            timeout=42.0,
+        )
+    else:
+        _install_fake_openai(monkeypatch, responses_error=_timeout_error())
+        cfg = dataclasses.replace(_CLOUD_CFG, timeout=42.0)
+    with pytest.raises(LLMUnavailable) as exc_info:
+        complete("system", "user", config=cfg)
+    message = str(exc_info.value)
+    assert "could not reach" in message, (
+        "a timeout is an infra failure -- it must match the sweep's "
+        "_INFRA_FAILURE_MARKER so it becomes NOT_RUN, never a scored miss"
+    )
+    assert "timed out" in message
+    assert "42.0" in message, (
+        "the configured window must appear in the reason, or a reader "
+        "cannot tell a too-short window from a dead provider"
+    )
+
+
+def test_complete_reports_call_latency(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_message = type("Msg", (), {"content": "[]"})()
+    fake_choice = type("Choice", (), {"message": fake_message})()
+    _install_fake_openai(
+        monkeypatch, chat_response=_FakeChoicesResponse(choices=[fake_choice])
+    )
+    cfg = LLMConfig(
+        provider="local", base_url="http://localhost:1234/v1", model="fake", api_key="x"
+    )
+    response = complete("system", "user", config=cfg)
+    assert response.latency_seconds >= 0.0
+
+
+def test_for_cloud_requires_a_real_key() -> None:
+    """The explicit constructor must keep the same fail-closed behaviour
+    ``from_env`` has: an empty key is a real LLMUnavailable, never a
+    silent attempt against the billable API.
+    """
+    with pytest.raises(LLMUnavailable, match="key"):
+        LLMConfig.for_cloud(model="gpt-5-nano", api_key="")
+
+
+def test_for_local_rejects_a_non_allowlisted_host() -> None:
+    """The explicit constructor must not become a way around the local
+    host allowlist that ``from_env`` enforces.
+    """
+    with pytest.raises(LLMUnavailable, match="not in the local allowlist"):
+        LLMConfig.for_local(
+            model="google/gemma-4-e4b", base_url="https://api.openai.com/v1"
+        )

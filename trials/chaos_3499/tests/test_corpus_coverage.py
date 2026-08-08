@@ -190,3 +190,26 @@ def test_no_oracle_is_assertion_free() -> None:
         assert oracle.must_include or oracle.must_exclude or oracle.coverage, (
             f"{oracle.oracle_id} asserts nothing"
         )
+
+
+def test_every_not_authorable_oracle_has_a_category() -> None:
+    """[codex M4] The flat registry let all 11 not-authorable oracles be
+    cited as evidence about the technique. Only the STRUCTURAL ones are:
+    DEFERRED entries are scope, and conflating the two inflates what the
+    trial claims to have established. A category is therefore mandatory,
+    and its absence must fail rather than default.
+    """
+    from ..harness.arms.source_documents import (
+        NOT_AUTHORABLE_CATEGORIES,
+        NOT_AUTHORABLE_REASONS,
+    )
+
+    assert set(NOT_AUTHORABLE_CATEGORIES) == set(NOT_AUTHORABLE_REASONS), (
+        "every not-authorable oracle needs a category: missing "
+        f"{sorted(set(NOT_AUTHORABLE_REASONS) - set(NOT_AUTHORABLE_CATEGORIES))}"
+    )
+    assert set(NOT_AUTHORABLE_CATEGORIES.values()) <= {
+        "structural",
+        "source_shape",
+        "deferred",
+    }

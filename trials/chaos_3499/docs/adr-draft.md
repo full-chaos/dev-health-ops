@@ -461,9 +461,9 @@ judgement.
    extraction-as-a-technique stand on their own, separately from which
    storage backend eventually hosts it?
 7. **NEW — what follows from class (c) being framework-bound?** No tier
-   exceeds 1/4 and the frontier buys nothing (§3.4). The live options are
-   accept, attack the contract, or cache (§8.3) — a product decision, not a
-   measurement one.
+   exceeds 2 of 4, and the frontier buys at most one oracle over the mid
+   tier — not stably (§3.4). The live options are accept, attack the
+   contract, or cache (§8.3) — a product decision, not a measurement one.
 9. **NEW — is the observed/inferred contract vocabulary right?** Models
    consistently mark root-cause attribution `observed` where the corpus
    requires `inferred` (§3.4). If the corpus is the one that is wrong, a
@@ -992,6 +992,14 @@ the records, in
 - **Every fraction** in the document must be derivable from the records, or
   be listed in a small `_HISTORICAL_FRACTIONS` table with a stated reason.
   An undeclared historical number is indistinguishable from a stale one.
+- **Superlatives** ("no tier exceeds N of M") are checked against the
+  measured maximum. This one is in the list because the first version of
+  this closure MISSED it: it is not a tier count, `1/4` was a derivable
+  fraction, and no tier name sat beside it, so all three guards passed a
+  false claim about the maximum. It was found by probing the document
+  independently afterwards — which is why the closure below is stated as a
+  class, and why the probe is worth repeating rather than trusting that the
+  guards are complete.
 - **Tier↔score pairings** are checked, because the set-based fraction check
   is not sufficient on its own: §8.3 paired the frontier tier with the mid
   tier's score after the frontier had moved, and that score is a legitimate

@@ -443,3 +443,53 @@ def test_no_tier_is_paired_with_a_score_that_is_not_its_own(
     assert not wrong, (
         "tier/score pairing(s) contradicting the records:\n  " + "\n  ".join(wrong)
     )
+
+
+def test_superlative_claims_about_the_best_tier_match_the_records(
+    records: dict, adr: str
+) -> None:
+    """The hole the first closure attempt left, found by probing rather than
+    by the guards: "No tier exceeds 1/4" survived every check.
+
+    It is not a tier count, so the count guard ignored it; `1/4` IS a
+    derivable fraction (it is the mid tier's), so the set guard blessed it;
+    and no tier NAME sits beside it, so the pairing guard never looked. Yet
+    it is a load-bearing claim about the maximum, and it was false.
+
+    Superlatives therefore get their own check, derived from the records.
+    """
+    authored_c = sorted(
+        {
+            row["oracle_id"]
+            for t in records["tiers"]
+            for row in t["rows"]
+            if row["question_class"] == "c"
+            and row["arm"] == "extraction_llm"
+            and row["verdict"] != "not_measured"
+        }
+    )
+    best = max(
+        sum(
+            1
+            for row in tier["rows"]
+            if row["arm"] == "extraction_llm"
+            and row["oracle_id"] in authored_c
+            and row["verdict"] == "pass"
+        )
+        for tier in records["tiers"]
+    )
+    denominator = len(authored_c)
+    text = _normalised(adr)
+    wrong = []
+    for match in re.finditer(r"no tier exceeds\s*(\d+)\s*(?:/|of)\s*(\d+)", text):
+        claimed, out_of = int(match.group(1)), int(match.group(2))
+        if out_of != denominator or claimed != best:
+            wrong.append(
+                f"claims 'no tier exceeds {claimed}/{out_of}' but the records "
+                f"say the best tier scores {best}/{denominator}"
+            )
+    assert not wrong, "\n  ".join(wrong)
+    # and the true statement must actually be present somewhere
+    assert re.search(rf"no tier exceeds\s*{best}\s*(?:/|of)\s*{denominator}", text), (
+        f"the ADR should state the measured maximum ({best} of {denominator})"
+    )

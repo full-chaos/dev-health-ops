@@ -34,13 +34,19 @@ from dev_health_ops.api.dev.contracts import (
     DevScopeResolution,
     DevToolRequest,
     DevToolResult,
+    FreshnessState,
     QuestionClass,
     ToolID,
 )
 from dev_health_ops.api.dev.contracts_v2 import DevInvestigationResult, DevSubjectSet
+from dev_health_ops.api.dev.evidence_service import (
+    EvidenceRecord,
+    EvidenceReferenceSigner,
+)
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, OrchestratorResult
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
+from dev_health_ops.api.dev.scope_catalog import merge_search_candidates
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -49,6 +55,7 @@ from dev_health_ops.api.dev.scope_service import (
     ScopeResolutionService,
 )
 from dev_health_ops.api.dev.subject_preflight import SubjectPreflight
+from dev_health_ops.api.dev.terminal_frames import is_orchestrator_error_frame
 from dev_health_ops.api.dev.tool_registry import AskDevToolRegistry
 from dev_health_ops.llm.agent.contracts import (
     AgentDecisionResult,
@@ -69,6 +76,45 @@ PERMISSION_FINGERPRINT = "permissions_01"
 RUN_ID = "run_01"
 CONVERSATION_ID = "conversation_01"
 ANSWER_ID = "answer_01"
+
+#: CHAOS-3576: a fixed, valid (>=32 byte) test secret for the REAL
+#: ``EvidenceReferenceSigner`` -- the exact class ``production_runtime.py``
+#: wires into ``PlanExecutor``/``EvidenceService`` -- rather than a
+#: hand-typed handle string. Mirrors
+#: ``tests._chaos_3295_plan_executor.TEST_EVIDENCE_SIGNER`` (duplicated, not
+#: imported: that module imports ``Recorder`` from this one, so importing
+#: back would be circular).
+_TEST_EVIDENCE_SIGNER = EvidenceReferenceSigner(
+    b"chaos-3576-preflight-harness-test-secret"
+)
+
+
+def _real_evidence_ref_id(*, org_id: str = ORG_ID) -> str:
+    """Mint a real, ``_TEST_EVIDENCE_SIGNER``-verifiable evidence handle.
+
+    The exact ``EvidenceRecord``/``issue`` call
+    ``EvidenceService._to_ref`` makes for every real evidence handle in
+    production, mirroring the fixture's own ``_evidence()`` shape
+    (``contract_fixtures.py``) so the minted handle stands in for that
+    fixture's ``evidence_ref_id`` without hand-authoring a grammar-valid
+    string that no signer ever actually produced (CHAOS-3576: never
+    hand-author what a producer can generate).
+    """
+
+    record = EvidenceRecord(
+        source_system="work_graph",
+        source_version="work_graph.v1",
+        entity_type="work_item",
+        entity_id="item_01",
+        display_label="Implement contract baseline",
+        observed_at=fixed_now(),
+        freshness=FreshnessState.FRESH,
+        provenance="Canonical work graph projection",
+        confidence=1.0,
+        repository_ids=("repo_dev_health",),
+    )
+    return _TEST_EVIDENCE_SIGNER.issue(org_id, record)
+
 
 #: Seeded subjects, by owning organization. Every catalog method filters on
 #: ``org_id`` exactly as every ``scope_catalog`` query does in SQL, so
@@ -131,6 +177,7 @@ class SeededCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         self.search_calls.append((org_id, query))
         if self.fail_search:
@@ -152,28 +199,42 @@ class SeededCatalog:
             # scan over the *same* seeded org-scoped entities, so a test can
             # exercise acronym/parenthetical-alias matching through this fake
             # without a live ClickHouse.
-            matched_ids = {(entity.kind, entity.canonical_id) for entity in matched}
+            #
+            # CHAOS-3422 codex review, medium: this pass ran *independently*
+            # of the substring pass in production and did not here -- it used
+            # to skip any entity the substring pass had already matched. An
+            # entity that matches both ways ("ACR Platform" for the query
+            # "acr") is therefore an alias hit in production and was a
+            # substring hit in the fake, so the fake ranked it one tier lower
+            # than the live path would. Deduplication belongs to
+            # ``merge_search_candidates``, which resolves the overlap in
+            # alias's favour; the two passes must stay independent here for
+            # it to see the overlap at all.
+            seen_alias: set[tuple[EntityKind, str]] = set()
             for owner, entity in self.entities:
                 if (
                     owner == org_id
                     and entity.kind in kinds
                     and entity.kind in {EntityKind.PROJECT, EntityKind.TEAM}
-                    and (entity.kind, entity.canonical_id) not in matched_ids
+                    and (entity.kind, entity.canonical_id) not in seen_alias
                 ):
                     forms = alias_forms(entity.label)
                     if needle in forms.literal_aliases or needle in forms.acronyms:
                         alias_matches.append(entity)
-                        matched_ids.add((entity.kind, entity.canonical_id))
+                        seen_alias.add((entity.kind, entity.canonical_id))
         # ORDER BY lowerUTF8(label), canonical_id ... LIMIT n — the ordering and
         # the truncation both happen in SQL, so an exact label sorted past the
-        # page boundary never reaches the caller at all. Alias/acronym hits
-        # are ordered AHEAD of plain substring hits, before the truncation --
-        # mirrors ClickHouseAuthorizedEntityCatalog.search's own priority
-        # fix (CHAOS-3388): incidental substring noise must never crowd the
-        # real acronym match for a named project out of the returned page.
-        alias_matches.sort(key=_label_sort_key)
-        matched.sort(key=_label_sort_key)
-        return (alias_matches + matched)[:limit]
+        # page boundary never reaches the caller at all. The rank-then-truncate
+        # step is the production function itself, imported rather than
+        # re-implemented: a hand-mirrored copy is exactly how a fake drifts
+        # from its producer and starts passing tests the live path fails.
+        return merge_search_candidates(
+            query=query,
+            alias_hits=alias_matches,
+            substring_hits=matched,
+            preferred_kinds=preferred_kinds,
+            limit=limit,
+        )
 
     async def organization_repository_ids(
         self, org_id: str, *, limit: int
@@ -275,6 +336,51 @@ def organization_resolution(scope: DevScope) -> DevScopeResolution:
     )
 
 
+def _make_payload_v2_frame_valid(payload: dict[str, Any]) -> str:
+    """Mutate ``payload`` in place so it survives
+    ``terminal_frames.wrap_legacy_answer_as_frame`` and returns the minted
+    evidence handle (CHAOS-3576).
+
+    The stock ``dev_answer.v1`` fixture's evidence (``_evidence()``,
+    ``contract_fixtures.py``) carries ``evidence_ref_id: "ev_01"`` and its
+    metric (``_metric()``) carries ``evidence_ref_ids: ["ev_01"]`` -- both
+    valid v1 ``OpaqueID`` shapes, but far short of v2's
+    ``EvidenceHandle`` grammar (``ev1_`` + 40 hex,
+    ``min_length=44``, ``contracts_v2.base.EvidenceHandle``). A completed
+    run's answer is re-validated as its v2 mirror inside
+    ``wrap_legacy_answer_as_frame`` (``DevEvidenceRefV2``/
+    ``DevMetricRefV2``), so construction raised for *every* run through
+    this fixture, and ``orchestrator.finish()``'s broad except silently
+    substituted the ``internal_error`` fallback frame in its place --
+    vacuous coverage for every test asserting on a recorded frame's content
+    (CHAOS-3576).
+
+    Two different fixes for two different fields, because they mean
+    different things:
+
+    * ``evidence[0].evidence_ref_id`` -- a real disclosure channel, so it
+      gets a REAL handle, minted the way ``EvidenceService._to_ref`` mints
+      one in production (see :func:`_real_evidence_ref_id`), never a
+      hand-typed grammar-valid literal.
+    * every ``metrics[*].evidence_ref_ids`` -- cleared to ``()``, matching
+      what ``production_runtime.py``'s ``query_metric.v1`` tool always
+      does to a real metric before a model ever sees it (``item.model_copy
+      (update={"evidence_ref_ids": []})``). ``_wrap_legacy_metric``
+      (``terminal_frames.py``) sets ``evidence_classification`` on every
+      v1-sourced metric UNCONDITIONALLY on that same premise -- a metric
+      carrying both a real handle and that classification is precisely
+      what ``DevMetricRefV2``'s F10 XOR validator exists to reject, so a
+      *minted* handle here would still fail, just on a different clause.
+    """
+
+    handle = _real_evidence_ref_id()
+    for evidence in payload.get("evidence", []):
+        evidence["evidence_ref_id"] = handle
+    for metric in payload.get("metrics", []):
+        metric["evidence_ref_ids"] = []
+    return handle
+
+
 def answer_payload(*, script_id: str) -> dict[str, Any]:
     """The stock answer with claims dropped.
 
@@ -288,6 +394,7 @@ def answer_payload(*, script_id: str) -> dict[str, Any]:
 
     payload = deepcopy(positive_fixtures()["dev_answer.v1"])
     payload["claims"] = []
+    _make_payload_v2_frame_valid(payload)
     payload["model"] = {
         "provider_source": "platform",
         "provider_family": "scripted",
@@ -313,6 +420,14 @@ def grounded_answer_payload(
     payload["direct_summary"] = summary
     payload["claims"][0]["text"] = summary
     payload["claims"][0]["validity_scope"] = deepcopy(validity_scope)
+    # CHAOS-3576: the claim's own evidence_ref_ids must keep pointing at a
+    # real id the answer's `evidence` list actually carries -- `DevAnswer
+    # .validate_answer_invariants` (contracts.py) rejects a claim that cites
+    # an id outside `{item.evidence_ref_id for item in self.evidence}`, so
+    # this has to be the SAME minted handle `_make_payload_v2_frame_valid`
+    # writes onto `payload["evidence"][0]`, not a second, independent one.
+    handle = _make_payload_v2_frame_valid(payload)
+    payload["claims"][0]["evidence_ref_ids"] = [handle]
     payload["model"] = {
         "provider_source": "platform",
         "provider_family": "scripted",
@@ -378,6 +493,10 @@ class Recorder:
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
         self.resolutions: list[Any] = []
+        #: CHAOS-3533: the ``authorizing_mention_id`` passed alongside each
+        #: recorded frame -- ``None`` for every terminal that made no
+        #: clarification offer, which is itself the assertable claim.
+        self.record_frame_authorizing_mention_ids: list[str | None] = []
         #: CHAOS-3389: every QUA shadow record this recorder was asked to
         #: persist. Empty whenever the shadow seam is unwired/disabled --
         #: exactly the RED test's own assertion surface.
@@ -419,8 +538,18 @@ class Recorder:
         self.resolutions.append(entry)
         self.call_order.append("append_resolution")
 
-    async def record_frame(self, frame: Any) -> None:
+    async def record_frame(
+        self, frame: Any, *, authorizing_mention_id: str | None = None
+    ) -> None:
         self.frames.append(frame)
+        #: CHAOS-3533: captured, not discarded -- this is the mention whose
+        #: ambiguity terminated the run, and a test that wants to prove the
+        #: orchestrator names the RIGHT one (rather than merely names one)
+        #: needs it here. Note the orchestrator wraps this call in a broad
+        #: `except Exception` intended for database faults, so a fake that
+        #: rejected this keyword would have its TypeError swallowed and would
+        #: report a missing frame instead of a signature mismatch.
+        self.record_frame_authorizing_mention_ids.append(authorizing_mention_id)
         self.call_order.append("record_frame")
 
     async def rollback(self) -> None:
@@ -462,6 +591,18 @@ def stock_executor(
                 "tool_id": request.tool_id.value,
             }
         )
+        # CHAOS-3576: `DevOrchestrator._canonical_answer_data` overwrites a
+        # completed answer's OWN `metrics`/`evidence` with these exact tool-
+        # result values (deduplicated by id) before `wrap_legacy_answer_as_
+        # frame` ever runs -- so this stock success fixture, not
+        # `answer_payload()`'s, is what actually reaches frame construction
+        # for any ordinary grounded run through this executor. `_real_
+        # evidence_ref_id` is deterministic (a fixed HMAC over a fixed
+        # payload), so every call mints the SAME handle -- multiple tool
+        # calls in one run still canonicalize to identical, deduplicable
+        # evidence/metric entries, exactly as this fixture's plain "ev_01"
+        # did before.
+        _make_payload_v2_frame_valid(payload)
         return DevToolResult.model_validate(payload)
 
     return execute
@@ -541,6 +682,58 @@ class RunOutput:
             for _outcome, guard in self.recorder.preflight_diagnostics
             if guard is not None
         )
+
+
+def assert_answered_frame_is_not_construction_fallback(
+    output: Any, *, run_id: str = RUN_ID
+) -> Any:
+    """CHAOS-3576: fail LOUDLY if a completed answer's recorded frame
+    silently degraded to the orchestrator's internal_error construction
+    fallback, instead of returning ``None``/passing quietly.
+
+    ``orchestrator.finish()`` deliberately swallows a
+    ``wrap_legacy_answer_as_frame`` exception and substitutes
+    ``terminal_frames.build_error_frame(code="internal_error", ...)`` so a
+    frame-layer bug in production can never crash or discard an otherwise-
+    successful run (see ``terminal_frames.py``'s module docstring and
+    ``orchestrator.py``'s ``frame_construction_exc`` handler) -- that
+    behavior is correct and this helper does not change it.
+
+    What it closes is the gap one layer up: a test asserting directly on
+    ``output.recorder.frames[-1]`` had no way to tell "this is the real
+    content frame" from "this is the generic stub the swallow produced" --
+    every assertion past that point measured the always-identical stub
+    instead of the run's actual output (vacuous coverage). Call this before
+    reading frame content on any run expected to answer.
+
+    Accepts a duck-typed ``output`` (only ``.result.answer`` and
+    ``.recorder.frames`` are read) so a caller can exercise this against a
+    hand-built double without depending on the full ``RunOutput``/
+    ``OrchestratorResult`` shape (see
+    ``test_chaos_3576_frame_construction_fixture.py``'s own anti-vacuity
+    control for this helper).
+    """
+
+    assert output.result.answer is not None, (
+        "no answer was produced -- nothing to have framed"
+    )
+    recorder = output.recorder
+    assert recorder is not None and recorder.frames, (
+        f"run {run_id!r} produced an answer but recorded no frame at all"
+    )
+    frame = recorder.frames[-1]
+    assert not is_orchestrator_error_frame(
+        frame_id=frame.frame_id, run_id=run_id, code="internal_error"
+    ), (
+        f"frame construction silently fell back to the internal_error frame "
+        f"for run {run_id!r} -- wrap_legacy_answer_as_frame raised inside "
+        f"orchestrator.finish() and its broad except (orchestrator.py, the "
+        f"frame_construction_exc handler) swallowed it instead of failing "
+        f"this test. Check the fixture answer's metrics/evidence shape "
+        f"against DevMetricRefV2/DevEvidenceRefV2 (contracts_v2/embedded.py) "
+        f"-- see _make_payload_v2_frame_valid's docstring above."
+    )
+    return frame
 
 
 async def run_preflight_orchestrator(

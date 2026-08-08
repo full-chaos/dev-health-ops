@@ -10,9 +10,12 @@
   ],
   "question": "How trustworthy is the data behind the status of the repo \"probe/source-stale\"?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-3",
   "subject_class": "exact",
   "subject_ref": null,
+  "expected_mention_texts": [
+    "probe/source-stale"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -36,5 +39,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Grounded against sources.json's dedicated 'stale' matrix row (repo_full_name probe/source-stale, org primary): commits/pull_requests/reviews/work_items/deployments all read DataHealthState.STALE (last_synced mutated to pinned_now - 96h, past the 48h STALE_FALLBACK_GRACE). Not a subjects.json entry -- subject_ref deliberately null, repo referenced directly by name in the question (same pattern as metric-compare.two-metrics.stale-source and case-scope.refused-with-grounding.json). >=1 source stale is exactly what must surface: a trustworthy-data answer over this repo must disclose the staleness rather than silently reporting the same confidence trust.source-health.current gets for an unmutated repo -- the direct answered_with_gaps counterpart to that positive control. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"How trustworthy is the data behind probe/source-stale's status?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "Grounded against sources.json's dedicated 'stale' matrix row (repo_full_name probe/source-stale, org primary): commits/pull_requests/reviews/work_items/deployments all read DataHealthState.STALE (last_synced mutated to pinned_now - 96h, past the 48h STALE_FALLBACK_GRACE). Not a subjects.json entry -- subject_ref deliberately null, repo referenced directly by name in the question (same pattern as metric-compare.two-metrics.stale-source and case-scope.refused-with-grounding.json). >=1 source stale is exactly what must surface: a trustworthy-data answer over this repo must disclose the staleness rather than silently reporting the same confidence trust.source-health.current gets for an unmutated repo -- the direct answered_with_gaps counterpart to that positive control. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"How trustworthy is the data behind probe/source-stale's status?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 79 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

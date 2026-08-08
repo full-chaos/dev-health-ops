@@ -21,7 +21,7 @@ def _run(migration, connection: sa.Connection, operation: str) -> None:
 
 def test_0088_creates_bounded_tenant_generation_snapshot_with_cascade() -> None:
     migration = importlib.import_module(
-        "dev_health_ops.alembic.versions.0088_add_sync_unit_effect_snapshots"
+        "dev_health_ops.alembic.versions.0092_add_sync_unit_effect_snapshots"
     )
     engine = sa.create_engine("sqlite:///:memory:")
     unit_id = "11111111-1111-4111-8111-111111111111"
@@ -124,7 +124,7 @@ _CHECK_VIOLATIONS = {
 
 @pytest.mark.parametrize("case", sorted(_CHECK_VIOLATIONS))
 def test_0088_check_constraints_reject_out_of_contract_rows(case: str) -> None:
-    """Each CHECK on 0088 must reject something.
+    """Each CHECK on 0092 must reject something.
 
     The original test inserted only well-formed rows, so deleting the
     schema_version or payload_bytes CHECK from the migration left it green --
@@ -133,7 +133,7 @@ def test_0088_check_constraints_reject_out_of_contract_rows(case: str) -> None:
     """
     schema_version, payload_bytes, payload = _CHECK_VIOLATIONS[case]
     migration = importlib.import_module(
-        "dev_health_ops.alembic.versions.0088_add_sync_unit_effect_snapshots"
+        "dev_health_ops.alembic.versions.0092_add_sync_unit_effect_snapshots"
     )
     engine = sa.create_engine("sqlite:///:memory:")
     unit_id = "11111111-1111-4111-8111-111111111111"
@@ -175,7 +175,7 @@ def test_0088_check_constraints_reject_out_of_contract_rows(case: str) -> None:
 
 
 def test_integration_fixture_ddl_matches_migration_0088() -> None:
-    """The Go integration fixture and migration 0088 must describe one schema.
+    """The Go integration fixture and migration 0092 must describe one schema.
 
     The fixture hand-rolls the table because the Go suite cannot run alembic.
     It previously dropped all three CHECK constraints and widened
@@ -190,7 +190,7 @@ def test_integration_fixture_ddl_matches_migration_0088() -> None:
         / "dev_health_ops"
         / "alembic"
         / "versions"
-        / "0088_add_sync_unit_effect_snapshots.py"
+        / "0092_add_sync_unit_effect_snapshots.py"
     ).read_text(encoding="utf-8")
     fixture_source = (
         _REPO_ROOT
@@ -208,7 +208,7 @@ def test_integration_fixture_ddl_matches_migration_0088() -> None:
     ):
         assert constraint in migration_source, constraint
         assert constraint in fixture_ddl, (
-            f"{constraint} is in migration 0088 but missing from the Go "
+            f"{constraint} is in migration 0092 but missing from the Go "
             f"integration fixture -- the fixture is more permissive than "
             f"production"
         )
@@ -251,7 +251,7 @@ def test_0088_check_constraints_reject_on_real_postgres(case: str) -> None:
 
     schema_version, payload_bytes, payload = _CHECK_VIOLATIONS[case]
     migration = importlib.import_module(
-        "dev_health_ops.alembic.versions.0088_add_sync_unit_effect_snapshots"
+        "dev_health_ops.alembic.versions.0092_add_sync_unit_effect_snapshots"
     )
     # Coerce to the sync driver: the env var carries whatever the caller
     # configured (often an async driver), and create_engine here needs a

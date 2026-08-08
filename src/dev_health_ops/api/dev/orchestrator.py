@@ -15,12 +15,13 @@ import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 import annotated_types
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from dev_health_ops.llm.agent.contracts import (
     AgentDecisionResult,
@@ -43,6 +44,7 @@ from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
+    ASK_DEV_QUA_COMMIT_TOTAL,
     ASK_DEV_QUA_SHADOW_FAULT_TOTAL,
     ASK_DEV_QUA_SHADOW_LATENCY_SECONDS,
     ASK_DEV_QUA_SHADOW_TOTAL,
@@ -62,6 +64,7 @@ from .answer_validator import (
     validate_answer_candidate,
 )
 from .contracts import (
+    V1_SCOPE_LIST_LIMIT,
     AnswerStatus,
     DevAnswer,
     DevClaim,
@@ -94,7 +97,9 @@ from .contracts_v2 import (
     DevSubjectSet,
     QuestionIntentID,
 )
+from .contracts_v2 import EntityKind as ContractEntityKind
 from .contracts_v2.base import SourceRequirementState
+from .contracts_v2.compat import scope_resolution_from_frame
 from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
@@ -103,6 +108,8 @@ from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .no_match_terminal import (
     attested_strings,
+    disclose_scope_widening,
+    disclose_subject_match,
     internal_token_leak_field,
     named_subject_not_found_answer,
     scrub_auxiliary_leaks,
@@ -117,7 +124,15 @@ from .preflight_outcomes import (
     project_preflight_error,
 )
 from .prompts import PromptComposer, PromptConversationTurn
+from .qua_promotion import (
+    QUA_COMMIT_DIAGNOSTIC,
+    QUAPromotion,
+    promotable_selection,
+    qua_committed_entry,
+    verify_still_authorized,
+)
 from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
+from .scope_service import MAX_CANDIDATES, ScopeResolutionService
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
@@ -127,7 +142,9 @@ from .status_answer_render import (
     status_snapshot_result,
 )
 from .subject_preflight import (
+    ALL_TOOLS,
     SUBJECT_BEARING_TOOLS,
+    CommittedSubjects,
     PreflightDecision,
     SubjectPreflight,
     SubjectPreflightResult,
@@ -238,6 +255,58 @@ def _named_entity_phrases(text: str) -> frozenset[str]:
     phrases.update(_ENTITY_NOUN_LEADING.findall(text))
     return frozenset(match.casefold() for match in phrases)
 
+
+#: CHAOS-3541: the closed set of ``AgentRefusal.code`` values a provider (the
+#: scripted acceptance provider today; a real model told the same vocabulary
+#: via its own instructions, tomorrow) uses to flag a request as genuinely
+#: PROHIBITED -- arbitrary execution or a write -- rather than merely
+#: unresolved or unsupported. ``AgentRefusal.code`` is otherwise a free-form,
+#: model-authored string with no wire-level enum (verified directly against
+#: openai_compatible.py's own JSON schema: ``"code": {"type": ["string",
+#: "null"]}``, no ``enum``) -- an UNRECOGNIZED code is deliberately NOT an
+#: error here, it just falls through to the existing generic refusal
+#: handling below, unchanged. Matching is intentionally exact-string, never
+#: substring/keyword -- a fuzzy match on free-form model text is exactly the
+#: kind of heuristic that misclassifies a legitimate refusal or, worse, an
+#: ordinary answer that happens to mention "write" or "execute".
+_PROHIBITED_ACTION_REFUSAL_CODES = frozenset(
+    {"prohibited_execution", "prohibited_write"}
+)
+
+#: The closed set of ``AgentRefusal.code`` values for a request whose SHAPE
+#: Ask Dev has no capability for at all (an arbitrary external fetch, an
+#: open-ended generation request) -- distinct from PROHIBITED above (a
+#: capability gap, not a categorical denial) and mapped to the existing
+#: ``PublicOutcome.UNSUPPORTED`` bucket, not a new one.
+_UNSUPPORTED_SHAPE_REFUSAL_CODES = frozenset(
+    {"unsupported_external_fetch", "unsupported_request"}
+)
+
+#: CHAOS-3541 (team-lead ruling 2026-08-07): the SAME sentence used for both
+#: the live v1 ``error().safe_message`` and the v2 canonical no-answer copy
+#: (``no_answer_policy.CANONICAL_NO_ANSWER_COPY["refused"]``) -- deliberately
+#: not a variant of each other. Never derived from ``decision.message``
+#: (model-authored, unvalidated free text) -- matches every other terminal
+#: in this branch, none of which ever surfaces a provider's own refusal
+#: text to the user.
+PROHIBITED_ACTION_COPY = (
+    "Ask Dev can only read and summarize your data; it can't run commands "
+    "or make changes."
+)
+
+#: CHAOS-3541: reuses the existing "feature_not_enabled" wire code (already
+#: mapped to PublicOutcome.UNSUPPORTED) rather than minting a second new v1
+#: code -- team-lead ruled one new code ("refused") for this ticket. Own
+#: message text, distinct from that code's OTHER call site
+#: (_provider_error's AgentProviderErrorCode.DISABLED classification, an
+#: operator/config-level "this provider is off" signal): the two causes are
+#: genuinely different operational events sharing one wire bucket, which is
+#: worth knowing if that code's own metrics/alerting ever need to
+#: distinguish them.
+UNSUPPORTED_SHAPE_COPY = (
+    "Ask Dev can't fetch external URLs or generate open-ended content -- "
+    "ask about your data instead."
+)
 
 #: The server-owned copy for the legacy CHAOS-3289 backstop, reachable only
 #: from the flag-off (no-preflight) path. Split out of the predicate so a
@@ -388,6 +457,22 @@ class OrchestratorResult:
     tool_call_count: int
     provider_fingerprint: str | None
     model_fingerprint: str | None
+    #: CHAOS-3497: the run's OWN most recent completed scope resolution,
+    #: carried on every terminal -- not only the answering ones.
+    #:
+    #: ``streaming.stream_orchestrator`` used to read the resolution off
+    #: ``answer.resolved_scope``, which exists only when the run produced an
+    #: answer, so a run that resolved scope and then terminated without one
+    #: (insufficient_evidence, a refusal, a not-found) emitted no
+    #: ``scope.resolved`` frame at all. Its scope decision -- including a
+    #: silent widening from a named subject to organization scope -- was then
+    #: permanently unobservable on the wire, which is exactly the run shape
+    #: the no-silent-widening audit family exists to catch.
+    #:
+    #: ``None`` only when the run terminated BEFORE scope resolution
+    #: completed (a cancellation on the accepted state, the outer catch-all
+    #: on a fault raised before ``_resolve_with_cancellation`` returned).
+    scope_resolution: DevScopeResolution | None = None
 
     def __post_init__(self) -> None:
         if self.state not in TERMINAL_STATES:
@@ -396,6 +481,124 @@ class OrchestratorResult:
             raise ValueError(
                 "orchestrator result requires exactly one terminal payload"
             )
+
+
+def _deterministic_declined(result: SubjectPreflightResult) -> bool:
+    """Whether the deterministic layer failed to commit a NAMED subject.
+
+    The two shapes, and only these two (CHAOS-3525):
+
+    * a ``TERMINATE`` that carries a resolution ledger -- the preflight
+      resolved mentions and none of them committed. A ``TERMINATE`` with no
+      ledger (an uninterpretable question, an oversized mention set) never
+      reached the catalog at all, so there is no named subject for a model to
+      match and nothing it could be second-guessing;
+    * the bare-name ``PROCEED`` that widens to organization scope, which is a
+      *scope* commit standing in for a subject it could not resolve -- see
+      ``SubjectPreflightResult.has_committed_subject``, whose whole reason for
+      existing is that this branch commits a resolution but emphatically not a
+      subject.
+
+    Written as one predicate here rather than inline at the seam so the
+    "declined" vocabulary has a single definition, and so a future preflight
+    branch that also declines has one obvious place to be added.
+    """
+
+    if result.decision is PreflightDecision.TERMINATE:
+        return result.ledger is not None
+    return result.legacy_guard_required
+
+
+def _promoted_preflight_result(
+    result: SubjectPreflightResult,
+    *,
+    promotion: QUAPromotion,
+    scope_service: Any,
+    org_id: str,
+    base_scope: DevScope,
+    resolved_at: datetime,
+) -> tuple[SubjectPreflightResult, tuple[DevResolutionEntry, ...]]:
+    """Rewrite a declined preflight result into a QUA-committed PROCEED.
+
+    Returns the rewritten result AND the ledger entries the caller still has
+    to persist, because which ones those are depends on the branch being
+    replaced and only this function knows both halves:
+
+    * replacing a TERMINATE: nothing was persisted (the whole-ledger write
+      is PROCEED-only, and the terminating-entry write lives in the branch
+      the promotion now skips), so every entry must be written;
+    * replacing the bare-name PROCEED: the ledger already flushed, so only
+      the new entry may be written -- re-writing the rest would collide on
+      the ``(run_id, entry_ordinal)`` unique constraint.
+
+    Mints through ``committed_resolution_for`` -- the same function the
+    deterministic commit uses, whose docstring calls itself "the one
+    construction of an exact-match committed scope … so there is one notion
+    of committed scope rather than two that can drift". A QUA commit becomes
+    a third caller of it, never a second notion.
+
+    The ledger gains a real ``exact_match`` entry for the mention
+    (``qua_committed_entry``), stamped with QUA's own ``resolver_version``:
+    the run must not later read as though the mention was never resolved,
+    and it equally must not read as though the deterministic resolver
+    resolved it.
+
+    ``allowed_tools`` matches the deterministic committed-subject branch --
+    ``resolve_scope.v1`` is withheld because there is nothing left for the
+    model to resolve, which is also what keeps the ``forbidden_or_not_found``
+    tool-result leak channel (CHAOS-3421) unreachable here.
+    """
+
+    committed = scope_service.committed_resolution_for(
+        promotion.entity,
+        org_id=org_id,
+        base_scope=base_scope,
+        resolved_at=resolved_at,
+    )
+    ledger = result.ledger
+    committed_entry: DevResolutionEntry | None = None
+    if ledger is not None:
+        committed_entry = qua_committed_entry(
+            promotion,
+            entry_ordinal=len(ledger.entries),
+            query_version=committed.requested_scope.schema_version,
+            resolved_at=resolved_at,
+        )
+        ledger = ledger.model_copy(
+            update={
+                "entries": (*ledger.entries, committed_entry),
+                "updated_at": resolved_at,
+            }
+        )
+    pending: tuple[DevResolutionEntry, ...] = ()
+    if ledger is not None and committed_entry is not None:
+        pending = (
+            ledger.entries
+            if result.decision is PreflightDecision.TERMINATE
+            else (committed_entry,)
+        )
+    promoted = replace(
+        result,
+        decision=PreflightDecision.PROCEED,
+        ledger=ledger,
+        committed_resolution=committed,
+        committed_subjects=CommittedSubjects(
+            resolution=committed, subject_set=result.subject_set
+        ),
+        answer=None,
+        outcome=None,
+        allowed_tools=ALL_TOOLS - {ToolID.RESOLVE_SCOPE},
+        diagnostic=QUA_COMMIT_DIAGNOSTIC,
+        # The legacy named-entity backstop exists to catch an answer that
+        # narrates a name the run never resolved. This run DID resolve it, and
+        # discloses the match -- leaving the guard armed would terminate the
+        # very answer the promotion exists to produce.
+        legacy_guard_required=False,
+        unresolved_name_spans=frozenset(),
+        blocking_mention_ids=frozenset(),
+        terminating_resolution_entry=None,
+    )
+    return promoted, pending
 
 
 class ScopeResolver(Protocol):
@@ -459,21 +662,37 @@ class RunRecorder(Protocol):
         ...
 
     async def append_resolution(self, entry: DevResolutionEntry) -> None:
-        """Persist one ``dev_resolution_ledger.v1`` entry (CHAOS-3325).
+        """Persist one ``dev_resolution_ledger.v1`` entry (CHAOS-3325/3424/3533).
 
-        Called only for the terminating ``ambiguous_candidates`` entry of a
-        preflight ambiguity — the exact entry
-        ``SubjectPreflightResult.terminating_resolution_entry`` carries —
-        always immediately before ``record_frame`` for the same outcome, so
-        the persisted frame's ``clarification_candidates`` always has a
-        matching ledger row to be authorized against
+        Called for every entry of the ledger the preflight built, on BOTH
+        decisions:
+
+        * ``PROCEED`` — CHAOS-3424, so a widening/wrong-subject incident is
+          auditable from data rather than a container log line;
+        * ``TERMINATE`` — CHAOS-3533, the same argument for the half where the
+          run declined to answer. Until then only the terminating
+          ``ambiguous_candidates`` entry was written, so a not-found, an
+          unavailable catalog, an unsupported kind, and a committed cohort
+          that v1 cannot render all left ZERO rows — and the eight corpus
+          cases asserting a resolution path over them were unsatisfiable by
+          construction.
+
+        On the ambiguity path the terminating entry is always persisted
+        before ``record_frame`` for the same outcome, so the frame's
+        ``clarification_candidates`` always has its own mention's ledger row
+        to be authorized against
         (``persistence.service._authorize_clarification_candidates``, a
         Codex-review NO-SHIP finding: a schema-valid frame could otherwise
         name an entity the ledger never authorized).
         """
         ...
 
-    async def record_frame(self, frame: DevAnswerFrame) -> None:
+    async def record_frame(
+        self,
+        frame: DevAnswerFrame,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
         """Persist one already-built ``dev_answer_frame.v1`` (CHAOS-3297).
 
         Called from the preflight TERMINATE branch with the frame
@@ -481,6 +700,16 @@ class RunRecorder(Protocol):
         the run tags ``contract_generation = 'v2'`` and the CHAOS-3299 v2
         replay branch (``router._replayed_result``) becomes reachable for a
         preflight-terminated run, not just a full model-round completion.
+
+        ``authorizing_mention_id`` (CHAOS-3533) names the mention whose
+        ambiguity terminated the run — the one whose ledger row authorizes
+        this frame's ``clarification_candidates``. ``None`` on every other
+        terminal, and that absence is itself an assertion: the frame must
+        then carry no candidates at all. It has to be named rather than
+        inferred now that a TERMINATE persists its whole ledger, because a
+        run can legitimately hold an ambiguous row for a mention it never
+        offered the user (an omitted cohort member, or an ambiguous mention
+        at a higher ordinal than the not-found one that actually terminated).
         """
         ...
 
@@ -586,8 +815,13 @@ class NullRunRecorder:
     async def append_resolution(self, entry: DevResolutionEntry) -> None:
         del entry
 
-    async def record_frame(self, frame: DevAnswerFrame) -> None:
-        del frame
+    async def record_frame(
+        self,
+        frame: DevAnswerFrame,
+        *,
+        authorizing_mention_id: str | None = None,
+    ) -> None:
+        del frame, authorizing_mention_id
 
     async def rollback(self) -> None:
         return None
@@ -826,6 +1060,30 @@ class DevOrchestrator:
         # up in the user's own question text.
         last_resolve_scope_resolution: DevScopeResolution | None = None
         last_resolve_scope_query: str | None = None
+        # CHAOS-3497: the resolution a preflight TERMINATE actually reached
+        # for the subject the question named -- set only on that branch, and
+        # the highest-priority thing `published_resolution()` reports.
+        #
+        # It has to be tracked separately because `_terminate()` commits
+        # NOTHING (`committed_resolution=None` on every one of its call
+        # sites), so `resolution` there is still the run's original top-level
+        # resolve. That value can only ever be healthy -- every unhealthy
+        # outcome already returned earlier -- so publishing it would put
+        # "scope resolved: exact" one frame ahead of an error saying the
+        # named subject could not be found, and would hand
+        # `no_unauthorized_candidate_surfaces` an object that STRUCTURALLY
+        # cannot carry candidates (v1 permits them only on candidate-bearing
+        # outcomes), flipping that security check from a loud "not measured"
+        # to a silent vacuous pass. Reproduced live before the fix: an
+        # ambiguous "Atlas" and a not-found "Nightfall" both published
+        # `inherited`, with zero candidates.
+        preflight_terminal_resolution: DevScopeResolution | None = None
+        #: CHAOS-3525: ``(user's span, authorized entity label)`` for a subject
+        #: committed from a QUA proposal -- set at the promotion seam, read by
+        #: ``finish()``'s closure. A free variable rather than a parameter for
+        #: the same reason ``investigation_result`` is one: ``finish()`` has
+        #: ~35 call sites and none of them should have to remember this.
+        qua_subject_disclosure: tuple[str, str] | None = None
         selected_event_sink = event_sink or self._event_sink
         # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
         # by the CHAOS-3295 plan-execution block below when a plan actually
@@ -857,6 +1115,43 @@ class DevOrchestrator:
         #: collision.
         portfolio_attested_labels: tuple[str, ...] = ()
 
+        def published_resolution() -> DevScopeResolution | None:
+            """The scope decision a no-answer terminal reports on the wire.
+
+            Three sources, in priority order, and the order is the whole
+            point -- an auditor must be able to tell a run that resolved to
+            an exact subject from one that silently widened, and every
+            wrong choice here is a false answer to that question:
+
+            1. ``preflight_terminal_resolution`` -- the preflight
+               TERMINATE branch's own outcome for the subject the question
+               named. Nothing else describes that failure at all.
+            2. ``last_resolve_scope_resolution``, but ONLY while the run is
+               still on organization scope. This mirrors the diversion
+               guard the answer path already applies (see the
+               ``missed_subject_label`` branch): once a ``resolve_scope.v1``
+               call has committed a REAL narrower subject, a later failed
+               lookup for some other name did not change what this run
+               executed under, and reporting that miss as the run's scope
+               decision invents a resolution failure that never happened.
+            3. ``resolution`` -- the committed scope itself.
+
+            ``None`` only when the run ended before scope resolution
+            completed at all.
+            """
+
+            if preflight_terminal_resolution is not None:
+                return preflight_terminal_resolution
+            committed = resolution
+            still_organization_wide = (
+                committed is None
+                or committed.resolved_scope is None
+                or committed.resolved_scope.direct_scope is DirectScope.ORGANIZATION
+            )
+            if still_organization_wide and last_resolve_scope_resolution is not None:
+                return last_resolve_scope_resolution
+            return committed
+
         async def transition(state: RunState, safe_code: str | None = None) -> None:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
             events.append(event)
@@ -876,6 +1171,45 @@ class DevOrchestrator:
             nonlocal terminal_written
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+            # CHAOS-3497 part 2: disclose a widening in PROSE, not only in
+            # `dev_scope_resolution.v1.fallbacks`.
+            #
+            # `legacy_guard_required` is true on exactly one branch: a bare
+            # name in the question went unresolved and `subject_preflight`
+            # committed the organization in its place so no page-derived
+            # subject could be narrated as the named one. That run then
+            # answers organization-wide, and until this the only trace was
+            # machine-readable -- a person reading the answer saw two
+            # unrelated limitations and no hint their subject was missed.
+            #
+            # Placed here, ahead of the leak scan and every record_*() write,
+            # so the sentence is scanned like any other user-visible copy and
+            # reaches the persisted answer, the persisted frame's
+            # `limitations`, and the stream's `warning` frames alike. The
+            # committed outcome is re-checked rather than assumed: the
+            # disclosure must state something that is actually true of the
+            # scope this answer was computed under.
+            if (
+                answer is not None
+                and preflight_result is not None
+                and preflight_result.legacy_guard_required
+                and answer.resolved_scope.outcome
+                is ScopeResolutionOutcome.ORGANIZATION_FALLBACK
+            ):
+                answer = disclose_scope_widening(answer)
+            # CHAOS-3525: a subject an LLM chose is never silent.
+            #
+            # Same channel as the widening disclosure immediately above, and
+            # placed in the same spot for the same reason: ahead of the leak
+            # scan and every record_*() write, so the sentence is scanned
+            # like any other user-visible copy and reaches the persisted
+            # answer, the frame's `limitations`, and the stream's `warning`
+            # frames together.
+            if answer is not None and qua_subject_disclosure is not None:
+                matched_span, matched_label = qua_subject_disclosure
+                answer = disclose_subject_match(
+                    answer, span=matched_span, label=matched_label
+                )
             # CHAOS-3367: the one place every terminal in this module passes
             # through, and therefore the only place a user-visible-copy rule
             # can be enforced structurally rather than by asking ~35 call
@@ -1232,11 +1566,62 @@ class DevOrchestrator:
                     # v1 answer/error above is authoritative and safe to
                     # terminate on alone.
                     if answer is None and not error_message_written:
-                        # No prior write in this flush to protect, so it is
-                        # safe to roll back a poisoned session -- otherwise
-                        # the terminal() write below could raise
-                        # PendingRollbackError (mirrors the preflight
-                        # TERMINATE branch, CHAOS-3297 Codex review).
+                        # No TRANSCRIPT row in this flush to protect (the
+                        # answer path never reaches here, and
+                        # record_error_message above failed), so a rollback
+                        # cannot discard the one row that is unrecoverable,
+                        # and it buys an inline terminal if the session is
+                        # poisoned -- otherwise the terminal() write below
+                        # could raise PendingRollbackError (mirrors the
+                        # preflight TERMINATE branch, CHAOS-3297 Codex
+                        # review).
+                        #
+                        # CHAOS-3441 Codex adversarial review round 1
+                        # (MEDIUM, confirmed as to fact, fix declined with
+                        # reasoning): "no prior write to protect" was too
+                        # broad a claim and is corrected here. This rollback
+                        # DOES discard this run's already-flushed forensic
+                        # rows -- stage diagnostics, tool calls, the
+                        # resolution ledger, subject sets, intent -- and
+                        # unlike the two preflight rollback sites below,
+                        # nothing re-persists them afterward. It is kept
+                        # anyway, and round 3's frequency objection does not
+                        # survive contact with what a poisoned session
+                        # actually means. Two cases, and only one costs
+                        # anything:
+                        #
+                        # * Session POISONED -- one earlier failure is enough:
+                        #   none of the telemetry writes (record_run_
+                        #   diagnostics, append_tool_call, append_resolution,
+                        #   record_subject_set, record_intent) is
+                        #   savepoint-isolated, and a mid-flush failure in any
+                        #   of them makes record_error_message and
+                        #   record_frame fail in turn, landing here with
+                        #   error_message_written False. Those forensic rows
+                        #   are ALREADY unrecoverable: the transaction cannot
+                        #   commit, so nothing flushed on it will ever land,
+                        #   with or without this rollback. The rollback
+                        #   discards nothing that had a future, and buys back
+                        #   a specific, user-visible terminal
+                        #   (`scope_not_found`, a clarification) in place of a
+                        #   generic `internal_error` from
+                        #   streaming.stream_orchestrator plus a
+                        #   force_terminal_fallback hop. Proven by
+                        #   test_chaos_3441_a_poisoned_session_has_already_lost_its_rows.
+                        # * Session HEALTHY -- only here does the rollback
+                        #   destroy rows that would otherwise have committed,
+                        #   and reaching it takes TWO independent failures:
+                        #   record_error_message failing inside its own
+                        #   savepoint AND record_frame failing inside its own.
+                        #
+                        # The incremental cost is the two-failure case; the
+                        # benefit covers the one-failure case. Telling them
+                        # apart in code would mean asking the session whether
+                        # it needs a rollback, and that cannot live inside
+                        # PersistenceRunRecorder.rollback(): the two preflight
+                        # call sites below re-persist rows immediately after
+                        # their own rollback, so a rollback that silently
+                        # became a no-op would double-write them.
                         await self._recorder.rollback()
                     # else: record_answer (answer is not None) or
                     # record_error_message (CHAOS-3423 Codex adversarial
@@ -1247,24 +1632,41 @@ class DevOrchestrator:
                     # is not, so this path deliberately leaves the session
                     # as-is and proceeds frame-less.
                     #
-                    # Codex adversarial review round 2 (honest residual, not
-                    # closed here): if `record_frame`'s failure was a real
-                    # mid-flush database error (not a pre-flush/construction
-                    # exception), the session may already be rollback-only,
-                    # and the `terminal()` write further below could still
-                    # raise `PendingRollbackError` regardless of this
-                    # branch -- a pre-existing risk this codebase already
-                    # accepts for a real `DevAnswer` (see
-                    # `DevPersistenceService.force_terminal_fallback`'s own
-                    # docstring, CHAOS-3297 round 3 Finding 2: the system
-                    # still reaches a coherent terminal state via that
-                    # fresh-session fallback, but the just-flushed row can
-                    # rarely be lost in that narrow correlated-failure
-                    # window). This makes the no-answer path symmetric with
-                    # that existing tradeoff, not worse than it -- closing
-                    # it for both would mean SAVEPOINT-wrapping
-                    # `record_frame`/`record_narrative` generally, out of
-                    # this ticket's scope.
+                    # CHAOS-3441: leaving the session as-is is safe for a real
+                    # mid-flush database failure too, not just a pre-flush
+                    # construction one. `record_frame` -- like
+                    # `record_narrative` and `append_assistant_answer`/
+                    # `append_assistant_error` -- runs inside a SAVEPOINT
+                    # (persistence/service.py), and that savepoint now opens
+                    # before its ownership/authorization SELECTs as well as
+                    # its flush. Given a caller that enters with nothing
+                    # unflushed -- which the transcript writes now guarantee,
+                    # each of them touching its conversation inside its own
+                    # savepoint (test_chaos_3441_transcript_writes_leave_no_
+                    # unflushed_state) -- no failure record_frame can raise
+                    # leaves this session rollback-only: the answer/error
+                    # transcript row already flushed above survives, and the
+                    # `terminal()` write below still lands. The one exception
+                    # is stated where it lives: pending state a caller DOES
+                    # leave is flushed at savepoint entry, before the
+                    # SAVEPOINT is emitted, so a failure there is outside
+                    # every savepoint (Codex adversarial review round 2).
+                    # Proven for BOTH transcript paths against a REAL
+                    # database failure, each proof failing if that
+                    # `begin_nested` is removed --
+                    # test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session
+                    # (no-answer row, duplicate-insert IntegrityError) and
+                    # tests/api/dev/test_chaos_3441_record_frame_savepoint.py
+                    # (real `DevAnswer` row, a driver-level write rejection
+                    # plus the savepoint-boundary and diagnostics-survival
+                    # proofs).
+                    #
+                    # What no savepoint can cover, stated plainly: if the
+                    # CONNECTION dies there is no session left to roll back,
+                    # and an uncommitted transcript row is lost by
+                    # definition -- recovered at the system level only, by
+                    # `DevPersistenceService.force_terminal_fallback`'s fresh
+                    # session (CHAOS-3297 round 3 Finding 2).
                 else:
                     # CHAOS-3297 stack #4: narrative synthesis only runs for
                     # a frame that actually persisted -- record_narrative's
@@ -1365,6 +1767,19 @@ class DevOrchestrator:
                 tool_call_count=len(tool_results),
                 provider_fingerprint=provider_fingerprint,
                 model_fingerprint=model_fingerprint,
+                # CHAOS-3497: the run's own scope decision, on EVERY terminal.
+                #
+                # On the answer path this is byte-identical to what
+                # ``streaming`` already published (``answer.resolved_scope``),
+                # so that path's wire output does not change at all.
+                #
+                # On a no-answer terminal it is ``published_resolution()``
+                # below -- the resolution this run actually executed under.
+                scope_resolution=(
+                    answer.resolved_scope
+                    if answer is not None
+                    else published_resolution()
+                ),
             )
 
         def error(code: str, message: str, *, retryable: bool = False) -> DevError:
@@ -1674,6 +2089,101 @@ class DevOrchestrator:
                                     exception_type=type(shadow_recovery_fault).__name__
                                 ).inc()
 
+                    # CHAOS-3525: the promotion seam.
+                    #
+                    # Deliberately HERE -- after the deterministic decision is
+                    # fully computed and persisted, before the branch that acts
+                    # on it. CHAOS-3389 built that ordering so the shadow could
+                    # observe without influencing; the same position is what lets
+                    # a promotion replace the decision without either
+                    # re-implementing the preflight or unwinding writes it has
+                    # already made.
+                    #
+                    # Everything below fails closed to "leave the run exactly as
+                    # the deterministic layer decided". That is the invariant the
+                    # CHAOS-3389 byte-identity tests certify and it must survive
+                    # commit mode: an absent, failing, slow, budget-exhausted,
+                    # low-confidence or out-of-slice proposal changes nothing.
+                    if (
+                        shadow_record is not None
+                        and self._qua_shadow is not None
+                        and self._qua_shadow.commit_enabled
+                    ):
+                        promotion = promotable_selection(
+                            shadow_record,
+                            deterministic_declined=_deterministic_declined(
+                                preflight_result
+                            ),
+                        )
+                        if promotion is not None and await verify_still_authorized(
+                            promotion,
+                            scope_service=self._qua_shadow.scope_service,
+                            org_id=org_id,
+                            permission_fingerprint=permission_fingerprint,
+                            limit=MAX_CANDIDATES,
+                        ):
+                            (
+                                preflight_result,
+                                pending_resolution_entries,
+                            ) = _promoted_preflight_result(
+                                preflight_result,
+                                promotion=promotion,
+                                scope_service=self._qua_shadow.scope_service,
+                                org_id=org_id,
+                                base_scope=authorized_scope,
+                                resolved_at=datetime.now(UTC),
+                            )
+                            # The disclosure the answer must carry. Held here and
+                            # applied in `finish()` rather than written now: the
+                            # answer does not exist yet, and a subject chosen by
+                            # a model that reached the user unannounced would be
+                            # a worse wrong-subject bug than the dead end this
+                            # promotion removes.
+                            qua_subject_disclosure = (
+                                promotion.text_span,
+                                promotion.entity.label,
+                            )
+                            # `allowed_tools` was captured from the ORIGINAL
+                            # decision, which for a TERMINATE is the empty
+                            # set. Re-read it here or the promoted run
+                            # proceeds with a committed subject and no tools
+                            # to answer about it -- which fails as an opaque
+                            # internal_error, not as anything a reader could
+                            # diagnose. (Found by the disclosure test: the
+                            # scope committed, the run still did not answer.)
+                            allowed_tools = preflight_result.allowed_tools
+                            ASK_DEV_QUA_COMMIT_TOTAL.labels(
+                                entity_kind=promotion.entity.kind.value
+                            ).inc()
+                            try:
+                                for pending_entry in pending_resolution_entries:
+                                    await self._recorder.append_resolution(
+                                        pending_entry
+                                    )
+                                await self._recorder.record_preflight(
+                                    preflight_outcome=preflight_result.diagnostic,
+                                    legacy_guard_reason=None,
+                                )
+                            except Exception as qua_commit_write_fault:
+                                # Best-effort, exactly like the shadow write
+                                # above: the promotion itself already happened in
+                                # memory and the run is coherent without this
+                                # row. Logged rather than swallowed silently so a
+                                # missing `committed_qua_subject` diagnostic is
+                                # never mistaken for a run that did not promote.
+                                logger.exception(
+                                    "ask_dev.orchestrator.qua_commit_write_fault",
+                                    extra={
+                                        "run_id": run_id,
+                                        "exception_type": type(
+                                            qua_commit_write_fault
+                                        ).__name__,
+                                    },
+                                )
+                                ASK_DEV_QUA_SHADOW_FAULT_TOTAL.labels(
+                                    exception_type=type(qua_commit_write_fault).__name__
+                                ).inc()
+
                 if preflight_result.decision is PreflightDecision.TERMINATE:
                     assert preflight_result.answer is not None
                     assert preflight_result.outcome is not None
@@ -1708,6 +2218,82 @@ class DevOrchestrator:
                         candidate.entity_ref.display_label
                         for candidate in preflight_result.answer.frame.clarification_candidates
                     )
+                    # CHAOS-3497: built from the SAME frame the richer
+                    # terminal below persists, through the SAME projector
+                    # `compat` already uses for a replayed clarification --
+                    # so the resolution on the wire and the candidates the
+                    # user was shown can never be two different stories.
+                    # Set before every `finish()` in this branch, including
+                    # the leak-guard bail-out: a run whose terminal was
+                    # rewritten to `internal_error` still resolved what it
+                    # resolved, and hiding that is how the gap this ticket
+                    # closes got there in the first place.
+                    #
+                    # CHAOS-3534: a COMPLETE committed cohort is the one
+                    # terminal the frame cannot describe. `scope_resolution_
+                    # from_frame` has three branches -- candidates, a single
+                    # `subject_ref`, else UNRESOLVED -- and a cohort frame
+                    # carries neither of the first two, so it fell through and
+                    # published "unresolved" for a run that resolved EVERY
+                    # named subject exactly and committed a real
+                    # dev_subject_set.v1. That is the same defect CHAOS-3497
+                    # exists to fix (a non-answer terminal misreporting its
+                    # own scope decision), one branch short.
+                    #
+                    # Sourced from the preflight's own subject set rather than
+                    # re-derived from the frame, because the frame
+                    # STRUCTURALLY cannot carry a cohort -- re-deriving from
+                    # it could only ever produce the wrong answer.
+                    #
+                    # Gated on `cohort_complete`, whose own contract validator
+                    # guarantees it is False whenever any mention was omitted:
+                    # a partial cohort did NOT resolve everything the question
+                    # named, and calling it exact would be the same false
+                    # statement pointing the other way.
+                    #
+                    # Restricted to REPOSITORY cohorts because v1 cannot
+                    # represent any other kind as a multi-entity scope --
+                    # DevScope requires exactly one entity_ref for
+                    # project/team/issue/PR/work-unit, while `repositories`
+                    # is a list. A project cohort therefore keeps today's
+                    # frame-derived outcome; that residual is real, is NOT
+                    # fixed here, and is tracked rather than papered over.
+                    #
+                    # And bounded by V1_SCOPE_LIST_LIMIT, because the subject
+                    # set's own bound is LARGER than v1's: a DevSubjectSet may
+                    # commit up to 25 refs, while DevScope.repositories and
+                    # DevScopeResolution.authorized_repository_ids both cap at
+                    # 20. Without this a fully-resolved, fully-authorized
+                    # 21-25 repository cohort raises during terminal
+                    # construction -- the SAME "legal upstream, illegal
+                    # downstream" defect as the project-kind case above, at a
+                    # different boundary, and it would have turned an honest
+                    # feature_not_enabled into an opaque internal_error.
+                    # (Codex adversarial review, HIGH; reproduced before
+                    # fixing.) An oversized cohort keeps the frame-derived
+                    # outcome: under-disclosure is the honest failure here,
+                    # since v1 genuinely cannot list what was committed.
+                    cohort = preflight_result.subject_set
+                    if (
+                        cohort is not None
+                        and cohort.cohort_complete
+                        and cohort.entity_kind is ContractEntityKind.REPOSITORY
+                        and len(cohort.committed_entity_refs) <= V1_SCOPE_LIST_LIMIT
+                    ):
+                        preflight_terminal_resolution = (
+                            ScopeResolutionService.committed_cohort_resolution_for(
+                                cohort,
+                                org_id=org_id,
+                                base_scope=authorized_scope,
+                                resolved_at=datetime.now(UTC),
+                            )
+                        )
+                    else:
+                        preflight_terminal_resolution = scope_resolution_from_frame(
+                            preflight_result.answer.frame,
+                            requested_scope=authorized_scope,
+                            resolved_at=datetime.now(UTC),
+                        )
                     preflight_leak = internal_token_leak_field(
                         user_visible_strings_by_field(error=preflight_error),
                         attested=attested_strings(None, request.question)
@@ -1749,12 +2335,97 @@ class DevOrchestrator:
                         # (_authorize_clarification_candidates) always has a
                         # real ledger row to authorize against rather than
                         # racing it.
-                        if preflight_result.terminating_resolution_entry is not None:
-                            await self._recorder.append_resolution(
-                                preflight_result.terminating_resolution_entry
+                        #
+                        # CHAOS-3533: the WHOLE ledger is written here now,
+                        # not only that one entry -- the same forensic
+                        # argument CHAOS-3424 made for the PROCEED branch
+                        # (see its comment above), applied to the half where
+                        # the run declined to answer. A terminate that
+                        # resolved "no authorized match", could not reach the
+                        # catalog, or committed a cohort v1 cannot render
+                        # previously left NO trace of any of it. Ordinals come
+                        # from the same ledger, so the (run_id, entry_ordinal)
+                        # unique constraint is satisfied by construction, and
+                        # the QUA promotion above has already converted any
+                        # run it rewrote to PROCEED -- so neither branch can
+                        # double-insert.
+                        #
+                        # The terminating mention is passed EXPLICITLY rather
+                        # than left for the persistence layer to infer: with a
+                        # whole ledger on disk, "the highest-ordinal ambiguous
+                        # row" is no longer a synonym for "the mention this
+                        # run offered the user".
+                        if preflight_result.ledger is not None:
+                            for resolution_entry in preflight_result.ledger.entries:
+                                await self._recorder.append_resolution(resolution_entry)
+                    except Exception as terminate_ledger_write_fault:
+                        # Codex adversarial review (HIGH, CONFIRMED BY
+                        # EXECUTION): the ledger write and the frame write
+                        # shared ONE try/except, and the finish() below was
+                        # told `frame_already_recorded=True` unconditionally.
+                        # A failing append_resolution therefore skipped
+                        # record_frame AND suppressed the v1 compatibility
+                        # frame finish() would otherwise build -- the run
+                        # landed with no ledger and no dev_answer_frames row.
+                        #
+                        # Reachability is what THIS change introduced: before
+                        # it a not-found or committed-cohort terminate called
+                        # append_resolution zero times, so it could not fail
+                        # here and always kept its frame. Widening the ledger
+                        # write to every terminate would have widened that
+                        # failure mode with it -- a hardening change that
+                        # invents a new way to lose a terminal under stress is
+                        # the very class CHAOS-3533 exists to close.
+                        #
+                        # Split out, and given the same operational signal its
+                        # PROCEED-branch sibling already carries (CHAOS-3424
+                        # round 3: a lost ledger that logs nothing means the
+                        # forensic gap it closes can itself go unnoticed).
+                        logger.exception(
+                            "ask_dev.orchestrator.resolution_ledger_write_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(
+                                    terminate_ledger_write_fault
+                                ).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(terminate_ledger_write_fault).__name__
+                        ).inc()
+                        await self._recorder.rollback()
+                        # The rollback discards every unflushed write on this
+                        # session, not only the poisoned ledger -- including
+                        # the record_preflight() diagnostic AND the committed
+                        # subject set flushed above, which share this same
+                        # transaction. Both are re-persisted, exactly as the
+                        # PROCEED-branch handler already does for both.
+                        #
+                        # The subject set matters most on the committed-cohort
+                        # terminate: that run resolved every named member
+                        # exactly and committed a real dev_subject_set.v1, so
+                        # losing it to an unrelated ledger fault would erase
+                        # the only surviving record that the cohort resolved
+                        # at all -- the same forensic hole one layer up.
+                        await self._recorder.record_preflight(
+                            preflight_outcome=preflight_result.diagnostic,
+                            legacy_guard_reason=None,
+                        )
+                        if preflight_result.subject_set is not None:
+                            await self._recorder.record_subject_set(
+                                preflight_result.subject_set
                             )
-                        await self._recorder.record_frame(preflight_result.answer.frame)
-                    except Exception:
+                    try:
+                        await self._recorder.record_frame(
+                            preflight_result.answer.frame,
+                            authorizing_mention_id=(
+                                preflight_result.terminating_resolution_entry.mention_id
+                                if preflight_result.terminating_resolution_entry
+                                is not None
+                                else None
+                            ),
+                        )
+                    except Exception as record_frame_fault:
                         # A database-layer failure here (constraint
                         # violation, dropped connection) marks the
                         # recorder's session rollback-only; the terminal()
@@ -1765,6 +2436,21 @@ class DevOrchestrator:
                         # back and finish as a coherent v1 terminal run
                         # instead -- a dropped frame is recoverable, a
                         # stranded run is not.
+                        #
+                        # CHAOS-3550: this used to be a bare `except
+                        # Exception`, so a PROGRAMMING error here (a
+                        # contract-signature drift, an AttributeError, a
+                        # KeyError) was indistinguishable from the database
+                        # fault the comment above actually describes -- the
+                        # run finished as an ordinary-looking terminal with
+                        # its frame silently absent and no signal anywhere.
+                        # The rollback + re-persist below are unconditional
+                        # (needed for EITHER cause, to keep the session
+                        # usable for whichever finish() eventually runs --
+                        # this one on the expected-fault path, or the
+                        # run-loop's own last-resort handler below on the
+                        # re-raise path); only the swallow-vs-surface
+                        # decision after them is now typed.
                         await self._recorder.rollback()
                         # The rollback above discards every unflushed write
                         # on this session, not just the poisoned frame --
@@ -1775,13 +2461,78 @@ class DevOrchestrator:
                         # preflight_outcome=None and silently loses the
                         # closed-vocabulary explanation of why it
                         # terminated (Codex review finding, CHAOS-3297).
+                        #
+                        # CHAOS-3550 / CHAOS-3544 interaction (team-lead
+                        # ruling): if THIS run's own dev_runs row was
+                        # cascade-deleted out from under it (a wedged run
+                        # whose 0-day conversation aged out and was purged
+                        # mid-flight -- CHAOS-3544), this re-persist call
+                        # itself raises DevPersistenceNotFound before the
+                        # typed check below ever runs, and that exception
+                        # (not record_frame_fault) is what the run-loop's
+                        # own last-resort handler (`except Exception as
+                        # unhandled` further down) logs and counts. That is
+                        # deliberate, not a gap this ticket closes: a run
+                        # whose row no longer exists must not report success
+                        # either way, and the zombie-run integration test
+                        # below exists to keep proving the last-resort
+                        # handler is what actually observes it.
                         await self._recorder.record_preflight(
                             preflight_outcome=preflight_result.diagnostic,
                             legacy_guard_reason=None,
                         )
+                        if not isinstance(record_frame_fault, SQLAlchemyError):
+                            logger.exception(
+                                "ask_dev.orchestrator.record_frame_programming_error",
+                                extra={
+                                    "run_id": run_id,
+                                    "exception_type": type(record_frame_fault).__name__,
+                                },
+                            )
+                            ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                                exception_type=type(record_frame_fault).__name__
+                            ).inc()
+                            raise
+                        # Expected path: a genuine database-layer fault,
+                        # recovered and swallowed exactly as before this
+                        # ticket. Previously this branch emitted NO signal
+                        # at all -- unlike its sibling ledger-write-fault
+                        # handler above (CHAOS-3533), which has always
+                        # logged and counted its own DB-adjacent faults
+                        # uniformly, expected or not. Matched here for the
+                        # same reason: a recovered fault is still a fault an
+                        # operator should be able to see happened, and a
+                        # log line costs nothing compared to the silence
+                        # this whole ticket exists to close.
+                        logger.warning(
+                            "ask_dev.orchestrator.record_frame_recovered_fault",
+                            extra={
+                                "run_id": run_id,
+                                "exception_type": type(record_frame_fault).__name__,
+                            },
+                        )
+                        ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
+                            exception_type=type(record_frame_fault).__name__
+                        ).inc()
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=preflight_error,
+                        # Deliberately still unconditional, and NOT switched to
+                        # "did the frame actually land". Making it honest was
+                        # tried and reverted: when record_frame ITSELF is what
+                        # failed, finish() would retry the same doomed insert,
+                        # fail again, and roll back the record_preflight()
+                        # diagnostic the handler above just re-persisted --
+                        # regressing the CHAOS-3297 guarantee that a run never
+                        # loses its closed-vocabulary reason for terminating
+                        # (caught by test_preflight_frame_flush_failure_reaches
+                        # _terminal_state_not_stranded, which is exactly why
+                        # that test exists). The Codex HIGH is closed by the
+                        # SPLIT above instead: a ledger fault no longer skips
+                        # record_frame, so the frame lands on the path that
+                        # previously lost it. A frame-write fault remains what
+                        # CHAOS-3297 decided it should be -- a dropped frame,
+                        # never a stranded run and never a lost diagnostic.
                         frame_already_recorded=True,
                         extra_attested=candidate_attestation,
                     )
@@ -1871,8 +2622,35 @@ class DevOrchestrator:
                     # is nothing to batch over without a committed
                     # DevSubjectSet, mirroring the SINGULAR branch's
                     # has_committed_subject gate one line up.
+                    #
+                    # CHAOS-3551: and the committed subject set's own KIND
+                    # must be one `plan` actually supports. Before this
+                    # ticket every intent whose vocabulary could classify as
+                    # PORTFOLIO_STATUS only ever reached here with a PROJECT
+                    # subject_set -- subject_preflight's own homogeneous-
+                    # cohort gate committed nothing else under that intent.
+                    # CHAOS-3551 adds a second PROCEED source for the SAME
+                    # (PORTFOLIO_STATUS-classified, PLURAL_COHORT) shape: a
+                    # REPOSITORY cohort, which intent classification alone
+                    # cannot rule out (it is lexical, not kind-aware -- see
+                    # subject_preflight's own PORTFOLIO_STATUS branch
+                    # comment). Without this check, a repository cohort
+                    # phrased like a status question would reach
+                    # `_project_scope_from_ref` -- documented as relying on
+                    # ITS CALLER to restrict `ref.entity_kind` to PROJECT --
+                    # and misrepresent each repository as a same-named
+                    # "project" scope to `PortfolioStatusService.
+                    # evaluate_portfolio`, exactly the "answer about one
+                    # entity under another's name" this module's own
+                    # docstring says it never does. `plan.
+                    # supported_subject_kinds` already declares the right
+                    # answer for every plan; nothing previously read it.
                     plan_eligible = (
-                        plan_eligible and preflight_result.subject_set is not None
+                        plan_eligible
+                        and plan is not None
+                        and preflight_result.subject_set is not None
+                        and preflight_result.subject_set.entity_kind
+                        in plan.supported_subject_kinds
                     )
                 if plan_eligible:
                     assert plan is not None
@@ -2898,6 +3676,35 @@ class DevOrchestrator:
                         ),
                     )
                 if isinstance(decision, AgentRefusal):
+                    # CHAOS-3541: a request the provider has flagged as
+                    # PROHIBITED or UNSUPPORTED-by-shape gets that exact
+                    # typed outcome, deterministically -- checked BEFORE the
+                    # CHAOS-3377 override below and bypassing it entirely,
+                    # never after. That override exists for an honest "I
+                    # don't have enough evidence" refusal, where reporting a
+                    # real, already-fetched result instead is strictly
+                    # better for the requester. A prohibited-action or
+                    # unsupported-shape refusal is a different kind of
+                    # claim -- not "insufficient evidence", a categorical
+                    # answer about what Ask Dev is allowed or able to do --
+                    # and silently swapping it for an unrelated status
+                    # snapshot would answer a question the requester did not
+                    # ask while burying the actual, security-relevant
+                    # signal. (In practice the override never fires for
+                    # these corpus cases anyway -- each is a single-decision
+                    # refusal script with zero tool calls -- but production
+                    # traffic is not guaranteed to share that shape, and the
+                    # bypass is the correct choice either way.)
+                    if decision.code in _PROHIBITED_ACTION_REFUSAL_CODES:
+                        return await finish(
+                            RunState.REFUSED,
+                            error=error("refused", PROHIBITED_ACTION_COPY),
+                        )
+                    if decision.code in _UNSUPPORTED_SHAPE_REFUSAL_CODES:
+                        return await finish(
+                            RunState.REFUSED,
+                            error=error("feature_not_enabled", UNSUPPORTED_SHAPE_COPY),
+                        )
                     # CHAOS-3377 HIGH 2 (codex adversarial review): a
                     # refusal reached AFTER a real status_snapshot.v1 result
                     # already exists for the run's current resolved scope is

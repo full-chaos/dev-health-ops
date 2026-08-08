@@ -276,5 +276,17 @@ def test_volatile_columns_cover_every_timestamp_this_world_writes() -> None:
             "last_sync_at",
             "feature_id",
             "categorization_run_id",
+            # CHAOS-3463, acknowledged deliberately per this test's contract:
+            # `users.last_login_at` is wall-clock-stamped by the API on every
+            # successful authentication. Once the launcher began proving world
+            # principals can log in on every boot, those logins moved a
+            # digested column and BOTH boots failed
+            # require_world_digest_match on postgres.users, each with a
+            # different live digest. A login-activity timestamp is not fixture
+            # content -- same class as `last_synced`/`updated_at` above.
+            # Scope is narrow on purpose: `password_hash` stays digested, so
+            # credential tampering is still visible as drift (see
+            # test_excluding_last_login_at_did_not_also_drop_the_credential).
+            "last_login_at",
         }
     )

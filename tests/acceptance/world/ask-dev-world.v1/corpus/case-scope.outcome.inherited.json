@@ -3,38 +3,21 @@
   "id": "scope.outcome.inherited",
   "family": "scope",
   "group": 1,
-  "status": "active",
-  "blocked_by": null,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3542 INHERITED is unreachable in all of production -- wire context refs or retire the vocabulary",
   "proves": [
     "P0-B state ScopeResolutionOutcome.inherited"
   ],
   "question": "Has anything changed since then?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-7",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
-  "invariants": [
-    {
-      "category": "no-silent-widening",
-      "check": "scope_resolution_outcome_in",
-      "args": {
-        "from_profile": "expected_scope_resolution_outcome"
-      },
-      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
-    }
-  ],
-  "resolution_profile_ref": "deterministic-v1",
+  "invariants": [],
+  "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "Second turn of a fresh (non-stale) conversation: turn 1 names meridian/web-app, turn 2 (<1h later, well within rotation window) asks a bare follow-up with no new subject mention -> ScopeResolutionOutcome.INHERITED. Same underlying mechanism as subject-label.valid-prior-turn-reference (CHAOS-3389 eval-fixture angle); kept as a separate id because it's the dedicated P0-B ScopeResolutionOutcome-value producer -- cross-referenced, not duplicated, matching the pattern subjects.json already uses for subject.tenant.sibling-only-private-repo."
+  "notes": "DECLARED-BLOCKED against CHAOS-3520 (CHAOS-3490 Part 2 corpus-authoring lane, 2026-08-07). Live evidence: CHAOS-3219 Phase 2 exit run 7, world digest 2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232, wave_3_1 preflight enabled=True -- receipt tests/acceptance/artifacts/wave4/scope.outcome.inherited.json recorded \"scope_resolution_outcome='exact', allowed=['inherited']\". 'exact' is not a near-miss: it means the scenario this case is NAMED for never occurred on the run. The expectation is NOT rewritten to 'exact' -- that would be the 'rewrite an honest expectation to force green' anti-pattern, and it would delete this case's coverage claim while reading as green. WHY IT CANNOT BE REALIZED: ScopeResolutionOutcome.INHERITED is produced only at scope_service.py:747 under `elif inherited:`, and `inherited` is True only when `request.page_context_refs` or `request.conversation_context_refs` is non-empty (scope_service.py:1524-1533). Grepping ALL of src/ for both names returns only the dataclass defaults at scope_service.py:215-216 and read sites -- NEITHER FIELD IS EVER ASSIGNED ANYWHERE IN THE CODEBASE. _scope_request (production_runtime.py:1117), the only builder used for scope resolution, sets explicit_refs and team_filter_refs and nothing else. So INHERITED is unreachable in all of production today, not merely for this runner. Separately, this case describes a SECOND turn against a subject committed on a first turn, and the corpus runner sends one message per case with surface_context=null (same runner gap as adv.mid-conversation.*, CHAOS-3454). Producer executed: interpret('Has anything changed since then?') yields ZERO mentions. NO UNIQUE ASSERTION COVERAGE IS LOST BY BLOCKING: the invariants dropped here besides scope_resolution_outcome_in (none -- scope_resolution_outcome_in was this case's ONLY invariant, so dropping it would leave an active case with zero invariants, which case_schema.py:192 rejects) are asserted by many other active cases; only this case's own named-outcome claim goes uncovered, which is exactly what CHAOS-3520 records. Retired profile entry preserved verbatim: {\"expected_public_outcome\": \"answered_with_gaps\", \"expected_scope_resolution_outcome\": \"inherited\", \"resolution_path\": \"deterministic-exact\"}. Full authored invariant list before the block is in git history for this file. [ORIGINAL NOTES, preserved verbatim: Second turn of a fresh (non-stale) conversation: turn 1 names meridian/web-app, turn 2 (<1h later, well within rotation window) asks a bare follow-up with no new subject mention -> ScopeResolutionOutcome.INHERITED. Same underlying mechanism as subject-label.valid-prior-turn-reference (CHAOS-3389 eval-fixture angle); kept as a separate id because it's the dedicated P0-B ScopeResolutionOutcome-value producer -- cross-referenced, not duplicated, matching the pattern subjects.json already uses for subject.tenant.sibling-only-private-repo.]",
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462, adversarial round 2). Established by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- not by reading the question. interpret returns ZERO mentions, so preflight takes the proceeded_organization_wide PROCEED with ledger=None, orchestrator's append_resolution sites require a non-None ledger, and zero dev_run_resolutions rows exist. derive_resolution_path([]) is None and resolution_path_in never matches None, so this check could not pass in ANY catalog world. The profile's declared value is left untouched: it is wrong for a separate, larger reason tracked as the mention_text blocker, and silently rewriting it here to force green would falsify the expectation rather than fix it.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 55 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible.",
+  "$comment_blocked_by_correction": "CHAOS-3219 Phase 3 (2026-08-07) stale-blocker sweep. WAS: 'CHAOS-3520'. CHAOS-3520 (cited before) is CLOSED, and closed with NO product change -- its own closing comment hands FILTERED/INHERITED to product. Re-verified at a07d9ff35: scope_service.py:746-747 gates INHERITED on `inherited`, set only by _active_refs (:1523-1533) from page_context_refs/conversation_context_refs, and those two are ASSIGNED NOWHERE in src/ -- all 7 ScopeResolveRequest( construction sites pass neither. Still genuinely unreachable, so this stays blocked; only the ticket was wrong."
 }

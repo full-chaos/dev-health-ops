@@ -215,9 +215,26 @@ class DevEntityRef(ContractModel):
     repository_id: OpaqueID | None = None
 
 
+#: The bound v1 places on every scope-shaped identifier list -- DevScope's
+#: ``repositories``/``entity_refs``/``team_ids`` and DevScopeResolution's
+#: ``authorized_repository_ids``/``authorized_entity_ids``.
+#:
+#: Named rather than repeated as a literal (CHAOS-3534) because a CALLER has
+#: to respect it too, and the only safe way to do that is to read the same
+#: constant the fields are declared with. ``DevSubjectSet`` independently
+#: allows up to 25 committed refs, so "legal upstream, illegal downstream" is
+#: a real and reachable state: a fully-resolved 21-25 repository cohort has
+#: no v1 scope representation, and a caller that copies its members into
+#: these lists raises instead of publishing. Found by adversarial review
+#: after the identical shape had already been found once for entity kinds.
+V1_SCOPE_LIST_LIMIT = 20
+
+
 class DevSurfaceContext(ContractModel):
     route_id: AskDevSurfaceRouteID
-    entity_refs: list[DevEntityRef] = Field(default_factory=list, max_length=20)
+    entity_refs: list[DevEntityRef] = Field(
+        default_factory=list, max_length=V1_SCOPE_LIST_LIMIT
+    )
     filter_fingerprint: OpaqueID | None = None
 
 
@@ -225,9 +242,15 @@ class DevScope(ContractModel):
     schema_version: Literal["dev_scope.v1"]
     organization_id: OpaqueID
     direct_scope: DirectScope
-    repositories: list[OpaqueID] = Field(default_factory=list, max_length=20)
-    entity_refs: list[DevEntityRef] = Field(default_factory=list, max_length=20)
-    team_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
+    repositories: list[OpaqueID] = Field(
+        default_factory=list, max_length=V1_SCOPE_LIST_LIMIT
+    )
+    entity_refs: list[DevEntityRef] = Field(
+        default_factory=list, max_length=V1_SCOPE_LIST_LIMIT
+    )
+    team_ids: list[OpaqueID] = Field(
+        default_factory=list, max_length=V1_SCOPE_LIST_LIMIT
+    )
     time_range: DevTimeRange
     comparison_range: DevTimeRange | None = None
     surface_context: DevSurfaceContext | None = None
@@ -387,9 +410,11 @@ class DevScopeResolution(ContractModel):
     resolved_scope: DevScope | None = None
     outcome: ScopeResolutionOutcome
     authorized_repository_ids: list[OpaqueID] = Field(
-        default_factory=list, max_length=20
+        default_factory=list, max_length=V1_SCOPE_LIST_LIMIT
     )
-    authorized_entity_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
+    authorized_entity_ids: list[OpaqueID] = Field(
+        default_factory=list, max_length=V1_SCOPE_LIST_LIMIT
+    )
     candidates: list[DevDisambiguationCandidate] = Field(
         default_factory=list, max_length=25
     )
@@ -1192,6 +1217,13 @@ class DevError(ContractModel):
         "cancelled",
         "provider_contract_violation",
         "internal_error",
+        # CHAOS-3541: a distinct wire code for a genuinely prohibited
+        # request (arbitrary execution, a write) -- never
+        # "insufficient_evidence", which would mislabel a categorical
+        # refusal as an evidence gap the requester could resolve by asking
+        # differently. See terminal_frames.PUBLIC_OUTCOME_BY_ERROR_CODE and
+        # contracts_v2.base.PublicOutcome.REFUSED.
+        "refused",
     ]
     safe_message: ShortText
     retryable: bool

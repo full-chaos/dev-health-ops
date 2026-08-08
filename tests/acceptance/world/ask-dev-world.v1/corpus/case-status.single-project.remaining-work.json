@@ -10,9 +10,12 @@
   ],
   "question": "What work remains before the repo \"meridian/web-app\" ships?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-4",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
+  "expected_mention_texts": [
+    "meridian/web-app"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -36,5 +39,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Same exact subject as the other status.single-project.* cases; this one specifically exercises the work-items-only evidence slice (open/incomplete work items) rather than the commits+CI blend the other three draw on. Expected answered: work_items generation for this repo (fixtures/generators/work_items.py) reliably produces open items within the 10-day generation window, so 'what remains' has real content to enumerate. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from 'What work remains before meridian/web-app ships?': question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "Same exact subject as the other status.single-project.* cases; this one specifically exercises the work-items-only evidence slice (open/incomplete work items) rather than the commits+CI blend the other three draw on. Expected answered: work_items generation for this repo (fixtures/generators/work_items.py) reliably produces open items within the 10-day generation window, so 'what remains' has real content to enumerate. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from 'What work remains before meridian/web-app ships?': question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 66 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

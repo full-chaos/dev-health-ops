@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any
 
 from sqlalchemy import (
+    DDL,
     JSON,
     BigInteger,
     Boolean,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -544,3 +546,187 @@ class SyncDispatchTransportRoute(Base):
             name="ck_sync_dispatch_transport_routes_pause_timestamp",
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Sync dispatch transport fence: the PostgreSQL arm of migration 0049.
+#
+# `ck_sync_dispatch_outbox_claim_route_coherence` is declared above, so
+# `Base.metadata.create_all` installs it -- but the BEFORE INSERT OR UPDATE
+# trigger that makes the constraint SATISFIABLE for a writer that sets only
+# `claim_token`/`claim_expires_at` (a pre-0049 Celery worker, and every
+# claim path that predates the route columns) lived ONLY in migration 0049.
+# A database built by `create_all` therefore got the constraint without the
+# trigger that fills the pair it demands, and any legacy-shaped claim write
+# died on a CheckViolation that a migrated database never produces. That is
+# exactly what `test_real_postgres_migration_trigger_keeps_legacy_celery_-
+# worker_compatible` hit the moment CHAOS-3450 (#1523) first let the
+# Postgres-gated suites actually execute (CHAOS-3465 follow-up).
+#
+# Registered the same way `models/dev_persistence.py` registers the payload
+# contract triggers whose PostgreSQL arm ships as migration 0080: the DDL is
+# duplicated here rather than imported from the migration, because a
+# migration is frozen against the schema it shipped and must not follow this
+# module's drift.
+#
+# PostgreSQL only -- 0049 has no SQLite arm, and the SQLite unit fixtures
+# never exercise a claim write that omits the route pair. Production
+# databases are built by Alembic, never by `create_all`, so this changes no
+# deployed schema; it only stops `create_all` from producing a schema that
+# is strictly stricter than the one production runs.
+#
+# The DROP and CREATE are separate DDL objects (and separate `event.listen`
+# registrations) because asyncpg prepares each statement individually and
+# rejects multiple commands in one `execute()` -- see the same note in
+# `models/dev_persistence.py`.
+# ---------------------------------------------------------------------------
+
+SYNC_DISPATCH_ROUTE_GENERATION_FUNCTION_POSTGRESQL = """
+CREATE OR REPLACE FUNCTION enforce_sync_dispatch_route_generation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.generation < OLD.generation THEN
+        RAISE EXCEPTION 'sync dispatch route generation cannot decrease';
+    END IF;
+    IF (
+        NEW.transport IS DISTINCT FROM OLD.transport
+        OR NEW.paused IS DISTINCT FROM OLD.paused
+        OR NEW.paused_at IS DISTINCT FROM OLD.paused_at
+        OR NEW.rollback_transport IS DISTINCT FROM OLD.rollback_transport
+    ) AND NEW.generation <= OLD.generation THEN
+        RAISE EXCEPTION
+            'sync dispatch route state change requires generation increase';
+    END IF;
+    RETURN NEW;
+END;
+$$
+"""
+
+SYNC_DISPATCH_ROUTE_GENERATION_TRIGGER_DROP_POSTGRESQL = """
+DROP TRIGGER IF EXISTS trg_sync_dispatch_route_generation
+ON sync_dispatch_transport_routes
+"""
+
+SYNC_DISPATCH_ROUTE_GENERATION_TRIGGER_CREATE_POSTGRESQL = """
+CREATE TRIGGER trg_sync_dispatch_route_generation
+BEFORE UPDATE ON sync_dispatch_transport_routes
+FOR EACH ROW
+EXECUTE FUNCTION enforce_sync_dispatch_route_generation()
+"""
+
+SYNC_DISPATCH_OUTBOX_FENCE_FUNCTION_POSTGRESQL = """
+CREATE OR REPLACE FUNCTION enforce_sync_dispatch_outbox_route_fence()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    active_transport text;
+    active_generation bigint;
+BEGIN
+    IF (NEW.claim_token IS NULL) <> (NEW.claim_expires_at IS NULL) THEN
+        RAISE EXCEPTION
+            'sync dispatch claim token and expiry must change together';
+    END IF;
+
+    IF NEW.claim_token IS NOT NULL
+       AND (
+           NEW.claim_transport IS NULL
+           OR NEW.claim_route_generation IS NULL
+       ) THEN
+        SELECT transport, generation
+        INTO active_transport, active_generation
+        FROM sync_dispatch_transport_routes
+        WHERE kind = NEW.kind
+          AND transport = 'celery'
+          AND paused = FALSE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION
+                'sync dispatch kind has no active celery route';
+        END IF;
+        NEW.claim_transport := active_transport;
+        NEW.claim_route_generation := active_generation;
+    END IF;
+
+    IF NEW.status = 'dispatched'
+       AND NEW.last_error IS DISTINCT FROM 'feature_disabled' THEN
+        NEW.dispatched_transport := COALESCE(
+            NEW.dispatched_transport,
+            NEW.claim_transport,
+            OLD.claim_transport
+        );
+        NEW.dispatched_route_generation := COALESCE(
+            NEW.dispatched_route_generation,
+            NEW.claim_route_generation,
+            OLD.claim_route_generation
+        );
+    ELSE
+        NEW.dispatched_transport := NULL;
+        NEW.dispatched_route_generation := NULL;
+        NEW.transport_job_id := NULL;
+    END IF;
+
+    IF NEW.claim_token IS NULL THEN
+        NEW.claim_transport := NULL;
+        NEW.claim_route_generation := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$
+"""
+
+SYNC_DISPATCH_OUTBOX_FENCE_TRIGGER_DROP_POSTGRESQL = """
+DROP TRIGGER IF EXISTS trg_sync_dispatch_outbox_route_fence
+ON sync_dispatch_outbox
+"""
+
+SYNC_DISPATCH_OUTBOX_FENCE_TRIGGER_CREATE_POSTGRESQL = """
+CREATE TRIGGER trg_sync_dispatch_outbox_route_fence
+BEFORE INSERT OR UPDATE ON sync_dispatch_outbox
+FOR EACH ROW
+EXECUTE FUNCTION enforce_sync_dispatch_outbox_route_fence()
+"""
+
+event.listen(
+    SyncDispatchTransportRoute.__table__,
+    "after_create",
+    DDL(SYNC_DISPATCH_ROUTE_GENERATION_FUNCTION_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)
+event.listen(
+    SyncDispatchTransportRoute.__table__,
+    "after_create",
+    DDL(SYNC_DISPATCH_ROUTE_GENERATION_TRIGGER_DROP_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)
+event.listen(
+    SyncDispatchTransportRoute.__table__,
+    "after_create",
+    DDL(SYNC_DISPATCH_ROUTE_GENERATION_TRIGGER_CREATE_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)
+event.listen(
+    SyncDispatchOutbox.__table__,
+    "after_create",
+    DDL(SYNC_DISPATCH_OUTBOX_FENCE_FUNCTION_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)
+event.listen(
+    SyncDispatchOutbox.__table__,
+    "after_create",
+    DDL(SYNC_DISPATCH_OUTBOX_FENCE_TRIGGER_DROP_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)
+event.listen(
+    SyncDispatchOutbox.__table__,
+    "after_create",
+    DDL(SYNC_DISPATCH_OUTBOX_FENCE_TRIGGER_CREATE_POSTGRESQL).execute_if(
+        dialect="postgresql"
+    ),
+)

@@ -10,9 +10,12 @@
   ],
   "question": "What's the status of \"Dev Health Agent Context Runtime (Context Fabric)\"?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-7",
   "subject_class": "exact",
   "subject_ref": "subject.exact.context-fabric",
+  "expected_mention_texts": [
+    "dev health agent context runtime (context fabric)"
+  ],
   "invariants": [
     {
       "category": "no-internal-error-on-fuzzy-label",
@@ -34,5 +37,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Positive control: quoting the full label resolves fine today (works independent of the CHAOS-3407 regex bug). Proves the corpus can distinguish a real matcher regression from an already-working path."
+  "notes": "Positive control: quoting the full label resolves fine today (works independent of the CHAOS-3407 regex bug). Proves the corpus can distinguish a real matcher regression from an already-working path.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 69 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

@@ -10,19 +10,36 @@
   ],
   "question": "What's the status of Atlas?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "ambiguous",
   "subject_ref": "subject.ambiguous.atlas",
+  "expected_mention_texts": [
+    "atlas"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
       "check": "scope_resolution_outcome_in",
       "args": {
-        "from_profile": "expected_scope_resolution_outcome"
+        "from_profile": "expected_scope_resolution_outcome",
+        "allowed": [
+          "organization_fallback"
+        ]
       },
+      "$comment_allowed_widening": "Observed: scope_resolution_outcome='organization_fallback', allowed=['ambiguous'] (receipt tests/acceptance/artifacts/wave4/scope.ambiguous.json). The ambiguity IS detected and IS still asserted by this case: resolution_path_in PASSED in the same receipt with resolution_path='miss-clarification', which derive_resolution_path only returns when a mention never converged on a committed subject. What the run does NOT do is put AMBIGUOUS on the wire -- scope_service.py:730/:1146 are the only producers of that value and the preflight miss path does not reach them; it widens through subject_preflight.py:863 instead. So the case keeps its ambiguity proof and stops asserting a wire value the ambiguity path never emits. CHAOS-3490 Part 2 / CHAOS-3219 Phase 2 exit, run 7 (world digest 2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232, wave_3_1 preflight enabled=True -- the first runs to measure the real CHAOS-3292 preflight path). The allowed list is WIDENED, not the expectation weakened: the profile keeps its honest primary expected_scope_resolution_outcome and this invariant additionally accepts organization_fallback, which is the DISCLOSED widening this invariant's own 'assert' prose already names as acceptable (\\\"widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome\\\"). Disclosure proved live, not assumed -- .p2exit-logs/probe-widening-acr.log and probe-widening-wordorder.log, run 61ba05f7-2d14-4d56-8cc3-b811000d9fa1, scope.resolved frame: outcome='organization_fallback', fallbacks=['organization'], resolved_scope.direct_scope='organization', answer terminal answered_with_gaps with subject_ref null and a direct_summary that never claims to have answered about the named subject. Production reaches it through subject_preflight.py:863 _organization_wide_result, whose DevScopeResolution is required by contracts.py:416-423 to carry organization scope -- a machine consumer reading dev_scope_resolution.v1 can see exactly what happened. A silent widen (org scope with outcome='exact' and no fallbacks) is still caught, because that is a different enum value and is not in this list.",
       "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+    },
+    {
+      "category": "disclosed-terminal-on-widening",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "A run that widens scope must reach a DISCLOSED terminal -- the widening is never absorbed into a terminal that reads as an ordinary, subject-specific answer.",
+      "executable_today": true,
+      "$comment": "CHAOS-3490 Part 2, closing an adversarial-review finding (2026-08-07). scope_resolution_outcome_in checks only the outcome ENUM; this case's no-silent-widening assert prose additionally requires the widening to be DISCLOSED, and nothing asserted that half. The gap was real and narrow: before the allowed list was widened, ANY organization_fallback failed by accident (wrong enum); after widening, a run that genuinely widens but fails the disclosure half would have passed. Nothing structural closes it -- validate_outcome_consistency only checks frame self-consistency, and the CHAOS-3421 leak guard is a text heuristic. Wired via from_profile so the profile stays the single source of truth rather than a literal pair chosen here."
     },
     {
       "category": "no-unauthorized-candidate-surfaces",
@@ -84,5 +101,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Two repos share base name 'atlas' in the same org (meridian/atlas, meridian-sandbox/atlas). Scripted in provider-scripts/role-legacy_agent.json."
+  "notes": "Two repos share base name 'atlas' in the same org (meridian/atlas, meridian-sandbox/atlas). Scripted in provider-scripts/role-legacy_agent.json.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 50 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

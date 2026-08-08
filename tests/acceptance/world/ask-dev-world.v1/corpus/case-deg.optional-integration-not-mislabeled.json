@@ -10,9 +10,12 @@
   ],
   "question": "Does the repo \"meridian/web-app\" get penalized with a deficiency simply because its automated code review evidence integration isn't configured?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
+  "expected_mention_texts": [
+    "meridian/web-app"
+  ],
   "invariants": [
     {
       "category": "no-optional-source-flagged-as-deficiency",
@@ -30,9 +33,20 @@
       },
       "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Grounded directly in sources.json's 'not-applicable' matrix row and data_health_service.py, read verbatim: 'NativeDataHealthReader.read hardcodes if source == \"acr\": SourceHealthObservation(source, False, False, warning=\"acr_optional\") for every org unconditionally -- required=False means DataHealthService.inspect's complete_eligible never gates on it.' No fixture row is needed for this state (sources.json's own realized_by is deliberately null, org-wide/unconditional). The question deliberately avoids the bare token 'ACR' -- that literal acronym is already claimed, with different, deliberate semantics, by subjects.json's subject.exact.context-fabric (an unaliased acronym MENTION of an unrelated project, exercised by the already-authored subject-label.acronym-mention corpus case) and using it here risks colliding with question_interpreter.py's _NAME/closed-kind-noun extraction in a way that would test subject-mention resolution instead of the optional-source deficiency question this case actually targets; 'automated code review evidence integration' names the same real acr source class in plain words instead. Category 1 is confirmed 'fully bound' in operational_deficiency_service.py's own docstring (every required source maps to a finding kind), and acr is explicitly excluded from that binding by its required=False status -- so the correct, honest answer is that no deficiency is ever raised for it, a real absence-of-false-positive claim this case exists to prove holds end to end, not a fixture-dependent condition. Subject resolves EXACT via the quoted noun-adjacent span 'the repo \"meridian/web-app\"' (same mechanism as scope.refused-with-grounding/health.project.exact-subject) -- resolution_path=deterministic-exact, expected_scope_resolution_outcome=exact. expected_public_outcome=answered_with_gaps follows the same settled-by-code fact workload.team.with-denominator/deficiency.team.applicable-rule's resolution-profile entries already document (terminal_frames.wrap_legacy_answer_as_frame: a real DevAnswer terminal on today's deterministic/legacy stack always maps to PublicOutcome.ANSWERED_WITH_GAPS, never plain ANSWERED) -- this case's own gap is unrelated to the acr question itself (the acr answer is a clean, confident negative), it is simply the same universal legacy-stack wrapping behavior every other successful DevAnswer terminal in this corpus already carries."
+  "notes": "Grounded directly in sources.json's 'not-applicable' matrix row and data_health_service.py, read verbatim: 'NativeDataHealthReader.read hardcodes if source == \"acr\": SourceHealthObservation(source, False, False, warning=\"acr_optional\") for every org unconditionally -- required=False means DataHealthService.inspect's complete_eligible never gates on it.' No fixture row is needed for this state (sources.json's own realized_by is deliberately null, org-wide/unconditional). The question deliberately avoids the bare token 'ACR' -- that literal acronym is already claimed, with different, deliberate semantics, by subjects.json's subject.exact.context-fabric (an unaliased acronym MENTION of an unrelated project, exercised by the already-authored subject-label.acronym-mention corpus case) and using it here risks colliding with question_interpreter.py's _NAME/closed-kind-noun extraction in a way that would test subject-mention resolution instead of the optional-source deficiency question this case actually targets; 'automated code review evidence integration' names the same real acr source class in plain words instead. Category 1 is confirmed 'fully bound' in operational_deficiency_service.py's own docstring (every required source maps to a finding kind), and acr is explicitly excluded from that binding by its required=False status -- so the correct, honest answer is that no deficiency is ever raised for it, a real absence-of-false-positive claim this case exists to prove holds end to end, not a fixture-dependent condition. Subject resolves EXACT via the quoted noun-adjacent span 'the repo \"meridian/web-app\"' (same mechanism as scope.refused-with-grounding/health.project.exact-subject) -- resolution_path=deterministic-exact, expected_scope_resolution_outcome=exact. expected_public_outcome=answered_with_gaps follows the same settled-by-code fact workload.team.with-denominator/deficiency.team.applicable-rule's resolution-profile entries already document (terminal_frames.wrap_legacy_answer_as_frame: a real DevAnswer terminal on today's deterministic/legacy stack always maps to PublicOutcome.ANSWERED_WITH_GAPS, never plain ANSWERED) -- this case's own gap is unrelated to the acr question itself (the acr answer is a clean, confident negative), it is simply the same universal legacy-stack wrapping behavior every other successful DevAnswer terminal in this corpus already carries.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 22 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

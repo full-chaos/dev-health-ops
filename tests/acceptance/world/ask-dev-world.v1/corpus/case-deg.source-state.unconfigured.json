@@ -10,9 +10,12 @@
   ],
   "question": "What incidents has the repo \"probe/source-current\" had?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "exact",
   "subject_ref": null,
+  "expected_mention_texts": [
+    "probe/source-current"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -32,9 +35,20 @@
       },
       "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Grounded against sources.json's dedicated 'unconfigured' matrix row: primary org's sync_providers deliberately omit pagerduty/opsgenie/incident -> _source_configured('incidents', configs) is False org-wide for primary -> DataHealthState.UNCONFIGURED for 'incidents' regardless of which repo is asked about (incidents carries no repo_id column). sources.json attaches this row to probe/source-current (an org-wide effect, reusing an already-realized repo rather than minting a dedicated one) -- this case follows that same attachment and asks specifically about incidents, per this batch's instruction, rather than reusing probe/source-current's role as the deg.source-state.current positive-control repo for a general status question. Repo referenced directly by name (no dedicated subjects.json entry needed for this angle), same pattern as the other deg.source-state.* cases in this batch."
+  "notes": "Grounded against sources.json's dedicated 'unconfigured' matrix row: primary org's sync_providers deliberately omit pagerduty/opsgenie/incident -> _source_configured('incidents', configs) is False org-wide for primary -> DataHealthState.UNCONFIGURED for 'incidents' regardless of which repo is asked about (incidents carries no repo_id column). sources.json attaches this row to probe/source-current (an org-wide effect, reusing an already-realized repo rather than minting a dedicated one) -- this case follows that same attachment and asks specifically about incidents, per this batch's instruction, rather than reusing probe/source-current's role as the deg.source-state.current positive-control repo for a general status question. Repo referenced directly by name (no dedicated subjects.json entry needed for this angle), same pattern as the other deg.source-state.* cases in this batch.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 29 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

@@ -16,19 +16,44 @@ class only checks *shape*: is ``selected_candidate_index`` an int or null,
 is ``confidence`` a probability, is ``outcome`` one of three closed values.
 Whether a given index actually falls within the specific shortlist shown for
 that mention is a **per-call** fact this static schema cannot know (two
-different questions show different candidate counts) -- that bound is
-enforced two other ways, both in ``qua_shadow.py``:
+different questions show different candidate counts).
 
-1. The wire-level JSON Schema handed to the provider (``_response_schema``)
-   bounds every index field to ``[0, total_candidates - 1]`` for THIS call,
-   built fresh per call. A provider honoring the schema cannot even
-   *generate* an out-of-range integer, and when there are zero authorized
-   candidates the bound is ``[0, -1]`` -- empty, so no integer satisfies it.
-2. ``_verify`` re-checks every index against the exact per-mention slice
-   after parsing, in case a provider does not honor the schema strictly.
-   A violation there marks that one mention's proposal ``rejected``, never
-   the whole record, and it is never a live-path decision either way --
-   shadow mode never acts on any of this.
+**That bound is enforced in two places, split by scope.** This paragraph has
+been wrong in both directions -- it once claimed defence in depth that did not
+exist (CHAOS-3536), then, while that was true, understated what came back
+(CHAOS-3537) -- so it now states the boundary precisely rather than a slogan:
+
+1. **Call-wide, structurally, on the wire.** ``qua_shadow._response_schema``
+   enumerates this call's authorized indices as ``enum``, so a provider cannot
+   express an index the CALL never authorized. The keyword matters:
+   ``OpenAICompatibleAgentProvider`` projects every schema through
+   ``_structural_schema``, which keeps only ``_STRUCTURAL_SCHEMA_KEYS``.
+   ``minimum``/``maximum``/``minItems``/``maxItems``/``maxLength`` are not in
+   it and are stripped in transit; ``enum`` is, and survives. The original
+   claim rested on ``[0, total_candidates - 1]`` range bounds and was false
+   for as long as it stood -- those never reached any provider.
+2. **Per-mention, at runtime.** ``_verify`` re-checks every index against the
+   exact per-mention slice after parsing, independent of whether the provider
+   honored anything. A violation marks that one mention's proposal
+   ``rejected``, never the whole record. CHAOS-3525 additionally hardened the
+   singular commit path to resolve by identity.
+
+**These are two STAGES, not two coverages.** Every mention slice is a subset
+of ``[0, len(combined))``, so any index the enum rejects is outside every
+mention's slice and ``_verify`` rejects it too -- ``_verify``'s rejection set
+strictly SUBSUMES the schema's. The enum earns its place by acting before
+generation (an unauthorized index is never produced, so the proposal survives
+rather than being discarded) and by ending ``_verify``'s status as a single
+point of failure. Per-mention ownership is ``_verify``'s alone: the schema is
+built once per call from the COMBINED shortlist and cannot express which
+mention an index belongs to.
+
+With zero candidates authorized, ``selected_candidate_index`` is sent as
+``{"type": "null"}``. ``candidate_indices`` stays a plain integer array --
+a null would fail parsing here (non-optional tuple), and the ``enum: []``
+that would close it structurally is an unsatisfiable choice set that has not
+been certified against the local/ollama/lmstudio decoders. It is bounded by
+``_verify`` alone. See ``qua_shadow._response_schema``.
 """
 
 from __future__ import annotations
@@ -49,9 +74,14 @@ __all__ = [
 
 QUESTION_UNDERSTANDING_SCHEMA_VERSION = "dev_question_understanding.v1"
 
-#: Bound applied to every candidate-index field regardless of shortlist size
-#: (belt: the wire schema's own per-call bound is tighter; this is the
-#: absolute ceiling a hand-authored ``max_length``/``le`` must never exceed).
+#: Bound applied to every candidate-index field regardless of shortlist size.
+#:
+#: CHAOS-3536 found this calling itself the "belt" to a tighter per-call wire
+#: bound that had been stripped in transit and did not exist. CHAOS-3537
+#: restored that bound as an ``enum``, which survives the projection -- so the
+#: braces are real again and this genuinely is the belt. Kept as the absolute
+#: ceiling a hand-authored ``max_length``/``le`` must never exceed, and as the
+#: bound that still applies if the per-call enum is ever widened.
 _MAX_MENTIONS = 25
 _MAX_CANDIDATE_INDICES = 25
 

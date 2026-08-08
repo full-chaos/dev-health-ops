@@ -13,6 +13,9 @@
   "user_alias": "primary.ordinary",
   "subject_class": "acronym-alias",
   "subject_ref": "subject.acronym-alias.ground-control-team",
+  "expected_mention_texts": [
+    "platform reliability (ground control)"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -40,9 +43,20 @@
       },
       "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "General/non-workload instance of an 'unknown denominator' condition, distinct from workload.team.without-denominator's workload-specific instance: grounded in dimension_observation_adapters.py, checked directly -- ALL FOUR of that module's dimension-observation adapters (including investment_allocation_shift_observation, category 8/investment_balance's only bound HEALTH_RULE_REGISTRY rule) report attribution_present=False unconditionally (CHAOS-3331, module docstring confirms this explicitly). operational_deficiency_service.py's own docstring independently confirms the downstream consequence: 'a genuinely computed shift therefore lands in suppressed_findings with missing_attribution, never a launch finding, until CHAOS-3331 lands.' This is a genuine, always-true production behavior today (not fixture-dependent, unlike most of this corpus's positive/negative controls) -- true for ANY team subject, not just this one, because attribution_present=False is hardcoded, not computed per-fixture. Same quoted-full-label EXACT-resolution mechanism as workload.team.with-denominator/deficiency.team.applicable-rule (see those cases' notes for the live-verified reason the bare 'Ground Control' alias mention is not used) -- resolution_path=deterministic-exact, expected_scope_resolution_outcome=exact per those already-established resolution-profiles/deterministic-v1.json precedents for this exact subject/mention shape. expected_public_outcome=answered_with_gaps follows the SAME settled-by-code fact those cases' resolution-profile entries already document (terminal_frames.wrap_legacy_answer_as_frame: a real DevAnswer terminal on today's deterministic/legacy stack always maps to PublicOutcome.ANSWERED_WITH_GAPS, never plain ANSWERED, because the legacy model-tool-choice loop never computes a DevCompletionBlock)."
+  "notes": "General/non-workload instance of an 'unknown denominator' condition, distinct from workload.team.without-denominator's workload-specific instance: grounded in dimension_observation_adapters.py, checked directly -- ALL FOUR of that module's dimension-observation adapters (including investment_allocation_shift_observation, category 8/investment_balance's only bound HEALTH_RULE_REGISTRY rule) report attribution_present=False unconditionally (CHAOS-3331, module docstring confirms this explicitly). operational_deficiency_service.py's own docstring independently confirms the downstream consequence: 'a genuinely computed shift therefore lands in suppressed_findings with missing_attribution, never a launch finding, until CHAOS-3331 lands.' This is a genuine, always-true production behavior today (not fixture-dependent, unlike most of this corpus's positive/negative controls) -- true for ANY team subject, not just this one, because attribution_present=False is hardcoded, not computed per-fixture. Same quoted-full-label EXACT-resolution mechanism as workload.team.with-denominator/deficiency.team.applicable-rule (see those cases' notes for the live-verified reason the bare 'Ground Control' alias mention is not used) -- resolution_path=deterministic-exact, expected_scope_resolution_outcome=exact per those already-established resolution-profiles/deterministic-v1.json precedents for this exact subject/mention shape. expected_public_outcome=answered_with_gaps follows the SAME settled-by-code fact those cases' resolution-profile entries already document (terminal_frames.wrap_legacy_answer_as_frame: a real DevAnswer terminal on today's deterministic/legacy stack always maps to PublicOutcome.ANSWERED_WITH_GAPS, never plain ANSWERED, because the legacy model-tool-choice loop never computes a DevCompletionBlock).",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 35 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

@@ -15,11 +15,13 @@ equals the name outright.
 
 from __future__ import annotations
 
+import inspect
 import re
 from typing import Any
 
 import pytest
 
+from dev_health_ops.api.dev import subject_preflight as subject_preflight_module
 from dev_health_ops.api.dev.contracts_v2 import (
     PublicOutcome,
     ResolutionOutcome,
@@ -97,6 +99,7 @@ class LimitRecordingCatalog(SeededCatalog):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         self.search_limits.append((len(kinds), limit))
         return await super().search(
@@ -105,6 +108,7 @@ class LimitRecordingCatalog(SeededCatalog):
             kinds,
             limit=limit,
             include_alias_matches=include_alias_matches,
+            preferred_kinds=preferred_kinds,
         )
 
 
@@ -123,6 +127,7 @@ class CrossTenantLeakingCatalog(SeededCatalog):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         if len(kinds) == 1:
             return await super().search(
@@ -131,6 +136,7 @@ class CrossTenantLeakingCatalog(SeededCatalog):
                 kinds,
                 limit=limit,
                 include_alias_matches=include_alias_matches,
+                preferred_kinds=preferred_kinds,
             )
         needle = query.casefold()
         matched = [
@@ -157,6 +163,7 @@ class MultiKindFailingCatalog(SeededCatalog):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         if len(kinds) > 1:
             raise RuntimeError("catalog unavailable for the fallback search")
@@ -166,6 +173,7 @@ class MultiKindFailingCatalog(SeededCatalog):
             kinds,
             limit=limit,
             include_alias_matches=include_alias_matches,
+            preferred_kinds=preferred_kinds,
         )
 
 
@@ -871,3 +879,36 @@ def test_every_preflight_diagnostic_fits_the_persisted_column() -> None:
     assert len(set(PREFLIGHT_DIAGNOSTICS)) == len(PREFLIGHT_DIAGNOSTICS)
     oversized = [name for name in PREFLIGHT_DIAGNOSTICS if len(name) > 32]
     assert oversized == []
+
+
+def test_every_emitted_diagnostic_literal_is_declared_in_the_closed_tuple() -> None:
+    """CHAOS-3528: a ``diagnostic="..."`` literal emitted somewhere in this
+    module but never added to :data:`PREFLIGHT_DIAGNOSTICS` widens
+    ``dev_runs.preflight_outcome`` past its own closed vocabulary silently --
+    the tuple's length guard above cannot see a value it never lists, and
+    nothing else in this test module reads the module's source to check.
+
+    ``portfolio_catalog_unavailable`` (the CHAOS-3393 catalog-outage branch)
+    was exactly that: emitted at a real call site, absent from the tuple, and
+    invisible to every other test because none of them persist a run against
+    the real ``String(32)`` column. Grep-based, per the ticket's own
+    suggested fix: it inspects the literal ``diagnostic="..."`` call-site
+    strings actually compiled into the module, not test expectations of them,
+    so a future branch that emits a new undeclared diagnostic fails HERE
+    rather than relying on a reviewer to notice.
+
+    Deliberately blind to a diagnostic assembled at runtime (an f-string) --
+    the closed tuple's own docstring requires diagnostics to be kept literal
+    for exactly this reason, so a dynamically built diagnostic is already a
+    violation the length guard and this guard both are entitled to miss.
+    """
+
+    source = inspect.getsource(subject_preflight_module)
+    emitted = set(re.findall(r'diagnostic="([a-z_]+)"', source))
+
+    assert emitted, 'no literal diagnostic="..." call sites found in the module'
+    undeclared = emitted - set(PREFLIGHT_DIAGNOSTICS)
+    assert undeclared == set(), (
+        f'{sorted(undeclared)} emitted via a literal diagnostic="..." but '
+        "missing from PREFLIGHT_DIAGNOSTICS"
+    )

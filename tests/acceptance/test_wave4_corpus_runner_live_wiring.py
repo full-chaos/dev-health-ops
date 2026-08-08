@@ -19,9 +19,11 @@ re-exercise those same seams through an extra layer of indirection.
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevStreamEvent
+from scripts.acceptance.corpus.principals import SEEDED_PROVISIONING_MARKER
 from scripts.acceptance.corpus.sse_client import SseFrame
 from tests.acceptance.test_wave4_corpus_runner_live import (
     _public_outcome_from_events,
@@ -103,3 +105,51 @@ class TestPublicOutcomeFromEvents:
         outcome = _public_outcome_from_events(events)
         assert outcome == "answered_with_gaps"
         assert outcome != "answered"
+
+
+class TestReceiptRecordsProvisioningMode:
+    """Adversarial round 3: the marker used to live only in a free-text
+    ``detail`` string, and deleting that fragment left every test green.
+
+    A receipt is evidence, and it must say where the run's credentials came
+    from. There is one path now -- the world seed (CHAOS-3463) -- but the
+    field stays named and recorded: a receipt that simply omits the question
+    cannot be distinguished later from one produced before the answer was
+    settled.
+    """
+
+    def test_the_runner_records_a_named_provisioning_check(self) -> None:
+        # Absolute, derived from this file: a relative path would depend on
+        # cwd, and a source-reading assertion that cannot find its source is
+        # exactly the "measurement that did not happen" shape. read_text
+        # raises loudly if it is ever wrong.
+        source = (
+            Path(__file__).with_name("test_wave4_corpus_runner_live.py")
+        ).read_text(encoding="utf-8")
+        assert "provisioned_via_" in source, (
+            "the runner no longer records a named provisioning-mode check -- "
+            "receipts can no longer say which credential path produced them"
+        )
+        assert 'category="provisioning-mode"' in source
+
+    def test_the_provisioning_check_is_asserted_not_merely_recorded(self) -> None:
+        """The check used to pass ``condition=True`` because either mode was
+        acceptable while the bridge existed. Only one is acceptable now, so
+        the check must actually compare against the seeded marker -- an
+        unconditional check reads as coverage while asserting nothing.
+        """
+
+        assert SEEDED_PROVISIONING_MARKER
+        source = (
+            Path(__file__).with_name("test_wave4_corpus_runner_live.py")
+        ).read_text(encoding="utf-8")
+        marker = 'category="provisioning-mode"'
+        start = source.index(marker)  # raises loudly if the check is gone
+        block = source[start : start + 600]
+        assert "SEEDED_PROVISIONING_MARKER" in block, (
+            "the provisioning-mode check no longer compares against the "
+            "seeded marker -- it can no longer fail"
+        )
+        assert "condition=True" not in block, (
+            "the provisioning-mode check went back to an unconditional pass"
+        )

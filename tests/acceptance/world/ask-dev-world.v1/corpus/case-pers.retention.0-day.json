@@ -4,7 +4,7 @@
   "family": "pers",
   "group": 10,
   "status": "declared-blocked",
-  "blocked_by": "CHAOS-3404",
+  "blocked_by": "CHAOS-3547 verification plane cannot read dev_conversations, so deletion cannot be asserted",
   "proves": [
     "group 10 bullet 4"
   ],
@@ -16,5 +16,6 @@
   "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "0-day retention sweep covering every intent/ledger/plan/source/frame/narrative/finding artifact class. DevPersistenceService.cleanup_expired exists (src/dev_health_ops/api/dev/persistence/service.py, confirmed by reading it directly) but has no beat schedule, CLI, or production caller (CHAOS-3404, confirmed open Backlog/High) -- retention sweeps never execute in production today, so this case cannot pass against real code yet. Matches registry-ids.v1.json group-10 blocked map (already recorded in REGISTRY-AMENDMENT.v1.md sec.1)."
+  "notes": "0-day retention sweep covering every intent/ledger/plan/source/frame/narrative/finding artifact class. DevPersistenceService.cleanup_expired exists (src/dev_health_ops/api/dev/persistence/service.py, confirmed by reading it directly) but has no beat schedule, CLI, or production caller (CHAOS-3404, confirmed open Backlog/High) -- retention sweeps never execute in production today, so this case cannot pass against real code yet. Matches registry-ids.v1.json group-10 blocked map (already recorded in REGISTRY-AMENDMENT.v1.md sec.1).",
+  "$comment_blocked_by_correction": "CHAOS-3219 Phase 3 (2026-08-07) stale-blocker sweep. WAS: 'CHAOS-3404'. CHAOS-3404 (cited before) is CLOSED and the sweep genuinely landed (beat entry workers/config.py:309-313; synchronous 0-day purge via update_run -> _stamp_ephemeral_expiry_if_terminal, persistence/service.py:2268-2281). Three runner-side gaps remain: no dev_conversations reader in the exec plane (db_verify.py exposes three reads, none over that table), no persistence-replay-retention-deletion checker (invariants.py NOT_YET_IMPLEMENTED_CATEGORIES, now enforced by a test), and the runner hardcodes retention_days=30 (test_wave4_corpus_runner_live.py:622) so a case cannot create a 0-day conversation at all. This case is ALSO homed on org 'primary', whose policy is 30-day; only 'sibling' carries 0-day. Separately, CHAOS-3544 (Urgent) records that seeded 0-day rows are un-purgeable by any code path AND that production can reach the same shape."
 }

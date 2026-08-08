@@ -195,6 +195,13 @@ class FakeBoundedRuntime:
             tool_call_count=0,
             provider_fingerprint="provider-test",
             model_fingerprint="model-test",
+            # CHAOS-3497: the real producer (`orchestrator.finish()`) sets
+            # this on every terminal, and `streaming` builds the
+            # `scope.resolved` frame from it. A double that leaves it None
+            # silently drops that frame from every router test's live leg,
+            # which is how a stream can look fully asserted while missing an
+            # event -- exactly what this ticket is about.
+            scope_resolution=answer.resolved_scope,
         )
 
     async def aclose(self) -> None:
@@ -742,6 +749,13 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     assert first.text.count("event: done") == 1
     assert "raw_prompt" not in first.text
     assert "provider_response" not in first.text
+    # CHAOS-3497: `streaming` now builds this frame from
+    # `OrchestratorResult.scope_resolution` rather than reaching into
+    # `answer.resolved_scope`, so `_replayed_result` has to populate that
+    # field too. Counted on BOTH legs: nothing here asserted on
+    # `scope.resolved` before, so a replay silently losing the frame would
+    # have passed every existing check.
+    assert first.text.count("event: scope.resolved") == 1
 
     replay = await client.post(
         f"/api/v1/dev/conversations/{conversation_id}/messages",
@@ -751,6 +765,7 @@ async def test_dev_message_stream_is_bounded_persisted_and_idempotent(
     assert replay.text.count("event: run.started") == 1
     assert replay.text.count("event: answer.completed") == 1
     assert replay.text.count("event: done") == 1
+    assert replay.text.count("event: scope.resolved") == 1
 
     transcript = await client.get(
         f"/api/v1/dev/conversations/{conversation_id}/transcript",

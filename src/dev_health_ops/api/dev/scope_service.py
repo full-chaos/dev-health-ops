@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .alias_matching import SpanMatch
 from .contracts import (
     DevDisambiguationCandidate,
     DevEntityRef,
@@ -169,6 +170,23 @@ class AuthorizedEntity:
     canonical_id: str
     label: str
     repository_id: str | None = None
+    #: CHAOS-3553: how the SEARCH SPAN that produced this row relates to the
+    #: label -- stamped by ``scope_catalog.merge_search_candidates``, the one
+    #: place that sees both the query and the ranked page.
+    #:
+    #: ``None`` on every entity that has no span to speak of: the catalog's
+    #: ``exact()`` path, the organization roster, the organization-fallback
+    #: entity, and anything a caller builds by hand. ``None`` means "not
+    #: classified", never "no match" -- every consumer must fail closed on it
+    #: rather than assume a class.
+    #:
+    #: Excluded from equality and hashing (``compare=False``) on purpose. This
+    #: is metadata about a QUERY, not about the entity: the same authorized
+    #: entity found by "MWA" and by "Web Application" is the same entity, and
+    #: letting the span decide identity would make ``==`` answer a different
+    #: question than every id-keyed dedupe in this module already answers.
+    #: Assert on ``.span_match`` directly rather than through entity equality.
+    span_match: SpanMatch | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         if not self.canonical_id or not self.label:
@@ -283,6 +301,17 @@ class ScopeSearchRequest:
     #: something close" -- that is exactly the outcome and copy the
     #: closest-matches fallback already owns.
     include_alias_matches: bool = False
+    #: CHAOS-3422. The kind a *typed* mention actually named. Purely a ranking
+    #: key -- candidates of this kind sort ahead of every other kind, before
+    #: each of the two truncations on this path (the catalog's page bound and
+    #: this service's own), and nothing is ever excluded for being another
+    #: kind. Excluding would regress CHAOS-3366, whose whole premise is that
+    #: the thing the user meant may sit one kind over. Empty for every caller
+    #: that has no user-stated kind to honour, which is today's behaviour
+    #: exactly; an untyped bare name is one of those, because its
+    #: ``requested_entity_kind`` is a declared default, not something the user
+    #: typed (``question_interpreter._add_untyped_mentions``).
+    preferred_kinds: frozenset[EntityKind] = frozenset()
 
     def __post_init__(self) -> None:
         query = self.query.strip()
@@ -294,6 +323,8 @@ class ScopeSearchRequest:
             raise ValueError("Caller allowlist exceeds the searchable entity ceiling")
         if any(kind not in self.allowed_kinds for kind in self.kinds):
             raise ValueError("Only approved searchable V1 direct scopes are allowed")
+        if not self.preferred_kinds <= set(self.kinds):
+            raise ValueError("A preferred kind must be one of the searched kinds")
         if self.limit < 1 or self.limit > MAX_CANDIDATES:
             raise ValueError(f"Search limit must be between 1 and {MAX_CANDIDATES}")
         object.__setattr__(self, "query", query)
@@ -353,6 +384,7 @@ class AuthorizedEntityCatalog(Protocol):
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]: ...
 
     async def organization_repository_ids(
@@ -421,6 +453,70 @@ def _dedupe_entities(
 ) -> tuple[AuthorizedEntity, ...]:
     unique = {(entity.kind, entity.canonical_id): entity for entity in entities}
     return tuple(sorted(unique.values(), key=_entity_order))
+
+
+def _dedupe_preserving_rank(
+    entities: Sequence[AuthorizedEntity],
+) -> tuple[AuthorizedEntity, ...]:
+    """Deduplicate a search page **without** re-ordering it.
+
+    Search results arrive already ranked by ``merge_search_candidates`` — the
+    named kind, then alias-equality over incidental substring containment,
+    then label. Passing them through ``_dedupe_entities`` re-sorted the whole
+    page by label and destroyed both of the first two keys, because an
+    ``AuthorizedEntity`` carries no match provenance for a later layer to
+    recover. That is what listed the one real project last in the CHAOS-3422
+    repro even though the catalog had ranked it first, and it silently
+    undid CHAOS-3388's alias precedence for every same-kind pair
+    (codex review round 3, confirmed: alias ``Zeta Runtime (ACR)`` lost its
+    lead to substring-only ``Aardvark ACR Notes``).
+
+    Not a behaviour change for the alias-unaware callers: with
+    ``include_alias_matches=False`` the catalog's own order *is* label order,
+    the identical sequence ``_dedupe_entities`` produced.
+
+    Exactly **two** callers enable alias matching and therefore see a
+    different page — counted, because an earlier draft of this docstring
+    claimed there was only one and a reviewer had to find the other:
+
+    * ``subject_preflight._close_matches`` — the closest-matches fallback,
+      whose ranking is what this ticket restores.
+    * ``qua_shadow.QUAShadowEvaluator._shortlist`` — the CHAOS-3389 shadow
+      seam. Its shortlist is reordered the same way, which is safe because
+      the model is shown the very list its returned indices are resolved
+      against, so there is no index/list skew, and because nothing downstream
+      reads the record it produces. It needs no ``preferred_kinds`` of its
+      own: it already searches a single kind for a typed mention, so a
+      preference would be vacuous, and for an untyped one the kind is a
+      declared default that must not be preferred at all.
+
+    ``resolve()``'s exact path still uses ``_dedupe_entities``: those entities
+    come from ``exact()``, which has no rank of its own to preserve.
+    """
+
+    unique: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+    for entity in entities:
+        unique.setdefault((entity.kind, entity.canonical_id), entity)
+    return tuple(unique.values())
+
+
+def _rank_preferred_kinds(
+    entities: Sequence[AuthorizedEntity], preferred_kinds: frozenset[EntityKind]
+) -> tuple[AuthorizedEntity, ...]:
+    """CHAOS-3422: the kind the user named leads, everything else follows.
+
+    A **stable** partition, so with no preference the result is the identical
+    tuple and with one the catalog's rank still decides the order inside each
+    side. Applied here as well as in the catalog because the two truncate
+    separately: the catalog bounds its page, this bounds what a caller asked
+    for, and a rank applied at only one of them is a rank applied after a cut.
+    """
+
+    if not preferred_kinds:
+        return tuple(entities)
+    preferred = [entity for entity in entities if entity.kind in preferred_kinds]
+    rest = [entity for entity in entities if entity.kind not in preferred_kinds]
+    return tuple(preferred + rest)
 
 
 def _request_payload(request: ScopeResolveRequest) -> dict[str, object]:
@@ -712,6 +808,11 @@ class ScopeResolutionService:
             # candidate sets, so sharing a cache key would let whichever
             # request happened to run first silently answer the other's call.
             "include_alias_matches": request.include_alias_matches,
+            # CHAOS-3422, for the same reason: a preference changes both which
+            # candidates survive the catalog's page bound and the order they
+            # arrive in, so a preferred and an unpreferred search of the same
+            # query/kinds/limit must never share a cache entry.
+            "preferred_kinds": sorted(kind.value for kind in request.preferred_kinds),
         }
         cache_key = self._cache_key(
             "search", org_id, permission_fingerprint, payload, watermark
@@ -725,9 +826,12 @@ class ScopeResolutionService:
             kinds,
             limit=request.limit,
             include_alias_matches=request.include_alias_matches,
+            preferred_kinds=request.preferred_kinds,
         )
         result = ScopeSearchResult(
-            candidates=_dedupe_entities(entities)[: request.limit],
+            candidates=_rank_preferred_kinds(
+                _dedupe_preserving_rank(entities), request.preferred_kinds
+            )[: request.limit],
             query_version=QUERY_VERSION,
             catalog_watermark=watermark,
         )
@@ -932,6 +1036,106 @@ class ScopeResolutionService:
             outcome=ScopeResolutionOutcome.EXACT,
             authorized_repository_ids=repository_ids,
             authorized_entity_ids=entity_ids,
+            candidates=[],
+            fallbacks=[],
+            warnings=[],
+            resolved_at=resolved_at,
+        )
+
+    @classmethod
+    def committed_cohort_resolution_for(
+        cls,
+        subject_set: DevSubjectSet,
+        *,
+        org_id: str,
+        base_scope: DevScope,
+        resolved_at: datetime,
+    ) -> DevScopeResolution:
+        """The committed-scope construction for a COHORT (CHAOS-3534).
+
+        Deliberately a sibling of ``committed_resolution_for`` in this same
+        module rather than a second notion built elsewhere: that function's
+        docstring exists to keep exactly one idea of "committed scope", and a
+        cohort is the same idea over more than one entity. The conventions are
+        inherited rather than reinvented -- most importantly that a REPOSITORY
+        commit carries its ids in ``authorized_repository_ids`` and leaves
+        ``authorized_entity_ids`` empty, which is exactly the detail a second
+        producer written from scratch gets backwards.
+
+        WHY IT EXISTS: a question naming several subjects that ALL resolve
+        exactly commits a real ``dev_subject_set.v1`` and then terminates,
+        because the v1 surface cannot render a cohort (D1). The resolution
+        published on that terminal used to be re-derived from the answer
+        FRAME, which structurally cannot carry a cohort -- so it fell through
+        to ``UNRESOLVED`` and told an auditor the run resolved nothing, for a
+        run that resolved everything it was asked about.
+
+        ``cohort_complete`` is the CALLER's gate, not this function's
+        business: an incomplete cohort genuinely did not resolve everything
+        the question named, and calling that ``exact`` would be the same false
+        statement pointing the other way.
+        """
+
+        kind = EntityKind(subject_set.entity_kind.value)
+        if kind is not EntityKind.REPOSITORY:
+            # v1 CANNOT express a multi-entity direct scope for any other
+            # kind, and that is a contract fact rather than a policy choice:
+            # DevScope.validate_direct_scope requires EXACTLY ONE matching
+            # entity_ref for PROJECT/WORK_UNIT/ISSUE/PULL_REQUEST/TEAM
+            # ("direct entity scope requires one matching entity"), while
+            # `repositories` is a list with a >= 1 bound. So a repository
+            # cohort has a faithful v1 representation and no other kind does.
+            #
+            # Refused loudly HERE rather than left to fail deep inside
+            # DevScope construction: the first cut of CHAOS-3534 did exactly
+            # that, and turned a two-project cohort's honest
+            # `feature_not_enabled` into an opaque `internal_error` -- a
+            # strictly worse outcome than the disclosure defect being fixed.
+            # The caller is responsible for not asking; this is the backstop
+            # that makes a future caller's mistake loud rather than silent.
+            raise ValueError(
+                f"a {kind.value} cohort has no multi-entity v1 scope "
+                "representation; only repository cohorts can be published as "
+                "an exact committed scope"
+            )
+        is_repository = True
+        is_team = False
+        entities = [
+            AuthorizedEntity(
+                kind=EntityKind(ref.entity_kind.value),
+                canonical_id=ref.entity_id,
+                label=ref.display_label,
+                repository_id=ref.repository_id,
+            )
+            for ref in subject_set.committed_entity_refs
+        ]
+        canonical_ids = [entity.canonical_id for entity in entities]
+        resolved_scope = DevScope(
+            schema_version="dev_scope.v1",
+            organization_id=org_id,
+            direct_scope=DirectScope(kind.value),
+            repositories=list(canonical_ids) if is_repository else [],
+            entity_refs=(
+                []
+                if is_repository
+                else [cls._contract_entity_ref(entity) for entity in entities]
+            ),
+            team_ids=list(canonical_ids) if is_team else [],
+            time_range=base_scope.time_range,
+            comparison_range=base_scope.comparison_range,
+            surface_context=None,
+        )
+        repository_ids = sorted(
+            (set(canonical_ids) if is_repository else set())
+            | {entity.repository_id for entity in entities if entity.repository_id}
+        )
+        return DevScopeResolution(
+            schema_version="dev_scope_resolution.v1",
+            requested_scope=base_scope,
+            resolved_scope=resolved_scope,
+            outcome=ScopeResolutionOutcome.EXACT,
+            authorized_repository_ids=repository_ids,
+            authorized_entity_ids=[] if is_repository else list(canonical_ids),
             candidates=[],
             fallbacks=[],
             warnings=[],

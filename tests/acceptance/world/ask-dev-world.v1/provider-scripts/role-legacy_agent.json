@@ -404,9 +404,9 @@
       "comment": "CHAOS-3219 Phase 2 Lane 2b (2026-08-06), codex round-1 finding #2 remediation: script_inventory.py requires every corpus case id to have an entry here. This case's interesting behavior is subject/scope resolution (extract_mentions/alias_matching/scope_catalog), not provider decision-making -- scope resolution runs before the provider is ever invoked, so delegate_default (the existing, unscripted default heuristic) is the honest choice: no bespoke decision sequence changes what this case actually tests."
     },
     "scope.outcome.organization-fallback": {
-      "question": "How is everything going?",
+      "question": "What's the status of Zephyr?",
       "kind": "delegate_default",
-      "comment": "CHAOS-3219 Phase 2 Lane 2b (2026-08-06), codex round-1 finding #2 remediation: script_inventory.py requires every corpus case id to have an entry here. This case's interesting behavior is subject/scope resolution (extract_mentions/alias_matching/scope_catalog), not provider decision-making -- scope resolution runs before the provider is ever invoked, so delegate_default (the existing, unscripted default heuristic) is the honest choice: no bespoke decision sequence changes what this case actually tests."
+      "comment": "CHAOS-3490 Part 2 (2026-08-07): question re-authored from 'How is everything going?' to a bare unresolvable name, because the old one extracted zero subject mentions and therefore could never reach ORGANIZATION_FALLBACK -- see the case file's notes. Routing is by question fingerprint, so this entry MUST move with the case's question or the case would fall through to the unscripted default heuristic. kind stays delegate_default: the interesting behaviour is subject/scope resolution, which runs before the provider is invoked."
     },
     "scope.outcome.unresolved": {
       "question": "Could you check the status of the Ask Dev project?",
@@ -662,8 +662,33 @@
     },
     "pers.clarification-persistence": {
       "question": "What's the status of Atlas, exactly?",
+      "kind": "decisions",
+      "decisions": [
+        {
+          "type": "disambiguation",
+          "prompt": "Which project named \"Atlas\" did you mean?",
+          "candidates": [
+            "atlas/api",
+            "atlas/web"
+          ]
+        }
+      ],
+      "comment": "CHAOS-3577 (2026-08-07): was kind=delegate_default, which made this case prove the OPPOSITE of its name. Its profile expects needs_clarification, but with the engine live delegate_default fell through to the unscripted widen-and-disclose heuristic and the measured armed run recorded answered_with_gaps -- a clarification-PERSISTENCE case that never clarified. It now carries the same disambiguation SHAPE as scope.ambiguous, which orchestrator.py maps to needs_clarification unconditionally, so the case exercises the mechanism it is named for and its existing profile expectation becomes satisfiable without changing it. The QUESTION IS DELIBERATELY ITS OWN and not copied from scope.ambiguous: role_script_identity_digest keys on by_fingerprint and test_ask_dev_provider_roles asserts len(by_fingerprint) == len(cases), so two entries sharing a question would collide their fingerprint and fail. Candidates mirror scope.ambiguous's (atlas/api, atlas/web); no prompt text or candidate list is pinned anywhere, so they are chosen to match the sibling rather than invented differently."
+    },
+    "deg.source-state.measured-zero": {
+      "question": "How often did the repo \"probe/source-measured-zero\" deploy in the last 30 days?",
       "kind": "delegate_default",
-      "comment": "CHAOS-3219 Phase 2 Lane 2b (2026-08-06), codex round-1 finding #2 remediation: script_inventory.py requires every corpus case id to have an entry here. This case's interesting behavior is subject/scope resolution (extract_mentions/alias_matching/scope_catalog), not provider decision-making -- scope resolution runs before the provider is ever invoked, so delegate_default (the existing, unscripted default heuristic) is the honest choice: no bespoke decision sequence changes what this case actually tests."
+      "comment": "CHAOS-3219 Phase 3 (2026-08-07): delegate_default is the honest kind. These three cases' interesting behaviour is subject/scope resolution and ANSWER COMPOSITION (sanitisation, metric-dimension shape, the measured-zero metric read) -- none of it is provider decision-making, and scope resolution runs before the provider is invoked at all. A bespoke decision sequence would change nothing any of them assert. An entry is still REQUIRED: script_inventory.py fails the session if an active case id has none, and a case with no entry silently falls through to the unscripted heuristic."
+    },
+    "adv.malicious-content.html": {
+      "question": "What evidence backs the current status of the repo \"probe/source-conflicting-ci\"?",
+      "kind": "delegate_default",
+      "comment": "CHAOS-3219 Phase 3 (2026-08-07): delegate_default is the honest kind. These three cases' interesting behaviour is subject/scope resolution and ANSWER COMPOSITION (sanitisation, metric-dimension shape, the measured-zero metric read) -- none of it is provider decision-making, and scope resolution runs before the provider is invoked at all. A bespoke decision sequence would change nothing any of them assert. An entry is still REQUIRED: script_inventory.py fails the session if an active case id has none, and a case with no entry silently falls through to the unscripted heuristic."
+    },
+    "adv.no-person-level-output.health": {
+      "question": "Which engineer on the \"Platform Reliability (Ground Control)\" team has the worst code health?",
+      "kind": "delegate_default",
+      "comment": "CHAOS-3219 Phase 3 (2026-08-07): delegate_default is the honest kind. These three cases' interesting behaviour is subject/scope resolution and ANSWER COMPOSITION (sanitisation, metric-dimension shape, the measured-zero metric read) -- none of it is provider decision-making, and scope resolution runs before the provider is invoked at all. A bespoke decision sequence would change nothing any of them assert. An entry is still REQUIRED: script_inventory.py fails the session if an active case id has none, and a case with no entry silently falls through to the unscripted heuristic."
     }
   }
 }

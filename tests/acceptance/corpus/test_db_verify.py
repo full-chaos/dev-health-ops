@@ -8,8 +8,11 @@ genuinely booted acceptance stack, out of the unit tier's reach by design.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -70,8 +73,6 @@ class TestExecInApi:
             exec_in_api(_context(), ["true"], runner=runner)
 
     def test_timeout_raises(self) -> None:
-        import subprocess
-
         def runner(args, **kwargs):
             raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs.get("timeout", 60))
 
@@ -430,3 +431,74 @@ class TestQueryTranscriptAssistantSchemaVersionsViaExec:
             query_transcript_assistant_schema_versions_via_exec(
                 _context(), conversation_id="conv-1", runner=runner
             )
+
+
+class TestExecInApiNeverInheritsStdin:
+    """CHAOS-3462: ``docker compose exec -T`` must not inherit fd 0.
+
+    Reported by the world-seeding lane, which hit it for real. ``-T``
+    suppresses the pseudo-TTY but does NOT close stdin -- compose still
+    forwards fd 0 into the container. With stdin merely inherited, the call
+    blocks forever whenever the parent's fd 0 is an open pipe nobody closes,
+    which is precisely what happens when the runner is driven from a shell
+    script instead of an interactive terminal.
+    ``scripts/acceptance/run_wave4_corpus.sh`` is exactly such a driver.
+
+    The failure mode is the worst one this lane has: not a red, but a silent
+    hang with no output, holding the gate slot while looking like nothing is
+    happening. That is the same class of non-signal as the arming false
+    green, so it gets a real test rather than a comment.
+    """
+
+    def test_the_runner_is_told_not_to_inherit_stdin(self) -> None:
+        seen: dict[str, object] = {}
+
+        def runner(args, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+        exec_in_api(_context(), ["echo", "hi"], runner=runner)
+        assert seen.get("stdin") is subprocess.DEVNULL, (
+            "exec_in_api must pass stdin=DEVNULL; inheriting fd 0 hangs the "
+            "whole run when driven from a shell script"
+        )
+
+    def test_the_hazard_is_real_and_devnull_is_what_fixes_it(self) -> None:
+        """Rule 2: observe the guard failing.
+
+        Proves the mechanism rather than asserting a keyword. A child that
+        drains stdin -- which is how compose forwards fd 0 -- hangs when
+        stdin is inherited from an open pipe, and completes when it is
+        DEVNULL. If this ever stops reproducing, the DEVNULL above has
+        stopped being load-bearing and the comment should be revisited.
+        """
+
+        child = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdin.read()",
+        ]
+        # An open pipe nobody closes -- the shell-script driver shape.
+        with subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.PIPE,
+        ) as holder:
+            try:
+                with pytest.raises(subprocess.TimeoutExpired):
+                    subprocess.run(
+                        child,
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                        stdin=holder.stdout,
+                    )
+                completed = subprocess.run(
+                    child,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    stdin=subprocess.DEVNULL,
+                )
+                assert completed.returncode == 0
+            finally:
+                holder.kill()

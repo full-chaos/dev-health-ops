@@ -5,6 +5,8 @@ content_type: configuration-reference
 owner: platform-product
 source_of_truth:
   - current feature registry and product navigation
+  - src/dev_health_ops/licensing/registry.py
+  - src/dev_health_ops/alembic/versions/0073_seed_ask_dev_wave_3_1_feature_flag.py
   - docs/architecture/licensing.md
   - deploy/go-workers/profiles.json
 applicability: current
@@ -42,19 +44,21 @@ Provider availability still applies:
 
 ## Ask Dev and AI gates
 
-Ask Dev has four independent feature decisions:
+Ask Dev has five independent feature decisions:
 
 | Key | Controls | Default |
 | --- | --- | --- |
 | `ask_dev` | The in-app Ask Dev interaction layer for Context Fabric | Disabled until explicitly enabled for an organization or license |
 | `ask_dev_contextual_entrypoints` | Typed, review-before-submit handoffs from approved product surfaces into Ask Dev | Disabled until explicitly enabled for an organization or license |
+| `ask_dev_wave_3_1` | Server-owned question interpretation and the named-subject preflight | Disabled until explicitly enabled for an organization or license |
 | `byo_llm` | Organization-managed LLM provider configuration | Existing tier and override behavior, unchanged |
 | `agent_context_runtime` | Hosted ACR/MCP context capability | Existing explicit-purchase behavior, unchanged |
 
 No gate grants any of the others. Enabling `ask_dev` does not enable contextual
-entrypoints, expose BYO LLM settings, or expose Context Fabric Validation, and
-enabling any of those gates does not make base Ask Dev available. The
-`ask_dev` and `ask_dev_contextual_entrypoints` registry rows are globally
+entrypoints, enable Wave 3.1 interpretation, expose BYO LLM settings, or expose
+Context Fabric Validation, and enabling any of those gates does not make base
+Ask Dev available. The `ask_dev`, `ask_dev_contextual_entrypoints`, and
+`ask_dev_wave_3_1` registry rows are globally
 enabled only so their global feature decisions remain emergency kill switches;
 their effective tier defaults are false for every tier. Inclusion in paid plans
 may be considered later only through separate product change control; it is not
@@ -66,6 +70,15 @@ product surfaces do not offer contextual handoff triggers. The API capability
 reports contextual entrypoints only when the base Ask Dev decision, the
 independent contextual-entrypoints decision, and runtime readiness all permit
 them; it never infers the contextual decision from `ask_dev`.
+
+`ask_dev_wave_3_1` is an explicit-enable registration (`ask_dev_wave_3_1` in the
+feature registry, seeded by Alembic revision `0073`). Every tier stays denied
+until an organization or license override grants it, and the row is preserved on
+rollback because those overrides may reference it. With the decision off, a run
+behaves exactly as it did before Wave 3.1: the preflight is not constructed, and
+neither is the question-understanding shadow seam, regardless of its own
+environment variable. Evaluating the decision fails closed — a storage error
+leaves it off rather than admitting an unreviewed path.
 
 Do not infer Ask Dev access from a paid plan. Bundling it into all paid plans is
 a deferred commercial possibility and requires a new accepted product decision,

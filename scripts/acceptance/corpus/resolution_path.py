@@ -91,6 +91,7 @@ __all__ = [
     "ResolutionPath",
     "ResolutionPathError",
     "ResolutionLedgerEntry",
+    "attach_mention_texts",
     "classify_match_kind",
     "derive_resolution_path",
 ]
@@ -233,6 +234,100 @@ def classify_match_kind(
     )
 
 
+def attach_mention_texts(
+    entries: Sequence[ResolutionLedgerEntry], mention_texts: Sequence[str]
+) -> list[ResolutionLedgerEntry]:
+    """Attach each mention's declared lookup text to its ledger entries.
+
+    CHAOS-3462 B6 closes the gap this module's docstring named as its own
+    residual: ``DevResolutionEntry`` never persists the mention span, so the
+    docker-exec ledger read returns entries with ``mention_text=None`` and
+    every single-shot ``exact_match`` was unclassifiable --
+    ``deterministic-exact`` was dead vocabulary for the whole corpus. The
+    case now DECLARES the spans (``expected_mention_texts``), derived from
+    production's own ``QuestionInterpreter`` rather than hand-authored, and
+    this function threads them onto the entries the exec plane returned.
+
+    ORDERING CONTRACT, and why positional mapping is sound here rather than
+    a guess: ``subject_preflight._build_ledger`` builds entries by
+    ``zip(mentions, resolutions, strict=True)`` and stamps ``entry_ordinal``
+    from that index, and ``_inner_ledger_query`` orders by
+    ``entry_ordinal``. So distinct ``mention_id`` values, in first-seen
+    order, correspond one-to-one with the question's mentions in the order
+    the interpreter produced them -- which is the order
+    ``expected_mention_texts`` is declared in, asserted against the real
+    interpreter by the corpus guard test.
+
+    THE TWO COUNT MISMATCHES ARE NOT SYMMETRIC, and treating them as if they
+    were is a defect this function had until it was attacked directly:
+
+    * MORE observed mentions than declared -> RAISE. The declaration is
+      genuinely short, so at least one real mention would get no span, and
+      positional mapping past the end is meaningless. That is a corpus
+      defect to fix, not to absorb.
+    * FEWER observed than declared -> attach NOTHING, and let
+      ``derive_resolution_path`` proceed on the raw entries. This is a
+      LEGITIMATE shape, not drift. A PROCEED ledgers every mention
+      (``_build_ledger`` zips with ``strict=True``) and ``append_resolution``
+      only flushes, so a partial PROCEED write is not possible -- a failure
+      there rolls back to ZERO rows, which lands in the empty-ledger branch
+      of :func:`derive_resolution_path`, not here. A NON-EMPTY short ledger
+      therefore comes from the TERMINATE path, which persists ONLY a
+      ``terminating_resolution_entry``, and ``_terminate`` sets that solely
+      for ``ambiguous_candidates``. Such an entry never needs a span: its
+      mention's final outcome is not ``exact_match``, so
+      ``derive_resolution_path`` short-circuits to ``miss-clarification``
+      without ever consulting ``mention_text``. Raising here would turn a
+      correct, classifiable run RED with a message blaming the case author
+      for drift that did not happen -- reproduced with a two-mention case
+      that terminates ambiguous on one of them.
+
+      Residual, stated rather than assumed away: if a short ledger ever DID
+      carry an ``exact_match``, this returns it unattached and
+      :func:`derive_resolution_path` raises its "no mention_text was
+      supplied" error -- a true failure, but one whose message points at the
+      wrong cause. No known code path produces that shape today.
+
+    Attaching positionally in that short case would be worse than attaching
+    nothing: the surviving entry is not necessarily the FIRST mention, so
+    the mapping could silently pair a real mention with another mention's
+    span.
+    """
+
+    order: list[str] = []
+    for entry in entries:
+        if entry.mention_id not in order:
+            order.append(entry.mention_id)
+    if len(order) > len(mention_texts):
+        raise ResolutionPathError(
+            f"the ledger carries {len(order)} distinct mention(s) "
+            f"({order!r}) but the case declares only {len(mention_texts)} "
+            f"expected_mention_texts ({list(mention_texts)!r}) -- at least "
+            "one real mention would get no span. The case's declaration has "
+            "drifted from what the interpreter produces for its question; "
+            "regenerate it from the interpreter."
+        )
+    if len(order) < len(mention_texts):
+        # Partial (terminating) ledger -- see the docstring. Nothing to
+        # attach, and nothing that needs attaching.
+        return list(entries)
+    text_by_mention = dict(zip(order, mention_texts, strict=True))
+    return [
+        ResolutionLedgerEntry(
+            outcome=entry.outcome,
+            mention_id=entry.mention_id,
+            committed_label=entry.committed_label,
+            committed_canonical_id=entry.committed_canonical_id,
+            mention_text=(
+                entry.mention_text
+                if entry.mention_text is not None
+                else text_by_mention[entry.mention_id]
+            ),
+        )
+        for entry in entries
+    ]
+
+
 def derive_resolution_path(
     entries: Sequence[ResolutionLedgerEntry],
 ) -> ResolutionPath | None:
@@ -325,3 +420,110 @@ def derive_resolution_path(
             saw_alias = True
 
     return "deterministic-alias" if saw_alias else "deterministic-exact"
+
+
+#: ``resolution_path`` is absent because the run really was queried and its
+#: ``dev_run_resolutions`` ledger really was empty, for a question that named
+#: NO subjects. HONEST: a zero-mention question (``portfolio.*``,
+#: ``investment.*``, and any question whose text carries no extractable
+#: subject span) appends nothing, and reporting a path for it would be
+#: fabrication. Not a defect in the measurement.
+ABSENCE_EMPTY_LEDGER = "empty-resolution-ledger"
+
+#: ``resolution_path`` is absent because the ledger was queried and was
+#: empty -- but the case DECLARED subject mention spans, so the question
+#: named subjects the preflight had to resolve.
+#:
+#: CHAOS-3533: this used to collapse into ``ABSENCE_EMPTY_LEDGER`` and read
+#: as an honest absence. That was defensible only while a preflight
+#: TERMINATE persisted at most one ledger row, which made an empty ledger
+#: the NORMAL outcome for any run terminating without an ambiguity -- eight
+#: corpus cases sat red on exactly that for three rounds, each looking
+#: merely unlucky rather than unmeasured. Now that every terminate persists
+#: its whole ledger, an empty one for a question that named subjects can
+#: only mean the run never reached resolution, the ledger read failed, or
+#: the persistence fix regressed. Each is a measurement that did not happen,
+#: and must fail loudly rather than pass quietly as an absence.
+ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS = "empty-resolution-ledger-despite-mentions"
+
+#: ``resolution_path`` is absent because the stream never yielded a run_id,
+#: so the ledger was NEVER QUERIED. This is a broken measurement, not an
+#: observation of absence, and callers must surface it as a failure.
+ABSENCE_RUN_ID_NOT_OBSERVED = "run-id-not-observed"
+
+#: ``resolution_path`` is absent because the ledger WAS queried and was NOT
+#: empty, but :func:`derive_resolution_path` could not classify it (a
+#: ``ResolutionPathError``: declared mention spans drifted from what the run
+#: actually resolved, or an entry shape this module does not handle).
+#:
+#: Codex adversarial review (MEDIUM, confirmed): this used to collapse into
+#: ``ABSENCE_EMPTY_LEDGER``, because the runner sets ``path=None`` on the
+#: error path while ``run_id`` is still present. "Could not be read" is not
+#: "was empty" -- it is a broken measurement, and labelling it an honest
+#: absence is the very conflation this vocabulary exists to prevent.
+ABSENCE_UNCLASSIFIABLE_LEDGER = "unclassifiable-resolution-ledger"
+
+
+def resolution_path_absence_reason(
+    *,
+    run_id: str | None,
+    path: ResolutionPath | None,
+    classification_failed: bool = False,
+    named_subject_mentions: bool = False,
+) -> str | None:
+    """Why this case has no ``resolution_path`` -- or ``None`` if it has one.
+
+    CHAOS-3219 Phase 2 exit, live-falsified. :func:`derive_resolution_path`
+    returns ``None`` for situations a receipt reader must be able to tell
+    apart, and exit run #3 wrote ``resolution_path: null`` into all 143
+    receipts without recording which one applied:
+
+    * the ledger was read and was genuinely empty (honest absence),
+    * the runner never obtained a run_id, so nothing was ever read, or
+    * the ledger was read, was non-empty, and could not be classified
+      (``classification_failed``) -- the Codex MEDIUM finding.
+
+    Collapsing those is what let an entire corpus that measured nothing read
+    as a corpus that measured cleanly. This does not change
+    ``derive_resolution_path``'s own contract (its ``None`` for an empty
+    sequence remains correct and is still the right answer for a zero-mention
+    question) -- it records the CONTEXT that ``None`` alone cannot carry.
+
+    ``classification_failed`` is checked BEFORE the empty-ledger fallback:
+    only the caller knows the derivation raised, and that fact must not be
+    reconstructible from ``path is None`` alone, which is exactly how the two
+    got conflated in the first place.
+    """
+
+    if path is not None:
+        return None
+    if run_id is None:
+        return ABSENCE_RUN_ID_NOT_OBSERVED
+    if classification_failed:
+        return ABSENCE_UNCLASSIFIABLE_LEDGER
+    if named_subject_mentions:
+        return ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS
+    return ABSENCE_EMPTY_LEDGER
+
+
+def absence_is_a_broken_measurement(reason: str | None) -> bool:
+    """Whether an absence reason means "this was not honestly measured".
+
+    Deliberately a positive test against the known-broken reasons rather than
+    ``reason != ABSENCE_EMPTY_LEDGER``: a future reason then defaults to "not
+    broken" only by explicit choice, never by falling through an inequality
+    nobody revisited. (That inequality would, by luck, have handled the Codex
+    MEDIUM finding correctly -- and would equally have mislabelled the next
+    honest reason someone adds. The explicit set is still right.)
+
+    CHAOS-3533 adds the third broken reason. Note what it does NOT do:
+    ``ABSENCE_EMPTY_LEDGER`` stays honest, because a zero-mention question
+    genuinely appends nothing. Only the mention-declaring case's empty ledger
+    became a defect, and only once every terminate started persisting one.
+    """
+
+    return reason in {
+        ABSENCE_RUN_ID_NOT_OBSERVED,
+        ABSENCE_UNCLASSIFIABLE_LEDGER,
+        ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS,
+    }

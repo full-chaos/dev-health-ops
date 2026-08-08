@@ -320,3 +320,37 @@ class TestCrossGenerationDigestStatus:
         assert isinstance(status, dict)
         assert status.get("status") == "declared-blocked"
         assert "CHAOS-3432" in str(status.get("blocked_by"))
+
+
+class TestEntitlementFieldsAreBoundToTheContract:
+    """Codex adversarial review (HIGH, confirmed): ``world.json``'s per-org
+    entitlement fields DRIVE committed ``org_feature_overrides`` rows via
+    ``_ENTITLEMENT_FIELDS``, but the manifest contract hash covered only
+    alias/id_seed/name/slug. So flipping an entitlement without re-minting
+    left the snapshot/world binding satisfied while the restored database
+    contradicted the manifest premise every consumer reads -- e.g. the
+    disabled-entitlement org silently entitled, or ``ask_dev_wave_3_1``
+    silently off, with receipts certified against the wrong runtime gate.
+
+    WORLD_DIGEST alone cannot catch this: it is computed FROM THE DATABASE,
+    and the flipped value is faithfully restored, so the digest matches.
+    """
+
+    def test_flipping_an_entitlement_changes_the_contract_hash(self) -> None:
+        from dev_health_ops.fixtures.world import (
+            _ENTITLEMENT_FIELDS,
+            world_manifest_contract_hash,
+        )
+
+        for field in _ENTITLEMENT_FIELDS.values():
+            base = load_world_manifest(_MANIFEST_PATH)
+            flipped = load_world_manifest(_MANIFEST_PATH)
+            org = flipped.world["orgs"][0]
+            org[field] = "disabled" if org.get(field) != "disabled" else "enabled"
+            assert world_manifest_contract_hash(base) != world_manifest_contract_hash(
+                flipped
+            ), (
+                f"flipping {field!r} left the manifest contract hash unchanged -- "
+                "an entitlement edit would pass the snapshot binding with a "
+                "stale snapshot"
+            )

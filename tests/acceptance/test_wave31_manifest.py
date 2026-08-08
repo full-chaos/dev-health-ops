@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -10,7 +11,6 @@ from typing import Any
 
 import pytest
 
-from scripts.acceptance import wave31_manifest
 from scripts.acceptance.acceptance_artifact import (
     RUNTIME_DEPENDENCY_PATHS,
     AcceptanceFailure,
@@ -27,6 +27,7 @@ from scripts.acceptance.wave31_manifest import (
     ManifestIntegrityError,
     ManifestItem,
     build_report,
+    contained_path,
     execute_manifest,
     run_evidence_tests,
     validate_blocked_execution_artifact,
@@ -348,6 +349,279 @@ def test_repeated_provider_gate_is_deferred_not_silently_green() -> None:
     assert "credentials" in item.blocked_reason
 
 
+def test_web_default_ci_gate_is_deferred_for_the_cross_repo_reason() -> None:
+    """CHAOS-3219 Phase 4 exit audit (2026-08-06): this row had NO exact-id
+    test, despite ManifestItem's docstring promising every id is "referenced
+    by exact-id tests below so a status cannot silently flip without a
+    corresponding test change". Repo-wide it appeared exactly twice -- the
+    definition and the generated report -- so the only thing standing
+    between it and a force-flip was
+    test_committed_report_matches_what_build_report_produces_now, which a
+    flip that regenerates the report in the same change satisfies. See the
+    RED-then-GREEN proof below for why that is not enough.
+
+    What this pins is the DISTINCTION the row now rests on: web PR #854
+    closed the substance, and the row stays deferred purely because this
+    manifest resolves evidence under its own repository root and therefore
+    cannot express a cross-repo claim. Both halves matter -- a future
+    reader who sees only "deferred" would otherwise re-derive the closed
+    coverage gap, and a future reader who sees only the coverage would
+    force the status.
+    """
+
+    by_id = {item.id: item for item in MANIFEST}
+    _assert_web_default_ci_row_is_honest(by_id["gate.web-default-ci"])
+
+
+def _assert_web_default_ci_row_is_honest(item: ManifestItem) -> None:
+    """The row's actual contract, factored out so the RED-then-GREEN proof
+    below can run this exact logic against a planted force-flip instead of
+    re-stating the constructor it just wrote.
+    """
+
+    assert item.status == "deferred"
+    # Honest emptiness: the whole point is that no path in THIS repo backs
+    # the claim. A future non-empty evidence tuple must come with a real
+    # ops-resident artifact, which is a deliberate change, not a drive-by.
+    assert item.evidence == ()
+    assert item.test_nodeids == ()
+    assert item.execution_artifact is None
+
+    reason = item.blocked_reason
+    assert reason is not None
+
+    # (1) the substance is recorded as MET, with the specific merged proof
+    assert "e64bae941a3481e17f720909b60192a830a5edbe" in reason
+    assert "#854" in reason
+    assert "ask-dev-web-default-ci-delta.md" in reason
+    for spec in (
+        "tests/ask-dev-outcomes.spec.ts",
+        "tests/ask-dev-shared.spec.ts",
+        "tests/ask-dev-continuity.spec.ts",
+        "tests/ask-dev-vocabulary.spec.ts",
+    ):
+        assert spec in reason, f"blocked_reason no longer names {spec}"
+    # ...and that the coverage is DEFAULT/required, which is the row's claim
+    assert "e2e-default" in reason
+
+    # (2) the reason it is still deferred is the cross-repo evidence model,
+    # explicitly tied to the precedent row that shares the constraint
+    assert "attack.runtime-" in reason
+    assert "claim, not proof" in reason
+    # The reason must name the mechanism that actually enforces this, not
+    # merely assert the conclusion -- codex refuted an earlier wording that
+    # claimed containment the validator did not yet perform, and then a
+    # second wording that said absolute and ".."-traversing paths are
+    # rejected "outright" when what is actually rejected is a path whose
+    # RESOLVED location leaves the tree. Pin the accurate semantics so the
+    # prose cannot drift back to either overclaim.
+    assert "contained_path" in reason
+    assert "RESOLVE inside this repository's root" in reason
+    assert "resolved location falls outside the tree" in reason
+    # ...and the accuracy is real, not just asserted: a path that leaves and
+    # comes back lands inside and IS accepted, which is exactly what the
+    # earlier "outright" wording denied.
+    assert contained_path(_ROOT, "scripts/../tests/acceptance") is not None
+
+    # (3) the route out is producing proof, not widening what counts as it
+    # The conclusion must be the NARROW one. Codex round 3: saying a
+    # cross-repo claim is categorically "not expressible" contradicts clause
+    # (3) of this very reason, which describes the route by which it becomes
+    # expressible. What is true is that a DIRECT web path is not citable.
+    assert "a DIRECT " in reason and "path is not citable here" in reason
+    assert "not an impossibility" in reason
+    assert "not expressible" not in reason, (
+        "the categorical overclaim is back -- clause (2) must not deny what "
+        "clause (3) describes"
+    )
+    assert "run_ask_dev_compose.sh:348" in reason
+    assert "not by widening what counts as proof" in reason
+
+
+@pytest.mark.parametrize(
+    "escaping_path",
+    [
+        pytest.param(
+            "/Users/chris/projects/full-chaos/dev-health/web/tests/"
+            "ask-dev-outcomes.spec.ts",
+            id="absolute-path-outside-the-repo",
+        ),
+        pytest.param(
+            "../../../../web/tests/ask-dev-outcomes.spec.ts",
+            id="dot-dot-traversal-out-of-the-repo",
+        ),
+    ],
+)
+def test_evidence_outside_the_repository_root_is_rejected(escaping_path: str) -> None:
+    """Codex adversarial review (HIGH, 2026-08-06): "root / value" is a join,
+    not a containment check. An ABSOLUTE segment replaces the base outright
+    (Path("/ops") / "/elsewhere/x" == "/elsewhere/x") and "../" walks out.
+    Both previously validated CLEAN, so any row could cite a file in another
+    repository -- or anywhere on the runner -- and claim proven_* from it.
+
+    Verified against the pre-fix code: both of these returned no errors.
+    That made the honesty guarantee this whole module rests on bypassable
+    with a path string, no artifact forgery required.
+    """
+
+    item = ManifestItem(
+        id="probe.escaping-evidence",
+        category="gate",
+        description="probe",
+        status="proven_unit",
+        requires_live_infra=True,
+        evidence=(escaping_path,),
+    )
+    errors = validate_manifest(_ROOT, (item,))
+    assert errors, f"{escaping_path!r} validated clean -- containment is not enforced"
+    assert any("escapes the repository root" in error for error in errors), errors
+
+
+def test_contained_path_accepts_real_in_repo_paths() -> None:
+    """Negative control for the check above: containment must not be so eager
+    that it rejects the ordinary relative paths every real row uses. Without
+    this, "reject everything" would pass the test above.
+    """
+
+    assert contained_path(_ROOT, "scripts/acceptance/wave31_manifest.py") is not None
+    assert contained_path(_ROOT, "tests/acceptance") is not None
+    # A path that stays inside the tree while containing ".." is still fine.
+    assert contained_path(_ROOT, "scripts/../tests/acceptance") is not None
+    # And a non-existent but contained path resolves -- the caller reports it
+    # as missing, which is a different (and more useful) error than an escape.
+    assert contained_path(_ROOT, "tests/acceptance/not-a-real-file.json") is not None
+
+
+@pytest.mark.parametrize(
+    "non_file",
+    [
+        pytest.param("", id="empty-string-resolves-to-the-repo-root"),
+        pytest.param(".", id="dot-resolves-to-the-repo-root"),
+        pytest.param("scripts/acceptance", id="a-real-directory"),
+    ],
+)
+def test_evidence_that_is_not_a_file_is_rejected(non_file: str) -> None:
+    """Containment alone is not enough. "" and "." resolve to the repo root
+    itself and a directory satisfies exists(), so an evidence tuple could
+    point at a directory -- contained, present, and proving nothing. It would
+    also crash the content_markers read, which calls read_text on
+    evidence[0]. All 95 landed evidence paths are files, so is_file() is the
+    honest check.
+    """
+
+    item = ManifestItem(
+        id="probe.non-file-evidence",
+        category="gate",
+        description="probe",
+        status="proven_unit",
+        requires_live_infra=True,
+        evidence=(non_file,),
+    )
+    assert validate_manifest(_ROOT, (item,)), (
+        f"{non_file!r} validated clean -- a non-file is not evidence"
+    )
+
+
+@pytest.mark.parametrize(
+    "non_file",
+    [
+        pytest.param("", id="empty-string"),
+        pytest.param(".", id="repository-root"),
+        pytest.param("scripts/acceptance", id="a-real-directory"),
+    ],
+)
+def test_blocked_execution_artifact_that_is_not_a_file_is_rejected(
+    non_file: str,
+) -> None:
+    """Codex round 3 (MED): validate_blocked_execution_artifact was the one
+    path call site still using exists() rather than is_file(). A directory
+    passed the check and then raised IsADirectoryError out of read_text --
+    a crash instead of a manifest-integrity error. Probe before the fix:
+
+        blocked_execution_artifact="scripts/acceptance"
+        -> IsADirectoryError: [Errno 21] Is a directory
+
+    A validator that crashes on bad input cannot report on it, and this one
+    is the guard for `blocked` rows specifically.
+    """
+
+    item = ManifestItem(
+        id="probe.non-file-blocked-artifact",
+        category="gate",
+        description="probe",
+        status="blocked",
+        blocked_reason="probe",
+        blocked_execution_artifact=non_file,
+    )
+    # Must return errors, not raise.
+    errors = validate_manifest(_ROOT, (item,))
+    assert errors, f"{non_file!r} validated clean as a blocked artifact"
+
+
+def test_every_real_manifest_row_still_validates_after_containment() -> None:
+    """Regression control: the containment fix must not break any of the 67
+    landed rows, all of which cite ordinary in-repo relative paths.
+    """
+
+    assert validate_manifest(_ROOT) == []
+
+
+def test_web_default_ci_force_flip_to_proven_is_actually_caught() -> None:
+    """RED-then-GREEN proof for the exact-id test above, in the same shape
+    as test_blocked_reason_mutation_is_actually_caught.
+
+    The defect this guards is the realistic one: someone force-flips this
+    row to a proven status so the CHAOS-3219 entry criterion reads green.
+    Confirm that the EXISTING integrity machinery does not catch that --
+    proving the new exact-id test does real work rather than restating a
+    guard that was already there.
+
+    proven_unit + requires_live_infra=True is the cheapest legal disguise:
+    validate_manifest waives test_nodeids for live-infra items
+    (wave31_manifest.py:2597-2605), so the only remaining requirement is a
+    non-empty evidence path that exists in THIS repo -- and any real ops
+    file satisfies that while proving nothing whatsoever about web CI.
+    """
+
+    disguised = ManifestItem(
+        id="gate.web-default-ci",
+        category="gate",
+        description="mutated",
+        status="proven_unit",
+        requires_live_infra=True,
+        # A real, existing ops file that has nothing to do with the claim.
+        evidence=("scripts/acceptance/run_ask_dev_compose.sh",),
+    )
+
+    # validate_manifest's own checks do NOT catch this: evidence is
+    # non-empty and resolvable, test_nodeids is waived by requires_live_
+    # infra, and there is no execution artifact to validate because that is
+    # only demanded of proven_e2e.
+    assert validate_manifest(_ROOT, (disguised,)) == []
+
+    # ...and the exact-id contract IS what catches it.
+    #
+    # Codex round 3 (MED): the first version of this proof ran the helper
+    # against `disguised`, which differs from the real row in status,
+    # evidence, test_nodeids, execution_artifact AND blocked_reason -- so
+    # the AssertionError could come from any clause, and deleting the
+    # status assertion alone left this test GREEN. Verified by probe.
+    # That is the "mutate clauses, not whole conditions" rule: a wholesale
+    # mutation reports KILLED while one clause inside it is unasserted.
+    #
+    # So the isolated mutation changes ONLY status, off the real row. Every
+    # other clause still matches, which means this raises if and only if
+    # the status assertion is what caught it.
+    real_row = {item.id: item for item in MANIFEST}["gate.web-default-ci"]
+    status_only = dataclasses.replace(real_row, status="proven_unit")
+    with pytest.raises(AssertionError) as caught:
+        _assert_web_default_ci_row_is_honest(status_only)
+    assert "deferred" in str(caught.value), (
+        "the status clause is not what rejected the status-only mutation: "
+        f"{caught.value}"
+    )
+
+
 def test_team_attribution_flipped_to_proven_after_chaos_3332_fix() -> None:
     """Locks in the 2026-08-02 team-attribution flip.
 
@@ -512,21 +786,13 @@ def test_every_blocked_item_reason_matches_independent_snapshot() -> None:
         assert by_id[item_id].blocked_reason == blocked_snapshot[item_id], item_id
 
 
-def test_blocked_reason_mutation_is_actually_caught(monkeypatch) -> None:
+def test_blocked_reason_mutation_is_actually_caught() -> None:
     """RED-then-GREEN proof for the fix above: plant codex's exact
     demonstrated bypass (a reason that is 'fabricated but nonempty') on a
     real blocked item and confirm the independent-snapshot check -- not
     validate_manifest's non-empty check -- is what catches it.
-
-    The declaration set is emptied because this validates a SYNTHETIC
-    one-item manifest: every real ``DECLARED_STALE_ARTIFACTS`` entry names a
-    row that manifest does not contain, and the cross-check would rightly
-    report each as acknowledging nothing. That is a different assertion than
-    the one this test makes, and letting it fire here would turn a targeted
-    RED-then-GREEN proof into a test that fails for an unrelated reason.
     """
 
-    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
     # CHAOS-3393: matrix.organization-portfolio-status flipped to
     # proven_unit (status.portfolio.v1 is wired now), so this RED-then-
     # GREEN proof uses a different item that is still genuinely blocked.
@@ -649,13 +915,7 @@ def test_validate_manifest_catches_unknown_status() -> None:
 
 def test_validate_manifest_is_clean_over_a_single_well_formed_item(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    # Synthetic one-item manifest: see the note on the same monkeypatch in
-    # test_blocked_reason_mutation_is_actually_caught. "Clean" here means
-    # this item is well formed, not that the repository's real declaration
-    # set happens to be empty.
-    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
     commit_sha = _init_throwaway_git_repo(tmp_path)
     artifact_path = _write_valid_artifact(
         tmp_path,
@@ -803,39 +1063,6 @@ def test_validate_execution_artifact_rejects_a_non_immutable_commit_ish(
         or "no commit_sha" in error
         for error in errors
     )
-
-
-def test_validate_execution_artifact_rejects_a_drifted_runtime_dependency(
-    tmp_path: Path,
-) -> None:
-    """codex finding (HIGH, 2026-08-03): script_sha256 covered the smoke
-    script and nothing else, so changing the scripted provider left every
-    artifact validating clean while the recorded run was no longer
-    reproducible. Editing ONE covered dependency must now fail the row."""
-
-    commit_sha = _init_throwaway_git_repo(tmp_path)
-    for relative in RUNTIME_DEPENDENCY_PATHS:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("original\n")
-    artifact_path = _write_valid_artifact(
-        tmp_path,
-        scenario_id="drifted",
-        script_relative="smoke_drifted.py",
-        commit_sha=commit_sha,
-        runtime_hashes=runtime_dependency_hashes(tmp_path),
-    )
-    item = _proven_e2e_item(
-        execution_artifact=str(artifact_path.relative_to(tmp_path)),
-        evidence="smoke_drifted.py",
-    )
-    # Control: the artifact validates while the fixture surface is intact.
-    assert validate_execution_artifact(tmp_path, item) == []
-
-    provider = tmp_path / "src/dev_health_ops/llm/agent/scripted_openai_service.py"
-    provider.write_text("# the fixture provider changed after the run\n")
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("is STALE" in error for error in errors)
 
 
 def test_validate_execution_artifact_rejects_an_artifact_with_no_runtime_digest(
@@ -1565,13 +1792,12 @@ def test_build_report_shape_over_the_real_manifest() -> None:
             "requires_live_infra",
             "execution_artifact",
             "required_assertion_names",
-            "stale_dependencies",
         }
-    # Staleness is reported at the top level too, so a reader scanning the
-    # tally cannot miss it -- see DECLARED_STALE_ARTIFACTS.
-    assert isinstance(report["stale_row_count"], int)
-    assert isinstance(report["stale_rows"], dict)
-    assert report["stale_row_count"] == len(report["stale_rows"])
+    # CHAOS-3479: the stale_dependencies / stale_row_count / stale_rows
+    # fields are GONE with the dependency-drift mechanism. Asserting the
+    # item key set is exact (== not <=) is what keeps this honest: if a
+    # future change re-adds a staleness field, this fails rather than
+    # silently tolerating it.
     # JSON-round-trippable -- a report a downstream tool cannot parse is not
     # a machine-readable deliverable.
     json.dumps(report)
@@ -1612,144 +1838,6 @@ def test_every_test_nodeid_file_half_is_one_of_its_item_evidence() -> None:
             assert file_part in item.evidence, (
                 f"{item.id}: {node_id} is not under its own evidence {item.evidence}"
             )
-
-
-# --- staleness semantics: a digest mismatch makes a row STALE, not invalid.
-# Silent staleness fails; declared staleness passes and is reported. See
-# wave31_manifest.DECLARED_STALE_ARTIFACTS for why. ---
-
-
-def _current_hash(root: Path, relative: str) -> str:
-    return hashlib.sha256((root / relative).read_bytes()).hexdigest()
-
-
-def _stale_fixture(tmp_path: Path) -> tuple[ManifestItem, str]:
-    """A valid proven_e2e row whose fixture surface has since drifted on
-    exactly one covered path. Returns the item and that path."""
-
-    commit_sha = _init_throwaway_git_repo(tmp_path)
-    artifact_path = _write_valid_artifact(
-        tmp_path,
-        scenario_id="stale",
-        script_relative="smoke_stale.py",
-        commit_sha=commit_sha,
-        runtime_hashes=runtime_dependency_hashes(tmp_path),
-    )
-    drifted = "pyproject.toml"
-    (tmp_path / drifted).write_text("# a routine dependency bump\n")
-    return (
-        _proven_e2e_item(
-            execution_artifact=str(artifact_path.relative_to(tmp_path)),
-            evidence="smoke_stale.py",
-        ),
-        drifted,
-    )
-
-
-def test_undeclared_staleness_fails(tmp_path: Path, monkeypatch) -> None:
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(wave31_manifest, "DECLARED_STALE_ARTIFACTS", {})
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("is STALE" in error and drifted in error for error in errors)
-
-
-def test_declared_staleness_passes_and_is_reported(tmp_path: Path, monkeypatch) -> None:
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {drifted: _current_hash(tmp_path, drifted)}},
-    )
-    assert validate_execution_artifact(tmp_path, item) == []
-    # ...but it is never silent: the row is still reported as stale.
-    assert wave31_manifest.stale_rows(tmp_path, (item,)) == {item.id: [drifted]}
-
-
-def test_a_declaration_cannot_hide_extra_drift(tmp_path: Path, monkeypatch) -> None:
-    """Declaring one drifted path while a second also drifted must fail --
-    a partial declaration is exactly how real drift would get buried."""
-
-    item, drifted = _stale_fixture(tmp_path)
-    (tmp_path / "requirements.txt").write_text("# also bumped\n")
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {drifted: _current_hash(tmp_path, drifted)}},
-    )
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("does not match reality" in error for error in errors)
-    assert any("requirements.txt" in error for error in errors)
-
-
-def test_a_declaration_cannot_pre_declare_undrifted_paths(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Naming a path that has NOT drifted must fail, or an author could
-    pre-declare every covered path once and buy permanent silence."""
-
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {
-            item.id: {
-                drifted: _current_hash(tmp_path, drifted),
-                "docker/Dockerfile": _current_hash(tmp_path, "docker/Dockerfile"),
-            }
-        },
-    )
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("does not match reality" in error for error in errors)
-
-
-def test_a_stale_declaration_must_be_removed_after_a_re_mint(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The self-cleaning property: once the scenario is re-run there is no
-    drift, and a leftover declaration then FAILS. A stale flag must never
-    outlive the staleness it describes."""
-
-    commit_sha = _init_throwaway_git_repo(tmp_path)
-    artifact_path = _write_valid_artifact(
-        tmp_path,
-        scenario_id="fresh",
-        script_relative="smoke_fresh.py",
-        commit_sha=commit_sha,
-        runtime_hashes=runtime_dependency_hashes(tmp_path),
-    )
-    item = _proven_e2e_item(
-        execution_artifact=str(artifact_path.relative_to(tmp_path)),
-        evidence="smoke_fresh.py",
-    )
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {"pyproject.toml": _current_hash(tmp_path, "pyproject.toml")}},
-    )
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("nothing has drifted" in error for error in errors)
-
-
-def test_a_declaration_does_not_exempt_a_path_forever(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """codex finding (MED, 2026-08-03), the repro that forced hashes into
-    the declaration: a path-only declaration absorbed EVERY later change to
-    that same file, so one entry silenced that dependency permanently. The
-    declaration acknowledges one specific hash, so the next edit fails."""
-
-    item, drifted = _stale_fixture(tmp_path)
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {item.id: {drifted: _current_hash(tmp_path, drifted)}},
-    )
-    assert validate_execution_artifact(tmp_path, item) == []
-
-    # The same covered path changes AGAIN, to different bytes.
-    (tmp_path / drifted).write_text("# a second, unacknowledged bump\n")
-    errors = validate_execution_artifact(tmp_path, item)
-    assert any("changed AGAIN since the drift was acknowledged" in e for e in errors)
 
 
 def test_an_artifact_with_extra_dependency_keys_is_rejected(tmp_path: Path) -> None:
@@ -1824,50 +1912,6 @@ def test_an_artifact_whose_aggregate_disagrees_with_its_parts_is_rejected(
     assert any("does not agree with its own per-path digests" in e for e in errors)
 
 
-def test_a_declaration_for_an_unknown_row_or_path_is_rejected(monkeypatch) -> None:
-    """The declaration table is checked too: a typo'd id or an
-    out-of-coverage path would otherwise be a silent no-op that reads like
-    an acknowledged risk."""
-
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {"no.such.row": {"pyproject.toml": "0" * 64}},
-    )
-    assert any("no manifest item has that id" in e for e in validate_manifest(_ROOT))
-
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        {"gate.migration-coexistence": {"src/not/covered.py": "0" * 64}},
-    )
-    assert any("not covered dependencies" in e for e in validate_manifest(_ROOT))
-
-
-def test_full_manifest_rejects_orphan_among_valid_stale_declarations(
-    monkeypatch,
-) -> None:
-    """Subset validation may ignore declarations it does not own, but the
-    landed full-manifest gate must still catch a declaration whose row was
-    removed while leaving the other declarations valid.
-    """
-
-    declarations = dict(wave31_manifest.DECLARED_STALE_ARTIFACTS)
-    declarations["no.such.row"] = {"compose.yml": _current_hash(_ROOT, "compose.yml")}
-    monkeypatch.setattr(
-        wave31_manifest,
-        "DECLARED_STALE_ARTIFACTS",
-        declarations,
-    )
-
-    errors = validate_manifest(_ROOT)
-
-    assert any(
-        "no.such.row: declared stale but no manifest item has that id" in error
-        for error in errors
-    )
-
-
 def test_the_report_states_what_proven_e2e_does_not_assert() -> None:
     """codex finding (HIGH, 2026-08-03): nine row descriptions say a live
     run is "proven", while a hand-written artifact with correct hashes
@@ -1880,3 +1924,33 @@ def test_the_report_states_what_proven_e2e_does_not_assert() -> None:
     assert "metadata only" in limits
     assert "historical records" in limits
     assert "does NOT mean" in limits
+
+
+def test_committed_report_matches_what_build_report_produces_now() -> None:
+    """The committed report is the machine-readable deliverable; the module is
+    the source of truth. Nothing tied them together, so a declaration added to
+    the source (e.g. a newly-acknowledged runtime dependency drift) could ship
+    while the committed report still described the old, smaller changed
+    surface -- consumers reading the report would understate it.
+
+    Codex adversarial review (MEDIUM, confirmed) during CHAOS-3463, whose
+    launcher change added exactly such a declaration.
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    committed = json.loads(
+        (root / "tests" / "acceptance" / "wave31-manifest-report.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert committed == build_report(root), (
+        "tests/acceptance/wave31-manifest-report.v1.json is out of date with "
+        "wave31_manifest.build_report(). Regenerate it in the same change that "
+        "altered the manifest, from the repository root: "
+        "PYTHONPATH=. python scripts/acceptance/wave31_manifest.py "
+        "--skip-execution  (the PYTHONPATH is required -- run as a bare "
+        "script, sys.path[0] is scripts/acceptance/ and the module-level "
+        "'from scripts.acceptance.acceptance_artifact import ...' dies "
+        "with ModuleNotFoundError; 'python -m scripts.acceptance."
+        "wave31_manifest --skip-execution' works too)"
+    )

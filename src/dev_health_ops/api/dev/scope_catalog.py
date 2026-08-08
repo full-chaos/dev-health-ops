@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -11,7 +12,7 @@ from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.api.queries.scopes import resolve_repo_id
 from dev_health_ops.api.services.identity import resolve_scope_display_names
 
-from .alias_matching import alias_forms
+from .alias_matching import alias_forms, classify_span_match
 from .scope_service import AuthorizedEntity, EntityKind, ScopeRef
 
 #: CHAOS-3388. Kinds whose display name is a stable proper noun an acronym or
@@ -77,6 +78,87 @@ _ORGANIZATION_PROJECT_ENTITIES_SQL = """
 
 def _entity_sort_key(entity: AuthorizedEntity) -> tuple[str, str, str]:
     return (entity.label.casefold(), entity.kind.value, entity.canonical_id)
+
+
+def merge_search_candidates(
+    *,
+    query: str,
+    alias_hits: Iterable[AuthorizedEntity],
+    substring_hits: Iterable[AuthorizedEntity],
+    preferred_kinds: frozenset[EntityKind],
+    limit: int,
+) -> list[AuthorizedEntity]:
+    """The one ranking of a search page, applied *before* its truncation.
+
+    Also the one place that stamps each surviving row with its
+    ``SpanMatch`` provenance (CHAOS-3553) -- see "Provenance" below.
+
+    Three keys, in this order:
+
+    1. **The kind the user named** (CHAOS-3422). A typed mention states a
+       kind; "the ACR project" asks about a project. Ranking is all this key
+       does — nothing is ever dropped for being another kind, because the
+       CHAOS-3366 fallback exists precisely for the case where the thing the
+       user meant sits one kind over ("the Go workers project", where the
+       catalog holds only issues). A filter would return zero candidates
+       there and regress that ticket to a bare not-found.
+    2. **Alias equality over incidental substring containment** (CHAOS-3388).
+       An acronym/parenthetical-alias hit is a strictly more precise signal
+       than a label that happens to contain the query.
+    3. **Label, kind, id** — the deterministic tiebreak.
+
+    Ranking here, rather than over whatever survives the bound, is the whole
+    point: with more incidental hits than ``limit``, reordering the survivors
+    cannot recover a same-kind entity that the truncation already discarded.
+    An empty ``preferred_kinds`` collapses key 1 to a constant, which is
+    byte-for-byte the alias-then-substring order this replaced.
+
+    **Provenance (CHAOS-3553).** Every returned row carries a ``SpanMatch``
+    describing how ``query`` identifies its label. This function is where it
+    is stamped because this function is the only place that holds the query
+    and the ranked page at once -- every layer above it (``scope_service``'s
+    dedupe and preferred-kind partition, the QUA shortlist, the promotion
+    predicate) receives entities and no longer has the query in hand, which is
+    exactly the shape of the CHAOS-3422 defect: provenance that a later layer
+    had to re-derive, and re-derived wrongly.
+
+    The stamp is a ``dataclasses.replace`` applied to the ALREADY-ORDERED
+    list, and that ordering is the CHAOS-3422 hard constraint. Nothing here
+    sorts, filters, or re-keys on the new field; ``span_match`` is also
+    ``compare=False`` on ``AuthorizedEntity``, so it cannot leak into a
+    downstream equality or dict key either. Ranking is unchanged
+    byte-for-byte -- the classification is computed after ``ordered`` is
+    final, never as a fourth sort key.
+
+    Note the class is derived from ``(query, label)``, not from which of the
+    two arguments a row arrived in. The buckets are coarser than the truth:
+    ``alias_hits`` merges parenthetical-alias with acronym matches, and
+    ``substring_hits`` merges a whole-label match with an incidental fragment.
+    See ``alias_matching.classify_span_match``.
+    """
+
+    alias_by_key: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
+    for entity in alias_hits:
+        alias_by_key.setdefault((entity.kind, entity.canonical_id), entity)
+    ranked: dict[tuple[EntityKind, str], tuple[int, AuthorizedEntity]] = {
+        key: (0, entity) for key, entity in alias_by_key.items()
+    }
+    for entity in substring_hits:
+        key = (entity.kind, entity.canonical_id)
+        if key not in ranked:
+            ranked[key] = (1, entity)
+    ordered = sorted(
+        ranked.values(),
+        key=lambda item: (
+            0 if item[1].kind in preferred_kinds else 1,
+            item[0],
+            _entity_sort_key(item[1]),
+        ),
+    )
+    return [
+        replace(entity, span_match=classify_span_match(span=query, label=entity.label))
+        for _, entity in ordered[:limit]
+    ]
 
 
 _WATERMARK_TABLES: dict[EntityKind, tuple[str, str]] = {
@@ -145,6 +227,7 @@ class ClickHouseAuthorizedEntityCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         rows_by_kind = await asyncio.gather(
             *(
@@ -175,29 +258,23 @@ class ClickHouseAuthorizedEntityCatalog:
             )
             for kind_hits in alias_hits:
                 alias_entities.extend(kind_hits)
-        # Alias/acronym hits are ordered AHEAD of plain substring hits, before
-        # either is truncated to `limit` -- never merged into one alphabetical
-        # sort. CHAOS-3388 live finding: a real organization can hold far more
-        # than `limit` incidental substring hits for a short query
-        # (issue/work-unit titles that happen to contain "acr" as a literal
-        # substring, e.g. "Harden ACR runtime client boundary") than it holds
-        # true acronym matches. A single combined alphabetical sort let that
-        # noise crowd the one real acronym match for the named project out of
-        # the returned page entirely -- the closest-matches offer named
-        # everything BUT the thing the acronym actually stood for. An
-        # acronym/alias equality is a strictly more precise signal than an
-        # incidental substring containment, so it always survives the bound.
-        alias_by_key: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
-        for entity in alias_entities:
-            alias_by_key.setdefault((entity.kind, entity.canonical_id), entity)
-        ordered_alias = sorted(alias_by_key.values(), key=_entity_sort_key)
-        substring_by_key: dict[tuple[EntityKind, str], AuthorizedEntity] = {}
-        for entity in entities:
-            key = (entity.kind, entity.canonical_id)
-            if key not in alias_by_key:
-                substring_by_key.setdefault(key, entity)
-        ordered_substring = sorted(substring_by_key.values(), key=_entity_sort_key)
-        return (ordered_alias + ordered_substring)[:limit]
+        # The named kind, then alias-over-substring, then label -- all applied
+        # before the truncation, never after it. CHAOS-3388 live finding: a
+        # real organization can hold far more than `limit` incidental
+        # substring hits for a short query (issue/work-unit titles that happen
+        # to contain "acr" as a literal substring, e.g. "Harden ACR runtime
+        # client boundary") than it holds true acronym matches, so a single
+        # combined alphabetical sort crowded the one real acronym match out of
+        # the returned page entirely. CHAOS-3422 is the same failure one level
+        # up: the surviving page was still kind-blind, so the one real
+        # *project* the user asked for ranked 5th of 5 behind four issues.
+        return merge_search_candidates(
+            query=query,
+            alias_hits=alias_entities,
+            substring_hits=entities,
+            preferred_kinds=preferred_kinds,
+            limit=limit,
+        )
 
     async def _alias_matches(
         self, org_id: str, kind: EntityKind, query: str, *, limit: int

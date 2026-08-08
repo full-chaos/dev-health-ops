@@ -38,10 +38,12 @@ docs\:check:
 	@$(MAKE) --no-print-directory docs\:check-fast
 	$(PYTHON) scripts/build_docs_cloudflare.py --mode preview --full-check
 
-# Fast inner loop while editing pages: catches taxonomy drift and broken relative
-# links/anchors without a full site build. Not sufficient before pushing.
+# Fast inner loop while editing pages: catches taxonomy drift, published-copy drift,
+# and broken relative links/anchors without a full site build. Not sufficient before
+# pushing.
 docs\:check-fast:
 	$(PYTHON) scripts/check_investment_docs_drift.py
+	$(PYTHON) scripts/check_ask_dev_copy_drift.py
 	$(PYTHON) scripts/check_docs_links.py
 
 docs\:build:

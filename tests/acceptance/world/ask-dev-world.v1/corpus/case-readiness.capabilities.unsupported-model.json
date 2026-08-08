@@ -3,8 +3,8 @@
   "id": "readiness.capabilities.unsupported-model",
   "family": "readiness",
   "group": 1,
-  "status": "active",
-  "blocked_by": null,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3588",
   "proves": [
     "P0-B MISSING item 14"
   ],
@@ -13,26 +13,9 @@
   "user_alias": "primary.unsupported-model-user",
   "subject_class": "n/a",
   "subject_ref": null,
-  "invariants": [
-    {
-      "category": "terminal-persists-assistant-row",
-      "check": "terminal_persists_assistant_row",
-      "args": {},
-      "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
-    }
-  ],
-  "resolution_profile_ref": "deterministic-v1",
+  "invariants": [],
+  "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "Realizes world.json's `provider_profiles.unsupported-model-profile` (readiness: unsupported_model, intent: readiness_probe) -- user_alias primary.unsupported-model-user carries provider_profile_override: unsupported-model-profile, which selects this profile regardless of question content, so the exact question text is deliberately generic (any status question exercises the same gate). Subject is n/a: the readiness/capability gate is evaluated before any subject preflight or scope resolution ever runs, so no ScopeResolutionOutcome value is asserted here (mirrors scope.unsupported-request / scope.prohibited-write's null-subject convention). Only one invariant is asserted (justifying the corpus's 'must justify zero/near-zero invariants' rule): the other three fixed invariants are about subject-label parsing and unauthorized-candidate leakage, neither of which this scenario exercises -- the readiness gate fires before a subject mention is ever parsed. Outcome choice (UNSUPPORTED, not TEMPORARILY_UNAVAILABLE) is documented in the resolution-profile fragment rather than here, per this schema's own design principle (matcher/provider-state-specific expected outcomes belong in the profile, not the case). [Reworded during Lane 2b codex round-1 remediation, 2026-08-06, from \"What's the status of meridian/web-app?\": production's provider_scripts.py requires GLOBALLY-UNIQUE question text per role script (test_a_question_fingerprint_collision_fails_to_load), and every corpus case now needs its own role-legacy_agent.json entry (script_inventory.py's full-coverage requirement) -- two cases sharing literal question text could never both get a script entry. Subject mention substring kept character-identical to subjects.json's declared 'mentions' so the deterministic extractor still recognizes it; only the surrounding phrasing changed.] [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from 'Please give me the status of meridian/web-app.': question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "BLOCKED (CHAOS-3546 -> CHAOS-3588): this case's mechanism was world.json's user-level provider_profile_override (unsupported-model-profile via user_alias primary.unsupported-model-user), retired by CHAOS-3546's fixture-field-consumer guard -- it was declared on two world.json users and read by zero production code, so both cases it drove were passing while proving nothing about unsupported-model handling. The underlying readiness gate IS real and structurally correct (policy.py:151-158's denied_providers/denied_models -> MODEL_NOT_SUPPORTED -> production_runtime.py's DevRuntimeUnavailable('model_not_supported'), firing before BoundedDevRuntime construction, i.e. before any subject preflight or scope resolution -- confirmed by trace, not assumed, so this case's own prior claim about gate ordering was correct), but nothing populates the denial lists: AgentProviderPolicy is built in exactly one place and never receives a `denied` value, and no acceptance-boot step writes the generic settings table a denial would live in. CHAOS-3588 is that ticket: choose org-scoped-settings-seeding vs. a real per-user threading mechanism (this case's own user needs a DIFFERENT provider outcome than other primary org users, which a bare org-level denial cannot express), build it, and re-author this case to drive the gate through it. Historical framing preserved for whoever re-authors: this id realized world.json's `provider_profiles.unsupported-model-profile` (readiness: unsupported_model, intent: readiness_probe) as a 'capability certification' scenario (group 1, readiness family), distinct from deg.provider.unsupported's 'provider degradation' framing (group 9) of the same underlying gate.",
+  "$comment_resolution_path_invariant": "SELF-CONTRADICTION RESOLVED BY EXECUTION (CHAOS-3490, 2026-08-06). This case's own notes state the readiness/capability gate is evaluated BEFORE any subject preflight or scope resolution ever runs, so no ScopeResolutionOutcome is asserted -- while its resolution-profile entry simultaneously declared resolution_path 'deterministic-exact'. Those cannot both be true. The exit evidence run settled it: resolution_path = None, no resolution reached. The notes were right and the profile expectation was wrong."
 }

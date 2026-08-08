@@ -68,8 +68,12 @@ __all__ = [
     "INTERNAL_TOKEN_DENYLIST",
     "NEVER_ATTESTABLE_TOKENS",
     "REFUSED_WITH_GROUNDING_SUMMARY",
+    "SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE",
+    "SUBJECT_MATCHED_BY_UNDERSTANDING_TEMPLATE",
     "WITHHELD_COPY",
     "attested_strings",
+    "disclose_scope_widening",
+    "disclose_subject_match",
     "internal_token_leak",
     "internal_token_leak_field",
     "named_subject_not_found_answer",
@@ -77,6 +81,7 @@ __all__ = [
     "redact_persisted_answer",
     "redact_persisted_error",
     "scrub_auxiliary_leaks",
+    "subject_matched_disclosure",
     "user_supplied_subject_kind",
     "user_supplied_subject_label",
     "user_visible_strings",
@@ -211,6 +216,154 @@ _UNNAMED_SUBJECT_SENTENCE = (
 )
 _NO_SUBSTITUTION_SENTENCE = "I did not substitute organization-wide data."
 _CLOSEST_MATCHES_SENTENCE = "Here are the closest matches, if any."
+
+#: CHAOS-3497 part 2: the one sentence that discloses a widening in prose.
+#:
+#: When a bare name in the question cannot be resolved, the run does not stop
+#: -- it widens to organization scope and answers anyway (see
+#: ``subject_preflight``'s ``unresolved_untyped`` branch and its comment for
+#: why). That widening was recorded machine-readably
+#: (``dev_scope_resolution.v1.fallbacks == ["organization"]``, outcome
+#: ``organization_fallback``, no ``subject_ref`` on the frame) but said
+#: nowhere a person reading the rendered answer would see it: measured live
+#: 2026-08-06, ``resolved_scope.warnings`` was empty and the frame's
+#: ``limitations`` carried only unrelated provenance entries. A reader saw
+#: "answered with gaps" and no indication that the thing they named had been
+#: missed.
+#:
+#: Deliberately NOT keyed on ``fallbacks == ["organization"]``, which the
+#: ticket suggested. That marker has a second producer:
+#: ``scope_service.resolve`` sets it for a request that named no subject at
+#: all and was ALLOWED to default to the organization -- not a widening away
+#: from anything, and a reader must not be told their subject was missed when
+#: they never named one. Measured, that second producer is unreachable from
+#: Ask Dev today (``production_runtime._scope_request`` passes
+#: ``allow_organization_fallback=False``), so the two predicates currently
+#: agree -- ``test_chaos_3497_scope_observability`` pins exactly that, so this
+#: is a checked claim rather than a story, and the day the flag flips the copy
+#: does not start lying.
+#:
+#: The trigger is instead the preflight's own ``legacy_guard_required``: true
+#: on exactly the branch where a NAMED bare subject went unresolved and the
+#: organization was committed in its place.
+#:
+#: Names nothing the user typed: the unresolved span is available
+#: (``SubjectPreflightResult.unresolved_name_spans``) but echoing it here
+#: would reopen the producer-authored-copy channel this module's docstring
+#: closes, and the sentence is true and actionable without it.
+SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE = (
+    "I could not match the subject named in this question, so this answer "
+    "covers the whole organization instead."
+)
+
+
+#: ``DevAnswer.warnings``' own contract bound, read off the model so this
+#: cannot drift from it.
+_MAX_ANSWER_WARNINGS: int = next(
+    metadata.max_length
+    for metadata in DevAnswer.model_fields["warnings"].metadata
+    if getattr(metadata, "max_length", None) is not None
+)
+
+
+def _disclosed(answer: DevAnswer, sentence: str) -> DevAnswer:
+    """Put one server-owned ``sentence`` into ``answer.warnings``, once.
+
+    The single implementation of "a disclosure survives the bound", shared by
+    every disclosure below so the rule is decided once rather than per
+    caller. CHAOS-3531: the two callers used to disagree here -- one yielded
+    at the bound and one took the slot -- which is a trap for the next reader
+    and made "never silent" true of one disclosure and false of its twin.
+
+    ``warnings`` is the right channel rather than a bespoke field: it is what
+    ``streaming`` publishes as ``warning`` frames and what
+    ``terminal_frames.wrap_legacy_answer_as_frame`` copies into the frame's
+    ``limitations``, so one entry reaches the wire and the rendered answer
+    together. ``answered_with_gaps`` (what every wrapped legacy answer is)
+    requires disclosed limitations, so adding one can never invalidate the
+    frame.
+
+    At the contract's twenty-warning bound the disclosure DISPLACES the last
+    producer warning rather than yielding to it. That trade is deliberate and
+    it is the whole point of this function: an undisclosed scope decision is
+    a claim the reader cannot check, and a dropped twentieth warning is not.
+    An answer carrying twenty warnings is already degenerate; the disclosure
+    is the one entry whose absence changes what the answer MEANS.
+
+    That judgement rests on a checked property of today's producers, stated
+    so a future change can notice it: every server-authored writer of
+    ``warnings`` emits at MOST one entry (the server-grounded notice, the
+    budget-exhaustion notice, these disclosures), so the only way to reach
+    the bound is model-authored free text -- displacement evicts model prose,
+    never a server safety signal. If a deterministic producer ever starts
+    emitting many machine warnings here, revisit this trade rather than
+    assuming it still holds.
+
+    The sentence goes FIRST so a truncating renderer keeps it, and the
+    function is idempotent -- disclosing twice costs one slot, not two.
+    """
+
+    if sentence in answer.warnings:
+        return answer
+    return answer.model_copy(
+        update={"warnings": [sentence, *answer.warnings][:_MAX_ANSWER_WARNINGS]}
+    )
+
+
+def disclose_scope_widening(answer: DevAnswer) -> DevAnswer:
+    """Disclose that the run widened to organization scope, once.
+
+    CHAOS-3531 corrects what CHAOS-3497 claimed: this used to return the
+    answer unchanged once the twenty-warning bound was spent, so a widened
+    run could answer organization-wide with no prose disclosure at all --
+    while CHAOS-3497's own write-up said the widening "is said out loud"
+    without qualification. The claim is now true rather than qualified: see
+    ``_disclosed`` for the bound rule and why displacement is the right
+    trade.
+    """
+
+    return _disclosed(answer, SCOPE_WIDENED_TO_ORGANIZATION_SENTENCE)
+
+
+#: CHAOS-3525: the sentence that makes a model-chosen subject visible.
+#:
+#: Promotion is the first time an LLM decides WHAT a question is about, and a
+#: subject chosen this way must never be indistinguishable from one the
+#: catalog matched literally. The named span is the user's own text and the
+#: label is a catalog-confirmed authorized entity -- the two things the
+#: reader needs to check the match themselves, and nothing else.
+#:
+#: Named "matched" rather than "found": the run did not find a literal match,
+#: it interpreted. Overstating that would be the same class of error as the
+#: silent commit this sentence exists to prevent.
+SUBJECT_MATCHED_BY_UNDERSTANDING_TEMPLATE = (
+    "I matched '{span}' to {label}. If that is not what you meant, ask again "
+    "using the full name."
+)
+
+
+def subject_matched_disclosure(*, span: str, label: str) -> str:
+    """The disclosure sentence for one QUA-committed subject."""
+
+    return SUBJECT_MATCHED_BY_UNDERSTANDING_TEMPLATE.format(span=span, label=label)
+
+
+def disclose_subject_match(answer: DevAnswer, *, span: str, label: str) -> DevAnswer:
+    """Disclose which subject a QUA proposal committed, once.
+
+    The label is authorized catalog content, so a legitimate entity whose
+    name happens to contain a denylisted token must not fail its own answer:
+    the caller attests it through ``finish()``'s ``extra_attested`` seam, the
+    same trust tier already granted to clarification-candidate labels.
+
+    Bound behaviour is ``_disclosed``'s, shared with the widening disclosure
+    -- a model-chosen subject reaching a reader unannounced is the failure
+    the whole promotion path is gated to prevent, and it must not become
+    reachable just because an answer already carried twenty warnings.
+    """
+
+    return _disclosed(answer, subject_matched_disclosure(span=span, label=label))
+
 
 #: The noun used when the question gave no entity noun of its own. Never
 #: "project": guessing a kind the search never confirmed would state

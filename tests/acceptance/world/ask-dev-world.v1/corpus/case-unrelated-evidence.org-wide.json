@@ -10,7 +10,7 @@
   ],
   "question": "What's the status of the organization's repositories?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-5",
   "subject_class": "n/a",
   "subject_ref": null,
   "invariants": [
@@ -21,18 +21,11 @@
       "assert": "An explicit org-wide request ('the organization's repositories', no single subject named) is answered using evidence drawn from every repository/project the requester is authorized to see across the org -- the answer must never silently narrow to a subset (e.g. only the most recently active repo, or only meridian/web-app) while presenting itself as a complete org-wide answer. This is the direct complement of unrelated-evidence.named-subject's invariant: the same cross-repository evidence that must never leak into a NAMED-subject answer must never be silently excluded from a genuinely ORG-WIDE one.",
       "executable_today": true,
       "$comment": "check=no_internal_error is a real, always-meaningful floor (the run must not crash to internal_error) but is NARROWER than this invariant's full 'assert' claim above -- Lane 2a's invariants.py registry (read directly, 2026-08-06) has no checker yet for the specific widening/unauthorized-candidate/persistence claim this category names. Tracked as a Lane 2a checker gap, not silently claimed as fully enforced."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "No provider-scripts/role-legacy_agent.json entry exists for this id -- the question falls through to the default heuristic untouched (CASE-SCHEMA.v1.md's own point: under-coverage never masks as false success). subject_class/subject_ref are n/a because this question deliberately names no single subject; it is the org-wide/portfolio-shaped counterpart to unrelated-evidence.named-subject, sharing the same fixture (multiple real primary-org repositories/projects) but exercising the opposite failure mode. expected_scope_resolution_outcome in the resolution-profile fragment is asserted as null for the same reason scope.unsupported-request/scope.prohibited-write assert null -- this question does not exercise ScopeResolutionService's per-mention candidate-resolution machinery at all (there is no named mention to resolve); it is served by the org-wide/portfolio aggregation path (see portfolio.org-wide.status), which is a distinct mechanism from named-subject scope resolution and is not itself under test here."
+  "notes": "No provider-scripts/role-legacy_agent.json entry exists for this id -- the question falls through to the default heuristic untouched (CASE-SCHEMA.v1.md's own point: under-coverage never masks as false success). subject_class/subject_ref are n/a because this question deliberately names no single subject; it is the org-wide/portfolio-shaped counterpart to unrelated-evidence.named-subject, sharing the same fixture (multiple real primary-org repositories/projects) but exercising the opposite failure mode. expected_scope_resolution_outcome in the resolution-profile fragment is asserted as null for the same reason scope.unsupported-request/scope.prohibited-write assert null -- this question does not exercise ScopeResolutionService's per-mention candidate-resolution machinery at all (there is no named mention to resolve); it is served by the org-wide/portfolio aggregation path (see portfolio.org-wide.status), which is a distinct mechanism from named-subject scope resolution and is not itself under test here.",
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B4). This case's question names ZERO mentions that production's extract_mentions recognizes -- verified by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- against this question text. NOTE (adversarial round 2): an earlier version of this comment cited extract_mentions, which is the WRONG oracle: production additionally mints untyped bare-name mentions via _add_untyped_mentions, and three cases were mis-dispositioned on that basis. This case's zero-mention conclusion was re-confirmed against the real interpreter. CASE-SCHEMA.v1.md's own 'practical extraction gotcha' is the cause: a bare, unquoted, lowercase slug is not a mention. So no dev_run_resolutions row is ever written, derive_resolution_path returns None BY CONTRACT, and resolution_path_in deliberately never matches None -- the check failed by construction on every run, on every stack. Same trap and same disposition as the four scope_resolution_outcome_in cases in CASE-SCHEMA.v1.md S1: drop the unpassable check, keep the narrower floor the remaining invariants give, and say so out loud rather than claim enforcement this case never had. The profile's null resolution_path is CORRECT and stays.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 81 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

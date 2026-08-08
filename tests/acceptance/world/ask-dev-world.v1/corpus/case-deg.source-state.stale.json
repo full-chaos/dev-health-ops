@@ -10,9 +10,12 @@
   ],
   "question": "What's the current data freshness for the repo \"probe/source-stale\"?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-7",
   "subject_class": "exact",
   "subject_ref": null,
+  "expected_mention_texts": [
+    "probe/source-stale"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -32,9 +35,20 @@
       },
       "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Grounded against sources.json's dedicated 'stale' matrix row (repo_full_name probe/source-stale, org primary): commits/pull_requests/reviews/work_items/deployments all read DataHealthState.STALE (last_synced mutated to pinned_now - 96h, past the 48h STALE_FALLBACK_GRACE). Same fixture row already-authored trust.source-health.stale grounds, but that case asks a TRUST/trustworthiness question; this one asks a source-state/freshness question directly (the deg.source-state family's own angle: is the data current, not how trustworthy is it) -- deliberately distinct question shape per this batch's global-uniqueness requirement. Also distinct from metric-compare.two-metrics.stale-source, which asks a metric-comparison question over the same repo. subject_ref intentionally null (repo referenced directly by name, same pattern as trust.source-health.stale -- no dedicated subjects.json entry for probe/source-stale)."
+  "notes": "Grounded against sources.json's dedicated 'stale' matrix row (repo_full_name probe/source-stale, org primary): commits/pull_requests/reviews/work_items/deployments all read DataHealthState.STALE (last_synced mutated to pinned_now - 96h, past the 48h STALE_FALLBACK_GRACE). Same fixture row already-authored trust.source-health.stale grounds, but that case asks a TRUST/trustworthiness question; this one asks a source-state/freshness question directly (the deg.source-state family's own angle: is the data current, not how trustworthy is it) -- deliberately distinct question shape per this batch's global-uniqueness requirement. Also distinct from metric-compare.two-metrics.stale-source, which asks a metric-comparison question over the same repo. subject_ref intentionally null (repo referenced directly by name, same pattern as trust.source-health.stale -- no dedicated subjects.json entry for probe/source-stale).",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 27 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

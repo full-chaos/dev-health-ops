@@ -46,6 +46,19 @@ index.txt
 # clone refuse to run the harness.
 .mutation-harness/
 
+# CHAOS-3462: the Wave 4 corpus launcher's JUnit report. Its SIBLINGS in that
+# directory -- the wave4_case_result.v1 receipts -- are deliberately tracked
+# evidence, so the directory itself must stay un-ignored; only this per-run
+# byproduct is excluded, so `run_wave4_corpus.sh` leaves no untracked noise
+# that could be swept into a commit.
+tests/acceptance/artifacts/wave4/junit-corpus.xml
+
+# CHAOS-3219 Phase 5: the acceptance CI lane's tee'd boot/corpus/stack logs.
+# .github/workflows/ask-dev-acceptance.yml writes them here and uploads them as
+# a run artifact; a local reproduction of that same sequence writes them here
+# too. Per-run byproducts, never commit content.
+.acceptance-logs/
+
 # Agent tool scratch output (browser automation, session memory). These are
 # per-run artifacts and must never enter a commit.
 .playwright-mcp/
@@ -61,3 +74,4 @@ index.txt
 .venv/
 .mypy_cache/
 .ruff_cache/
+worktrees/

@@ -10,9 +10,12 @@
   ],
   "question": "What's the status of the project \"sibling-only/private-repo\"?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-4",
   "subject_class": "exact",
   "subject_ref": "subject.tenant.sibling-only-private-repo",
+  "expected_mention_texts": [
+    "sibling-only/private-repo"
+  ],
   "invariants": [
     {
       "category": "no-unauthorized-candidate-surfaces",
@@ -55,16 +58,6 @@
       "$comment": "Wired to the real graduated checker no_unauthorized_candidate_surfaces with a literal authorized_entity_ids allowlist -- org primary's full real fixture repository/project/team catalog, derived directly from src/dev_health_ops/fixtures/generator.py's FIXTURE_NAMESPACE uuid5 repo-id derivation, fixtures/generators/projects.py (project id = repo_full_name), and fixtures/demo_identity.py + world.py's postprocess (team id = literal slug); cross-checked against subjects.json + sources.json's org_alias=primary roster (rebase pass, 2a landed the 3 graduated checkers in PR #1518). Deliberately excludes subject.tenant.sibling-only-private-repo's sibling-org derived ids -- the whole point of this invariant is that they must never appear here. KNOWN TRUST BOUNDARY (invariants.py's own docstring): this declared list's correctness is case-authoring's responsibility, not independently re-verified by the checker at runtime."
     },
     {
-      "category": "no-silent-widening",
-      "check": "scope_resolution_outcome_in",
-      "args": {
-        "from_profile": "expected_scope_resolution_outcome"
-      },
-      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; a cross-tenant identifier that cannot resolve within the requester's own org must terminate gracefully (not_found), never silently fall back to answering about something else.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
       "category": "terminal-persists-assistant-row",
       "check": "terminal_persists_assistant_row",
       "args": {},
@@ -73,16 +66,20 @@
       "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
     },
     {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
       "args": {
-        "from_profile": "resolution_path"
+        "from_profile": "expected_public_outcome"
       },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "No separate sibling-org PROJECT catalog row is documented anywhere in this fixture world distinct from the sibling REPOSITORY row (subjects.json's own subject.tenant.sibling-only-private-repo entry is explicitly entity_kind=repository, corrected there from an earlier mislabel) -- so this deliberately reuses that SAME fixture row and the SAME DataHealthService.inspect/ScopeResolutionService guard the repository-id case (adv.cross-tenant.repository-id) and the group-1 tenant.* pair already exercise, distinguishing this case from those not by underlying entity but by MENTION SHAPE: the full, exact, literal identifier adjacent to the 'project' kind noun (question_interpreter._KIND_NOUNS maps 'project' to EntityKind.PROJECT) rather than 'repo'/'repository'. This proves the cross-tenant refusal holds regardless of which closed kind-noun grammar the mention is typed through -- the authorization guard in DataHealthService.inspect fires on the RESOLVED SCOPE's outcome, not on the requested_entity_kind label the question happened to use. Deliberately full+exact (not the fuzzy 'the private-repo project' phrasing subject-label.unauthorized-candidate-excluded already uses), matching tenant.cross-tenant-identifier-refused's own reasoning for choosing the exact form there. expected_public_outcome/resolution_path triple copied verbatim from that case's profile entry for the same reason: not_found regardless of mention shape is the stronger, simpler invariant."
+  "notes": "No separate sibling-org PROJECT catalog row is documented anywhere in this fixture world distinct from the sibling REPOSITORY row (subjects.json's own subject.tenant.sibling-only-private-repo entry is explicitly entity_kind=repository, corrected there from an earlier mislabel) -- so this deliberately reuses that SAME fixture row and the SAME DataHealthService.inspect/ScopeResolutionService guard the repository-id case (adv.cross-tenant.repository-id) and the group-1 tenant.* pair already exercise, distinguishing this case from those not by underlying entity but by MENTION SHAPE: the full, exact, literal identifier adjacent to the 'project' kind noun (question_interpreter._KIND_NOUNS maps 'project' to EntityKind.PROJECT) rather than 'repo'/'repository'. This proves the cross-tenant refusal holds regardless of which closed kind-noun grammar the mention is typed through -- the authorization guard in DataHealthService.inspect fires on the RESOLVED SCOPE's outcome, not on the requested_entity_kind label the question happened to use. Deliberately full+exact (not the fuzzy 'the private-repo project' phrasing subject-label.unauthorized-candidate-excluded already uses), matching tenant.cross-tenant-identifier-refused's own reasoning for choosing the exact form there. expected_public_outcome/resolution_path triple copied verbatim from that case's profile entry for the same reason: not_found regardless of mention shape is the stronger, simpler invariant.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 3 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible.",
+  "$comment_resolution_path_invariant": "CHAOS-3490 Part 2: REMOVED on live evidence from the CHAOS-3219 Phase 2 exit evidence run (2026-08-06). This case executed against the real stack and its run wrote ZERO dev_run_resolutions rows, so derive_resolution_path returned None and resolution_path_in refused it -- 'resolution_path was not observed (None)'. Same class as CHAOS-3462 B4, which removed the check from 23 cases whose path provably writes no ledger row; this is a population B4 missed. The disposition is EXECUTED, not read: the run is the oracle.",
+  "$comment_scope_resolution_outcome_invariant": "CHAOS-3490 Part 2: REMOVED on the same live evidence. The run emitted no scope.resolved event carrying a scope_resolution.outcome, so this check could not match any allowed value. Observed, not inferred."
 }

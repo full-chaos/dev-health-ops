@@ -33,11 +33,18 @@ checked with ``is_symlink()`` throughout.
 Every test below points LOCK_DIR at a pytest ``tmp_path`` (or a uniquely-named
 default under /tmp, never the real ``dev-health-clickhouse-1``-keyed path) so
 none of this can ever collide with a real gate's lock elsewhere on the host.
+
+HARNESS RULE, learned the expensive way (CHAOS-3468): a probe that is running
+CONCURRENTLY with the test body must NEVER have a pipe for stdout/stderr.
+Every probe below writes to a plain FILE under the test's own tmp_path, read
+back after the process exits. See ``_Probe`` for the measured evidence.
 """
 
 from __future__ import annotations
 
 import os
+import signal
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -48,42 +55,215 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ci" / "local_validate.sh"
 _BASE_PATH = "/usr/bin:/bin:/usr/local/bin"
 
+# Honest budgets, restored in CHAOS-3468.
+#
+# These were 900s (wait) / 960s (reap) until CHAOS-3468. That was a
+# timeout-raise standing in for a diagnosis: this file's own comment used to
+# attribute a gate-run TimeoutExpired at wait_secs=60 to "a transient
+# scheduling stall" on a loaded host. That story is REFUTED -- the real cause
+# was in this harness (see ``_Probe``), not in the host's scheduler and not in
+# the lock. The 900s budget did not fix it; it converted a deadlock into
+# ~16 minutes of every local gate run and hid the defect behind "the gate is
+# mysteriously slow".
+#
+# Probes hold the lock for ~0.1-4s by design, so a waiter that is going to
+# acquire at all acquires within a couple of seconds. 60s is ~15x the longest
+# designed hold: enough slack for a genuinely loaded host, short enough that a
+# real wedge fails the test in a minute instead of a quarter of an hour.
+_WAIT_SECS = 60
+# Ceiling for waiting on a probe process to EXIT (its own LOCK_WAIT_SECS
+# budget, plus its hold, plus slack).
+_REAP_SECS = 90
 
-# wait_secs default is large (900), not a tight budget: this test file runs
-# as part of the FULL gate's own unit suite (~12000 tests under pytest-xdist
-# -n4), and a run through the real gate hit a genuine TimeoutExpired at
-# wait_secs=60 that never reproduced standalone or under deliberately
-# reconstructed load (repeated direct measurements, including racing under
-# two concurrent -n4 full-suite runs, all completed in ~6s). Investigated,
-# not assumed, per this repo's own rule against just raising a timeout: in
-# that failure, BOTH subprocess.communicate() calls returned without a
-# Python-level TimeoutExpired, meaning the "loser" process was not stuck --
-# it completed and released on its own, just far slower than its expected
-# ~3s hold, consistent with a transient scheduling stall (that gate run's
-# total suite time was 214s vs. 172s for a clean rerun -- a real, if
-# unreproduced-on-demand, load spike) rather than a lost wakeup or hung
-# lock. wait_secs=900 gives real scheduling delays room to resolve without
-# the test's own pass/fail depending on exactly how fast the host is right
-# now -- see the test below, which asserts the actual invariant (no
-# overlapping ownership) rather than a wall-clock budget for how fast
-# acquisition "should" happen.
-def _spawn_probe(lock_dir: Path, hold_secs: float, wait_secs: int = 900):
-    return subprocess.Popen(
+# Probes spawned by the test currently running, reaped by the autouse fixture
+# below. Populated by _spawn_probe*/_spawn_exit_order_probe.
+_SPAWNED: list[_Probe] = []
+
+
+class _Probe:
+    """A running ``--lock-probe`` child whose output goes to a FILE, not a pipe.
+
+    Popen-compatible enough for this file (``communicate``, ``wait``, ``kill``,
+    ``returncode``), so the tests read the same way they always did.
+
+    WHY NO PIPE (CHAOS-3468). These tests deliberately run two or more probes
+    at once, and the old harness gave every one of them ``stdout=PIPE`` while
+    draining them SERIALLY (``a.communicate(); b.communicate()``). That
+    deadlocks: the undrained probe blocks in ``write()`` on its own stdout
+    pipe WHILE HOLDING THE LOCK, so the probe being drained can never acquire,
+    and the drainer never gets to the blocked one. Directly observed on this
+    host, not theorised: the lock symlink named the blocked PID as owner, and
+    a stack sample of it was 1804/1808 samples deep in
+    ``__swbuf -> __sflush -> _swrite -> __write_nocancel``, with fd 1 and 2
+    both pointing at the pipe whose read end pytest was not reading. Both
+    probes were still alive 5+ minutes into a 3-second hold; the waiter then
+    burned its full LOCK_WAIT_SECS and failed.
+
+    A probe emits ~370 bytes total, and ``lsof`` reports these pipes with the
+    nominal 16K capacity -- yet they block anyway, because nominal is not
+    actual. Measured on this host while the deadlock was live: a single
+    ``write()`` of 512 bytes to an unread pipe succeeds and 1024 bytes BLOCKS,
+    i.e. the effective buffer is 512 bytes, not 16K (macOS hands out the small
+    buffer and defers expansion under kernel pipe-memory pressure, which a
+    machine running many concurrent agent sessions sits in permanently).
+    So "the output is small, the pipe is safe" is not a defense here at any
+    size worth writing. A file has no writer-side blocking at all, which is why
+    this is the fix rather than "drain concurrently with threads".
+
+    Files also survive the process: a probe killed in teardown still leaves
+    whatever it managed to print, which a pipe drained after the fact does not.
+    """
+
+    def __init__(self, proc: subprocess.Popen, out_path: Path) -> None:
+        self._proc = proc
+        self._out_path = out_path
+
+    @property
+    def pid(self) -> int:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode
+
+    def output(self) -> str:
+        """Everything the probe has written so far (stdout+stderr, merged)."""
+        return self._out_path.read_text(errors="replace")
+
+    def communicate(self, timeout: float | None = None) -> tuple[str, None]:
+        """Wait for exit, then return ``(output, None)`` -- Popen-shaped."""
+        self._proc.wait(timeout=timeout)
+        return self.output(), None
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self._proc.wait(timeout=timeout)
+
+    def poll(self) -> int | None:
+        return self._proc.poll()
+
+    def kill(self) -> None:
+        """SIGKILL the probe AND its ``sleep`` child (whole process group).
+
+        Killing only the bash PID leaves its ``sleep`` behind as an orphan for
+        the rest of that sleep's duration. Every probe is spawned into its own
+        session (``start_new_session=True``), so its PID is its process-group
+        id and one ``killpg`` takes the tree. No EXIT trap runs either way, so
+        this is still the "run was SIGKILLed, the symlink is left behind"
+        scenario the stale-lock test needs.
+        """
+        self._killpg()
+
+    def _killpg(self) -> None:
+        if self._proc.poll() is not None:
+            # Already exited: the pid may have been recycled by now, so
+            # signalling "its" group could hit an unrelated process.
+            return
+        try:
+            os.killpg(self._proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def reap(self) -> None:
+        """Teardown: leave nothing running, whatever the test did or failed at.
+
+        CHAOS-3468 also recorded probes from a FAILED gate run still alive 12+
+        minutes later, holding tmp locks and CPU, because a test that raised
+        never got back to its ``communicate()``. Reaping is therefore a
+        fixture's job, not a test's.
+
+        Stated tradeoff: with a pipe, a probe whose parent died got EPIPE on
+        its next write and exited -- accidental reaping that only worked
+        because the pipe was also the deadlock. A file-backed probe survives
+        its parent, so if pytest itself is SIGKILLed (no finalizers run) a
+        probe outlives it. It is bounded, though: LOCK_WAIT_SECS <= 60 plus
+        its hold, so ~2 minutes worst case, against the 12+ minutes actually
+        observed.
+        """
+        self._killpg()
+        try:
+            self._proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _reap_probes():
+    """Kill and reap every probe this module spawns, pass or fail."""
+    _SPAWNED.clear()
+    try:
+        yield
+    finally:
+        for probe in _SPAWNED:
+            probe.reap()
+        _SPAWNED.clear()
+
+
+def _spawn(argv: list[str], out_dir: Path, env: dict[str, str]) -> _Probe:
+    """Start a probe with its output on a FILE and its own process group."""
+    out_path = out_dir / f"probe-{len(_SPAWNED)}.out"
+    # The parent's handle is closed immediately -- the child holds its own dup,
+    # and the test reads the path back after exit.
+    with out_path.open("wb") as out_fh:
+        assert stat.S_ISREG(os.fstat(out_fh.fileno()).st_mode), (
+            f"probe output must go to a regular file, got mode "
+            f"{os.fstat(out_fh.fileno()).st_mode:#o}"
+        )
+        proc = subprocess.Popen(
+            argv,
+            cwd=ROOT,
+            env=env,
+            stdout=out_fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    # THE INVARIANT, checked on every spawn rather than assumed: this child has
+    # NO pipe to block on. CHAOS-3468's defect is a probe blocked in write()
+    # while holding the lock, and the only thing that can block a writer that
+    # way here is a pipe nobody is reading. ``Popen.stdout``/``stderr`` are
+    # non-None if and only if this call asked for a pipe, so a future edit that
+    # reintroduces ``stdout=PIPE`` fails HERE, immediately and by name, instead
+    # of deadlocking the file for a quarter of an hour.
+    #
+    # This -- not the file's wall-clock runtime -- is the proof the deadlock is
+    # gone. Wall clock is a symptom, and it would also "improve" from the
+    # LOCK_WAIT_SECS 900 -> 60 change on its own; treating a faster run as the
+    # proof is the same self-confirming reasoning that produced the 900s budget
+    # in the first place. (Verified falsifiable: putting ``stdout=PIPE`` back
+    # makes this assert fire at spawn.)
+    assert proc.stdout is None and proc.stderr is None, (
+        "a probe must never be given a pipe: it can block in write() while "
+        "holding the lock, which deadlocks every test in this file"
+    )
+    probe = _Probe(proc, out_path)
+    _SPAWNED.append(probe)
+    return probe
+
+
+def _spawn_probe(
+    lock_dir: Path,
+    hold_secs: float,
+    wait_secs: int = _WAIT_SECS,
+    *,
+    extra_env: dict[str, str] | None = None,
+    path: str = _BASE_PATH,
+) -> _Probe:
+    env = {
+        "LOCK_DIR": str(lock_dir),
+        "LOCK_WAIT_SECS": str(wait_secs),
+        "LOCK_POLL_SECS": "1",
+        "PATH": path,
+    }
+    env.update(extra_env or {})
+    return _spawn(
         ["bash", str(SCRIPT), "--lock-probe", str(hold_secs)],
-        cwd=ROOT,
-        env={
-            "LOCK_DIR": str(lock_dir),
-            "LOCK_WAIT_SECS": str(wait_secs),
-            "LOCK_POLL_SECS": "1",
-            "PATH": _BASE_PATH,
-        },
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+        lock_dir.parent,
+        env,
     )
 
 
-def _spawn_probe_with_env(hold_secs: float, wait_secs: int, extra_env: dict):
+def _spawn_probe_with_env(
+    hold_secs: float, wait_secs: int, extra_env: dict[str, str], out_dir: Path
+) -> _Probe:
     """Like _spawn_probe, but does NOT set LOCK_DIR -- lets the script compute
     its own default, with whatever extra env (e.g. a distinct TMPDIR) the
     caller supplies layered on top of a minimal base."""
@@ -93,13 +273,23 @@ def _spawn_probe_with_env(hold_secs: float, wait_secs: int, extra_env: dict):
         "PATH": _BASE_PATH,
     }
     env.update(extra_env)
-    return subprocess.Popen(
-        ["bash", str(SCRIPT), "--lock-probe", str(hold_secs)],
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+    return _spawn(["bash", str(SCRIPT), "--lock-probe", str(hold_secs)], out_dir, env)
+
+
+def _spawn_exit_order_probe(
+    lock_dir: Path, hold_secs: float, cleanup_delay: float, marker: Path
+) -> _Probe:
+    return _spawn(
+        [
+            "bash",
+            str(SCRIPT),
+            "--lock-probe-exit-order",
+            str(hold_secs),
+            str(cleanup_delay),
+            str(marker),
+        ],
+        lock_dir.parent,
+        {"LOCK_DIR": str(lock_dir), "LOCK_WAIT_SECS": "10", "PATH": _BASE_PATH},
     )
 
 
@@ -150,8 +340,11 @@ def test_two_concurrent_invocations_serialize_not_both_run(tmp_path):
     proc_a = _spawn_probe(lock_dir, hold_secs)
     proc_b = _spawn_probe(lock_dir, hold_secs)
 
-    out_a = proc_a.communicate(timeout=960)[0]
-    out_b = proc_b.communicate(timeout=960)[0]
+    # Draining one after the other is safe ONLY because probe output goes to
+    # files: with pipes, the undrained probe blocks in write() while holding
+    # the lock and neither ever finishes (CHAOS-3468 -- see _Probe).
+    out_a = proc_a.communicate(timeout=_REAP_SECS)[0]
+    out_b = proc_b.communicate(timeout=_REAP_SECS)[0]
 
     assert proc_a.returncode == 0, out_a
     assert proc_b.returncode == 0, out_b
@@ -222,22 +415,8 @@ def test_high_concurrency_stress_no_double_acquire(tmp_path):
     n = 4
     hold_secs = 0.15
 
-    procs = [
-        subprocess.Popen(
-            ["bash", str(SCRIPT), "--lock-probe", str(hold_secs)],
-            cwd=ROOT,
-            env={
-                "LOCK_DIR": str(lock_dir),
-                "LOCK_WAIT_SECS": "900",
-                "PATH": _BASE_PATH,
-            },
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        for _ in range(n)
-    ]
-    outputs = [p.communicate(timeout=960)[0] for p in procs]
+    procs = [_spawn_probe(lock_dir, hold_secs) for _ in range(n)]
+    outputs = [p.communicate(timeout=_REAP_SECS)[0] for p in procs]
     for p, out in zip(procs, outputs):
         assert p.returncode == 0, out
 
@@ -434,21 +613,7 @@ def test_release_lock_runs_before_slow_cleanup_on_exit(tmp_path):
     hold_secs = 2
     cleanup_delay = 2
 
-    proc = subprocess.Popen(
-        [
-            "bash",
-            str(SCRIPT),
-            "--lock-probe-exit-order",
-            str(hold_secs),
-            str(cleanup_delay),
-            str(marker),
-        ],
-        cwd=ROOT,
-        env={"LOCK_DIR": str(lock_dir), "LOCK_WAIT_SECS": "10", "PATH": _BASE_PATH},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    proc = _spawn_exit_order_probe(lock_dir, hold_secs, cleanup_delay, marker)
 
     # Generous deadlines: this repo's dev host routinely runs many concurrent
     # agent-driven processes (observed directly during this fix: load average
@@ -510,17 +675,19 @@ def test_default_lock_dir_ignores_tmpdir_and_still_serializes(tmp_path):
     try:
         proc_a = _spawn_probe_with_env(
             hold_secs,
-            wait_secs=900,
+            wait_secs=_WAIT_SECS,
             extra_env={"TMPDIR": str(tmpdir_a), "CH_CONTAINER": container},
+            out_dir=tmp_path,
         )
         proc_b = _spawn_probe_with_env(
             hold_secs,
-            wait_secs=900,
+            wait_secs=_WAIT_SECS,
             extra_env={"TMPDIR": str(tmpdir_b), "CH_CONTAINER": container},
+            out_dir=tmp_path,
         )
 
-        out_a = proc_a.communicate(timeout=960)[0]
-        out_b = proc_b.communicate(timeout=960)[0]
+        out_a = proc_a.communicate(timeout=_REAP_SECS)[0]
+        out_b = proc_b.communicate(timeout=_REAP_SECS)[0]
 
         assert proc_a.returncode == 0, out_a
         assert proc_b.returncode == 0, out_b
@@ -591,18 +758,8 @@ def test_reclaim_ignores_locale_when_checking_holder_liveness(tmp_path):
     the live holder.
     """
     lock_dir = tmp_path / "locale.lock"
-    holder = subprocess.Popen(
-        ["bash", str(SCRIPT), "--lock-probe", "5"],
-        cwd=ROOT,
-        env={
-            "LOCK_DIR": str(lock_dir),
-            "LOCK_WAIT_SECS": "30",
-            "PATH": _BASE_PATH,
-            "LC_ALL": "C",
-        },
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+    holder = _spawn_probe(
+        lock_dir, hold_secs=5, wait_secs=30, extra_env={"LC_ALL": "C"}
     )
     try:
         deadline = time.monotonic() + 15
@@ -729,27 +886,25 @@ def test_reclaim_is_compare_and_delete_under_widened_window(tmp_path):
     try:
         os.symlink(f"{live.pid}|Mon Jan  1 00:00:00 1999|/some/x/cwd", lock_dir)
 
-        x = subprocess.Popen(
-            ["bash", str(SCRIPT), "--lock-probe", "1"],
-            cwd=ROOT,
-            env={
+        x = _spawn_probe(
+            lock_dir,
+            hold_secs=1,
+            wait_secs=30,
+            extra_env={
                 "SLOW_PS_TARGET_PID": str(live.pid),
                 "SLOW_PS_DELAY": "3",
-                "LOCK_DIR": str(lock_dir),
-                "LOCK_WAIT_SECS": "30",
-                "LOCK_POLL_SECS": "1",
-                "PATH": f"{slow_ps_dir}:{_BASE_PATH}",
             },
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+            path=f"{slow_ps_dir}:{_BASE_PATH}",
         )
         # Let X get into its delayed ps call before Y starts racing it.
         time.sleep(1)
         y = _spawn_probe(lock_dir, hold_secs=4, wait_secs=30)
 
-        out_x = x.communicate(timeout=40)[0]
-        out_y = y.communicate(timeout=40)[0]
+        # Y is deliberately NOT drained first: it holds the lock while X is
+        # still deciding, and with pipes that undrained hold deadlocked the
+        # whole file (CHAOS-3468). Output is on files, so drain order is free.
+        out_x = x.communicate(timeout=_REAP_SECS)[0]
+        out_y = y.communicate(timeout=_REAP_SECS)[0]
         assert x.returncode == 0, out_x
         assert y.returncode == 0, out_y
 

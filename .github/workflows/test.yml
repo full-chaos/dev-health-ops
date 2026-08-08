@@ -26,6 +26,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
+        # A manual run is a request to test THIS ref, and it has no base/head
+        # diff to filter against; computing one against the default branch
+        # would let `gh workflow run test.yml` produce a run where every test
+        # job skipped and the required `test` check still went green
+        # (CHAOS-3482 Codex round 1). Leaving the filter unrun makes `code`
+        # empty, which the job conditions below and
+        # ci/aggregate_gate_results.sh both read as "not 'true'" -- so the
+        # dispatch clause, not the path filter, is what selects the jobs.
+        # Same construction as lint.yml and typecheck.yml.
+        if: github.event_name != 'workflow_dispatch'
         with:
           filters: |
             code:
@@ -40,6 +50,28 @@ jobs:
               - 'ci/**'
               - 'migrations/**'
               - 'requirements.txt'
+              # Both test jobs `pip install -r requirements-docs.txt` before
+              # running anything, so it is part of the test environment. It
+              # was missing here until CHAOS-3482 Codex round 2: a PR touching
+              # only this file got code=false, skipped both test jobs, and the
+              # aggregator -- correctly, by its own rule -- called that a
+              # legitimate docs-only skip and reported the required check
+              # green. test_paths_filter_covers_every_file_the_test_jobs_install
+              # derives this list from the jobs' own install commands.
+              - 'requirements-docs.txt'
+              # The guards for these live in this workflow's suite
+              # (tests/tooling/test_aggregate_gate_results.py), so a PR
+              # touching only one of them must not skip that suite --
+              # otherwise the check that would notice a collapsed lint or
+              # typecheck scope is the one that does not run
+              # (CHAOS-3513 Codex round 2).
+              - '.gitignore'
+              - '.ignore'
+              - 'ruff.toml'
+              - '.ruff.toml'
+              - 'mypy.ini'
+              - '.mypy.ini'
+              - 'setup.cfg'
               - 'pyproject.toml'
               - 'pytest.ini'
               - 'alembic.ini'
@@ -47,6 +79,12 @@ jobs:
               - 'scripts/**'
               - 'alerts/**'
               - 'compose.yml'
+              # docker/Dockerfile is one of scripts/acceptance's
+              # RUNTIME_DEPENDENCY_PATHS: the acceptance suite hashes it and
+              # asserts on it, so a change here can turn the suite red -- but
+              # the filter did not select on it, so such a PR skipped every
+              # test job and the gate went green (CHAOS-3482 Codex round 4).
+              - 'docker/**'
               - 'deploy/**'
 
   # Fast, pytest-xdist-parallelized unit suite on the supported Python
@@ -61,8 +99,13 @@ jobs:
     # On merge_group, dorny/paths-filter has no PR base/head diff to compute and
     # can report code=false, which would skip every test job; the `test`
     # aggregator then treats the skip as a pass and an untested change reaches
-    # main. Always run in the merge queue regardless of the path filter.
-    if: github.event_name == 'merge_group' || needs.changes.outputs.code == 'true'
+    # main. Always run in the merge queue regardless of the path filter, and
+    # likewise on workflow_dispatch, where the filter is deliberately not run
+    # (see the `changes` job) so a manual run cannot test nothing.
+    if: >-
+      github.event_name == 'merge_group' ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04-arm
     # Test matrix needs package read access for dependency installs.
     permissions:
@@ -126,7 +169,7 @@ jobs:
           # 4 vCPUs, so this matches `-n auto` there while staying predictable on
           # larger runners. Override PYTEST_XDIST_WORKERS to tune.
           PYTEST_XDIST_WORKERS: "4"
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py --ignore=tests/api/admin/test_add_member_visibility.py
+          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py --ignore=tests/api/admin/test_add_member_visibility.py --ignore=tests/api/dev/test_persistence_postgres.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
@@ -158,7 +201,8 @@ jobs:
             tests/test_0066_celery_river_cutover_postgres.py \
             tests/test_chaos_3337_source_class_postgres_migration.py \
             tests/test_canonical_incident_feature_flag_postgres_migration.py \
-            tests/api/admin/test_add_member_visibility.py
+            tests/api/admin/test_add_member_visibility.py \
+            tests/api/dev/test_persistence_postgres.py
 
       - name: Upload junit test reports
         if: always()
@@ -186,6 +230,14 @@ jobs:
   # verification + Codecov upload), never on pull_request. Reassigned from the
   # retired 3.11 leg to 3.12 and parallelized with xdist (CHAOS-2586); moved to
   # 3.14 to match the shipped interpreter (CHAOS-3419).
+  #
+  # It also does not run on workflow_dispatch, because the path filter that
+  # `code` comes from is not run there (see `changes`) and this condition is
+  # unchanged: a manual run is the fast-suite path, proved by test-matrix,
+  # which workflow_dispatch now always selects. The aggregator accepts this
+  # skip for the same reason it accepts the pull_request one -- the job's own
+  # condition did not select it -- and ci/aggregate_gate_results.sh derives
+  # that from this exact expression.
   coverage:
     needs: [changes]
     if: >-
@@ -315,31 +367,85 @@ jobs:
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test"; the matrix above produces "test-matrix (3.14)"
-  # and the coverage job produces "coverage", neither of which match. This
-  # aggregator always runs, treating skipped (path filter, or coverage skipped
-  # on pull_request) as pass and failure/cancelled as fail. It is the single
-  # required check for both PRs and the merge queue. Do not remove.
+  # and the coverage job produces "coverage", neither of which match. It is the
+  # single required check for both PRs and the merge queue. Do not remove.
+  #
+  # The verdict lives in ci/aggregate_gate_results.sh rather than inline here,
+  # so it can be driven through the whole result matrix by
+  # tests/tooling/test_aggregate_gate_results.py. See that script's header for
+  # why `needs.changes.result` -- not the downstream results alone -- is what
+  # separates a legitimate skip from an upstream failure that skipped
+  # everything (CHAOS-3482).
+  docs-tests:
+    name: docs-tests
+    # CHAOS-3514. Runs `pytest tests/docs` alone (16s measured in a clean
+    # py3.14 env, excluding install) so the 116
+    # docs guards execute on a docs-content-only PR, which previously ran
+    # none of them: `code` selects on `tests/**` but not `docs/**`, so
+    # editing a docs TEST ran it while editing the page it asserts on did
+    # not. docs-guards.yml cannot cover this -- it invokes pytest zero times.
+    #
+    # DELIBERATELY UNCONDITIONAL, and this is the design rather than
+    # laziness. Two gated alternatives were built and rejected against the
+    # repo's own machinery:
+    #
+    #   * a second `docs` filter output gating this job -- rejected because
+    #     ci/aggregate_gate_results.sh's `path-filtered` policy treats a skip
+    #     as legitimate ONLY when CHANGES_CODE == 'false', so a docs-gated
+    #     job would SKIP on an ordinary code-only PR while the aggregator
+    #     held that skip illegitimate, failing the required gate on EVERY
+    #     such PR;
+    #   * widening the condition to `code || docs` -- rejected because
+    #     _PATH_FILTERED_IF pins the exact condition every `path-filtered`
+    #     job must carry, and says in terms: "Drift here means the model is
+    #     stale: fix ci/aggregate_gate_results.sh, do not just update the
+    #     string." Inventing a policy in the script whose purpose is to
+    #     refuse ambiguity, to save ~10s on a code-only PR, is a bad trade.
+    #
+    # Unconditional needs no filter, no new policy, and no skip-legitimacy
+    # reasoning at all -- and a job that never skips is the strongest
+    # available answer to "no required job may exit success after skipping
+    # substantive work". The cost is ~10s on PRs that changed no docs.
+    needs: [changes]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install docs test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-docs.txt
+      - name: Run the docs guards
+        run: pytest tests/docs -q
+
   test:
     name: test
+    # Must remain `always()`. Under `!cancelled()` (or any condition that lets
+    # this job itself skip) a cancelled run leaves the REQUIRED check *skipped*,
+    # and branch protection counts a skipped required check as satisfied --
+    # which moves the silent pass one level up instead of closing it.
+    # Cancellation has to be reported by a job that actually ran, so this job
+    # runs unconditionally and the script fails the gate on `cancelled`.
     if: always()
-    needs: [test-matrix, coverage]
+    needs: [changes, test-matrix, coverage, docs-tests]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Aggregate test results
         env:
-          MATRIX_RESULT: ${{ needs.test-matrix.result }}
-          COVERAGE_RESULT: ${{ needs.coverage.result }}
+          GATE_NAME: test
+          EVENT_NAME: ${{ github.event_name }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_CODE: ${{ needs.changes.outputs.code }}
+          GATED_JOB_1: test-matrix|path-filtered|${{ needs.test-matrix.result }}
+          GATED_JOB_2: coverage|merge-time-only|${{ needs.coverage.result }}
+          GATED_JOB_3: docs-tests|unconditional|${{ needs.docs-tests.result }}
         run: |
-          echo "test-matrix result: ${MATRIX_RESULT}"
-          echo "coverage result: ${COVERAGE_RESULT}"
-          for result in "${MATRIX_RESULT}" "${COVERAGE_RESULT}"; do
-            case "${result}" in
-              success|skipped)
-                ;;
-              failure|cancelled|*)
-                echo "test gate failed (${result})"
-                exit 1
-                ;;
-            esac
-          done
-          echo "test gate passed"
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

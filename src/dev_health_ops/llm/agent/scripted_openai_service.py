@@ -80,6 +80,87 @@ def _tool_results_from_messages(payload: dict[str, Any]) -> list[dict[str, Any]]
     return []
 
 
+#: The contract a Question Understanding Agent request asks to be answered
+#: in. CHAOS-3532: this string, and only this string, is how the scripted
+#: service recognises a QUA call.
+#:
+#: Pinned to the contract ID rather than inferred from the schema's shape: a
+#: structural guess ("does it have a mentions array?") would drift silently
+#: the first time an unrelated schema grew a similar field, and a QUA call
+#: answered by the wrong branch is indistinguishable downstream from the QUA
+#: path declining.
+QUA_CONTRACT_ID = "dev_question_understanding.v1"
+
+#: Script file answering QUA calls. Deliberately NOT ``role-*.json``: the
+#: role is not the routing key and never was. ``qua_shadow`` runs under the
+#: already-certified ``legacy_agent`` provider (see ``roles.AgentRole``), so
+#: a ``role-question_understanding.json`` would never be loaded by anything.
+QUA_SCRIPT_FILENAME = "qua-decisions.v1.json"
+
+_QUA_QUESTION_PATTERN = re.compile(r'^Question:\s*"(?P<question>.*)"\s*$', re.M)
+
+
+def _is_qua_request(payload: dict[str, Any]) -> bool:
+    """Whether this request is a Question Understanding Agent call.
+
+    A QUA request self-identifies: ``qua_shadow`` asks for its answer in the
+    ``dev_question_understanding.v1`` contract, and that id travels in the
+    request's own ``response_format`` json_schema. Nothing else this service
+    receives carries it.
+
+    Searched anywhere in the schema rather than at a fixed path because the
+    adapter nests the caller's schema inside its own decision envelope
+    (``openai_compatible._decision_response_schema``); the id's PRESENCE is
+    the signal, its position is an implementation detail of that wrapper.
+    """
+
+    response_format = payload.get("response_format")
+    if not isinstance(response_format, dict):
+        return False
+    return QUA_CONTRACT_ID in json.dumps(response_format)
+
+
+def _qua_question_from_messages(payload: dict[str, Any]) -> str | None:
+    """The question text out of a QUA user message.
+
+    ``qua_shadow._build_messages`` sends PLAIN TEXT beginning
+    ``Question: "..."`` -- not the JSON object ``_question_from_messages``
+    requires. That mismatch is why no script file could previously answer a
+    QUA call at all: the JSON parse raised, the router returned None, and
+    the request fell through to the heuristic.
+    """
+
+    for message in payload.get("messages") or []:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        match = _QUA_QUESTION_PATTERN.search(content)
+        if match is not None:
+            return match.group("question")
+    return None
+
+
+def _load_qua_script() -> dict[str, Any]:
+    """The QUA decision script, or an empty mapping if absent.
+
+    An absent file is NOT an error here -- it means "no QUA scripts", and
+    every QUA request then takes the loud 422 below. That is the correct
+    degradation: a missing script must never become a plausible answer.
+    """
+
+    path = provider_scripts._scripts_dir() / QUA_SCRIPT_FILENAME
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    cases = payload.get("cases")
+    return cases if isinstance(cases, dict) else {}
+
+
 def _question_from_messages(payload: dict[str, Any]) -> str | None:
     for message in payload.get("messages") or []:
         if message.get("role") != "user":
@@ -364,6 +445,73 @@ def _acceptance_answer(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def scripted_engine_health() -> dict[str, object]:
+    """The ``/healthz`` body, reporting whether the decision/fault engine is
+    ACTUALLY loaded.
+
+    CHAOS-3219 Phase 3. This endpoint used to return a hardcoded
+    ``{"status":"ready", ...}`` byte string, so the container advertised
+    itself healthy -- and ``api`` started against it, since compose gates
+    ``api`` on this healthcheck -- while ``try_load_engine`` was returning
+    ``None`` and every scripted fault and refusal in the corpus was silently
+    degrading to the unscripted default heuristic. A whole armed run passed
+    that way, 19 scripted cases reporting green having exercised nothing.
+
+    A health endpoint that cannot report the one thing this service exists
+    to do is not a health check. ``script_directory`` and ``cases`` are
+    included so a reader can tell "loaded, 93 cases" from "loaded, 0 cases",
+    which are very different kinds of ready.
+
+    Deliberately still HTTP 200 with ``status: degraded`` rather than a 5xx:
+    the corpus runner's own precondition is what must fail the RUN loudly,
+    and returning 5xx here would instead wedge compose's dependency gate and
+    surface as an opaque "api never became healthy" boot timeout -- a worse,
+    less diagnosable failure than an honest body a guard can read.
+    """
+
+    role = provider_scripts.current_role()
+    try:
+        engine = provider_scripts.try_load_engine(role)
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        return {
+            "status": "degraded",
+            "script": "ask-dev-scripted-v1",
+            "scripted_engine": {
+                "loaded": False,
+                "role": role,
+                "reason": f"{type(exc).__name__}: {exc}",
+            },
+        }
+    if engine is None:
+        return {
+            "status": "degraded",
+            "script": "ask-dev-scripted-v1",
+            "scripted_engine": {
+                "loaded": False,
+                "role": role,
+                "reason": (
+                    "try_load_engine returned None -- the script directory is "
+                    "unreachable or unreadable from this container"
+                ),
+            },
+        }
+    return {
+        "status": "ready",
+        "script": "ask-dev-scripted-v1",
+        "scripted_engine": {
+            "loaded": True,
+            "role": role,
+            "cases": len(engine.role_script.cases),
+            # WHICH script, not just how many. A count cannot distinguish a
+            # wrong role or a stale mount that happens to carry the same
+            # number of cases (codex adversarial review, HIGH, confirmed).
+            "script_digest": provider_scripts.role_script_identity_digest(
+                engine.role_script
+            ),
+        },
+    }
+
+
 class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
     server: ScriptedOpenAIServer
 
@@ -371,7 +519,7 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
         if self.path != "/healthz":
             self.send_error(404)
             return
-        encoded = b'{"status":"ready","script":"ask-dev-scripted-v1"}'
+        encoded = json.dumps(scripted_engine_health()).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
@@ -433,6 +581,59 @@ class ScriptedOpenAIHandler(BaseHTTPRequestHandler):
                     "scripted cases by exact question text instead (see "
                     "provider-scripts/README.md)",
                 )
+            )
+            return
+
+        # CHAOS-3532: QUA requests route on their own contract id, and NEVER
+        # fall through.
+        #
+        # Placed ahead of the question-JSON router below because a QUA call
+        # cannot reach it: qua_shadow sends plain text, that router needs a
+        # JSON object with a `question` key, so the parse raises and the
+        # engine is never consulted. Before this branch existed, every QUA
+        # call landed in the heuristic and came back as a `tool_calls`
+        # response -- which is not an AgentFinalAnswer, so qua_shadow
+        # recorded SKIPPED_UNEXPECTED_DECISION. An armed QUA run reported
+        # "skipped" with no error and read as a negative result about the
+        # CHAOS-3525 commit path it was booted to demonstrate.
+        #
+        # The 422 is the load-bearing half. This service already learned once
+        # that a silent fall-through is worse than a failure: "all 19
+        # scripted cases fell through to the unscripted default heuristic
+        # while PASSING" (see compose.ask-dev.yml). An unscripted QUA
+        # question must be distinguishable from a QUA path that declined,
+        # and only a distinct error code makes that possible.
+        if _is_qua_request(payload):
+            qua_question = _qua_question_from_messages(payload)
+            scripted = _load_qua_script().get(qua_question or "")
+            if not isinstance(scripted, dict) or "value" not in scripted:
+                self._write_json(
+                    422,
+                    {
+                        "error": {
+                            "type": "scripted_provider_unmapped_qua_question",
+                            "code": "scripted_provider_unmapped_qua_question",
+                            "message": (
+                                "no QUA decision is scripted for this question; "
+                                "add it to "
+                                f"{QUA_SCRIPT_FILENAME} rather than letting the "
+                                "unscripted heuristic answer a question-"
+                                "understanding call"
+                            ),
+                        }
+                    },
+                )
+                return
+            self._send_completion(
+                payload,
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {"kind": "final_answer", "value": scripted["value"]},
+                        separators=(",", ":"),
+                    ),
+                },
+                "stop",
             )
             return
 

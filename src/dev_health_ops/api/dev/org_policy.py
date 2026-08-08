@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
+from dev_health_ops.api.graphql.security import is_development_environment
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.models.settings import SettingCategory
 
@@ -23,16 +25,62 @@ PLATFORM_MONTHLY_COST_LIMIT_DEFAULT_MICROUSD = 100_000_000
 PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD = 500_000_000
 ASK_DEV_RUN_COST_HARD_MAX_MICROUSD = 5_000_000
 
+#: The one definition of "this dev_run is finished". Previously duplicated
+#: (persistence/service.py's own ``_TERMINAL_RUN_STATES``, and a third bare
+#: literal inline in ask_dev.py's platform-allowance query) -- the same class
+#: of "two implementations of the same fact" as platform_month_window()
+#: above. persistence/service.py keeps a private ``_TERMINAL_RUN_STATES``
+#: alias importing this, for its own existing call sites and the test that
+#: names it directly.
+TERMINAL_RUN_STATES: frozenset[str] = frozenset(
+    {
+        "completed",
+        "insufficient_evidence",
+        "refused",
+        "failed",
+        "cancelled",
+    }
+)
+
 
 def _bounded_operator_limit(
-    name: str, *, default: int, minimum: int, hard_maximum: int
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    hard_maximum: int,
+    dev_override_name: str | None = None,
 ) -> int:
     raw = os.getenv(name, "").strip()
     try:
         value = int(raw) if raw else default
     except ValueError:
         value = default
-    return min(hard_maximum, max(minimum, value))
+    ceiling = hard_maximum
+    if dev_override_name is not None and is_development_environment():
+        # CHAOS-3523(B): dev/local escape hatch for the compiled-in hard
+        # maximum. A local/dev account otherwise cannot exceed
+        # ``hard_maximum`` without SQL surgery on dev_runs. Gated on
+        # ``is_development_environment()`` -- the SAME production/dev signal
+        # ``api/graphql/security.py`` already stakes real security posture on
+        # (GraphQL introspection, the GraphiQL IDE) and ``rate_limit.py``
+        # uses for its own dev/test bypass -- not a second, independently
+        # spoofable flag. That signal already defaults CLOSED: with
+        # ENVIRONMENT/APP_ENV/ENV all unset, ``environment_name()`` resolves
+        # to ``"production"`` and this branch never runs, so
+        # ``dev_override_name`` is never even read in that posture. A
+        # deployment where this DID leak open would already have GraphQL
+        # introspection and the GraphiQL IDE exposed -- a louder signal ops
+        # would catch long before this cap mattered.
+        override_raw = os.getenv(dev_override_name, "").strip()
+        if override_raw:
+            try:
+                override_ceiling = int(override_raw)
+            except ValueError:
+                override_ceiling = 0
+            if override_ceiling > 0:
+                ceiling = override_ceiling
+    return min(ceiling, max(minimum, value))
 
 
 def platform_operator_request_limit() -> int:
@@ -41,6 +89,7 @@ def platform_operator_request_limit() -> int:
         default=PLATFORM_MONTHLY_REQUEST_LIMIT_DEFAULT,
         minimum=PLATFORM_MONTHLY_REQUEST_LIMIT_MIN,
         hard_maximum=PLATFORM_MONTHLY_REQUEST_LIMIT_HARD_MAX,
+        dev_override_name="ASK_DEV_PLATFORM_MONTHLY_REQUEST_DEV_MAX",
     )
 
 
@@ -50,7 +99,29 @@ def platform_operator_cost_limit_microusd() -> int:
         default=PLATFORM_MONTHLY_COST_LIMIT_DEFAULT_MICROUSD,
         minimum=PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
         hard_maximum=PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD,
+        dev_override_name="ASK_DEV_PLATFORM_MONTHLY_COST_DEV_MAX_MICROUSD",
     )
+
+
+def platform_month_window(now: datetime) -> tuple[datetime, datetime]:
+    """The calendar-month-UTC window platform allowance is billed against.
+
+    CHAOS-3522: this is the ONE definition. Before, ``ask_dev.py``'s admin
+    usage read and ``persistence/service.py``'s admission enforcement each
+    hand-rolled their own copy of "start of this UTC month" / "start of next
+    UTC month" -- two implementations of "this month" that happened to agree
+    only because nobody had touched either in a while. The Valkey allowance
+    counter key (``askdev:allowance:{org_id}:{YYYY-MM}``) and its TTL are
+    also derived from this function, so a key an admission writes and a key
+    a read or the SQL fallback computes are always the same key by
+    construction, never by two authors independently getting the same
+    calendar math right.
+    """
+
+    start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    if now.month == 12:
+        return start, datetime(now.year + 1, 1, 1, tzinfo=UTC)
+    return start, datetime(now.year, now.month + 1, 1, tzinfo=UTC)
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,10 +8,10 @@
   "proves": [
     "P0-B state ScopeResolutionOutcome.organization_fallback"
   ],
-  "question": "How is everything going?",
+  "question": "What's the status of Zephyr?",
   "org_alias": "primary",
   "user_alias": "primary.ordinary",
-  "subject_class": "n/a",
+  "subject_class": "no-match",
   "subject_ref": null,
   "invariants": [
     {
@@ -22,27 +22,32 @@
       },
       "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
       "executable_today": true,
-      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
+      "$comment": "This is the corpus's dedicated ORGANIZATION_FALLBACK producer. Unlike the subject-label cases it needs NO widened allowed list: it expects organization_fallback directly, because that is the outcome the case exists to pin."
+    },
+    {
+      "category": "disclosed-terminal-on-widening",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "A run that widens scope must reach a DISCLOSED terminal -- the widening is never absorbed into a terminal that reads as an ordinary, subject-specific answer.",
+      "executable_today": true,
+      "$comment": "CHAOS-3490 Part 2, closing an adversarial-review finding (2026-08-07). scope_resolution_outcome_in checks only the outcome ENUM; this case's no-silent-widening assert prose additionally requires the widening to be DISCLOSED, and nothing asserted that half. The gap was real and narrow: before the allowed list was widened, ANY organization_fallback failed by accident (wrong enum); after widening, a run that genuinely widens but fails the disclosure half would have passed. Nothing structural closes it -- validate_outcome_consistency only checks frame self-consistency, and the CHAOS-3421 leak guard is a text heuristic. Wired via from_profile so the profile stays the single source of truth rather than a literal pair chosen here."
     },
     {
       "category": "terminal-persists-assistant-row",
       "check": "terminal_persists_assistant_row",
       "args": {},
       "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Fresh conversation, no named subject, nothing inherited -> falls back to org-wide scope (used_org_fallback, no team filter) -> ScopeResolutionOutcome.ORGANIZATION_FALLBACK. This IS a by-design-and-disclosed widening (inv.no-silent-widening's explicit carve-out), not the silent-widening failure mode."
+  "notes": "RE-AUTHORED AS CLASS (b), NOT BLOCKED (CHAOS-3490 Part 2, team-lead ruling 2026-08-07: an outcome that is REACHABLE but not from this question's shape gets its question re-authored, keeping the expectation; only genuinely unreachable outcomes are declared-blocked). This case was briefly blocked on CHAOS-3520 and that was WRONG. ORGANIZATION_FALLBACK is reachable -- proved by EXECUTION against the live acceptance stack post-CHAOS-3497 (world digest 2e1e254d..., 2026-08-07): the bare unresolvable name 'Zephyr' yields scope_resolution.outcome='organization_fallback' with fallbacks=['organization'] and the CHAOS-3497 disclosure sentence \"I could not match the subject named in this question, so this answer covers the whole organization instead.\" in warnings. WHAT CHANGED AND WHY: the question was 'How is everything going?', which extracts ZERO subject mentions (producer executed). Both producers of ORGANIZATION_FALLBACK need a NAMED subject that fails -- scope_service.py:751 is dead in production (every caller pins allow_organization_fallback=False), and subject_preflight.py:863 is only reached from the `if unresolved_untyped:` branch at :594-618, downstream of the `if not mentions:` early return at :383-392. So the old question could never realize the outcome this case is NAMED for; it is the QUESTION that was wrong, not the expectation. 'Zephyr' is deliberately absent from subjects.json and the world catalog, so it is unresolvable BY CONSTRUCTION rather than by accident, and its question fingerprint collides with no other corpus case and no role-legacy_agent.json entry (both checked by executing question_fingerprint). expected_mention_texts generated from the producer, not hand-authored. [PRIOR NOTES, preserved verbatim: DECLARED-BLOCKED against CHAOS-3520 (CHAOS-3490 Part 2 corpus-authoring lane, 2026-08-07). Live evidence: CHAOS-3219 Phase 2 exit run 7, world digest 2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232, wave_3_1 preflight enabled=True -- receipt tests/acceptance/artifacts/wave4/scope.outcome.organization-fallback.json recorded \"scope_resolution_outcome='exact', allowed=['organization_fallback']\". 'exact' is not a near-miss: it means the scenario this case is NAMED for never occurred on the run. The expectation is NOT rewritten to 'exact' -- that would be the 'rewrite an honest expectation to force green' anti-pattern, and it would delete this case's coverage claim while reading as green. WHY IT CANNOT BE REALIZED: This case's own prior notes claimed 'falls back to org-wide scope (used_org_fallback, no team filter) -> ORGANIZATION_FALLBACK'. EXECUTION FALSIFIES THAT. The two producers are both excluded. (1) scope_service.py:751 `elif used_org_fallback:` requires allow_organization_fallback=True, and all three production callers pin it False (production_runtime.py:1136, evidence_service.py:546, graphql/resolvers/dev_evidence.py:93) with a False dataclass default -- that branch is DEAD in production. (2) subject_preflight.py:863 _organization_resolution is called from exactly one site, the `if unresolved_untyped:` branch at subject_preflight.py:594-618, which is downstream of the `if not mentions:` early return at :383-392 and therefore requires a bare/untyped mention that FAILED to resolve. Producer executed: interpret('How is everything going?') yields ZERO mentions, so the preflight returns PROCEED with committed_resolution=None and the run's resolution stays the initial org-scope authorization, which falls to scope_service.py:755 `else: outcome = EXACT`. 'exact' is the only value this question shape can produce. ORGANIZATION_FALLBACK coverage is NOT lost: it is now genuinely observed and asserted by subject-label.{{acronym-mention,parenthetical-unquoted,word-order-variation}}, scope.ambiguous, deg.acr-unavailable-native-usable, deg.source-state.not-applicable and trust.conflicting-evidence, all of which reach it through subject_preflight.py:863. NO UNIQUE ASSERTION COVERAGE IS LOST BY BLOCKING: the invariants dropped here besides scope_resolution_outcome_in (terminal_persists_assistant_row (which PASSED)) are asserted by many other active cases; only this case's own named-outcome claim goes uncovered, which is exactly what CHAOS-3520 records. Retired profile entry preserved verbatim: {\"expected_public_outcome\": \"answered_with_gaps\", \"expected_scope_resolution_outcome\": \"organization_fallback\", \"resolution_path\": null}. Full authored invariant list before the block is in git history for this file. [ORIGINAL NOTES, preserved verbatim: Fresh conversation, no named subject, nothing inherited -> falls back to org-wide scope (used_org_fallback, no team filter) -> ScopeResolutionOutcome.ORGANIZATION_FALLBACK. This IS a by-design-and-disclosed widening (inv.no-silent-widening's explicit carve-out), not the silent-widening failure mode.]]",
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B4). This case's question names ZERO mentions that production's extract_mentions recognizes -- verified by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- against this question text. NOTE (adversarial round 2): an earlier version of this comment cited extract_mentions, which is the WRONG oracle: production additionally mints untyped bare-name mentions via _add_untyped_mentions, and three cases were mis-dispositioned on that basis. This case's zero-mention conclusion was re-confirmed against the real interpreter. CASE-SCHEMA.v1.md's own 'practical extraction gotcha' is the cause: a bare, unquoted, lowercase slug is not a mention. So no dev_run_resolutions row is ever written, derive_resolution_path returns None BY CONTRACT, and resolution_path_in deliberately never matches None -- the check failed by construction on every run, on every stack. Same trap and same disposition as the four scope_resolution_outcome_in cases in CASE-SCHEMA.v1.md S1: drop the unpassable check, keep the narrower floor the remaining invariants give, and say so out loud rather than claim enforcement this case never had. The profile's null resolution_path is CORRECT and stays.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 56 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible.",
+  "expected_mention_texts": [
+    "zephyr"
+  ]
 }

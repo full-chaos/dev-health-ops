@@ -6,13 +6,16 @@
   "status": "active",
   "blocked_by": null,
   "proves": [
-    "group 1 bullet 11; P0-B MISSING item \u2014 scope.no-match webstate"
+    "group 1 bullet 11; P0-B MISSING item — scope.no-match webstate"
   ],
   "question": "What is the status of the Ask Dev project?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-5",
   "subject_class": "no-match",
   "subject_ref": "subject.no-match.ask-dev-project",
+  "expected_mention_texts": [
+    "ask dev"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -52,5 +55,7 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "= smoke_ask_dev_not_found.py. Deliberately never realized by any fixture row -- absence IS the fixture."
+  "notes": "= smoke_ask_dev_not_found.py. Deliberately never realized by any fixture row -- absence IS the fixture.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 53 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible.",
+  "$comment_known_red_class_closed": "WAS KNOWN-RED UNDER CHAOS-3533; THE MECHANISM IS NOW CLOSED. Kept as a visible exit from the known-red set rather than a silent deletion -- the key was renamed from $comment_known_red_class so a reader grepping for that key finds this case has left the class, not that the note was quietly dropped. The class was: a preflight TERMINATE persisted a dev_run_resolutions row for exactly ONE outcome (only when the terminating mention was AMBIGUOUS_CANDIDATES), so this case terminated on a different outcome, persisted nothing, derive_resolution_path returned None by contract, and resolution_path_in never matched None -- unsatisfiable BY CONSTRUCTION. The fix persists the WHOLE ledger on every TERMINATE, the same argument CHAOS-3424 already won for the PROCEED half. WHAT IS PROVEN, AND WHAT IS NOT -- read both halves before treating this case as green. PROVEN at unit tier, against the rows a REAL orchestrator run persists, read back by the SAME production reader the acceptance stack execs (_inner_ledger_query._fetch_entries) and classified by the SAME derive_resolution_path the live runner calls: this run shape now yields 'miss-clarification', which is exactly what this case's own resolution-profiles/deterministic-v1.json entry declares. See tests/api/dev/test_chaos_3533_terminate_ledger.py. NOT PROVEN: that this case passes end to end. That is a measurement only an armed corpus run can make, and the lane that landed the fix did not make it -- no armed run was taken for this change. Treat 'unsatisfiable by construction' as removed and 'passes' as unconfirmed until an armed run says otherwise. If it is still red after the next armed run, the residual is a DIFFERENT defect from CHAOS-3533 and must be filed on its own evidence, not re-folded into this class -- and do NOT strip resolution_path_in, which is the motion this class exists to prevent (23 cases in #1527, 18 in #1543, 9 in #1561)."
 }

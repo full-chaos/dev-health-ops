@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import AwareDatetime, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,11 +22,13 @@ from dev_health_ops.api.admin.middleware import (
     block_impersonated_write,
     require_superuser,
 )
+from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from dev_health_ops.api.dev.production_runtime import (
     certify_platform_resolution,
     resolve_platform_certification_provider,
 )
 from dev_health_ops.api.dev.runtime import DevRuntimeUnavailable
+from dev_health_ops.api.services import askdev_allowance_counters
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
@@ -269,3 +272,60 @@ async def run_platform_ask_dev_readiness(
         return await _platform_readiness_response(session)
     await certify_platform_resolution(session, resolution)
     return await _platform_readiness_response(session)
+
+
+class PlatformAskDevAllowanceReconcileResponse(StrictAdminModel):
+    schema_version: Literal["platform_ask_dev_allowance_reconcile.v1"] = (
+        "platform_ask_dev_allowance_reconcile.v1"
+    )
+    org_id: str
+    window_start: AwareDatetime
+    reset_at: AwareDatetime
+    request_used: int = Field(ge=0)
+    cost_used_microusd: int = Field(ge=0)
+
+
+@router.post(
+    "/platform/ask-dev/organizations/{org_id}/platform-allowance/reconcile",
+    response_model=PlatformAskDevAllowanceReconcileResponse,
+)
+async def reconcile_platform_allowance(
+    org_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
+) -> PlatformAskDevAllowanceReconcileResponse:
+    """The operator escape hatch (CHAOS-3522): force-recompute one org's
+    platform allowance counter straight from ``dev_runs`` and overwrite
+    whatever the Valkey counter currently holds.
+
+    This is the origin of the ticket -- resetting a local/dev org's monthly
+    allowance today needs literal SQL surgery on ``dev_runs``. With a
+    counter, "reset" is safely just "recompute from the source of truth and
+    replace the cache of it", which is what this does: it never mutates
+    ``dev_runs`` itself, only Valkey's cached view of it. Deliberately
+    superuser-only and platform-scoped (not on the org-admin ``/admin/
+    ask-dev`` surface) -- an org admin resetting their own org's spend cap
+    enforcement would defeat the cap it exists to enforce.
+    """
+
+    block_impersonated_write(
+        current_user,
+        detail="Platform Ask Dev administrative actions are unavailable while impersonating",
+    )
+    try:
+        uuid.UUID(org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="org_id must be a UUID") from exc
+
+    counts, window_start, reset_at = await askdev_allowance_counters.force_reconcile(
+        session,
+        org_id=org_id,
+        per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+    )
+    return PlatformAskDevAllowanceReconcileResponse(
+        org_id=org_id,
+        window_start=window_start,
+        reset_at=reset_at,
+        request_used=counts.requests,
+        cost_used_microusd=counts.cost_microusd,
+    )

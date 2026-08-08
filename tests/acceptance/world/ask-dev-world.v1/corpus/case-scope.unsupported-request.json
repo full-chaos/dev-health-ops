@@ -10,7 +10,7 @@
   ],
   "question": "Refactor this function for me",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-7",
   "subject_class": "n/a",
   "subject_ref": null,
   "invariants": [
@@ -21,18 +21,10 @@
       "assert": "Every clarification or error terminal persists a real transcript row (DevAnswer or the CHAOS-3423 dev_error.v1 row) -- never a silently-dropped turn.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker terminal_persists_assistant_row (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
-  "fault_ref": "scope.unsupported-request",
-  "notes": "Scripted in provider-scripts/role-legacy_agent.json (kind=decisions, refusal code=unsupported_request)."
+  "notes": "Scripted in provider-scripts/role-legacy_agent.json (kind=decisions, refusal code=unsupported_request).",
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462 B4). This case's question names ZERO mentions that production's extract_mentions recognizes -- verified by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- against this question text. NOTE (adversarial round 2): an earlier version of this comment cited extract_mentions, which is the WRONG oracle: production additionally mints untyped bare-name mentions via _add_untyped_mentions, and three cases were mis-dispositioned on that basis. This case's zero-mention conclusion was re-confirmed against the real interpreter. CASE-SCHEMA.v1.md's own 'practical extraction gotcha' is the cause: a bare, unquoted, lowercase slug is not a mention. So no dev_run_resolutions row is ever written, derive_resolution_path returns None BY CONTRACT, and resolution_path_in deliberately never matches None -- the check failed by construction on every run, on every stack. Same trap and same disposition as the four scope_resolution_outcome_in cases in CASE-SCHEMA.v1.md S1: drop the unpassable check, keep the narrower floor the remaining invariants give, and say so out loud rather than claim enforcement this case never had. The profile's null resolution_path is CORRECT and stays.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 62 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

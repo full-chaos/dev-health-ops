@@ -4,17 +4,18 @@
   "family": "ops",
   "group": 11,
   "status": "declared-blocked",
-  "blocked_by": "CHAOS-3458",
+  "blocked_by": "CHAOS-3454 no mid-run entitlement-mutation seam between turns",
   "proves": [
     "group 11 bullet 4"
   ],
-  "question": "n/a",
+  "question": "And how does the repo \"meridian/web-app\" look now?",
   "org_alias": "primary",
   "user_alias": "primary.ordinary",
-  "subject_class": "n/a",
-  "subject_ref": null,
+  "subject_class": "exact",
+  "subject_ref": "subject.exact.meridian-web-app",
   "invariants": [],
   "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "Grepped src/dev_health_ops/ for 'kill_switch'/'KillSwitch' -- ZERO matches anywhere in production code. world.json's `kill_switches` field (global/org/provider/role/surface/contextual_entry, all 'enabled' today for every one of the 3 fixture orgs) is a Lane 1a fixture-schema field with no enforcing production code behind it yet -- there is nothing for a corpus case to exercise: no request path reads that field and no org fixture variant has any switch disabled to test the off-state against. Not a case-authoring gap; a real, confirmed absence of the feature this corpus case would need to prove. [blocked_by WIRED to CHAOS-3458 during Lane 2b ticket-filing pass, 2026-08-06 -- original free-text reason preserved verbatim here: 'runner: no production kill-switch enforcement code exists yet'.]"
+  "notes": "RE-AUTHORED as the MID-CONVERSATION FLAG-FLIP half of the flag-off pair (CHAOS-3458, chris ruling 2026-08-06: the single org feature flag IS the kill mechanism; per-scope kill switches are not wanted and the four per-scope sibling cases were RETIRED in the same changeset). Sibling ops.kill-switch.global covers the steady-state refusal; this case covers the in-flight one, following the pattern adv.mid-conversation.entitlement-change already established. WHAT THIS CASE NOW SPECIFIES: turn 1, primary.ordinary asks about subject.exact.meridian-web-app and is answered normally (world.json's primary org has ask_dev_entitlement='enabled'). Between turn 1 and turn 2 the org's own ask_dev_entitlement flips to 'disabled'. Turn 2 repeats a near-identical follow-up and must be REFUSED, not silently answered from a conversation that started before the flip -- the entitlement gate must be re-checked per turn, never cached from conversation start. That per-turn re-check is the entire assertion: a cached gate is exactly how a disabled org keeps getting answers after the kill mechanism has been pulled. STILL BLOCKED on the same runner gap as adv.mid-conversation.entitlement-change (CHAOS-3454): the corpus runner sends one message per case and has no structured multi-turn support and no way to mutate org entitlement between turns. world.json's 'disabled' org fixture proves the disabled state is real and realized, just not a state this conversation's org can transition INTO mid-run today. Unblocking needs multi-turn plus a mid-run fixture mutation seam (Lane 2a), not any further case authoring. [blocked_by stays CHAOS-3458 because the flag-is-the-mechanism re-scope is what this case now proves; the mechanical dependency is CHAOS-3454. Original pre-ruling free-text reason preserved verbatim for provenance: 'runner: no production kill-switch enforcement code exists yet'.]",
+  "$comment_blocked_by_correction": "CHAOS-3219 Phase 3 (2026-08-07) stale-blocker sweep. WAS: 'CHAOS-3458'. CHAOS-3458 (cited before) is CLOSED (superseded by the single-flag ruling). The mechanism exists (feature_flags.py:135-217 does a real admin feature-override write) but is invoked only from the session fixture before any case runs; there is no hook inside test_corpus_case. Appended to CHAOS-3454's scope 2026-08-07, together with the hard constraint that org_feature_overrides is a WORLD_DIGEST-hashed table, so any mid-case flip must revert or every armed run becomes single-use."
 }

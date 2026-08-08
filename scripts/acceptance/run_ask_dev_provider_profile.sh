@@ -115,6 +115,15 @@ trap report_failure EXIT
 "${compose[@]}" up -d --build --wait \
   postgres pgbouncer clickhouse valkey migrate api
 
+# CHAOS-3572: same wrong-worktree guard run_ask_dev_compose.sh runs -- see
+# container_source_guard.sh. compose bind-mounts --project-directory at
+# /app, so this stack could just as easily be serving a different checkout's
+# source as the main acceptance launcher's stack can; nothing about being a
+# provider-profile boot instead exempts it.
+# shellcheck source=container_source_guard.sh
+source "${script_dir}/container_source_guard.sh"
+container_source_guard_check "${ops_root}" "${compose[@]}"
+
 "${compose[@]}" exec -T api dev-hops fixtures generate \
   --sink clickhouse://ch:ch@clickhouse:8123/default \
   --org "${fixture_org_id}" \

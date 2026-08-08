@@ -293,6 +293,29 @@ _VOLATILE_COLUMNS = frozenset(
         # comparison between two scratch databases: every OTHER column on
         # this table matched exactly.
         "categorization_run_id",
+        # CHAOS-3463 (found LIVE by the two-boot re-proof, not by reading):
+        # `users.last_login_at` is stamped with wall-clock `datetime.now()` by
+        # `api.services.users` on every successful authentication. Once the
+        # launcher began proving on every boot that the world's principals can
+        # log in (Codex round 3, HIGH), those logins mutated a DIGESTED column
+        # and both boots failed `require_world_digest_match` on
+        # `postgres.users` -- with a DIFFERENT live digest each time, because
+        # each boot logs in at its own wall-clock instant. Measured, not
+        # assumed: exactly the four contract aliases came back with a non-null
+        # `last_login_at` and the other six world users with NULL.
+        #
+        # Excluded rather than "fix the proof", because a login-activity
+        # timestamp is not fixture CONTENT -- it is the same class as
+        # `last_synced`/`updated_at` above, a runtime side effect of using the
+        # system. Keeping it digested would make the pin a function of whether
+        # anyone had authenticated yet, which no re-mint can stabilise.
+        #
+        # Scope is deliberately narrow: `password_hash` stays INSIDE the digest
+        # (see test_password_hash_stays_inside_the_digest_surface and the
+        # mutation test beside it), so credential tampering is still visible as
+        # drift. What is dropped here is when someone last logged in, never the
+        # credential itself.
+        "last_login_at",
     }
 )
 
@@ -524,6 +547,216 @@ class WorldManifest:
         raise WorldManifestError(f"world.json has no user with alias={alias!r}")
 
 
+#: The world.json fields a restored snapshot is supposed to REALIZE, as
+#: opposed to the prose around them. Hashed by
+#: :func:`world_manifest_contract_hash` and stamped into the snapshot manifest
+#: at mint time, so a restore can refuse a snapshot minted for a different
+#: world rather than serving one.
+#:
+#: Deliberately a field ALLOWLIST, not "everything except $comment_*": the
+#: point is to bind the identity/credential/tenancy contract, and a hash over
+#: the whole document would also churn on every generation-volume or
+#: kill-switch tweak that the restored rows genuinely do not encode. Each
+#: entry below is a field whose value a restored row actually carries or is
+#: derived from.
+#: The feature flags this world realizes as ``org_feature_overrides``, mapped
+#: to the manifest org field that decides each one.
+#:
+#: ``ask_dev_wave_3_1`` (CHAOS-3219 Phase 2 exit) is SEEDED here rather than
+#: enabled at runtime by the corpus runner. Enabling it from the runner meant
+#: the first armed run WROTE to ``org_feature_overrides`` -- a table
+#: WORLD_DIGEST hashes -- so a second armed run against the same stack failed
+#: digest verification and needed a fresh restore, undoing the re-runnability
+#: ``principal_sessions`` had deliberately won back. Seeding restores it: a
+#: clean world already satisfies the precondition, so the runner's fixture
+#: verifies and writes nothing.
+#:
+#: Deliberately per-org, never global. The ``disabled`` org gets it OFF with
+#: its other entitlements so the disabled-entitlement cases keep their premise.
+#: The ``fixtures generate`` org -- the Wave 3.1 legacy positive-control
+#: oracle's org -- is not part of this manifest at all and is therefore
+#: untouched: that oracle must keep exercising the pre-3292 legacy loop, which
+#: is also why ``prepare_ask_dev_acceptance.py`` stays wave-3.1-free.
+_ENTITLEMENT_FIELDS: dict[str, str] = {
+    "ask_dev": "ask_dev_entitlement",
+    "ask_dev_contextual_entrypoints": "ask_dev_contextual_entrypoints_entitlement",
+    "ask_dev_wave_3_1": "ask_dev_wave_3_1_entitlement",
+}
+
+
+#: Org fields bound into the manifest contract hash. The entitlement
+#: fields are included (Codex adversarial review, HIGH, confirmed) because
+#: they DRIVE committed ``org_feature_overrides`` rows via
+#: :data:`_ENTITLEMENT_FIELDS`: flipping one without re-minting left the
+#: snapshot/world binding satisfied while the restored database
+#: contradicted the manifest premise every consumer reads -- the disabled
+#: org silently entitled, or ``ask_dev_wave_3_1`` silently off with
+#: receipts certified against the wrong runtime gate. WORLD_DIGEST cannot
+#: catch it: the digest is computed FROM THE DATABASE and the flipped
+#: value is faithfully restored, so it matches. Derived from
+#: ``_ENTITLEMENT_FIELDS`` rather than re-listed, so a future flag added
+#: there is bound automatically instead of silently unbound.
+_MANIFEST_CONTRACT_ORG_FIELDS: tuple[str, ...] = (
+    "alias",
+    "id_seed",
+    "name",
+    "slug",
+    *sorted(_ENTITLEMENT_FIELDS.values()),
+)
+_MANIFEST_CONTRACT_USER_FIELDS: tuple[str, ...] = (
+    "alias",
+    "org_alias",
+    "id_seed",
+    "email",
+    "username",
+    "full_name",
+    "membership_role",
+    "is_superuser",
+)
+
+
+def world_manifest_contract_hash(manifest: WorldManifest) -> str:
+    """A canonical sha256 over the identity/credential contract world.json
+    declares (CHAOS-3463, Codex adversarial review MEDIUM, confirmed).
+
+    Closes a real hole in "the snapshot and the pin are a matched pair": they
+    were bound to each OTHER (via the stamped ``world_digest``) but neither was
+    bound to ``world.json``. ``WORLD_DIGEST`` is computed FROM THE DATABASE, so
+    a world.json edit that leaves derived ids alone -- changing a user's email,
+    username, full_name or membership_role -- leaves the restored rows, and
+    therefore the digest, bit-for-bit identical. The stack would then serve a
+    world that disagrees with the manifest every consumer reads, silently.
+    (Edits that DO move a derived id were already caught: the digest queries
+    by derived id, so it finds no rows and drifts.)
+
+    ``password_for_alias`` derives from the alias, so the alias list is part of
+    this hash too: an alias rename silently re-points every seeded credential.
+
+    Only the fields a restored row actually carries are hashed -- see
+    ``_MANIFEST_CONTRACT_ORG_FIELDS``/``_MANIFEST_CONTRACT_USER_FIELDS``. A
+    prose or generation-volume edit must NOT invalidate a snapshot, or the
+    guard would be re-minted away the first time it fired for a harmless
+    reason, which is how a guard stops being one.
+    """
+
+    payload = {
+        "schema_version": manifest.world["schema_version"],
+        "master_seed": manifest.master_seed,
+        "orgs": [
+            {f: org.get(f) for f in _MANIFEST_CONTRACT_ORG_FIELDS}
+            for org in sorted(manifest.world["orgs"], key=lambda o: o["alias"])
+        ],
+        "users": [
+            {f: user.get(f) for f in _MANIFEST_CONTRACT_USER_FIELDS}
+            for user in sorted(manifest.world["users"], key=lambda u: u["alias"])
+        ],
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+#: The world principals the Wave 4 corpus actually binds `user_alias` to
+#: (CHAOS-3462 runner lane, confirmed 2026-08-06). Credentials are seeded for
+#: EVERY world.json user; these are the contract MINIMUM, asserted at mint
+#: time to exist, be seeded, and log into the org world.json derives for them.
+#: A future world edit that drops or re-orgs one fails the mint -- not the
+#: evidence run, and not the corpus at 2am.
+#:
+#: CHAOS-3490 added ``primary.ordinary-2``..``-7``, the ordinary-primary POOL.
+#: Cases are spread round-robin over ``primary.ordinary`` plus those six
+#: because production caps one user at ``requests_per_user_per_15_minutes=20``
+#: (``DevCapabilityLimits``, ``le=20``, "may only be configured downward")
+#: while 85 of the corpus's 91 active cases named the single alias above --
+#: exactly 20 reached their assertions and the other 65 died on HTTP 429.
+#:
+#: EVERY pool member is asserted here, not a sampled subset. Sampling was
+#: considered and rejected: an unproven member does not fail at boot, it fails
+#: partway through the corpus as an unexplained 401 on whichever cases happened
+#: to land on it -- the "measurement that did not happen" shape this proof
+#: exists to prevent. Six extra logins at boot is a trivial price.
+CORPUS_CONTRACT_USER_ALIASES: tuple[str, ...] = (
+    "primary.ordinary",
+    "primary.ordinary-2",
+    "primary.ordinary-3",
+    "primary.ordinary-4",
+    "primary.ordinary-5",
+    "primary.ordinary-6",
+    "primary.ordinary-7",
+    "sibling.ordinary",
+    "primary.degraded-readiness-user",
+    "primary.unsupported-model-user",
+)
+
+#: The subset proven on EVERY BOOT, as opposed to at mint time.
+#:
+#: Codex review (P1, CHAOS-3490): proving all ten per boot is not affordable.
+#: ``run_ask_dev_compose.sh`` also performs two ``prepare_ask_dev_acceptance``
+#: superuser logins, seven smoke-script logins and a Playwright backend login,
+#: so ten positives plus the negative control pushed a normal acceptance boot
+#: past ``AUTH_LOGIN_IP_LIMIT`` ("20/15minutes", per IP) and the 21st request
+#: took a 429. The exit-run boot script never caught it because it stops before
+#: the smoke and web legs -- a truncated boot cannot observe a budget the full
+#: boot spends.
+#:
+#: WHY A SUBSET IS SOUND HERE, and it is not "sampling because it is cheaper".
+#: The two failure modes are different in kind:
+#:
+#: * A per-ACCOUNT fault (one pool member never seeded, wrong org) is caught at
+#:   MINT time, where :data:`CORPUS_CONTRACT_USER_ALIASES` is proven in full
+#:   with no downstream login pressure -- and WORLD_DIGEST covers
+#:   ``password_hash``, so every later boot restoring a verified digest is
+#:   restoring the exact credential bytes the mint proved.
+#: * A per-PATH regression (a login-path change, a bcrypt cost/policy change,
+#:   an auth refactor) is what the digest cannot see, and it breaks every
+#:   principal identically rather than one of them. Detecting it needs *a*
+#:   principal, not all ten.
+#:
+#: So the boot subset keeps exactly the four originals -- one ordinary member,
+#: a second org, and both provider-profile users -- which is what the check
+#: cost before the pool existed.
+BOOT_LOGIN_PROOF_ALIASES: tuple[str, ...] = (
+    "primary.ordinary",
+    "sibling.ordinary",
+    "primary.degraded-readiness-user",
+    "primary.unsupported-model-user",
+)
+
+#: Label that separates credential derivation from id derivation inside the
+#: shared ``FIXTURE_NAMESPACE``. Not a secret and not secret-shaped -- it is a
+#: namespace discriminator, exactly like the ``id_seed`` strings beside it.
+_CREDENTIAL_DERIVATION_LABEL = "ask-dev-world.v1:credential"
+
+
+def password_for_alias(alias: str) -> str:
+    """The password of the ``ask-dev-world.v1`` principal ``alias``.
+
+    THE single derivation for world credentials (CHAOS-3463). Both sides of
+    the contract go through it: ``_build_auth_fixture`` hashes exactly this
+    when seeding, and the corpus runner logs in with exactly this, so seeding
+    and login cannot disagree. Anything that needs a world principal's
+    password imports this rather than holding its own copy.
+
+    Constructed at runtime from a fixed, non-secret namespace and the alias --
+    there is deliberately no literal password anywhere in the tree, in the
+    committed snapshot artifact, or in any test fixture. The snapshot is
+    committed and gitleaks scans it, and a checked-in credential string would
+    be a finding even though these accounts only exist inside a disposable
+    acceptance stack.
+
+    Deterministic, so the same alias always yields the same password on every
+    machine and in every generation. (The bcrypt HASH of it is not
+    deterministic -- ``bcrypt.gensalt()`` is random -- but the snapshot freezes
+    the hash bytes once, and every boot restores those same bytes, so
+    ``password_hash`` is stable in the digest and credential tampering shows up
+    as digest drift. See fixtures/world_snapshot.py.)
+    """
+
+    if not alias:
+        raise ValueError("password_for_alias requires a non-empty alias")
+    derived = uuid.uuid5(FIXTURE_NAMESPACE, f"{_CREDENTIAL_DERIVATION_LABEL}:{alias}")
+    return f"world-{derived.hex}"
+
+
 def derive_id(master_seed: int, id_seed: str) -> uuid.UUID:
     """The one place a world/subjects/sources id_seed string becomes a UUID.
 
@@ -732,12 +965,21 @@ def _generation_namespace(
     org_id: uuid.UUID,
     repo_full_name: str,
     sink: str,
+    postgres_uri: str,
     allow_mixed_org: bool,
 ) -> argparse.Namespace:
     gen_cfg = manifest.world.get("generation", {})
     overrides = _VOLUME_OVERRIDES.get(repo_full_name, {})
     return argparse.Namespace(
         sink=sink,
+        # CHAOS-3463: `run_fixtures_generation`'s auth-seeding branch reads
+        # this attribute (falling back to DATABASE_URI/POSTGRES_URI for every
+        # other caller). Threading the world's OWN, already-guard-validated
+        # `--postgres-uri` through closes a live-reproduced guard escape:
+        # without it the world's orgs/users/memberships/licenses were written
+        # to whatever Postgres the environment named, never to the scratch
+        # database `_require_scratch_database` had just approved.
+        postgres_uri=postgres_uri,
         db_type=None,
         repo_name=repo_full_name,
         repo_count=1,
@@ -781,6 +1023,13 @@ def _build_auth_fixture(manifest: WorldManifest) -> dict[str, Any]:
     entire world -- shaped exactly like ``fixtures.runner._seed_auth_data``
     expects (that function is reused verbatim, not reimplemented)."""
 
+    # The API's OWN hasher, deliberately, private name and all: the point of
+    # seeding a hash is that `/api/v1/auth/login` accepts it, and the only way
+    # to be sure of that is to produce it with the same function login verifies
+    # against (`users._verify_password` -> `bcrypt.checkpw`). A second bcrypt
+    # call site here could drift in cost factor or encoding and the failure
+    # would surface as an unexplained 401 in an acceptance run.
+    from dev_health_ops.api.services.users import _hash_password
     from dev_health_ops.licensing.generator import generate_test_license
     from dev_health_ops.licensing.types import LicenseTier
     from dev_health_ops.models.licensing import OrgLicense
@@ -819,7 +1068,21 @@ def _build_auth_fixture(manifest: WorldManifest) -> dict[str, Any]:
                 id=user_id,
                 email=user["email"],
                 username=user["username"],
-                password_hash=None,
+                # CHAOS-3463: every world principal gets a real, working
+                # credential at GENERATION time. Before this, every world user
+                # had `password_hash=None`, so no world principal could
+                # authenticate at all -- the corpus's cross-tenant and
+                # entitlement cases had no way to be anyone but the superuser
+                # (found by the CHAOS-3462 runner lane). Seeding it here rather
+                # than provisioning it at runtime also keeps `password_hash`
+                # honest inside the digest: the runtime approach mutated a
+                # digested column, so a second armed run against the same stack
+                # reported users-digest drift.
+                #
+                # Seeded for EVERY user, not only the four the corpus binds
+                # today, so a future case that reaches for another alias
+                # already works.
+                password_hash=_hash_password(password_for_alias(user["alias"])),
                 full_name=user["full_name"],
                 auth_provider="local",
                 is_active=True,
@@ -845,9 +1108,9 @@ def _build_auth_fixture(manifest: WorldManifest) -> dict[str, Any]:
 
 
 async def _seed_entitlements(session: Any, manifest: WorldManifest) -> None:
-    """``org_feature_overrides`` for ``ask_dev``/``ask_dev_contextual_entrypoints``.
+    """``org_feature_overrides`` for every flag in :data:`_ENTITLEMENT_FIELDS`.
 
-    Requires the ``FeatureFlag`` catalog rows Alembic migrations 0067/0070
+    Requires the ``FeatureFlag`` catalog rows Alembic migrations 0067/0070/0073
     seed to already exist -- fails loud (not silently skipped) if they do
     not, since a world generated without them cannot realize the
     disabled-entitlement org at all.
@@ -857,30 +1120,26 @@ async def _seed_entitlements(session: Any, manifest: WorldManifest) -> None:
 
     from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 
+    wanted = set(_ENTITLEMENT_FIELDS)
     flag_rows = (
         (
             await session.execute(
-                select(FeatureFlag).where(
-                    FeatureFlag.key.in_(["ask_dev", "ask_dev_contextual_entrypoints"])
-                )
+                select(FeatureFlag).where(FeatureFlag.key.in_(sorted(wanted)))
             )
         )
         .scalars()
         .all()
     )
     flags_by_key = {flag.key: flag for flag in flag_rows}
-    missing = {"ask_dev", "ask_dev_contextual_entrypoints"} - set(flags_by_key)
+    missing = wanted - set(flags_by_key)
     if missing:
         raise WorldManifestError(
             f"Postgres is missing FeatureFlag catalog row(s) {sorted(missing)} -- "
-            "run `dev-hops migrate postgres` (Alembic 0067/0070 seed these) "
+            "run `dev-hops migrate postgres` (Alembic 0067/0070/0073 seed these) "
             "before `fixtures world`."
         )
 
-    entitlement_fields = {
-        "ask_dev": "ask_dev_entitlement",
-        "ask_dev_contextual_entrypoints": "ask_dev_contextual_entrypoints_entitlement",
-    }
+    entitlement_fields = _ENTITLEMENT_FIELDS
     for org in manifest.orgs:
         org_id = manifest.org_id(org["alias"])
         for key, field in entitlement_fields.items():
@@ -1719,6 +1978,7 @@ async def _generate_world(ns: argparse.Namespace, manifest: WorldManifest) -> in
                 org_id=org_id,
                 repo_full_name=repo_full_name,
                 sink=ns.sink,
+                postgres_uri=postgres_uri,
                 allow_mixed_org=getattr(ns, "allow_mixed_org", False),
             )
             with _frozen_clock(manifest.pinned_now):

@@ -470,7 +470,7 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
 			last_retry_reason text, updated_at timestamptz NOT NULL
 		)`,
-		// Must stay byte-for-byte equivalent to migration 0088. This fixture
+		// Must stay byte-for-byte equivalent to migration 0092. This fixture
 		// previously dropped all three CHECK constraints and widened
 		// content_digest to text, so every integration test here ran against a
 		// schema more permissive than production -- the class of gap where a
@@ -541,7 +541,7 @@ func seedProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	}
 }
 
-// snapshotFixtureDDL mirrors migration 0088 exactly, constraints included.
+// snapshotFixtureDDL mirrors migration 0092 exactly, constraints included.
 const snapshotFixtureDDL = `CREATE TABLE public.sync_run_unit_effect_snapshots (
 	org_id text NOT NULL,
 	sync_run_unit_id uuid NOT NULL,

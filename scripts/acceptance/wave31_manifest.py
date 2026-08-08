@@ -36,9 +36,7 @@ from typing import Literal, TypedDict
 
 from scripts.acceptance.acceptance_artifact import (
     RUNTIME_DEPENDENCY_PATHS,
-    AcceptanceFailure,
     aggregate_runtime_digest,
-    runtime_dependency_hashes,
 )
 
 __all__ = [
@@ -170,7 +168,6 @@ class ManifestItemJSON(TypedDict):
     requires_live_infra: bool
     execution_artifact: str | None
     required_assertion_names: list[str]
-    stale_dependencies: list[str]
 
 
 class ManifestReportJSON(TypedDict):
@@ -178,14 +175,9 @@ class ManifestReportJSON(TypedDict):
     item_count: int
     status_counts: dict[str, int]
     category_counts: dict[str, int]
-    #: Rows whose execution artifact no longer matches this tree, and the
-    #: covered dependency paths that drifted. A separate dimension from
-    #: status on purpose -- see DECLARED_STALE_ARTIFACTS.
     #: See PROVEN_E2E_CLAIM_LIMITS -- emitted so a consumer reading the
     #: rows cannot miss what "proven" does and does not assert.
     proven_e2e_claim_limits: str
-    stale_row_count: int
-    stale_rows: dict[str, list[str]]
     items: list[ManifestItemJSON]
 
 
@@ -1643,29 +1635,50 @@ def _gates() -> tuple[ManifestItem, ...]:
             ),
             status="deferred",
             blocked_reason=(
-                "Re-checked 2026-08-03 per team-lead priority: web #833 "
-                "(CHAOS-3287, merged to dev-health-web@main at "
-                "a24de7c90dafa98c4f46f0cf5fc4a76cf6767023) landed real, "
-                "default (not opt-in) Playwright coverage -- verified "
-                "directly against the merged spec files, not the PR "
-                "description alone: tests/ask-dev-continuity.spec.ts "
-                "proves window/dev semantic equivalence (a conversation "
-                "started in either surface resumes with the same "
-                "transcript and rendered answer in the other, both "
-                "directions); tests/ask-dev-outcomes.spec.ts and "
-                "tests/ask-dev-shared.spec.ts cover every rendered "
-                "dev_answer.v1 status, evidence-first hierarchy, and "
-                "availability gating; tests/ask-dev-vocabulary.spec.ts is "
-                "the internal-enum-leak denylist (CHAOS-3291 cross-check). "
-                "This row's own claim names 'answer-v2 outcomes' "
-                "specifically, and #833's own PR body is explicit that "
-                "dev_answer.v2's outcome taxonomy is separate CHAOS-3294/"
-                "3298 work not yet landed in web -- honoring 'claim what "
-                "you assert', this row stays deferred rather than "
-                "force-flipped, narrowed to exactly the gap #833 left: "
-                "v2 outcome coverage. Subjects/rendering/window-dev "
-                "equivalence are otherwise real, live, default-suite "
-                "coverage today, not aspirational."
+                "Re-checked 2026-08-06 after dev-health-web PR #854 "
+                "(CHAOS-3219 Phase 4, merged to dev-health-web@main at "
+                "e64bae941a3481e17f720909b60192a830a5edbe). The SUBSTANCE "
+                "of this row's claim is now met in web; what keeps it "
+                "deferred is this manifest's evidence model, not the "
+                "coverage. (1) Substance. Web consumes dev_answer.v1 only "
+                "-- dev_answer.v2 is projected down by ops before it "
+                "reaches the wire -- so 'answer-v2 outcome coverage' in "
+                "web means coverage of the projected shapes: three of the "
+                "eight PublicOutcome values arrive as a DevAnswer and five "
+                "as a DevError. #854 closed all 14 rows of the audit "
+                "committed at web docs/audits/ask-dev-web-default-ci-"
+                "delta.md, across tests/ask-dev-outcomes.spec.ts, "
+                "tests/ask-dev-shared.spec.ts, tests/ask-dev-continuity."
+                "spec.ts and tests/ask-dev-vocabulary.spec.ts -- all four "
+                "land in playwright.config.ts's authenticated project and "
+                "execute in the required tests.yml e2e-default job over "
+                "three required shards, so this is default, gating "
+                "coverage rather than an opt-in tier. (2) Why still "
+                "deferred. validate_manifest requires every evidence path "
+                "to RESOLVE inside this repository's root and to be a real "
+                "file -- see contained_path, which rejects any path whose "
+                "resolved location falls outside the tree, however it is "
+                "spelled (absolute or '..'-traversing); a path that leaves "
+                "and returns is fine, because it lands inside -- so a "
+                "dev-health-web spec path is not citable as evidence; "
+                "proven_e2e additionally requires an "
+                "in-repo execution artifact whose script is one of the "
+                "row's own evidence paths and whose recorded sha256 still "
+                "matches that file's current bytes. So a DIRECT "
+                "dev-health-web path is not citable here. What could "
+                "support promotion is an in-repo wrapper or artifact whose "
+                "cross-repo provenance is explicit and checkable from this "
+                "tree -- which is route (3) below, not an impossibility. "
+                "The same constraint keeps attack.runtime-divergence "
+                "deferred. Claiming proven on evidence this repository "
+                "cannot check would be a claim, not proof. "
+                "(3) The route to proven_e2e is Phase 5's CI lane: "
+                "scripts/acceptance/run_ask_dev_compose.sh:348 already "
+                "invokes the web acceptance Playwright config, and once "
+                "that launcher runs inside a workflow and records "
+                "ops-resident artifacts, this row acquires real checkable "
+                "evidence. The bookkeeping resolves by producing proof, "
+                "not by widening what counts as proof."
             ),
         ),
         ManifestItem(
@@ -2051,131 +2064,22 @@ _CANONICAL_COMMIT_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 PROVEN_E2E_CLAIM_LIMITS = (
     "A proven_e2e row means: a live scenario was run by an operator, its "
     "per-assertion results were recorded by the scenario itself, and the "
-    "script and shared fixture surface it ran against still match this "
-    "tree. It does NOT mean the validator has established that the run "
-    "happened. Execution artifacts are unsigned JSON and the validator "
-    "recomputes exactly the values a forger would compute, so a fabricated "
-    "artifact validates clean; occurrence rests on operator-recorded "
-    "evidence and on re-running scenarios, not on this check. commit_sha is "
-    "metadata only -- shape-checked, never resolved, so a well-formed id "
-    "naming no commit is accepted. Product code under src/ is outside the "
-    "digested surface, so for product changes these rows are historical "
-    "records of a past run rather than statements about the current tree."
+    "script it cites still matches this tree. It does NOT mean the "
+    "validator has established that the run happened. Execution artifacts "
+    "are unsigned JSON and the validator recomputes exactly the values a "
+    "forger would compute, so a fabricated artifact validates clean; "
+    "occurrence rests on operator-recorded evidence and on re-running "
+    "scenarios, not on this check. commit_sha is metadata only -- "
+    "shape-checked, never resolved, so a well-formed id naming no commit is "
+    "accepted. Product code under src/ is outside the digested surface, so "
+    "for product changes these rows are historical records of a past run "
+    "rather than statements about the current tree. As of CHAOS-3479 the "
+    "recorded shared-fixture surface (runtime_dependencies) is provenance "
+    "only: it is checked for internal consistency and tamper-evidence, but "
+    "is NO LONGER compared against the current tree, so a row does not "
+    "assert that its shared fixture surface is unchanged since the run."
 )
 
-#: Rows whose execution artifact is KNOWN stale, mapped to the drifted
-#: dependency paths AND the exact content hash being acknowledged for each.
-#:
-#: A digest mismatch does not invalidate a row -- it makes it stale. That
-#: distinction is what keeps this gate affordable: ``pyproject.toml`` and
-#: ``requirements.txt`` are covered dependencies, so without it every
-#: routine dependency bump would red the whole repository's CI until
-#: somebody found time to run live Compose. A gate with that tax gets
-#: switched off, and a gate that is off catches nothing.
-#:
-#: Silent staleness FAILS; declared staleness passes and is reported.
-#: Declaring is cheap but cannot lie, because the declaration names the
-#: HASH it is acknowledging, not merely the path. Codex finding (MED,
-#: 2026-08-03): a path-only declaration permanently absorbed every later
-#: change to that same file -- once ``pyproject.toml`` was declared, any
-#: subsequent contents produced the identical path set and kept validating
-#: clean, so one declaration silenced that dependency forever. Binding the
-#: acknowledged hash means the next edit to an already-declared path fails
-#: again, which is the property "you cannot pre-declare future drift"
-#: actually requires.
-#:
-#: A declaration with no drift at all also fails, which makes a re-mint
-#: self-cleaning: once the scenario is re-run the entry MUST be deleted or
-#: the manifest breaks, so a stale flag can never outlive its staleness.
-#:
-#: Whether a stale row is ACCEPTABLE is a wave-close decision, not a CI
-#: one. CI's only job here is that nobody can be surprised by one.
-#:
-#: HISTORY: from the CHAOS-3312 datastore reconciliation through CHAOS-3419
-#: (Python version standardization), this mapping carried a running set of
-#: acknowledged-stale declarations for all fourteen ``proven_e2e`` rows
-#: above -- each entry named the exact drifted-path/hash pair a routine,
-#: non-product dependency bump (compose datastore versions, the scripted
-#: provider, the Lane 1c launcher/compose/seeder, pyproject.toml) left
-#: behind, per the self-cleaning rule below: a declaration whose named hash
-#: no longer matches the drift, or that names a row with no drift at all,
-#: fails loudly rather than silently expiring.
-#:
-#: CHAOS-3219 Wave 4 Phase 1 barrier re-proof (2026-08-05): all fourteen
-#: rows were re-minted live against merged main in the SAME change that
-#: bound ``tests/acceptance/compose.ask-dev-acr.yml`` into
-#: ``RUNTIME_DEPENDENCY_PATHS`` (see acceptance_artifact.py's comment).
-#: A fresh run against the current tree has, by construction, no drift left
-#: to acknowledge -- so every prior declaration above was removed here,
-#: exactly as this mechanism requires ("once the scenario is re-run the
-#: entry MUST be deleted or the manifest breaks"). Empty is the correct
-#: steady state until the next real, acknowledged drift.
-#:
-#: CHAOS-3437 (Codex adversarial review follow-up, same day): the CHAOS-3437
-#: residual-gap paragraph was added to acceptance_artifact.py's
-#: ``RUNTIME_DEPENDENCY_PATHS`` comment immediately after the re-mint above
-#: -- a covered-dependency-file edit, so it genuinely drifts all fourteen
-#: rows' ``scripts/acceptance/acceptance_artifact.py`` hash again. Comment
-#: text only; no behavioral change to the recorder, the digest, or any
-#: scenario. Declared per team-lead ruling (2026-08-05) rather than
-#: triggering a third live re-mint for a doc-only edit -- the same
-#: "routine, non-product dependency bump" reasoning the HISTORY note above
-#: already established for pyproject.toml.
-_ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC = (
-    "38d9503d5bd0c4e0ab3da72e2a8eeb069f7c1171cd3a9bff86742acf2239a34b"
-)
-#: Go worker runtime migration (feature branch only): the migration adds
-#: disabled-by-default Go worker Compose wiring on top of merged main's
-#: ``compose.yml``. That changes the governed runtime surface without
-#: changing what any of the fourteen scenarios exercised, so acknowledge
-#: this exact merged ``compose.yml`` content hash until the scenarios are
-#: re-minted on the migrated runtime. The hash binding makes the NEXT
-#: Compose edit fail loudly again instead of turning this into a permanent
-#: exemption. This entry is feature-branch-local and must be deleted when
-#: the Go worker scenarios are re-minted (or when this branch's Compose
-#: delta lands on main and the rows are re-recorded).
-_GO_WORKER_FEATURE_COMPOSE_SHA256 = (
-    "7438994fe1a356825c1b103fe83fbab046c2d73056ccfdb31122eb3f81f4c7d4"
-)
-#: Consequence of the Compose delta above, not a second independent change.
-#: The migration's two disabled-by-default GitLab worker flags are ``${VAR}``
-#: references in compose.yml, and
-#: test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots
-#: (correctly) fails until the acceptance launcher unsets them -- otherwise an
-#: ambient direnv value silently reaches the acceptance stack's interpolation.
-#: Hardening the launcher edits a covered dependency file, so the same fourteen
-#: rows drift on it too. Deleted together with the Compose entry when the
-#: scenarios are re-minted on the migrated runtime.
-_GO_WORKER_FEATURE_LAUNCHER_SHA256 = (
-    "7903602dcb2ea4251a4f5ba522f16a4a8918bd485ead5c6aa37540631d8d5b61"
-)
-DECLARED_STALE_ARTIFACTS: Mapping[str, Mapping[str, str]] = {
-    item_id: {
-        "scripts/acceptance/acceptance_artifact.py": (
-            _ACCEPTANCE_ARTIFACT_PY_AT_CHAOS_3437_DOC
-        ),
-        "compose.yml": _GO_WORKER_FEATURE_COMPOSE_SHA256,
-        "scripts/acceptance/run_ask_dev_compose.sh": (
-            _GO_WORKER_FEATURE_LAUNCHER_SHA256
-        ),
-    }
-    for item_id in (
-        "attack.team-attribution.e2e-blocked-by-live-defect",
-        "attack.unrelated-evidence.e2e-live-validated",
-        "defect.ask-dev-exact-commit.e2e-live-validated",
-        "defect.ask-dev-not-found.e2e-live-validated",
-        "gate.plan-registry-gap-is-loud.e2e-live-validated",
-        "matrix.data-trust-organization-wide",
-        "matrix.exact-project-complete",
-        "matrix.multi-metric-comparison-organization-wide",
-        "matrix.operational-deficiency.e2e-live-validated",
-        "matrix.registered-metric-catalog",
-        "matrix.remaining-work-exact-project",
-        "matrix.team-health.e2e-live-validated",
-        "matrix.team-workload-balance.e2e-live-validated",
-        "positive-control.real-project-status",
-    )
-}
 
 #: A sha256 hex digest, the only shape a recorded dependency hash may take.
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -2223,19 +2127,39 @@ def _recorded_dependency_errors(recorded: object) -> tuple[dict[str, str], list[
 
 
 def _runtime_digest_errors(
-    root: Path, *, item_id: str, label: str, artifact: Mapping[str, object]
-) -> tuple[list[str], list[str]]:
-    """Return ``(errors, drifted_paths)`` for one artifact's fixture surface.
+    *, item_id: str, label: str, artifact: Mapping[str, object]
+) -> list[str]:
+    """Return integrity errors for one artifact's recorded fixture surface.
 
-    See :data:`DECLARED_STALE_ARTIFACTS` for why drift is survivable and
-    silence is not.
+    CHAOS-3479 (chris's directive, 2026-08-06): this used to ALSO compare
+    every recorded digest against the CURRENT tree and fail the whole
+    repository's gate when any covered path had changed -- the
+    ``DECLARED_STALE_ARTIFACTS`` dependency-drift mechanism. That is gone.
+    See this module's history and the CHAOS-3479 follow-up PR for the
+    rationale; the short version is that an unrelated dependency bump
+    (#1531 adding one line to ``pyproject.toml``) turned main red for every
+    lane, which is a tax that gets a gate switched off rather than obeyed.
+
+    What REMAINS here is artifact-CONTENT integrity, which is a different
+    property and the one worth keeping: the recorded map must be exactly
+    the covered set of well-formed sha256 digests, and ``runtime_digest``
+    must agree with the per-path digests it aggregates. The recorder writes
+    those two together, so a disagreement means the artifact was EDITED --
+    that fires on tampering with the artifact itself, never on somebody
+    else's commit.
+
+    What is deliberately NOT checked any more, stated plainly rather than
+    left for a reader to infer: whether the recorded digests still match
+    this tree. ``runtime_dependencies`` is now provenance -- a record of
+    what the scenario ran against, internally consistent and tamper-
+    evident, but NOT an assertion that the run is reproducible today.
     """
 
     recorded, structural = _recorded_dependency_errors(
         artifact.get("runtime_dependencies")
     )
     if structural:
-        return [f"{item_id}: {label} {structural[0]}"], []
+        return [f"{item_id}: {label} {structural[0]}"]
 
     recorded_aggregate = artifact.get("runtime_digest")
     expected_aggregate = aggregate_runtime_digest(recorded)
@@ -2244,55 +2168,8 @@ def _runtime_digest_errors(
             f"{item_id}: {label}'s runtime_digest does not agree with its "
             "own per-path digests -- the two are written together by the "
             "recorder, so a disagreement means the artifact was edited"
-        ], []
-
-    try:
-        current = runtime_dependency_hashes(root)
-    except AcceptanceFailure as exc:
-        return [f"{item_id}: {label}'s runtime digests cannot be checked: {exc}"], []
-
-    drifted = [
-        relative
-        for relative in RUNTIME_DEPENDENCY_PATHS
-        if recorded[relative] != current[relative]
-    ]
-    declared = DECLARED_STALE_ARTIFACTS.get(item_id, {})
-
-    if declared and not drifted:
-        return [
-            f"{item_id}: declared stale against {sorted(declared)} but "
-            "nothing has drifted. Remove the DECLARED_STALE_ARTIFACTS entry; "
-            "a stale flag must not outlive the staleness it describes."
-        ], []
-    if not drifted:
-        return [], []
-    if not declared:
-        return [
-            f"{item_id}: {label} is STALE -- {drifted} changed since the "
-            "scenario ran, so the recorded run is not the run you would get "
-            "today. Re-run the scenario, or declare it in "
-            "DECLARED_STALE_ARTIFACTS naming each drifted path and the hash "
-            "you are acknowledging. Staleness is allowed; silence is not."
-        ], drifted
-    if sorted(declared) != drifted:
-        return [
-            f"{item_id}: stale declaration does not match reality -- "
-            f"declared {sorted(declared)}, actually drifted {drifted}. It "
-            "must name exactly what changed, so it can neither pre-declare "
-            "drift that has not happened nor hide drift that has."
-        ], drifted
-    superseded = sorted(
-        path for path, acknowledged in declared.items() if acknowledged != current[path]
-    )
-    if superseded:
-        return [
-            f"{item_id}: stale declaration is itself out of date -- {superseded} "
-            "changed AGAIN since the drift was acknowledged. A declaration "
-            "acknowledges one specific content hash, not a permanent "
-            "exemption for that path; re-run the scenario or acknowledge the "
-            "new hash deliberately."
-        ], drifted
-    return [], drifted
+        ]
+    return []
 
 
 def _commit_metadata_errors(*, item_id: str, label: str, commit_sha: str) -> list[str]:
@@ -2334,6 +2211,34 @@ def _commit_metadata_errors(*, item_id: str, label: str, commit_sha: str) -> lis
 _ARTIFACT_JWT_PATTERN = re.compile(
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
 )
+
+
+def contained_path(root: Path, relative_path: str) -> Path | None:
+    """Resolve ``relative_path`` under ``root``, or ``None`` if it escapes.
+
+    Codex adversarial review (HIGH, 2026-08-06, CHAOS-3219): every path in
+    this module was joined as ``root / value`` and then existence-checked.
+    That is not containment. ``Path("/ops") / "/elsewhere/x"`` is
+    ``/elsewhere/x`` -- pathlib lets an ABSOLUTE segment replace the base
+    outright -- and ``../../`` walks out just as easily. Both validated
+    clean, so a row could cite a file in another repository (or anywhere on
+    the runner) and claim ``proven_*`` from it.
+
+    That defeats the point of the manifest. A claim is only proof if this
+    repository can check it on any machine that checks out this commit; a
+    path outside the tree is unreproducible by construction and its
+    contents are not reviewed by anything that gates this repo.
+
+    Returns the resolved path when it is genuinely inside ``root``.
+    ``strict=False`` so a non-existent path still resolves and is reported
+    as missing by the caller rather than as an escape.
+    """
+
+    resolved = (root / relative_path).resolve()
+    root_resolved = root.resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        return None
+    return resolved
 
 
 def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
@@ -2382,8 +2287,14 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
         )
         return errors
 
-    artifact_path = root / item.execution_artifact
-    if not artifact_path.exists():
+    artifact_path = contained_path(root, item.execution_artifact)
+    if artifact_path is None:
+        errors.append(
+            f"{item.id}: execution artifact escapes the repository root: "
+            f"{item.execution_artifact}"
+        )
+        return errors
+    if not artifact_path.is_file():
         errors.append(
             f"{item.id}: execution artifact does not exist: {item.execution_artifact}"
         )
@@ -2513,8 +2424,8 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
                 f"is not among this item's own evidence paths {item.evidence!r}"
                 " -- the artifact must belong to a script this row cites"
             )
-        script_path = root / script_relative
-        if not script_path.exists():
+        script_path = contained_path(root, script_relative)
+        if script_path is None or not script_path.is_file():
             errors.append(
                 f"{item.id}: execution artifact's script no longer exists: "
                 f"{script_relative}"
@@ -2529,10 +2440,11 @@ def validate_execution_artifact(root: Path, item: ManifestItem) -> list[str]:
                     "re-run to refresh"
                 )
 
-    digest_errors, _drifted = _runtime_digest_errors(
-        root, item_id=item.id, label="execution artifact", artifact=artifact
+    errors.extend(
+        _runtime_digest_errors(
+            item_id=item.id, label="execution artifact", artifact=artifact
+        )
     )
-    errors.extend(digest_errors)
     return errors
 
 
@@ -2554,8 +2466,14 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
         return errors
     assert item.blocked_execution_artifact is not None
 
-    artifact_path = root / item.blocked_execution_artifact
-    if not artifact_path.exists():
+    contained_blocked = contained_path(root, item.blocked_execution_artifact)
+    if contained_blocked is None:
+        return [
+            f"{item.id}: blocked execution artifact escapes the repository "
+            f"root: {item.blocked_execution_artifact}"
+        ]
+    artifact_path = contained_blocked
+    if not artifact_path.is_file():
         errors.append(
             f"{item.id}: blocked_execution_artifact does not exist: "
             f"{item.blocked_execution_artifact}"
@@ -2676,8 +2594,8 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
                 f"{script_relative!r} is not among this item's own evidence "
                 f"paths {item.evidence!r}"
             )
-        script_path = root / script_relative
-        if not script_path.exists():
+        script_path = contained_path(root, script_relative)
+        if script_path is None or not script_path.is_file():
             errors.append(
                 f"{item.id}: blocked_execution_artifact's script no longer "
                 f"exists: {script_relative}"
@@ -2695,7 +2613,7 @@ def validate_blocked_execution_artifact(root: Path, item: ManifestItem) -> list[
 
 
 def validate_manifest(
-    root: Path, items: tuple[ManifestItem, ...] | None = None
+    root: Path, items: tuple[ManifestItem, ...] = MANIFEST
 ) -> list[str]:
     """Return integrity errors. An empty list means every claim is honest.
 
@@ -2718,49 +2636,9 @@ def validate_manifest(
     runs cheap local ``git`` queries. That keeps every commit's normal test
     run able to catch a stale or fabricated ``proven_e2e`` claim without
     needing Docker/Compose.
-
-    Omitting ``items`` validates the complete landed manifest and therefore
-    also rejects stale declarations whose row no longer exists. Passing an
-    explicit subset validates only declarations owned by that subset; this
-    keeps focused integrity checks composable without treating the complete
-    manifest's declarations as orphans.
     """
 
-    validate_declaration_ownership = items is None
-    items = MANIFEST if items is None else items
     errors: list[str] = []
-    known_ids = {item.id for item in items}
-    for declared_id, declared_paths in DECLARED_STALE_ARTIFACTS.items():
-        # The declaration table is itself checked, or a typo becomes a
-        # silent no-op that reads like an acknowledged risk. Explicit subset
-        # validation ignores declarations for rows outside that subset; only
-        # the complete landed-manifest check owns orphan detection.
-        if declared_id not in known_ids:
-            if validate_declaration_ownership:
-                errors.append(
-                    f"{declared_id}: declared stale but no manifest item has "
-                    "that id -- a stale declaration for a row that does not "
-                    "exist acknowledges nothing"
-                )
-            continue
-        uncovered = sorted(set(declared_paths) - set(RUNTIME_DEPENDENCY_PATHS))
-        if uncovered:
-            errors.append(
-                f"{declared_id}: stale declaration names {uncovered}, which "
-                "are not covered dependencies -- only paths in "
-                "RUNTIME_DEPENDENCY_PATHS can drift"
-            )
-        malformed = sorted(
-            path
-            for path, acknowledged in declared_paths.items()
-            if not isinstance(acknowledged, str)
-            or not _SHA256_HEX.fullmatch(acknowledged)
-        )
-        if malformed:
-            errors.append(
-                f"{declared_id}: stale declaration acknowledges malformed "
-                f"(non-sha256) hashes for {malformed}"
-            )
     seen_ids: set[str] = set()
     for item in items:
         if item.id in seen_ids:
@@ -2809,14 +2687,26 @@ def validate_manifest(
                 )
 
         for relative_path in item.evidence:
-            if not (root / relative_path).exists():
+            contained = contained_path(root, relative_path)
+            if contained is None:
+                errors.append(
+                    f"{item.id}: evidence path escapes the repository root: "
+                    f"{relative_path} -- evidence must be a file this "
+                    "repository can check out and check; a path outside the "
+                    "tree is a claim, not proof"
+                )
+            elif not contained.is_file():
+                # is_file(), not exists(): "" and "." resolve to the repo
+                # root, and a directory satisfies exists() while proving
+                # nothing and crashing the content_markers read below. All
+                # 95 landed evidence paths are files.
                 errors.append(
                     f"{item.id}: evidence file does not exist: {relative_path}"
                 )
 
         if item.content_markers and item.evidence:
-            first_evidence = root / item.evidence[0]
-            if first_evidence.exists():
+            first_evidence = contained_path(root, item.evidence[0])
+            if first_evidence is not None and first_evidence.is_file():
                 text = first_evidence.read_text(encoding="utf-8", errors="replace")
                 for marker in item.content_markers:
                     if marker not in text:
@@ -2930,41 +2820,8 @@ def execute_manifest(
     return errors
 
 
-def stale_rows(
-    root: Path, items: tuple[ManifestItem, ...] = MANIFEST
-) -> dict[str, list[str]]:
-    """``{item_id: [drifted paths]}`` for every row whose artifact is stale.
-
-    Declared or not -- this is the honest picture of which claims rest on a
-    run that could no longer be reproduced. ``validate_manifest`` decides
-    whether a given stale row is an ERROR (undeclared) or merely reported
-    (declared); this reports them either way, so a reader of the manifest
-    can never mistake a stale claim for a current one.
-    """
-
-    stale: dict[str, list[str]] = {}
-    for item in items:
-        if item.status != "proven_e2e" or item.execution_artifact is None:
-            continue
-        artifact_path = root / item.execution_artifact
-        if not artifact_path.exists():
-            continue
-        try:
-            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(artifact, dict):
-            continue
-        _errors, drifted = _runtime_digest_errors(
-            root, item_id=item.id, label="execution artifact", artifact=artifact
-        )
-        if drifted:
-            stale[item.id] = drifted
-    return stale
-
-
 def build_report(
-    root: Path, items: tuple[ManifestItem, ...] | None = None
+    root: Path, items: tuple[ManifestItem, ...] = MANIFEST
 ) -> ManifestReportJSON:
     """Build the CHAOS-3300 deliverable #1 JSON report.
 
@@ -2974,34 +2831,19 @@ def build_report(
     failure mode this manifest exists to prevent.
     """
 
-    validate_complete_manifest = items is None
-    items = MANIFEST if items is None else items
-    errors = (
-        validate_manifest(root)
-        if validate_complete_manifest
-        else validate_manifest(root, items)
-    )
+    errors = validate_manifest(root, items)
     if errors:
         raise ManifestIntegrityError(
             "manifest integrity check failed:\n" + "\n".join(f"- {e}" for e in errors)
         )
     by_status = Counter(item.status for item in items)
     by_category = Counter(item.category for item in items)
-    stale = stale_rows(root, items)
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "item_count": len(items),
         "status_counts": dict(sorted(by_status.items())),
         "category_counts": dict(sorted(by_category.items())),
-        # Staleness is a SEPARATE dimension from status, deliberately: a row
-        # can be proven_e2e and stale at once, and collapsing the two would
-        # let "proven" quietly mean "proven against a tree that no longer
-        # exists". Surfaced in the tally so it is impossible to miss.
         "proven_e2e_claim_limits": PROVEN_E2E_CLAIM_LIMITS,
-        "stale_row_count": len(stale),
-        "stale_rows": {
-            item_id: sorted(paths) for item_id, paths in sorted(stale.items())
-        },
         "items": [
             {
                 "id": item.id,
@@ -3014,7 +2856,6 @@ def build_report(
                 "requires_live_infra": item.requires_live_infra,
                 "execution_artifact": item.execution_artifact,
                 "required_assertion_names": list(item.required_assertion_names),
-                "stale_dependencies": sorted(stale.get(item.id, ())),
             }
             for item in sorted(items, key=lambda i: (i.category, i.id))
         ],

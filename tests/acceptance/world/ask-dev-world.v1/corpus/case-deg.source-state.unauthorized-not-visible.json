@@ -13,6 +13,10 @@
   "user_alias": "primary.ordinary",
   "subject_class": "exact",
   "subject_ref": "subject.tenant.sibling-only-private-repo",
+  "expected_mention_texts": [
+    "sibling-only/private-repo",
+    "ci"
+  ],
   "invariants": [
     {
       "category": "no-unauthorized-candidate-surfaces",
@@ -80,9 +84,21 @@
       },
       "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Grounded against sources.json's dedicated 'unauthorized' matrix row: DataHealthService.inspect's own guard short-circuits every requested source to DataHealthState.UNAUTHORIZED before the reader is even invoked whenever ScopeResolution.outcome is not one of {EXACT, FILTERED, INHERITED, ORGANIZATION_FALLBACK} -- a cross-tenant id (asked from primary about sibling-only/private-repo) can never resolve to one of those for the wrong org. Same underlying fixture row as tenant.cross-tenant-identifier-refused and deg.source-state.unavailable (three distinct, individually true observations of one fixture row from three different vantage points, per sources.json's own note) -- deliberately DIFFERENT question wording from tenant.cross-tenant-identifier-refused ('What's the status of the repo...') and from subject-label.unauthorized-candidate-excluded ('What's the status of the project \"private-repo\"?') to satisfy this batch's global-uniqueness requirement, while asserting the SAME expected terminal (not_found / unresolved / miss-clarification) for consistency with the sibling cases over this fixture row."
+  "notes": "Grounded against sources.json's dedicated 'unauthorized' matrix row: DataHealthService.inspect's own guard short-circuits every requested source to DataHealthState.UNAUTHORIZED before the reader is even invoked whenever ScopeResolution.outcome is not one of {EXACT, FILTERED, INHERITED, ORGANIZATION_FALLBACK} -- a cross-tenant id (asked from primary about sibling-only/private-repo) can never resolve to one of those for the wrong org. Same underlying fixture row as tenant.cross-tenant-identifier-refused and deg.source-state.unavailable (three distinct, individually true observations of one fixture row from three different vantage points, per sources.json's own note) -- deliberately DIFFERENT question wording from tenant.cross-tenant-identifier-refused ('What's the status of the repo...') and from subject-label.unauthorized-candidate-excluded ('What's the status of the project \"private-repo\"?') to satisfy this batch's global-uniqueness requirement, while asserting the SAME expected terminal (not_found / unresolved / miss-clarification) for consistency with the sibling cases over this fixture row.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 28 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible.",
+  "$comment_known_red_class_closed": "WAS KNOWN-RED UNDER CHAOS-3533; THE MECHANISM IS NOW CLOSED. Kept as a visible exit from the known-red set rather than a silent deletion -- the key was renamed from $comment_known_red_class so a reader grepping for that key finds this case has left the class, not that the note was quietly dropped. The class was: a preflight TERMINATE persisted a dev_run_resolutions row for exactly ONE outcome (only when the terminating mention was AMBIGUOUS_CANDIDATES), so this case terminated on a different outcome, persisted nothing, derive_resolution_path returned None by contract, and resolution_path_in never matched None -- unsatisfiable BY CONSTRUCTION. The fix persists the WHOLE ledger on every TERMINATE, the same argument CHAOS-3424 already won for the PROCEED half. WHAT IS PROVEN, AND WHAT IS NOT -- read both halves before treating this case as green. PROVEN at unit tier, against the rows a REAL orchestrator run persists, read back by the SAME production reader the acceptance stack execs (_inner_ledger_query._fetch_entries) and classified by the SAME derive_resolution_path the live runner calls: this run shape now yields 'miss-clarification', which is exactly what this case's own resolution-profiles/deterministic-v1.json entry declares. See tests/api/dev/test_chaos_3533_terminate_ledger.py. NOT PROVEN: that this case passes end to end. That is a measurement only an armed corpus run can make, and the lane that landed the fix did not make it -- no armed run was taken for this change. Treat 'unsatisfiable by construction' as removed and 'passes' as unconfirmed until an armed run says otherwise. If it is still red after the next armed run, the residual is a DIFFERENT defect from CHAOS-3533 and must be filed on its own evidence, not re-folded into this class -- and do NOT strip resolution_path_in, which is the motion this class exists to prevent (23 cases in #1527, 18 in #1543, 9 in #1561)."
 }

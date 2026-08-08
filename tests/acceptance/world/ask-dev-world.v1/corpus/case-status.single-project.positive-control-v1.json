@@ -10,7 +10,7 @@
   ],
   "question": "How did completed work change in this scope during the selected time range, and what evidence supports it?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
   "invariants": [
@@ -23,18 +23,12 @@
       "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
       "executable_today": true,
       "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Question text must remain byte-identical to ../../ask-dev-oracle.v1.json's `question` field -- that file is the Wave 3.1 heritage positive control (expected_metric_id items_completed, expected_evidence_entity_fragment 'meridian/web-app', model ask-dev-scripted-v1, required_tool_ids [query_metric.v1, search_evidence.v1, data_health.v1]). This CHAOS-3219 case re-anchors the same oracle question against subject.exact.meridian-web-app so the Wave 4 corpus and the pre-existing smoke oracle stay pointed at one real scenario instead of two independently-drifting approximations. Minimal invariant set (one) because this is a plain positive control with nothing degraded -- the point of this case is a clean answered terminal, not a fuzzy-label/degradation probe (those are subject-label.*/status.single-project.readiness-completion's job)."
+  "notes": "Question text must remain byte-identical to ../../ask-dev-oracle.v1.json's `question` field -- that file is the Wave 3.1 heritage positive control (expected_metric_id items_completed, expected_evidence_entity_fragment 'meridian/web-app', model ask-dev-scripted-v1, required_tool_ids [query_metric.v1, search_evidence.v1, data_health.v1]). This CHAOS-3219 case re-anchors the same oracle question against subject.exact.meridian-web-app so the Wave 4 corpus and the pre-existing smoke oracle stay pointed at one real scenario instead of two independently-drifting approximations. Minimal invariant set (one) because this is a plain positive control with nothing degraded -- the point of this case is a clean answered terminal, not a fuzzy-label/degradation probe (those are subject-label.*/status.single-project.readiness-completion's job).",
+  "$comment_resolution_path_invariant": "resolution_path_in REMOVED (CHAOS-3462, adversarial round 2). Established by executing the REAL producer -- QuestionInterpreter.interpret plus SubjectPreflight.run with this runner's exact request shape -- not by reading the question. interpret returns ZERO mentions, so preflight takes the proceeded_organization_wide PROCEED with ledger=None, orchestrator's append_resolution sites require a non-None ledger, and zero dev_run_resolutions rows exist. derive_resolution_path([]) is None and resolution_path_in never matches None, so this check could not pass in ANY catalog world. The profile's declared value is left untouched: it is wrong for a separate, larger reason tracked as the mention_text blocker, and silently rewriting it here to force green would falsify the expectation rather than fix it.",
+  "$comment_scope_resolution_outcome": "OPEN QUESTION, left as authored on purpose (CHAOS-3462, team-lead ruling 2026-08-06). This case asserts scope_resolution_outcome_in = 'exact' via its profile, but production's QuestionInterpreter yields ZERO mentions for this question (executed, not read -- the question uses a bare unquoted lowercase slug, which CASE-SCHEMA.v1.md's own extraction gotcha says is not a mention). Whether a zero-mention request can still resolve scope as 'exact', or falls back to organization_fallback, depends on how ScopeResolutionService treats the request's own scope payload and is NOT decidable offline. It was therefore NOT pre-emptively weakened: the Phase 2 evidence re-run adjudicates it with live data, and if it reds for this reason the case gets re-dispositioned on that evidence. Reader beware if this goes red -- the cause is likely case authoring, not a product regression. NOTE: this is a POSITIVE CONTROL. A red here will look like a product failure and should be checked against this note first; weakening a positive control pre-emptively would have been the worse error.",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 64 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

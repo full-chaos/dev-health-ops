@@ -290,7 +290,13 @@ class DevRun(Base):
         CheckConstraint(
             "public_outcome IS NULL OR public_outcome IN ('answered', "
             "'answered_with_gaps', 'needs_clarification', 'not_found', "
-            "'temporarily_unavailable', 'unsupported', 'denied', 'failed')",
+            "'temporarily_unavailable', 'unsupported', 'denied', 'failed', "
+            # CHAOS-3541: kept in step with alembic/versions/0088_widen_
+            # dev_runs_public_outcome_refused.py -- the migration is what
+            # actually widens a live database; this literal is what a
+            # fresh migrate-from-zero (tests, a new environment) creates
+            # directly, and it must describe the same constraint.
+            "'refused')",
             name="ck_dev_runs_public_outcome",
         ),
         ForeignKeyConstraint(
@@ -752,7 +758,10 @@ class DevAnswerFrame(Base):
         CheckConstraint(
             "public_outcome IN ('answered', 'answered_with_gaps', "
             "'needs_clarification', 'not_found', 'temporarily_unavailable', "
-            "'unsupported', 'denied', 'failed')",
+            "'unsupported', 'denied', 'failed', "
+            # CHAOS-3541: kept in step with alembic/versions/0090_widen_
+            # dev_answer_frames_public_outcome_refused.py.
+            "'refused')",
             name="ck_dev_answer_frames_public_outcome",
         ),
         UniqueConstraint("run_id", name="uq_dev_answer_frames_run"),

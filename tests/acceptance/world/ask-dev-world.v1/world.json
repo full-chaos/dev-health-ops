@@ -4,14 +4,13 @@
   "master_seed": 3219000,
   "pinned_now": "2026-08-05T00:00:00+00:00",
   "$comment_pinned_now": "The single reference instant every relative timestamp (staleness cutoffs, retention ages, conversation-rotation windows) is computed from. CHAOS-3392 lesson: the world generator must never call datetime.now()/utcnow() to decide freshness -- every age-relative fixture row is pinned off this value, threaded explicitly through dev_health_ops.fixtures.world's call graph.",
-
   "cross_generation_digest_status": {
     "status": "declared-blocked",
     "blocked_by": "CHAOS-3432 concurrent ClickHouse batch-insert nondeterminism",
-    "note": "SINGLE-generation WORLD_DIGEST pinning IS proven: compute_world_digest + `fixtures world --verify-digest` correctly detect drift within one generated database (every HIGH-3/HIGH-5 mutation test in this round relies on exactly that, live). What is NOT proven, and was an explicit goal of this round's HIGH-4 work: that two INDEPENDENT `fixtures world` runs against fresh scratch databases produce an IDENTICAL digest. Root-caused down to five real, fixed defects (wall-clock modules missing from the clock-freeze list, a random per-run categorization_run_id needing digest exclusion, a postprocess handler running outside frozen-clock scope) -- each individually confirmed via live two-generation reruns. One residual remains open: an isolated, single-repo-at-a-time row-count divergence (ci_pipeline_runs/deployments/work_graph_pr_commit/work_unit_investments), narrowed to 'concurrent ClickHouse batch insertion via fixtures/runner.py's _insert_batches (asyncio.gather, MAX_WORKERS default 4)' as the leading hypothesis but not yet confirmed by the discriminating serialization experiment (stopped mid-run by explicit user direction, not by a negative result) -- see fixtures/world.py's _frozen_clock docstring for the full evidence trail and ruled-out theories (mock LLM provider has no randomness; PYTHONHASHSEED=0 did not converge and made drift worse/broader; global-random-desync-cascades-forward is contradicted by unaffected repos generated after the affected one). Any future claim of proven cross-generation digest reproducibility must update this field, not just prose elsewhere.",
-    "$comment_status_values": "Mirrors sources.json's DECLARED_BLOCKED_STATUS (CHAOS-3428) and subjects.json's REALIZED_UNVERIFIED_LIVE_STATUS (CHAOS-3429) -- the same discipline applied at the whole-world/digest level rather than a single manifest entry: an honest, ticketed, schema-validated 'not proven' beats either a false pass or a silent omission."
+    "note": "SINGLE-generation WORLD_DIGEST pinning IS proven: compute_world_digest + `fixtures world --verify-digest` correctly detect drift within one generated database (every HIGH-3/HIGH-5 mutation test in this round relies on exactly that, live). What is NOT proven, and was an explicit goal of this round's HIGH-4 work: that two INDEPENDENT `fixtures world` runs against fresh scratch databases produce an IDENTICAL digest. Root-caused down to five real, fixed defects (wall-clock modules missing from the clock-freeze list, a random per-run categorization_run_id needing digest exclusion, a postprocess handler running outside frozen-clock scope) -- each individually confirmed via live two-generation reruns. One residual remains open: an isolated, single-repo-at-a-time row-count divergence (ci_pipeline_runs/deployments/work_graph_pr_commit/work_unit_investments), narrowed to 'concurrent ClickHouse batch insertion via fixtures/runner.py's _insert_batches (asyncio.gather, MAX_WORKERS default 4)' as the leading hypothesis but not yet confirmed by the discriminating serialization experiment (stopped mid-run by explicit user direction, not by a negative result) -- see fixtures/world.py's _frozen_clock docstring for the full evidence trail and ruled-out theories (mock LLM provider has no randomness; PYTHONHASHSEED=0 did not converge and made drift worse/broader; global-random-desync-cascades-forward is contradicted by unaffected repos generated after the affected one). Any future claim of proven cross-generation digest reproducibility must update this field, not just prose elsewhere. CHAOS-3463 UPDATE (2026-08-06): this remains DECLARED-BLOCKED and unchanged -- two independent `fixtures world` runs are still not proven to produce an identical digest, and nothing here attempts to fix that. What changed is that acceptance boots no longer DEPEND on it. The world is generated exactly once into a scratch database, snapshotted (fixtures world-snapshot), and every boot RESTORES those same bytes (fixtures world-restore) rather than regenerating; WORLD_DIGEST is re-minted from the restored state. Every boot therefore sits inside the single-generation regime that IS proven, and the mint asserts the scratch generation and the restored database hash identically before it will write a pin. Reopening cross-generation reproducibility is CHAOS-3432's business, not a prerequisite for the acceptance gate.",
+    "$comment_status_values": "Mirrors sources.json's DECLARED_BLOCKED_STATUS (CHAOS-3428) and subjects.json's REALIZED_UNVERIFIED_LIVE_STATUS (CHAOS-3429) -- the same discipline applied at the whole-world/digest level rather than a single manifest entry: an honest, ticketed, schema-validated 'not proven' beats either a false pass or a silent omission.",
+    "$comment_snapshot_strategy": "See src/dev_health_ops/fixtures/world_snapshot.py and scripts/acceptance/mint_ask_dev_world_snapshot.sh. The snapshot artifact (snapshot/) and WORLD_DIGEST are only ever valid as a PAIR -- the mint stamps the digest it computed into the snapshot manifest, and the restore refuses a snapshot whose stamped digest disagrees with the pin."
   },
-
   "orgs": [
     {
       "alias": "primary",
@@ -21,25 +20,27 @@
       "role": "primary",
       "ask_dev_entitlement": "enabled",
       "ask_dev_contextual_entrypoints_entitlement": "enabled",
+      "ask_dev_wave_3_1_entitlement": "enabled",
       "acr_evidence_adapter": "not_configured",
       "$comment_acr": "ACR is the SourceClass.SOURCE_HEALTH 'acr' key, which NativeDataHealthReader.read hardcodes as SourceHealthObservation(configured=False, required=False) for every org regardless of fixture state -- this is the sources.json 'not_applicable' realization (see sources.json deg.source-state.not-applicable), not something the fixture world needs to toggle per org.",
       "sync_providers": {
-        "local": {"state": "active_success"},
-        "jira": {"state": "active_success"},
-        "pagerduty": {"state": "unconfigured"}
+        "local": {
+          "state": "active_success"
+        },
+        "jira": {
+          "state": "active_success"
+        },
+        "pagerduty": {
+          "state": "unconfigured"
+        }
       },
       "$comment_sync_providers": "Realizes DataHealthState per NATIVE_EVIDENCE_SOURCES (data_health_service.py): 'local'/'git' backs commits/pull_requests/reviews/deployments/work_units, 'jira' backs work_items, 'pagerduty' backs incidents. pagerduty deliberately absent -> incidents reads UNCONFIGURED org-wide for primary (sources.json deg.source-state.unconfigured).",
       "retention_policies": [
-        {"resource_type": "dev_conversation", "retention_days": 30}
-      ],
-      "kill_switches": {
-        "global": "enabled",
-        "org": "enabled",
-        "provider": {"scripted-v1": "enabled"},
-        "role": {"primary_answer": "enabled"},
-        "surface": {"window": "enabled", "dev_workspace": "enabled"},
-        "contextual_entry": "enabled"
-      }
+        {
+          "resource_type": "dev_conversation",
+          "retention_days": 30
+        }
+      ]
     },
     {
       "alias": "sibling",
@@ -49,24 +50,26 @@
       "role": "sibling_tenant",
       "ask_dev_entitlement": "enabled",
       "ask_dev_contextual_entrypoints_entitlement": "enabled",
+      "ask_dev_wave_3_1_entitlement": "enabled",
       "acr_evidence_adapter": "not_configured",
       "sync_providers": {
-        "local": {"state": "active_failure"},
-        "jira": {"state": "active_success"},
-        "pagerduty": {"state": "active_success"}
+        "local": {
+          "state": "active_failure"
+        },
+        "jira": {
+          "state": "active_success"
+        },
+        "pagerduty": {
+          "state": "active_success"
+        }
       },
       "$comment_sync_providers": "local sync marked active_failure (last_sync_success=False) -> commits/pull_requests/reviews/deployments read UNAVAILABLE org-wide for the sibling tenant (sources.json deg.source-state.unavailable). work_units is NOT in that list -- it is only provider-mapped to jira/linear/github/gitlab (source_health.PROVIDER_SUPPORTS_SOURCE), never 'local', and sibling's jira provider below is active_success, so work_units correctly reads COMPLETE (live-verification correction, 2026-08-05 -- see sources.json's matching $comment_source_classes). A visibly degraded sibling is also a MORE realistic cross-tenant probe target than a pristine one.",
       "retention_policies": [
-        {"resource_type": "dev_conversation", "retention_days": 0}
-      ],
-      "kill_switches": {
-        "global": "enabled",
-        "org": "enabled",
-        "provider": {"scripted-v1": "enabled"},
-        "role": {"primary_answer": "enabled"},
-        "surface": {"window": "enabled", "dev_workspace": "enabled"},
-        "contextual_entry": "enabled"
-      }
+        {
+          "resource_type": "dev_conversation",
+          "retention_days": 0
+        }
+      ]
     },
     {
       "alias": "disabled",
@@ -76,41 +79,206 @@
       "role": "disabled_entitlement",
       "ask_dev_entitlement": "disabled",
       "ask_dev_contextual_entrypoints_entitlement": "disabled",
+      "ask_dev_wave_3_1_entitlement": "disabled",
       "acr_evidence_adapter": "not_configured",
       "sync_providers": {
-        "local": {"state": "active_success"},
-        "jira": {"state": "active_success"},
-        "pagerduty": {"state": "active_success"}
+        "local": {
+          "state": "active_success"
+        },
+        "jira": {
+          "state": "active_success"
+        },
+        "pagerduty": {
+          "state": "active_success"
+        }
       },
       "retention_policies": [
-        {"resource_type": "dev_conversation", "retention_days": 30}
-      ],
-      "kill_switches": {
-        "global": "enabled",
-        "org": "disabled",
-        "provider": {"scripted-v1": "enabled"},
-        "role": {"primary_answer": "enabled"},
-        "surface": {"window": "enabled", "dev_workspace": "enabled"},
-        "contextual_entry": "enabled"
-      }
+        {
+          "resource_type": "dev_conversation",
+          "retention_days": 30
+        }
+      ]
     }
   ],
-
   "users": [
-    {"alias": "primary.ordinary", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:ordinary", "email": "ordinary@ask-dev-world-primary.example", "username": "primary-ordinary", "full_name": "Priya Ordinary", "membership_role": "member", "is_superuser": false, "feature_overrides": {}},
-    {"alias": "primary.org-admin", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:org-admin", "email": "org-admin@ask-dev-world-primary.example", "username": "primary-org-admin", "full_name": "Owen OrgAdmin", "membership_role": "admin", "is_superuser": false, "feature_overrides": {}},
-    {"alias": "primary.platform-admin", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:platform-admin", "email": "platform-admin@ask-dev-world-primary.example", "username": "primary-platform-admin", "full_name": "Pat PlatformAdmin", "membership_role": "member", "is_superuser": true, "feature_overrides": {}},
-    {"alias": "primary.impersonation-target", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:impersonation-target", "email": "impersonation-target@ask-dev-world-primary.example", "username": "primary-impersonation-target", "full_name": "Ivy ImpersonationTarget", "membership_role": "member", "is_superuser": false, "feature_overrides": {}, "impersonatable": true},
-    {"alias": "primary.unsupported-model-user", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:unsupported-model-user", "email": "unsupported-model@ask-dev-world-primary.example", "username": "primary-unsupported-model", "full_name": "Uma UnsupportedModel", "membership_role": "member", "is_superuser": false, "feature_overrides": {}, "provider_profile_override": "unsupported-model-profile"},
-    {"alias": "primary.degraded-readiness-user", "org_alias": "primary", "id_seed": "ask-dev-world.v1:user:primary:degraded-readiness-user", "email": "degraded-readiness@ask-dev-world-primary.example", "username": "primary-degraded-readiness", "full_name": "Dana DegradedReadiness", "membership_role": "member", "is_superuser": false, "feature_overrides": {}, "provider_profile_override": "degraded-profile"},
-
-    {"alias": "sibling.ordinary", "org_alias": "sibling", "id_seed": "ask-dev-world.v1:user:sibling:ordinary", "email": "ordinary@ask-dev-world-sibling.example", "username": "sibling-ordinary", "full_name": "Sasha SiblingOrdinary", "membership_role": "member", "is_superuser": false, "feature_overrides": {}},
-    {"alias": "sibling.org-admin", "org_alias": "sibling", "id_seed": "ask-dev-world.v1:user:sibling:org-admin", "email": "org-admin@ask-dev-world-sibling.example", "username": "sibling-org-admin", "full_name": "Sam SiblingOrgAdmin", "membership_role": "admin", "is_superuser": false, "feature_overrides": {}},
-
-    {"alias": "disabled.ordinary", "org_alias": "disabled", "id_seed": "ask-dev-world.v1:user:disabled:ordinary", "email": "ordinary@ask-dev-world-disabled-entitlement.example", "username": "disabled-ordinary", "full_name": "Devon DisabledOrdinary", "membership_role": "member", "is_superuser": false, "feature_overrides": {}},
-    {"alias": "disabled.org-admin", "org_alias": "disabled", "id_seed": "ask-dev-world.v1:user:disabled:org-admin", "email": "org-admin@ask-dev-world-disabled-entitlement.example", "username": "disabled-org-admin", "full_name": "Deepa DisabledOrgAdmin", "membership_role": "admin", "is_superuser": false, "feature_overrides": {}}
+    {
+      "alias": "primary.ordinary",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:ordinary",
+      "email": "ordinary@ask-dev-world-primary.example",
+      "username": "primary-ordinary",
+      "full_name": "Priya Ordinary",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.ordinary-2",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:ordinary-2",
+      "email": "ordinary-2@ask-dev-world-primary.example",
+      "username": "primary-ordinary-2",
+      "full_name": "Nadia Poolman",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.ordinary-3",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:ordinary-3",
+      "email": "ordinary-3@ask-dev-world-primary.example",
+      "username": "primary-ordinary-3",
+      "full_name": "Omar Poolman",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.ordinary-4",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:ordinary-4",
+      "email": "ordinary-4@ask-dev-world-primary.example",
+      "username": "primary-ordinary-4",
+      "full_name": "Petra Poolman",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.ordinary-5",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:ordinary-5",
+      "email": "ordinary-5@ask-dev-world-primary.example",
+      "username": "primary-ordinary-5",
+      "full_name": "Quinn Poolman",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.ordinary-6",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:ordinary-6",
+      "email": "ordinary-6@ask-dev-world-primary.example",
+      "username": "primary-ordinary-6",
+      "full_name": "Rafael Poolman",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.ordinary-7",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:ordinary-7",
+      "email": "ordinary-7@ask-dev-world-primary.example",
+      "username": "primary-ordinary-7",
+      "full_name": "Sofia Poolman",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.org-admin",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:org-admin",
+      "email": "org-admin@ask-dev-world-primary.example",
+      "username": "primary-org-admin",
+      "full_name": "Owen OrgAdmin",
+      "membership_role": "admin",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.platform-admin",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:platform-admin",
+      "email": "platform-admin@ask-dev-world-primary.example",
+      "username": "primary-platform-admin",
+      "full_name": "Pat PlatformAdmin",
+      "membership_role": "member",
+      "is_superuser": true,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.impersonation-target",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:impersonation-target",
+      "email": "impersonation-target@ask-dev-world-primary.example",
+      "username": "primary-impersonation-target",
+      "full_name": "Ivy ImpersonationTarget",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {},
+      "impersonatable": true
+    },
+    {
+      "alias": "primary.unsupported-model-user",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:unsupported-model-user",
+      "email": "unsupported-model@ask-dev-world-primary.example",
+      "username": "primary-unsupported-model",
+      "full_name": "Uma UnsupportedModel",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "primary.degraded-readiness-user",
+      "org_alias": "primary",
+      "id_seed": "ask-dev-world.v1:user:primary:degraded-readiness-user",
+      "email": "degraded-readiness@ask-dev-world-primary.example",
+      "username": "primary-degraded-readiness",
+      "full_name": "Dana DegradedReadiness",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "sibling.ordinary",
+      "org_alias": "sibling",
+      "id_seed": "ask-dev-world.v1:user:sibling:ordinary",
+      "email": "ordinary@ask-dev-world-sibling.example",
+      "username": "sibling-ordinary",
+      "full_name": "Sasha SiblingOrdinary",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "sibling.org-admin",
+      "org_alias": "sibling",
+      "id_seed": "ask-dev-world.v1:user:sibling:org-admin",
+      "email": "org-admin@ask-dev-world-sibling.example",
+      "username": "sibling-org-admin",
+      "full_name": "Sam SiblingOrgAdmin",
+      "membership_role": "admin",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "disabled.ordinary",
+      "org_alias": "disabled",
+      "id_seed": "ask-dev-world.v1:user:disabled:ordinary",
+      "email": "ordinary@ask-dev-world-disabled-entitlement.example",
+      "username": "disabled-ordinary",
+      "full_name": "Devon DisabledOrdinary",
+      "membership_role": "member",
+      "is_superuser": false,
+      "feature_overrides": {}
+    },
+    {
+      "alias": "disabled.org-admin",
+      "org_alias": "disabled",
+      "id_seed": "ask-dev-world.v1:user:disabled:org-admin",
+      "email": "org-admin@ask-dev-world-disabled-entitlement.example",
+      "username": "disabled-org-admin",
+      "full_name": "Deepa DisabledOrgAdmin",
+      "membership_role": "admin",
+      "is_superuser": false,
+      "feature_overrides": {}
+    }
   ],
-
   "provider_profiles": {
     "scripted-v1": {
       "kind": "scripted",
@@ -141,12 +309,18 @@
       "$comment": "Realizes readiness.capabilities.degraded."
     }
   },
-
   "retention_policy_catalog": [
-    {"id": "retention-0-day", "days": 0, "resource_type": "dev_conversation"},
-    {"id": "retention-30-day", "days": 30, "resource_type": "dev_conversation"}
+    {
+      "id": "retention-0-day",
+      "days": 0,
+      "resource_type": "dev_conversation"
+    },
+    {
+      "id": "retention-30-day",
+      "days": 30,
+      "resource_type": "dev_conversation"
+    }
   ],
-
   "generation": {
     "days_of_history": 10,
     "commits_per_day": 3,
@@ -154,5 +328,6 @@
     "team_count": 3,
     "with_metrics": true,
     "with_work_graph": true
-  }
+  },
+  "$comment_principal_pool": "CHAOS-3490: primary.ordinary-2..-7 are a POOL of ordinary members of org 'primary', byte-identical in role and entitlement to primary.ordinary (membership_role=member, is_superuser=false) and differing only in alias/email/id_seed. They exist because production caps a single user at requests_per_user_per_15_minutes=20 (DevCapabilityLimits, le=20, 'may only be configured downward'), while 85 of the corpus's 91 active cases declared user_alias primary.ordinary. Exactly 20 of them reached their assertions and the other 65 died on HTTP 429, so a single-pass armed run was impossible. Cases are now spread round-robin over primary.ordinary plus this pool (7 principals, <=13 cases each), which is ~35% headroom under the cap. The pool is deliberately role-identical so spreading changes ONLY request distribution, never what a case proves: an authorization-sensitive case such as subject-label.unauthorized-candidate-excluded evaluates the same for any pool member as for primary.ordinary."
 }

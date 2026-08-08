@@ -68,6 +68,7 @@ __all__ = [
     "QuestionInterpreter",
     "count_mention_candidates",
     "extract_mentions",
+    "organization_mention_spans",
 ]
 
 #: Satisfies ``base.PlatformVersionToken``, which
@@ -356,6 +357,106 @@ def untyped_name_candidates(
         seen.add(normalized)
         found.append(span)
     return tuple(found)
+
+
+#: The organization noun, kept deliberately separate from ``_KIND_NOUNS``:
+#: an organization is not a ``EntityKind`` and never a searchable catalog
+#: entity (CHAOS-3574 -- ``adv.cross-tenant.organization-id``'s own corpus
+#: notes: "there is no subjects.json class for an organization-kind entity
+#: ... the org itself is not a searchable catalog entity"). A name adjacent
+#: to this noun still states, as plainly as a kind-noun match does, that the
+#: user is naming *something* by that name -- just not something
+#: ``resolve_mention`` can ever confirm by catalog lookup. That is what
+#: distinguishes "the Orbit organization" from an ordinary ambiguous bare
+#: word like "Zephyr" or "DORA" (``question_interpreter``'s own module
+#: docstring example, and ``scope.outcome.organization-fallback``'s pinned
+#: corpus case): both go unresolved, but only the former unambiguously names
+#: an organization, and an organization the requester's own catalog does not
+#: contain is, by construction, never the requester's own.
+_ORGANIZATION_NOUN_ALTERNATION = "|".join(
+    re.escape(noun) for noun in ("organizations", "organization", "orgs", "org")
+)
+_ORGANIZATION_NOUN_LEADING = re.compile(
+    rf"\b(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\s+"
+    rf"(?:{_QUOTED}|(?P<plain>{_NAME}))",
+)
+#: CHAOS-3574 review round 2 (CONFIRMED): the trailing form alone, with no
+#: guard on what follows the noun, fired on "the Atlas organization chart" /
+#: "org structure" / "organization's status" -- attributive/idiomatic uses
+#: where "organization"/"org" modifies a FOLLOWING noun ("chart", "structure")
+#: or is itself possessed ("'s"), rather than the preceding name naming an
+#: organization outright. A closed, small continuation list, deliberately not
+#: exhaustive (stated, not hidden): it catches the reported idiom class and
+#: nothing broader. "Is the Nightfall Holdings org on track?" is unaffected —
+#: "on" is not in the list, so the noun still reads as naming an organization
+#: there.
+_ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS = (
+    "chart",
+    "charts",
+    "structure",
+    "structures",
+    "diagram",
+    "diagrams",
+    "hierarchy",
+    "hierarchies",
+)
+_ORGANIZATION_ATTRIBUTIVE_GUARD = (
+    r"(?!'s\b)" + rf"(?!\s+(?:{'|'.join(_ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS)})\b)"
+)
+_ORGANIZATION_NOUN_TRAILING = re.compile(
+    rf"(?:{_QUOTED}|(?P<plain>{_NAME}))\s+"
+    rf"(?P<noun>(?i:{_ORGANIZATION_NOUN_ALTERNATION}))\b"
+    rf"{_ORGANIZATION_ATTRIBUTIVE_GUARD}",
+)
+#: Same continuation list, applied to the LEADING form (CHAOS-3574 review
+#: round 3, CONFIRMED): there the idiom word is not something that FOLLOWS
+#: the noun, it IS the captured name -- "Org Chart" / "Organization
+#: Structure" satisfy ``_NAME`` (a leading capital is all it requires, not a
+#: real proper noun) exactly as a genuine org name like "Org Meridian" would.
+#: Filtered in :func:`organization_mention_spans` rather than the regex
+#: itself: a lookahead here would need to duplicate the alternation inside
+#: the existing capture group, and a plain post-match set check is simpler
+#: and exactly as precise.
+_ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS_SET = frozenset(
+    _ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS
+)
+
+
+def organization_mention_spans(question: str) -> frozenset[str]:
+    """Normalized bare-name spans adjacent to an "organization"/"org" noun.
+
+    A subset of what :func:`untyped_name_candidates` already finds (every
+    span here is still an untyped bare name -- there is no ``EntityKind`` to
+    type it as), surfaced separately so a caller can tell "unresolved, and
+    unambiguously claims to name an organization" apart from "unresolved,
+    and may not be a subject at all". ``subject_preflight`` uses this to
+    terminate the former rather than silently widening to organization scope
+    the way it must for the latter (CHAOS-3574).
+    """
+
+    found: set[str] = set()
+    for pattern in (_ORGANIZATION_NOUN_LEADING, _ORGANIZATION_NOUN_TRAILING):
+        for match in pattern.finditer(question):
+            raw = match.group("quoted") or match.group("plain")
+            if raw is None:
+                continue
+            span = raw.strip()
+            if len(span) < 2 or len(span) > 256:
+                continue
+            words = [
+                _strip_word_punctuation(word) for word in _normalize(span).split(" ")
+            ]
+            words = [word for word in words if word]
+            if not words or all(word in _NAME_STOP_WORDS for word in words):
+                continue
+            if (
+                pattern is _ORGANIZATION_NOUN_LEADING
+                and len(words) == 1
+                and words[0] in _ORGANIZATION_ATTRIBUTIVE_CONTINUATIONS_SET
+            ):
+                continue
+            found.add(_normalize(span))
+    return frozenset(found)
 
 
 def _candidate_mentions(

@@ -396,6 +396,104 @@ async def test_update_run_without_provider_source_leaves_the_column_intact(
             )
 
 
+@pytest.mark.asyncio
+async def test_terminal_transition_reconciles_the_allowance_counter_exactly_once(
+    persistence, monkeypatch
+) -> None:
+    """CHAOS-3522 amendment 2: driving update_run's terminal transition twice
+    through the REAL path must reconcile the Valkey allowance counter exactly
+    once, not zero and not twice.
+
+    This is a contract test, not an inference: ``update_run``'s "already
+    terminal" early return happens BEFORE the mutate block that calls
+    ``askdev_allowance_counters.reconcile_terminal_cost`` -- placement, not
+    caller discipline, is what makes this exactly-once. A second call with
+    the SAME terminal state on an already-terminal run must be a structural
+    no-op for the counter, the same way it already is for every ORM field.
+    """
+
+    fakeredis = pytest.importorskip("fakeredis")
+    from dev_health_ops.api.services import (
+        askdev_allowance_counters as counters,
+    )
+
+    client = fakeredis.FakeAsyncValkey(server=fakeredis.FakeServer())
+    monkeypatch.setattr(counters, "_client", client)
+    monkeypatch.setattr(counters, "_circuit_open_until", 0.0)
+    monkeypatch.setattr(counters, "_needs_recovery_recompute", False)
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    allowance = DevPlatformAllowance(
+        monthly_request_limit=10,
+        monthly_cost_limit_microusd=6_000_000,
+    )
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Reconcile exactly once",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=allowance,
+        )
+        run_id = accepted.run.id
+
+        # After admission: reservation charged in full (worst-case hard max).
+        from dev_health_ops.api.dev.org_policy import (
+            ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+            platform_month_window,
+        )
+
+        window_start, _reset_at = platform_month_window(datetime.now(UTC))
+        key = counters._key(str(org_id), window_start)
+        after_admission = await client.hmget(key, ["requests", "cost_microusd"])
+        assert after_admission == [
+            b"1",
+            str(ASK_DEV_RUN_COST_HARD_MAX_MICROUSD).encode(),
+        ]
+
+        first = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="completed",
+            estimated_cost_microusd=250_000,
+        )
+        assert first is not None
+        assert first.state == "completed"
+        after_first = await client.hmget(key, ["requests", "cost_microusd"])
+        assert after_first == [b"1", b"250000"]
+
+        # Drive the SAME terminal transition again, with a DIFFERENT cost --
+        # if reconcile fired a second time, this would move the counter
+        # again and prove it double-applied.
+        second = await service.update_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            state="completed",
+            estimated_cost_microusd=999_999,
+        )
+        assert second is not None
+        assert second.id == first.id
+        assert (
+            second.estimated_cost_microusd == 250_000
+        )  # unmutated, per the ORM contract
+
+        after_second = await client.hmget(key, ["requests", "cost_microusd"])
+        assert after_second == [b"1", b"250000"], (
+            "a repeat terminal update_run call must not reconcile the "
+            "allowance counter a second time"
+        )
+
+
 # -- dev_run_intents ----------------------------------------------------
 
 
@@ -954,6 +1052,13 @@ async def test_record_frame_accepts_clarification_candidates_matching_the_ledger
             frame_id=uuid.UUID(frame_payload["frame_id"]),
             public_outcome="needs_clarification",
             payload=frame_payload,
+            # CHAOS-3533: the offer's own mention is now NAMED rather than
+            # inferred from "the highest-ordinal ambiguous row for this run".
+            # What this test asserts is unchanged -- candidates matching the
+            # run's own ledger entry persist cleanly -- but the entry is now
+            # identified, so this positive control can no longer be satisfied
+            # by an unrelated ambiguous row that happens to sort last.
+            authorizing_mention_id=mention_id,
         )
         assert record.public_outcome == "needs_clarification"
         assert record.payload["clarification_candidates"] == candidates
@@ -1076,6 +1181,12 @@ async def test_record_frame_persists_the_authorized_snapshot_not_the_caller_mapp
             frame_id=uuid.UUID(frame_payload["frame_id"]),
             public_outcome="needs_clarification",
             payload=frame_payload,
+            # CHAOS-3533: names the mention whose row the wrapped-but-real
+            # authorization above authorizes against. The mutation window
+            # this test reproduces is unchanged -- authorization genuinely
+            # runs and returns, and only then is the caller's mapping
+            # mutated.
+            authorizing_mention_id=mention_id,
         )
 
         # The caller's mapping really was mutated -- otherwise the test is
@@ -1158,13 +1269,29 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
 ):
     """The other half of the same guard: a ledger entry does exist for this
     run, but the frame's candidates diverge from it (a different entity, or
-    a different order) -- rejected exactly like the missing-entry case."""
+    a different order) -- rejected exactly like the missing-entry case.
+
+    CHAOS-3533, Codex adversarial review (MEDIUM, confirmed): this test had
+    gone VACUOUS. Once ``record_frame`` began taking an explicit
+    ``authorizing_mention_id``, omitting it meant the ``None`` guard rejected
+    the frame before the ledger row was ever fetched -- so the test still
+    passed while proving nothing about the equality comparison it exists for.
+    A regression in either the mention-bound query or the candidate
+    comparison would have gone unnoticed. The mention is now named.
+
+    A SECOND ambiguous row is seeded at a HIGHER ordinal whose candidates
+    match the frame exactly. Under the pre-CHAOS-3533 "highest-ordinal
+    ambiguous row for this run" heuristic that row would be selected and the
+    frame would be ACCEPTED -- so this test now also proves the service
+    consults the mention it was given rather than whichever row sorts last.
+    """
 
     maker, org_id, _other_org, user_id, _other_user = persistence
     async with maker() as session:
         service = DevPersistenceService(session)
         _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
         mention_id = uuid.uuid4()
+        other_mention_id = uuid.uuid4()
 
         frame_payload = _needs_clarification_frame_payload(
             run_id=run_id, with_candidates=True
@@ -1185,6 +1312,21 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
                 mention_id=mention_id, candidates=ledger_candidates
             ),
         )
+        # The decoy: a later, unrelated ambiguous mention whose candidates DO
+        # match the frame. Selecting by ordinal would find this one and pass.
+        await service.append_resolution(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            entry_ordinal=1,
+            mention_id=other_mention_id,
+            outcome="ambiguous_candidates",
+            resolved_at=datetime.now(UTC),
+            payload=_ambiguous_ledger_entry_payload(
+                mention_id=other_mention_id,
+                candidates=deepcopy(frame_payload["clarification_candidates"]),
+            ),
+        )
 
         with pytest.raises(
             DevPersistenceValidationError, match="clarification_candidates"
@@ -1196,6 +1338,7 @@ async def test_record_frame_rejects_clarification_candidates_mismatching_the_led
                 frame_id=uuid.UUID(frame_payload["frame_id"]),
                 public_outcome="needs_clarification",
                 payload=frame_payload,
+                authorizing_mention_id=mention_id,
             )
 
         frame_count = await session.scalar(
@@ -1354,6 +1497,13 @@ async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_
         # This SHOULD raise once CHAOS-3330 validates append_resolution's
         # payload against the authorized catalog. It does not today, which
         # is exactly the residual seam this test documents.
+        #
+        # CHAOS-3533: the forged mention MUST be named here. Omitting it
+        # would make this test XPASS -- rejected for naming no terminating
+        # mention rather than for the forgery -- and a strict xfail flipping
+        # for the wrong reason reads exactly like CHAOS-3330 landing. The
+        # forged pair must still be presented as a fully self-consistent
+        # offer, which is the whole point of the seam.
         with pytest.raises(DevPersistenceValidationError):
             await service.record_frame(
                 org_id=org_id,
@@ -1362,6 +1512,7 @@ async def test_record_frame_double_forged_ledger_and_frame_defeats_the_equality_
                 frame_id=uuid.UUID(forged_frame["frame_id"]),
                 public_outcome="needs_clarification",
                 payload=forged_frame,
+                authorizing_mention_id=mention_id,
             )
 
 
@@ -2359,6 +2510,84 @@ async def test_force_terminal_fallback_is_a_noop_for_a_missing_run(persistence) 
         )
 
 
+@pytest.mark.asyncio
+async def test_recompute_from_dev_runs_keeps_worst_case_for_force_terminal_fallback_row(
+    persistence,
+) -> None:
+    """CHAOS-3573 follow-up (adversarial review finding).
+
+    force_terminal_fallback exists precisely because finish() may already
+    have dispatched real, billed provider calls before its own terminal
+    update_run write died -- the row it leaves behind has
+    estimated_cost_microusd == NULL with UNKNOWN real cost, never a proven
+    zero. _recompute_from_dev_runs must not coalesce that NULL to 0 the way
+    it correctly does for a genuine zero-spend terminal (preflight
+    rejection, disabled feature, etc.) -- doing so would erase a
+    possibly-real charge on every cold-key heal (routine: first request of
+    the month, TTL lapse, Valkey restart), not merely a rare event.
+
+    This is the SQL-ground-truth sibling of
+    test_force_terminal_fallback_forces_a_stuck_run_terminal above, which
+    already pins the row shape (safe_error_code set, terminal_error_payload
+    NULL) this discriminator relies on.
+    """
+
+    from dev_health_ops.api.dev.org_policy import (
+        ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        platform_month_window,
+    )
+    from dev_health_ops.api.services.askdev_allowance_counters import (
+        _recompute_from_dev_runs,
+    )
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="A run that dies mid-flight after real spend",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=DevPlatformAllowance(
+                monthly_request_limit=10,
+                monthly_cost_limit_microusd=6_000_000,
+            ),
+        )
+        await session.commit()
+
+        await service.force_terminal_fallback(
+            org_id=org_id, user_id=user_id, run_id=accepted.run.id
+        )
+
+        run_after = await session.get(DevRun, accepted.run.id)
+        assert run_after is not None
+        assert run_after.state == "failed"
+        assert run_after.estimated_cost_microusd is None
+        # Sanity: the exact decoupled signature the discriminator keys off.
+        assert run_after.safe_error_code is not None
+        assert run_after.terminal_error_payload is None
+
+        window_start, reset_at = platform_month_window(datetime.now(UTC))
+        counts = await _recompute_from_dev_runs(
+            session,
+            org_id=str(org_id),
+            window_start=window_start,
+            reset_at=reset_at,
+            per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        )
+        assert counts.cost_microusd == ASK_DEV_RUN_COST_HARD_MAX_MICROUSD, (
+            "a force_terminal_fallback row's unknown cost must stay "
+            "charged at the worst-case reservation, never coalesced to zero"
+        )
+
+
 # -- recover_stale_non_terminal_run (CHAOS-3297 Codex review round 5 HIGH) --
 #
 # force_terminal_fallback is the request's own last-resort write. This is
@@ -2611,6 +2840,80 @@ async def test_recover_stale_non_terminal_run_refreshes_a_stale_identity_map_ent
         assert run_after.safe_error_code != "internal_error"
         assert run_after.ended_at is not None
         assert run_after.ended_at.replace(tzinfo=UTC) == completed_at
+
+
+@pytest.mark.asyncio
+async def test_recompute_from_dev_runs_keeps_worst_case_for_recover_stale_row(
+    persistence,
+) -> None:
+    """CHAOS-3573 follow-up (adversarial review finding): the
+    recover_stale_non_terminal_run sibling of
+    test_recompute_from_dev_runs_keeps_worst_case_for_force_terminal_fallback_row
+    above -- same unknown-real-cost hazard, reached via the SECOND recovery
+    path instead of the first."""
+
+    from dev_health_ops.api.dev.org_policy import (
+        ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        platform_month_window,
+    )
+    from dev_health_ops.api.services.askdev_allowance_counters import (
+        _recompute_from_dev_runs,
+    )
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="A run stuck non-terminal after real spend",
+            scope_snapshot={},
+            admission_limits=DevAdmissionLimits(),
+            provider_source="platform",
+            platform_allowance=DevPlatformAllowance(
+                monthly_request_limit=10,
+                monthly_cost_limit_microusd=6_000_000,
+            ),
+        )
+        run_id = accepted.run.id
+        await service.update_run(
+            org_id=org_id, user_id=user_id, run_id=run_id, state="resolving_scope"
+        )
+        run = await session.get(DevRun, run_id)
+        assert run is not None
+        run.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        await session.commit()
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        recovered = await service.recover_stale_non_terminal_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stale_after=timedelta(minutes=5),
+        )
+        assert recovered is not None
+        assert recovered.estimated_cost_microusd is None
+        assert recovered.safe_error_code is not None
+        assert recovered.terminal_error_payload is None
+
+        window_start, reset_at = platform_month_window(datetime.now(UTC))
+        counts = await _recompute_from_dev_runs(
+            session,
+            org_id=str(org_id),
+            window_start=window_start,
+            reset_at=reset_at,
+            per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+        )
+        assert counts.cost_microusd == ASK_DEV_RUN_COST_HARD_MAX_MICROUSD, (
+            "a recover_stale_non_terminal_run row's unknown cost must stay "
+            "charged at the worst-case reservation, never coalesced to zero"
+        )
 
 
 # -- dev_run_stage_diagnostics ---------------------------------------------

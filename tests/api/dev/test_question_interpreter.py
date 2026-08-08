@@ -20,6 +20,7 @@ from dev_health_ops.api.dev.question_interpreter import (
     ClassifierProposal,
     QuestionInterpreter,
     extract_mentions,
+    organization_mention_spans,
 )
 from tests._chaos_3292_preflight import fixed_now, request_for, sequential_ids
 
@@ -429,3 +430,69 @@ async def test_a_proposal_cannot_clear_a_clarification_requirement() -> None:
     assert not hasattr(ClassifierProposal, "requires_clarification")
     assert "requires_clarification" not in ClassifierProposal.__annotations__
     assert "mention_id" not in ClassifierProposal.__annotations__
+
+
+# ---------------------------------------------------------------------------
+# organization_mention_spans (CHAOS-3574)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # Trailing: "<Name> organization"/"org" -- the corpus case's own shape.
+        ("What's the status of the Orbit organization?", frozenset({"orbit"})),
+        ("Is the Nightfall Holdings org on track?", frozenset({"nightfall holdings"})),
+        # Leading: "organization/org <Name>".
+        (
+            'What is organization "Orbit" doing?',
+            frozenset({"orbit"}),
+        ),
+        # No capitalized/quoted name adjacent to the noun at all.
+        ("What's the status of our organization?", frozenset()),
+        ("What's the status of the organization's repositories?", frozenset()),
+        ("Purge my organization's expired conversations.", frozenset()),
+        # A bare name with no organization noun nearby is not in scope for
+        # this recognizer -- it is still an ordinary untyped bare name.
+        ("What is our DORA score?", frozenset()),
+        ("What's the status of Zephyr?", frozenset()),
+        ("How is Nightfall doing?", frozenset()),
+        # CHAOS-3574 review round 2 (CONFIRMED): attributive/idiomatic uses --
+        # "organization"/"org" modifies a FOLLOWING noun rather than being
+        # named by the PRECEDING one. A closed, stated-not-hidden
+        # continuation list, not an attempt at exhaustive NLP.
+        ("What's the status of the Atlas organization chart?", frozenset()),
+        ("Can you share the Atlas org structure?", frozenset()),
+        ("Where's the Meridian organization diagram?", frozenset()),
+        # Possessive attributive use is excluded the same way.
+        ("What's the Atlas organization's status?", frozenset()),
+        # CHAOS-3574 review round 3 (CONFIRMED): the LEADING form ("org/
+        # organization <Name>") is idiomatic too when the captured name is
+        # itself one of the closed continuation words, capitalized the way a
+        # question naturally capitalizes it mid-sentence -- "Org Chart" reads
+        # exactly like "the Atlas organization chart" backwards. `_NAME`
+        # requires only a leading capital, not a real proper noun, so
+        # "Chart"/"Structure" satisfy it exactly as "Orbit" does.
+        ("What's on the Org Chart?", frozenset()),
+        ("Can you show me the Organization Structure?", frozenset()),
+        # Positive control: a real org name after the noun still matches --
+        # the guard rejects the closed continuation words, not every name.
+        ('What is organization "Orbit" doing?', frozenset({"orbit"})),
+        ("Ask about org Meridian please", frozenset({"meridian"})),
+        # Still fires when the noun is not followed by an idiom continuation,
+        # even with trailing words after it.
+        (
+            "Is the Nightfall Holdings org on track this quarter?",
+            frozenset({"nightfall holdings"}),
+        ),
+    ],
+)
+def test_organization_mention_spans(question: str, expected: frozenset[str]) -> None:
+    assert organization_mention_spans(question) == expected
+
+
+def test_organization_mention_spans_ignores_stop_word_only_spans() -> None:
+    """ "Our Org" mints no span -- "Our" is a closed stop word, matching every
+    other recognizer's treatment of "Our team is overburdened"."""
+
+    assert organization_mention_spans("How is Our Org doing?") == frozenset()

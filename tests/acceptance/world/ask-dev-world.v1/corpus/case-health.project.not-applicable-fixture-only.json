@@ -10,9 +10,12 @@
   ],
   "question": "What health data exists for the project \"meridian/api-gateway\"?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-3",
   "subject_class": "exact",
   "subject_ref": "subject.bounded-set.web-app-and-api-gateway",
+  "expected_mention_texts": [
+    "meridian/api-gateway"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -36,5 +39,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "Registry sketch named 'the Nightfall project', which is NOT a real subjects.json entity -- we never hand-author entities outside the real world, so this substitutes meridian/api-gateway (a real PROJECT-kind row, the second member of subject.bounded-set.web-app-and-api-gateway; same mention/subject_ref precedent already used by subject-label.wrong-kind-collision). subject_ref points at the bounded-set entry rather than a standalone api-gateway subject because no standalone subjects.json entry exists for it in isolation. Expected answered_with_gaps: world.json's primary org has incidents reading DataHealthState.UNCONFIGURED org-wide (pagerduty absent) and the 'acr' source reads not_applicable org-wide unconditionally (NativeDataHealthReader hardcode, sources.json deg.source-state.not-applicable) -- a 'what health data exists' enumeration over this repo realistically surfaces both as gaps rather than a uniformly clean answer. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from 'What health data exists for the meridian/api-gateway project?': question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "Registry sketch named 'the Nightfall project', which is NOT a real subjects.json entity -- we never hand-author entities outside the real world, so this substitutes meridian/api-gateway (a real PROJECT-kind row, the second member of subject.bounded-set.web-app-and-api-gateway; same mention/subject_ref precedent already used by subject-label.wrong-kind-collision). subject_ref points at the bounded-set entry rather than a standalone api-gateway subject because no standalone subjects.json entry exists for it in isolation. Expected answered_with_gaps: world.json's primary org has incidents reading DataHealthState.UNCONFIGURED org-wide (pagerduty absent) and the 'acr' source reads not_applicable org-wide unconditionally (NativeDataHealthReader hardcode, sources.json deg.source-state.not-applicable) -- a 'what health data exists' enumeration over this repo realistically surfaces both as gaps rather than a uniformly clean answer. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from 'What health data exists for the meridian/api-gateway project?': question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 37 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

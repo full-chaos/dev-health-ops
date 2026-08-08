@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, TypeAlias
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import and_, case, event, exists, func, or_, select
+from sqlalchemy import and_, event, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -35,7 +35,12 @@ from dev_health_ops.api.dev.contracts_v2.narrative import (
 from dev_health_ops.api.dev.contracts_v2.subject import (
     DevResolutionEntry as DevResolutionEntryContract,
 )
-from dev_health_ops.api.dev.org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
+from dev_health_ops.api.dev.org_policy import (
+    ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+    TERMINAL_RUN_STATES,
+    platform_month_window,
+)
+from dev_health_ops.api.services import askdev_allowance_counters
 from dev_health_ops.models.dev_persistence import (
     DEV_RETENTION_DAYS,
     DevAnswerFrame,
@@ -108,15 +113,61 @@ def _wire_visible_message_condition():
     )
 
 
-_TERMINAL_RUN_STATES = frozenset(
-    {
-        "completed",
-        "insufficient_evidence",
-        "refused",
-        "failed",
-        "cancelled",
-    }
-)
+#: How long a 0-day (ephemeral) conversation that never completes a turn is
+#: kept before the sweep may collect it (CHAOS-3544).
+#:
+#: WHY A GRACE AT ALL, rather than stamping ``now`` at creation. ``cleanup_
+#: expired`` selects purely on ``expires_at IS NOT NULL AND expires_at <=
+#: now``; it has NO in-flight protection of any kind. That is safe only
+#: because a 0-day row is never stamped until its run reaches terminal.
+#: Stamping ``now`` at creation makes every ephemeral conversation deletable
+#: the instant it exists -- purging it while the user is still typing their
+#: first message, and deleting a live run's conversation out from under it.
+#: Observed, not theorised: against that implementation
+#: ``append_user_message_and_run`` raises ``conversation not found`` because
+#: the row is already gone.
+#:
+#: WHY ONE HOUR, derived rather than chosen. A run cannot outlive the grace:
+#: ``DevRunLimits.wall_seconds`` is 45 seconds (80x smaller), and
+#: ``router._STALE_NON_TERMINAL_RUN_THRESHOLD`` is 5 minutes (12x smaller) --
+#: the latter documented in its own comment as "comfortably longer than any
+#: run that is still genuinely in flight could take without something else
+#: already having failed it". Both bounds are asserted against this constant
+#: by ``test_the_grace_is_far_longer_than_any_run_can_live``, so growing
+#: either past the grace fails loudly instead of silently reintroducing the
+#: purged-while-in-use failure mode.
+#:
+#: A module constant rather than configuration, deliberately: a configurable
+#: grace invites being lowered back under the safety bound, and expressing a
+#: floor for it would mean importing two constants from other modules and
+#: silently clamping an operator's value -- a worse surprise than one number
+#: with its derivation written beside it.
+#:
+#: WHAT THIS CHANGES ABOUT THE PRODUCT PROMISE. 0-day retention now means
+#: **"deleted at completion, or after 1 hour with no activity if abandoned"**.
+#: It previously meant "deleted at completion, or NEVER" -- a conversation
+#: that never completed a turn was retained indefinitely in the one tier
+#: whose entire promise is immediate deletion.
+#:
+#: The invariant is IDLE-anchored, not creation-anchored: an ephemeral
+#: conversation is **never collectable until it has been idle for a full
+#: grace period**. ``_touch`` refreshes this expiry on every activity, which
+#: is what makes that true -- anchoring on creation alone was a data-loss
+#: path, deleting a turn that started late in the window while it was still
+#: in flight.
+#:
+#: The grace therefore only ever affects conversations that go quiet: one
+#: that completes a turn is still stamped to ``now`` at terminal and
+#: collected on the next tick, unchanged.
+EPHEMERAL_ABANDONED_GRACE = timedelta(hours=1)
+
+#: Alias of org_policy.TERMINAL_RUN_STATES, kept private-named here for this
+#: module's own existing call sites and tests/api/dev/test_chaos_3292_run_
+#: states.py, which names it directly. The canonical definition lives in
+#: org_policy.py so ask_dev.py and askdev_allowance_counters.py can share it
+#: without importing this module (and risking a cycle: this module imports
+#: askdev_allowance_counters, which must not import back).
+_TERMINAL_RUN_STATES = TERMINAL_RUN_STATES
 _RUN_STATES = _TERMINAL_RUN_STATES | frozenset(
     {
         "accepted",
@@ -1072,6 +1123,7 @@ async def _authorize_clarification_candidates(
     org_id: uuid.UUID,
     user_id: uuid.UUID,
     validated: DevAnswerFrameContract,
+    authorizing_mention_id: uuid.UUID | None,
 ) -> None:
     """CHAOS-3325 Codex review (NO-SHIP, confirmed medium): a schema-valid
     ``clarification_candidates`` entry only proves *shape*, not provenance --
@@ -1085,28 +1137,50 @@ async def _authorize_clarification_candidates(
     test pair can prove this specific check, not the whole of
     ``record_frame``, is what rejects an unauthorized candidate.
 
-    The run's ``ambiguous_candidates`` resolution-ledger entry is **always**
-    fetched, regardless of whether the frame's own
-    ``clarification_candidates`` is empty (Codex review round 2, confirmed
-    medium: the round-1 early return on an empty frame tuple let an internal
-    caller silently *downgrade* canonical state -- persist ``needs_
-    clarification`` with zero candidates for a run whose ledger genuinely
-    recorded several, hiding the real choices the resolver offered from
-    every future reader of this "canonical" v2 row):
+    ``authorizing_mention_id`` is the mention whose ambiguity actually
+    terminated the run -- ``SubjectPreflightResult.terminating_resolution_
+    entry.mention_id``, threaded from the one caller that has it. It is
+    named rather than inferred (CHAOS-3533).
 
-    * **No ledger entry recorded at all** (e.g. the question could not be
-      interpreted -- ``build_preflight_answer`` never calls
-      ``append_resolution`` for that case): the frame's candidates must be
-      empty too. Non-empty here means the frame is claiming candidates
-      nothing authorized, and is rejected exactly like a mismatch below.
-    * **A ledger entry exists**: the frame's candidates must equal it
-      exactly, in the same order, element for element -- including
-      non-emptiness. An empty frame against a non-empty ledger entry is now
-      rejected (the round-2 fix): under-disclosure is no longer assumed
+    Until CHAOS-3533 this function guessed: it took the HIGHEST-ordinal
+    ``ambiguous_candidates`` row for the run. That guess was only ever
+    correct because a preflight TERMINATE persisted at most ONE ledger row,
+    so at most one ambiguous row could exist. Once the TERMINATE branch
+    began persisting the whole ledger -- so that a run which declined to
+    answer can evidence what it resolved -- a run can hold an ambiguous row
+    for a mention that was NOT the one it terminated on, and the guess
+    silently authorized the frame against the wrong mention. Naming the
+    mention makes the check strictly stronger than the ordinal heuristic it
+    replaces: it can no longer be satisfied by any ambiguous row that
+    happens to sort last.
+
+    The frame's ``clarification_candidates`` is checked in **both**
+    directions whenever a terminating mention is named, regardless of
+    whether that tuple is empty (Codex review round 2, confirmed medium:
+    the round-1 early return on an empty frame tuple let an internal caller
+    silently *downgrade* canonical state -- persist ``needs_clarification``
+    with zero candidates for a run whose ledger genuinely recorded several,
+    hiding the real choices the resolver offered from every future reader of
+    this "canonical" v2 row):
+
+    * **No terminating mention named** (``authorizing_mention_id`` is
+      ``None``): the run offered no clarification, so the frame's candidates
+      must be empty too. Non-empty here means the frame is claiming
+      candidates nothing authorized, and is rejected exactly like a mismatch
+      below. This covers both the question that could not be interpreted
+      (no ledger at all) and, since CHAOS-3533, every terminal whose ledger
+      holds ambiguous rows for mentions the run never offered.
+    * **A terminating mention is named**: that mention's own
+      ``ambiguous_candidates`` row must exist, and the frame's candidates
+      must equal it exactly, in the same order, element for element --
+      including non-emptiness. An empty frame against a non-empty ledger
+      entry is rejected (the round-2 fix): under-disclosure is not assumed
       safe once a real ledger row exists to compare against, because that
-      row is exactly the canonical-state-downgrade signal above.
+      row is exactly the canonical-state-downgrade signal above. A named
+      mention with no matching row is rejected too -- an offer whose
+      authorizing record is missing is not an offer.
 
-    ``orchestrator.run`` persists the ledger entry via ``append_resolution``
+    ``orchestrator.run`` persists the ledger via ``append_resolution``
     immediately before calling ``record_frame`` for this outcome (see
     ``SubjectPreflightResult.terminating_resolution_entry``), so both fetch
     outcomes above correspond to a real caller state, never an artifact of
@@ -1127,24 +1201,72 @@ async def _authorize_clarification_candidates(
     (``xfail(strict=True)``, flips loudly once CHAOS-3330 lands).
     """
 
+    if authorizing_mention_id is None:
+        # No mention terminated this run with a candidate offer, so there is
+        # nothing for a candidate list to be authorized against and a
+        # non-empty one is a claim nothing backs.
+        #
+        # CHAOS-3533: this branch is reached by runs whose ledger DOES hold
+        # ambiguous_candidates rows -- a cohort that omitted an ambiguous
+        # member (subject_preflight's ambiguous_mention_ids partition), or a
+        # not-found mention at a lower ordinal than an ambiguous one. Since
+        # the TERMINATE branch began persisting its whole ledger, those rows
+        # are real and visible here, and the previous "highest-ordinal
+        # ambiguous row for this run" query would have compared the frame
+        # against a mention the run never offered the user -- rejecting the
+        # frame and rolling back an ordinary not-found terminal. Observed,
+        # not theorized: test_chaos_3533_ambiguous_non_terminating_mention_
+        # never_poisons_the_frame fails with an empty ledger AND zero frame
+        # rows against the whole-ledger write alone.
+        if validated.clarification_candidates:
+            raise DevPersistenceValidationError(
+                "frame_payload.clarification_candidates is non-empty but this "
+                "run recorded no terminating ambiguous_candidates resolution "
+                "ledger entry to authorize it"
+            )
+        if validated.public_outcome.value != "needs_clarification":
+            # Not an offer, so an ambiguous row belonging to some OTHER
+            # mention says nothing about this frame. This is the branch the
+            # whole-ledger write made reachable.
+            return
+        # A needs_clarification frame IS an offer. One that shows nothing and
+        # names no mention, for a run whose ledger recorded an offer, is the
+        # CHAOS-3325 round-2 canonical-state downgrade -- preserved here
+        # rather than lost to the mention_id refactor. Deliberately keyed on
+        # the frame's own outcome and not on "does any ambiguous row exist",
+        # which is what would falsely reject the not-found terminal above.
+        downgraded = await session.scalar(
+            select(DevRunResolution).where(
+                DevRunResolution.run_id == run_id,
+                DevRunResolution.org_id == org_id,
+                DevRunResolution.user_id == user_id,
+                DevRunResolution.outcome == "ambiguous_candidates",
+            )
+        )
+        if downgraded is not None:
+            raise DevPersistenceValidationError(
+                "frame_payload.clarification_candidates is empty and names no "
+                "terminating mention, but this run recorded an "
+                "ambiguous_candidates resolution ledger entry -- persisting it "
+                "would hide the choices the resolver actually offered"
+            )
+        return
+
     ledger_row = await session.scalar(
-        select(DevRunResolution)
-        .where(
+        select(DevRunResolution).where(
             DevRunResolution.run_id == run_id,
             DevRunResolution.org_id == org_id,
             DevRunResolution.user_id == user_id,
             DevRunResolution.outcome == "ambiguous_candidates",
+            DevRunResolution.mention_id == authorizing_mention_id,
         )
-        .order_by(DevRunResolution.entry_ordinal.desc())
     )
     if ledger_row is None:
-        if validated.clarification_candidates:
-            raise DevPersistenceValidationError(
-                "frame_payload.clarification_candidates is non-empty but this "
-                "run has no recorded ambiguous_candidates resolution ledger "
-                "entry to authorize it"
-            )
-        return
+        raise DevPersistenceValidationError(
+            "frame_payload.clarification_candidates names a terminating "
+            "mention with no matching ambiguous_candidates resolution ledger "
+            "entry to authorize it"
+        )
     try:
         ledger_entry = DevResolutionEntryContract.model_validate(ledger_row.payload)
     except PydanticValidationError as exc:
@@ -1192,7 +1314,23 @@ class DevPersistenceService:
             retention_days=retention_days,
             created_at=now,
             updated_at=now,
-            expires_at=(now + timedelta(days=30)) if retention_days == 30 else None,
+            # CHAOS-3544: BOTH tiers are stamped at creation now. Creation is
+            # the one event guaranteed to happen -- a conversation exists the
+            # moment it is created, with no message and therefore no run
+            # required -- so it is the only stamp that cannot be missed.
+            #
+            # The 0-day stamp is graced (see EPHEMERAL_ABANDONED_GRACE); the
+            # run-terminal stamp is now a REFRESH that moves it earlier to
+            # `now`, preserving immediate deletion for any conversation that
+            # actually completes a turn. Before this, a 0-day conversation
+            # that never completed one -- abandoned before its first message,
+            # or holding a run left non-terminal by a crash -- was stamped by
+            # nothing and retained forever.
+            expires_at=(
+                now + timedelta(days=30)
+                if retention_days == 30
+                else now + EPHEMERAL_ABANDONED_GRACE
+            ),
         )
         self.session.add(conversation)
         await self.session.flush()
@@ -1723,6 +1861,15 @@ class DevPersistenceService:
                     raise DevPersistenceValidationError(
                         "platform allowance requires a platform provider source"
                     )
+                # CHAOS-3522 ORDERING INVARIANT (also stated in
+                # askdev_allowance_counters.admit and _ensure_initialized):
+                # this call, and its own Valkey reservation, MUST complete
+                # before the DevRun row below is inserted. A cold-key
+                # baseline recompute reads dev_runs live -- if this run's
+                # row had already landed, a concurrent recompute for the
+                # same org could double-count it (once from the SQL scan,
+                # once from this call's own increment). Do not reorder this
+                # block after the DevRun/DevMessage construction below.
                 await self._enforce_platform_allowance(
                     org_id=org_id,
                     allowance=platform_allowance,
@@ -1767,8 +1914,31 @@ class DevPersistenceService:
                 raise
             return existing
 
-        conversation.current_scope = scope
-        self._touch(conversation)
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            conversation.current_scope = scope
+            self._touch(conversation)
+            await self.session.flush()
         return MessageRunResult(message=message, run=run, created=True)
 
     async def append_assistant_answer(
@@ -1852,7 +2022,30 @@ class DevPersistenceService:
             if existing is None:
                 raise
             return existing
-        self._touch(conversation)
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            self._touch(conversation)
+            await self.session.flush()
         return message
 
     async def append_assistant_error(
@@ -1950,7 +2143,30 @@ class DevPersistenceService:
             if existing is None:
                 raise
             return existing
-        self._touch(conversation)
+        # CHAOS-3441: the conversation mutation gets its OWN savepoint, and
+        # deliberately not a place inside the row-write savepoint above.
+        # Two failure modes are being closed at once:
+        #
+        # 1. Left dirty until after this method returned (as it was), the
+        #    `UPDATE dev_conversations` was emitted by the NEXT operation's
+        #    savepoint entry -- SessionTransaction._take_snapshot() flushes
+        #    pending state BEFORE emitting the SAVEPOINT, so that UPDATE ran
+        #    outside every savepoint. A server-side failure on it poisoned
+        #    the session and took the transcript row just flushed above down
+        #    with it: this ticket's exact loss, via a statement nobody was
+        #    looking at.
+        # 2. Folded INTO the row-write savepoint, its rollback on the
+        #    idempotent-duplicate path would expire this conversation object
+        #    while the caller still holds it, so a later attribute read
+        #    would emit lazy IO from async code (Codex adversarial review
+        #    round 2, MEDIUM). Its own savepoint keeps the duplicate path
+        #    byte-identical to before: the conversation is never touched
+        #    when the insert loses that race.
+        #
+        # Pinned by test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        async with self.session.begin_nested():
+            self._touch(conversation)
+            await self.session.flush()
         return message
 
     async def record_run_diagnostics(
@@ -2192,6 +2408,24 @@ class DevPersistenceService:
         run.narrative_failure_code = safe_narrative_failure_code
         if state in _TERMINAL_RUN_STATES:
             run.ended_at = self._now()
+            # CHAOS-3522: reconcile the Valkey allowance counter's worst-case
+            # reservation down (or up) to the real cost. Placed HERE -- past
+            # the early "already terminal" return above, inside the mutate
+            # block that only runs on a genuine NEW terminal transition -- so
+            # this fires exactly once per run, structurally, not because a
+            # caller happens to be well-behaved (see
+            # test_persistence_v2.py's contract test, which drives this
+            # transition twice through the real path and asserts a single
+            # reconcile).
+            await askdev_allowance_counters.reconcile_terminal_cost(
+                self.session,
+                org_id=str(org_id),
+                provider_source=run.provider_source,
+                state=state,
+                estimated_cost_microusd=estimated_cost_microusd,
+                per_run_reservation_microusd=ASK_DEV_RUN_COST_HARD_MAX_MICROUSD,
+                now=self._now(),
+            )
         await self.session.flush()
 
         ephemeral_conversation = None
@@ -2895,6 +3129,7 @@ class DevPersistenceService:
         frame_id: uuid.UUID,
         public_outcome: str,
         payload: Mapping[str, Any],
+        authorizing_mention_id: uuid.UUID | None = None,
     ) -> DevAnswerFrame:
         """Persist the canonical ``dev_answer_frame.v1`` for one run.
 
@@ -2950,72 +3185,115 @@ class DevPersistenceService:
         row identity closure.
         """
 
-        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
-        if run is None:
-            raise DevPersistenceNotFound("run not found")
-        if public_outcome not in _PUBLIC_OUTCOMES:
-            raise DevPersistenceValidationError("invalid public_outcome")
-        try:
-            validated = DevAnswerFrameContract.model_validate(payload)
-        except PydanticValidationError as exc:
-            raise DevPersistenceValidationError(
-                f"frame_payload is not a valid dev_answer_frame.v1: {exc}"
-            ) from exc
-        if validated.frame_id != str(frame_id):
-            raise DevPersistenceValidationError(
-                "frame_payload.frame_id does not match the frame_id argument"
-            )
-        if validated.run_id != str(run_id):
-            raise DevPersistenceValidationError(
-                "frame_payload.run_id does not match the run_id argument"
-            )
-        if validated.public_outcome.value != public_outcome:
-            raise DevPersistenceValidationError(
-                "frame_payload.public_outcome does not match the "
-                "public_outcome argument"
-            )
-        # CHAOS-3325 Codex review (NO-SHIP, confirmed): the contract only
-        # enforces wire shape, not provenance -- see
-        # _authorize_clarification_candidates's own docstring. Runs before
-        # the row is constructed, so an unauthorized candidate list never
-        # reaches the payload-bearing row at all.
-        await _authorize_clarification_candidates(
-            self.session,
-            run_id=run_id,
-            org_id=org_id,
-            user_id=user_id,
-            validated=validated,
-        )
-        record = await self._construct_validated_payload_row(
-            model_cls=DevAnswerFrame,
-            payload_dict=validated.model_dump(mode="json"),
-            field_name="frame_payload",
-            max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
-            run_id=run.id,
-            org_id=org_id,
-            user_id=user_id,
-            frame_id=frame_id,
-            public_outcome=public_outcome,
-            created_at=self._now(),
-        )
-        # CHAOS-3423 Codex adversarial review round 3 (HIGH, confirmed):
-        # isolated in a SAVEPOINT, matching append_assistant_answer/
-        # append_assistant_error's own pattern -- a real mid-flush database
-        # failure here (not just a pre-flush construction exception) used
-        # to be able to mark the WHOLE outer session rollback-only, which
-        # could silently discard an already-flushed answer or no-answer
-        # transcript row the moment finish()'s own failure handler chose
-        # not to roll back (to protect that exact row). Any exception here
-        # now unwinds only to this savepoint -- the outer session, and
-        # every write already flushed on it, stays healthy regardless of
-        # what kind of failure this was. This is CHAOS-3441's own scope,
-        # brought forward and closed inline here rather than deferred: round
-        # 3's finding supplied a concrete, reproducible mid-flush failure
-        # (a real IntegrityError, not the round-2 finding's abstract
-        # concern), verified against a genuine duplicate-insert test
-        # (test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session)
-        # rather than only documented as a residual.
+        # CHAOS-3441 Codex adversarial review round 1 (HIGH, confirmed): the
+        # SAVEPOINT opens HERE, before the ownership and authorization
+        # SELECTs, not just around the write. Wrapping only the flush left a
+        # real window open: on PostgreSQL a server-side failure on any
+        # statement -- a `statement_timeout` firing on one of the SELECTs
+        # below is the realistic case -- aborts the WHOLE transaction, so
+        # every later statement fails with InFailedSqlTransaction and the
+        # caller's already-flushed transcript row, diagnostics, tool calls
+        # and resolutions all die with the commit that can no longer happen.
+        # A SAVEPOINT entered before the first statement makes that
+        # recoverable: `ROLLBACK TO SAVEPOINT` returns an aborted PostgreSQL
+        # transaction to a usable state, which is the whole reason savepoints
+        # exist. Entering the savepoint first is behavior-preserving for the
+        # write path: `begin_nested()` flushes the caller's pending state
+        # BEFORE emitting the SAVEPOINT, so outer pending writes land in the
+        # outer transaction and a savepoint rollback never takes them
+        # (verified, and pinned by
+        # test_chaos_3441_savepoint_opens_before_the_pre_write_selects; the
+        # semantics -- ROLLBACK TO SAVEPOINT actually recovering an aborted
+        # PostgreSQL transaction, which sqlite cannot express -- are proven on
+        # the real engine by
+        # test_persistence_postgres.py::test_chaos_3441_savepoint_recovers_an_aborted_transaction,
+        # which fails with InFailedSQLTransactionError if this savepoint is
+        # moved back after the ownership SELECT).
+        #
+        # The flip side of that entry-flush, stated where it lives (Codex
+        # adversarial review round 2, HIGH): pending state the CALLER left
+        # unflushed is flushed BEFORE the SAVEPOINT exists, so a failure on
+        # it is outside this savepoint and does poison the session. Every
+        # write in this service returns with nothing dirty -- the transcript
+        # writes' conversation touch is the one that did not, and now runs
+        # inside its own savepoint (see append_assistant_answer) -- so no
+        # production caller reaches here with pending state. That is an
+        # invariant of the callers, not something this method can enforce,
+        # and it is guarded by
+        # test_chaos_3441_transcript_writes_leave_no_unflushed_state.
+        #
+        # One failure class remains outside any savepoint's reach, stated
+        # plainly rather than implied: if the CONNECTION itself dies, there
+        # is no session left to roll back to a savepoint and an uncommitted
+        # transaction is lost by definition. That is recovered at the system
+        # level only, by force_terminal_fallback's fresh session.
         async with self.session.begin_nested():
+            run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+            if run is None:
+                raise DevPersistenceNotFound("run not found")
+            if public_outcome not in _PUBLIC_OUTCOMES:
+                raise DevPersistenceValidationError("invalid public_outcome")
+            try:
+                validated = DevAnswerFrameContract.model_validate(payload)
+            except PydanticValidationError as exc:
+                raise DevPersistenceValidationError(
+                    f"frame_payload is not a valid dev_answer_frame.v1: {exc}"
+                ) from exc
+            if validated.frame_id != str(frame_id):
+                raise DevPersistenceValidationError(
+                    "frame_payload.frame_id does not match the frame_id argument"
+                )
+            if validated.run_id != str(run_id):
+                raise DevPersistenceValidationError(
+                    "frame_payload.run_id does not match the run_id argument"
+                )
+            if validated.public_outcome.value != public_outcome:
+                raise DevPersistenceValidationError(
+                    "frame_payload.public_outcome does not match the "
+                    "public_outcome argument"
+                )
+            # CHAOS-3325 Codex review (NO-SHIP, confirmed): the contract only
+            # enforces wire shape, not provenance -- see
+            # _authorize_clarification_candidates's own docstring. Runs before
+            # the row is constructed, so an unauthorized candidate list never
+            # reaches the payload-bearing row at all.
+            await _authorize_clarification_candidates(
+                self.session,
+                run_id=run_id,
+                org_id=org_id,
+                user_id=user_id,
+                validated=validated,
+                authorizing_mention_id=authorizing_mention_id,
+            )
+            record = await self._construct_validated_payload_row(
+                model_cls=DevAnswerFrame,
+                payload_dict=validated.model_dump(mode="json"),
+                field_name="frame_payload",
+                max_bytes=_FRAME_PAYLOAD_MAX_BYTES,
+                run_id=run.id,
+                org_id=org_id,
+                user_id=user_id,
+                frame_id=frame_id,
+                public_outcome=public_outcome,
+                created_at=self._now(),
+            )
+            # CHAOS-3423 Codex adversarial review round 3 (HIGH, confirmed):
+            # the write is isolated by the SAVEPOINT above, matching
+            # append_assistant_answer/append_assistant_error's own pattern --
+            # a real mid-flush database failure here (not just a pre-flush
+            # construction exception) used to be able to mark the WHOLE outer
+            # session rollback-only, which could silently discard an
+            # already-flushed answer or no-answer transcript row the moment
+            # finish()'s own failure handler chose not to roll back (to
+            # protect that exact row). Any exception now unwinds only to this
+            # savepoint -- the outer session, and every write already flushed
+            # on it, stays healthy regardless of what kind of failure this
+            # was. Verified by REAL database failures on both transcript
+            # paths, each of which fails if the begin_nested is removed:
+            # test_chaos_3423_record_frame_integrity_failure_never_poisons_the_session
+            # (no-answer row, duplicate-insert IntegrityError) and
+            # tests/api/dev/test_chaos_3441_record_frame_savepoint.py
+            # (real DevAnswer row, driver-level write rejection).
             self.session.add(record)
             run.contract_generation = "v2"
             run.public_outcome = public_outcome
@@ -3055,102 +3333,124 @@ class DevPersistenceService:
         any mismatch rejects, no write.
         """
 
-        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
-        if run is None:
-            raise DevPersistenceNotFound("run not found")
-        if mode not in _NARRATIVE_MODES:
-            raise DevPersistenceValidationError("invalid narrative mode")
-        frame = await self.session.scalar(
-            select(DevAnswerFrame).where(
-                DevAnswerFrame.run_id == run.id,
-                DevAnswerFrame.org_id == org_id,
-                DevAnswerFrame.user_id == user_id,
-            )
-        )
-        if frame is None or frame.frame_id != frame_id:
-            raise DevPersistenceValidationError(
-                "narrative frame_id must match the run's recorded answer frame"
-            )
-        reconstructed = dict(payload)
-        reconstructed["body"] = narrative_text
-        try:
-            validated = DevNarrativeContract.model_validate(reconstructed)
-        except PydanticValidationError as exc:
-            raise DevPersistenceValidationError(
-                f"narrative payload is not a valid dev_narrative.v1: {exc}"
-            ) from exc
-        if validated.narrative_id != str(narrative_id):
-            raise DevPersistenceValidationError(
-                "narrative payload's narrative_id does not match the "
-                "narrative_id argument"
-            )
-        if validated.run_id != str(run_id):
-            raise DevPersistenceValidationError(
-                "narrative payload's run_id does not match the run_id argument"
-            )
-        if validated.frame_id != str(frame_id):
-            raise DevPersistenceValidationError(
-                "narrative payload's frame_id does not match the frame_id argument"
-            )
-        if validated.mode != mode:
-            raise DevPersistenceValidationError(
-                "narrative payload's mode does not match the mode argument"
-            )
-        # provider_fingerprint arrives already hashed (the caller -- see
-        # orchestrator_persistence.PersistenceRunRecorder.record_narrative --
-        # digests narrative.provider_metadata.model_fingerprint before this
-        # call); _digest here only validates that shape. To cross-check it
-        # against the *payload's own* raw model_fingerprint, that raw value
-        # must be hashed the identical way, not passed through the
-        # shape-only validator.
-        expected_provider_fingerprint = (
-            _sha256_digest(validated.provider_metadata.model_fingerprint)
-            if validated.provider_metadata is not None
-            else None
-        )
-        safe_provider_fingerprint = _digest(
-            provider_fingerprint, field="provider_fingerprint"
-        )
-        if expected_provider_fingerprint != safe_provider_fingerprint:
-            raise DevPersistenceValidationError(
-                "narrative payload's provider_metadata does not match the "
-                "provider_fingerprint argument"
-            )
-        text = _bounded_text(
-            validated.body, field="narrative_text", max_bytes=_NARRATIVE_TEXT_MAX_BYTES
-        )
-        if not text:
-            raise DevPersistenceValidationError("narrative_text must not be empty")
-        record = await self._construct_validated_payload_row(
-            model_cls=DevRunNarrative,
-            payload_dict=validated.model_dump(mode="json", exclude={"body"}),
-            field_name="narrative_payload",
-            max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
-            run_id=run.id,
-            org_id=org_id,
-            user_id=user_id,
-            narrative_id=narrative_id,
-            frame_id=frame_id,
-            mode=mode,
-            provider_fingerprint=safe_provider_fingerprint,
-            narrative_text=text,
-            created_at=self._now(),
-        )
-        # codex NO-SHIP finding round 1 (HIGH #2b): the narrative row is an
-        # *optional* write on a session that may already carry a
-        # successfully-flushed frame/answer earlier in the same request
-        # (orchestrator.finish() calls this after record_frame). A flush
-        # failure here (a CHECK-constraint violation, a byte-bound
-        # rejection) previously poisoned the WHOLE session -- the
-        # terminal() write that follows would then raise
-        # PendingRollbackError, and recovery would roll back the
-        # already-flushed frame/answer along with it, downgrading an
-        # otherwise-valid run. A SAVEPOINT isolates this one flush: on
-        # failure, only the savepoint rolls back (automatic, on exception
-        # exit from this block) -- the outer transaction, and everything
-        # already flushed on it, stays intact and the session stays usable
-        # for the terminal() write that follows.
+        # CHAOS-3441 Codex adversarial review round 1 (HIGH, confirmed): the
+        # SAVEPOINT opens before the ownership/frame SELECTs, not just around
+        # the write, for the same reason as record_frame -- see that method's
+        # own comment. A narrative failure is the worst place to lose the
+        # outer transaction: by the time this runs, the transcript row AND
+        # the frame are already flushed on it.
         async with self.session.begin_nested():
+            run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+            if run is None:
+                raise DevPersistenceNotFound("run not found")
+            if mode not in _NARRATIVE_MODES:
+                raise DevPersistenceValidationError("invalid narrative mode")
+            frame = await self.session.scalar(
+                select(DevAnswerFrame).where(
+                    DevAnswerFrame.run_id == run.id,
+                    DevAnswerFrame.org_id == org_id,
+                    DevAnswerFrame.user_id == user_id,
+                )
+            )
+            if frame is None or frame.frame_id != frame_id:
+                raise DevPersistenceValidationError(
+                    "narrative frame_id must match the run's recorded answer frame"
+                )
+            reconstructed = dict(payload)
+            reconstructed["body"] = narrative_text
+            try:
+                validated = DevNarrativeContract.model_validate(reconstructed)
+            except PydanticValidationError as exc:
+                raise DevPersistenceValidationError(
+                    f"narrative payload is not a valid dev_narrative.v1: {exc}"
+                ) from exc
+            if validated.narrative_id != str(narrative_id):
+                raise DevPersistenceValidationError(
+                    "narrative payload's narrative_id does not match the "
+                    "narrative_id argument"
+                )
+            if validated.run_id != str(run_id):
+                raise DevPersistenceValidationError(
+                    "narrative payload's run_id does not match the run_id argument"
+                )
+            if validated.frame_id != str(frame_id):
+                raise DevPersistenceValidationError(
+                    "narrative payload's frame_id does not match the frame_id argument"
+                )
+            if validated.mode != mode:
+                raise DevPersistenceValidationError(
+                    "narrative payload's mode does not match the mode argument"
+                )
+            # provider_fingerprint arrives already hashed (the caller -- see
+            # orchestrator_persistence.PersistenceRunRecorder.record_narrative --
+            # digests narrative.provider_metadata.model_fingerprint before this
+            # call); _digest here only validates that shape. To cross-check it
+            # against the *payload's own* raw model_fingerprint, that raw value
+            # must be hashed the identical way, not passed through the
+            # shape-only validator.
+            expected_provider_fingerprint = (
+                _sha256_digest(validated.provider_metadata.model_fingerprint)
+                if validated.provider_metadata is not None
+                else None
+            )
+            safe_provider_fingerprint = _digest(
+                provider_fingerprint, field="provider_fingerprint"
+            )
+            if expected_provider_fingerprint != safe_provider_fingerprint:
+                raise DevPersistenceValidationError(
+                    "narrative payload's provider_metadata does not match the "
+                    "provider_fingerprint argument"
+                )
+            text = _bounded_text(
+                validated.body,
+                field="narrative_text",
+                max_bytes=_NARRATIVE_TEXT_MAX_BYTES,
+            )
+            if not text:
+                raise DevPersistenceValidationError("narrative_text must not be empty")
+            record = await self._construct_validated_payload_row(
+                model_cls=DevRunNarrative,
+                payload_dict=validated.model_dump(mode="json", exclude={"body"}),
+                field_name="narrative_payload",
+                max_bytes=_NARRATIVE_PAYLOAD_MAX_BYTES,
+                run_id=run.id,
+                org_id=org_id,
+                user_id=user_id,
+                narrative_id=narrative_id,
+                frame_id=frame_id,
+                mode=mode,
+                provider_fingerprint=safe_provider_fingerprint,
+                narrative_text=text,
+                created_at=self._now(),
+            )
+            # codex NO-SHIP finding round 1 (HIGH #2b): the narrative row is an
+            # *optional* write on a session that may already carry a
+            # successfully-flushed frame/answer earlier in the same request
+            # (orchestrator.finish() calls this after record_frame). A flush
+            # failure here (a CHECK-constraint violation, a byte-bound
+            # rejection) previously poisoned the WHOLE session -- the
+            # terminal() write that follows would then raise
+            # PendingRollbackError, and recovery would roll back the
+            # already-flushed frame/answer along with it, downgrading an
+            # otherwise-valid run. A SAVEPOINT isolates this one flush: on
+            # failure, only the savepoint rolls back (automatic, on exception
+            # exit from this block) -- the outer transaction, and everything
+            # already flushed on it, stays intact and the session stays usable
+            # for the terminal() write that follows.
+            # codex NO-SHIP finding round 1 (HIGH #2b): the narrative row is
+            # an *optional* write on a session that may already carry a
+            # successfully-flushed frame/answer earlier in the same request
+            # (orchestrator.finish() calls this after record_frame). A flush
+            # failure here (a CHECK-constraint violation, a byte-bound
+            # rejection) previously poisoned the WHOLE session -- the
+            # terminal() write that follows would then raise
+            # PendingRollbackError, and recovery would roll back the
+            # already-flushed frame/answer along with it, downgrading an
+            # otherwise-valid run. The SAVEPOINT isolates this flush: on
+            # failure only the savepoint rolls back (automatic, on exception
+            # exit from the block) -- the outer transaction, and everything
+            # already flushed on it, stays intact and the session stays
+            # usable for the terminal() write that follows.
             self.session.add(record)
             await self.session.flush()
         return record
@@ -3410,6 +3710,41 @@ class DevPersistenceService:
             or 0
         )
 
+    async def count_stranded_ephemeral(self) -> int:
+        """Count 0-day conversations still awaiting a repair stamp (CHAOS-3544).
+
+        The exact counterpart of ``count_expired``, for the population that
+        one is structurally blind to: a stranded row carries ``expires_at IS
+        NULL``, so no count of DUE expiries can ever see it.
+
+        Non-locking, and that is the whole point (Codex adversarial review
+        round 2). The sweep's stamp loop cannot conclude "backlog cleared"
+        from a short batch: ``backfill_stranded_ephemeral_expiry`` selects
+        ``FOR UPDATE SKIP LOCKED``, so a concurrent stamper -- another tick,
+        or the manual ``dev-hops maintenance`` drain -- holding the remaining
+        rows makes the batch look short while the backlog is untouched. And
+        if that peer then rolls back, the rows it held still need stamping,
+        yet this task would already have reported a healthy "completed".
+
+        Row locks block writers, not readers, so this sees every still-
+        stranded row regardless of who holds it -- exactly the argument
+        ``count_expired`` already makes for the purge half.
+        """
+
+        now = self._now()
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(DevConversation)
+                .where(
+                    DevConversation.retention_days == 0,
+                    DevConversation.expires_at.is_(None),
+                    DevConversation.updated_at < now - EPHEMERAL_ABANDONED_GRACE,
+                )
+            )
+            or 0
+        )
+
     async def backfill_stranded_ephemeral_expiry(self, *, limit: int = 500) -> int:
         """One-time repair for 0-day conversations already stranded before
         this fix existed (CHAOS-3404; Codex adversarial-review round 3,
@@ -3426,9 +3761,17 @@ class DevPersistenceService:
         run still non-terminal) and stamps ``expires_at = now()`` on them,
         identically to the synchronous stamp -- the ordinary
         ``cleanup_expired`` sweep then collects them on its next tick, same
-        as any other now-due row. Deliberately narrow: a conversation with
-        zero runs (freshly created, no message posted yet) or ANY
-        non-terminal run (genuinely still in flight) is never touched.
+        as any other now-due row.
+
+        CHAOS-3544 WIDENED WHAT COUNTS AS STRANDED. This used to skip a
+        conversation with zero runs ("nothing to retire yet") or with any
+        non-terminal run ("genuinely still in flight"). Both exclusions were
+        wrong in the same way: they assumed something would eventually stamp
+        those rows, and nothing ever would. A 0-day conversation abandoned
+        before its first message, or holding a run left non-terminal by a
+        crash, was unreachable by every path -- retained forever in the tier
+        whose whole promise is immediate deletion. The selection is now by
+        AGE, which covers both and cannot touch anything still in flight.
 
         Bounded and idempotent -- returns the number stamped this call;
         safe to run repeatedly (a resumable one-time operator action, e.g.
@@ -3439,15 +3782,27 @@ class DevPersistenceService:
                 "backfill limit must be between 1 and 500"
             )
         now = self._now()
-        has_a_run = exists(
-            select(DevRun.id).where(DevRun.conversation_id == DevConversation.id)
-        )
-        has_a_non_terminal_run = exists(
-            select(DevRun.id).where(
-                DevRun.conversation_id == DevConversation.id,
-                DevRun.state.not_in(_TERMINAL_RUN_STATES),
-            )
-        )
+        # CHAOS-3544: an AGE predicate replaces the previous
+        # `has_a_run AND ~has_a_non_terminal_run` pair.
+        #
+        # That pair existed for one reason: to avoid stamping a conversation
+        # whose run might still be in flight. But it bought that safety by
+        # excluding BOTH stranded shapes this backfill now has to reach --
+        # a conversation with zero runs (excluded by `has_a_run`) and one
+        # whose run never terminates (excluded by `~has_a_non_terminal_run`).
+        # Neither was repairable by anything, in a tier that promises
+        # immediate deletion.
+        #
+        # Age subsumes the pair rather than joining it: past
+        # EPHEMERAL_ABANDONED_GRACE a live run is impossible by the same two
+        # bounds that justify the grace itself (a 45s wall limit, and a
+        # 5-minute threshold beyond which a non-terminal run is already
+        # considered dead). So this is one predicate, no run-state reasoning,
+        # and strictly more complete than the two it replaces.
+        #
+        # Still narrow in the way that matters: a conversation created within
+        # the grace is never touched, so an in-flight turn cannot be stamped
+        # out from under itself.
         stranded = (
             (
                 await self.session.execute(
@@ -3455,8 +3810,20 @@ class DevPersistenceService:
                     .where(
                         DevConversation.retention_days == 0,
                         DevConversation.expires_at.is_(None),
-                        has_a_run,
-                        ~has_a_non_terminal_run,
+                        # Codex adversarial review (HIGH): keyed on
+                        # updated_at, not created_at. The reachable version
+                        # of that finding -- a user resuming a pre-fix row
+                        # and having it stamped out from under a live run --
+                        # is already closed by _touch stamping the NULL
+                        # expiry on admission, and a test proves it. This is
+                        # the belt-and-braces half: "idle for a full grace"
+                        # is the condition that actually matters, and
+                        # updated_at says it directly rather than relying on
+                        # the invariant that every touch also stamps. A
+                        # future path that touches without stamping would
+                        # strand and then purge a live conversation under
+                        # created_at; under updated_at it cannot.
+                        DevConversation.updated_at < now - EPHEMERAL_ABANDONED_GRACE,
                     )
                     .order_by(DevConversation.created_at, DevConversation.id)
                     .limit(limit)
@@ -3468,6 +3835,16 @@ class DevPersistenceService:
         )
         for conversation in stranded:
             conversation.expires_at = now
+        # CHAOS-3441 Codex adversarial review round 3 (MEDIUM, confirmed):
+        # flushed here rather than left dirty for whatever the caller does
+        # next. Every mutating method on this service returns with nothing
+        # pending, and that is load-bearing, not tidiness:
+        # SessionTransaction._take_snapshot() flushes pending state BEFORE
+        # emitting a SAVEPOINT, so a stamp left dirty here would be emitted
+        # by the next operation's savepoint entry -- outside that savepoint,
+        # where a failure poisons the whole transaction and takes the
+        # unrelated rows already flushed on it (see record_frame).
+        await self.session.flush()
         logger.info(
             "ask_dev_ephemeral_expiry_backfill_completed",
             extra={"stamped": len(stranded)},
@@ -3587,35 +3964,23 @@ class DevPersistenceService:
         org_id: uuid.UUID,
         allowance: DevPlatformAllowance,
     ) -> None:
+        # CHAOS-3522: reservation + limit check now goes through the shared
+        # Valkey counters (askdev_allowance_counters.admit), not a fresh
+        # dev_runs aggregate scan every admission. reset_at is still needed
+        # here only to shape the raised exceptions the same as before.
         now = self._now()
-        window_start = datetime(now.year, now.month, 1, tzinfo=UTC)
-        if now.month == 12:
-            reset_at = datetime(now.year + 1, 1, 1, tzinfo=UTC)
-        else:
-            reset_at = datetime(now.year, now.month + 1, 1, tzinfo=UTC)
-        terminal_with_cost = and_(
-            DevRun.state.in_(_TERMINAL_RUN_STATES),
-            DevRun.estimated_cost_microusd.is_not(None),
+        _window_start, reset_at = platform_month_window(now)
+        outcome = await askdev_allowance_counters.admit(
+            self.session,
+            org_id=str(org_id),
+            request_limit=allowance.monthly_request_limit,
+            cost_limit_microusd=allowance.monthly_cost_limit_microusd,
+            per_run_reservation_microusd=allowance.per_run_reservation_microusd,
+            now=now,
         )
-        charged_cost = case(
-            (terminal_with_cost, DevRun.estimated_cost_microusd),
-            else_=allowance.per_run_reservation_microusd,
-        )
-        statement = select(
-            func.count(DevRun.id), func.coalesce(func.sum(charged_cost), 0)
-        ).where(
-            DevRun.org_id == org_id,
-            DevRun.provider_source == "platform",
-            DevRun.started_at >= window_start,
-            DevRun.started_at < reset_at,
-        )
-        request_count, charged_microusd = (await self.session.execute(statement)).one()
-        if int(request_count or 0) >= allowance.monthly_request_limit:
+        if outcome is askdev_allowance_counters.AdmitOutcome.REQUEST_LIMIT_EXCEEDED:
             raise DevMonthlyRequestLimitExceeded(reset_at)
-        if (
-            int(charged_microusd or 0) + allowance.per_run_reservation_microusd
-            > allowance.monthly_cost_limit_microusd
-        ):
+        if outcome is askdev_allowance_counters.AdmitOutcome.COST_LIMIT_EXCEEDED:
             raise DevMonthlyCostLimitExceeded(reset_at)
 
     async def _message_run_by_client_id(
@@ -3654,6 +4019,31 @@ class DevPersistenceService:
         conversation.updated_at = now
         if conversation.retention_days == 30:
             conversation.expires_at = now + timedelta(days=30)
+        else:
+            # CHAOS-3544, Codex adversarial review (HIGH, REPRODUCED): the
+            # ephemeral expiry must track ACTIVITY, not creation.
+            #
+            # Anchoring on creation alone is a data-loss path. Open an
+            # ephemeral conversation, leave it idle 55 minutes, then ask a
+            # question: the run is legitimately in flight, but the expiry set
+            # at T0 falls due at T0+1h and `cleanup_expired` has no run-state
+            # guard -- so the live turn's own conversation is deleted out
+            # from under it, five minutes in. The first in-flight test could
+            # not see this: it starts its run at creation time, with the
+            # whole grace still ahead of it.
+            #
+            # Refreshing here restores the invariant the grace was meant to
+            # provide -- an ephemeral conversation is never collectable until
+            # it has been idle for a full grace period. It also repairs a
+            # pre-fix row (`expires_at IS NULL`) the moment anyone touches
+            # it, which is what stops the age-based backfill from stamping a
+            # conversation somebody just resumed.
+            #
+            # It never DELAYS the completed case:
+            # `_stamp_ephemeral_expiry_if_terminal` still moves the expiry
+            # back to `now` when the run reaches terminal, and runs after
+            # this.
+            conversation.expires_at = now + EPHEMERAL_ABANDONED_GRACE
 
     async def _purge_conversation(
         self,

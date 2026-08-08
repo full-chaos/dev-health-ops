@@ -833,6 +833,19 @@ def _replayed_result(
         tool_call_count=run.tool_call_count,
         provider_fingerprint=run.provider_fingerprint,
         model_fingerprint=run.model_fingerprint,
+        # CHAOS-3497: a replay must stream the same frames the live run did.
+        # ``streaming`` reads ``scope.resolved`` off this field now (so a
+        # no-answer terminal can publish one at all), and leaving it None
+        # here would silently DROP the frame from every replayed answer --
+        # a regression introduced by the very change that closes the gap.
+        #
+        # Only the answer branch can supply it. A replayed no-answer run has
+        # no persisted ``dev_scope_resolution.v1`` to read (the run row keeps
+        # ``terminal_error_payload`` and the frame, neither of which carries
+        # one), so it replays without the frame rather than with a fabricated
+        # one -- an honest known gap, filed rather than papered over: a live
+        # no-answer run publishes its resolution, its replay does not.
+        scope_resolution=answer.resolved_scope if answer is not None else None,
     )
 
 

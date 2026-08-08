@@ -25,14 +25,50 @@ adversarial critique, comment 7d1368d9):
   the same cardinality. This is what stops "how is the Contxt Fabric doing?"
   from reading as a corroborated org-wide proposal just because the model
   found no candidate id to name.
-* **Never-widen holds structurally.** ``_response_schema`` bounds every
-  candidate-index field to ``[0, len(combined) - 1]`` for the exact
-  authorized shortlist THIS call built -- when that shortlist is empty the
-  bound is ``[0, -1]``, which no integer satisfies, so the wire schema
-  itself cannot express a candidate when none were authorized. ``_verify``
-  re-checks every accepted index against its OWN mention's slice (not just
-  the call-wide bound) after parsing, independent of whether the provider
-  honored the schema.
+* **Never-widen is enforced in TWO places, and the split is exact.** This
+  bullet has now been wrong in both directions, so it states the boundary
+  rather than a slogan.
+
+  *Call-wide, structurally, on the wire.* ``_response_schema`` enumerates the
+  authorized indices as ``enum``, rebuilt per call, so a provider cannot
+  express an index this CALL did not authorize. Read the mechanism, because
+  the keyword choice is the whole point: ``OpenAICompatibleAgentProvider``
+  projects every schema through ``_structural_schema``, which keeps only
+  ``_STRUCTURAL_SCHEMA_KEYS``. ``minimum``/``maximum``/``minItems``/
+  ``maxItems``/``maxLength`` are NOT in that set; ``enum`` is. The original
+  bullet claimed this guarantee on the strength of ``[0, len(combined) - 1]``
+  range bounds, and was FALSE for as long as it was written (CHAOS-3536) --
+  those bounds were stripped before dispatch on every call that ever ran.
+  CHAOS-3537 re-expressed the bound in a keyword that survives, which is also
+  strictly stronger: a range admits every integer between its ends, an enum
+  admits exactly the shortlist.
+
+  *Per-mention, at runtime.* ``_verify`` re-checks every accepted index
+  against its OWN mention's authorized slice, which the wire schema cannot
+  express at all -- the schema is built once per call from the COMBINED
+  shortlist, so a mention whose own slice is empty (past
+  ``max_total_candidates``) still sees the call's full range. CHAOS-3525
+  additionally hardened the singular path to resolve by identity.
+
+  **These are two STAGES, not two coverages** -- the first version of this
+  bullet claimed the latter and was wrong. Every mention slice is a subset of
+  ``[0, len(combined))``, so any index the enum rejects is also outside every
+  mention's slice: ``_verify``'s rejection set strictly SUBSUMES the enum's.
+
+  What the enum buys, scoped to what is actually true: **for a decoder that
+  honors the schema**, a call-wide-out-of-range index is not generated in the
+  first place, so the proposal arrives usable instead of arriving and being
+  rejected. It is a generation-time constraint that reduces malformed
+  proposals -- NOT an authorization control and NOT a backstop. A
+  non-compliant decoder can still emit anything (and a decoder that dislikes
+  the schema can reject the request outright), and ``_verify`` remains the
+  sole enforcement point for per-mention ownership, which the schema cannot
+  express at all. If ``_verify`` regresses, the enum does not save you.
+
+  With zero candidates authorized, ``selected_candidate_index`` is
+  ``{"type": "null"}``. ``candidate_indices`` stays a plain integer array and
+  is bounded only by ``_verify`` -- see ``_response_schema`` for the
+  empty-enum option that was measured and deliberately not adopted.
 * **LLM unavailable degrades to silent skip, never a block.** Every branch
   of ``evaluate()`` returns a ``QUAShadowRecord`` (never raises); the
   orchestrator's own call site additionally wraps the call and the
@@ -150,6 +186,37 @@ class QUAShadowConfig:
     #: The single flag flip CHAOS-3389 requires: off is byte-identical to
     #: the seam not existing at all (see ``evaluate``'s first branch).
     enabled: bool = False
+    #: CHAOS-3525: whether an EVALUATED proposal may be promoted to the run's
+    #: committed subject, instead of only being recorded.
+    #:
+    #: A SECOND gate on purpose, rather than widening what ``enabled`` means.
+    #: ``enabled`` is the shadow's own contract -- "this seam observes and
+    #: never influences" -- and that contract is what
+    #: ``test_chaos_3389_qua_shadow.py``'s byte-identity tests certify. Making
+    #: ``enabled`` also mean "and may now change the answer" would retire
+    #: those proofs by redefinition rather than by evidence, and would leave
+    #: no flag state in which the shadow can still be run purely for
+    #: evidence. Two flags keep the rollout ladder (shadow -> commit) real:
+    #: ``commit_enabled`` is meaningless unless ``enabled`` is also set, since
+    #: there is no proposal to promote otherwise.
+    #:
+    #: **Before arming this in an environment, read
+    #: ``qua_promotion._structurally_admissible``'s generalization limit.**
+    #: CHAOS-3553 replaced the confidence floor with a structural predicate and
+    #: closed every false positive CHAOS-3539 measured, but it left TWO shapes
+    #: admitting, both stated there and both pinned by characterization tests:
+    #: a short acronym window from a genuine primary name ("AC", "OP", "API"),
+    #: and a multi-word parenthetical qualifier named in full ("Legacy
+    #: Operations"). Neither is a regression -- the previous confidence-only
+    #: gate admitted both -- and neither has a structural fix available without
+    #: an explicit catalog alias field.
+    #:
+    #: So landing CHAOS-3553 does NOT by itself authorize arming this flag.
+    #: Adversarial review was explicit that "not a regression" is not a safety
+    #: closure, and it is right. Arming is a product decision that owns those
+    #: two residuals, and it belongs to CHAOS-3525 with evidence, not to
+    #: whoever next edits this file.
+    commit_enabled: bool = False
     #: Platform-spec hard cap (comment 6fa38d88, "Performance and budgets").
     #: Also bounded by the run's own remaining wall-clock budget at the call
     #: site -- whichever is smaller governs.
@@ -179,6 +246,24 @@ class QUAShadowMentionAssessment:
     candidate_entities: tuple[AuthorizedEntity, ...]
     confidence: float
     rejected_reason: str | None = None
+    #: CHAOS-3553: this mention's OWN authorized slice, ``combined[start:end]``
+    #: -- everything the catalog offered for this span, whether or not the
+    #: model mentioned it.
+    #:
+    #: Distinct from ``candidate_entities`` above, and the distinction is the
+    #: whole reason this field exists. ``candidate_entities`` is the MODEL's
+    #: ``candidate_indices``, filtered to the slice; it says what the model
+    #: chose to name. This says what the span actually matched. A model that
+    #: names one index out of a five-entity slice produces
+    #: ``len(candidate_entities) == 1``, so a slice-size rule reading that
+    #: field would read a genuinely ambiguous span as unambiguous -- which is
+    #: precisely the false positive CHAOS-3553's predicate exists to refuse
+    #: (``neg.C1``, "Meridian", 4 of 12 observed). Verified by execution
+    #: before this field was added, not assumed.
+    #:
+    #: Empty for a mention past ``max_total_candidates``, which is the same
+    #: value an unauthorized-everything mention carries; both are refusals.
+    authorized_slice: tuple[AuthorizedEntity, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +311,31 @@ class QuestionUnderstandingShadow:
         self._config = config
         self._now = now
         self._monotonic = monotonic
+
+    @property
+    def commit_enabled(self) -> bool:
+        """Whether a proposal from this shadow may be promoted (CHAOS-3525).
+
+        Read by the orchestrator's promotion seam. Exposed as a property
+        rather than reaching into ``_config`` so the gate has one reader and
+        one name, and so a caller cannot accidentally consult ``enabled``
+        (which means only "a proposal was produced") when it meant this.
+        """
+
+        return self._config.commit_enabled
+
+    @property
+    def scope_service(self) -> ScopeResolutionService:
+        """The SAME authorization boundary this shadow built its shortlist from.
+
+        CHAOS-3525's commit-time re-verification has to ask the boundary
+        again, and it must be the identical service instance -- a different
+        one would carry a different request-scoped, permission-fingerprint-
+        keyed cache, so "is this entity authorized for this caller" could be
+        answered from a snapshot the proposal was never checked against.
+        """
+
+        return self._scope_service
 
     async def evaluate(
         self,
@@ -486,6 +596,24 @@ class QuestionUnderstandingShadow:
                     limit=self._config.max_candidates_per_mention,
                     allowed_kinds=SEARCHABLE_ENTITY_KINDS,
                     include_alias_matches=True,
+                    # CHAOS-3525: a TYPED mention's own kind ranks first, the
+                    # same key CHAOS-3422 added for the deterministic close-
+                    # match search.
+                    #
+                    # Set now because the shortlist stopped being audit-only.
+                    # While nothing read the record, ordering was cosmetic;
+                    # now the model picks from this list and the list is
+                    # truncated at a cap, so an unranked shortlist can push
+                    # the one real project below issue/PR substring hits --
+                    # which is CHAOS-3422's exact defect re-entering through
+                    # the QUA door after being fixed at the deterministic
+                    # one. An untyped mention names no kind, so it gets no
+                    # preference rather than an invented one.
+                    preferred_kinds=(
+                        frozenset()
+                        if mention.mention_id in untyped_ids
+                        else frozenset(kinds)
+                    ),
                 ),
             )
             return mention.mention_id, result.candidates
@@ -553,15 +681,84 @@ class QuestionUnderstandingShadow:
     def _response_schema(
         self, *, mention_count: int, candidate_count: int
     ) -> dict[str, Any]:
-        """A JSON Schema whose index bounds make an out-of-authorization
-        candidate literally inexpressible for THIS call. When
-        ``candidate_count`` is zero the bound is ``[0, -1]`` -- an empty
-        range no integer satisfies, so a provider honoring the schema
-        cannot select any candidate at all when none were authorized.
+        """The response schema for THIS call's authorized shortlist.
+
+        Index bounds are expressed as ``enum``, not as ``minimum``/
+        ``maximum``, and that is load-bearing rather than stylistic.
+        ``OpenAICompatibleAgentProvider`` projects every schema through
+        ``_structural_schema``, which keeps only ``_STRUCTURAL_SCHEMA_KEYS``.
+        ``minimum``/``maximum``/``minItems``/``maxItems``/``maxLength`` are
+        NOT in that set and are stripped before dispatch; ``enum`` IS, and
+        survives untouched. CHAOS-3536 found the range bounds had therefore
+        never reached any provider, leaving ``_verify`` as the sole guard;
+        CHAOS-3537 is this repair.
+
+        An enumeration is also strictly STRONGER than the range it replaces:
+        ``[0, n-1]`` admits every integer between the ends, while the enum
+        admits exactly the indices this call authorized, rebuilt per call.
+
+        Measured live before adopting (CHAOS-3537, gpt-5-nano): strict mode
+        accepts an integer enum at 3 and at 50 candidates and accepts the
+        empty enum below; and given a prompt instructing it to return
+        out-of-range index 7, the pre-fix schema returned
+        ``selected_candidate_index: 7`` at confidence 0.92 in 3 runs of 3,
+        while the enum-bound schema could not express it in any of 3.
+
+        With zero candidates, ``selected_candidate_index`` is
+        ``{"type": "null"}`` (parseable -- the contract field is
+        ``_StrictIndex | None``). ``candidate_indices`` deliberately stays a
+        plain integer array. An EMPTY item enum would close it structurally,
+        and was measured working against OpenAI -- but ``enum: []`` is an
+        unsatisfiable choice set, and ``CERTIFIED_PLATFORM_AGENT_PROVIDERS``
+        also includes ``local``/``ollama``/``lmstudio``, whose constrained
+        decoders were NOT probed. A decoder that rejects it would turn every
+        zero-candidate call into a provider error and silently lose exactly
+        the no-match evidence the shadow exists to collect -- a worse failure
+        than the residual it closes. Adopt it only with per-endpoint
+        certification evidence (CHAOS-3538 is the natural home).
+
+        Decoder compatibility, since the live evidence is one endpoint
+        (OpenAI/gpt-5-nano) and ``CERTIFIED_PLATFORM_AGENT_PROVIDERS`` also
+        holds ``local``/``ollama``/``lmstudio``: ``enum`` itself is NOT a new
+        dependency for them. Every Ask Dev call already ships enums to every
+        provider family -- ``_decision_response_schema``'s mandatory ``kind``
+        field is one, and this schema's own ``intent_id``/``cardinality``/
+        ``outcome`` were enums before this change. The untested delta is
+        narrow: integer-valued enums rather than string, and a list up to 50
+        long. That is why the EMPTY enum was withdrawn while these were kept
+        -- an unsatisfiable choice set is a genuinely novel construct, a
+        50-element integer enum is a variation on something already in every
+        request. Fold the remaining delta into CHAOS-3538's certification.
+
+        What the enum does NOT do, stated because the first version of this
+        docstring got it wrong: it does not add coverage ``_verify`` lacks.
+        Every mention's slice is a subset of ``[0, len(combined))``, so an
+        index the enum would reject is outside every mention's slice and
+        ``_verify`` rejects it too -- ``_verify``'s rejection set strictly
+        SUBSUMES the enum's. The enum earns its place by acting at a
+        different STAGE, not over a different set: for a decoder that honors
+        the schema it constrains generation, so a call-wide-out-of-range
+        index is not produced rather than produced and then rejected, and the
+        proposal survives instead of being discarded. It is not an
+        authorization control and not a backstop -- a non-compliant decoder
+        can emit anything, and per-mention ownership remains ``_verify``'s
+        alone, since the schema is built once per call from the COMBINED
+        shortlist and cannot express it.
+
+        ``maxItems``/``maxLength`` below are stripped in transit and are kept
+        only as intent, and as a real bound for any future provider that does
+        not project. Nothing may be claimed on their strength.
         """
 
-        max_index = candidate_count - 1
-        index_schema = {"type": ["integer", "null"], "minimum": 0, "maximum": max_index}
+        authorized_indices = list(range(candidate_count))
+        index_schema: dict[str, Any] = (
+            {"type": "null"}
+            if candidate_count == 0
+            else {
+                "type": ["integer", "null"],
+                "enum": [*authorized_indices, None],
+            }
+        )
         mention_schema = {
             "type": "object",
             "additionalProperties": False,
@@ -576,7 +773,15 @@ class QuestionUnderstandingShadow:
                 "candidate_indices": {
                     "type": "array",
                     "maxItems": 25,
-                    "items": {"type": "integer", "minimum": 0, "maximum": max_index},
+                    # Enumerated when there is anything to enumerate. With
+                    # NOTHING authorized this stays a plain integer array
+                    # rather than carrying an empty enum -- see the docstring
+                    # for why that exotic shape was measured, then dropped.
+                    "items": (
+                        {"type": "integer", "enum": authorized_indices}
+                        if authorized_indices
+                        else {"type": "integer"}
+                    ),
                 },
                 "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             },
@@ -592,7 +797,17 @@ class QuestionUnderstandingShadow:
                 "requires_clarification",
             ],
             "properties": {
-                "schema_version": {"const": QUESTION_UNDERSTANDING_SCHEMA_VERSION},
+                # CHAOS-3536: ``type`` is REQUIRED here, and its absence took
+                # the whole QUA path down against every real provider --
+                # strict structured-output mode rejects the request with
+                # "In context=('properties', 'schema_version'), schema must
+                # have a 'type' key". ``const`` alone is not a type
+                # declaration. The pin stays: the field must still be v1 by
+                # VALUE, not merely a string.
+                "schema_version": {
+                    "type": "string",
+                    "const": QUESTION_UNDERSTANDING_SCHEMA_VERSION,
+                },
                 "intent_id": {
                     "type": "string",
                     "enum": [intent.value for intent in QuestionIntentID],
@@ -666,6 +881,10 @@ class QuestionUnderstandingShadow:
                     outcome=proposed.outcome,
                     selected_entity=selected_entity,
                     candidate_entities=candidate_entities,
+                    # CHAOS-3553. Taken from the SAME ``start``/``end`` the
+                    # index checks above used, so the slice a promotion reads
+                    # and the slice ``_verify`` enforced can never disagree.
+                    authorized_slice=tuple(combined[start:end]),
                     confidence=proposed.confidence,
                     rejected_reason=rejected_reason,
                 )

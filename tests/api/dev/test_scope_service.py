@@ -7,6 +7,7 @@ import pytest
 
 from dev_health_ops.api.dev import scope_service as scope_service_module
 from dev_health_ops.api.dev.contracts import DevScope, DevTimeRange, DirectScope
+from dev_health_ops.api.dev.scope_catalog import merge_search_candidates
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -104,13 +105,25 @@ class FakeCatalog:
         *,
         limit: int,
         include_alias_matches: bool = False,
+        preferred_kinds: frozenset[EntityKind] = frozenset(),
     ) -> list[AuthorizedEntity]:
         self.search_calls += 1
-        return [
-            entity
-            for entity in self.entities
-            if entity.kind in kinds and query.casefold() in entity.label.casefold()
-        ][:limit]
+        # Ranked and truncated by the production helper: every catalog query
+        # applies its ORDER BY in SQL, and since CHAOS-3422 the service
+        # preserves the order it is handed rather than re-sorting it, so a
+        # double returning rows in seeded order would pin an order the real
+        # catalog never emits.
+        return merge_search_candidates(
+            query=query,
+            alias_hits=(),
+            substring_hits=[
+                entity
+                for entity in self.entities
+                if entity.kind in kinds and query.casefold() in entity.label.casefold()
+            ],
+            preferred_kinds=preferred_kinds,
+            limit=limit,
+        )
 
     async def organization_repository_ids(
         self, org_id: str, *, limit: int

@@ -10,9 +10,12 @@
   ],
   "question": "How trustworthy is the data behind the status of the repo \"meridian/web-app\"?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-2",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
+  "expected_mention_texts": [
+    "meridian/web-app"
+  ],
   "invariants": [
     {
       "category": "no-silent-widening",
@@ -36,5 +39,6 @@
   ],
   "resolution_profile_ref": "deterministic-v1",
   "fault_ref": null,
-  "notes": "meridian/web-app is the Wave 3.1 heritage positive-control repo (subjects.json's own note) and is never mutated by any of sources.json's post-generation staleness/failure mutations, so it presents the same DataHealthState.COMPLETE shape sources.json's dedicated 'current' row (probe/source-current) demonstrates -- reusing the already-canonical exact-subject repo here rather than minting a second current-state repo. Positive control across ALL native source classes (commits, pull_requests, reviews, work_items, deployments) plus the org-wide-hardcoded acr not_applicable and primary's own unconfigured incidents (world.json: primary omits pagerduty) -- a genuinely healthy trust answer must still disclose the always-unconfigured incidents source rather than silently omitting it, which is why answered_with_gaps is NOT expected here despite one source reading non-complete: incidents' UNCONFIGURED state is itself the normal/expected shape for this org, not a gap relative to what was asked. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"How trustworthy is the data behind meridian/web-app's status?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "meridian/web-app is the Wave 3.1 heritage positive-control repo (subjects.json's own note) and is never mutated by any of sources.json's post-generation staleness/failure mutations, so it presents the same DataHealthState.COMPLETE shape sources.json's dedicated 'current' row (probe/source-current) demonstrates -- reusing the already-canonical exact-subject repo here rather than minting a second current-state repo. Positive control across ALL native source classes (commits, pull_requests, reviews, work_items, deployments) plus the org-wide-hardcoded acr not_applicable and primary's own unconfigured incidents (world.json: primary omits pagerduty) -- a genuinely healthy trust answer must still disclose the always-unconfigured incidents source rather than silently omitting it, which is why answered_with_gaps is NOT expected here despite one source reading non-complete: incidents' UNCONFIGURED state is itself the normal/expected shape for this org, not a gap relative to what was asked. [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"How trustworthy is the data behind meridian/web-app's status?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 78 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

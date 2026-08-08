@@ -3,38 +3,23 @@
   "id": "scope.outcome.filtered",
   "family": "scope",
   "group": 1,
-  "status": "active",
-  "blocked_by": null,
+  "status": "declared-blocked",
+  "blocked_by": "CHAOS-3543 corpus runner has no per-case scope, so a team-filtered DevScope cannot be requested",
   "proves": [
     "P0-B state ScopeResolutionOutcome.filtered"
   ],
   "question": "What's the status of the repo \"meridian/web-app\" for the platform team?",
   "org_alias": "primary",
-  "user_alias": "primary.ordinary",
+  "user_alias": "primary.ordinary-6",
   "subject_class": "exact",
   "subject_ref": "subject.exact.meridian-web-app",
-  "invariants": [
-    {
-      "category": "no-silent-widening",
-      "check": "scope_resolution_outcome_in",
-      "args": {
-        "from_profile": "expected_scope_resolution_outcome"
-      },
-      "assert": "A named subject mention that misses its intended target never silently widens to org-wide/broader scope; widening is only ever a disclosed, terminal answered_with_gaps/needs_clarification outcome.",
-      "executable_today": true,
-      "$comment": "Wired to the real graduated checker scope_resolution_outcome_in against this case's own resolution-profile expected_scope_resolution_outcome (rebase pass, 2a landed the 3 graduated checkers in PR #1518) -- no longer a narrower no_internal_error placeholder."
-    },
-    {
-      "category": "resolution-path-matches-profile",
-      "check": "resolution_path_in",
-      "args": {
-        "from_profile": "resolution_path"
-      },
-      "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
-      "executable_today": true
-    }
+  "expected_mention_texts": [
+    "meridian/web-app"
   ],
-  "resolution_profile_ref": "deterministic-v1",
+  "invariants": [],
+  "resolution_profile_ref": null,
   "fault_ref": null,
-  "notes": "Explicit team-filter mention alongside a resolved repo entity -> ScopeResolutionService.FILTERED (scope_service.py: teams-resolved branch without org fallback). Dedicated P0-B outcome-value producer per corpus-registry-v1.md's cross-reference table; conceptually related to scope.partially-resolved-subject but a distinct code path (explicit team filter, not sub-team narrowing). [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"What's the status of meridian/web-app for the platform team?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]"
+  "notes": "[SUPERSEDED IN PART -- read $comment_blocked_by_correction FIRST. The 'WHY IT CANNOT BE REALIZED' paragraph below is FALSIFIED: it claims DevScope.team_ids is 'a value the MODEL must set', but a CLIENT-supplied DevScope carries it too (production_runtime.py:1141-1145, verified by execution). FILTERED is reachable; the blocker is a runner seam. The original text is preserved unedited below because the reasoning trail matters more than a tidy file.] DECLARED-BLOCKED against CHAOS-3520 (CHAOS-3490 Part 2 corpus-authoring lane, 2026-08-07). Live evidence: CHAOS-3219 Phase 2 exit run 7, world digest 2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232, wave_3_1 preflight enabled=True -- receipt tests/acceptance/artifacts/wave4/scope.outcome.filtered.json recorded \"scope_resolution_outcome='exact', allowed=['filtered']\". 'exact' is not a near-miss: it means the scenario this case is NAMED for never occurred on the run. The expectation is NOT rewritten to 'exact' -- that would be the 'rewrite an honest expectation to force green' anti-pattern, and it would delete this case's coverage claim while reading as green. WHY IT CANNOT BE REALIZED: ScopeResolutionOutcome.FILTERED is produced only at scope_service.py:749 and :753, both requiring a non-empty `teams`, which comes from `request.team_filter_refs` (scope_service.py:711). That field is populated only by _scope_request (production_runtime.py:1125-1129) out of DevScope.team_ids -- a value the MODEL must set on a resolve_scope.v1 tool argument. Nothing anywhere parses a team name out of question text, so the phrase 'for the platform team' is inert (grep team_filter_refs across src/ finds no text-derivation site). In the acceptance stack the model cannot set it at all: the scripted provider's delegate_default heuristic offers only readiness_echo_v1 / query_metric_v1 / status_snapshot_v1 / search_evidence_v1 / data_health_v1 / list_metrics_v1 -- resolve_scope has ZERO occurrences in llm/agent/scripted_openai_service.py. Producer executed: QuestionInterpreter().interpret yields exactly one mention, [('meridian/web-app', repository)]; the team qualifier produces nothing. NO UNIQUE ASSERTION COVERAGE IS LOST BY BLOCKING: the invariants dropped here besides scope_resolution_outcome_in (resolution_path_in (which PASSED, resolution_path='deterministic-exact' -- the repo mention resolves fine; only the team-filter half is unrealizable)) are asserted by many other active cases; only this case's own named-outcome claim goes uncovered, which is exactly what CHAOS-3520 records. Retired profile entry preserved verbatim: {\"expected_public_outcome\": \"answered_with_gaps\", \"expected_scope_resolution_outcome\": \"filtered\", \"resolution_path\": \"deterministic-exact\"}. Full authored invariant list before the block is in git history for this file. [ORIGINAL NOTES, preserved verbatim: Explicit team-filter mention alongside a resolved repo entity -> ScopeResolutionService.FILTERED (scope_service.py: teams-resolved branch without org fallback). Dedicated P0-B outcome-value producer per corpus-registry-v1.md's cross-reference table; conceptually related to scope.partially-resolved-subject but a distinct code path (explicit team filter, not sub-team narrowing). [CORRECTED during Lane 2b codex round-1 remediation, 2026-08-06, from \"What's the status of meridian/web-app for the platform team?\": question_interpreter.py's own module docstring states plainly 'a lowercase slug ... produces no mention' -- extract_mentions requires either a capitalized _NAME token or a QUOTED span adjacent to a closed kind noun (test_question_interpreter.py's proven pattern: 'How is repo \"dev-health-ops\" doing?'). The original bare, unquoted lowercase slug would extract ZERO typed mentions and silently degrade to org-wide/no-subject behavior -- exactly the false-pass risk codex's wrong-kind-collision finding named, generalized here to every other case that had the same bug.]]",
+  "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 54 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible.",
+  "$comment_blocked_by_correction": "CHAOS-3219 Phase 3 (2026-08-07) stale-blocker sweep. WAS: 'CHAOS-3520'. CORRECTION, and the mechanism recorded in REGISTRY-AMENDMENT sec.10.3 was WRONG. FILTERED is NOT unreachable: executing production_runtime._scope_request shows a CLIENT-SUPPLIED DevScope with direct_scope != team and non-empty team_ids yields non-empty team_filter_refs (production_runtime.py:1141-1145) -- that is the canonical dev_scope.v1 positive fixture itself, so the model never needs to author it. The real blocker is the runner: _scope() hardcodes team_ids: [] for every case (test_wave4_corpus_runner_live.py:479) and the case schema has no scope field. This is class (b) (reachable, wrong input shape), not class (a)."
 }

@@ -1,0 +1,1941 @@
+{
+  "clickhouse": {
+    "baseline_row_counts": {
+      "ai_attribution": 0,
+      "ai_governance_coverage_daily": 0,
+      "ai_impact_metrics_daily": 0,
+      "ai_policy_events": 0,
+      "ai_tool_allowlist": 0,
+      "ai_workflow_artifact_edges": 0,
+      "ai_workflow_issue_edges": 0,
+      "ai_workflow_runs": 0,
+      "atlassian_ops_alerts": 0,
+      "atlassian_ops_incidents": 0,
+      "atlassian_ops_schedules": 0,
+      "backfill_log": 0,
+      "capacity_forecasts": 0,
+      "ci_acceptance_checks": 0,
+      "ci_daily_rollup": 0,
+      "ci_job_runs": 0,
+      "ci_pipeline_runs": 0,
+      "cicd_metrics_daily": 0,
+      "commit_daily_rollup": 0,
+      "commit_metrics": 0,
+      "compounding_risk_daily": 0,
+      "coverage_snapshots": 0,
+      "deploy_metrics_daily": 0,
+      "deployment_daily_rollup": 0,
+      "deployments": 0,
+      "dora_metrics_daily": 0,
+      "estimate_coverage_metrics_daily": 0,
+      "feature_flag": 0,
+      "feature_flag_event": 0,
+      "feature_flag_link": 0,
+      "file_complexity_snapshots": 0,
+      "file_hotspot_daily": 0,
+      "file_metrics_daily": 0,
+      "git_blame": 0,
+      "git_commit_stats": 0,
+      "git_commits": 0,
+      "git_files": 0,
+      "git_pull_request_reviews": 0,
+      "git_pull_requests": 0,
+      "ic_landscape_rolling_30d": 0,
+      "identities": 0,
+      "incident_metrics_daily": 0,
+      "investment_classifications_daily": 0,
+      "investment_explanations": 0,
+      "investment_metrics_daily": 0,
+      "issue_type_metrics_daily": 0,
+      "jira_project_ops_team_links": 0,
+      "llm_token_usage": 0,
+      "manual_attribution_fallbacks": 0,
+      "members": 0,
+      "operational_alerts": 0,
+      "operational_escalation_policies": 0,
+      "operational_incident_notes": 0,
+      "operational_incident_responders": 0,
+      "operational_incident_timeline_events": 0,
+      "operational_incidents": 0,
+      "operational_on_call_assignments": 0,
+      "operational_on_call_schedules": 0,
+      "operational_service_repository_mappings": 0,
+      "operational_services": 0,
+      "operational_teams": 0,
+      "operational_users": 0,
+      "product_telemetry_events": 0,
+      "projects": 0,
+      "recommendations_daily": 0,
+      "release_impact_daily": 0,
+      "repo_complexity_daily": 0,
+      "repo_metrics_daily": 0,
+      "report_plans": 0,
+      "report_provenance": 0,
+      "repos": 0,
+      "review_edges_daily": 0,
+      "schema_migrations": 81,
+      "security_alerts": 0,
+      "sprints": 0,
+      "team_drift_changes": 0,
+      "team_memberships": 0,
+      "team_metrics_daily": 0,
+      "team_project_ownership": 0,
+      "team_provider_observations": 0,
+      "team_repo_ownership": 0,
+      "team_sync_policies": 0,
+      "teams": 0,
+      "telemetry_signal_bucket": 0,
+      "test_case_results": 0,
+      "test_suite_results": 0,
+      "testops_benchmark_insights": 0,
+      "testops_coverage_metrics_daily": 0,
+      "testops_maturity_bands": 0,
+      "testops_metric_anomalies": 0,
+      "testops_metric_baselines": 0,
+      "testops_metric_correlations": 0,
+      "testops_period_comparisons": 0,
+      "testops_pipeline_metrics_daily": 0,
+      "testops_pipeline_stability": 0,
+      "testops_quality_drag": 0,
+      "testops_release_confidence": 0,
+      "testops_test_metrics_daily": 0,
+      "user_metrics_daily": 0,
+      "work_graph_deployment_incident_edges": 0,
+      "work_graph_edges": 0,
+      "work_graph_issue_pr": 0,
+      "work_graph_pr_commit": 0,
+      "work_graph_pr_deployment_edges": 0,
+      "work_graph_pr_review_outcome_edges": 0,
+      "work_graph_projection_runs": 0,
+      "work_item_cycle_times": 0,
+      "work_item_dependencies": 0,
+      "work_item_interactions": 0,
+      "work_item_metrics_daily": 0,
+      "work_item_reopen_events": 0,
+      "work_item_state_durations_daily": 0,
+      "work_item_team_attributions": 0,
+      "work_item_transitions": 0,
+      "work_item_user_metrics_daily": 0,
+      "work_items": 0,
+      "work_unit_investment_quotes": 0,
+      "work_unit_investments": 0,
+      "work_unit_membership": 0,
+      "work_unit_membership_runs": 0,
+      "work_unit_membership_scoped_runs": 0,
+      "work_unit_repo_effort": 0,
+      "worklogs": 0
+    },
+    "schema_fingerprint": {
+      "catalog_sha256": "363880bebc98296e9b20714ae3c8847033dcd1997a1031b8a3f5bf47a4528442",
+      "migrations": [
+        "000_raw_tables.sql",
+        "001_metrics_v2.sql",
+        "002_phase2_metrics.sql",
+        "002_teams.sql",
+        "003_flow_efficiency.sql",
+        "004_quality_delivery_metrics.sql",
+        "005_ic_metrics.sql",
+        "006_knowledge_predictability.sql",
+        "007_complexity_investment_issues.sql",
+        "008_grafana_panel_views.sql",
+        "009_raw_work_items.sql",
+        "010_rename_mergestat_synced_at.py",
+        "011_ensure_teams.sql",
+        "011_work_item_extras.sql",
+        "012_work_item_dependencies_last_synced.sql",
+        "013_work_item_extras_last_synced.sql",
+        "014_work_graph.sql",
+        "015_work_item_pr_descriptions.sql",
+        "016_cognitive_load_metrics.sql",
+        "016_work_graph_event_ts.sql",
+        "017_investment_materialize_tables.sql",
+        "018_investment_explanations.sql",
+        "019_work_unit_investment_labels.sql",
+        "020_jira_project_ops_team_links.sql",
+        "021_atlassian_ops_tables.sql",
+        "022_worklogs.sql",
+        "023_capacity_forecasts.sql",
+        "023b_dora_metrics.sql",
+        "024_add_org_id.sql",
+        "025_teams_project_repo.sql",
+        "026_materialized_views.sql",
+        "027_add_org_id_to_sorting_keys.py",
+        "027_backfill_log.sql",
+        "028_add_release_ref_to_deployments.py",
+        "028_repos_provider.sql",
+        "029_testops_tables.sql",
+        "030_testops_risk_tables.sql",
+        "031_testops_benchmarking.sql",
+        "032_security_alerts.sql",
+        "033_security_alerts_org_id.sql",
+        "034_feature_flag_user_impact_tables.sql",
+        "035_ai_attribution.sql",
+        "036_ai_metrics.sql",
+        "037_ai_workgraph.sql",
+        "038_ai_governance.sql",
+        "039_recommendations.sql",
+        "040_compounding_risk_daily.sql",
+        "041_product_telemetry_events.sql",
+        "042_rmt_org_id_dedup_keys.py",
+        "043_ai_attribution_resolved_repo_scope.sql",
+        "044_ai_attribution_repo_id_dedup_key.sql",
+        "045_deployment_rollup_failure_status.sql",
+        "046_work_unit_membership.sql",
+        "047_work_unit_membership_run_id.sql",
+        "048_seed_legacy_membership_run.py",
+        "049_work_unit_membership_run_id_dedup_key.py",
+        "050_work_items_native_team_key_project_name.sql",
+        "051_team_attribution_dimensions.sql",
+        "052_llm_token_usage.sql",
+        "053_manual_attribution_fallbacks.sql",
+        "054_identities.sql",
+        "055_work_item_daily_rollups_replacing_merge_tree.py",
+        "056_team_sync_policies.sql",
+        "057_team_provider_observations.sql",
+        "058_team_drift_changes.sql",
+        "059_work_unit_membership_scoped_runs.sql",
+        "060_team_membership_identity_facets.sql",
+        "061_teams_sprints_org_id_dedup_keys.py",
+        "062_sprints_native_team_key.sql",
+        "063_estimate_coverage_metrics.sql",
+        "064_work_unit_repo_effort.sql",
+        "065_external_ingest_source_id.sql",
+        "065_llm_token_usage_run_id.sql",
+        "066_operational_canonical.sql",
+        "068_drop_legacy_incidents.sql",
+        "069_acr_code_metric_access_paths.sql",
+        "070_ci_acceptance_checks.sql",
+        "071_blocker_direction_projection.sql",
+        "072_llm_token_usage_use_case.sql",
+        "073_linear_project_lifecycle.sql",
+        "__init__.py"
+      ],
+      "server_version": "26.7.1.1315"
+    },
+    "source_content_hashes": [
+      {
+        "content_hash": "a3c8f691eb017fc1c03d25c4f78bb8b69b28e9728d47f8035d8c6a988a1dc779",
+        "table": "ai_attribution"
+      },
+      {
+        "content_hash": "d9db06a9553b9d7f967e3258b7077c69e8fa731a1005cd6a72a0c67d06bb60f2",
+        "table": "ai_governance_coverage_daily"
+      },
+      {
+        "content_hash": "49be4a136b87efc794347ca9df9a5b37e93f2603ff83c79d76cdbb3e794a97b6",
+        "table": "ai_impact_metrics_daily"
+      },
+      {
+        "content_hash": "ac73da703afbcd551637b27c2f490779ac455d5fc5e43ea2ef684f44b9b923a0",
+        "table": "ai_policy_events"
+      },
+      {
+        "content_hash": "1e99706d393fad116cbdfb38adfa9e8c49d054649d07c5d5f7ed9c9437dd986a",
+        "table": "ai_tool_allowlist"
+      },
+      {
+        "content_hash": "d5e78b447847f158fde787b818952ff6a1104cba33c653a347e973a2067c08a1",
+        "table": "ai_workflow_artifact_edges"
+      },
+      {
+        "content_hash": "ad7a47e04676d34a00729425c24d6eb4152f84e1eaa38547ba33c53c53d6379a",
+        "table": "ai_workflow_issue_edges"
+      },
+      {
+        "content_hash": "1083047591c07cc9bb797decc68b84e54d5c5cafe4e20edd55b0d00f7d12de1d",
+        "table": "ai_workflow_runs"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "atlassian_ops_alerts"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "atlassian_ops_incidents"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "atlassian_ops_schedules"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "backfill_log"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "capacity_forecasts"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "ci_acceptance_checks"
+      },
+      {
+        "content_hash": "0d4c6ad5f03ccc4d1ff4b3cd497c3860266d9565c9e26b0f3e9e0f2332a6353a",
+        "table": "ci_daily_rollup"
+      },
+      {
+        "content_hash": "010e0143123207d0803c9ff8d6effc465bf98dc9bc60ef45b4aa29f5de1d7a8f",
+        "table": "ci_job_runs"
+      },
+      {
+        "content_hash": "bb84c281aa4667e7e64225676e6cb93ed1e33b8e46b5a366c721b94c804b6ad9",
+        "table": "ci_pipeline_runs"
+      },
+      {
+        "content_hash": "9a08bc17dabe9bfe36338f6dcc855f08012239dd2f1e0c28d3e994623667a5e2",
+        "table": "cicd_metrics_daily"
+      },
+      {
+        "content_hash": "91bb1879e11e9bd68b71bbd1b6eefeea5346743ee4931820e999c17933c32eb5",
+        "table": "commit_daily_rollup"
+      },
+      {
+        "content_hash": "c03634368e5c5b9ae90459e3bf6b651a78c1ddf515bd98c53a56631be55743fe",
+        "table": "commit_metrics"
+      },
+      {
+        "content_hash": "715de880e735741981642e126160ad4ea0b7cc174bc57e0b07a5c572b8676710",
+        "table": "compounding_risk_daily"
+      },
+      {
+        "content_hash": "d4e4bf7d818e8cbf5a58d75ead69d4dd84ce2cfab7a5023a37d8ebea65149c94",
+        "table": "coverage_snapshots"
+      },
+      {
+        "content_hash": "261384e16e3ad67a8320810d0ef474775ee26dca545c9efb8ff012c792262e67",
+        "table": "deploy_metrics_daily"
+      },
+      {
+        "content_hash": "1e0c89818d46ec2a08feeee13751702778f06e97b6683e6b52cf8df9a8a23b35",
+        "table": "deployment_daily_rollup"
+      },
+      {
+        "content_hash": "5237d6ab622b59818b599dc82b3addfa3343cde6538d604cc54a408929907dd7",
+        "table": "deployments"
+      },
+      {
+        "content_hash": "d9c7702d2bf16e837f2d1c57d2ede2e2a3e675cd1e789e6861454b95d4ea55b4",
+        "table": "dora_metrics_daily"
+      },
+      {
+        "content_hash": "928d47425b3dd58def0004189f3ede8b819bda81d800d728e76ac93cf27eb110",
+        "table": "estimate_coverage_metrics_daily"
+      },
+      {
+        "content_hash": "48e32c7340d2b28417075e15073b1c9bfde4e673a0facc633dec80003fe5afb8",
+        "table": "feature_flag"
+      },
+      {
+        "content_hash": "8144787ae1c73cae2082413dd5c33bc68ff3dc79720bb67c3971f6d324947695",
+        "table": "feature_flag_event"
+      },
+      {
+        "content_hash": "9ec712ba655a169740776ebf76da5df048e9c81d68e227048151d70e1bfa5d25",
+        "table": "feature_flag_link"
+      },
+      {
+        "content_hash": "b01fedb4fcb386ab756b37f4fe19c6176d3ece878d98583f8e34032c071fe2c7",
+        "table": "file_complexity_snapshots"
+      },
+      {
+        "content_hash": "a7657fa0ef6eec320592a383473c33da8dee5029670600743a62a20150644488",
+        "table": "file_hotspot_daily"
+      },
+      {
+        "content_hash": "72b8b17378b4c737ca0bd3830b1b519b3507399d6d05196a6511b13a5467fadc",
+        "table": "file_metrics_daily"
+      },
+      {
+        "content_hash": "d43b9300d8dda284017a7709e4a3b042a1c3e6b8cd1950c3b0f043c6ee4c6555",
+        "table": "git_blame"
+      },
+      {
+        "content_hash": "263431fb8960e76b7d447075a265b7f6e576e452ca65483219929d10c35e6d47",
+        "table": "git_commit_stats"
+      },
+      {
+        "content_hash": "775b05b48d96271747b0f7f22798da6906afc3c7163d3c25af65874c746a83f4",
+        "table": "git_commits"
+      },
+      {
+        "content_hash": "b52d25a74803b64ce5715176a621754c5974bf7d871cd365e6f737d38f15b568",
+        "table": "git_files"
+      },
+      {
+        "content_hash": "c29294be2066c1faafce348e4a77f620a4653b1b557e7c5a94f3935260a9628e",
+        "table": "git_pull_request_reviews"
+      },
+      {
+        "content_hash": "9a5d3e1dc59bff7c47b2045e63920f901e4ee21e32e20bebbe5c9302d9f409b8",
+        "table": "git_pull_requests"
+      },
+      {
+        "content_hash": "6bb8b6036235529b93a572183f7d942417a12c10e4f4e92955af75a5594d9fb9",
+        "table": "ic_landscape_rolling_30d"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "identities"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "incident_metrics_daily"
+      },
+      {
+        "content_hash": "c5b9c556564c9afcef2f1394b678403dd63a07aaa1206a97413a1d58f0e875c4",
+        "table": "investment_classifications_daily"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "investment_explanations"
+      },
+      {
+        "content_hash": "8c6f248087f782835e111cf5275a6f7575e630d45ee23ac68b842bb1e8594406",
+        "table": "investment_metrics_daily"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "issue_type_metrics_daily"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "jira_project_ops_team_links"
+      },
+      {
+        "content_hash": "c1958ca61e6fc6bc814a1cbfa3eba4d48dab8d7c86082922af4b8bf71cc13a3a",
+        "table": "llm_token_usage"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "manual_attribution_fallbacks"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "members"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_alerts"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_escalation_policies"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_incident_notes"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_incident_responders"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_incident_timeline_events"
+      },
+      {
+        "content_hash": "e7f31bf0db7fa266bce09e7669dd59f8018176b0984181ee88c4f4693c89742a",
+        "table": "operational_incidents"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_on_call_assignments"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_on_call_schedules"
+      },
+      {
+        "content_hash": "a3f01e0554a58076ab5ed4da8c38a02c1243dcbaa984f7e92741a243e3756fe3",
+        "table": "operational_service_repository_mappings"
+      },
+      {
+        "content_hash": "1c634427d598a0bc3b826de4923f70c661484ec0d7626cda53b3c11c8f9a351d",
+        "table": "operational_services"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_teams"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "operational_users"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "product_telemetry_events"
+      },
+      {
+        "content_hash": "a32c267f58ba16ef5eb422d7be48f6a172f3e98c68a6ef5e4e046653dedde022",
+        "table": "projects"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "recommendations_daily"
+      },
+      {
+        "content_hash": "1a96fc1eeeca42dd3341289ed584a1c747c7a7e7e8af3d378e6dc2ce23725d8b",
+        "table": "release_impact_daily"
+      },
+      {
+        "content_hash": "15ef5f82a58a087a9e92f08626ba816e97d3e6e35521c9ea84629ed8787a9154",
+        "table": "repo_complexity_daily"
+      },
+      {
+        "content_hash": "b0105a7723e652de9d074475d1d8fc1dde9f8428d61b8732cc5ab646172a6ee0",
+        "table": "repo_metrics_daily"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "report_plans"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "report_provenance"
+      },
+      {
+        "content_hash": "01f766c9fea442c819d797dafcb2dbef5c14bae2fdfd53e13da78a5fa60a3a62",
+        "table": "repos"
+      },
+      {
+        "content_hash": "2681704a938dba80d4b6f10c84bb6bad9d540d4e44ebb31e72c5e9cd4de8a6b8",
+        "table": "review_edges_daily"
+      },
+      {
+        "content_hash": "9c923ad8f9ef274afaebdfcc22a8df235278181b2462a788f4d4f719df16dc10",
+        "table": "security_alerts"
+      },
+      {
+        "content_hash": "69cbfc050b399eca919acba201623ac493ebbbccb13b35db296a28ac03bc3197",
+        "table": "sprints"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "team_drift_changes"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "team_memberships"
+      },
+      {
+        "content_hash": "36694b0a47bc1aba3e4b88fae6fae0464c26d20507f59b01e9eb6b440331528a",
+        "table": "team_metrics_daily"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "team_project_ownership"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "team_provider_observations"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "team_repo_ownership"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "team_sync_policies"
+      },
+      {
+        "content_hash": "1eac6efa63fbb28d15d8c2e61f93f5b9abea3128a52ddeac3fd229e6f472e783",
+        "table": "teams"
+      },
+      {
+        "content_hash": "9310d15dad75a40beb6cff492bf6e992b4804a64d4f3daf54ac9a1547b16d169",
+        "table": "telemetry_signal_bucket"
+      },
+      {
+        "content_hash": "0f7fe2b12d6794005e6d74014b343eb398ecdf3a52f32a1ff7f1a14a3cf47d64",
+        "table": "test_case_results"
+      },
+      {
+        "content_hash": "e8269bcf22eb2922d93fee9b04e734a96bfb5782835e9372f118fffc287e757d",
+        "table": "test_suite_results"
+      },
+      {
+        "content_hash": "842608a18d8147fb48d2849b30a3a85ac6469db63d6a404949111c8017724ac5",
+        "table": "testops_benchmark_insights"
+      },
+      {
+        "content_hash": "0b2f8996f287587283cfaf4fd0d2aaeddc44644cd20b77746d2f8a9f39c539fa",
+        "table": "testops_coverage_metrics_daily"
+      },
+      {
+        "content_hash": "e1a82949a5342810fa747f439f80d52fd53e1b6a4253a06cc5a35abf2c7ad278",
+        "table": "testops_maturity_bands"
+      },
+      {
+        "content_hash": "0c994c8b6ebda2952d4bb0f5b4914af0e7217a41733c904c61108bc324ddd42e",
+        "table": "testops_metric_anomalies"
+      },
+      {
+        "content_hash": "8f715bbc6f8c3a743cf13db4920cd73362ea50c6cd3455c91fbc886a04de0ee7",
+        "table": "testops_metric_baselines"
+      },
+      {
+        "content_hash": "9c246fd6afdb61fd33c14b6c4c374c96ef7dfebe73575b0edab29f8857d468d5",
+        "table": "testops_metric_correlations"
+      },
+      {
+        "content_hash": "8781be118aeee41f046dd42edaf0406b3123462f6135232a0570673847a79e9b",
+        "table": "testops_period_comparisons"
+      },
+      {
+        "content_hash": "f17e914ff8ca317b98d367857d0ee64236bc338430d3dd0b2f723e8e9a26c7fd",
+        "table": "testops_pipeline_metrics_daily"
+      },
+      {
+        "content_hash": "a5e7f9756b5a5811a21e88efb17296f4bc3ac23e95329f63386aca16e191f9e3",
+        "table": "testops_pipeline_stability"
+      },
+      {
+        "content_hash": "827f57aedd88fd1b720822bbe5d83afafe7553cd5fa187b64076e616c19eb709",
+        "table": "testops_quality_drag"
+      },
+      {
+        "content_hash": "d12eaeb5afb3c209f6efacd50b392bc162c23b5c9d4cff522faa89c02e4aaad1",
+        "table": "testops_release_confidence"
+      },
+      {
+        "content_hash": "633ff705f30e01931c0688c552472289f85297dc80d4496fe18350c233d350d6",
+        "table": "testops_test_metrics_daily"
+      },
+      {
+        "content_hash": "c3bfe1d9aa12e9b1306a2949471a6c81bd4f3c90c9ee8d010091fbd5aaa78e9a",
+        "table": "user_metrics_daily"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "work_graph_deployment_incident_edges"
+      },
+      {
+        "content_hash": "8216a15ccd3124b4066883c311fcdde7d3bd629f15d983ba8a23b293c9d75065",
+        "table": "work_graph_edges"
+      },
+      {
+        "content_hash": "b4b2ef9a8bb4701230a6901e91ddb32eee2f13ed4a6e59ab55ad5d6550ed8997",
+        "table": "work_graph_issue_pr"
+      },
+      {
+        "content_hash": "a9a8096f26850873f79b51b254db51eaecf1f0b0c6d7fa702ba2ee626dbcefea",
+        "table": "work_graph_pr_commit"
+      },
+      {
+        "content_hash": "efd059b28fc87b60877a2fdf50c8fd1b402a05eaa7d0e71bc2d278ce0f88e8f8",
+        "table": "work_graph_pr_deployment_edges"
+      },
+      {
+        "content_hash": "a25b28b207b9870bc0dbbe48bcf65c5debeb87af9021e813af7f8ec636b1985f",
+        "table": "work_graph_pr_review_outcome_edges"
+      },
+      {
+        "content_hash": "5ce8c41b02acdd4f282dd89343fdbaf16394198a408e79ac9970efdf65dded18",
+        "table": "work_graph_projection_runs"
+      },
+      {
+        "content_hash": "9659068e969be762149c8561dad47eb108591a9dc827023ac5683c4031782659",
+        "table": "work_item_cycle_times"
+      },
+      {
+        "content_hash": "424cbe0d8c2ebca3ff54785a16553d8f8a2c6a44834927dc503c32809396a211",
+        "table": "work_item_dependencies"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "work_item_interactions"
+      },
+      {
+        "content_hash": "54a0b4adf1e8ac0d4429a970dfb86e261da5f99a104d7dd38126417431d453dd",
+        "table": "work_item_metrics_daily"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "work_item_reopen_events"
+      },
+      {
+        "content_hash": "a8e7c37403e3542f55bf9e4f0edc53f1e8554b3611876ae486b080a211e21719",
+        "table": "work_item_state_durations_daily"
+      },
+      {
+        "content_hash": "1faac005efaf7e51c133722d56cdc846e6636145f1971d43fe3bceee73ac3004",
+        "table": "work_item_team_attributions"
+      },
+      {
+        "content_hash": "8c594db6a1b219bcfdbdde715a54357cbcabdfbcd715ab0027ab5ea8c080cbb7",
+        "table": "work_item_transitions"
+      },
+      {
+        "content_hash": "b0fd6ec39644a7095d82a799519134391287591d60f672967d948a2f6f721848",
+        "table": "work_item_user_metrics_daily"
+      },
+      {
+        "content_hash": "1a357668dc7389c48a74c945ae50d58ac88fb87719c7453bc56494f7f4a1d8a6",
+        "table": "work_items"
+      },
+      {
+        "content_hash": "97a28de901fd7b5b2f94bb72a36eb28cced1e0bcf56e7628e0f01464a4138346",
+        "table": "work_unit_investment_quotes"
+      },
+      {
+        "content_hash": "c561a7b80ad7b1b9869a34a8a868d33c1e1b53f4dd34a580e3ae89eb1bfff018",
+        "table": "work_unit_investments"
+      },
+      {
+        "content_hash": "aa3e3cf8301bb7364057f329ab638f7b4e49f291a687c2d714a761caf93bd556",
+        "table": "work_unit_membership"
+      },
+      {
+        "content_hash": "071d8cfe5a06d14e46814ff46d30fcd034dd854aded7baca8f9c010015f1cb28",
+        "table": "work_unit_membership_runs"
+      },
+      {
+        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "work_unit_membership_scoped_runs"
+      },
+      {
+        "content_hash": "9aba071ecd7c49f598b9a9387924e2bb00dfc961a4ae0025f48d016b1041f2b1",
+        "table": "work_unit_repo_effort"
+      },
+      {
+        "content_hash": "8d53032e9d1ece0777542cdd730591e400b592115b47595ebca77af694c23bf0",
+        "table": "worklogs"
+      }
+    ],
+    "source_row_counts": {
+      "ai_attribution": 302,
+      "ai_governance_coverage_daily": 137,
+      "ai_impact_metrics_daily": 353,
+      "ai_policy_events": 2174,
+      "ai_tool_allowlist": 12,
+      "ai_workflow_artifact_edges": 315,
+      "ai_workflow_issue_edges": 210,
+      "ai_workflow_runs": 252,
+      "atlassian_ops_alerts": 0,
+      "atlassian_ops_incidents": 0,
+      "atlassian_ops_schedules": 0,
+      "backfill_log": 0,
+      "capacity_forecasts": 0,
+      "ci_acceptance_checks": 0,
+      "ci_daily_rollup": 166,
+      "ci_job_runs": 1828,
+      "ci_pipeline_runs": 472,
+      "cicd_metrics_daily": 942,
+      "commit_daily_rollup": 161,
+      "commit_metrics": 2982,
+      "compounding_risk_daily": 1059,
+      "coverage_snapshots": 165,
+      "deploy_metrics_daily": 777,
+      "deployment_daily_rollup": 140,
+      "deployments": 293,
+      "dora_metrics_daily": 595,
+      "estimate_coverage_metrics_daily": 822,
+      "feature_flag": 203,
+      "feature_flag_event": 1050,
+      "feature_flag_link": 298,
+      "file_complexity_snapshots": 6191,
+      "file_hotspot_daily": 44435,
+      "file_metrics_daily": 28752,
+      "git_blame": 51089,
+      "git_commit_stats": 1746,
+      "git_commits": 590,
+      "git_files": 574,
+      "git_pull_request_reviews": 719,
+      "git_pull_requests": 302,
+      "ic_landscape_rolling_30d": 2307,
+      "identities": 0,
+      "incident_metrics_daily": 0,
+      "investment_classifications_daily": 303,
+      "investment_explanations": 0,
+      "investment_metrics_daily": 2265,
+      "issue_type_metrics_daily": 0,
+      "jira_project_ops_team_links": 0,
+      "llm_token_usage": 14,
+      "manual_attribution_fallbacks": 0,
+      "members": 0,
+      "operational_alerts": 0,
+      "operational_escalation_policies": 0,
+      "operational_incident_notes": 0,
+      "operational_incident_responders": 0,
+      "operational_incident_timeline_events": 0,
+      "operational_incidents": 6,
+      "operational_on_call_assignments": 0,
+      "operational_on_call_schedules": 0,
+      "operational_service_repository_mappings": 14,
+      "operational_services": 14,
+      "operational_teams": 0,
+      "operational_users": 0,
+      "product_telemetry_events": 0,
+      "projects": 14,
+      "recommendations_daily": 0,
+      "release_impact_daily": 386,
+      "repo_complexity_daily": 151,
+      "repo_metrics_daily": 1059,
+      "report_plans": 0,
+      "report_provenance": 0,
+      "repos": 14,
+      "review_edges_daily": 601,
+      "schema_migrations": 81,
+      "security_alerts": 210,
+      "sprints": 8,
+      "team_drift_changes": 0,
+      "team_memberships": 0,
+      "team_metrics_daily": 388,
+      "team_project_ownership": 0,
+      "team_provider_observations": 0,
+      "team_repo_ownership": 0,
+      "team_sync_policies": 0,
+      "teams": 16,
+      "telemetry_signal_bucket": 7332,
+      "test_case_results": 194937,
+      "test_suite_results": 720,
+      "testops_benchmark_insights": 4577,
+      "testops_coverage_metrics_daily": 942,
+      "testops_maturity_bands": 26376,
+      "testops_metric_anomalies": 2447,
+      "testops_metric_baselines": 26376,
+      "testops_metric_correlations": 884,
+      "testops_period_comparisons": 3105,
+      "testops_pipeline_metrics_daily": 1812,
+      "testops_pipeline_stability": 942,
+      "testops_quality_drag": 942,
+      "testops_release_confidence": 942,
+      "testops_test_metrics_daily": 925,
+      "user_metrics_daily": 9684,
+      "work_graph_deployment_incident_edges": 0,
+      "work_graph_edges": 2102,
+      "work_graph_issue_pr": 324,
+      "work_graph_pr_commit": 847,
+      "work_graph_pr_deployment_edges": 341,
+      "work_graph_pr_review_outcome_edges": 660,
+      "work_graph_projection_runs": 2,
+      "work_item_cycle_times": 223,
+      "work_item_dependencies": 92,
+      "work_item_interactions": 0,
+      "work_item_metrics_daily": 800,
+      "work_item_reopen_events": 0,
+      "work_item_state_durations_daily": 6786,
+      "work_item_team_attributions": 630,
+      "work_item_transitions": 998,
+      "work_item_user_metrics_daily": 1250,
+      "work_items": 284,
+      "work_unit_investment_quotes": 29,
+      "work_unit_investments": 378,
+      "work_unit_membership": 888,
+      "work_unit_membership_runs": 14,
+      "work_unit_membership_scoped_runs": 0,
+      "work_unit_repo_effort": 76,
+      "worklogs": 273
+    },
+    "tables": {
+      "ai_attribution": {
+        "file": "clickhouse/ai_attribution.native.gz",
+        "raw_source_row_count": 302,
+        "row_count": 302,
+        "sha256": "51a21ab4e22be9479c4e155dd6a9384e4bdfee52a380bef2f9108c065d7aa7f9"
+      },
+      "ai_governance_coverage_daily": {
+        "file": "clickhouse/ai_governance_coverage_daily.native.gz",
+        "raw_source_row_count": 137,
+        "row_count": 137,
+        "sha256": "1f304acb6f7e6b174c595da6b1a92e66fcd071823ecf8e1f324f380023ee9941"
+      },
+      "ai_impact_metrics_daily": {
+        "file": "clickhouse/ai_impact_metrics_daily.native.gz",
+        "raw_source_row_count": 353,
+        "row_count": 353,
+        "sha256": "26732127ab116b7006d7dabb00619471a99aec27d66a6b0effae91518de9f012"
+      },
+      "ai_policy_events": {
+        "file": "clickhouse/ai_policy_events.native.gz",
+        "raw_source_row_count": 2174,
+        "row_count": 2174,
+        "sha256": "1448d381131c7477f6b45a52be49ac0fb65273b113e6caf14186db177e5a0f61"
+      },
+      "ai_tool_allowlist": {
+        "file": "clickhouse/ai_tool_allowlist.native.gz",
+        "raw_source_row_count": 12,
+        "row_count": 12,
+        "sha256": "af2c6a614a106d2d7706304ce92ba8058746fc9be9b192eef0a2fc6d3a4093d3"
+      },
+      "ai_workflow_artifact_edges": {
+        "file": "clickhouse/ai_workflow_artifact_edges.native.gz",
+        "raw_source_row_count": 315,
+        "row_count": 315,
+        "sha256": "7e92edc6f942ec23c81dc69fbf7d6623440b529d48e5f913fbe7803376712ac5"
+      },
+      "ai_workflow_issue_edges": {
+        "file": "clickhouse/ai_workflow_issue_edges.native.gz",
+        "raw_source_row_count": 210,
+        "row_count": 210,
+        "sha256": "03222e35eaee5def1277c512ea8453a89aaea05a697e66e7c1e1736b734274cd"
+      },
+      "ai_workflow_runs": {
+        "file": "clickhouse/ai_workflow_runs.native.gz",
+        "raw_source_row_count": 252,
+        "row_count": 252,
+        "sha256": "26383a59422945674cc7f25a1a00cbb9d1458f848c6a907100ef6af49c0a3d4d"
+      },
+      "ci_daily_rollup": {
+        "file": "clickhouse/ci_daily_rollup.native.gz",
+        "raw_source_row_count": 166,
+        "row_count": 165,
+        "sha256": "1fcf15c2ad3b3c06269f10cd674211d0aad8fd7b2c96bf7242930fe32cb611bf"
+      },
+      "ci_job_runs": {
+        "file": "clickhouse/ci_job_runs.native.gz",
+        "raw_source_row_count": 1828,
+        "row_count": 1828,
+        "sha256": "2c4092238350d46b0fddecd5ce9375781bc858feb67a1a236954db37ee01455b"
+      },
+      "ci_pipeline_runs": {
+        "file": "clickhouse/ci_pipeline_runs.native.gz",
+        "raw_source_row_count": 472,
+        "row_count": 472,
+        "sha256": "d9cfee1d5f9b60668e8f8ba90b2273490a89dcd23c8f1bb517fcb74361b608a5"
+      },
+      "cicd_metrics_daily": {
+        "file": "clickhouse/cicd_metrics_daily.native.gz",
+        "raw_source_row_count": 942,
+        "row_count": 942,
+        "sha256": "82f2c19cdec940436de85f442225fa59653ac862c718ed1fe33974ad747148e9"
+      },
+      "commit_daily_rollup": {
+        "file": "clickhouse/commit_daily_rollup.native.gz",
+        "raw_source_row_count": 161,
+        "row_count": 151,
+        "sha256": "492ad1e38db45a2fd57c47b8eb32b366f3c3c19f136b23aa27cff49781312fa9"
+      },
+      "commit_metrics": {
+        "file": "clickhouse/commit_metrics.native.gz",
+        "raw_source_row_count": 2982,
+        "row_count": 2982,
+        "sha256": "189fd277d5132a9b863f7e3423a7a40388506cb3b8bd4bec50d26e52181f6d1a"
+      },
+      "compounding_risk_daily": {
+        "file": "clickhouse/compounding_risk_daily.native.gz",
+        "raw_source_row_count": 1059,
+        "row_count": 1059,
+        "sha256": "55a7c49a04f6a28d207531cf99ff54979251ce94450e4bc97eca50d35aecc084"
+      },
+      "coverage_snapshots": {
+        "file": "clickhouse/coverage_snapshots.native.gz",
+        "raw_source_row_count": 165,
+        "row_count": 165,
+        "sha256": "ff47357ed7ec331d94b2efcb46fad2256b9619e6e9eb0cd5903f02c72c15a610"
+      },
+      "deploy_metrics_daily": {
+        "file": "clickhouse/deploy_metrics_daily.native.gz",
+        "raw_source_row_count": 777,
+        "row_count": 777,
+        "sha256": "c407a59b01c9b696967f1a4e67263fb4bb885be66042e70a3e98afcef2f3416f"
+      },
+      "deployment_daily_rollup": {
+        "file": "clickhouse/deployment_daily_rollup.native.gz",
+        "raw_source_row_count": 140,
+        "row_count": 133,
+        "sha256": "09ed05095b9b6c72d44d6bed9aeb774dbd2e71d62402d49792e5ab2e5aa6f72d"
+      },
+      "deployments": {
+        "file": "clickhouse/deployments.native.gz",
+        "raw_source_row_count": 293,
+        "row_count": 293,
+        "sha256": "99cdce01f9fbb7505e3d9d000185cb590be4017922d048e1f806c645c38fd32e"
+      },
+      "dora_metrics_daily": {
+        "file": "clickhouse/dora_metrics_daily.native.gz",
+        "raw_source_row_count": 595,
+        "row_count": 595,
+        "sha256": "5a66460fbb91f929ffd66e554607f0d1c56baf8689c3ae55dfdb7ff74561a909"
+      },
+      "estimate_coverage_metrics_daily": {
+        "file": "clickhouse/estimate_coverage_metrics_daily.native.gz",
+        "raw_source_row_count": 822,
+        "row_count": 822,
+        "sha256": "5344e99bdfea019b4f919044d31c53e00fc3ff91194bb760a2bbff34bf896da8"
+      },
+      "feature_flag": {
+        "file": "clickhouse/feature_flag.native.gz",
+        "raw_source_row_count": 203,
+        "row_count": 203,
+        "sha256": "953b17f85c3ce9d7296f34089223364a7d63d258a227ab22e3e39e72e2ade730"
+      },
+      "feature_flag_event": {
+        "file": "clickhouse/feature_flag_event.native.gz",
+        "raw_source_row_count": 1050,
+        "row_count": 1050,
+        "sha256": "2c9ab7715e02069845f174dafc41e6937d4c8459bf273258e4fd348fafaf217b"
+      },
+      "feature_flag_link": {
+        "file": "clickhouse/feature_flag_link.native.gz",
+        "raw_source_row_count": 298,
+        "row_count": 298,
+        "sha256": "533e0923379fd3a5bc9101301bdfaddf8de30dc6a0252a43ea45254c5601dec5"
+      },
+      "file_complexity_snapshots": {
+        "file": "clickhouse/file_complexity_snapshots.native.gz",
+        "raw_source_row_count": 6191,
+        "row_count": 6191,
+        "sha256": "acd81b755375a6cb768872afa43dc7bfc45e93a170a3313adf2ce17e390e51a3"
+      },
+      "file_hotspot_daily": {
+        "file": "clickhouse/file_hotspot_daily.native.gz",
+        "raw_source_row_count": 44435,
+        "row_count": 44435,
+        "sha256": "3851e106b148eadd88f4a85ee6e9e33e140deef9f09a89325c8a215d6ecf5b01"
+      },
+      "file_metrics_daily": {
+        "file": "clickhouse/file_metrics_daily.native.gz",
+        "raw_source_row_count": 28752,
+        "row_count": 28752,
+        "sha256": "ea208b0404fd4c9cf4b093f0e928c140d41c02c48de33f7f08e555da3655a314"
+      },
+      "git_blame": {
+        "file": "clickhouse/git_blame.native.gz",
+        "raw_source_row_count": 51089,
+        "row_count": 51089,
+        "sha256": "a704aaf80059b53550df2497d0fcdaf94dbdcc9aa17cae41ecd47cabb5456d3f"
+      },
+      "git_commit_stats": {
+        "file": "clickhouse/git_commit_stats.native.gz",
+        "raw_source_row_count": 1746,
+        "row_count": 1746,
+        "sha256": "9da0472c3bae73b84f3312a2f56c9632c2fed3e737f95cbf37a9a92e70a61796"
+      },
+      "git_commits": {
+        "file": "clickhouse/git_commits.native.gz",
+        "raw_source_row_count": 590,
+        "row_count": 590,
+        "sha256": "f4d38b68c21a233fbacdcc1198f16fbdbd0098d996ab11975b1d2def98589588"
+      },
+      "git_files": {
+        "file": "clickhouse/git_files.native.gz",
+        "raw_source_row_count": 574,
+        "row_count": 574,
+        "sha256": "0739d7d9ebfc37d7a044f40824eb07626658c7190a36e86ea23fa37ff78fa846"
+      },
+      "git_pull_request_reviews": {
+        "file": "clickhouse/git_pull_request_reviews.native.gz",
+        "raw_source_row_count": 719,
+        "row_count": 719,
+        "sha256": "c83411bc1f771bde0c2a0e61ada8102040e24fdae48dba3883755f6944d6b193"
+      },
+      "git_pull_requests": {
+        "file": "clickhouse/git_pull_requests.native.gz",
+        "raw_source_row_count": 302,
+        "row_count": 302,
+        "sha256": "45e86329f86e7f7ac34a35bdadef33524e6108d0c8a15d9c1109e91a867928d6"
+      },
+      "ic_landscape_rolling_30d": {
+        "file": "clickhouse/ic_landscape_rolling_30d.native.gz",
+        "raw_source_row_count": 2307,
+        "row_count": 2307,
+        "sha256": "a0e3b859665c0d7fa6c38a7cf1f067eb9b630852d5ea2455b4560fd1fe56e795"
+      },
+      "investment_classifications_daily": {
+        "file": "clickhouse/investment_classifications_daily.native.gz",
+        "raw_source_row_count": 303,
+        "row_count": 303,
+        "sha256": "f66209ae18470422d2e3d787bf84329b3f002543e74d75fa7cff6c96f3a718f2"
+      },
+      "investment_metrics_daily": {
+        "file": "clickhouse/investment_metrics_daily.native.gz",
+        "raw_source_row_count": 2265,
+        "row_count": 2265,
+        "sha256": "1156735408393641b11b909c453678814504a586780a2f3e8c94aaad58c5346b"
+      },
+      "llm_token_usage": {
+        "file": "clickhouse/llm_token_usage.native.gz",
+        "raw_source_row_count": 14,
+        "row_count": 14,
+        "sha256": "e6590786a51ad870b9391df339fcbf6b60200461b85001ac8b277a962bfce931"
+      },
+      "operational_incidents": {
+        "file": "clickhouse/operational_incidents.native.gz",
+        "raw_source_row_count": 6,
+        "row_count": 6,
+        "sha256": "8fdff360bda4956d5c71bbcebf1fabf604f07f6fe220ff7ebe9b03dbf79978e4"
+      },
+      "operational_service_repository_mappings": {
+        "file": "clickhouse/operational_service_repository_mappings.native.gz",
+        "raw_source_row_count": 14,
+        "row_count": 14,
+        "sha256": "881ad28103c4396390a558a710a64fae4668f4d4c3f2bcc0e9d2d03eaf7b2964"
+      },
+      "operational_services": {
+        "file": "clickhouse/operational_services.native.gz",
+        "raw_source_row_count": 14,
+        "row_count": 14,
+        "sha256": "612893d67984a1f9dfad9e74289e840823ae9d1ff631afc910faae83ac2f641a"
+      },
+      "projects": {
+        "file": "clickhouse/projects.native.gz",
+        "raw_source_row_count": 14,
+        "row_count": 14,
+        "sha256": "737156539a1bd4357ff6d7d722d7d72e7c6245dbefc038becc3cb1dbebae6cda"
+      },
+      "release_impact_daily": {
+        "file": "clickhouse/release_impact_daily.native.gz",
+        "raw_source_row_count": 386,
+        "row_count": 386,
+        "sha256": "a0310426e0bd299620d68cd0431e02fdb7849e0fc8446c32797491661ef507ff"
+      },
+      "repo_complexity_daily": {
+        "file": "clickhouse/repo_complexity_daily.native.gz",
+        "raw_source_row_count": 151,
+        "row_count": 151,
+        "sha256": "3b0fd3a6074d7c2025a91c451884ba3634d5784b8900a8f5430286e9213001fb"
+      },
+      "repo_metrics_daily": {
+        "file": "clickhouse/repo_metrics_daily.native.gz",
+        "raw_source_row_count": 1059,
+        "row_count": 1059,
+        "sha256": "abbe37d658ac70a8c38985af28a13943cb105a34a304d0edfdc249776b948f7e"
+      },
+      "repos": {
+        "file": "clickhouse/repos.native.gz",
+        "raw_source_row_count": 14,
+        "row_count": 14,
+        "sha256": "64b165ea0cfe4808725b38612438f3b4d7f94eb78f61c51e8ad263ad1274b7eb"
+      },
+      "review_edges_daily": {
+        "file": "clickhouse/review_edges_daily.native.gz",
+        "raw_source_row_count": 601,
+        "row_count": 601,
+        "sha256": "98d6b0a5e91457bbd3e9b35d9e3c884776c0ce8cb1952504d347a9e99089f49e"
+      },
+      "security_alerts": {
+        "file": "clickhouse/security_alerts.native.gz",
+        "raw_source_row_count": 210,
+        "row_count": 210,
+        "sha256": "a94f8463a8ac81981a289b9ea03e54a629aa971cd602c72bb012b9b346b19d78"
+      },
+      "sprints": {
+        "file": "clickhouse/sprints.native.gz",
+        "raw_source_row_count": 8,
+        "row_count": 8,
+        "sha256": "3cb584897bd6f13f949f12a117bbfe7b5d701e3d32f3aa9ea2c4eede7c04adb5"
+      },
+      "team_metrics_daily": {
+        "file": "clickhouse/team_metrics_daily.native.gz",
+        "raw_source_row_count": 388,
+        "row_count": 388,
+        "sha256": "89df42556bff0c13d2defc6d2f3f67c3c79318bcc98a7195cd9f875ba6a8462b"
+      },
+      "teams": {
+        "file": "clickhouse/teams.native.gz",
+        "raw_source_row_count": 16,
+        "row_count": 10,
+        "sha256": "ba3a2b377130a9fd317aae898c240e5f43d0f46c4ba4c73956b1880a2e4acbd9"
+      },
+      "telemetry_signal_bucket": {
+        "file": "clickhouse/telemetry_signal_bucket.native.gz",
+        "raw_source_row_count": 7332,
+        "row_count": 7332,
+        "sha256": "a266247d933000445f3365f1cf4d0f41c8428395d878c9d78f6237a6894bdc2f"
+      },
+      "test_case_results": {
+        "file": "clickhouse/test_case_results.native.gz",
+        "raw_source_row_count": 194937,
+        "row_count": 194937,
+        "sha256": "37d5e46637b448fd36cd235c17963775f601f9883d0248335d8761753b2d58dc"
+      },
+      "test_suite_results": {
+        "file": "clickhouse/test_suite_results.native.gz",
+        "raw_source_row_count": 720,
+        "row_count": 720,
+        "sha256": "0d63b52521898fd0bd2cf3dc447ec6ac3352b587a85975ce535cfac0a6b2c3ff"
+      },
+      "testops_benchmark_insights": {
+        "file": "clickhouse/testops_benchmark_insights.native.gz",
+        "raw_source_row_count": 4577,
+        "row_count": 4577,
+        "sha256": "afda09ed8cf9247aa22ee79b78bf006e87787a5787353aebe96887d139bb97d4"
+      },
+      "testops_coverage_metrics_daily": {
+        "file": "clickhouse/testops_coverage_metrics_daily.native.gz",
+        "raw_source_row_count": 942,
+        "row_count": 942,
+        "sha256": "c6bbd74c744d45b14bfb490b81ccd64405537f380cf626b78242aa0edebeccae"
+      },
+      "testops_maturity_bands": {
+        "file": "clickhouse/testops_maturity_bands.native.gz",
+        "raw_source_row_count": 26376,
+        "row_count": 26376,
+        "sha256": "6d8b942e08242b402d83cf67d208c4cf4d11504c12a457915f1407d131b90f7c"
+      },
+      "testops_metric_anomalies": {
+        "file": "clickhouse/testops_metric_anomalies.native.gz",
+        "raw_source_row_count": 2447,
+        "row_count": 2447,
+        "sha256": "06243adb96a5fab98df6adf794ea9fc82f2d4ecbb78161c084974b63896123b7"
+      },
+      "testops_metric_baselines": {
+        "file": "clickhouse/testops_metric_baselines.native.gz",
+        "raw_source_row_count": 26376,
+        "row_count": 26376,
+        "sha256": "293900eb52930b21b804ed909a0eeb56442772443a25b7d7d5a268ee84d8b825"
+      },
+      "testops_metric_correlations": {
+        "file": "clickhouse/testops_metric_correlations.native.gz",
+        "raw_source_row_count": 884,
+        "row_count": 884,
+        "sha256": "cdd48e87966c7a8c5e24f97810236edcd72c6651d6b7ca75a26b07a485f88903"
+      },
+      "testops_period_comparisons": {
+        "file": "clickhouse/testops_period_comparisons.native.gz",
+        "raw_source_row_count": 3105,
+        "row_count": 3105,
+        "sha256": "6a1eadc66c60fd1051dec2ff171ce74a2ce365228bd28078963335bc475f1379"
+      },
+      "testops_pipeline_metrics_daily": {
+        "file": "clickhouse/testops_pipeline_metrics_daily.native.gz",
+        "raw_source_row_count": 1812,
+        "row_count": 1812,
+        "sha256": "316ff28eb52706c401a2416acab9d51613229a0d87cb5eca616f055830ab48f4"
+      },
+      "testops_pipeline_stability": {
+        "file": "clickhouse/testops_pipeline_stability.native.gz",
+        "raw_source_row_count": 942,
+        "row_count": 942,
+        "sha256": "8e2bf4c9189d23d4316956f6eb63488b7509f3737ca3431a28b315eba76d59e9"
+      },
+      "testops_quality_drag": {
+        "file": "clickhouse/testops_quality_drag.native.gz",
+        "raw_source_row_count": 942,
+        "row_count": 942,
+        "sha256": "ecc6db3b68dcc13aedcb513bc09c3f332b3a628318ec6ee05c3f5c06f2990718"
+      },
+      "testops_release_confidence": {
+        "file": "clickhouse/testops_release_confidence.native.gz",
+        "raw_source_row_count": 942,
+        "row_count": 942,
+        "sha256": "eaa11c532736150918d48da3b8bf95b3e16a91d36fda028745adb42276ddc289"
+      },
+      "testops_test_metrics_daily": {
+        "file": "clickhouse/testops_test_metrics_daily.native.gz",
+        "raw_source_row_count": 925,
+        "row_count": 925,
+        "sha256": "4a5c0ec82399a461ae25cd9f8c72700412eb7c6f6c1f4b1c41cd5609880c9b0d"
+      },
+      "user_metrics_daily": {
+        "file": "clickhouse/user_metrics_daily.native.gz",
+        "raw_source_row_count": 9684,
+        "row_count": 9684,
+        "sha256": "282d9ac6f99e3c3a2cdcdba7c0f0a2c68d6683aae426546934edb5785b5cecca"
+      },
+      "work_graph_edges": {
+        "file": "clickhouse/work_graph_edges.native.gz",
+        "raw_source_row_count": 2102,
+        "row_count": 2102,
+        "sha256": "f1a821048a1e8e99e4f229fbacb4cc7ebacb51d85225a49e90323af4ba9b989a"
+      },
+      "work_graph_issue_pr": {
+        "file": "clickhouse/work_graph_issue_pr.native.gz",
+        "raw_source_row_count": 324,
+        "row_count": 324,
+        "sha256": "73fb8ced0cf549c1f0e309079a121778085aad03db3df7f83e6684086f6297a5"
+      },
+      "work_graph_pr_commit": {
+        "file": "clickhouse/work_graph_pr_commit.native.gz",
+        "raw_source_row_count": 847,
+        "row_count": 847,
+        "sha256": "e5dbd8282c05824b7654044d476e9ccb22810fa5cbb080b3f3574847c250bc7d"
+      },
+      "work_graph_pr_deployment_edges": {
+        "file": "clickhouse/work_graph_pr_deployment_edges.native.gz",
+        "raw_source_row_count": 341,
+        "row_count": 341,
+        "sha256": "0e292f4d651bc3006c2e62503d4e1310c4ef8c374b3fb4f10093ba8e58114603"
+      },
+      "work_graph_pr_review_outcome_edges": {
+        "file": "clickhouse/work_graph_pr_review_outcome_edges.native.gz",
+        "raw_source_row_count": 660,
+        "row_count": 660,
+        "sha256": "4e59566a624999a6357e6d84aeafa7c24353fcaa9b2d1192fb2df1da52d828e7"
+      },
+      "work_graph_projection_runs": {
+        "file": "clickhouse/work_graph_projection_runs.native.gz",
+        "raw_source_row_count": 2,
+        "row_count": 2,
+        "sha256": "df25d72e6c31c766cb5c3fdd0062c4c803ea7c593376e377f494bf8b90a049f0"
+      },
+      "work_item_cycle_times": {
+        "file": "clickhouse/work_item_cycle_times.native.gz",
+        "raw_source_row_count": 223,
+        "row_count": 220,
+        "sha256": "103b43c611922925af2bd50638514340745377a3aa26cb1a0b2e8e3f83675572"
+      },
+      "work_item_dependencies": {
+        "file": "clickhouse/work_item_dependencies.native.gz",
+        "raw_source_row_count": 92,
+        "row_count": 92,
+        "sha256": "d7a0a774a2787ec298561ff711fea7fbf02a4f0b381fbcea4863a046ceb8ed9c"
+      },
+      "work_item_metrics_daily": {
+        "file": "clickhouse/work_item_metrics_daily.native.gz",
+        "raw_source_row_count": 800,
+        "row_count": 800,
+        "sha256": "37cc9faf5804cb0f0c78362d1d2af78d0b67c117c3ec296b74309dcb396a42f0"
+      },
+      "work_item_state_durations_daily": {
+        "file": "clickhouse/work_item_state_durations_daily.native.gz",
+        "raw_source_row_count": 6786,
+        "row_count": 6786,
+        "sha256": "676bc19218287346f8e4dfec68c11822461519ebd9070933ce0aa68f3c35ffe9"
+      },
+      "work_item_team_attributions": {
+        "file": "clickhouse/work_item_team_attributions.native.gz",
+        "raw_source_row_count": 630,
+        "row_count": 630,
+        "sha256": "d188e823b1a8fdfe11be15a126d400c6cce696070c6b29b7ef2f0ba935c4a727"
+      },
+      "work_item_transitions": {
+        "file": "clickhouse/work_item_transitions.native.gz",
+        "raw_source_row_count": 998,
+        "row_count": 998,
+        "sha256": "9510f831a37309c904d5681fb0c3c51f401fb2f2996d334c37c5bfaa294eedbd"
+      },
+      "work_item_user_metrics_daily": {
+        "file": "clickhouse/work_item_user_metrics_daily.native.gz",
+        "raw_source_row_count": 1250,
+        "row_count": 1250,
+        "sha256": "62e58b463ba569bf148c72a4743654490d490157cc1f61a1bff908a6960ff43a"
+      },
+      "work_items": {
+        "file": "clickhouse/work_items.native.gz",
+        "raw_source_row_count": 284,
+        "row_count": 284,
+        "sha256": "ae4775642c19c78e757ac3436128b1ece733de31c5ba4673c7422a554ef440d8"
+      },
+      "work_unit_investment_quotes": {
+        "file": "clickhouse/work_unit_investment_quotes.native.gz",
+        "raw_source_row_count": 29,
+        "row_count": 29,
+        "sha256": "d583e8115a17970037505028b4d3a3fdd3320f4e095f19c65f99b8747363a753"
+      },
+      "work_unit_investments": {
+        "file": "clickhouse/work_unit_investments.native.gz",
+        "raw_source_row_count": 378,
+        "row_count": 378,
+        "sha256": "0546c250d3ee0ff25fbb0f65a0f682ba33656c13972c5f84caa25100aa4920ea"
+      },
+      "work_unit_membership": {
+        "file": "clickhouse/work_unit_membership.native.gz",
+        "raw_source_row_count": 888,
+        "row_count": 888,
+        "sha256": "cba38ff48675a70711d42ad1982c4dbe400c0cdf71b9adf03b780be31a9241e9"
+      },
+      "work_unit_membership_runs": {
+        "file": "clickhouse/work_unit_membership_runs.native.gz",
+        "raw_source_row_count": 14,
+        "row_count": 14,
+        "sha256": "38675de5708ca24b2874bc7d562b1e211b7392b57815ae509666a70069f80226"
+      },
+      "work_unit_repo_effort": {
+        "file": "clickhouse/work_unit_repo_effort.native.gz",
+        "raw_source_row_count": 76,
+        "row_count": 76,
+        "sha256": "7f8d947dadd883583b8526109976593b431bd1a4ed2bd373b9388f3d38756da7"
+      },
+      "worklogs": {
+        "file": "clickhouse/worklogs.native.gz",
+        "raw_source_row_count": 273,
+        "row_count": 273,
+        "sha256": "a49c1c0eb377a09c9c8fc7728b118e9dc957ac21caf4e936cf7170470820e609"
+      }
+    }
+  },
+  "master_seed": 3219000,
+  "minted_at": "2026-08-07T18:45:54.554574+00:00",
+  "postgres": {
+    "baseline_row_counts": {
+      "alembic_version": 2,
+      "audit_logs": 0,
+      "backfill_jobs": 0,
+      "billing_audit_log": 0,
+      "billing_notifications": 0,
+      "billing_plans": 0,
+      "billing_prices": 0,
+      "byo_llm_budget_reservations": 0,
+      "daily_metrics_partitions": 0,
+      "daily_metrics_runs": 0,
+      "dev_answer_frames": 0,
+      "dev_conversation_tombstones": 0,
+      "dev_conversations": 0,
+      "dev_feedback": 0,
+      "dev_messages": 0,
+      "dev_qua_shadow_budget_reservations": 0,
+      "dev_run_intents": 0,
+      "dev_run_narratives": 0,
+      "dev_run_qua_shadow": 0,
+      "dev_run_resolutions": 0,
+      "dev_run_source_observations": 0,
+      "dev_run_stage_diagnostics": 0,
+      "dev_run_subject_sets": 0,
+      "dev_runs": 0,
+      "dev_tool_calls": 0,
+      "email_verification_tokens": 0,
+      "external_ingest_batch_payloads": 0,
+      "external_ingest_batches": 0,
+      "external_ingest_recompute_jobs": 0,
+      "external_ingest_rejections": 0,
+      "external_ingest_sources": 0,
+      "external_ingest_tokens": 0,
+      "feature_bundles": 0,
+      "feature_flags": 32,
+      "fixed_schedule_occurrences": 0,
+      "github_app_installations": 0,
+      "health_rule_calibrations": 0,
+      "health_rule_version_fingerprints": 0,
+      "impersonation_sessions": 0,
+      "integration_credentials": 0,
+      "integration_datasets": 0,
+      "integration_sources": 0,
+      "integrations": 0,
+      "internal_service_credential_audits": 0,
+      "internal_service_credentials": 0,
+      "investment_batch_items": 0,
+      "investment_batch_jobs": 0,
+      "invoice_line_items": 0,
+      "invoices": 0,
+      "job_runs": 0,
+      "login_attempts": 0,
+      "memberships": 0,
+      "metric_checkpoints": 0,
+      "metric_compatibility_execution_repairs": 0,
+      "metric_compatibility_executions": 0,
+      "org_feature_overrides": 0,
+      "org_invites": 0,
+      "org_ip_allowlist": 0,
+      "org_licenses": 0,
+      "org_retention_policies": 0,
+      "organizations": 0,
+      "pagerduty_oauth_authorization_requests": 0,
+      "pagerduty_webhook_bindings": 0,
+      "password_reset_tokens": 0,
+      "permissions": 22,
+      "plan_feature_bundles": 0,
+      "provider_oauth_credentials": 0,
+      "provider_oauth_revocations": 0,
+      "provider_rate_limit_observations": 0,
+      "refresh_tokens": 0,
+      "refunds": 0,
+      "remaining_metric_partitions": 0,
+      "remaining_metric_runs": 0,
+      "report_runs": 0,
+      "role_permissions": 20,
+      "saved_reports": 0,
+      "scheduled_jobs": 0,
+      "scheduled_report_occurrences": 0,
+      "scheduled_sync_occurrences": 0,
+      "settings": 0,
+      "sso_providers": 0,
+      "subscription_events": 0,
+      "subscriptions": 0,
+      "sync_compute_checkpoints": 0,
+      "sync_configurations": 0,
+      "sync_coverage_projections": 0,
+      "sync_dispatch_outbox": 0,
+      "sync_dispatch_transport_routes": 4,
+      "sync_run_post_dispatches": 0,
+      "sync_run_reference_discoveries": 0,
+      "sync_run_units": 0,
+      "sync_runs": 0,
+      "sync_watermarks": 0,
+      "tier_limits": 21,
+      "users": 0,
+      "webhook_deliveries": 0,
+      "work_graph_execution_ledger": 0,
+      "work_graph_execution_repairs": 0,
+      "work_graph_execution_requests": 0,
+      "worker_job_completion_fences": 0,
+      "worker_job_outbox": 0,
+      "worker_job_routes": 24,
+      "worker_job_runs": 0,
+      "worker_operator_audits": 0
+    },
+    "reference_tables": {
+      "feature_flags": {
+        "ids": {
+          "[\"agent_context_runtime\"]": {
+            "__t__": "uuid",
+            "v": "ad112cda-b8f0-4f9d-b682-6334e5f4abdc"
+          },
+          "[\"api_access\"]": {
+            "__t__": "uuid",
+            "v": "9f3a233f-c142-4f36-af96-03b36f2d556b"
+          },
+          "[\"ask_dev\"]": {
+            "__t__": "uuid",
+            "v": "a50e2f25-3041-460d-bb36-c998fde2019b"
+          },
+          "[\"ask_dev_contextual_entrypoints\"]": {
+            "__t__": "uuid",
+            "v": "7de6fee2-45e4-48b8-9a95-1fbe18b4c1cd"
+          },
+          "[\"ask_dev_wave_3_1\"]": {
+            "__t__": "uuid",
+            "v": "c621a441-ff45-4561-b0af-7180d6b8c538"
+          },
+          "[\"audit_log\"]": {
+            "__t__": "uuid",
+            "v": "76e72a2d-4a0c-4400-841e-c15f5f6d17df"
+          },
+          "[\"basic_analytics\"]": {
+            "__t__": "uuid",
+            "v": "dbd2d1c2-7210-4c75-9a64-9b268545fbd6"
+          },
+          "[\"byo_llm\"]": {
+            "__t__": "uuid",
+            "v": "3fbf9a5d-d853-419e-b452-1af0c7284902"
+          },
+          "[\"canonical_incident_ingestion\"]": {
+            "__t__": "uuid",
+            "v": "cfba2576-3073-4d04-8c39-ef116c8204f2"
+          },
+          "[\"capacity_forecast\"]": {
+            "__t__": "uuid",
+            "v": "88643c96-6cdb-42af-89b8-edb5e4bba225"
+          },
+          "[\"custom_branding\"]": {
+            "__t__": "uuid",
+            "v": "d7aaea9c-100d-4514-a586-27186ec27205"
+          },
+          "[\"custom_retention\"]": {
+            "__t__": "uuid",
+            "v": "376038b8-f211-4eb1-a7c4-abd15f84849d"
+          },
+          "[\"customer_push_ingest\"]": {
+            "__t__": "uuid",
+            "v": "0b2756b2-563f-49a8-bc47-5f1b4891bcfa"
+          },
+          "[\"data_export\"]": {
+            "__t__": "uuid",
+            "v": "0db7bcfd-f99d-491b-94c3-c1390000b571"
+          },
+          "[\"git_sync\"]": {
+            "__t__": "uuid",
+            "v": "554338b8-a99c-4b99-9d23-8b0becb63aa3"
+          },
+          "[\"github_integration\"]": {
+            "__t__": "uuid",
+            "v": "e3e2597d-72cf-492e-a356-1b5fb799e9c2"
+          },
+          "[\"gitlab_integration\"]": {
+            "__t__": "uuid",
+            "v": "d18394ba-f793-4061-b8f9-00b45b7f9570"
+          },
+          "[\"investment_view\"]": {
+            "__t__": "uuid",
+            "v": "e38d3b60-540f-4f5e-9212-6d4d0abc7e89"
+          },
+          "[\"ip_allowlist\"]": {
+            "__t__": "uuid",
+            "v": "44dfe2b1-8ae8-4743-ad45-e28cc57b55a9"
+          },
+          "[\"jira_integration\"]": {
+            "__t__": "uuid",
+            "v": "1414a9a5-fb5e-4d64-84a0-66576e636a94"
+          },
+          "[\"linear_integration\"]": {
+            "__t__": "uuid",
+            "v": "eba7bc47-0b52-4784-b942-f131d6927635"
+          },
+          "[\"llm_categorization\"]": {
+            "__t__": "uuid",
+            "v": "f072d56f-12ff-4f5e-ab4c-144c78105f21"
+          },
+          "[\"multi_org\"]": {
+            "__t__": "uuid",
+            "v": "c20b5b9a-34bc-4008-b094-85a528c5e8fb"
+          },
+          "[\"priority_support\"]": {
+            "__t__": "uuid",
+            "v": "7db643a0-a329-4929-83ed-bd84802ac57b"
+          },
+          "[\"quadrant_analysis\"]": {
+            "__t__": "uuid",
+            "v": "b27331d1-a6c2-46e1-a991-578bdb51c5dd"
+          },
+          "[\"scheduled_jobs\"]": {
+            "__t__": "uuid",
+            "v": "52cdfe97-c226-4042-b839-45ea27df5cb7"
+          },
+          "[\"sso_oidc\"]": {
+            "__t__": "uuid",
+            "v": "83b9d74e-830a-47c2-a62d-685102612c49"
+          },
+          "[\"sso_saml\"]": {
+            "__t__": "uuid",
+            "v": "1848a449-dafc-4ea2-942c-a6663649fa03"
+          },
+          "[\"team_management\"]": {
+            "__t__": "uuid",
+            "v": "05123a92-e346-458f-aa19-b2bae6b78616"
+          },
+          "[\"webhooks\"]": {
+            "__t__": "uuid",
+            "v": "0e1fd023-b585-4683-a436-7777789529ff"
+          },
+          "[\"work_graph\"]": {
+            "__t__": "uuid",
+            "v": "f21cf60f-62aa-4094-88f9-ac5d38c5266a"
+          },
+          "[\"work_items_sync\"]": {
+            "__t__": "uuid",
+            "v": "a1c3db28-cf93-44d5-baba-c980b5c24418"
+          }
+        },
+        "natural_key": [
+          "key"
+        ],
+        "primary_key": "id"
+      }
+    },
+    "schema_fingerprint": {
+      "alembic_heads": [
+        "0066",
+        "0091"
+      ],
+      "catalog_sha256": "39737967a7993d2ffee8798f51c5c37d1968453ab8702efaf4273bf17d372c19"
+    },
+    "source_row_counts": {
+      "alembic_version": 2,
+      "audit_logs": 0,
+      "backfill_jobs": 0,
+      "billing_audit_log": 0,
+      "billing_notifications": 0,
+      "billing_plans": 0,
+      "billing_prices": 0,
+      "byo_llm_budget_reservations": 0,
+      "daily_metrics_partitions": 0,
+      "daily_metrics_runs": 0,
+      "dev_answer_frames": 0,
+      "dev_conversation_tombstones": 0,
+      "dev_conversations": 8,
+      "dev_feedback": 0,
+      "dev_messages": 0,
+      "dev_qua_shadow_budget_reservations": 0,
+      "dev_run_intents": 0,
+      "dev_run_narratives": 0,
+      "dev_run_qua_shadow": 0,
+      "dev_run_resolutions": 0,
+      "dev_run_source_observations": 0,
+      "dev_run_stage_diagnostics": 0,
+      "dev_run_subject_sets": 1,
+      "dev_runs": 5,
+      "dev_tool_calls": 0,
+      "email_verification_tokens": 0,
+      "external_ingest_batch_payloads": 0,
+      "external_ingest_batches": 0,
+      "external_ingest_recompute_jobs": 0,
+      "external_ingest_rejections": 0,
+      "external_ingest_sources": 0,
+      "external_ingest_tokens": 0,
+      "feature_bundles": 0,
+      "feature_flags": 32,
+      "fixed_schedule_occurrences": 0,
+      "github_app_installations": 0,
+      "health_rule_calibrations": 0,
+      "health_rule_version_fingerprints": 0,
+      "impersonation_sessions": 0,
+      "integration_credentials": 0,
+      "integration_datasets": 0,
+      "integration_sources": 0,
+      "integrations": 0,
+      "internal_service_credential_audits": 0,
+      "internal_service_credentials": 0,
+      "investment_batch_items": 0,
+      "investment_batch_jobs": 0,
+      "invoice_line_items": 0,
+      "invoices": 0,
+      "job_runs": 0,
+      "login_attempts": 0,
+      "memberships": 16,
+      "metric_checkpoints": 0,
+      "metric_compatibility_execution_repairs": 0,
+      "metric_compatibility_executions": 0,
+      "org_feature_overrides": 9,
+      "org_invites": 0,
+      "org_ip_allowlist": 0,
+      "org_licenses": 3,
+      "org_retention_policies": 3,
+      "organizations": 3,
+      "pagerduty_oauth_authorization_requests": 0,
+      "pagerduty_webhook_bindings": 0,
+      "password_reset_tokens": 0,
+      "permissions": 22,
+      "plan_feature_bundles": 0,
+      "provider_oauth_credentials": 0,
+      "provider_oauth_revocations": 0,
+      "provider_rate_limit_observations": 0,
+      "refresh_tokens": 0,
+      "refunds": 0,
+      "remaining_metric_partitions": 0,
+      "remaining_metric_runs": 0,
+      "report_runs": 0,
+      "role_permissions": 20,
+      "saved_reports": 0,
+      "scheduled_jobs": 0,
+      "scheduled_report_occurrences": 0,
+      "scheduled_sync_occurrences": 0,
+      "settings": 0,
+      "sso_providers": 0,
+      "subscription_events": 0,
+      "subscriptions": 0,
+      "sync_compute_checkpoints": 0,
+      "sync_configurations": 8,
+      "sync_coverage_projections": 0,
+      "sync_dispatch_outbox": 0,
+      "sync_dispatch_transport_routes": 4,
+      "sync_run_post_dispatches": 0,
+      "sync_run_reference_discoveries": 0,
+      "sync_run_units": 0,
+      "sync_runs": 0,
+      "sync_watermarks": 0,
+      "tier_limits": 21,
+      "users": 16,
+      "webhook_deliveries": 0,
+      "work_graph_execution_ledger": 0,
+      "work_graph_execution_repairs": 0,
+      "work_graph_execution_requests": 0,
+      "worker_job_completion_fences": 0,
+      "worker_job_outbox": 0,
+      "worker_job_routes": 24,
+      "worker_job_runs": 0,
+      "worker_operator_audits": 0
+    },
+    "tables": {
+      "dev_conversations": {
+        "columns": [
+          "id",
+          "org_id",
+          "user_id",
+          "title",
+          "current_scope",
+          "retention_days",
+          "created_at",
+          "updated_at",
+          "expires_at",
+          "deleted_at"
+        ],
+        "file": "postgres/dev_conversations.json.gz",
+        "row_count": 8,
+        "sha256": "e69a68d4acee97b78748a1c301156c10c63fab15e635cb7f118628571d5d707b"
+      },
+      "dev_run_subject_sets": {
+        "columns": [
+          "id",
+          "run_id",
+          "org_id",
+          "user_id",
+          "set_id",
+          "entity_kind",
+          "cohort_complete",
+          "fingerprint",
+          "payload",
+          "created_at"
+        ],
+        "file": "postgres/dev_run_subject_sets.json.gz",
+        "row_count": 1,
+        "sha256": "988ea69afab7ffb0674bb270141d37f4cbf6b0506991ac47d82af6c27454dc2d"
+      },
+      "dev_runs": {
+        "columns": [
+          "id",
+          "request_id",
+          "conversation_id",
+          "user_message_id",
+          "retry_of_run_id",
+          "answer_id",
+          "org_id",
+          "user_id",
+          "state",
+          "terminal_reason",
+          "provider_source",
+          "provider_fingerprint",
+          "model_fingerprint",
+          "prompt_version",
+          "tool_contract_version",
+          "metric_version",
+          "query_version",
+          "started_at",
+          "ended_at",
+          "latency_ms",
+          "input_tokens",
+          "output_tokens",
+          "estimated_cost_microusd",
+          "tool_call_count",
+          "citation_count",
+          "metric_count",
+          "grounding_validation_status",
+          "safe_error_code",
+          "created_at",
+          "preflight_outcome",
+          "legacy_guard_reason",
+          "contract_generation",
+          "public_outcome",
+          "compatibility_projection_version",
+          "plan_id",
+          "plan_version",
+          "plan_step_partition",
+          "relationship_closure_verified",
+          "narrative_mode",
+          "narrative_failure_code",
+          "terminal_error_payload"
+        ],
+        "file": "postgres/dev_runs.json.gz",
+        "row_count": 5,
+        "sha256": "8b1c686ae2301428d6d8fa3e49799c4f2963bdc8f159334f535ae66afb4b4c93"
+      },
+      "memberships": {
+        "columns": [
+          "id",
+          "user_id",
+          "org_id",
+          "role",
+          "invited_by_id",
+          "joined_at",
+          "created_at",
+          "updated_at"
+        ],
+        "file": "postgres/memberships.json.gz",
+        "row_count": 16,
+        "sha256": "949569668b03869d4ebec857ec9ad73e96617dfc69ff203501d3755c5930c268"
+      },
+      "org_feature_overrides": {
+        "columns": [
+          "id",
+          "org_id",
+          "feature_id",
+          "is_enabled",
+          "expires_at",
+          "config",
+          "reason",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "updated_by"
+        ],
+        "file": "postgres/org_feature_overrides.json.gz",
+        "row_count": 9,
+        "sha256": "8238def251065d985eb7db65000eccf353b49323d838523712711ac0f24c9083"
+      },
+      "org_licenses": {
+        "columns": [
+          "id",
+          "org_id",
+          "license_key",
+          "tier",
+          "licensed_users",
+          "licensed_repos",
+          "issued_at",
+          "expires_at",
+          "is_valid",
+          "validation_error",
+          "last_validated_at",
+          "license_type",
+          "customer_id",
+          "features_override",
+          "limits_override",
+          "created_at",
+          "updated_at",
+          "managed_by"
+        ],
+        "file": "postgres/org_licenses.json.gz",
+        "row_count": 3,
+        "sha256": "5dfe1bec8154f55684c973b3591d9f693d875d38536efd1167ceb6d4cfdd68ac"
+      },
+      "org_retention_policies": {
+        "columns": [
+          "id",
+          "org_id",
+          "resource_type",
+          "retention_days",
+          "description",
+          "is_active",
+          "last_run_at",
+          "last_run_deleted_count",
+          "next_run_at",
+          "created_by_id",
+          "created_at",
+          "updated_at"
+        ],
+        "file": "postgres/org_retention_policies.json.gz",
+        "row_count": 3,
+        "sha256": "21e06e925d4df1e4e31e8421692a4fa0e867ef0169fae3f1529980de6f15cb9b"
+      },
+      "organizations": {
+        "columns": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "settings",
+          "tier",
+          "stripe_customer_id",
+          "is_active",
+          "created_at",
+          "updated_at",
+          "managed_by",
+          "onboarding_integration_skipped_at"
+        ],
+        "file": "postgres/organizations.json.gz",
+        "row_count": 3,
+        "sha256": "54eea04f94f638310cb9c582a3650e2d273521a4315af5c6ffe7fa4110648d6e"
+      },
+      "sync_configurations": {
+        "columns": [
+          "id",
+          "org_id",
+          "name",
+          "provider",
+          "sync_targets",
+          "sync_options",
+          "is_active",
+          "last_sync_at",
+          "last_sync_success",
+          "last_sync_error",
+          "last_sync_stats",
+          "created_at",
+          "updated_at",
+          "parent_id",
+          "integration_id",
+          "source_id",
+          "planner_managed"
+        ],
+        "file": "postgres/sync_configurations.json.gz",
+        "row_count": 8,
+        "sha256": "7626d4e989e45335941c4a356a2bf597f650a118e4be7c1472d32de95f614bf2"
+      },
+      "users": {
+        "columns": [
+          "id",
+          "email",
+          "username",
+          "password_hash",
+          "full_name",
+          "avatar_url",
+          "auth_provider",
+          "auth_provider_id",
+          "is_active",
+          "is_verified",
+          "is_superuser",
+          "last_login_at",
+          "created_at",
+          "updated_at",
+          "token_version"
+        ],
+        "file": "postgres/users.json.gz",
+        "row_count": 16,
+        "sha256": "f5c5164f3accd99aac72d0f779de8b4955a1eebf13e135fed624d58da6e40476"
+      }
+    }
+  },
+  "schema_version": "ask_dev_world_snapshot.v1",
+  "shelf_life_days": 28,
+  "world_digest": "fea90782a6b462597c41173e5d5e40728c4bf5c291631b1a42a3215ef14758e5",
+  "world_manifest_contract": "fb9256ab9d2ffc8ae352cdad9403801dccad6639e7692190ab6f6930d4f4d2db",
+  "world_schema_version": "ask_dev_world.v1"
+}

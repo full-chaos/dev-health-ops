@@ -22,79 +22,94 @@ lands as a NEW row, retained forever rather than merged away.
 future sync's row here too (in addition to, never instead of, the existing
 ``projects`` write -- no change to that table's own behavior).
 
-``write_seq`` / ``version_key`` (codex cross-system review C1, HIGH, refined
-after team-lead's follow-up on the first version of this fix): ``updated_at``
-and ``last_synced`` are both only millisecond-precision (``DateTime64(3)``).
-Two DIFFERENT observed states sharing the same millisecond for BOTH columns
--- plausible under real concurrent writers, e.g. a provider webhook and a
-backfill sync racing, or two workers processing a burst of events from the
-same batch -- share the FULL ``ORDER BY`` key AND (before this column
-existed) the version column too: ``argMax((updated_at, last_synced))`` had
-no further tie-break, so a pre-merge read was implementation-defined and
-could disagree with whatever ReplacingMergeTree eventually kept after a
-background merge, silently discarding one of the two states from the
-reader's perspective.
+``version_key`` (codex cross-system review C1, HIGH -- this is the THIRD
+and current design; the two prior attempts are recorded below, not
+silently corrected, because both were shipped as "fixed" before being
+caught): ``updated_at`` and ``last_synced`` are both only
+millisecond-precision (``DateTime64(3)``). Two DIFFERENT observed states
+sharing the same millisecond for BOTH columns -- plausible under real
+concurrent writers, e.g. a provider webhook and a backfill sync racing, or
+two workers processing a burst of events from the same batch -- share the
+FULL ``ORDER BY`` key AND (before this column existed) the version column
+too: ``argMax((updated_at, last_synced))`` had no further tie-break, so a
+pre-merge read was implementation-defined and could disagree with
+whatever ReplacingMergeTree eventually kept after a background merge,
+silently discarding one of the two states from the reader's perspective.
 
-FIRST FIX (superseded within this same round, kept here only as a
-record): made ``write_seq`` (a ``generateSnowflakeID()``-backed value,
-unique and monotonically increasing per row) the SOLE ReplacingMergeTree
+ATTEMPT 1 (superseded, kept only as a record): made ``write_seq`` (a
+``generateSnowflakeID()``-backed value) the SOLE ReplacingMergeTree
 version column, replacing ``last_synced`` entirely. Team-lead's follow-up
-caught the real problem with that: it changed the dedup semantic from
-"freshest ``last_synced`` wins" to "whichever was INSERTED last wins" for
-EVERY same-``updated_at`` collision, not just the narrow same-millisecond
-one -- an out-of-order-delivered replay carrying an OLDER ``last_synced``
-would then win over an already-recorded fresher one merely by arriving
-later, regressing the freshness watermark a caller sees for the ordinary,
-much MORE common case F6 already covered (two rows sharing ``updated_at``
-with genuinely DIFFERENT ``last_synced`` values).
+caught the real problem: it changed the dedup semantic from "freshest
+``last_synced`` wins" to "whichever was INSERTED last wins" for EVERY
+same-``updated_at`` collision, not just the narrow same-millisecond one --
+an out-of-order-delivered replay carrying an OLDER ``last_synced`` would
+then win over an already-recorded fresher one merely by arriving later,
+regressing the freshness watermark for the ordinary, much MORE common
+case F6 already covered.
 
-ACTUAL FIX: ``version_key`` is a ``MATERIALIZED`` ``UInt64`` combining
-BOTH signals with ``last_synced`` as the PRIMARY ordering criterion and
-``write_seq`` as a TERTIARY tie-break used only when ``last_synced`` ALSO
-ties exactly:
+ATTEMPT 2 (superseded, kept only as a record): a ``MATERIALIZED
+version_key`` combining ``last_synced`` (high bits, primary ordering) with
+``write_seq``'s LOW 22 BITS (tertiary tie-break, only reached when
+``last_synced`` also tied exactly) -- this fixed attempt 1's regression
+(``last_synced`` differing still governs, unaffected). But the low-bit
+tie-break itself was ALSO wrong, measured empirically by the verifier:
+ClickHouse's ``generateSnowflakeID()`` packs its low 22 bits as
+``machine_id(10 bits) | per-millisecond counter(12 bits)`` -- the counter
+RESETS every millisecond, so two snowflake IDs generated ~100ms apart on
+the SAME machine can (and in the verifier's trial, did: 10/20 runs)
+collide OUTRIGHT in those low 22 bits despite being nowhere near each
+other in full value. This is the opposite of the "~1-in-4.19-million"
+claim that attempt's docstring made (off by roughly six orders of
+magnitude) -- worse, because the low bits are STRUCTURED, not uniformly
+distributed, "later write_seq wins" was not even reliably true once
+masked: the EARLIER-inserted row won 5 of 10 broken ties in the verifier's
+measurement, contradicting that docstring's own claimed tie-break
+direction. A test (``test_c1_same_millisecond_collision_is_deterministic``)
+shipped alongside it asserted FULL ``write_seq`` distinctness -- which is
+essentially always true (snowflake IDs are globally unique) and therefore
+could never fail for the actual defect (masked-value collision) it was
+meant to catch.
 
-    version_key = (unix_millis(last_synced) << 22) | (write_seq & 0x3FFFFF)
+ACTUAL FIX (attempt 3, current): replace the write_seq-derived tie-break
+with a CONTENT-DERIVED one -- ``cityHash64`` over the declared-state
+payload columns, masked the same way:
 
-``unix_millis(last_synced)`` occupies the high bits (safe through the
-year ~2109 in 42 bits), so ordering by ``version_key`` is IDENTICAL to
-ordering by ``last_synced`` whenever ``last_synced`` differs -- F6's
-established, business-meaningful "freshest confirmed observation wins"
-semantic is completely UNCHANGED and unaffected by this fix. Only when
-two rows share the exact same ``updated_at`` AND the exact same
-``last_synced`` millisecond does the low 22 bits of ``write_seq`` (~4.19
-million distinct values) break the tie by insertion order. Verified
-directly against the real engine (see the migration's own live proof
-test): differing ``last_synced`` -> larger wins regardless of insertion
-order; identical ``last_synced`` -> later-inserted wins.
+    version_key = (unix_millis(last_synced) << 22)
+                  | (cityHash64(state, target_date, url, is_active,
+                                 name, project_key) & 0x3FFFFF)
 
-Residual (honestly documented, not claimed away): a full ``version_key``
-tie now requires BOTH ``updated_at`` and ``last_synced`` to coincide
-exactly (already the rare C1 scenario) AND the two rows' ``write_seq``
-values to ALSO collide in their low 22 bits (~1-in-4.19-million given the
-first condition already holds) -- reduced from "no tie-break at all" to a
-double-rare coincidence, not proven mathematically impossible. This is
-review option "(a) widen precision... document residual", but landing on
-a far smaller residual than precision-widening alone would give, without
-sacrificing F6's ``last_synced`` semantics the way a pure ``write_seq``
-version column (the first fix above) did.
+``unix_millis(last_synced)`` still occupies the high bits, so ordering by
+``version_key`` remains IDENTICAL to ordering by ``last_synced`` whenever
+``last_synced`` differs -- F6's semantic is still completely unaffected.
+Only when ``last_synced`` ALSO ties does the content hash break the tie,
+with three properties a randomized or insertion-order tie-break cannot
+offer: (1) IDENTICAL content hashes to the IDENTICAL key, so a tie between
+two rows carrying the SAME declared state is harmless by construction --
+there is no real ambiguity to resolve; (2) DIFFERING content resolves to
+a DETERMINISTIC winner purely as a function of that content, with no
+dependency on which process inserted it or when; (3) STABLE across
+replays and across a FULL REBUILD of this table (migration 075's
+reconciler, CHAOS-3563 round-3 review A, drops and recreates this table
+from ``projects FINAL`` when its shape is stale) -- recomputing the hash
+of the SAME content always yields the SAME tie-break result, unlike
+``write_seq``, which is freshly (and differently) generated on every
+insert and could not survive a rebuild with the same answer. This directly
+serves this table's own "derived, rebuildable store" design principle.
+
+Residual (honestly documented, and now an actual probability rather than
+a mis-stated one): a full ``version_key`` tie requires BOTH ``updated_at``
+and ``last_synced`` to coincide exactly (already the rare C1 scenario) AND
+a genuine ``cityHash64`` COLLISION in the low 22 bits for two rows with
+DIFFERENT content -- approximately 1-in-4.19-million per such pair, this
+time relying on a general-purpose hash function's actual distribution
+properties rather than an id-generator's internal bit layout that was
+never designed to be masked this way.
 
 ``_PROJECT_DECLARED_FACTS_SQL``'s own ``argMax`` tie-break is
 ``(updated_at, version_key)`` -- reading ``version_key`` DIRECTLY (it is a
-real, queryable column despite being ``MATERIALIZED``), not recomputing an
-independent ``(last_synced, write_seq)`` tuple. That independent-tuple
-approach was tried first and is WRONG, measured empirically (~2 of 8 runs
-disagreeing): bit-MASKING ``write_seq`` down to its low 22 bits (what
-``version_key`` actually does) does not preserve the full column's
-relative order -- two snowflake IDs where the second is numerically
-LARGER overall can easily have a SMALLER low-22-bit slice, so comparing
-the full ``write_seq`` column (as a plain tuple element) and comparing the
-masked value the engine actually uses are DIFFERENT orderings whenever
-``last_synced`` ties. Only reading the identical materialized expression
-GUARANTEES agreement with the engine; reasoning that an independently
-recomputed expression "should" match it is not sufficient -- the same
-"reader tie-break equals engine version column" principle review finding
-F6 already established for this query, now literal rather than
-approximated.
+real, queryable column despite being ``MATERIALIZED``), never recomputing
+an independent expression and reasoning that it "should" match the
+engine's own value. Verified 20/20 agreement across repeated live runs.
 
 BACKFILL / WHAT IS UNRECOVERABLE
 ---------------------------------
@@ -206,10 +221,15 @@ CREATE TABLE IF NOT EXISTS project_declared_state_history (
     updated_at DateTime64(3, 'UTC'),
     last_synced DateTime64(3, 'UTC'),
     ingested_at DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC'),
-    write_seq UInt64 DEFAULT generateSnowflakeID(),
     version_key UInt64 MATERIALIZED (
         bitShiftLeft(toUInt64(toUnixTimestamp64Milli(last_synced)), 22)
-        + bitAnd(write_seq, 4194303)
+        + bitAnd(
+            cityHash64(
+                state, ifNull(toString(target_date), ''), url,
+                is_active, name, ifNull(project_key, '')
+            ),
+            4194303
+        )
     )
 ) ENGINE = ReplacingMergeTree(version_key)
 ORDER BY (org_id, provider, id, updated_at)

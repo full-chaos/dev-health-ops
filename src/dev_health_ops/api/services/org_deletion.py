@@ -79,9 +79,17 @@ logger = logging.getLogger(__name__)
 _CLICKHOUSE_MIGRATIONS_DIR = (
     Path(__file__).resolve().parents[2] / "migrations" / "clickhouse"
 )
+#: PR #1602 round-3 review D (LOW, pre-existing): anchored to the START of
+#: a LINE (`^` + re.MULTILINE) -- without this, the unanchored version
+#: matched PROSE inside a comment in migration 027's real source ("Regex:
+#: table name in CREATE TABLE statement (handles...)"), discovering a
+#: phantom `statement` table and emitting a spurious "missing or has no
+#: org_id column; skipped." warning on EVERY production org deletion. A
+#: real `CREATE TABLE` statement always starts its own line (possibly
+#: indented); prose referencing "CREATE TABLE" mid-sentence does not.
 _CREATE_TABLE_RE = re.compile(
-    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(?P<table>[A-Za-z_][\w]*)`?\s*\(",
-    re.IGNORECASE,
+    r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(?P<table>[A-Za-z_][\w]*)`?\s*\(",
+    re.IGNORECASE | re.MULTILINE,
 )
 _ALTER_ORG_ID_RE = re.compile(
     r"ALTER\s+TABLE\s+`?(?P<table>[A-Za-z_][\w]*)`?\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+org_id\b",
@@ -650,6 +658,21 @@ class OrganizationDeletionService:
         finally:
             if close_client is not None:
                 close_client()
+
+        # PR #1602 round-3 review C (CONFIRMED, proven live on `repos`): the
+        # per-table outcome tracking above only ever surfaced through the
+        # unregistered-drift warning below, which by construction only
+        # iterates the UNREGISTERED subset. A REGISTERED table's failed
+        # count query or failed DELETE produced NO warning at all -- its
+        # `result.clickhouse.tables[t]` entry (whatever count was captured
+        # before the failure, or 0 for a failed count) read exactly like a
+        # genuine success, indistinguishable from one. Any bad outcome,
+        # registered or not, must be surfaced.
+        for table, outcome in outcomes.items():
+            if outcome.startswith("failed") or outcome.startswith("not verified"):
+                result.warnings.append(
+                    f"ClickHouse table {table}: {outcome} during org deletion."
+                )
 
         if unregistered:
             per_table = "; ".join(

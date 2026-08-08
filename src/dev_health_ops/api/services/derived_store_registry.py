@@ -148,7 +148,6 @@ CLICKHOUSE_DERIVED_STORES: tuple[str, ...] = (
     "review_edges_daily",
     "security_alerts",
     "sprints",
-    "statement",
     "team_drift_changes",
     "team_memberships",
     "team_metrics_daily",

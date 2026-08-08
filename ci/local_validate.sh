@@ -933,16 +933,34 @@ ch_declared_state_history_tests() {
     -m clickhouse -ra --tb=short -q
 }
 
+# CHAOS-3563 round-3 review A: migration 075 reconciles a stale
+# project_declared_state_history shape (074 was amended in place multiple
+# times; a DB that ran an older shape never re-runs it, since the migration
+# runner tracks applied migrations by VERSION NUMBER, not content -- see
+# 075's own docstring). This gate's own ch-migrate stage above only ever
+# proves the NO-OP path (a fresh scratch DB always starts current) -- it
+# cannot, by construction, exercise the actual healing path a stale real
+# database would need. This file builds an old-shape table BY HAND (never
+# via 074/075's own scripts) and proves 075 heals it for real.
+ch_migration_075_reconcile_tests() {
+  OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest \
+    tests/test_migration_075_reconcile_clickhouse_live.py \
+    -m clickhouse -ra --tb=short -q
+}
+
 # CH-marked tests (need production DDL) + the direct argMax live-exec proof.
 # Runs AFTER the unit suite, reusing the provisioned scratch db.
 ch_tests() {
   if [ "${CH_READY:-0}" != "1" ]; then
     skip "argMax live-exec proof" "scratch CH not provisioned"
     skip "declared-state-history live tests" "scratch CH not provisioned"
+    skip "migration 075 reconcile live tests" "scratch CH not provisioned"
     return 0
   fi
   run_stage "argMax live-exec proof (real engine)" ch_argmax_proof
   run_stage "declared-state-history live tests (real engine)" ch_declared_state_history_tests
+  run_stage "migration 075 reconcile live tests (real engine)" ch_migration_075_reconcile_tests
 }
 
 print_summary() {

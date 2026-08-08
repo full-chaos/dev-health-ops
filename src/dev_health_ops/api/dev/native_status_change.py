@@ -417,30 +417,35 @@ LIMIT {limit:UInt32}
 #: background merge. The tie-break is now ``(updated_at, version_key)`` --
 #: ``version_key`` (migration 074) is the table's own ReplacingMergeTree
 #: version column, a ``MATERIALIZED`` value bit-packing ``last_synced``
-#: (high bits, primary ordering) with ``write_seq`` (low bits, tertiary
-#: tie-break, only reached when ``last_synced`` ALSO ties exactly).
+#: (high bits, primary ordering) with a ``cityHash64`` of the declared
+#: CONTENT columns (low bits, tertiary tie-break, only reached when
+#: ``last_synced`` ALSO ties exactly).
 #:
-#: SECOND bug, found empirically (measured ~2 of 8 runs disagreeing) after
-#: an earlier version of this exact fix used ``(updated_at, last_synced,
-#: write_seq)`` instead -- a plain 3-level tuple comparing the FULL
-#: ``write_seq`` value, reasoned (wrongly) to be equivalent to comparing
-#: the bit-packed ``version_key``: bit-MASKING ``write_seq`` down to its
-#: low 22 bits (what ``version_key`` actually does) does NOT preserve the
-#: full value's relative order -- two snowflake IDs where the SECOND is
-#: numerically larger overall can easily have a SMALLER low-22-bit slice,
-#: so comparing the full column and comparing the masked column are
-#: different orderings whenever ``last_synced`` ties. Reading
-#: ``version_key`` directly (it is a real, queryable column despite being
-#: ``MATERIALIZED``) is the only way to GUARANTEE agreement with the
-#: engine, rather than reasoning about whether an independently-computed
-#: expression happens to match it -- the "reader tie-break equals engine
-#: version column" principle F6 established, now literally reading that
-#: column instead of recomputing an approximation of it. See the
-#: migration's own docstring for the full rationale, including why an
-#: EVEN EARLIER version of this fix (making ``write_seq`` the sole version
-#: column, no ``last_synced`` involvement at all) was ALSO wrong: it
-#: silently changed the dedup semantic for the ordinary
-#: differing-``last_synced`` case too, not just the rare tie.
+#: This went through THREE attempts before landing here -- see migration
+#: 074's own docstring for the full account, including two that shipped as
+#: "fixed" and were each caught only afterward:
+#: (1) making ``write_seq`` (a ``generateSnowflakeID()``-backed column) the
+#: SOLE version column silently changed the dedup semantic for the
+#: ordinary differing-``last_synced`` case, not just the rare tie;
+#: (2) bit-masking ``write_seq``'s low 22 bits as the tertiary tie-break
+#: had TWO independent problems -- a reader that recomputed
+#: ``(updated_at, last_synced, write_seq)`` as a plain tuple instead of
+#: reading the engine's actual masked value disagreed with it ~2 of 8
+#: measured runs (comparing the FULL column is a different ordering than
+#: comparing the masked one), and even after reading the masked value
+#: correctly, the masked bits themselves collide far more than assumed:
+#: ``generateSnowflakeID()``'s low 22 bits are
+#: ``machine_id(10) | per-millisecond-counter(12)``, and that counter
+#: RESETS every millisecond, so IDs generated ~100ms apart on the same
+#: machine collided outright in 10 of 20 measured trials -- roughly six
+#: orders of magnitude worse than the "~1-in-4.19-million" the shipped
+#: docstring claimed, because a structured, non-uniform bit layout was
+#: masked and assumed to behave like a uniform one. Reading ``version_key``
+#: directly (it is a real, queryable column despite being ``MATERIALIZED``)
+#: is still necessary but not sufficient -- the "reader tie-break equals
+#: engine version column" principle F6 established has to be paired with
+#: an engine-side tie-break that is ACTUALLY well-distributed, which a
+#: content hash is and a masked id-generator counter is not.
 #:
 #: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04, fixed
 #: prior to this migration and preserved here): never alias an aggregate to

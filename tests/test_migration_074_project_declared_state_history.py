@@ -91,20 +91,30 @@ def test_history_table_version_column_is_version_key_not_last_synced() -> None:
     could disagree with whatever a background merge eventually kept.
     `version_key` -- a MATERIALIZED value bit-packing `last_synced`
     (primary ordering, preserving F6's established semantic unchanged
-    whenever `last_synced` differs) with `write_seq`'s low 22 bits
-    (tertiary tie-break, reached only when `last_synced` ALSO ties
-    exactly) -- is the version column now.
+    whenever `last_synced` differs) with a `cityHash64` of the declared
+    CONTENT columns (tertiary tie-break, reached only when `last_synced`
+    ALSO ties exactly) -- is the version column now.
+
+    NOT `write_seq`/`generateSnowflakeID()` -- an earlier version of this
+    fix used that, and the verifier measured its low 22 bits (a
+    per-millisecond counter that RESETS every millisecond) colliding far
+    more than a uniformly-distributed tie-break would, in 10 of 20 trials
+    at ~100ms spacing. A content hash does not have that structured,
+    non-uniform bit layout.
     """
     module = _load()
     client = _FakeClient()
     module.upgrade(client)
     create_stmt = next(c for c in client.commands if "CREATE TABLE" in c)
     normalized = " ".join(create_stmt.split())
-    assert "write_seq UInt64 DEFAULT generateSnowflakeID()" in normalized
+    assert "cityHash64(" in normalized
     assert "version_key UInt64 MATERIALIZED" in normalized
     assert "ReplacingMergeTree(version_key)" in normalized
     assert "ReplacingMergeTree(last_synced)" not in normalized
-    assert "ReplacingMergeTree(write_seq)" not in normalized
+    assert "generateSnowflakeID" not in normalized, (
+        "the low-bit tie-break must be content-derived, not an id "
+        "generator's low bits (measured to collide far more than assumed)"
+    )
 
 
 def test_backfills_from_projects_final_when_projects_exists() -> None:

@@ -436,13 +436,13 @@ async def test_f6_argmax_tie_break_agrees_with_rmt_keep_rule(
     Constructed so the two tie-break candidates disagree with each other:
     row A is inserted FIRST but carries the LARGER `last_synced` (the value
     RMT's merge will keep); row B is inserted SECOND (so it would win an
-    insertion-order/`write_seq` tie-break) but carries the SMALLER
-    `last_synced`. The fix's tie-break is `(updated_at, last_synced,
-    write_seq)`, `last_synced` first -- codex review C1's `write_seq`
-    tertiary tie-break must NEVER override a genuine `last_synced`
+    insertion-order tie-break) but carries the SMALLER `last_synced`. The
+    fix's tie-break is `(updated_at, version_key)`, and `version_key` is
+    PRIMARILY ordered by `last_synced` -- the content-hash-derived tertiary
+    tie-break (codex review C1) must NEVER override a genuine `last_synced`
     difference (that would silently change this established semantic --
-    see the migration's own docstring on why an earlier version of the C1
-    fix got exactly this wrong).
+    see the migration's own docstring on why two earlier versions of the
+    C1 fix got exactly this wrong).
     """
     org_id = f"proj-history-f6-{uuid.uuid4().hex[:16]}"
     project_id = str(uuid.uuid4())
@@ -452,8 +452,8 @@ async def test_f6_argmax_tie_break_agrees_with_rmt_keep_rule(
     row_b_last_synced = NOW - timedelta(hours=2)
     assert row_b_last_synced < row_a_last_synced
 
-    # Row A first (earlier ingestion, smaller write_seq), but the HIGHER
-    # last_synced -- the one RMT will keep after a merge.
+    # Row A first (earlier ingestion), but the HIGHER last_synced -- the
+    # one RMT will keep after a merge.
     sink.write_projects(
         [
             ProjectRecord(
@@ -469,9 +469,9 @@ async def test_f6_argmax_tie_break_agrees_with_rmt_keep_rule(
             )
         ]
     )
-    # Row B second (later ingestion, LARGER write_seq -- deliberately the
-    # value a pure-insertion-order tie-break would wrongly prefer), but the
-    # LOWER last_synced.
+    # Row B second (later ingestion -- deliberately the value a
+    # pure-insertion-order tie-break would wrongly prefer), but the LOWER
+    # last_synced.
     sink.write_projects(
         [
             ProjectRecord(
@@ -511,6 +511,21 @@ async def test_f6_argmax_tie_break_agrees_with_rmt_keep_rule(
     assert final_rows[0]["state"] == "a_should_survive"
 
 
+_HISTORY_COLUMNS_NO_VERSION = [
+    "org_id",
+    "provider",
+    "id",
+    "project_key",
+    "name",
+    "is_active",
+    "state",
+    "target_date",
+    "url",
+    "updated_at",
+    "last_synced",
+]
+
+
 @pytest.mark.asyncio
 async def test_c1_same_millisecond_collision_is_deterministic(
     raw_client: Any,
@@ -522,90 +537,72 @@ async def test_c1_same_millisecond_collision_is_deterministic(
     deterministically -- a pre-merge read could disagree with whatever a
     background merge eventually kept, silently discarding one state. The
     fix's `version_key` (migration 074) breaks this SPECIFIC tie (identical
-    `last_synced` too) with `write_seq`'s low bits -- see
-    `test_f6_argmax_tie_break_agrees_with_rmt_keep_rule` immediately above
-    for proof that `write_seq` never overrides a genuinely differing
-    `last_synced`, only a fully-tied one like this.
+    `last_synced` too) with a `cityHash64` of the declared CONTENT columns
+    -- see `test_f6_argmax_tie_break_agrees_with_rmt_keep_rule` immediately
+    above for proof that this tertiary tie-break never overrides a
+    genuinely differing `last_synced`, only a fully-tied one like this.
+
+    NOT testing `write_seq`/`generateSnowflakeID()` distinctness -- an
+    earlier version of this test did, and it could never fail for the
+    defect it named (snowflake IDs are globally unique almost by
+    definition; the actual bug was in the MASKED low bits colliding, which
+    full-value distinctness cannot detect). This version checks the MASKED
+    `version_key` values directly, which is what the engine and the reader
+    both actually compare.
 
     Seeded directly via `raw_client` (bypassing the sink, which stamps a
     real, distinct-enough `last_synced` per call) to force the exact
-    collision: identical `updated_at` AND `last_synced` on two rows,
-    inserted as two SEPARATE parts (two `insert()` calls, mirroring two
-    real concurrent workers) so a genuine merge-time tie-break is
-    exercised, not just an in-batch ordering artifact.
+    collision: identical `updated_at` AND `last_synced` on two rows with
+    DIFFERENT content, inserted as two SEPARATE parts (two `insert()`
+    calls, mirroring two real concurrent workers) so a genuine merge-time
+    tie-break is exercised, not just an in-batch ordering artifact.
     """
     org_id = f"proj-history-c1-{uuid.uuid4().hex[:16]}"
     project_id = str(uuid.uuid4())
     colliding_instant = NOW - timedelta(days=1)
 
-    columns = [
-        "org_id",
-        "provider",
-        "id",
-        "project_key",
-        "name",
-        "is_active",
-        "state",
-        "target_date",
-        "url",
-        "updated_at",
-        "last_synced",
-    ]
+    def _row(state: str) -> list[Any]:
+        return [
+            org_id,
+            "linear",
+            project_id,
+            None,
+            "Platform",
+            1,
+            state,
+            None,
+            "",
+            colliding_instant,
+            colliding_instant,
+        ]
+
     raw_client.insert(
         "project_declared_state_history",
-        [
-            [
-                org_id,
-                "linear",
-                project_id,
-                None,
-                "Platform",
-                1,
-                "state_from_worker_a",
-                None,
-                "",
-                colliding_instant,
-                colliding_instant,
-            ]
-        ],
-        column_names=columns,
+        [_row("state_from_worker_a")],
+        column_names=_HISTORY_COLUMNS_NO_VERSION,
     )
     raw_client.insert(
         "project_declared_state_history",
-        [
-            [
-                org_id,
-                "linear",
-                project_id,
-                None,
-                "Platform",
-                1,
-                "state_from_worker_b",
-                None,
-                "",
-                colliding_instant,
-                colliding_instant,
-            ]
-        ],
-        column_names=columns,
+        [_row("state_from_worker_b")],
+        column_names=_HISTORY_COLUMNS_NO_VERSION,
     )
 
-    # The write_seq values ClickHouse assigned to the two colliding rows
-    # must be genuinely DISTINCT -- this is the property that makes the
-    # tie-break deterministic rather than merely "observed to agree so
-    # far". If this ever fails, generateSnowflakeID() has stopped being
-    # unique-per-row and the whole fix's premise is void.
-    write_seqs = await query_dicts(
+    # The two colliding rows carry DIFFERENT content -- their masked
+    # version_key values must be genuinely DISTINCT (this is what "the
+    # tie is actually broken" means; a rare hash collision here would be
+    # the documented ~1-in-4.19-million residual, not this test flaking
+    # for no reason).
+    version_keys = await query_dicts(
         raw_client,
-        "SELECT write_seq FROM project_declared_state_history "
+        "SELECT state, version_key FROM project_declared_state_history "
         "WHERE org_id = {org_id:String} AND id = {entity_id:String} "
-        "ORDER BY write_seq",
+        "ORDER BY state",
         {"org_id": org_id, "entity_id": project_id},
     )
-    assert len(write_seqs) == 2
-    assert write_seqs[0]["write_seq"] != write_seqs[1]["write_seq"], (
-        "the two colliding rows must get DISTINCT write_seq values -- "
-        "otherwise the tie is not actually broken"
+    assert len(version_keys) == 2
+    assert version_keys[0]["version_key"] != version_keys[1]["version_key"], (
+        "two rows with DIFFERENT content sharing the same updated_at and "
+        "last_synced must get distinct masked version_key values"
     )
 
     pre_merge = await _declared_facts(
@@ -614,7 +611,7 @@ async def test_c1_same_millisecond_collision_is_deterministic(
     raw_client.command("OPTIMIZE TABLE project_declared_state_history FINAL")
     post_merge_rows = await query_dicts(
         raw_client,
-        "SELECT state FROM project_declared_state_history FINAL "
+        "SELECT state, version_key FROM project_declared_state_history FINAL "
         "WHERE org_id = {org_id:String} AND id = {entity_id:String}",
         {"org_id": org_id, "entity_id": project_id},
     )
@@ -625,6 +622,35 @@ async def test_c1_same_millisecond_collision_is_deterministic(
         "must still resolve to the SAME state before and after a merge -- "
         f"got pre-merge={pre_merge['state']!r}, "
         f"post-merge={post_merge_rows[0]['state']!r}"
+    )
+
+    # Rebuild-stability: the winning row's version_key must be a pure
+    # function of its CONTENT, not of anything ephemeral (insertion time,
+    # a freshly-generated id) -- re-inserting the EXACT SAME content into a
+    # freshly truncated table must reproduce the IDENTICAL version_key.
+    # This is the property migration 075's reconciler (CHAOS-3563 round-3
+    # review A) depends on: rebuilding this table from `projects FINAL`
+    # must not change tie-break outcomes for unchanged content.
+    winning_state = post_merge_rows[0]["state"]
+    winning_version_key = post_merge_rows[0]["version_key"]
+    raw_client.command("TRUNCATE TABLE project_declared_state_history")
+    raw_client.insert(
+        "project_declared_state_history",
+        [_row(winning_state)],
+        column_names=_HISTORY_COLUMNS_NO_VERSION,
+    )
+    rebuilt_rows = await query_dicts(
+        raw_client,
+        "SELECT version_key FROM project_declared_state_history "
+        "WHERE org_id = {org_id:String} AND id = {entity_id:String}",
+        {"org_id": org_id, "entity_id": project_id},
+    )
+    assert len(rebuilt_rows) == 1
+    assert rebuilt_rows[0]["version_key"] == winning_version_key, (
+        "version_key must be reproducible from content alone -- a rebuild "
+        "(TRUNCATE + re-insert of the identical row) must yield the exact "
+        "same value, unlike a write_seq/generateSnowflakeID()-based design "
+        "would"
     )
 
 
@@ -1033,19 +1059,19 @@ async def test_c1_delayed_replay_of_an_older_sync_never_regresses_the_watermark(
     sink: Any, raw_client: Any
 ) -> None:
     """Team-lead follow-up on the C1 fix's first draft: does switching to a
-    write_seq-influenced version column let a DELAYED REPLAY of an OLDER
+    tie-break-influenced version column let a DELAYED REPLAY of an OLDER
     sync (same declared `updated_at`, but an earlier, staler `last_synced`)
     win the merge just because it happened to be INSERTED later -- e.g. a
     retried delivery arriving after a network partition, well after a
     fresher sync of the SAME state already landed?
 
     Answer, pinned here: no. `version_key`'s primary ordering is
-    `last_synced`, not insertion order (see migration 074's docstring and
-    `test_f6_argmax_tie_break_agrees_with_rmt_keep_rule` above) -- a
-    replay carrying an OLDER `last_synced` can NEVER win over an
-    already-recorded fresher one, regardless of arrival order. Direction
+    `last_synced`, not insertion order or content (see migration 074's
+    docstring and `test_f6_argmax_tie_break_agrees_with_rmt_keep_rule`
+    above) -- a replay carrying an OLDER `last_synced` can NEVER win over
+    an already-recorded fresher one, regardless of arrival order. Direction
     of any residual failure this design accepts (documented, not this
-    scenario): if `write_seq` ever needs to break a tie, it only does so
+    scenario): the content-hash tertiary tie-break only ever activates
     when `last_synced` ALSO matches exactly -- a replay by definition
     carries a DIFFERENT (older) `last_synced`, so it never reaches that
     tie-break path at all here.
@@ -1075,8 +1101,8 @@ async def test_c1_delayed_replay_of_an_older_sync_never_regresses_the_watermark(
         ]
     )
     # 2. A DELAYED REPLAY of the older observation arrives SECOND (later
-    #    write_seq / insertion order) -- e.g. a retried delivery. Same
-    #    declared updated_at, but a STALER last_synced.
+    #    insertion order) -- e.g. a retried delivery. Same declared
+    #    updated_at, but a STALER last_synced.
     sink.write_projects(
         [
             ProjectRecord(

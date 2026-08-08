@@ -27,6 +27,7 @@ op-services	op-run	/operate/run/services/	Service and process responsibilities	c
 op-workers	op-run	/operate/run/workers-and-jobs/	Workers, jobs, retries, and schedules	task-guide	true	public	planned	false	
 op-ingestion	op-run	/operate/run/ingestion-and-backfills/	Ingestion and backfill operations	task-guide	true	public	planned	false	
 op-controls	op-run	/operate/run/operational-controls/	Safe operational controls	task-guide	true	public	planned	false	
+op-ask-dev-rollout	op-run	/operate/run/ask-dev-rollout/	Ask Dev rollout	task-guide	true	public	planned	false	
 op-observe	operate	/operate/observe/	Observe the platform	landing	true	public	planned	false	
 op-healthchecks	op-observe	/operate/observe/health-checks/	Health checks	reference	true	public	planned	false	
 op-logs	op-observe	/operate/observe/logs/	Logs	reference	true	public	planned	false	

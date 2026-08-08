@@ -76,6 +76,8 @@ nav:
           - AI Impact: use/ai-workflows/impact.md
           - AI Review Load: use/ai-workflows/review-load.md
           - AI Governance Risk: use/ai-workflows/risk.md
+          - Ask what Ask Dev supports: use/ai-workflows/ask-dev-questions.md
+          - Read an Ask Dev answer: use/ai-workflows/ask-dev-answers.md
       - Reports:
           - use/reports/index.md
           - Create or clone: use/reports/create-or-clone.md
@@ -145,6 +147,7 @@ nav:
           - Workers and jobs: operate/run/workers-and-jobs.md
           - Ingestion and backfills: operate/run/ingestion-and-backfills.md
           - Operational controls: operate/run/operational-controls.md
+          - Ask Dev rollout: operate/run/ask-dev-rollout.md
       - Observe:
           - operate/observe/index.md
           - Health checks: operate/observe/health-checks.md

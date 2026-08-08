@@ -64,6 +64,88 @@ class TestProjects:
         with pytest.raises(ValueError, match="strictly after"):
             projects_gen.build_retired_project_version(active, retired_as_of=_NOW)
 
+    def test_build_project_record_can_carry_a_declared_state(self) -> None:
+        """PR #1602 round-2 review C4 (CONFIRMED): before this fix,
+        `ProjectRecord`/`build_project_record` had no `state`/`target_date`
+        field at all -- no fixture world could ever seed a declared project
+        state, so it could never exercise Ask Dev's declared-state feature
+        (`_PROJECT_DECLARED_FACTS_SQL`).
+        """
+        from datetime import date
+
+        record = projects_gen.build_project_record(
+            org_id="org-1",
+            repo_full_name="meridian/web-app",
+            state="in_progress",
+            target_date=date(2026, 12, 1),
+            url="https://example.test/projects/1",
+            as_of=_NOW,
+        )
+        assert record.state == "in_progress"
+        assert record.target_date == date(2026, 12, 1)
+        assert record.url == "https://example.test/projects/1"
+
+    def test_build_project_record_declared_state_defaults_match_production_empties(
+        self,
+    ) -> None:
+        record = projects_gen.build_project_record(
+            org_id="org-1", repo_full_name="meridian/web-app", as_of=_NOW
+        )
+        assert record.state == ""
+        assert record.target_date is None
+        assert record.url == ""
+
+    def test_retired_version_carries_declared_state_forward(self) -> None:
+        from datetime import date
+
+        active = projects_gen.build_project_record(
+            org_id="org-1",
+            repo_full_name="legacy/billing",
+            state="completed",
+            target_date=date(2026, 6, 1),
+            as_of=_NOW,
+        )
+        retired = projects_gen.build_retired_project_version(
+            active, retired_as_of=_NOW + timedelta(hours=1)
+        )
+        assert retired.state == "completed"
+        assert retired.target_date == date(2026, 6, 1)
+
+    @pytest.mark.asyncio
+    async def test_insert_projects_carries_declared_state_into_the_matrix(
+        self,
+    ) -> None:
+        """PR #1602 round-2 review C4: the declared-state fields must
+        actually reach the insert matrix (both the `projects` write and
+        the F2 history mirror), positioned correctly against
+        `_PROJECT_COLUMNS`, not just exist on the dataclass.
+        """
+        from datetime import date
+
+        calls = []
+
+        class _StubClient:
+            def insert(self, table, matrix, column_names):
+                calls.append((table, matrix, column_names))
+
+        record = projects_gen.build_project_record(
+            org_id="org-1",
+            repo_full_name="meridian/web-app",
+            state="planned",
+            target_date=date(2026, 9, 1),
+            url="https://example.test/p/1",
+            as_of=_NOW,
+        )
+        await projects_gen.insert_projects(_StubClient(), [record])
+
+        assert len(calls) == 2
+        for _table, matrix, column_names in calls:
+            row = matrix[0]
+            as_dict = dict(zip(column_names, row, strict=True))
+            assert as_dict["state"] == "planned"
+            assert as_dict["target_date"] == date(2026, 9, 1)
+            assert as_dict["url"] == "https://example.test/p/1"
+
     @pytest.mark.asyncio
     async def test_insert_projects_no_records_is_a_noop(self) -> None:
         class _MustNotInsert:

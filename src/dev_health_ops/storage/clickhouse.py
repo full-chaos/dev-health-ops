@@ -172,13 +172,28 @@ class ClickHouseStore:
 
     @staticmethod
     def _normalize_datetime(value: Any) -> Any:
+        """Normalize to a timezone-AWARE UTC datetime for clickhouse-connect.
+
+        PR #1602 round-2 review NEW-2 (HIGH, BLOCKS) found the identical bug
+        pattern in ``metrics/sinks/clickhouse/_insert.py``'s sibling
+        ``_dt_to_clickhouse_datetime``: converting to UTC and then stripping
+        ``tzinfo`` before handing the value to clickhouse-connect, which
+        reinterprets a NAIVE datetime using the WRITER PROCESS's own local
+        system timezone -- a second, spurious conversion. This function has
+        the same shape and feeds the same client, including this PR's own
+        ``insert_projects`` write into ``project_declared_state_history``
+        (CHAOS-3563 review F2), so it carries the identical fix: return an
+        AWARE UTC datetime (never stripped), and treat a naive input as
+        already-UTC (this codebase's convention) rather than leaving it
+        naive and vulnerable to the same reinterpretation.
+        """
         if value is None:
             return None
         if not isinstance(value, datetime):
             return value
         if value.tzinfo is None:
-            return value
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     @staticmethod
     def _json_or_none(value: Any) -> str | None:

@@ -401,16 +401,46 @@ LIMIT {limit:UInt32}
 #:
 #: PR #1602 review F6 (PLAUSIBLE): the tie-break tuple's second element used
 #: to be ``ingested_at`` (this row's own insertion time), but
-#: ``project_declared_state_history`` is
-#: ``ReplacingMergeTree(last_synced)`` -- a background merge keeps whichever
+#: ``project_declared_state_history``'s ReplacingMergeTree version column
+#: (at the time) was ``last_synced`` -- a background merge kept whichever
 #: row sharing the full ORDER BY key ``(org_id, provider, id, updated_at)``
-#: has the LARGEST ``last_synced``, not the largest ``ingested_at``. Two
-#: rows sharing that key can disagree on which is "latest" by each
+#: had the LARGEST ``last_synced``, not the largest ``ingested_at``. Two
+#: rows sharing that key could disagree on which is "latest" by each
 #: ordering, so the query's answer could silently FLIP the moment a merge
-#: happens, with no new write and no ``as_of`` change. The tie-break is now
-#: ``(updated_at, last_synced)`` -- the exact same ordering the engine's own
-#: version column uses -- so the answer this query returns is guaranteed to
-#: already agree with whatever a merge will eventually keep.
+#: happened, with no new write and no ``as_of`` change.
+#:
+#: Codex cross-system review C1 (HIGH): ``(updated_at, last_synced)`` fixed
+#: F6's specific disagreement but left a NARROWER one: both columns are
+#: only millisecond-precision, so two DIFFERENT observed states sharing the
+#: same millisecond for BOTH tied with no further tie-break at all --
+#: implementation-defined and possibly still able to disagree with a
+#: background merge. The tie-break is now ``(updated_at, version_key)`` --
+#: ``version_key`` (migration 074) is the table's own ReplacingMergeTree
+#: version column, a ``MATERIALIZED`` value bit-packing ``last_synced``
+#: (high bits, primary ordering) with ``write_seq`` (low bits, tertiary
+#: tie-break, only reached when ``last_synced`` ALSO ties exactly).
+#:
+#: SECOND bug, found empirically (measured ~2 of 8 runs disagreeing) after
+#: an earlier version of this exact fix used ``(updated_at, last_synced,
+#: write_seq)`` instead -- a plain 3-level tuple comparing the FULL
+#: ``write_seq`` value, reasoned (wrongly) to be equivalent to comparing
+#: the bit-packed ``version_key``: bit-MASKING ``write_seq`` down to its
+#: low 22 bits (what ``version_key`` actually does) does NOT preserve the
+#: full value's relative order -- two snowflake IDs where the SECOND is
+#: numerically larger overall can easily have a SMALLER low-22-bit slice,
+#: so comparing the full column and comparing the masked column are
+#: different orderings whenever ``last_synced`` ties. Reading
+#: ``version_key`` directly (it is a real, queryable column despite being
+#: ``MATERIALIZED``) is the only way to GUARANTEE agreement with the
+#: engine, rather than reasoning about whether an independently-computed
+#: expression happens to match it -- the "reader tie-break equals engine
+#: version column" principle F6 established, now literally reading that
+#: column instead of recomputing an approximation of it. See the
+#: migration's own docstring for the full rationale, including why an
+#: EVEN EARLIER version of this fix (making ``write_seq`` the sole version
+#: column, no ``last_synced`` involvement at all) was ALSO wrong: it
+#: silently changed the dedup semantic for the ordinary
+#: differing-``last_synced`` case too, not just the rare tie.
 #:
 #: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04, fixed
 #: prior to this migration and preserved here): never alias an aggregate to
@@ -440,19 +470,22 @@ LIMIT {limit:UInt32}
 #: exactly one provider has exactly one or more such rows) versus
 #: ``total_count``/``earliest_known_updated_at`` (ALL retained rows for this
 #: id, regardless of ``as_of`` -- computed by a second, unbounded
-#: aggregate). ``bounded_count == 0 and total_count > 0`` is case (b) --
-#: floor-breached, not absent -- and the caller (below) renders it as an
-#: explicit warning rather than silence. Both aggregates are single-row
-#: (no ``GROUP BY``), so the ``FROM bounded, unbounded`` cross join is
-#: always exactly one row, never zero -- ``_read`` below no longer relies
-#: on an empty result set to signal "nothing found"; the row's own counts
-#: carry that now.
+#: aggregate). ``bounded_count == 0 and total_count > 0`` is NECESSARY but
+#: not SUFFICIENT for case (b): it also requires ``has_floor_row`` (a third,
+#: independent aggregate over ``project_declared_state_floor`` -- see review
+#: NEW-1) to distinguish a genuine floor breach from a project simply
+#: created after ``as_of`` with its complete history already retained (see
+#: the caller for the full three-way branch). All three aggregates are
+#: single-row (no ``GROUP BY``), so the ``FROM bounded, unbounded, floor``
+#: cross join is always exactly one row, never zero -- ``_read`` below no
+#: longer relies on an empty result set to signal "nothing found"; the
+#: row's own counts carry that now.
 _PROJECT_DECLARED_FACTS_SQL = """
 WITH bounded AS (
     SELECT
         argMax(
             tuple(state, target_date, last_synced, is_active),
-            (updated_at, last_synced)
+            (updated_at, version_key)
         ) AS winner,
         max(updated_at) AS declared_updated_at,
         countDistinct(provider) AS provider_count,
@@ -463,9 +496,16 @@ WITH bounded AS (
 ), unbounded AS (
     SELECT
         count() AS total_count,
-        min(updated_at) AS earliest_known_updated_at,
-        argMin(is_backfill_floor, updated_at) AS earliest_is_backfill_floor
+        min(updated_at) AS earliest_known_updated_at
     FROM project_declared_state_history
+    WHERE org_id = {org_id:String} AND id = {entity_id:String}
+), floor AS (
+    -- PR #1602 review NEW-1: `project_declared_state_floor` is written
+    -- ONLY by migration 074's backfill, never by an ordinary sync, so a
+    -- row here can never be discarded by a merge the way an in-history
+    -- `is_backfill_floor` column was (see the migration's own docstring).
+    SELECT count() AS floor_count
+    FROM project_declared_state_floor
     WHERE org_id = {org_id:String} AND id = {entity_id:String}
 )
 SELECT
@@ -499,16 +539,17 @@ SELECT
     bounded.bounded_count AS bounded_count,
     unbounded.total_count AS total_count,
     unbounded.earliest_known_updated_at AS earliest_known_updated_at,
-    -- PR #1602 review F4: whether the EARLIEST retained row (chronologically
-    -- first, regardless of `as_of`) is a migration-074 backfill seed. Only
+    -- PR #1602 review F4 / NEW-1: whether this project existed at
+    -- migration-074's run time (a durable fact recorded outside the
+    -- history table's merge domain -- see the `floor` CTE above). Only
     -- meaningful when `bounded_count = 0 AND total_count > 0` -- see the
-    -- caller for how this distinguishes a genuine floor breach (earliest
-    -- row IS a backfill seed, so an unknown, unrecoverable past may exist
-    -- before it) from a project simply created after `as_of` (earliest row
-    -- is a normal sync, so the retained history already IS the complete
-    -- history back to this project's true creation).
-    unbounded.earliest_is_backfill_floor AS earliest_is_backfill_floor
-FROM bounded, unbounded
+    -- caller for how this distinguishes a genuine floor breach (a floor
+    -- row exists, so an unknown, unrecoverable past may exist before it)
+    -- from a project simply created after `as_of` (no floor row, so the
+    -- retained history already IS the complete history back to this
+    -- project's true creation).
+    floor.floor_count > 0 AS has_floor_row
+FROM bounded, unbounded, floor
 """
 
 _BLOCKER_WATERMARK_SQL = """
@@ -1812,11 +1853,11 @@ class ClickHouseStatusChangeSource:
                 bounded_count = int(row.get("bounded_count") or 0)
                 total_count = int(row.get("total_count") or 0)
                 provider_count = int(row.get("provider_count") or 0)
-                earliest_is_backfill_floor = row.get("earliest_is_backfill_floor")
+                has_floor_row = row.get("has_floor_row")
                 if (
                     bounded_count == 0
                     and total_count > 0
-                    and earliest_is_backfill_floor in (1, True)
+                    and has_floor_row in (1, True)
                 ):
                     # CHAOS-3563 review condition: `as_of` predates every
                     # retained declared-state row for this project -- the
@@ -1840,15 +1881,17 @@ class ClickHouseStatusChangeSource:
                     # project whose entire retained history postdates
                     # `as_of` because it did not exist yet is not "unknown",
                     # it is absent, exactly like any other not-yet-created
-                    # entity. `earliest_is_backfill_floor` (migration 074)
-                    # distinguishes the two: only true when the earliest
-                    # retained row is itself a migration backfill seed,
-                    # meaning real, unretained state may have existed even
-                    # earlier. When the earliest row is an ordinary sync
-                    # instead, the retained history already IS the complete
-                    # history back to this project's true creation, and this
-                    # branch falls through to silent absence below, matching
-                    # every other entity's as_of semantics.
+                    # entity. `has_floor_row` (migration 074's separate
+                    # `project_declared_state_floor` table -- see review
+                    # NEW-1 on why it is not a column on the history table
+                    # itself) distinguishes the two: only true when this
+                    # project existed at migration time, meaning real,
+                    # unretained state may have existed even earlier. When
+                    # no floor row exists, the retained history already IS
+                    # the complete history back to this project's true
+                    # creation, and this branch falls through to silent
+                    # absence below, matching every other entity's as_of
+                    # semantics.
                     earliest = row.get("earliest_known_updated_at")
                     earliest_display = (
                         self._datetime(earliest, None).isoformat()

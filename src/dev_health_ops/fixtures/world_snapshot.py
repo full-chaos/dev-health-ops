@@ -320,7 +320,7 @@ async def _clickhouse_content_hashes(client: Any) -> dict[str, str]:
     ``FINAL`` view is what those engines exist to present and what every
     reader actually sees, so that is what is hashed.
 
-    Covers EVERY table, not just the 14 in ``_CLICKHOUSE_DIGEST_TABLES``:
+    Covers EVERY table, not just the 15 in ``_CLICKHOUSE_DIGEST_TABLES``:
     ``WORLD_DIGEST`` deliberately scopes itself to the world's own orgs and
     tables, while this has to catch a restore that quietly dropped or doubled
     anything anywhere.

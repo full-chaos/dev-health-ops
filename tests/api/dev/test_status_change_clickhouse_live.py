@@ -40,9 +40,37 @@ ORG_ID = "019fa8b7-2a25-7680-80dd-39fc20d3296d"
 REPOSITORY_ID = "11111111-1111-4111-8111-111111111111"
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 
+#: PR #1602 round-2 review NEW-4 (LOW): this file used to skip on
+#: `not CLICKHOUSE_URI` alone -- with the repo's own `.env` sourced (which
+#: points `CLICKHOUSE_URI` at the real dev `default` database), that
+#: condition is False, so this file ran for real against `default` and
+#: HARD-FAILED with `UNKNOWN_TABLE` the moment a query referenced a table
+#: `default` doesn't have, instead of skipping. Matches the
+#: `_PROTECTED_DATABASES` guard every sibling live-ClickHouse test file in
+#: this package already uses (e.g.
+#: `test_project_declared_state_history_clickhouse_live.py`).
+_PROTECTED_DATABASES = frozenset({"", "default"})
+
+
+def _database_of(dsn: str | None) -> str:
+    from urllib.parse import urlparse
+
+    return urlparse(dsn or "").path.lstrip("/").strip().lower()
+
+
+_SKIP_REASON = (
+    "Requires a migrated SCRATCH CLICKHOUSE_URI "
+    "(e.g. clickhouse://ch:ch@localhost:8123/ci_local_validate); "
+    f"got database {_database_of(CLICKHOUSE_URI) or '<unset>'!r}, which this "
+    "suite refuses to run schema analysis against"
+)
+
 pytestmark = [
     pytest.mark.clickhouse,
-    pytest.mark.skipif(not CLICKHOUSE_URI, reason="Requires migrated CLICKHOUSE_URI"),
+    pytest.mark.skipif(
+        not CLICKHOUSE_URI or _database_of(CLICKHOUSE_URI) in _PROTECTED_DATABASES,
+        reason=_SKIP_REASON,
+    ),
 ]
 
 

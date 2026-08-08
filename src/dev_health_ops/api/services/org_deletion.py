@@ -158,8 +158,18 @@ def _clickhouse_tables_from_migrations() -> tuple[str, ...]:
         for statement in text.split(";"):
             if not re.search(r"\borg_id\b", statement):
                 continue
-            create_match = _CREATE_TABLE_RE.search(statement)
-            if create_match:
+            # Self-discovered while adding migration 074's second table
+            # (PR #1602 round-2 review NEW-1): `.search()` finds only the
+            # FIRST `CREATE TABLE` in this chunk. Two CREATE TABLE
+            # statements defined back-to-back as Python triple-quoted
+            # string constants share a chunk (neither has a literal `;`),
+            # so a second org_id-bearing table in the same migration file
+            # was silently never discovered. `.finditer()` catches all of
+            # them; a name without a REAL org_id column is still safely
+            # filtered out downstream by `_purge_clickhouse`'s own
+            # `system.columns` probe (with a warning), so over-discovery
+            # here is harmless -- under-discovery is not.
+            for create_match in _CREATE_TABLE_RE.finditer(statement):
                 tables.add(create_match.group("table"))
 
     return tuple(sorted(tables))
@@ -587,6 +597,16 @@ class OrganizationDeletionService:
                 )
             return
 
+        # PR #1602 round-2 review C3 (CONFIRMED): the drift warning's outcome
+        # claim used to be derived ONLY from `dry_run`, blanket-applied to
+        # EVERY unregistered table -- a table with no org_id column
+        # (skipped), a count query that itself failed (silently folded into
+        # "0 rows", indistinguishable from a genuinely empty table), or a
+        # DELETE that raised (caught and logged, but the loop moved on as if
+        # nothing happened) all still got reported as "purged them" /
+        # "would purge them". Track each table's REAL outcome here and
+        # report per-table below, for the unregistered subset specifically.
+        outcomes: dict[str, str] = {}
         try:
             for table in tables:
                 org_id_type = await self._clickhouse_org_id_type(client, table)
@@ -594,27 +614,54 @@ class OrganizationDeletionService:
                     result.warnings.append(
                         f"ClickHouse table {table} missing or has no org_id column; skipped."
                     )
+                    outcomes[table] = "skipped (no org_id column)"
                     continue
 
                 condition = self._clickhouse_org_id_condition(org_id_type)
                 count = await self._clickhouse_count(client, table, condition, org_id)
+                if count is None:
+                    # The count query itself failed (already logged by
+                    # _clickhouse_count) -- this table was never verified,
+                    # NOT confirmed empty. Recorded as 0 in the response
+                    # totals only because DeletionScopeResult has no
+                    # "unknown" slot; the per-table outcome text below is
+                    # what actually distinguishes it from a real zero.
+                    result.clickhouse.tables[table] = 0
+                    outcomes[table] = "not verified (count query failed)"
+                    continue
                 result.clickhouse.tables[table] = count
                 result.clickhouse.total += count
-                if dry_run or count == 0:
+                if dry_run:
+                    outcomes[table] = (
+                        f"would purge ({count} row(s))"
+                        if count
+                        else "would purge (0 rows)"
+                    )
                     continue
-                await self._clickhouse_delete(client, table, condition, org_id)
+                if count == 0:
+                    outcomes[table] = "purged (0 rows)"
+                    continue
+                deleted = await self._clickhouse_delete(
+                    client, table, condition, org_id
+                )
+                outcomes[table] = (
+                    f"purged ({count} row(s))" if deleted else "failed (delete raised)"
+                )
         finally:
             if close_client is not None:
                 close_client()
 
         if unregistered:
-            outcome = "would purge them" if dry_run else "purged them"
+            per_table = "; ".join(
+                f"{table}: {outcomes.get(table, 'not verified (not reached)')}"
+                for table in sorted(unregistered)
+            )
             result.warnings.append(
                 "Org deletion has no reviewed deletion-completeness decision "
                 f"for: {sorted(unregistered)}. Record one in "
                 "api/services/derived_store_registry.py's "
-                f"CLICKHOUSE_DERIVED_STORES (this run {outcome} via "
-                "the migration scan; the registry is out of date)."
+                "CLICKHOUSE_DERIVED_STORES (the registry is out of date). "
+                f"Per-table outcome this run: {per_table}."
             )
 
     def _resolve_clickhouse_client(
@@ -662,7 +709,14 @@ class OrganizationDeletionService:
 
     async def _clickhouse_count(
         self, client: Any, table: str, condition: str, org_id: str
-    ) -> int:
+    ) -> int | None:
+        """Returns ``None`` on a failed count query -- PR #1602 round-2
+        review C3 (CONFIRMED): this used to return ``0`` on failure,
+        silently indistinguishable from a genuinely empty table (which
+        also legitimately skips the DELETE below). The caller now reports
+        those two cases with different wording ("not verified" vs.
+        "purged (0 rows)").
+        """
         try:
             response = await asyncio.to_thread(
                 client.query,
@@ -676,19 +730,25 @@ class OrganizationDeletionService:
                 table,
                 exc,
             )
-            return 0
+            return None
         rows = list(getattr(response, "result_rows", []) or [])
         return int(rows[0][0]) if rows else 0
 
     async def _clickhouse_delete(
         self, client: Any, table: str, condition: str, org_id: str
-    ) -> None:
+    ) -> bool:
+        """Returns whether the DELETE actually succeeded -- PR #1602
+        round-2 review C3 (CONFIRMED): this used to return ``None``
+        unconditionally, so a raised exception (caught and only logged)
+        was indistinguishable to the caller from a genuine success.
+        """
         try:
             await asyncio.to_thread(
                 client.command,
                 f"ALTER TABLE `{table}` DELETE WHERE {condition}",
                 parameters={"org_id": org_id},
             )
+            return True
         except Exception as exc:
             logger.warning(
                 "Unable to delete ClickHouse table for org deletion org_id=%s table=%s error=%s",
@@ -696,6 +756,7 @@ class OrganizationDeletionService:
                 table,
                 exc,
             )
+            return False
 
     async def _purge_external_stores(
         self, org_id: str, *, dry_run: bool, result: DeletionResult

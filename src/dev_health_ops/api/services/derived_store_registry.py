@@ -135,6 +135,7 @@ CLICKHOUSE_DERIVED_STORES: tuple[str, ...] = (
     "operational_services",
     "operational_teams",
     "operational_users",
+    "project_declared_state_floor",
     "project_declared_state_history",
     "projects",
     "recommendations_daily",

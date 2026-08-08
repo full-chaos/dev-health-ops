@@ -3468,7 +3468,7 @@ async def test_native_project_scope_surfaces_declared_state_and_target_date(
                     "bounded_count": 1,
                     "total_count": 1,
                     "earliest_known_updated_at": declared_updated_at,
-                    "earliest_is_backfill_floor": 0,
+                    "has_floor_row": False,
                 }
             ]
         if "INNER JOIN project ON 1 = 1" in sql:
@@ -3521,11 +3521,14 @@ async def test_native_project_scope_declared_state_is_explicit_floor_breach_not_
             # not far enough back. Must never be reported the same way as
             # "this project has no declared-state history at all".
             #
-            # PR #1602 review F4 (CONFIRMED): earliest_is_backfill_floor=1
-            # is what makes this a GENUINE floor breach (the earliest
-            # retained row is itself a migration-074 backfill seed, so real
-            # state may have existed even earlier that the floor could not
-            # recover) -- see
+            # PR #1602 review F4 (CONFIRMED), corrected by round-2 review
+            # NEW-1: has_floor_row=True is what makes this a GENUINE floor
+            # breach (this project existed at migration-074's run time, so
+            # real state may have existed even earlier that the floor
+            # could not recover). The fact lives in its own
+            # project_declared_state_floor table now, never a column on
+            # the history table itself (see the migration's own docstring
+            # on why that was unsound) -- see
             # test_native_project_scope_declared_state_created_after_as_of_
             # is_not_a_floor_breach below for the other half of this same
             # raw shape.
@@ -3540,7 +3543,7 @@ async def test_native_project_scope_declared_state_is_explicit_floor_breach_not_
                     "bounded_count": 0,
                     "total_count": 1,
                     "earliest_known_updated_at": earliest,
-                    "earliest_is_backfill_floor": 1,
+                    "has_floor_row": True,
                 }
             ]
         if "INNER JOIN project ON 1 = 1" in sql:
@@ -3592,7 +3595,7 @@ async def test_native_project_scope_declared_state_genuinely_absent_has_no_floor
                     "bounded_count": 0,
                     "total_count": 0,
                     "earliest_known_updated_at": None,
-                    "earliest_is_backfill_floor": None,
+                    "has_floor_row": None,
                 }
             ]
         if "INNER JOIN project ON 1 = 1" in sql:
@@ -3619,12 +3622,11 @@ async def test_native_project_scope_declared_state_created_after_as_of_is_not_a_
     """PR #1602 review F4 (CONFIRMED): the SAME raw shape as
     ``test_native_project_scope_declared_state_is_explicit_floor_breach_
     not_silent_absence`` above (``bounded_count == 0, total_count > 0``)
-    must NOT warn when ``earliest_is_backfill_floor`` is 0 -- the earliest
-    retained row is an ORDINARY sync, not a migration-074 backfill seed, so
-    this project's retained history already IS the complete history back
-    to its true creation. ``as_of`` before it means the project simply did
-    not exist yet -- plain absence, never the "unknown, not absent"
-    floor-breach signal.
+    must NOT warn when ``has_floor_row`` is ``False`` -- no floor row
+    exists for this project, so its retained history already IS the
+    complete history back to its true creation. ``as_of`` before it means
+    the project simply did not exist yet -- plain absence, never the
+    "unknown, not absent" floor-breach signal.
     """
     earliest = NOW.replace(hour=9) - timedelta(days=3)
 
@@ -3643,7 +3645,7 @@ async def test_native_project_scope_declared_state_created_after_as_of_is_not_a_
                     "bounded_count": 0,
                     "total_count": 1,
                     "earliest_known_updated_at": earliest,
-                    "earliest_is_backfill_floor": 0,
+                    "has_floor_row": False,
                 }
             ]
         if "INNER JOIN project ON 1 = 1" in sql:

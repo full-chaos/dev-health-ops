@@ -96,6 +96,69 @@ def test_registry_covers_every_table_the_migration_scan_discovers():
     )
 
 
+def test_migration_scan_discovers_every_create_table_in_one_statement_chunk(
+    tmp_path, monkeypatch
+):
+    """Self-discovered while wiring migration 074's second table
+    (`project_declared_state_floor`, PR #1602 round-2 review NEW-1) into
+    this registry: `_clickhouse_tables_from_migrations()` splits each
+    migration file's raw TEXT on `;`, then used `re.search` (first match
+    only, not `re.finditer`) for `CREATE TABLE` within each chunk. Two
+    `CREATE TABLE ... org_id ...` statements defined back-to-back as
+    Python triple-quoted string constants -- as migration 074 now has --
+    contain no literal `;` between them, so they land in the SAME chunk,
+    and the SECOND table was silently never discovered as an org-deletion
+    target at all (not even a "missing org_id column" warning -- it never
+    reached that code path). Over-discovery is safe: a discovered name
+    without a real `org_id` column is skipped downstream, WITH a warning,
+    by `_purge_clickhouse`'s own `system.columns` probe. Under-discovery is
+    not: a genuinely org_id-bearing table nobody added to
+    `CLICKHOUSE_DERIVED_STORES` AND that this scan also misses would never
+    be purged, and would never even warn -- an org-deletion completeness
+    gap silent at every layer.
+    """
+    from dev_health_ops.api.services import org_deletion as org_deletion_module
+
+    migration_dir = tmp_path / "clickhouse"
+    migration_dir.mkdir()
+    (migration_dir / "999_two_tables_one_chunk.py").write_text(
+        '_CREATE_FIRST_SQL = """\n'
+        "CREATE TABLE IF NOT EXISTS first_table (\n"
+        "    org_id String,\n"
+        "    id String\n"
+        ") ENGINE = MergeTree\n"
+        "ORDER BY (org_id, id)\n"
+        '"""\n'
+        "\n"
+        '_CREATE_SECOND_SQL = """\n'
+        "CREATE TABLE IF NOT EXISTS second_table (\n"
+        "    org_id String,\n"
+        "    id String\n"
+        ") ENGINE = MergeTree\n"
+        "ORDER BY (org_id, id)\n"
+        '"""\n'
+    )
+
+    monkeypatch.setattr(
+        org_deletion_module, "_CLICKHOUSE_MIGRATIONS_DIR", migration_dir
+    )
+    # @lru_cache(maxsize=1): must clear before (a prior test may have
+    # cached the REAL migrations directory's result) and after (so the
+    # next real caller recomputes against the real directory, not this
+    # synthetic one).
+    org_deletion_module._clickhouse_tables_from_migrations.cache_clear()
+    try:
+        discovered = org_deletion_module._clickhouse_tables_from_migrations()
+    finally:
+        org_deletion_module._clickhouse_tables_from_migrations.cache_clear()
+
+    assert "first_table" in discovered
+    assert "second_table" in discovered, (
+        "the SECOND CREATE TABLE sharing a semicolon-chunk with the first "
+        "must still be discovered"
+    )
+
+
 def test_clickhouse_derived_stores_has_no_duplicates():
     assert len(CLICKHOUSE_DERIVED_STORES) == len(set(CLICKHOUSE_DERIVED_STORES))
 
@@ -155,12 +218,13 @@ async def test_purge_clickhouse_warns_when_registry_is_incomplete(monkeypatch):
         "ALTER TABLE `a_table_missing_from_the_registry` DELETE"
         in clickhouse.commands[-1][0]
     )
-    # PR #1602 review F7 (CONFIRMED): this run genuinely purged (dry_run is
-    # False and a real client was resolved), so the warning may correctly
-    # claim so -- see the dry-run and unresolved-client variants below,
-    # where that claim would be FALSE.
-    assert "purged them" in drift_warning
-    assert "would purge" not in drift_warning
+    # PR #1602 review F7 (CONFIRMED), sharpened by round-2 review C3: this
+    # run genuinely purged THIS SPECIFIC TABLE (dry_run is False, a real
+    # client was resolved, the count was 1, and the DELETE succeeded), so
+    # the per-table outcome may correctly say so -- see the dry-run,
+    # unresolved-client, no-org-id, count-failure, and delete-failure
+    # variants below, where that claim would be FALSE for THAT table.
+    assert "a_table_missing_from_the_registry: purged (1 row(s))" in drift_warning
 
 
 @pytest.mark.asyncio
@@ -204,8 +268,8 @@ async def test_purge_clickhouse_drift_warning_says_would_purge_on_dry_run(
         for warning in result.warnings
         if "a_table_missing_from_the_registry" in warning
     )
-    assert "would purge" in drift_warning
-    assert "this run still purged them" not in drift_warning
+    assert "a_table_missing_from_the_registry: would purge (1 row(s))" in drift_warning
+    assert "a_table_missing_from_the_registry: purged" not in drift_warning
 
 
 @pytest.mark.asyncio
@@ -244,6 +308,157 @@ async def test_purge_clickhouse_drift_warning_says_not_verified_when_client_unre
     assert "not verified" in drift_warning
     assert "this run purged them" not in drift_warning
     assert "this run would purge them" not in drift_warning
+
+
+@pytest.mark.asyncio
+async def test_purge_clickhouse_drift_warning_reports_no_org_id_per_table(
+    monkeypatch,
+):
+    """PR #1602 round-2 review C3 (CONFIRMED): an unregistered table with
+    no `org_id` column is skipped (already warned separately by the
+    `system.columns` probe) -- but before this fix, the DRIFT warning's
+    blanket dry_run-derived wording still claimed it was "purged" anyway.
+    """
+    from dev_health_ops.api.services import org_deletion as org_deletion_module
+
+    class _FakeClickHouseClient:
+        def query(self, query, parameters=None):
+            class _Result:
+                # No `system.columns` row at all -- the table has no
+                # org_id column (or does not exist).
+                result_rows: list[tuple[Any, ...]] = []
+
+            return _Result()
+
+        def command(self, query, parameters=None):
+            raise AssertionError("no org_id column -- must never reach DELETE")
+
+    monkeypatch.setattr(
+        org_deletion_module,
+        "_clickhouse_tables_from_migrations",
+        lambda: ("repos", "a_table_missing_from_the_registry"),
+    )
+
+    clickhouse = _FakeClickHouseClient()
+    service = OrganizationDeletionService(_NO_SESSION, clickhouse_client=clickhouse)
+    result = org_deletion_module.DeletionResult(
+        organization_id=str(uuid.uuid4()), dry_run=False
+    )
+    await service._purge_clickhouse(
+        result.organization_id, dry_run=False, result=result
+    )
+
+    drift_warning = next(
+        warning
+        for warning in result.warnings
+        if "a_table_missing_from_the_registry" in warning
+        and "Per-table outcome" in warning
+    )
+    assert (
+        "a_table_missing_from_the_registry: skipped (no org_id column)" in drift_warning
+    )
+    assert "a_table_missing_from_the_registry: purged" not in drift_warning
+
+
+@pytest.mark.asyncio
+async def test_purge_clickhouse_drift_warning_reports_count_failure_per_table(
+    monkeypatch,
+):
+    """PR #1602 round-2 review C3 (CONFIRMED): a count query that fails
+    used to return 0 -- indistinguishable from a genuinely empty table,
+    which the old blanket wording would have called "purged" (0 rows,
+    technically true but misleading: this table was never actually
+    VERIFIED empty, the count itself errored).
+    """
+    from dev_health_ops.api.services import org_deletion as org_deletion_module
+
+    class _FakeClickHouseClient:
+        def query(self, query, parameters=None):
+            if "system.columns" in query:
+
+                class _ColumnsResult:
+                    result_rows: list[tuple[Any, ...]] = [("String",)]
+
+                return _ColumnsResult()
+            raise RuntimeError("count query exploded")
+
+        def command(self, query, parameters=None):
+            raise AssertionError("count failed -- must never reach DELETE")
+
+    monkeypatch.setattr(
+        org_deletion_module,
+        "_clickhouse_tables_from_migrations",
+        lambda: ("repos", "a_table_missing_from_the_registry"),
+    )
+
+    clickhouse = _FakeClickHouseClient()
+    service = OrganizationDeletionService(_NO_SESSION, clickhouse_client=clickhouse)
+    result = org_deletion_module.DeletionResult(
+        organization_id=str(uuid.uuid4()), dry_run=False
+    )
+    await service._purge_clickhouse(
+        result.organization_id, dry_run=False, result=result
+    )
+
+    drift_warning = next(
+        warning
+        for warning in result.warnings
+        if "a_table_missing_from_the_registry" in warning
+        and "Per-table outcome" in warning
+    )
+    assert (
+        "a_table_missing_from_the_registry: not verified (count query failed)"
+        in drift_warning
+    )
+    assert "a_table_missing_from_the_registry: purged" not in drift_warning
+
+
+@pytest.mark.asyncio
+async def test_purge_clickhouse_drift_warning_reports_delete_failure_per_table(
+    monkeypatch,
+):
+    """PR #1602 round-2 review C3 (CONFIRMED): a DELETE that raises is
+    caught and logged, but the old code never propagated that failure to
+    the drift warning -- it still claimed "purged them".
+    """
+    from dev_health_ops.api.services import org_deletion as org_deletion_module
+
+    class _FakeClickHouseClient:
+        def query(self, query, parameters=None):
+            class _Result:
+                result_rows: list[tuple[Any, ...]] = (
+                    [("String",)] if "system.columns" in query else [(3,)]
+                )
+
+            return _Result()
+
+        def command(self, query, parameters=None):
+            raise RuntimeError("delete exploded")
+
+    monkeypatch.setattr(
+        org_deletion_module,
+        "_clickhouse_tables_from_migrations",
+        lambda: ("repos", "a_table_missing_from_the_registry"),
+    )
+
+    clickhouse = _FakeClickHouseClient()
+    service = OrganizationDeletionService(_NO_SESSION, clickhouse_client=clickhouse)
+    result = org_deletion_module.DeletionResult(
+        organization_id=str(uuid.uuid4()), dry_run=False
+    )
+    await service._purge_clickhouse(
+        result.organization_id, dry_run=False, result=result
+    )
+
+    assert result.clickhouse.tables["a_table_missing_from_the_registry"] == 3
+    drift_warning = next(
+        warning
+        for warning in result.warnings
+        if "a_table_missing_from_the_registry" in warning
+        and "Per-table outcome" in warning
+    )
+    assert "a_table_missing_from_the_registry: failed (delete raised)" in drift_warning
+    assert "a_table_missing_from_the_registry: purged" not in drift_warning
 
 
 @pytest.mark.asyncio

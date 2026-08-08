@@ -83,6 +83,30 @@ def test_history_table_is_keyed_finer_than_projects_by_updated_at() -> None:
     assert "ORDER BY (org_id, provider, id, updated_at)" in normalized
 
 
+def test_history_table_version_column_is_version_key_not_last_synced() -> None:
+    """Codex cross-system review C1 (HIGH): `updated_at`/`last_synced` are
+    both only millisecond-precision -- two DIFFERENT observed states
+    sharing the same millisecond for BOTH used to tie on the RMT version
+    column (`last_synced`) with no further tie-break, so a pre-merge read
+    could disagree with whatever a background merge eventually kept.
+    `version_key` -- a MATERIALIZED value bit-packing `last_synced`
+    (primary ordering, preserving F6's established semantic unchanged
+    whenever `last_synced` differs) with `write_seq`'s low 22 bits
+    (tertiary tie-break, reached only when `last_synced` ALSO ties
+    exactly) -- is the version column now.
+    """
+    module = _load()
+    client = _FakeClient()
+    module.upgrade(client)
+    create_stmt = next(c for c in client.commands if "CREATE TABLE" in c)
+    normalized = " ".join(create_stmt.split())
+    assert "write_seq UInt64 DEFAULT generateSnowflakeID()" in normalized
+    assert "version_key UInt64 MATERIALIZED" in normalized
+    assert "ReplacingMergeTree(version_key)" in normalized
+    assert "ReplacingMergeTree(last_synced)" not in normalized
+    assert "ReplacingMergeTree(write_seq)" not in normalized
+
+
 def test_backfills_from_projects_final_when_projects_exists() -> None:
     module = _load()
     client = _FakeClient(projects_exists=True)
@@ -92,34 +116,56 @@ def test_backfills_from_projects_final_when_projects_exists() -> None:
     assert "FROM projects FINAL" in backfill[0]
 
 
-def test_backfill_marks_every_seeded_row_as_the_floor() -> None:
-    """PR #1602 review F4 (CONFIRMED): the backfill INSERT is the ONLY
-    writer that may ever set `is_backfill_floor = 1` -- it is how a reader
-    (`_PROJECT_DECLARED_FACTS_SQL`'s `earliest_is_backfill_floor`) tells a
-    genuine floor breach (real state existed before this seed, now
-    unrecoverable) apart from a project simply created after this
-    migration ran (no seed at all, full history already known).
+def test_creates_a_separate_floor_table_written_only_by_this_migration() -> None:
+    """PR #1602 review F4, corrected by round-2 review NEW-1 (HIGH,
+    BLOCKS): the floor fact used to live in an `is_backfill_floor` column
+    on `project_declared_state_history` itself -- but that table's RMT
+    version column is `last_synced`, so an ORDINARY re-sync of an
+    unchanged project (same `updated_at`, fresher `last_synced`,
+    `is_backfill_floor = 0` by every ordinary writer's default) collapses
+    the floor-seeded row away on the next merge. `project_declared_state_
+    floor` is a SEPARATE table, written ONLY here -- no ordinary sync ever
+    touches it, so a floor row can never be merged away.
     """
-    module = _load()
-    client = _FakeClient(projects_exists=True)
-    module.upgrade(client)
-    backfill = next(c for c in client.commands if "INSERT INTO" in c)
-    normalized = " ".join(backfill.split())
-    assert "is_backfill_floor" in normalized
-    # The literal `1` must be a projected value in the SELECT list (every
-    # backfilled row), not merely present anywhere in the statement text.
-    assert "target_date, url, updated_at, last_synced, 1" in normalized
-
-
-def test_history_table_has_an_is_backfill_floor_column_defaulting_to_zero() -> None:
     module = _load()
     client = _FakeClient()
     module.upgrade(client)
-    create_stmt = next(c for c in client.commands if "CREATE TABLE" in c)
+    assert any(
+        "CREATE TABLE IF NOT EXISTS project_declared_state_floor" in c
+        for c in client.commands
+    )
+    create_stmt = next(
+        c
+        for c in client.commands
+        if "CREATE TABLE" in c and "project_declared_state_floor" in c
+    )
     normalized = " ".join(create_stmt.split())
-    assert "is_backfill_floor UInt8 DEFAULT 0" in normalized, (
-        "every ordinary writer (production syncs, fixtures) omits this "
-        "column and must get 0 from the schema default, never 1"
+    assert "ORDER BY (org_id, provider, id)" in normalized, (
+        "the floor table's key deliberately excludes updated_at -- there is "
+        "exactly one floor instant per (org_id, provider, id), unlike the "
+        "history table's finer (org_id, provider, id, updated_at) key"
+    )
+    assert "floor_updated_at" in normalized
+
+
+def test_backfill_seeds_the_floor_table_from_projects_final() -> None:
+    module = _load()
+    client = _FakeClient(projects_exists=True)
+    module.upgrade(client)
+    floor_backfill = next(
+        c for c in client.commands if "INSERT INTO project_declared_state_floor" in c
+    )
+    normalized = " ".join(floor_backfill.split())
+    assert "FROM projects FINAL" in normalized
+    assert "org_id, provider, id, updated_at" in normalized
+
+
+def test_skips_floor_backfill_when_projects_table_is_absent() -> None:
+    module = _load()
+    client = _FakeClient(projects_exists=False)
+    module.upgrade(client)  # must not raise
+    assert not any(
+        "INSERT INTO project_declared_state_floor" in c for c in client.commands
     )
 
 

@@ -1198,11 +1198,13 @@ def _install_status_client_with_project_row(
 
     ``is_backfill_floor`` (PR #1602 review F4, default ``True`` to preserve
     every existing caller's floor-breach-must-warn expectation): whether the
-    simulated not-in-bound row should read as a genuine migration-074 floor
-    breach (``earliest_is_backfill_floor = 1``, the "unknown, not absent"
-    warning fires) or as a project simply created after ``as_of`` with no
-    backfill seed at all (``earliest_is_backfill_floor = 0``, plain
-    absence, never a warning) -- see
+    simulated not-in-bound row should read as a genuine floor breach
+    (``has_floor_row = True``, the "unknown, not absent" warning fires) or
+    as a project simply created after ``as_of`` with no floor row at all
+    (``has_floor_row = False``, plain absence, never a warning -- PR
+    round-2 review NEW-1 moved this fact into its own
+    ``project_declared_state_floor`` table, never merge-collapsible the
+    way an in-history column was) -- see
     ``test_f4_created_after_as_of_is_never_a_floor_breach_warning`` below.
 
     ``project_row["provider_count"]`` (PR #1602 review F10, default ``1``):
@@ -1218,7 +1220,7 @@ def _install_status_client_with_project_row(
     fake = _FakeWorkItems()
 
     def _absent_row(
-        *, total_count: int, earliest: Any, backfill_floor: int
+        *, total_count: int, earliest: Any, has_floor_row: bool
     ) -> dict[str, Any]:
         return {
             "state": None,
@@ -1230,7 +1232,7 @@ def _install_status_client_with_project_row(
             "bounded_count": 0,
             "total_count": total_count,
             "earliest_known_updated_at": earliest,
-            "earliest_is_backfill_floor": backfill_floor,
+            "has_floor_row": has_floor_row,
         }
 
     async def wrapped(_client: object, sql: str, params: dict[str, Any]) -> Any:
@@ -1242,7 +1244,7 @@ def _install_status_client_with_project_row(
                 or params.get("org_id") != ORG_ID
                 or params.get("entity_id") != PROJECT_ID
             ):
-                return [_absent_row(total_count=0, earliest=None, backfill_floor=0)]
+                return [_absent_row(total_count=0, earliest=None, has_floor_row=False)]
             # PR #1602 review F9 (CONFIRMED): gate the as_of bound on the
             # SQL TEXT itself, not on params alone -- a fake that always
             # applies the param-based `updated_at <= as_of` filter keeps
@@ -1262,7 +1264,7 @@ def _install_status_client_with_project_row(
                     _absent_row(
                         total_count=1,
                         earliest=project_row.get("updated_at"),
-                        backfill_floor=1 if is_backfill_floor else 0,
+                        has_floor_row=is_backfill_floor,
                     )
                 ]
             return [
@@ -1276,7 +1278,7 @@ def _install_status_client_with_project_row(
                     "bounded_count": 1,
                     "total_count": 1,
                     "earliest_known_updated_at": project_row.get("updated_at"),
-                    "earliest_is_backfill_floor": 0,
+                    "has_floor_row": False,
                 }
             ]
         return await fake(_client, sql, params)
@@ -1492,12 +1494,11 @@ async def test_f4_created_after_as_of_is_never_a_floor_breach_warning(
     """PR #1602 review F4 (CONFIRMED): the exact same raw shape as
     ``test_committed_project_scope_declared_state_absent_for_future_dated_
     row`` above (``bounded_count == 0 and total_count > 0``) must NOT warn
-    when the earliest retained row is an ORDINARY sync
-    (``earliest_is_backfill_floor = 0``), not a migration-074 backfill
-    seed -- this project's retained history already IS the complete
-    history back to its true creation, so `as_of` before it means the
-    project simply did not exist yet. That is plain absence, exactly like
-    any other not-yet-created entity, never the "unknown, not absent"
+    when no floor row exists for this project (``has_floor_row = False``)
+    -- this project's retained history already IS the complete history
+    back to its true creation, so `as_of` before it means the project
+    simply did not exist yet. That is plain absence, exactly like any
+    other not-yet-created entity, never the "unknown, not absent"
     floor-breach signal.
     """
 

@@ -368,10 +368,17 @@ def _volatile_columns_for_table(table: str) -> frozenset[str]:
 #: a migration-file grep, which missed several ADD COLUMN sites) to carry
 #: an `org_id` column, so the existing per-org WHERE clause covers them
 #: uniformly.
+#:
+#: PR #1602 round-2 review NEW-5: added ``project_declared_state_history``
+#: -- ``fixtures/generators/projects.py``'s ``insert_projects`` (CHAOS-3563
+#: review F2) writes it, and Ask Dev's ``_PROJECT_DECLARED_FACTS_SQL`` reads
+#: it EXCLUSIVELY now (not ``projects``), so it must participate in the
+#: drift digest the same way every other table this world writes does.
 _CLICKHOUSE_DIGEST_TABLES: tuple[str, ...] = (
     "repos",
     "teams",
     "projects",
+    "project_declared_state_history",
     "work_items",
     "git_commits",
     "git_pull_requests",

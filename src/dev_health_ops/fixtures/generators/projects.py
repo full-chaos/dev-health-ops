@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 #: Same fixture namespace every other generator in this package derives
@@ -44,7 +44,17 @@ SYNTHETIC_PROVIDER = "synthetic"
 @dataclass(frozen=True, slots=True)
 class ProjectRecord:
     """One row of the ``projects`` table (id, org_id, provider, project_key,
-    name, is_active, updated_at, last_synced)."""
+    name, is_active, state, target_date, url, updated_at, last_synced).
+
+    PR #1602 round-2 review C4 (CONFIRMED): ``state``/``target_date``/``url``
+    used to be entirely absent from this record -- a fixture world could
+    never seed a declared project state or target date at all, so it could
+    not exercise Ask Dev's declared-state feature
+    (``_PROJECT_DECLARED_FACTS_SQL``) even once. Mirrors
+    ``metrics/schemas.ProjectRecord``'s own field set (the production
+    writer's record type) so this fixture path can express everything a
+    real provider sync can.
+    """
 
     id: str
     org_id: str
@@ -52,6 +62,11 @@ class ProjectRecord:
     provider: str = SYNTHETIC_PROVIDER
     project_key: str | None = None
     is_active: bool = True
+    #: The provider's own lifecycle vocabulary (CHAOS-3365), stored
+    #: verbatim -- empty for fixture rows that don't need one.
+    state: str = ""
+    target_date: date | None = None
+    url: str = ""
     updated_at: datetime | None = None
     last_synced: datetime | None = None
 
@@ -75,6 +90,9 @@ def build_project_record(
     repo_full_name: str,
     display_name: str | None = None,
     is_active: bool = True,
+    state: str = "",
+    target_date: date | None = None,
+    url: str = "",
     as_of: datetime,
 ) -> ProjectRecord:
     """One repo-backed PROJECT catalog row, active as of ``as_of``.
@@ -82,6 +100,12 @@ def build_project_record(
     ``as_of`` must be derived from the world's pinned ``now`` by the caller
     (``fixtures/world.py``) -- never ``datetime.now()`` here, per the
     CHAOS-3392 no-wall-clock rule for new fixture-world code.
+
+    ``state``/``target_date``/``url`` (PR #1602 round-2 review C4): default
+    to the same empty values every OTHER caller of this function already
+    gets (no behavior change for existing callers), but let a caller that
+    DOES need a declared project state -- e.g. the ask-dev-world's own
+    CHAOS-3563 acceptance subjects -- express it.
     """
 
     return ProjectRecord(
@@ -91,6 +115,9 @@ def build_project_record(
         provider=SYNTHETIC_PROVIDER,
         project_key=None,
         is_active=is_active,
+        state=state,
+        target_date=target_date,
+        url=url,
         updated_at=as_of,
         last_synced=as_of,
     )
@@ -105,6 +132,11 @@ def build_retired_project_version(
     ``(org_id, provider, id)`` -- inserting a second row with the same key
     and a LATER ``updated_at`` is how a project is "deleted"/archived without
     ever issuing a DELETE. Realizes ``subjects.json``'s ``deleted`` class.
+
+    Carries ``state``/``target_date``/``url`` over from ``active_record``
+    unchanged (PR #1602 round-2 review C4) -- retirement is an
+    ``is_active`` transition, not a declared-state change; a real provider
+    archiving a project does not simultaneously erase what it last declared.
     """
 
     if retired_as_of <= (active_record.updated_at or retired_as_of):
@@ -120,6 +152,9 @@ def build_retired_project_version(
         provider=active_record.provider,
         project_key=active_record.project_key,
         is_active=False,
+        state=active_record.state,
+        target_date=active_record.target_date,
+        url=active_record.url,
         updated_at=retired_as_of,
         last_synced=retired_as_of,
     )
@@ -132,6 +167,9 @@ _PROJECT_COLUMNS = (
     "project_key",
     "name",
     "is_active",
+    "state",
+    "target_date",
+    "url",
     "updated_at",
     "last_synced",
 )
@@ -147,6 +185,9 @@ def _row_for_insert(record: ProjectRecord) -> list[Any]:
         record.project_key,
         record.name,
         1 if record.is_active else 0,
+        record.state,
+        record.target_date,
+        record.url,
         updated_at,
         last_synced,
     ]

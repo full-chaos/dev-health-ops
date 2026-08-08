@@ -92,6 +92,37 @@ def test_backfills_from_projects_final_when_projects_exists() -> None:
     assert "FROM projects FINAL" in backfill[0]
 
 
+def test_backfill_marks_every_seeded_row_as_the_floor() -> None:
+    """PR #1602 review F4 (CONFIRMED): the backfill INSERT is the ONLY
+    writer that may ever set `is_backfill_floor = 1` -- it is how a reader
+    (`_PROJECT_DECLARED_FACTS_SQL`'s `earliest_is_backfill_floor`) tells a
+    genuine floor breach (real state existed before this seed, now
+    unrecoverable) apart from a project simply created after this
+    migration ran (no seed at all, full history already known).
+    """
+    module = _load()
+    client = _FakeClient(projects_exists=True)
+    module.upgrade(client)
+    backfill = next(c for c in client.commands if "INSERT INTO" in c)
+    normalized = " ".join(backfill.split())
+    assert "is_backfill_floor" in normalized
+    # The literal `1` must be a projected value in the SELECT list (every
+    # backfilled row), not merely present anywhere in the statement text.
+    assert "target_date, url, updated_at, last_synced, 1" in normalized
+
+
+def test_history_table_has_an_is_backfill_floor_column_defaulting_to_zero() -> None:
+    module = _load()
+    client = _FakeClient()
+    module.upgrade(client)
+    create_stmt = next(c for c in client.commands if "CREATE TABLE" in c)
+    normalized = " ".join(create_stmt.split())
+    assert "is_backfill_floor UInt8 DEFAULT 0" in normalized, (
+        "every ordinary writer (production syncs, fixtures) omits this "
+        "column and must get 0 from the schema default, never 1"
+    )
+
+
 def test_backfill_is_the_only_recoverable_state_documented_as_such() -> None:
     """Regression guard for the module docstring's central claim: the
     backfill source is `projects FINAL` -- the single current row per

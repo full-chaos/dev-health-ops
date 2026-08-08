@@ -1967,23 +1967,32 @@ class ClickHouseStore:
                     or synced_at,
                 }
             )
-        await self._insert_rows(
-            "projects",
-            [
-                "id",
-                "org_id",
-                "provider",
-                "project_key",
-                "name",
-                "is_active",
-                "state",
-                "target_date",
-                "url",
-                "updated_at",
-                "last_synced",
-            ],
-            payload,
-        )
+        columns = [
+            "id",
+            "org_id",
+            "provider",
+            "project_key",
+            "name",
+            "is_active",
+            "state",
+            "target_date",
+            "url",
+            "updated_at",
+            "last_synced",
+        ]
+        # `projects` first, `project_declared_state_history` second (PR #1602
+        # review F5's ordering, applied to this writer too): if migration 074
+        # has not run yet here, the history insert fails loud AFTER
+        # `projects` already committed, not before.
+        await self._insert_rows("projects", columns, payload)
+        # PR #1602 review F2 (CONFIRMED): mirror into the additive history
+        # table too -- `_PROJECT_DECLARED_FACTS_SQL` (CHAOS-3563) reads
+        # `project_declared_state_history` exclusively now. A `projects`-only
+        # writer's declared state would otherwise silently vanish from that
+        # read the moment `projects`' own ReplacingMergeTree collapses it,
+        # exactly the gap migration 074 exists to close -- this writer must
+        # not reopen it.
+        await self._insert_rows("project_declared_state_history", columns, payload)
 
     async def insert_members(self, rows: list[Any]) -> None:
         if not rows:

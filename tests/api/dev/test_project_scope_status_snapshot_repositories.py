@@ -1162,6 +1162,7 @@ def _install_status_client_with_project_row(
     monkeypatch: pytest.MonkeyPatch,
     *,
     project_row: dict[str, Any] | None,
+    is_backfill_floor: bool = True,
 ) -> _FakeWorkItems:
     """``_install_status_client`` plus a controllable ``projects`` catalog
     read, without touching ``_FakeWorkItems`` itself (every other test in
@@ -1194,11 +1195,31 @@ def _install_status_client_with_project_row(
     floor-breach case, distinguishable from genuine absence by
     ``bounded_count``/``total_count`` alone, exactly as the real query's
     row shape lets ``status_snapshot`` distinguish them.
+
+    ``is_backfill_floor`` (PR #1602 review F4, default ``True`` to preserve
+    every existing caller's floor-breach-must-warn expectation): whether the
+    simulated not-in-bound row should read as a genuine migration-074 floor
+    breach (``earliest_is_backfill_floor = 1``, the "unknown, not absent"
+    warning fires) or as a project simply created after ``as_of`` with no
+    backfill seed at all (``earliest_is_backfill_floor = 0``, plain
+    absence, never a warning) -- see
+    ``test_f4_created_after_as_of_is_never_a_floor_breach_warning`` below.
+
+    ``project_row["provider_count"]`` (PR #1602 review F10, default ``1``):
+    lets a caller simulate the provider-ambiguity case
+    (``provider_count > 1``) independently of ``is_active``, so the two
+    fail-closed clauses in ``status_snapshot``'s consumption of this row
+    (``provider_count == 1`` and ``is_active in (1, True)``) can each be
+    proven necessary on its own -- see
+    ``test_declared_state_suppressed_by_provider_ambiguity_alone`` and
+    ``test_declared_state_suppressed_by_as_of_inactive_winner_alone``.
     """
 
     fake = _FakeWorkItems()
 
-    def _absent_row(*, total_count: int, earliest: Any) -> dict[str, Any]:
+    def _absent_row(
+        *, total_count: int, earliest: Any, backfill_floor: int
+    ) -> dict[str, Any]:
         return {
             "state": None,
             "target_date": None,
@@ -1209,6 +1230,7 @@ def _install_status_client_with_project_row(
             "bounded_count": 0,
             "total_count": total_count,
             "earliest_known_updated_at": earliest,
+            "earliest_is_backfill_floor": backfill_floor,
         }
 
     async def wrapped(_client: object, sql: str, params: dict[str, Any]) -> Any:
@@ -1220,14 +1242,28 @@ def _install_status_client_with_project_row(
                 or params.get("org_id") != ORG_ID
                 or params.get("entity_id") != PROJECT_ID
             ):
-                return [_absent_row(total_count=0, earliest=None)]
-            in_bound = (
+                return [_absent_row(total_count=0, earliest=None, backfill_floor=0)]
+            # PR #1602 review F9 (CONFIRMED): gate the as_of bound on the
+            # SQL TEXT itself, not on params alone -- a fake that always
+            # applies the param-based `updated_at <= as_of` filter keeps
+            # passing every test in this file even if a future edit drops
+            # that predicate from the REAL SQL (a serious regression: the
+            # real query would then return history disregarding `as_of`
+            # entirely). Mirrors `_FakeWorkItems.__call__`'s own
+            # `"updated_at <= {as_of:DateTime64(3, 'UTC')}" in sql` gate
+            # just above in this file.
+            has_as_of_bound = "updated_at <= {as_of:DateTime64(3, 'UTC')}" in sql
+            in_bound = (not has_as_of_bound) or (
                 project_row.get("updated_at") is None
                 or project_row["updated_at"] <= params["as_of"]
             )
             if not in_bound:
                 return [
-                    _absent_row(total_count=1, earliest=project_row.get("updated_at"))
+                    _absent_row(
+                        total_count=1,
+                        earliest=project_row.get("updated_at"),
+                        backfill_floor=1 if is_backfill_floor else 0,
+                    )
                 ]
             return [
                 {
@@ -1236,10 +1272,11 @@ def _install_status_client_with_project_row(
                     "declared_updated_at": project_row.get("updated_at"),
                     "last_synced": project_row.get("last_synced"),
                     "is_active": project_row.get("is_active", 1),
-                    "provider_count": 1,
+                    "provider_count": project_row.get("provider_count", 1),
                     "bounded_count": 1,
                     "total_count": 1,
                     "earliest_known_updated_at": project_row.get("updated_at"),
+                    "earliest_is_backfill_floor": 0,
                 }
             ]
         return await fake(_client, sql, params)
@@ -1446,3 +1483,125 @@ async def test_committed_project_scope_declared_state_absent_for_future_dated_ro
     ), "history exists for this project but postdates as_of -- must not be silent"
     # The rest of the tree (bounded by the same as_of) is unaffected.
     assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS
+
+
+@pytest.mark.asyncio
+async def test_f4_created_after_as_of_is_never_a_floor_breach_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #1602 review F4 (CONFIRMED): the exact same raw shape as
+    ``test_committed_project_scope_declared_state_absent_for_future_dated_
+    row`` above (``bounded_count == 0 and total_count > 0``) must NOT warn
+    when the earliest retained row is an ORDINARY sync
+    (``earliest_is_backfill_floor = 0``), not a migration-074 backfill
+    seed -- this project's retained history already IS the complete
+    history back to its true creation, so `as_of` before it means the
+    project simply did not exist yet. That is plain absence, exactly like
+    any other not-yet-created entity, never the "unknown, not absent"
+    floor-breach signal.
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+    assert scope.time_range.end < NOW + timedelta(days=1)
+
+    _install_status_client_with_project_row(
+        monkeypatch,
+        project_row={
+            "state": "started",
+            "target_date": date(2026, 9, 1),
+            "updated_at": scope.time_range.end + timedelta(days=1),
+            "last_synced": scope.time_range.end + timedelta(days=1),
+        },
+        is_backfill_floor=False,
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
+    assert not any(
+        "predates the retained floor" in warning for warning in snapshot.warnings
+    ), (
+        "the earliest retained row is an ORDINARY sync, not a backfill "
+        "seed -- this must read as plain absence (project created after "
+        "as_of), never as an unknown/unrecoverable past"
+    )
+    assert {child.entity_id for child in snapshot.children} == IN_SCOPE_WORK_ITEM_IDS
+
+
+@pytest.mark.asyncio
+async def test_f10_declared_state_suppressed_by_provider_ambiguity_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #1602 review F10 (CONFIRMED): ``status_snapshot``'s
+    ``elif bounded_count > 0 and provider_count == 1:`` gate has two
+    clauses; this proves the ``provider_count == 1`` clause specifically,
+    isolated from ``is_active`` (which stays true/1 here) -- a
+    provider-ambiguous winning row (``provider_count == 2``, the "pooled
+    history from two providers claiming the same id" case) must never
+    surface a declared state, even though every other field (including
+    ``is_active``) looks perfectly usable.
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+
+    _install_status_client_with_project_row(
+        monkeypatch,
+        project_row={
+            "state": "started",
+            "target_date": date(2026, 9, 1),
+            "updated_at": NOW,
+            "last_synced": NOW,
+            "is_active": 1,
+            "provider_count": 2,
+        },
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None
+
+
+@pytest.mark.asyncio
+async def test_f10_declared_state_suppressed_by_as_of_inactive_winner_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #1602 review F10 (CONFIRMED): the companion clause -- proves
+    ``is_active in (1, True)`` specifically, isolated from
+    ``provider_count`` (which stays unambiguous, 1, here). A winning
+    version that is retired AS OF the requested instant
+    (``is_active == 0``) must never surface a declared state, even though
+    ``provider_count == 1`` and the row is otherwise perfectly usable.
+    """
+
+    _install_catalog_client(monkeypatch)
+    scope = await _committed_project_scope()
+
+    _install_status_client_with_project_row(
+        monkeypatch,
+        project_row={
+            "state": "completed",
+            "target_date": date(2026, 9, 1),
+            "updated_at": NOW,
+            "last_synced": NOW,
+            "is_active": 0,
+            "provider_count": 1,
+        },
+    )
+    service = StatusChangeService(ClickHouseStatusChangeSource(object(), now=NOW))
+
+    snapshot = await service.status_snapshot(
+        ORG_ID, "permission-fingerprint", StatusSnapshotRequest(scope)
+    )
+
+    assert snapshot.declared_project_state is None
+    assert snapshot.declared_project_target_date is None

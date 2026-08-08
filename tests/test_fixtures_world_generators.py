@@ -84,11 +84,22 @@ class TestProjects:
             org_id="org-1", repo_full_name="meridian/web-app", as_of=_NOW
         )
         await projects_gen.insert_projects(_StubClient(), [record])
-        assert len(calls) == 1
-        table, matrix, column_names = calls[0]
-        assert table == "projects"
-        assert len(matrix) == 1
-        assert column_names == list(projects_gen._PROJECT_COLUMNS)
+        # PR #1602 review F2 (CONFIRMED): this generator must ALSO mirror
+        # into the additive project_declared_state_history table --
+        # `_PROJECT_DECLARED_FACTS_SQL` (CHAOS-3563) reads that table
+        # exclusively now, so a `projects`-only fixture write leaves this
+        # project's is_active toggle (e.g. `build_retired_project_version`'s
+        # "deleted" subject class) invisible to it. `projects` first (PR
+        # #1602 review F5's ordering, applied here too).
+        assert len(calls) == 2
+        tables_written = [call[0] for call in calls]
+        assert tables_written == ["projects", "project_declared_state_history"]
+        for table, matrix, column_names in calls:
+            assert len(matrix) == 1
+            assert column_names == list(projects_gen._PROJECT_COLUMNS)
+        assert calls[0][1] == calls[1][1], (
+            "both writes must carry the identical row matrix -- no drift"
+        )
 
 
 class TestSourceHealth:

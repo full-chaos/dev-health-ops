@@ -266,3 +266,353 @@ async def test_unchanged_resync_does_not_duplicate_history_rows(
         "three identical re-syncs (same updated_at) must collapse to one "
         "history row after a merge, not three"
     )
+
+
+@pytest.mark.asyncio
+async def test_f1_cleared_target_date_does_not_resurrect_stale_value(
+    sink: Any, raw_client: Any
+) -> None:
+    """PR #1602 review F1: `argMax` skips NULL args per-column. Before the
+    tuple-wrap fix, each of state/target_date/last_synced/is_active was its
+    own independent `argMax(col, (updated_at, ...))` -- a winning row whose
+    `target_date` is NULL (a legitimate clear) was skipped by THAT column's
+    argMax, which fell through to the next-highest-`updated_at` row that
+    still had a non-NULL `target_date`. The columns then came from two
+    DIFFERENT rows: `state` from the newest sync, `target_date` resurrected
+    from a stale, superseded one.
+    """
+    org_id = f"proj-history-f1-{uuid.uuid4().hex[:16]}"
+    project_id = str(uuid.uuid4())
+    first_updated_at = NOW - timedelta(days=10)
+    second_updated_at = NOW - timedelta(days=1)
+
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=project_id,
+                org_id=org_id,
+                provider="linear",
+                project_key="PLAT",
+                name="Platform",
+                is_active=1,
+                state="planned",
+                target_date=(NOW - timedelta(days=100)).date(),
+                updated_at=first_updated_at,
+                last_synced=first_updated_at,
+            )
+        ]
+    )
+    # Second sync genuinely CLEARS the target date -- a real provider event,
+    # not a data-entry omission.
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=project_id,
+                org_id=org_id,
+                provider="linear",
+                project_key="PLAT",
+                name="Platform",
+                is_active=1,
+                state="started",
+                target_date=None,
+                updated_at=second_updated_at,
+                last_synced=second_updated_at,
+            )
+        ]
+    )
+
+    row = await _declared_facts(
+        raw_client, org_id=org_id, project_id=project_id, as_of=NOW
+    )
+    assert row["bounded_count"] > 0
+    assert row["state"] == "started", "state must come from the newest (second) sync"
+    assert row["target_date"] is None, (
+        "target_date must come from the SAME winning row as state -- the "
+        "clear must not resurrect the FIRST sync's stale target_date"
+    )
+
+
+@pytest.mark.asyncio
+async def test_f3_ambiguous_provider_suppresses_watermark(
+    sink: Any, raw_client: Any
+) -> None:
+    """PR #1602 review F3: the pre-CHAOS-3563 `projects FINAL` read used
+    `HAVING count() = 1` to fail closed on provider ambiguity -- an
+    ambiguous project returned ZERO rows, so `_read`'s generic
+    `last_synced`-based watermark collection never saw it. The history-based
+    read always returns exactly one (bounded, unbounded) row now, and the
+    Python-side caller correctly refuses to surface `state`/`target_date`
+    when `provider_count != 1` -- but `last_synced` must ALSO come back
+    NULL in that case, or `_read` still computes a "confirmed fresh"
+    watermark from a row nothing downstream actually trusts.
+    """
+    org_id = f"proj-history-f3-ambiguous-{uuid.uuid4().hex[:16]}"
+    project_id = str(uuid.uuid4())
+    updated_at = NOW - timedelta(days=1)
+
+    for provider in ("linear", "jira"):
+        sink.write_projects(
+            [
+                ProjectRecord(
+                    id=project_id,
+                    org_id=org_id,
+                    provider=provider,
+                    project_key="PLAT",
+                    name="Platform",
+                    is_active=1,
+                    state="started",
+                    updated_at=updated_at,
+                    last_synced=updated_at,
+                )
+            ]
+        )
+
+    row = await _declared_facts(
+        raw_client, org_id=org_id, project_id=project_id, as_of=NOW
+    )
+    assert row["bounded_count"] > 0
+    assert row["provider_count"] == 2
+    assert row["last_synced"] is None, (
+        "an ambiguous project must not leak a watermark -- nothing "
+        "downstream trusts this row's declared state"
+    )
+
+
+@pytest.mark.asyncio
+async def test_f3_as_of_inactive_winner_suppresses_watermark(
+    sink: Any, raw_client: Any
+) -> None:
+    """PR #1602 review F3, the other fail-closed case: the pre-CHAOS-3563
+    read filtered `is_active = 1` in its WHERE clause -- a retired project
+    returned zero rows. The history-based read now evaluates `is_active` AS
+    OF the winning version and still returns the row (so the caller can
+    read the retirement fact), but `last_synced` must stay NULL when the
+    winning version is retired, matching the old fail-closed contract.
+    """
+    org_id = f"proj-history-f3-inactive-{uuid.uuid4().hex[:16]}"
+    project_id = str(uuid.uuid4())
+    updated_at = NOW - timedelta(days=1)
+
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=project_id,
+                org_id=org_id,
+                provider="linear",
+                project_key="PLAT",
+                name="Platform",
+                is_active=0,
+                state="completed",
+                updated_at=updated_at,
+                last_synced=updated_at,
+            )
+        ]
+    )
+
+    row = await _declared_facts(
+        raw_client, org_id=org_id, project_id=project_id, as_of=NOW
+    )
+    assert row["bounded_count"] > 0
+    assert row["is_active"] in (0, False)
+    assert row["last_synced"] is None, (
+        "a retired-as-of-the-winning-version project must not leak a watermark either"
+    )
+
+
+@pytest.mark.asyncio
+async def test_f6_argmax_tie_break_agrees_with_rmt_keep_rule(
+    sink: Any, raw_client: Any
+) -> None:
+    """PR #1602 review F6: `project_declared_state_history` is
+    `ReplacingMergeTree(last_synced)` -- a background merge keeps the row
+    with the HIGHEST `last_synced` among rows sharing the full ORDER BY key
+    `(org_id, provider, id, updated_at)`. If the reader's `argMax` tie-break
+    disagrees with that keep-rule, the SAME query can answer differently
+    before and after a merge happens -- a query result that silently flips
+    with no write, no `as_of` change, nothing but background compaction
+    timing.
+
+    Constructed so the two tie-break candidates disagree with each other:
+    row A is inserted FIRST but carries the LARGER `last_synced` (the value
+    RMT's merge will keep); row B is inserted SECOND (so it would win an
+    ingestion-order tie-break) but carries the SMALLER `last_synced`. The
+    fix's tie-break is `(updated_at, last_synced)`, so it must agree with
+    RMT's own keep-rule regardless of insertion order.
+    """
+    org_id = f"proj-history-f6-{uuid.uuid4().hex[:16]}"
+    project_id = str(uuid.uuid4())
+    shared_updated_at = NOW - timedelta(days=1)
+
+    row_a_last_synced = NOW
+    row_b_last_synced = NOW - timedelta(hours=2)
+    assert row_b_last_synced < row_a_last_synced
+
+    # Row A first (earlier ingestion), but the HIGHER last_synced -- the one
+    # RMT will keep after a merge.
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=project_id,
+                org_id=org_id,
+                provider="linear",
+                project_key="PLAT",
+                name="Platform",
+                is_active=1,
+                state="a_should_survive",
+                updated_at=shared_updated_at,
+                last_synced=row_a_last_synced,
+            )
+        ]
+    )
+    # Row B second (later ingestion), but the LOWER last_synced.
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=project_id,
+                org_id=org_id,
+                provider="linear",
+                project_key="PLAT",
+                name="Platform",
+                is_active=1,
+                state="b_should_not_survive",
+                updated_at=shared_updated_at,
+                last_synced=row_b_last_synced,
+            )
+        ]
+    )
+
+    # Pre-merge: the argMax-based read must already agree with what a merge
+    # will keep.
+    row = await _declared_facts(
+        raw_client, org_id=org_id, project_id=project_id, as_of=NOW
+    )
+    assert row["state"] == "a_should_survive", (
+        "argMax's tie-break must pick the row RMT's own version column "
+        "(last_synced) would keep, not insertion order"
+    )
+
+    # Post-merge: confirm that is genuinely what RMT keeps, so the
+    # assertion above is proven against the real engine, not assumed.
+    raw_client.command("OPTIMIZE TABLE project_declared_state_history FINAL")
+    final_rows = await query_dicts(
+        raw_client,
+        "SELECT state FROM project_declared_state_history FINAL "
+        "WHERE org_id = {org_id:String} AND id = {entity_id:String}",
+        {"org_id": org_id, "entity_id": project_id},
+    )
+    assert len(final_rows) == 1
+    assert final_rows[0]["state"] == "a_should_survive"
+
+
+@pytest.mark.asyncio
+async def test_f4_genuine_floor_breach_warns(raw_client: Any) -> None:
+    """PR #1602 review F4 (CONFIRMED), the genuine-floor-breach half: the
+    earliest retained row for this project IS a migration-074 backfill seed
+    (``is_backfill_floor = 1``) -- real state may have existed even earlier
+    that the backfill floor could not recover. `as_of` strictly before that
+    seed's `updated_at` must surface `earliest_is_backfill_floor = 1` so the
+    caller renders the explicit "unknown, not absent" warning.
+
+    Seeded directly via `raw_client`, mirroring exactly what migration 074's
+    own backfill INSERT does (``_BACKFILL_SQL`` in
+    ``074_project_declared_state_history.py``) -- no production write path
+    ever sets `is_backfill_floor = 1` itself.
+    """
+    org_id = f"proj-history-f4-floor-{uuid.uuid4().hex[:16]}"
+    project_id = str(uuid.uuid4())
+    seeded_at = NOW - timedelta(days=30)
+
+    raw_client.insert(
+        "project_declared_state_history",
+        [
+            [
+                org_id,
+                "linear",
+                project_id,
+                None,
+                "Platform",
+                1,
+                "in_progress",
+                None,
+                "",
+                seeded_at,
+                seeded_at,
+                1,  # is_backfill_floor
+            ]
+        ],
+        column_names=[
+            "org_id",
+            "provider",
+            "id",
+            "project_key",
+            "name",
+            "is_active",
+            "state",
+            "target_date",
+            "url",
+            "updated_at",
+            "last_synced",
+            "is_backfill_floor",
+        ],
+    )
+
+    row = await _declared_facts(
+        raw_client,
+        org_id=org_id,
+        project_id=project_id,
+        as_of=seeded_at - timedelta(days=1),
+    )
+    assert row["bounded_count"] == 0
+    assert row["total_count"] > 0
+    assert row["earliest_is_backfill_floor"] in (1, True), (
+        "the earliest retained row IS a backfill seed -- a genuine floor "
+        "breach, must be distinguishable from plain absence"
+    )
+
+
+@pytest.mark.asyncio
+async def test_f4_created_after_as_of_is_not_a_floor_breach(
+    sink: Any, raw_client: Any
+) -> None:
+    """PR #1602 review F4, the other half: this project has NO backfill
+    seed at all -- every retained row is an ordinary sync, so its history
+    already IS the complete history back to true creation. `as_of` before
+    the project's first-ever sync means the project simply did not exist
+    yet -- plain absence, never a floor-breach warning, even though
+    `bounded_count == 0 and total_count > 0` (the same raw shape the
+    genuine floor-breach case has).
+    """
+    org_id = f"proj-history-f4-created-{uuid.uuid4().hex[:16]}"
+    project_id = str(uuid.uuid4())
+    created_at = NOW - timedelta(days=5)
+
+    sink.write_projects(
+        [
+            ProjectRecord(
+                id=project_id,
+                org_id=org_id,
+                provider="linear",
+                project_key="PLAT",
+                name="Platform",
+                is_active=1,
+                state="planned",
+                updated_at=created_at,
+                last_synced=created_at,
+            )
+        ]
+    )
+
+    row = await _declared_facts(
+        raw_client,
+        org_id=org_id,
+        project_id=project_id,
+        as_of=created_at - timedelta(days=1),
+    )
+    assert row["bounded_count"] == 0
+    assert row["total_count"] > 0
+    assert row["earliest_is_backfill_floor"] in (0, False, None), (
+        "the earliest (and only) retained row is an ORDINARY sync, not a "
+        "backfill seed -- this project's full history is known back to "
+        "its true creation, so `as_of` before it is plain absence, not an "
+        "unknown/unrecoverable past"
+    )

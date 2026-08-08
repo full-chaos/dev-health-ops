@@ -106,6 +106,12 @@ class DeletionResult:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     postgres: DeletionScopeResult = field(default_factory=DeletionScopeResult)
     clickhouse: DeletionScopeResult = field(default_factory=DeletionScopeResult)
+    #: PR #1602 review F8 (CONFIRMED): a successful `EXTERNAL_DERIVED_STORES`
+    #: visit is a result, not a problem -- it belongs in a typed bucket
+    #: parallel to `postgres`/`clickhouse` (keyed by store name), not in
+    #: `warnings`, which stays reserved for genuine problems (a store
+    #: registered without a `visit` callable, or a visit that raised).
+    external: DeletionScopeResult = field(default_factory=DeletionScopeResult)
     disabled_jobs: int = 0
     credentials_deleted: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -118,6 +124,7 @@ class DeletionResult:
             "timestamp": timestamp.replace("+00:00", "Z"),
             "postgres": self.postgres.to_dict(),
             "clickhouse": self.clickhouse.to_dict(),
+            "external": self.external.to_dict(),
             "disabled_jobs": self.disabled_jobs,
             "credentials_deleted": self.credentials_deleted,
             "warnings": list(self.warnings),
@@ -556,18 +563,28 @@ class OrganizationDeletionService:
         # CHAOS-3566: this scan stays the deletion-time source of truth (no
         # behavior change below), but drift against the explicit, reviewed
         # derived_store_registry is surfaced rather than silently swallowed.
+        #
+        # PR #1602 review F7 (CONFIRMED): the drift warning below is now
+        # appended AFTER the purge outcome is known, with per-outcome
+        # wording -- it used to be appended HERE, before the client was even
+        # resolved, unconditionally claiming "this run still purged them"
+        # even on a dry run (which never issues a single `ALTER TABLE
+        # DELETE` -- see the per-table `if dry_run or count == 0: continue`
+        # guard below) or when the client never resolved at all (this
+        # method returns immediately afterward, having purged nothing).
         unregistered = unregistered_clickhouse_tables(tables)
-        if unregistered:
-            result.warnings.append(
-                "Org deletion has no reviewed deletion-completeness decision "
-                f"for: {sorted(unregistered)}. Record one in "
-                "api/services/derived_store_registry.py's "
-                "CLICKHOUSE_DERIVED_STORES (this run still purged them via "
-                "the migration scan; the registry is out of date)."
-            )
 
         client, close_client = self._resolve_clickhouse_client(result)
         if client is None:
+            if unregistered:
+                result.warnings.append(
+                    "Org deletion has no reviewed deletion-completeness "
+                    f"decision for: {sorted(unregistered)}. Record one in "
+                    "api/services/derived_store_registry.py's "
+                    "CLICKHOUSE_DERIVED_STORES (the ClickHouse client could "
+                    "not be resolved this run -- these tables were not "
+                    "verified or purged; the registry is out of date)."
+                )
             return
 
         try:
@@ -589,6 +606,16 @@ class OrganizationDeletionService:
         finally:
             if close_client is not None:
                 close_client()
+
+        if unregistered:
+            outcome = "would purge them" if dry_run else "purged them"
+            result.warnings.append(
+                "Org deletion has no reviewed deletion-completeness decision "
+                f"for: {sorted(unregistered)}. Record one in "
+                "api/services/derived_store_registry.py's "
+                f"CLICKHOUSE_DERIVED_STORES (this run {outcome} via "
+                "the migration scan; the registry is out of date)."
+            )
 
     def _resolve_clickhouse_client(
         self, result: DeletionResult
@@ -701,10 +728,13 @@ class OrganizationDeletionService:
                     f"Derived store '{store.name}' deletion failed: {exc}"
                 )
                 continue
-            result.warnings.append(
-                f"Derived store '{store.name}': {count} row(s) "
-                f"{'would be deleted' if dry_run else 'deleted'}."
-            )
+            # PR #1602 review F8 (CONFIRMED): a successful visit is a
+            # result, not a problem -- record it in the typed `external`
+            # bucket (parallel to `postgres`/`clickhouse`), never in
+            # `warnings`, which a caller reasonably reads as "something
+            # needs attention."
+            result.external.tables[store.name] = count
+            result.external.total += count
 
 
 __all__ = [

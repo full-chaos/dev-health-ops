@@ -159,6 +159,17 @@ async def insert_projects(client: Any, records: list[ProjectRecord]) -> None:
     territory -- ``src/dev_health_ops/storage/**`` belongs to other lanes) and
     talks to ``client.insert`` directly, the same underlying call
     ``ClickHouseStore._insert_rows`` makes.
+
+    PR #1602 review F2 (CONFIRMED): also mirrors every row into the additive
+    ``project_declared_state_history`` table (migration 074) -- CHAOS-3563's
+    ``_PROJECT_DECLARED_FACTS_SQL`` reads that table exclusively now, so a
+    ``projects``-only fixture write left a fixture project's ``is_active``
+    toggle (e.g. ``build_retired_project_version``'s ``deleted`` subject
+    class -- an ``is_active = 0`` version superseding an active one)
+    invisible to it, even though the fixture corpus depends on that toggle
+    being readable. ``projects`` write first (PR #1602 review F5's
+    ordering, applied here too): a missing history table (schema not yet
+    migrated) must not abort the more fundamental catalog write.
     """
 
     if not records:
@@ -167,6 +178,12 @@ async def insert_projects(client: Any, records: list[ProjectRecord]) -> None:
     await asyncio.to_thread(
         client.insert,
         "projects",
+        matrix,
+        column_names=list(_PROJECT_COLUMNS),
+    )
+    await asyncio.to_thread(
+        client.insert,
+        "project_declared_state_history",
         matrix,
         column_names=list(_PROJECT_COLUMNS),
     )

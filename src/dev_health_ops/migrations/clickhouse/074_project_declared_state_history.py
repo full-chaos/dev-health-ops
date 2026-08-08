@@ -33,6 +33,21 @@ a reconstruction -- anything before it is UNRECOVERABLE. From the moment
 this migration lands, every subsequent transition IS retained; the gap this
 closes is prospective, not retroactive.
 
+``is_backfill_floor`` (PR #1602 review F4): set to 1 ONLY by this
+migration's own backfill INSERT below; every normal write (production sync
+via ``metrics/sinks/clickhouse/core.py``'s ``write_projects``, and every
+other writer of this table) inserts 0. This is how a reader distinguishes
+the two DIFFERENT reasons a project can have retained history that entirely
+postdates a requested ``as_of``: (a) the earliest retained row IS a backfill
+seed, meaning real state existed even earlier that this migration's own
+floor could not recover (genuine floor breach, must render as an explicit
+"unknown, not absent" signal); versus (b) the earliest retained row is an
+ordinary sync, meaning this project was created AFTER the migration ran and
+its retained history already IS the complete history back to its true
+creation (the requested `as_of` simply predates the project's existence --
+must render as plain absence, same as any other not-yet-created entity,
+never as an "unknown past" warning).
+
 IDEMPOTENT
 ----------
 Re-running re-inserts the same (org_id, provider, id, updated_at) keys with
@@ -70,7 +85,8 @@ CREATE TABLE IF NOT EXISTS project_declared_state_history (
     url String DEFAULT '',
     updated_at DateTime64(3, 'UTC'),
     last_synced DateTime64(3, 'UTC'),
-    ingested_at DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC')
+    ingested_at DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC'),
+    is_backfill_floor UInt8 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (org_id, provider, id, updated_at)
 """
@@ -78,9 +94,9 @@ ORDER BY (org_id, provider, id, updated_at)
 _BACKFILL_SQL = """
 INSERT INTO project_declared_state_history
     (org_id, provider, id, project_key, name, is_active, state,
-     target_date, url, updated_at, last_synced)
+     target_date, url, updated_at, last_synced, is_backfill_floor)
 SELECT org_id, provider, id, project_key, name, is_active, state,
-       target_date, url, updated_at, last_synced
+       target_date, url, updated_at, last_synced, 1
 FROM projects FINAL
 """
 

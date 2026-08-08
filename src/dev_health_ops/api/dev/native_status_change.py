@@ -376,18 +376,41 @@ LIMIT {limit:UInt32}
 #: reintroduce the exact gap this migration exists to close) -- picks the
 #: LATEST version that was already true at ``as_of``, so a project updated
 #: after ``as_of`` no longer blanks the whole row: its PRIOR declared state
-#: (if any exists at or before ``as_of``) is returned instead. Every
-#: ``argMax`` call shares the identical tie-break tuple, so ``state``/
-#: ``target_date``/``last_synced``/``is_active`` are always drawn from the
-#: SAME winning row, never independently. ``is_active`` is now also
-#: evaluated AS OF that same winning version (not merely "currently
-#: active") -- a project retired after ``as_of`` still answers with its
-#: pre-retirement declared state, matching the "as declared at T" contract
-#: this ticket introduces. The provider-ambiguity guard is
+#: (if any exists at or before ``as_of``) is returned instead. ``is_active``
+#: is now also evaluated AS OF that same winning version (not merely
+#: "currently active") -- a project retired after ``as_of`` still answers
+#: with its pre-retirement declared state, matching the "as declared at T"
+#: contract this ticket introduces. The provider-ambiguity guard is
 #: ``countDistinct(provider) = 1`` (the multi-row analogue of the old
 #: ``FINAL``-based ``HAVING count() = 1``: with history, more than one row
 #: at a given ``(org_id, id)`` is expected and fine as long as every row
 #: agrees on ``provider``).
+#:
+#: PR #1602 review F1 (CONFIRMED): ``argMax(col, tie)`` skips rows where
+#: ``col`` IS NULL -- computed PER COLUMN. Four independent
+#: ``argMax(state, ...)`` / ``argMax(target_date, ...)`` / etc. calls could
+#: therefore each pick a DIFFERENT winning row: a sync that genuinely
+#: CLEARS ``target_date`` (sets it NULL) is skipped by that column's own
+#: argMax, silently resurrecting an older, superseded row's stale
+#: ``target_date`` while ``state`` correctly came from the newest sync.
+#: Fixed by tuple-wrapping every column into ONE ``argMax(tuple(...), tie)``
+#: call -- the "arg" being maximized is now the tuple itself, which is
+#: never NULL even when an element inside it is, so no column can be
+#: independently skipped; every field is guaranteed to come from the SAME
+#: winning row. Accessed positionally below as ``winner.1``..``winner.4``.
+#:
+#: PR #1602 review F6 (PLAUSIBLE): the tie-break tuple's second element used
+#: to be ``ingested_at`` (this row's own insertion time), but
+#: ``project_declared_state_history`` is
+#: ``ReplacingMergeTree(last_synced)`` -- a background merge keeps whichever
+#: row sharing the full ORDER BY key ``(org_id, provider, id, updated_at)``
+#: has the LARGEST ``last_synced``, not the largest ``ingested_at``. Two
+#: rows sharing that key can disagree on which is "latest" by each
+#: ordering, so the query's answer could silently FLIP the moment a merge
+#: happens, with no new write and no ``as_of`` change. The tie-break is now
+#: ``(updated_at, last_synced)`` -- the exact same ordering the engine's own
+#: version column uses -- so the answer this query returns is guaranteed to
+#: already agree with whatever a merge will eventually keep.
 #:
 #: CHAOS-3377 residual defect (live acceptance probe, 2026-08-04, fixed
 #: prior to this migration and preserved here): never alias an aggregate to
@@ -427,11 +450,11 @@ LIMIT {limit:UInt32}
 _PROJECT_DECLARED_FACTS_SQL = """
 WITH bounded AS (
     SELECT
-        argMax(state, (updated_at, ingested_at)) AS state,
-        argMax(target_date, (updated_at, ingested_at)) AS target_date,
+        argMax(
+            tuple(state, target_date, last_synced, is_active),
+            (updated_at, last_synced)
+        ) AS winner,
         max(updated_at) AS declared_updated_at,
-        argMax(last_synced, (updated_at, ingested_at)) AS last_synced,
-        argMax(is_active, (updated_at, ingested_at)) AS is_active,
         countDistinct(provider) AS provider_count,
         count() AS bounded_count
     FROM project_declared_state_history
@@ -440,7 +463,8 @@ WITH bounded AS (
 ), unbounded AS (
     SELECT
         count() AS total_count,
-        min(updated_at) AS earliest_known_updated_at
+        min(updated_at) AS earliest_known_updated_at,
+        argMin(is_backfill_floor, updated_at) AS earliest_is_backfill_floor
     FROM project_declared_state_history
     WHERE org_id = {org_id:String} AND id = {entity_id:String}
 )
@@ -451,16 +475,39 @@ SELECT
     -- mistake for a real value. `_read`'s shared watermark logic below
     -- depends specifically on `last_synced` being NULL, not epoch, in
     -- that case.
-    if(bounded.bounded_count > 0, bounded.state, NULL) AS state,
-    if(bounded.bounded_count > 0, bounded.target_date, NULL) AS target_date,
+    if(bounded.bounded_count > 0, bounded.winner.1, NULL) AS state,
+    if(bounded.bounded_count > 0, bounded.winner.2, NULL) AS target_date,
     if(bounded.bounded_count > 0, bounded.declared_updated_at, NULL)
         AS declared_updated_at,
-    if(bounded.bounded_count > 0, bounded.last_synced, NULL) AS last_synced,
-    if(bounded.bounded_count > 0, bounded.is_active, NULL) AS is_active,
+    -- PR #1602 review F3 (CONFIRMED): the pre-CHAOS-3563 `FINAL`-based read
+    -- filtered `is_active = 1 ... HAVING count() = 1` in SQL, so an
+    -- ambiguous-provider or as-of-inactive project returned ZERO rows and
+    -- `_read`'s generic `last_synced`-based watermark collection never saw
+    -- it. This query always returns one row now; `state`/`target_date` are
+    -- correctly gated by the Python caller on `provider_count == 1` and
+    -- `is_active`, but `last_synced` must be gated the SAME way here, or a
+    -- watermark leaks from a row nothing downstream actually trusts.
+    if(
+        bounded.bounded_count > 0
+        AND bounded.provider_count = 1
+        AND bounded.winner.4 = 1,
+        bounded.winner.3,
+        NULL
+    ) AS last_synced,
+    if(bounded.bounded_count > 0, bounded.winner.4, NULL) AS is_active,
     bounded.provider_count AS provider_count,
     bounded.bounded_count AS bounded_count,
     unbounded.total_count AS total_count,
-    unbounded.earliest_known_updated_at AS earliest_known_updated_at
+    unbounded.earliest_known_updated_at AS earliest_known_updated_at,
+    -- PR #1602 review F4: whether the EARLIEST retained row (chronologically
+    -- first, regardless of `as_of`) is a migration-074 backfill seed. Only
+    -- meaningful when `bounded_count = 0 AND total_count > 0` -- see the
+    -- caller for how this distinguishes a genuine floor breach (earliest
+    -- row IS a backfill seed, so an unknown, unrecoverable past may exist
+    -- before it) from a project simply created after `as_of` (earliest row
+    -- is a normal sync, so the retained history already IS the complete
+    -- history back to this project's true creation).
+    unbounded.earliest_is_backfill_floor AS earliest_is_backfill_floor
 FROM bounded, unbounded
 """
 
@@ -1765,7 +1812,12 @@ class ClickHouseStatusChangeSource:
                 bounded_count = int(row.get("bounded_count") or 0)
                 total_count = int(row.get("total_count") or 0)
                 provider_count = int(row.get("provider_count") or 0)
-                if bounded_count == 0 and total_count > 0:
+                earliest_is_backfill_floor = row.get("earliest_is_backfill_floor")
+                if (
+                    bounded_count == 0
+                    and total_count > 0
+                    and earliest_is_backfill_floor in (1, True)
+                ):
                     # CHAOS-3563 review condition: `as_of` predates every
                     # retained declared-state row for this project -- the
                     # backfill floor (migration 074 seeded history starting
@@ -1780,6 +1832,23 @@ class ClickHouseStatusChangeSource:
                     # the earliest retained row's state as if it were true
                     # at `as_of` (that would misrepresent an unknown past as
                     # a known one).
+                    #
+                    # PR #1602 review F4 (CONFIRMED): this branch used to
+                    # fire whenever `bounded_count == 0 and total_count > 0`,
+                    # with no way to tell a genuine floor breach apart from a
+                    # project that was simply CREATED after `as_of` -- a
+                    # project whose entire retained history postdates
+                    # `as_of` because it did not exist yet is not "unknown",
+                    # it is absent, exactly like any other not-yet-created
+                    # entity. `earliest_is_backfill_floor` (migration 074)
+                    # distinguishes the two: only true when the earliest
+                    # retained row is itself a migration backfill seed,
+                    # meaning real, unretained state may have existed even
+                    # earlier. When the earliest row is an ordinary sync
+                    # instead, the retained history already IS the complete
+                    # history back to this project's true creation, and this
+                    # branch falls through to silent absence below, matching
+                    # every other entity's as_of semantics.
                     earliest = row.get("earliest_known_updated_at")
                     earliest_display = (
                         self._datetime(earliest, None).isoformat()

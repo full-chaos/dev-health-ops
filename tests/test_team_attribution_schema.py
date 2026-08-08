@@ -98,15 +98,19 @@ def test_metrics_sink_writes_dimension_and_attribution_columns() -> None:
                 )
             ]
         )
-        assert sink.client.insert.call_args.args[0] == "projects"
+        assert sink.client.insert.call_args.args[0] == "project_declared_state_history"
         assert "project_key" in sink.client.insert.call_args.kwargs["column_names"]
 
         tables_written = [call.args[0] for call in sink.client.insert.call_args_list]
-        assert tables_written == ["project_declared_state_history", "projects"], (
+        assert tables_written == ["projects", "project_declared_state_history"], (
             "CHAOS-3563: every project sync must append to the additive history "
             "table IN ADDITION TO (never instead of) the existing `projects` "
-            "write -- otherwise a state change is still lost the moment "
-            "`projects`' own ReplacingMergeTree collapses it."
+            "write. PR #1602 review F5 (PLAUSIBLE): `projects` writes FIRST -- "
+            "if the history table is missing on a stale worker image, that "
+            "failure must not abort `projects`' own sync too and cascade "
+            "staleness org-wide; the history insert stays fail-loud (its "
+            "exception still propagates, just AFTER `projects` already "
+            "committed)."
         )
         assert (
             sink.client.insert.call_args_list[0].args[1]
@@ -295,13 +299,22 @@ async def test_async_store_writes_team_attribution_tables() -> None:
 
     assert [entry[0] for entry in captured] == [
         "projects",
+        "project_declared_state_history",
         "members",
         "team_repo_ownership",
         "work_item_team_attributions",
-    ]
+    ], (
+        "PR #1602 review F2 (CONFIRMED): ClickHouseStore.insert_projects must "
+        "mirror into the additive history table too, IN ADDITION TO (never "
+        "instead of) `projects` -- otherwise this writer's declared state "
+        "silently vanishes from _PROJECT_DECLARED_FACTS_SQL's history-backed "
+        "read the moment `projects`' own ReplacingMergeTree collapses it. "
+        "`projects` first (PR #1602 review F5's ordering, applied here too)."
+    )
     assert captured[0][2][0]["updated_at"] is not None
     assert captured[0][2][0]["last_synced"] is not None
-    assert "repo_id" in captured[2][1]
-    assert captured[2][2][0]["repo_id"] == repo_id
-    assert captured[3][2][0]["source"] == "native_team"
-    assert captured[3][2][0]["repo_id"] == uuid.UUID(int=0)
+    assert captured[1][2][0]["id"] == "proj-1"
+    assert "repo_id" in captured[3][1]
+    assert captured[3][2][0]["repo_id"] == repo_id
+    assert captured[4][2][0]["source"] == "native_team"
+    assert captured[4][2][0]["repo_id"] == uuid.UUID(int=0)

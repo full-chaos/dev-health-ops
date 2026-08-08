@@ -245,14 +245,29 @@ class ClickHouseCore(BaseMetricsSink):
 
     def write_projects(self, rows: Sequence[ProjectRecord]) -> None:
         # CHAOS-3563: append every observed declared-state snapshot to the
-        # additive history table BEFORE writing the collapsing `projects`
+        # additive history table IN ADDITION TO the collapsing `projects`
         # row -- `projects` is a ReplacingMergeTree keyed WITHOUT
         # `updated_at`, so a background merge eventually discards every
         # earlier version; this second, finer-keyed write is the only
         # record of a project's declared state at a past instant once that
-        # merge happens. No change to `projects`' own write below.
-        self._insert_rows("project_declared_state_history", self._PROJECT_COLUMNS, rows)
+        # merge happens.
+        #
+        # PR #1602 review F5 (PLAUSIBLE): `projects` writes FIRST, history
+        # SECOND -- the reverse of this method's original order. If
+        # migration 074 has not run yet on this worker's ClickHouse (a
+        # stale worker image, a known failure class here), the history
+        # insert raises "table does not exist". With history first, that
+        # exception aborted the `projects` write too, cascading staleness
+        # to a table that itself never depended on migration 074 --
+        # org-wide, for every project this worker touches, until the image
+        # is fixed. With `projects` first, only the NEW declared-state
+        # history row is lost until the worker retries; `projects` itself
+        # keeps syncing normally. The history insert stays fail-loud: any
+        # exception here still propagates (never caught/swallowed) -- a
+        # retry re-inserts both rows, and ReplacingMergeTree's dedup on
+        # (org_id, provider, id, updated_at) makes that idempotent.
         self._insert_rows("projects", self._PROJECT_COLUMNS, rows)
+        self._insert_rows("project_declared_state_history", self._PROJECT_COLUMNS, rows)
 
     def write_members(self, rows: Sequence[MemberRecord]) -> None:
         self._insert_rows(

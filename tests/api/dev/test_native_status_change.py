@@ -3468,6 +3468,7 @@ async def test_native_project_scope_surfaces_declared_state_and_target_date(
                     "bounded_count": 1,
                     "total_count": 1,
                     "earliest_known_updated_at": declared_updated_at,
+                    "earliest_is_backfill_floor": 0,
                 }
             ]
         if "INNER JOIN project ON 1 = 1" in sql:
@@ -3519,6 +3520,15 @@ async def test_native_project_scope_declared_state_is_explicit_floor_breach_not_
             # total_count > 0: history DOES exist for this project -- just
             # not far enough back. Must never be reported the same way as
             # "this project has no declared-state history at all".
+            #
+            # PR #1602 review F4 (CONFIRMED): earliest_is_backfill_floor=1
+            # is what makes this a GENUINE floor breach (the earliest
+            # retained row is itself a migration-074 backfill seed, so real
+            # state may have existed even earlier that the floor could not
+            # recover) -- see
+            # test_native_project_scope_declared_state_created_after_as_of_
+            # is_not_a_floor_breach below for the other half of this same
+            # raw shape.
             return [
                 {
                     "state": None,
@@ -3530,6 +3540,7 @@ async def test_native_project_scope_declared_state_is_explicit_floor_breach_not_
                     "bounded_count": 0,
                     "total_count": 1,
                     "earliest_known_updated_at": earliest,
+                    "earliest_is_backfill_floor": 1,
                 }
             ]
         if "INNER JOIN project ON 1 = 1" in sql:
@@ -3581,6 +3592,7 @@ async def test_native_project_scope_declared_state_genuinely_absent_has_no_floor
                     "bounded_count": 0,
                     "total_count": 0,
                     "earliest_known_updated_at": None,
+                    "earliest_is_backfill_floor": None,
                 }
             ]
         if "INNER JOIN project ON 1 = 1" in sql:
@@ -3598,3 +3610,60 @@ async def test_native_project_scope_declared_state_genuinely_absent_has_no_floor
 
     assert raw.declared_project_state is None
     assert not any("predates the retained floor" in warning for warning in raw.warnings)
+
+
+@pytest.mark.asyncio
+async def test_native_project_scope_declared_state_created_after_as_of_is_not_a_floor_breach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #1602 review F4 (CONFIRMED): the SAME raw shape as
+    ``test_native_project_scope_declared_state_is_explicit_floor_breach_
+    not_silent_absence`` above (``bounded_count == 0, total_count > 0``)
+    must NOT warn when ``earliest_is_backfill_floor`` is 0 -- the earliest
+    retained row is an ORDINARY sync, not a migration-074 backfill seed, so
+    this project's retained history already IS the complete history back
+    to its true creation. ``as_of`` before it means the project simply did
+    not exist yet -- plain absence, never the "unknown, not absent"
+    floor-breach signal.
+    """
+    earliest = NOW.replace(hour=9) - timedelta(days=3)
+
+    async def fake_query(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        if "FROM project_declared_state_history" in sql:
+            return [
+                {
+                    "state": None,
+                    "target_date": None,
+                    "declared_updated_at": None,
+                    "last_synced": None,
+                    "is_active": None,
+                    "provider_count": 0,
+                    "bounded_count": 0,
+                    "total_count": 1,
+                    "earliest_known_updated_at": earliest,
+                    "earliest_is_backfill_floor": 0,
+                }
+            ]
+        if "INNER JOIN project ON 1 = 1" in sql:
+            return [{"repository_id": "00000000-0000-0000-0000-000000000000"}]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_status_change.query_dicts", fake_query
+    )
+    source = ClickHouseStatusChangeSource(object(), now=NOW)
+    scope = _scope(DirectScope.PROJECT, entity_id="project-1", repositories=[])
+    raw = await source.status_snapshot(
+        org_id="org-a", scope=scope, as_of=NOW, limit=100
+    )
+
+    assert raw.declared_project_state is None
+    assert not any(
+        "predates the retained floor" in warning for warning in raw.warnings
+    ), (
+        "the earliest retained row is an ORDINARY sync, not a backfill "
+        "seed -- must read as plain absence, never an unknown/"
+        "unrecoverable past"
+    )

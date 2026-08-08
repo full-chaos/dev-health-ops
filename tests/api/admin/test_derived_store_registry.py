@@ -145,18 +145,117 @@ async def test_purge_clickhouse_warns_when_registry_is_incomplete(monkeypatch):
     )
 
     assert result.clickhouse.tables["a_table_missing_from_the_registry"] == 1
-    assert any(
-        "a_table_missing_from_the_registry" in warning for warning in result.warnings
-    ), "an unregistered discovered table must produce a warning, not silence"
+    drift_warning = next(
+        warning
+        for warning in result.warnings
+        if "a_table_missing_from_the_registry" in warning
+    )
     # No behavior change: the table is still purged even though unregistered.
     assert (
         "ALTER TABLE `a_table_missing_from_the_registry` DELETE"
         in clickhouse.commands[-1][0]
     )
+    # PR #1602 review F7 (CONFIRMED): this run genuinely purged (dry_run is
+    # False and a real client was resolved), so the warning may correctly
+    # claim so -- see the dry-run and unresolved-client variants below,
+    # where that claim would be FALSE.
+    assert "purged them" in drift_warning
+    assert "would purge" not in drift_warning
+
+
+@pytest.mark.asyncio
+async def test_purge_clickhouse_drift_warning_says_would_purge_on_dry_run(
+    monkeypatch,
+):
+    """PR #1602 review F7 (CONFIRMED): on a dry run, `_purge_clickhouse`
+    never issues a single `ALTER TABLE ... DELETE` (see the per-table `if
+    dry_run or count == 0: continue` guard) -- the drift warning must not
+    claim "this run still purged them" when nothing was actually deleted.
+    """
+    from dev_health_ops.api.services import org_deletion as org_deletion_module
+
+    class _FakeClickHouseClient:
+        def query(self, query, parameters=None):
+            class _Result:
+                result_rows: list[tuple[Any, ...]] = (
+                    [("String",)] if "system.columns" in query else [(1,)]
+                )
+
+            return _Result()
+
+        def command(self, query, parameters=None):
+            raise AssertionError("a dry run must never issue ALTER TABLE DELETE")
+
+    monkeypatch.setattr(
+        org_deletion_module,
+        "_clickhouse_tables_from_migrations",
+        lambda: ("repos", "a_table_missing_from_the_registry"),
+    )
+
+    clickhouse = _FakeClickHouseClient()
+    service = OrganizationDeletionService(_NO_SESSION, clickhouse_client=clickhouse)
+    result = org_deletion_module.DeletionResult(
+        organization_id=str(uuid.uuid4()), dry_run=True
+    )
+    await service._purge_clickhouse(result.organization_id, dry_run=True, result=result)
+
+    drift_warning = next(
+        warning
+        for warning in result.warnings
+        if "a_table_missing_from_the_registry" in warning
+    )
+    assert "would purge" in drift_warning
+    assert "this run still purged them" not in drift_warning
+
+
+@pytest.mark.asyncio
+async def test_purge_clickhouse_drift_warning_says_not_verified_when_client_unresolved(
+    monkeypatch,
+):
+    """PR #1602 review F7 (CONFIRMED): when the ClickHouse client cannot be
+    resolved at all (no URI configured), `_purge_clickhouse` returns before
+    touching a single table -- the drift warning must say the unregistered
+    tables were never verified or purged this run, not claim they "still"
+    were.
+    """
+    from dev_health_ops.api.services import org_deletion as org_deletion_module
+
+    monkeypatch.setattr(
+        org_deletion_module,
+        "_clickhouse_tables_from_migrations",
+        lambda: ("repos", "a_table_missing_from_the_registry"),
+    )
+    monkeypatch.setattr(org_deletion_module, "get_clickhouse_uri", lambda: None)
+
+    service = OrganizationDeletionService(_NO_SESSION)
+    result = org_deletion_module.DeletionResult(
+        organization_id=str(uuid.uuid4()), dry_run=False
+    )
+    await service._purge_clickhouse(
+        result.organization_id, dry_run=False, result=result
+    )
+
+    assert result.clickhouse.tables == {}
+    drift_warning = next(
+        warning
+        for warning in result.warnings
+        if "a_table_missing_from_the_registry" in warning
+    )
+    assert "not verified" in drift_warning
+    assert "this run purged them" not in drift_warning
+    assert "this run would purge them" not in drift_warning
 
 
 @pytest.mark.asyncio
 async def test_purge_external_stores_visits_a_registered_store(monkeypatch):
+    """PR #1602 review F8 (CONFIRMED): a SUCCESSFUL external-store visit is
+    not a problem -- it must be recorded through a typed result bucket
+    (``result.external``, parallel to ``result.postgres``/
+    ``result.clickhouse``), not through ``result.warnings``, which is
+    reserved for genuine problems (not-wired, visit failure -- see
+    ``test_purge_external_stores_warns_when_not_wired`` and
+    ``test_purge_external_stores_warns_on_visit_failure`` below).
+    """
     from dev_health_ops.api.services import org_deletion as org_deletion_module
 
     calls: list[tuple[str, bool]] = []
@@ -177,7 +276,40 @@ async def test_purge_external_stores_visits_a_registered_store(monkeypatch):
     await service._purge_external_stores("org-1", dry_run=True, result=result)
 
     assert calls == [("org-1", True)]
-    assert any("fake_shadow_store" in warning for warning in result.warnings)
+    assert result.external.tables["fake_shadow_store"] == 7
+    assert result.external.total == 7
+    assert not any("fake_shadow_store" in warning for warning in result.warnings), (
+        "a successful visit is not a warning-worthy problem"
+    )
+
+
+@pytest.mark.asyncio
+async def test_purge_external_stores_warns_on_visit_failure(monkeypatch):
+    """PR #1602 review F8, the companion case: a FAILED visit is a genuine
+    problem and must still go through ``result.warnings`` (unchanged from
+    before this fix) -- only the success path moved to ``result.external``.
+    """
+    from dev_health_ops.api.services import org_deletion as org_deletion_module
+
+    async def _visit(org_id: str, dry_run: bool) -> int:
+        raise RuntimeError("boom")
+
+    failing_store = DerivedStore(
+        name="failing_store", kind=DerivedStoreKind.EXTERNAL, visit=_visit
+    )
+    monkeypatch.setattr(
+        org_deletion_module, "EXTERNAL_DERIVED_STORES", (failing_store,)
+    )
+
+    service = OrganizationDeletionService(_NO_SESSION)
+    result = org_deletion_module.DeletionResult(organization_id="org-1", dry_run=False)
+    await service._purge_external_stores("org-1", dry_run=False, result=result)
+
+    assert "failing_store" not in result.external.tables
+    assert any(
+        "failing_store" in warning and "failed" in warning
+        for warning in result.warnings
+    )
 
 
 @pytest.mark.asyncio

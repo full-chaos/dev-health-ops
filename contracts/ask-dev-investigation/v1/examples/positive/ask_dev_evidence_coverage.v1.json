@@ -1,0 +1,180 @@
+{
+  "authorization_filtered_count": 0,
+  "clarification_needs": [],
+  "conflicts": [],
+  "evidence_index": [
+    {
+      "evidence": {
+        "citation_text": "Project registered under this display name.",
+        "confidence": 1.0,
+        "display_label": "Nightfall Migration registration",
+        "entity_id": "proj_nightfall_migration",
+        "entity_type": "project",
+        "evidence_ref_id": "ev1_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "flags": {},
+        "freshness": "fresh",
+        "link": {
+          "internal_path": "/work/project/proj_nightfall_migration",
+          "source_url": null
+        },
+        "observed_at": "2026-08-08T12:00:00Z",
+        "provenance": "Canonical work graph projection",
+        "repository_ids": [],
+        "schema_version": "dev_evidence_ref.v1",
+        "source_system": "work_graph",
+        "source_version": "work_graph.v1",
+        "valid_entity_ids": []
+      },
+      "relevance": "current",
+      "source_class": "work_graph",
+      "supports_driver_ids": [],
+      "supports_entity_ids": [],
+      "supports_path_ids": [],
+      "supports_subject_ids": [
+        "proj_nightfall_migration"
+      ]
+    },
+    {
+      "evidence": {
+        "citation_text": "Dependency has no released version carrying the change.",
+        "confidence": 1.0,
+        "display_label": "authlib release status",
+        "entity_id": "dep_authlib",
+        "entity_type": "dependency",
+        "evidence_ref_id": "ev1_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "flags": {},
+        "freshness": "fresh",
+        "link": {
+          "internal_path": "/work/dependency/dep_authlib",
+          "source_url": null
+        },
+        "observed_at": "2026-08-08T12:00:00Z",
+        "provenance": "Canonical work graph projection",
+        "repository_ids": [],
+        "schema_version": "dev_evidence_ref.v1",
+        "source_system": "work_graph",
+        "source_version": "work_graph.v1",
+        "valid_entity_ids": []
+      },
+      "relevance": "current",
+      "source_class": "work_graph",
+      "supports_driver_ids": [
+        "drv_dependency_stall"
+      ],
+      "supports_entity_ids": [
+        "svc_auth_gateway",
+        "dep_authlib"
+      ],
+      "supports_path_ids": [
+        "path_dependency"
+      ],
+      "supports_subject_ids": []
+    },
+    {
+      "evidence": {
+        "citation_text": "Open review count exceeded the drain rate for the window.",
+        "confidence": 1.0,
+        "display_label": "Platform review queue",
+        "entity_id": "team_platform",
+        "entity_type": "team",
+        "evidence_ref_id": "ev1_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        "flags": {},
+        "freshness": "fresh",
+        "link": {
+          "internal_path": "/work/team/team_platform",
+          "source_url": null
+        },
+        "observed_at": "2026-08-08T12:00:00Z",
+        "provenance": "Canonical work graph projection",
+        "repository_ids": [],
+        "schema_version": "dev_evidence_ref.v1",
+        "source_system": "review",
+        "source_version": "work_graph.v1",
+        "valid_entity_ids": []
+      },
+      "relevance": "current",
+      "source_class": "review",
+      "supports_driver_ids": [
+        "drv_review_backlog"
+      ],
+      "supports_entity_ids": [
+        "team_platform"
+      ],
+      "supports_path_ids": [
+        "path_ownership"
+      ],
+      "supports_subject_ids": []
+    },
+    {
+      "evidence": {
+        "citation_text": "Median cycle time rose over the window.",
+        "confidence": 1.0,
+        "display_label": "Cycle time p50",
+        "entity_id": "proj_nightfall_migration",
+        "entity_type": "project",
+        "evidence_ref_id": "ev1_d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+        "flags": {},
+        "freshness": "fresh",
+        "link": {
+          "internal_path": "/work/project/proj_nightfall_migration",
+          "source_url": null
+        },
+        "observed_at": "2026-08-08T12:00:00Z",
+        "provenance": "Canonical work graph projection",
+        "repository_ids": [],
+        "schema_version": "dev_evidence_ref.v1",
+        "source_system": "work_item",
+        "source_version": "work_graph.v1",
+        "valid_entity_ids": []
+      },
+      "relevance": "current",
+      "source_class": "work_item",
+      "supports_driver_ids": [
+        "drv_cycle_time_rising"
+      ],
+      "supports_entity_ids": [],
+      "supports_path_ids": [],
+      "supports_subject_ids": []
+    }
+  ],
+  "evidence_truncated": false,
+  "limitations": [
+    {
+      "detail": "Investment allocation is unconfigured for this organization; capacity statements are out of scope for this packet.",
+      "kind": "missing_source"
+    },
+    {
+      "detail": "Deployment evidence is 31 hours old; a release landing since then would not be reflected.",
+      "kind": "stale_source"
+    }
+  ],
+  "missing_sources": [
+    {
+      "impact": "No allocation denominator is available, so no staffing claim is made about this project.",
+      "source_class": "investment_allocation",
+      "state": "unconfigured"
+    }
+  ],
+  "schema_version": "ask_dev_evidence_coverage.v1",
+  "source_health": [
+    {
+      "detail": null,
+      "observed_at": "2026-08-08T12:00:00Z",
+      "source_class": "work_graph",
+      "state": "available_current"
+    },
+    {
+      "detail": null,
+      "observed_at": "2026-08-08T12:00:00Z",
+      "source_class": "review",
+      "state": "available_current"
+    },
+    {
+      "detail": "Last deployment sync completed 31 hours ago.",
+      "observed_at": "2026-08-08T12:00:00Z",
+      "source_class": "deployment",
+      "state": "available_stale"
+    }
+  ],
+  "truncation_reason": null
+}

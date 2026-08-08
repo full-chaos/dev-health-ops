@@ -1,0 +1,405 @@
+{
+  "relationship_types": [
+    {
+      "canonical_reading": "the dependent entity is the source; the thing depended upon is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "project",
+          "target_kind": "service"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "dependency"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "project"
+        },
+        {
+          "source_kind": "service",
+          "target_kind": "service"
+        },
+        {
+          "source_kind": "service",
+          "target_kind": "dependency"
+        },
+        {
+          "source_kind": "repository",
+          "target_kind": "dependency"
+        },
+        {
+          "source_kind": "initiative",
+          "target_kind": "project"
+        }
+      ],
+      "relationship": "depends_on",
+      "symmetric": false,
+      "title": "Depends on"
+    },
+    {
+      "canonical_reading": "the blocked entity is the source; the blocker is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "work_unit",
+          "target_kind": "work_unit"
+        },
+        {
+          "source_kind": "work_unit",
+          "target_kind": "issue"
+        },
+        {
+          "source_kind": "issue",
+          "target_kind": "issue"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "work_unit"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "dependency"
+        },
+        {
+          "source_kind": "pull_request",
+          "target_kind": "pull_request"
+        }
+      ],
+      "relationship": "blocked_by",
+      "symmetric": false,
+      "title": "Blocked by"
+    },
+    {
+      "canonical_reading": "the owned entity is the source; the owning team is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "project",
+          "target_kind": "team"
+        },
+        {
+          "source_kind": "repository",
+          "target_kind": "team"
+        },
+        {
+          "source_kind": "service",
+          "target_kind": "team"
+        },
+        {
+          "source_kind": "work_unit",
+          "target_kind": "team"
+        },
+        {
+          "source_kind": "initiative",
+          "target_kind": "team"
+        }
+      ],
+      "relationship": "owned_by_team",
+      "symmetric": false,
+      "title": "Owned by team"
+    },
+    {
+      "canonical_reading": "the contributing artifact is the source; the larger unit is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "work_unit",
+          "target_kind": "project"
+        },
+        {
+          "source_kind": "issue",
+          "target_kind": "project"
+        },
+        {
+          "source_kind": "pull_request",
+          "target_kind": "project"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "initiative"
+        },
+        {
+          "source_kind": "repository",
+          "target_kind": "project"
+        }
+      ],
+      "relationship": "contributes_to",
+      "symmetric": false,
+      "title": "Contributes to"
+    },
+    {
+      "canonical_reading": "the parent is the source; the child is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "initiative",
+          "target_kind": "project"
+        },
+        {
+          "source_kind": "portfolio",
+          "target_kind": "initiative"
+        },
+        {
+          "source_kind": "work_unit",
+          "target_kind": "work_unit"
+        },
+        {
+          "source_kind": "issue",
+          "target_kind": "issue"
+        },
+        {
+          "source_kind": "team",
+          "target_kind": "team"
+        }
+      ],
+      "relationship": "parent_of",
+      "symmetric": false,
+      "title": "Parent of"
+    },
+    {
+      "canonical_reading": "the unit of intent is the source; the implementing change is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "work_unit",
+          "target_kind": "pull_request"
+        },
+        {
+          "source_kind": "issue",
+          "target_kind": "pull_request"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "pull_request"
+        }
+      ],
+      "relationship": "implemented_by",
+      "symmetric": false,
+      "title": "Implemented by"
+    },
+    {
+      "canonical_reading": "the reviewing team is the source; the reviewed change is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "team",
+          "target_kind": "pull_request"
+        },
+        {
+          "source_kind": "team",
+          "target_kind": "repository"
+        }
+      ],
+      "relationship": "reviews",
+      "symmetric": false,
+      "title": "Reviews"
+    },
+    {
+      "canonical_reading": "the deploying change is the source; the deployed service is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "pull_request",
+          "target_kind": "service"
+        },
+        {
+          "source_kind": "repository",
+          "target_kind": "service"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "service"
+        }
+      ],
+      "relationship": "deploys",
+      "symmetric": false,
+      "title": "Deploys"
+    },
+    {
+      "canonical_reading": "the operating team is the source; the operated service is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "team",
+          "target_kind": "service"
+        },
+        {
+          "source_kind": "team",
+          "target_kind": "repository"
+        }
+      ],
+      "relationship": "operates",
+      "symmetric": false,
+      "title": "Operates"
+    },
+    {
+      "canonical_reading": "the referring artifact is the source; the referenced artifact is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "pull_request",
+          "target_kind": "issue"
+        },
+        {
+          "source_kind": "issue",
+          "target_kind": "work_unit"
+        },
+        {
+          "source_kind": "work_unit",
+          "target_kind": "issue"
+        },
+        {
+          "source_kind": "pull_request",
+          "target_kind": "work_unit"
+        }
+      ],
+      "relationship": "references",
+      "symmetric": false,
+      "title": "References"
+    },
+    {
+      "canonical_reading": "the member entity is the source; the portfolio is the target",
+      "forward_pairs": [
+        {
+          "source_kind": "project",
+          "target_kind": "portfolio"
+        },
+        {
+          "source_kind": "initiative",
+          "target_kind": "portfolio"
+        },
+        {
+          "source_kind": "team",
+          "target_kind": "portfolio"
+        }
+      ],
+      "relationship": "belongs_to_portfolio",
+      "symmetric": false,
+      "title": "Belongs to portfolio"
+    },
+    {
+      "canonical_reading": "both endpoints depend on a common third entity; the ordering is arbitrary",
+      "forward_pairs": [
+        {
+          "source_kind": "project",
+          "target_kind": "project"
+        },
+        {
+          "source_kind": "service",
+          "target_kind": "service"
+        },
+        {
+          "source_kind": "project",
+          "target_kind": "service"
+        },
+        {
+          "source_kind": "team",
+          "target_kind": "team"
+        }
+      ],
+      "relationship": "shares_dependency_with",
+      "symmetric": true,
+      "title": "Shares dependency with"
+    }
+  ],
+  "schema_version": "ask_dev_trial_allowlists.v1",
+  "slice_boundaries": [
+    {
+      "definition": "Entities, relationships and evidence that are valid now. The investigation reads the live projection: no as-of timestamp is supplied and no edge-validity interval is consulted. This is the slice every 'what is happening / what is going sideways / who needs attention' question runs in, and it is deliberately the slice that CHAOS-3569 does not block.",
+      "known_gap": null,
+      "permitted_comparability": [
+        "not_applicable"
+      ],
+      "requires_as_of": false,
+      "requires_edge_validity": false,
+      "schema_version": "ask_dev_slice_boundary.v1",
+      "slice_id": "current",
+      "title": "Current"
+    },
+    {
+      "definition": "The state as of a supplied past instant. Requires an as-of timestamp and requires every traversed edge to carry a validity interval covering that instant, so that relationships which did not exist then are not reported as if they did.",
+      "known_gap": "CHAOS-3569 (native historical edge validity) is open. Rows whose edges lack a validity interval are reported NOT COMPARABLE and excluded from historical scoring -- they are not trial failures and they do not block the current slice.",
+      "permitted_comparability": [
+        "comparable",
+        "not_comparable_missing_edge_validity",
+        "not_comparable_missing_baseline"
+      ],
+      "requires_as_of": true,
+      "requires_edge_validity": true,
+      "schema_version": "ask_dev_slice_boundary.v1",
+      "slice_id": "historical",
+      "title": "Historical"
+    },
+    {
+      "definition": "A change question: the current state compared against the state as of a supplied past instant. Inherits every requirement of the historical slice, plus a baseline that must itself be reconstructable -- a comparison against a baseline that cannot be rebuilt is NOT COMPARABLE rather than a zero delta.",
+      "known_gap": "CHAOS-3569 as above, plus: a missing baseline must be reported NOT_COMPARABLE_MISSING_BASELINE and never silently rendered as 'no change'.",
+      "permitted_comparability": [
+        "comparable",
+        "not_comparable_missing_edge_validity",
+        "not_comparable_missing_baseline"
+      ],
+      "requires_as_of": true,
+      "requires_edge_validity": true,
+      "schema_version": "ask_dev_slice_boundary.v1",
+      "slice_id": "current_vs_historical",
+      "title": "Current versus historical"
+    }
+  ],
+  "source_classes": [
+    {
+      "rationale": "declared status and its transitions -- the 'declared' half of the declared-versus-actual family",
+      "source_class": "status_change"
+    },
+    {
+      "rationale": "canonical units of work; the substrate for delivery pressure, scope change and blocked-by lineage",
+      "source_class": "work_item"
+    },
+    {
+      "rationale": "canonical entity identity and membership -- how a candidate subject becomes a canonical ID at all",
+      "source_class": "work_graph"
+    },
+    {
+      "rationale": "implementing changes; the 'actual delivery evidence' half of the declared-versus-actual family",
+      "source_class": "pull_request"
+    },
+    {
+      "rationale": "change volume and locality behind delivery pressure",
+      "source_class": "code_change"
+    },
+    {
+      "rationale": "review pressure, and the cycled-in-review colloquial family",
+      "source_class": "review"
+    },
+    {
+      "rationale": "readiness evidence for declared-complete claims",
+      "source_class": "ci_run"
+    },
+    {
+      "rationale": "readiness evidence for declared-complete claims",
+      "source_class": "test_report"
+    },
+    {
+      "rationale": "release evidence for declared-complete claims",
+      "source_class": "deployment"
+    },
+    {
+      "rationale": "operational pressure and its driver lineage",
+      "source_class": "incident"
+    },
+    {
+      "rationale": "operational readiness controls behind operational-deficiency drivers",
+      "source_class": "operational_control"
+    },
+    {
+      "rationale": "source availability and freshness -- required to distinguish 'no signal' from 'no data'",
+      "source_class": "source_health"
+    },
+    {
+      "rationale": "team-level interruption/context-spread/review-request rollups behind the struggling-teams family. Team-level only: this source class also backs per-developer rollups, which the packet cannot express because no person subject kind exists",
+      "source_class": "cognitive_load"
+    },
+    {
+      "rationale": "investment mix pressure, and the nearest available proxy for a capacity denominator",
+      "source_class": "investment_allocation"
+    },
+    {
+      "rationale": "code-owned health-rule findings; a derived judgment over other sources, never a primary source of its own",
+      "source_class": "health_profile"
+    },
+    {
+      "rationale": "operational-deficiency inventory behind readiness and operational pressure judgments",
+      "source_class": "deficiency_inventory"
+    }
+  ]
+}

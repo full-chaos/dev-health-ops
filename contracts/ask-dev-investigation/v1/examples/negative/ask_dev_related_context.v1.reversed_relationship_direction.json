@@ -1,0 +1,110 @@
+{
+  "authorization_filtered_count": 0,
+  "authorized_entity_ids": [
+    "proj_nightfall_migration",
+    "team_platform",
+    "svc_auth_gateway",
+    "dep_authlib"
+  ],
+  "entities": [
+    {
+      "display_label": "Platform",
+      "entity_id": "team_platform",
+      "entity_kind": "team",
+      "inclusion_reason": "Owns the project; the team whose review capacity gates the remaining work.",
+      "observed_at": "2026-08-08T12:00:00Z",
+      "relevance": "current",
+      "supporting_path_ids": [
+        "path_ownership"
+      ]
+    },
+    {
+      "display_label": "Auth Gateway",
+      "entity_id": "svc_auth_gateway",
+      "entity_kind": "service",
+      "inclusion_reason": "The project's remaining work all lands in this service.",
+      "observed_at": "2026-08-08T12:00:00Z",
+      "relevance": "current",
+      "supporting_path_ids": [
+        "path_dependency"
+      ]
+    },
+    {
+      "display_label": "authlib",
+      "entity_id": "dep_authlib",
+      "entity_kind": "dependency",
+      "inclusion_reason": "Shared dependency the gateway is blocked behind; the terminal node of the driver's lineage.",
+      "observed_at": "2026-08-08T12:00:00Z",
+      "relevance": "current",
+      "supporting_path_ids": [
+        "path_dependency"
+      ]
+    }
+  ],
+  "entities_truncated": false,
+  "paths": [
+    {
+      "evidence_ref_ids": [
+        "ev1_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+      ],
+      "hops": [
+        {
+          "direction": "forward",
+          "observed_at": "2026-08-08T12:00:00Z",
+          "relationship": "owned_by_team",
+          "relevance": "current",
+          "source_entity_id": "team_platform",
+          "source_entity_kind": "team",
+          "target_entity_id": "proj_nightfall_migration",
+          "target_entity_kind": "project"
+        }
+      ],
+      "inclusion_reason": "Establishes which team's review capacity applies to the project's outstanding changes.",
+      "origin_entity_id": "team_platform",
+      "path_id": "path_ownership",
+      "relevance": "current",
+      "source_health": "available_current",
+      "terminal_entity_id": "proj_nightfall_migration",
+      "truncated": false,
+      "truncation_reason": null
+    },
+    {
+      "evidence_ref_ids": [
+        "ev1_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+      ],
+      "hops": [
+        {
+          "direction": "forward",
+          "observed_at": "2026-08-08T12:00:00Z",
+          "relationship": "depends_on",
+          "relevance": "current",
+          "source_entity_id": "proj_nightfall_migration",
+          "source_entity_kind": "project",
+          "target_entity_id": "svc_auth_gateway",
+          "target_entity_kind": "service"
+        },
+        {
+          "direction": "forward",
+          "observed_at": "2026-08-08T12:00:00Z",
+          "relationship": "depends_on",
+          "relevance": "current",
+          "source_entity_id": "svc_auth_gateway",
+          "source_entity_kind": "service",
+          "target_entity_id": "dep_authlib",
+          "target_entity_kind": "dependency"
+        }
+      ],
+      "inclusion_reason": "The two-hop chain from the project to the stalled shared dependency; the mechanism behind the principal driver.",
+      "origin_entity_id": "proj_nightfall_migration",
+      "path_id": "path_dependency",
+      "relevance": "current",
+      "source_health": "available_current",
+      "terminal_entity_id": "dep_authlib",
+      "truncated": false,
+      "truncation_reason": null
+    }
+  ],
+  "paths_truncated": false,
+  "schema_version": "ask_dev_related_context.v1",
+  "truncation_reason": null
+}

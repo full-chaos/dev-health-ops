@@ -1,0 +1,369 @@
+{
+  "$defs": {
+    "InvestigationSubjectKind": {
+      "description": "What an investigation may take as a subject, cohort member or node.\n\nA superset of the *organizational* kinds an Ask Dev question can name,\nand a strict subset of \"anything in the work graph\": there is no person\nkind, by design (see the module docstring). ``EntityKind``\n(``contracts_v2.base``) is the answer-frame subject vocabulary and is\ndeliberately not reused here \u2014 it carries ``pull_request``/``issue`` as\n*subjects* of a status answer, whereas this enum has to describe\nportfolio, initiative and service nodes that a status answer never takes\nas its subject but a lineage path routinely crosses.",
+      "enum": [
+        "team",
+        "project",
+        "portfolio",
+        "initiative",
+        "repository",
+        "service",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "dependency"
+      ],
+      "title": "InvestigationSubjectKind",
+      "type": "string"
+    },
+    "LineageHop": {
+      "additionalProperties": false,
+      "description": "One traversed edge.\n\n``source_entity_id`` is always the entity traversal started from and\n``target_entity_id`` the entity it arrived at; ``direction`` says whether\nthat traversal followed the relationship's canonical orientation or ran\nagainst it. Separating traversal order from canonical orientation is\nwhat makes a reversed relationship detectable at all \u2014 with a single\ncombined field, \"team owns project\" and \"project owned by team\" are the\nsame bytes.",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/RelationshipDirection"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "relationship": {
+          "$ref": "#/$defs/RelationshipType"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "source_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source Entity Id",
+          "type": "string"
+        },
+        "source_entity_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        },
+        "target_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Target Entity Id",
+          "type": "string"
+        },
+        "target_entity_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        }
+      },
+      "required": [
+        "source_entity_id",
+        "source_entity_kind",
+        "relationship",
+        "direction",
+        "target_entity_id",
+        "target_entity_kind",
+        "relevance"
+      ],
+      "title": "LineageHop",
+      "type": "object"
+    },
+    "LineagePath": {
+      "additionalProperties": false,
+      "description": "A bounded chain of hops, and why it was included.",
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "hops": {
+          "items": {
+            "$ref": "#/$defs/LineageHop"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Hops",
+          "type": "array"
+        },
+        "inclusion_reason": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Inclusion Reason",
+          "type": "string"
+        },
+        "origin_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Origin Entity Id",
+          "type": "string"
+        },
+        "path_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Path Id",
+          "type": "string"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "source_health": {
+          "$ref": "#/$defs/SourceRequirementState"
+        },
+        "terminal_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Terminal Entity Id",
+          "type": "string"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path_id",
+        "origin_entity_id",
+        "terminal_entity_id",
+        "hops",
+        "inclusion_reason",
+        "relevance",
+        "truncated",
+        "source_health"
+      ],
+      "title": "LineagePath",
+      "type": "object"
+    },
+    "RelatedEntity": {
+      "additionalProperties": false,
+      "description": "A canonical entity the investigation pulled in, and its justification.\n\n``supporting_path_ids`` is ``min_length=1``: an entity nothing connects\nto the subject is not related context, it is noise that displaces the\nlineage actually asked for.",
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        },
+        "inclusion_reason": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Inclusion Reason",
+          "type": "string"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "supporting_path_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Supporting Path Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "entity_id",
+        "entity_kind",
+        "display_label",
+        "inclusion_reason",
+        "supporting_path_ids",
+        "relevance"
+      ],
+      "title": "RelatedEntity",
+      "type": "object"
+    },
+    "RelationshipDirection": {
+      "description": "Which way a hop was traversed relative to the relationship's own\ncanonical orientation (declared in :mod:`.relationships`).\n\nA hop that claims ``FORWARD`` while its endpoint kinds match only the\nreverse orientation is exactly the named \"a relationship is reversed\"\nfault, and is rejected by ``LineageHop.validate_direction_matches_\nallowlist``.",
+      "enum": [
+        "forward",
+        "reverse"
+      ],
+      "title": "RelationshipDirection",
+      "type": "string"
+    },
+    "RelationshipType": {
+      "description": "The closed technical relationship vocabulary for the trial.",
+      "enum": [
+        "depends_on",
+        "blocked_by",
+        "owned_by_team",
+        "contributes_to",
+        "parent_of",
+        "implemented_by",
+        "reviews",
+        "deploys",
+        "operates",
+        "references",
+        "belongs_to_portfolio",
+        "shares_dependency_with"
+      ],
+      "title": "RelationshipType",
+      "type": "string"
+    },
+    "RelevanceState": {
+      "description": "Whether a node, path, driver or evidence item is *currently* relevant.",
+      "enum": [
+        "current",
+        "recently_current",
+        "historical_only",
+        "unknown"
+      ],
+      "title": "RelevanceState",
+      "type": "string"
+    },
+    "SourceRequirementState": {
+      "description": "Per-source fulfillment state (CHAOS-3294 deliverable list, verbatim).\n\nDistinct from ``dev_source_requirement.v1.requirement_level`` (the\na-priori ``mandatory | conditional | optional | not_applicable``\ndeclaration): this enum is the *observed*, executed outcome recorded on\n``dev_source_observation.v1.observed_state`` once a plan step actually\nran. Kept in ``base`` because both the plan and result contract modules\nreference it (the plan's applicability rules describe which states are\nacceptable; the result records which state was actually observed).",
+      "enum": [
+        "available_current",
+        "available_stale",
+        "available_unknown",
+        "unconfigured",
+        "unavailable",
+        "unauthorized_or_not_visible",
+        "not_applicable",
+        "truncated"
+      ],
+      "title": "SourceRequirementState",
+      "type": "string"
+    },
+    "TruncationReason": {
+      "enum": [
+        "path_budget",
+        "node_budget",
+        "cohort_budget",
+        "evidence_budget",
+        "time_budget",
+        "authorization_filter",
+        "source_unavailable"
+      ],
+      "title": "TruncationReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev-investigation/v1/ask_dev_related_context.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Related entities, the paths that reach them, and the authorized set.",
+  "properties": {
+    "authorization_filtered_count": {
+      "minimum": 0,
+      "title": "Authorization Filtered Count",
+      "type": "integer"
+    },
+    "authorized_entity_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 500,
+      "title": "Authorized Entity Ids",
+      "type": "array"
+    },
+    "entities": {
+      "items": {
+        "$ref": "#/$defs/RelatedEntity"
+      },
+      "maxItems": 100,
+      "title": "Entities",
+      "type": "array"
+    },
+    "entities_truncated": {
+      "title": "Entities Truncated",
+      "type": "boolean"
+    },
+    "paths": {
+      "items": {
+        "$ref": "#/$defs/LineagePath"
+      },
+      "maxItems": 100,
+      "title": "Paths",
+      "type": "array"
+    },
+    "paths_truncated": {
+      "title": "Paths Truncated",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "ask_dev_related_context.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "truncation_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TruncationReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "schema_version",
+    "authorization_filtered_count",
+    "entities_truncated",
+    "paths_truncated"
+  ],
+  "title": "RelatedContext",
+  "type": "object"
+}

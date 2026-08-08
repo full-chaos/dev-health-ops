@@ -1,0 +1,313 @@
+{
+  "$defs": {
+    "CohortCompleteness": {
+      "enum": [
+        "complete",
+        "truncated",
+        "best_effort_uncertain"
+      ],
+      "title": "CohortCompleteness",
+      "type": "string"
+    },
+    "CohortEvidenceClassification": {
+      "description": "Closed reasons a cohort member may carry no evidence handle.\n\nThe same \"evidence refs XOR an explicit no-evidence classification \u2014\nnever both, never neither\" pattern as\n``contracts_v2.embedded.MetricEvidenceClassification`` and\n``contracts_v2.deficiency.DeficiencyEvidenceClassification``, applied to\ncohort membership here.",
+      "enum": [
+        "explicitly_named_by_question",
+        "canonical_registry_membership"
+      ],
+      "title": "CohortEvidenceClassification",
+      "type": "string"
+    },
+    "CohortExclusion": {
+      "additionalProperties": false,
+      "description": "A subject considered for the cohort and deliberately left out.",
+      "properties": {
+        "canonical_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/CohortExclusionReason"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        }
+      },
+      "required": [
+        "subject_kind",
+        "canonical_id",
+        "reason",
+        "rationale"
+      ],
+      "title": "CohortExclusion",
+      "type": "object"
+    },
+    "CohortExclusionReason": {
+      "enum": [
+        "out_of_authorized_scope",
+        "insufficient_evidence",
+        "not_comparable_slice",
+        "archived_or_inactive",
+        "truncation_budget",
+        "ambiguous_identity",
+        "excluded_by_question"
+      ],
+      "title": "CohortExclusionReason",
+      "type": "string"
+    },
+    "CohortInclusionBasis": {
+      "description": "Why a subject is in the comparison cohort.\n\nThere is deliberately no ``unspecified`` member and the field is\n``min_length=1``: \"an unrelated project appears in the cohort\" is a named\nfault mode, and the cheapest way for an arm to commit it is to include a\nmember with no stated basis at all.",
+      "enum": [
+        "explicitly_named",
+        "shared_dependency",
+        "shared_team_ownership",
+        "same_portfolio",
+        "same_initiative",
+        "comparable_delivery_profile",
+        "peer_of_named_subject"
+      ],
+      "title": "CohortInclusionBasis",
+      "type": "string"
+    },
+    "CohortMember": {
+      "additionalProperties": false,
+      "description": "A subject in the comparison cohort, with its inclusion justified.",
+      "properties": {
+        "canonical_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "inclusion_basis": {
+          "items": {
+            "$ref": "#/$defs/CohortInclusionBasis"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "title": "Inclusion Basis",
+          "type": "array"
+        },
+        "inclusion_evidence_classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CohortEvidenceClassification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inclusion_evidence_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Inclusion Evidence Ids",
+          "type": "array"
+        },
+        "inclusion_rationale": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Inclusion Rationale",
+          "type": "string"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        }
+      },
+      "required": [
+        "subject_kind",
+        "canonical_id",
+        "display_label",
+        "inclusion_basis",
+        "inclusion_rationale",
+        "relevance"
+      ],
+      "title": "CohortMember",
+      "type": "object"
+    },
+    "ComparisonDimension": {
+      "description": "Axes a cohort may be compared on.\n\nEvery member is a *unit-of-work or system* axis. None is per-person, and\nnone may be derived per-person: person-level productivity, workload and\nstaffing ranking is prohibited outright, and this enum is one of the two\nstructural places that ban is enforced (the other being the absence of a\nperson member on :class:`InvestigationSubjectKind`).",
+      "enum": [
+        "delivery_throughput",
+        "cycle_time",
+        "review_load",
+        "work_in_progress",
+        "dependency_exposure",
+        "incident_load",
+        "deployment_frequency",
+        "investment_mix",
+        "open_deficiency_count",
+        "status_declaration_gap",
+        "capacity_load_ratio",
+        "data_coverage"
+      ],
+      "title": "ComparisonDimension",
+      "type": "string"
+    },
+    "ComparisonShape": {
+      "description": "The requested comparison or singular-subject shape.",
+      "enum": [
+        "singular_subject",
+        "explicit_cohort",
+        "discovered_cohort",
+        "portfolio_wide",
+        "organization_wide"
+      ],
+      "title": "ComparisonShape",
+      "type": "string"
+    },
+    "InvestigationSubjectKind": {
+      "description": "What an investigation may take as a subject, cohort member or node.\n\nA superset of the *organizational* kinds an Ask Dev question can name,\nand a strict subset of \"anything in the work graph\": there is no person\nkind, by design (see the module docstring). ``EntityKind``\n(``contracts_v2.base``) is the answer-frame subject vocabulary and is\ndeliberately not reused here \u2014 it carries ``pull_request``/``issue`` as\n*subjects* of a status answer, whereas this enum has to describe\nportfolio, initiative and service nodes that a status answer never takes\nas its subject but a lineage path routinely crosses.",
+      "enum": [
+        "team",
+        "project",
+        "portfolio",
+        "initiative",
+        "repository",
+        "service",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "dependency"
+      ],
+      "title": "InvestigationSubjectKind",
+      "type": "string"
+    },
+    "RelevanceState": {
+      "description": "Whether a node, path, driver or evidence item is *currently* relevant.",
+      "enum": [
+        "current",
+        "recently_current",
+        "historical_only",
+        "unknown"
+      ],
+      "title": "RelevanceState",
+      "type": "string"
+    },
+    "TruncationReason": {
+      "enum": [
+        "path_budget",
+        "node_budget",
+        "cohort_budget",
+        "evidence_budget",
+        "time_budget",
+        "authorization_filter",
+        "source_unavailable"
+      ],
+      "title": "TruncationReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev-investigation/v1/ask_dev_comparison_cohort.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The comparison cohort, its exclusions, and how complete it is.",
+  "properties": {
+    "authorization_filtered_count": {
+      "minimum": 0,
+      "title": "Authorization Filtered Count",
+      "type": "integer"
+    },
+    "cohort_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Cohort Id",
+      "type": "string"
+    },
+    "cohort_uncertainty": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cohort Uncertainty"
+    },
+    "comparison_shape": {
+      "$ref": "#/$defs/ComparisonShape"
+    },
+    "completeness": {
+      "$ref": "#/$defs/CohortCompleteness"
+    },
+    "exclusions": {
+      "items": {
+        "$ref": "#/$defs/CohortExclusion"
+      },
+      "maxItems": 50,
+      "title": "Exclusions",
+      "type": "array"
+    },
+    "members": {
+      "items": {
+        "$ref": "#/$defs/CohortMember"
+      },
+      "maxItems": 50,
+      "title": "Members",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "ask_dev_comparison_cohort.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "supported_comparison_dimensions": {
+      "items": {
+        "$ref": "#/$defs/ComparisonDimension"
+      },
+      "maxItems": 12,
+      "title": "Supported Comparison Dimensions",
+      "type": "array"
+    },
+    "truncation_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TruncationReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "schema_version",
+    "cohort_id",
+    "comparison_shape",
+    "completeness",
+    "authorization_filtered_count"
+  ],
+  "title": "ComparisonCohort",
+  "type": "object"
+}

@@ -1,0 +1,590 @@
+{
+  "aggregate_score_prohibited": true,
+  "dimensions": [
+    {
+      "aggregate_prohibited": true,
+      "definition": "The expected canonical subject is the rank-1 candidate. Scored per question family; a family whose questions name no subject is scored NOT APPLICABLE rather than 0, so an unnameable family cannot drag a score down or prop one up.",
+      "dimension_id": "subject_top_1",
+      "fault_mode_ids": [
+        "wrong_but_similar_subject_ranked_first"
+      ],
+      "measurement_kind": "ordinal_top_k",
+      "packet_fields": [
+        "subject_discovery.candidates[].rank",
+        "subject_discovery.candidates[].canonical_id"
+      ],
+      "packet_sections": [
+        "subject_discovery"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Correct canonical subject at rank 1"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "The expected canonical subject appears in the top three candidates. Reported alongside rank-1 rather than instead of it: an arm that is reliably top-3 but rarely top-1 is a clarification-first product, not a resolution product, and the two must stay distinguishable.",
+      "dimension_id": "subject_top_3",
+      "fault_mode_ids": [
+        "wrong_but_similar_subject_ranked_first"
+      ],
+      "measurement_kind": "ordinal_top_k",
+      "packet_fields": [
+        "subject_discovery.candidates[].rank",
+        "subject_discovery.candidates[].canonical_id"
+      ],
+      "packet_sections": [
+        "subject_discovery"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Correct canonical subject within rank 3"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "When the arm asks for clarification, the candidates it offers contain the expected subject and exclude obvious non-candidates. A clarification listing every project in the organization is a failure of this dimension even though it technically contains the right answer.",
+      "dimension_id": "clarification_candidate_precision",
+      "fault_mode_ids": [
+        "wrong_but_similar_subject_ranked_first",
+        "organization_widening_after_unresolved_reference"
+      ],
+      "measurement_kind": "precision",
+      "packet_fields": [
+        "subject_discovery.unresolved_mentions[].candidate_ids",
+        "evidence_coverage.clarification_needs[].candidate_ids"
+      ],
+      "packet_sections": [
+        "subject_discovery",
+        "evidence_coverage"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Useful clarification candidate precision"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "A reference by alias, acronym, previous name or provider identifier resolves to the correct canonical subject, and the packet says which signal did it. Scoring the signal as well as the outcome is deliberate: an arm that gets the right answer by fuzzy label is not doing alias resolution and will not generalize.",
+      "dimension_id": "alias_acronym_rename_resolution",
+      "fault_mode_ids": [
+        "wrong_but_similar_subject_ranked_first"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "subject_discovery.candidates[].match_signals[].signal",
+        "subject_discovery.candidates[].match_signals[].matched_text"
+      ],
+      "packet_sections": [
+        "subject_discovery"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Alias, acronym and renamed-entity resolution"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "'What about the other project we discussed?' resolves against conversation or surface context, or is escalated to clarification. Silently guessing is scored as a failure, not a partial success.",
+      "dimension_id": "conversational_reference_resolution",
+      "fault_mode_ids": [
+        "wrong_but_similar_subject_ranked_first"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "analytical_job.surface_context_refs",
+        "analytical_job.conversation_reference_ids",
+        "subject_discovery.candidates[].match_signals[].signal"
+      ],
+      "packet_sections": [
+        "analytical_job",
+        "subject_discovery"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Conversational and surface reference resolution"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "An unresolved named reference never silently becomes an organization-wide sweep. Must be zero: widening after a failed resolution is how a question about one team becomes a report on everybody, and it is both a privacy and a usefulness failure.",
+      "dimension_id": "no_unsafe_organization_widening",
+      "fault_mode_ids": [
+        "organization_widening_after_unresolved_reference"
+      ],
+      "measurement_kind": "boolean_zero",
+      "packet_fields": [
+        "analytical_job.comparison_shape",
+        "subject_discovery.unresolved_mentions",
+        "evidence_coverage.clarification_needs[].kind"
+      ],
+      "packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "comparison_cohort"
+      ],
+      "polarity": "must_be_zero",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "No unsafe organization widening"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Members of the cohort belong in it. An unrelated project in the cohort is the failure this scores.",
+      "dimension_id": "cohort_precision",
+      "fault_mode_ids": [
+        "unrelated_cohort_member"
+      ],
+      "measurement_kind": "precision",
+      "packet_fields": [
+        "comparison_cohort.members[].canonical_id"
+      ],
+      "packet_sections": [
+        "comparison_cohort"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Comparison cohort precision"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Subjects that belong in the cohort are in it. Reported alongside precision because a one-member cohort is trivially precise.",
+      "dimension_id": "cohort_recall",
+      "fault_mode_ids": [
+        "unrelated_cohort_member",
+        "wildcard_or_optional_field_makes_check_vacuous"
+      ],
+      "measurement_kind": "recall",
+      "packet_fields": [
+        "comparison_cohort.members[].canonical_id",
+        "comparison_cohort.completeness"
+      ],
+      "packet_sections": [
+        "comparison_cohort"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Comparison cohort recall"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Every member states a closed-vocabulary basis and a rationale, and carries either evidence handles or an explicit no-evidence classification.",
+      "dimension_id": "cohort_inclusion_explainability",
+      "fault_mode_ids": [
+        "unrelated_cohort_member"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "comparison_cohort.members[].inclusion_basis",
+        "comparison_cohort.members[].inclusion_rationale",
+        "comparison_cohort.members[].inclusion_evidence_ids"
+      ],
+      "packet_sections": [
+        "comparison_cohort"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Explainable cohort inclusion"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Subjects the arm considered and rejected are listed with reasons. Scored separately from inclusion because an arm can be perfectly explainable about what it kept while being silent about what it dropped, which is where quiet authorization filtering hides.",
+      "dimension_id": "cohort_exclusion_explainability",
+      "fault_mode_ids": [
+        "unrelated_cohort_member",
+        "absent_required_field_silently_defaults"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "comparison_cohort.exclusions[].reason",
+        "comparison_cohort.exclusions[].rationale",
+        "comparison_cohort.authorization_filtered_count"
+      ],
+      "packet_sections": [
+        "comparison_cohort"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Explainable cohort exclusion"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "The entities a human investigator would consider relevant are present in the related-context section.",
+      "dimension_id": "relevant_entity_recall",
+      "fault_mode_ids": [
+        "irrelevant_evidence_displaces_lineage"
+      ],
+      "measurement_kind": "recall",
+      "packet_fields": [
+        "related_context.entities[].entity_id"
+      ],
+      "packet_sections": [
+        "related_context"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Relevant entity recall"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "The relationships that explain the situation are present, not just the entities they connect.",
+      "dimension_id": "relevant_relationship_recall",
+      "fault_mode_ids": [
+        "irrelevant_evidence_displaces_lineage"
+      ],
+      "measurement_kind": "recall",
+      "packet_fields": [
+        "related_context.paths[].hops[].relationship"
+      ],
+      "packet_sections": [
+        "related_context"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Relevant relationship and path recall"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Included paths actually connect what they claim to connect, and each states why it was included.",
+      "dimension_id": "lineage_path_precision",
+      "fault_mode_ids": [
+        "irrelevant_evidence_displaces_lineage",
+        "path_crosses_unauthorized_entity"
+      ],
+      "measurement_kind": "precision",
+      "packet_fields": [
+        "related_context.paths[].hops",
+        "related_context.paths[].inclusion_reason"
+      ],
+      "packet_sections": [
+        "related_context"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Lineage path precision"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Every hop's direction matches the relationship's canonical orientation. 'A blocks B' and 'B blocks A' are different claims about the world and only one of them is actionable.",
+      "dimension_id": "lineage_direction_correctness",
+      "fault_mode_ids": [
+        "reversed_relationship_direction"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "related_context.paths[].hops[].direction",
+        "related_context.paths[].hops[].relationship"
+      ],
+      "packet_sections": [
+        "related_context"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Lineage direction correctness"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "The investigation connects facts across source classes rather than staying inside one. A packet whose entire evidence index is one source class has not done cross-source association, whatever its other scores.",
+      "dimension_id": "cross_source_association",
+      "fault_mode_ids": [
+        "irrelevant_evidence_displaces_lineage"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "evidence_coverage.evidence_index[].source_class"
+      ],
+      "packet_sections": [
+        "evidence_coverage"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Cross-source association"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Every evidence handle referenced anywhere in the packet is declared in the evidence index, and every indexed item supports something the packet includes. Both halves matter: the first stops dangling citations, the second stops a high-volume evidence dump from displacing the lineage that was actually asked for.",
+      "dimension_id": "evidence_closure",
+      "fault_mode_ids": [
+        "irrelevant_evidence_displaces_lineage"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "evidence_coverage.evidence_index[].evidence.evidence_ref_id",
+        "evidence_coverage.evidence_index[].supports_path_ids",
+        "evidence_coverage.evidence_index[].supports_driver_ids"
+      ],
+      "packet_sections": [
+        "evidence_coverage"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Evidence closure"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "What the packet presents as current is current. A dependency that was removed last quarter is not a current driver, however strong its historical evidence.",
+      "dimension_id": "current_relevance",
+      "fault_mode_ids": [
+        "symptom_labelled_as_principal_driver"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "related_context.entities[].relevance",
+        "driver_analysis.candidates[].relevance"
+      ],
+      "packet_sections": [
+        "related_context",
+        "driver_analysis"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Current relevance"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Drivers the packet promotes to principal standing really are the principal current drivers.",
+      "dimension_id": "principal_driver_precision",
+      "fault_mode_ids": [
+        "symptom_labelled_as_principal_driver",
+        "dashboard_redirect_without_direct_judgment"
+      ],
+      "measurement_kind": "precision",
+      "packet_fields": [
+        "driver_analysis.principal_driver_ids"
+      ],
+      "packet_sections": [
+        "driver_analysis"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Principal driver precision"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "The principal current drivers a human investigator would name are present. Reported alongside precision because an arm that promotes nothing is trivially precise and useless.",
+      "dimension_id": "principal_driver_recall",
+      "fault_mode_ids": [
+        "dashboard_redirect_without_direct_judgment"
+      ],
+      "measurement_kind": "recall",
+      "packet_fields": [
+        "driver_analysis.principal_driver_ids",
+        "driver_analysis.candidates"
+      ],
+      "packet_sections": [
+        "driver_analysis"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Principal driver recall"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Rising cycle time is a symptom; the review bottleneck causing it is a driver. Scored on whether the packet classifies each candidate correctly, not merely on whether it lists both.",
+      "dimension_id": "symptom_versus_driver_distinction",
+      "fault_mode_ids": [
+        "symptom_labelled_as_principal_driver"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "driver_analysis.candidates[].role",
+        "driver_analysis.candidates[].standing",
+        "driver_analysis.candidates[].supporting_path_ids"
+      ],
+      "packet_sections": [
+        "driver_analysis"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Symptom versus driver distinction"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "How often the packet asserts a causal or measured claim without the supporting basis it declares. Must trend to zero; unlike the must-be-zero dimensions it is reported as a rate because partial credit is meaningful here.",
+      "dimension_id": "unsupported_attribution_rate",
+      "fault_mode_ids": [
+        "symptom_labelled_as_principal_driver",
+        "staffing_certainty_without_allocation_evidence"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "driver_analysis.candidates[].assertion_basis",
+        "driver_analysis.candidates[].supporting_evidence_ids",
+        "driver_analysis.candidates[].confidence_qualifier"
+      ],
+      "packet_sections": [
+        "driver_analysis"
+      ],
+      "polarity": "must_be_zero",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Unsupported attribution rate"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "A comparison question gets a cohort with declared comparison dimensions, not a list of subjects the reader must compare themselves.",
+      "dimension_id": "comparative_judgment_support",
+      "fault_mode_ids": [
+        "wildcard_or_optional_field_makes_check_vacuous"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "comparison_cohort.supported_comparison_dimensions",
+        "comparison_cohort.members"
+      ],
+      "packet_sections": [
+        "comparison_cohort"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Comparative judgment support"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "The packet supports a direct judgment. 'Open the project dashboard' is not a successful outcome, and a packet whose only substance is surface references is scored zero here regardless of how well formed it is.",
+      "dimension_id": "answer_usefulness_beyond_dashboard",
+      "fault_mode_ids": [
+        "dashboard_redirect_without_direct_judgment"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "driver_analysis.candidates[].standing",
+        "driver_analysis.candidates[].summary",
+        "evidence_coverage.evidence_index"
+      ],
+      "packet_sections": [
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Direct answer usefulness beyond dashboard redirection"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "Limitations named are the ones that actually bit, and are specific enough to act on. A packet that discloses every possible limitation on every question scores no better than one that discloses none.",
+      "dimension_id": "useful_uncertainty_behaviour",
+      "fault_mode_ids": [
+        "wildcard_or_optional_field_makes_check_vacuous",
+        "absent_required_field_silently_defaults"
+      ],
+      "measurement_kind": "rate",
+      "packet_fields": [
+        "evidence_coverage.limitations[].kind",
+        "evidence_coverage.missing_sources",
+        "evidence_coverage.conflicts"
+      ],
+      "packet_sections": [
+        "evidence_coverage"
+      ],
+      "polarity": "higher_is_better",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Useful uncertainty and limitation behaviour"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "No entity, path or evidence item outside the caller's authorized set appears anywhere in the packet. Must be zero.",
+      "dimension_id": "zero_unauthorized_results",
+      "fault_mode_ids": [
+        "path_crosses_unauthorized_entity",
+        "absent_required_field_silently_defaults"
+      ],
+      "measurement_kind": "boolean_zero",
+      "packet_fields": [
+        "related_context.authorized_entity_ids",
+        "related_context.paths[].hops",
+        "related_context.authorization_filtered_count"
+      ],
+      "packet_sections": [
+        "related_context",
+        "evidence_coverage"
+      ],
+      "polarity": "must_be_zero",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Zero unauthorized or cross-tenant results"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "No person is ranked, scored or compared. Must be zero, and is structurally impossible in this contract: there is no person subject kind and no per-person comparison dimension, so the dimension scores the *arm's whole surface*, not just its packet.",
+      "dimension_id": "zero_person_level_ranking",
+      "fault_mode_ids": [
+        "wildcard_or_optional_field_makes_check_vacuous"
+      ],
+      "measurement_kind": "boolean_zero",
+      "packet_fields": [
+        "subject_discovery.candidates[].subject_kind",
+        "comparison_cohort.supported_comparison_dimensions"
+      ],
+      "packet_sections": [
+        "subject_discovery",
+        "comparison_cohort",
+        "driver_analysis"
+      ],
+      "polarity": "must_be_zero",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Zero person-level ranking"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "No staffing or capacity claim is presented as certain without allocation evidence. Must be zero. The converse is explicitly not scored here: a missing denominator must reduce confidence, never make the question unsupported.",
+      "dimension_id": "zero_unsupported_staffing_certainty",
+      "fault_mode_ids": [
+        "staffing_certainty_without_allocation_evidence"
+      ],
+      "measurement_kind": "boolean_zero",
+      "packet_fields": [
+        "driver_analysis.candidates[].staffing_qualification",
+        "driver_analysis.candidates[].confidence_qualifier"
+      ],
+      "packet_sections": [
+        "driver_analysis"
+      ],
+      "polarity": "must_be_zero",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Zero unsupported staffing certainty"
+    },
+    {
+      "aggregate_prohibited": true,
+      "definition": "No backend identity, query language, node identifier or traversal syntax reaches the packet. Must be zero. Enforced structurally by the contract's own vocabulary and checked against the generated schemas, not merely reviewed.",
+      "dimension_id": "zero_graph_native_surface_leakage",
+      "fault_mode_ids": [
+        "wildcard_or_optional_field_makes_check_vacuous"
+      ],
+      "measurement_kind": "boolean_zero",
+      "packet_fields": [
+        "versions.trial",
+        "related_context.paths[].hops[].relationship"
+      ],
+      "packet_sections": [
+        "versions",
+        "related_context"
+      ],
+      "polarity": "must_be_zero",
+      "reported_per_question_family": true,
+      "schema_version": "ask_dev_scoring_dimension.v1",
+      "title": "Zero graph-native surface leakage"
+    }
+  ],
+  "reporting_shape": "per_question_family_x_per_dimension",
+  "schema_version": "ask_dev_scoring_registry.v1"
+}

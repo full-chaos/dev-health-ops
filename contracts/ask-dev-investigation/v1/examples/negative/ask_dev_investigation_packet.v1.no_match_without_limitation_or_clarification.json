@@ -1,0 +1,498 @@
+{
+  "analytical_job": {
+    "comparison_shape": "singular_subject",
+    "conversation_reference_ids": [
+      "conv_2026_08_08_a"
+    ],
+    "interpretation_limitations": [],
+    "job_id": "job_nightfall_status",
+    "job_statement": "Report the current delivery status of the Nightfall Migration project and identify its principal current drivers.",
+    "job_uncertainty": "precise",
+    "question_family": "project_status_drivers",
+    "schema_version": "ask_dev_analytical_job.v1",
+    "surface_context_refs": [
+      {
+        "entity_id": "proj_nightfall_migration",
+        "entity_kind": "project",
+        "surface_id": "surface_project_overview",
+        "surface_kind": "project_page"
+      }
+    ],
+    "time_context": {
+      "analytical_slice": "current",
+      "as_of": null,
+      "end": "2026-08-08T00:00:00Z",
+      "historical_comparability": "not_applicable",
+      "start": "2026-07-09T00:00:00Z",
+      "timezone": "America/Los_Angeles"
+    }
+  },
+  "comparison_cohort": {
+    "authorization_filtered_count": 0,
+    "cohort_id": "cohort_nightfall_singular",
+    "cohort_uncertainty": null,
+    "comparison_shape": "singular_subject",
+    "completeness": "complete",
+    "exclusions": [
+      {
+        "canonical_id": "proj_nightfall",
+        "rationale": "Archived project with a near-identical name; excluded so the near-miss is recorded rather than silently dropped.",
+        "reason": "ambiguous_identity",
+        "subject_kind": "project"
+      }
+    ],
+    "members": [
+      {
+        "canonical_id": "proj_nightfall_migration",
+        "display_label": "Nightfall Migration",
+        "inclusion_basis": [
+          "explicitly_named"
+        ],
+        "inclusion_evidence_classification": "explicitly_named_by_question",
+        "inclusion_evidence_ids": [],
+        "inclusion_rationale": "The question names this project directly; it is the sole subject rather than a member of a comparison set.",
+        "relevance": "current",
+        "subject_kind": "project"
+      }
+    ],
+    "schema_version": "ask_dev_comparison_cohort.v1",
+    "supported_comparison_dimensions": [],
+    "truncation_reason": null
+  },
+  "driver_analysis": {
+    "candidates": [
+      {
+        "affected_subject_ids": [
+          "proj_nightfall_migration",
+          "svc_auth_gateway"
+        ],
+        "assertion_basis": "measured",
+        "category": "dependency_pressure",
+        "confidence_qualifier": "measured_certain",
+        "conflict_note": null,
+        "conflicting_evidence_ids": [],
+        "driver_id": "drv_dependency_stall",
+        "exclusion_reason": null,
+        "relevance": "current",
+        "role": "driver",
+        "staffing_qualification": null,
+        "standing": "candidate_only",
+        "summary": "The migration's remaining work is blocked behind an unreleased authlib change the gateway depends on.",
+        "supporting_evidence_ids": [
+          "ev1_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+        ],
+        "supporting_path_ids": [
+          "path_dependency"
+        ]
+      },
+      {
+        "affected_subject_ids": [
+          "proj_nightfall_migration",
+          "team_platform"
+        ],
+        "assertion_basis": "measured",
+        "category": "review_pressure",
+        "confidence_qualifier": "qualified",
+        "conflict_note": null,
+        "conflicting_evidence_ids": [],
+        "driver_id": "drv_review_backlog",
+        "exclusion_reason": null,
+        "relevance": "current",
+        "role": "driver",
+        "staffing_qualification": null,
+        "standing": "candidate_only",
+        "summary": "The owning team's review queue has grown faster than it is being drained, extending the tail of every change.",
+        "supporting_evidence_ids": [
+          "ev1_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+        ],
+        "supporting_path_ids": [
+          "path_ownership"
+        ]
+      },
+      {
+        "affected_subject_ids": [
+          "proj_nightfall_migration"
+        ],
+        "assertion_basis": "measured",
+        "category": "delivery_pressure",
+        "confidence_qualifier": "qualified",
+        "conflict_note": null,
+        "conflicting_evidence_ids": [],
+        "driver_id": "drv_cycle_time_rising",
+        "exclusion_reason": null,
+        "relevance": "current",
+        "role": "symptom",
+        "staffing_qualification": null,
+        "standing": "candidate_only",
+        "summary": "Median cycle time on the project has risen over the window.",
+        "supporting_evidence_ids": [
+          "ev1_d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+        ],
+        "supporting_path_ids": []
+      }
+    ],
+    "candidates_truncated": false,
+    "principal_driver_ids": [],
+    "schema_version": "ask_dev_driver_analysis.v1",
+    "truncation_reason": null
+  },
+  "evidence_coverage": {
+    "authorization_filtered_count": 0,
+    "clarification_needs": [],
+    "conflicts": [],
+    "evidence_index": [
+      {
+        "evidence": {
+          "citation_text": "Project registered under this display name.",
+          "confidence": 1.0,
+          "display_label": "Nightfall Migration registration",
+          "entity_id": "proj_nightfall_migration",
+          "entity_type": "project",
+          "evidence_ref_id": "ev1_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/project/proj_nightfall_migration",
+            "source_url": null
+          },
+          "observed_at": "2026-08-08T12:00:00Z",
+          "provenance": "Canonical work graph projection",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "work_graph",
+          "source_version": "work_graph.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_graph",
+        "supports_driver_ids": [],
+        "supports_entity_ids": [],
+        "supports_path_ids": [],
+        "supports_subject_ids": [
+          "proj_nightfall_migration"
+        ]
+      },
+      {
+        "evidence": {
+          "citation_text": "Dependency has no released version carrying the change.",
+          "confidence": 1.0,
+          "display_label": "authlib release status",
+          "entity_id": "dep_authlib",
+          "entity_type": "dependency",
+          "evidence_ref_id": "ev1_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/dependency/dep_authlib",
+            "source_url": null
+          },
+          "observed_at": "2026-08-08T12:00:00Z",
+          "provenance": "Canonical work graph projection",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "work_graph",
+          "source_version": "work_graph.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_graph",
+        "supports_driver_ids": [
+          "drv_dependency_stall"
+        ],
+        "supports_entity_ids": [
+          "svc_auth_gateway",
+          "dep_authlib"
+        ],
+        "supports_path_ids": [
+          "path_dependency"
+        ],
+        "supports_subject_ids": []
+      },
+      {
+        "evidence": {
+          "citation_text": "Open review count exceeded the drain rate for the window.",
+          "confidence": 1.0,
+          "display_label": "Platform review queue",
+          "entity_id": "team_platform",
+          "entity_type": "team",
+          "evidence_ref_id": "ev1_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/team/team_platform",
+            "source_url": null
+          },
+          "observed_at": "2026-08-08T12:00:00Z",
+          "provenance": "Canonical work graph projection",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "review",
+          "source_version": "work_graph.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "review",
+        "supports_driver_ids": [
+          "drv_review_backlog"
+        ],
+        "supports_entity_ids": [
+          "team_platform"
+        ],
+        "supports_path_ids": [
+          "path_ownership"
+        ],
+        "supports_subject_ids": []
+      },
+      {
+        "evidence": {
+          "citation_text": "Median cycle time rose over the window.",
+          "confidence": 1.0,
+          "display_label": "Cycle time p50",
+          "entity_id": "proj_nightfall_migration",
+          "entity_type": "project",
+          "evidence_ref_id": "ev1_d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/project/proj_nightfall_migration",
+            "source_url": null
+          },
+          "observed_at": "2026-08-08T12:00:00Z",
+          "provenance": "Canonical work graph projection",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "work_item",
+          "source_version": "work_graph.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_item",
+        "supports_driver_ids": [
+          "drv_cycle_time_rising"
+        ],
+        "supports_entity_ids": [],
+        "supports_path_ids": [],
+        "supports_subject_ids": []
+      }
+    ],
+    "evidence_truncated": false,
+    "limitations": [],
+    "missing_sources": [],
+    "schema_version": "ask_dev_evidence_coverage.v1",
+    "source_health": [
+      {
+        "detail": null,
+        "observed_at": "2026-08-08T12:00:00Z",
+        "source_class": "work_graph",
+        "state": "available_current"
+      },
+      {
+        "detail": null,
+        "observed_at": "2026-08-08T12:00:00Z",
+        "source_class": "review",
+        "state": "available_current"
+      },
+      {
+        "detail": "Last deployment sync completed 31 hours ago.",
+        "observed_at": "2026-08-08T12:00:00Z",
+        "source_class": "deployment",
+        "state": "available_stale"
+      }
+    ],
+    "truncation_reason": null
+  },
+  "organization_id": "org_fullchaos",
+  "outcome": "no_match",
+  "packet_id": "6f1c2a80-3d4e-4b71-9c8a-2e5f7d90ab13",
+  "produced_at": "2026-08-08T12:00:00Z",
+  "related_context": {
+    "authorization_filtered_count": 0,
+    "authorized_entity_ids": [
+      "proj_nightfall_migration",
+      "team_platform",
+      "svc_auth_gateway",
+      "dep_authlib"
+    ],
+    "entities": [
+      {
+        "display_label": "Platform",
+        "entity_id": "team_platform",
+        "entity_kind": "team",
+        "inclusion_reason": "Owns the project; the team whose review capacity gates the remaining work.",
+        "observed_at": "2026-08-08T12:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_ownership"
+        ]
+      },
+      {
+        "display_label": "Auth Gateway",
+        "entity_id": "svc_auth_gateway",
+        "entity_kind": "service",
+        "inclusion_reason": "The project's remaining work all lands in this service.",
+        "observed_at": "2026-08-08T12:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_dependency"
+        ]
+      },
+      {
+        "display_label": "authlib",
+        "entity_id": "dep_authlib",
+        "entity_kind": "dependency",
+        "inclusion_reason": "Shared dependency the gateway is blocked behind; the terminal node of the driver's lineage.",
+        "observed_at": "2026-08-08T12:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_dependency"
+        ]
+      }
+    ],
+    "entities_truncated": false,
+    "paths": [
+      {
+        "evidence_ref_ids": [
+          "ev1_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+        ],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08T12:00:00Z",
+            "relationship": "owned_by_team",
+            "relevance": "current",
+            "source_entity_id": "proj_nightfall_migration",
+            "source_entity_kind": "project",
+            "target_entity_id": "team_platform",
+            "target_entity_kind": "team"
+          }
+        ],
+        "inclusion_reason": "Establishes which team's review capacity applies to the project's outstanding changes.",
+        "origin_entity_id": "proj_nightfall_migration",
+        "path_id": "path_ownership",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "team_platform",
+        "truncated": false,
+        "truncation_reason": null
+      },
+      {
+        "evidence_ref_ids": [
+          "ev1_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+        ],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08T12:00:00Z",
+            "relationship": "depends_on",
+            "relevance": "current",
+            "source_entity_id": "proj_nightfall_migration",
+            "source_entity_kind": "project",
+            "target_entity_id": "svc_auth_gateway",
+            "target_entity_kind": "service"
+          },
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08T12:00:00Z",
+            "relationship": "depends_on",
+            "relevance": "current",
+            "source_entity_id": "svc_auth_gateway",
+            "source_entity_kind": "service",
+            "target_entity_id": "dep_authlib",
+            "target_entity_kind": "dependency"
+          }
+        ],
+        "inclusion_reason": "The two-hop chain from the project to the stalled shared dependency; the mechanism behind the principal driver.",
+        "origin_entity_id": "proj_nightfall_migration",
+        "path_id": "path_dependency",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "dep_authlib",
+        "truncated": false,
+        "truncation_reason": null
+      }
+    ],
+    "paths_truncated": false,
+    "schema_version": "ask_dev_related_context.v1",
+    "truncation_reason": null
+  },
+  "schema_version": "ask_dev_investigation_packet.v1",
+  "subject_discovery": {
+    "authorization_filtered_count": 0,
+    "candidates": [
+      {
+        "candidate_id": "cand_1",
+        "canonical_id": "proj_nightfall_migration",
+        "commitment_state": "proposed",
+        "display_label": "Nightfall Migration",
+        "match_confidence": 0.97,
+        "match_rationale": "The question's phrase 'the Nightfall migration' matches this project's registered display name exactly, and the surface the question was asked from is this project's overview page.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [
+              "ev1_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            ],
+            "matched_text": "Nightfall Migration",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          },
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "surface_project_overview",
+            "signal": "surface_context_reference",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 1,
+        "relevance": "current",
+        "subject_kind": "project"
+      },
+      {
+        "candidate_id": "cand_2",
+        "canonical_id": "proj_nightfall",
+        "commitment_state": "proposed",
+        "display_label": "Nightfall",
+        "match_confidence": 0.41,
+        "match_rationale": "A similarly named archived project. Retained as a ranked candidate so the near-miss is visible rather than silently discarded.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Nightfall",
+            "signal": "fuzzy_label",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 2,
+        "relevance": "historical_only",
+        "subject_kind": "project"
+      }
+    ],
+    "candidates_truncated": false,
+    "committed_subject_ids": [],
+    "schema_version": "ask_dev_subject_discovery.v1",
+    "truncation_reason": null,
+    "unresolved_mentions": []
+  },
+  "versions": {
+    "corpus_version": null,
+    "packet_schema_version": "ask_dev_investigation_packet.v1",
+    "projection_version": "work_graph_projection.v1",
+    "query_version": "ask_dev_investigation_queries.v1",
+    "ranking_version": "ask_dev_investigation_ranking.v1",
+    "schema_version": "ask_dev_investigation_versions.v1",
+    "source_contract_versions": [
+      {
+        "contract_version": "work_graph.v1",
+        "source_class": "work_graph"
+      },
+      {
+        "contract_version": "review_metrics.v1",
+        "source_class": "review"
+      },
+      {
+        "contract_version": "work_item.v1",
+        "source_class": "work_item"
+      }
+    ],
+    "trial": null
+  }
+}

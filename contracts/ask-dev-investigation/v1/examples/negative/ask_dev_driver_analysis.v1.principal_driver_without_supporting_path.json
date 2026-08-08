@@ -1,0 +1,77 @@
+{
+  "candidates": [
+    {
+      "affected_subject_ids": [
+        "proj_nightfall_migration",
+        "svc_auth_gateway"
+      ],
+      "assertion_basis": "measured",
+      "category": "dependency_pressure",
+      "confidence_qualifier": "measured_certain",
+      "conflict_note": null,
+      "conflicting_evidence_ids": [],
+      "driver_id": "drv_dependency_stall",
+      "exclusion_reason": null,
+      "relevance": "current",
+      "role": "driver",
+      "staffing_qualification": null,
+      "standing": "principal_driver",
+      "summary": "The migration's remaining work is blocked behind an unreleased authlib change the gateway depends on.",
+      "supporting_evidence_ids": [
+        "ev1_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+      ],
+      "supporting_path_ids": []
+    },
+    {
+      "affected_subject_ids": [
+        "proj_nightfall_migration",
+        "team_platform"
+      ],
+      "assertion_basis": "measured",
+      "category": "review_pressure",
+      "confidence_qualifier": "qualified",
+      "conflict_note": null,
+      "conflicting_evidence_ids": [],
+      "driver_id": "drv_review_backlog",
+      "exclusion_reason": null,
+      "relevance": "current",
+      "role": "driver",
+      "staffing_qualification": null,
+      "standing": "contributing_driver",
+      "summary": "The owning team's review queue has grown faster than it is being drained, extending the tail of every change.",
+      "supporting_evidence_ids": [
+        "ev1_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+      ],
+      "supporting_path_ids": [
+        "path_ownership"
+      ]
+    },
+    {
+      "affected_subject_ids": [
+        "proj_nightfall_migration"
+      ],
+      "assertion_basis": "measured",
+      "category": "delivery_pressure",
+      "confidence_qualifier": "qualified",
+      "conflict_note": null,
+      "conflicting_evidence_ids": [],
+      "driver_id": "drv_cycle_time_rising",
+      "exclusion_reason": "symptom_of_another_candidate",
+      "relevance": "current",
+      "role": "symptom",
+      "staffing_qualification": null,
+      "standing": "excluded",
+      "summary": "Median cycle time on the project has risen over the window.",
+      "supporting_evidence_ids": [
+        "ev1_d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+      ],
+      "supporting_path_ids": []
+    }
+  ],
+  "candidates_truncated": false,
+  "principal_driver_ids": [
+    "drv_dependency_stall"
+  ],
+  "schema_version": "ask_dev_driver_analysis.v1",
+  "truncation_reason": null
+}

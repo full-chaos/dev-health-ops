@@ -1,0 +1,2256 @@
+{
+  "$defs": {
+    "AnalyticalJob": {
+      "additionalProperties": false,
+      "description": "The normalized analytical job, with its uncertainty stated.\n\n``job_uncertainty`` is what keeps this contract from requiring a\npre-enumerated intent: an arm may declare a broad job it is uncertain\nabout and still investigate, provided it says so. The\n``question_family`` is a *family*, not an enumerated intent \u2014 ten of\nthem cover the whole trial, and one of them is \"clarification and safe\nno-match\".",
+      "properties": {
+        "comparison_shape": {
+          "$ref": "#/$defs/ComparisonShape"
+        },
+        "conversation_reference_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Conversation Reference Ids",
+          "type": "array"
+        },
+        "interpretation_limitations": {
+          "items": {
+            "$ref": "#/$defs/PacketLimitation"
+          },
+          "maxItems": 25,
+          "title": "Interpretation Limitations",
+          "type": "array"
+        },
+        "job_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Job Id",
+          "type": "string"
+        },
+        "job_statement": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Job Statement",
+          "type": "string"
+        },
+        "job_uncertainty": {
+          "$ref": "#/$defs/JobUncertainty"
+        },
+        "question_family": {
+          "$ref": "#/$defs/QuestionFamilyID"
+        },
+        "schema_version": {
+          "const": "ask_dev_analytical_job.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "surface_context_refs": {
+          "items": {
+            "$ref": "#/$defs/SurfaceContextRef"
+          },
+          "maxItems": 10,
+          "title": "Surface Context Refs",
+          "type": "array"
+        },
+        "time_context": {
+          "$ref": "#/$defs/BoundedTimeContext"
+        }
+      },
+      "required": [
+        "schema_version",
+        "job_id",
+        "question_family",
+        "job_uncertainty",
+        "job_statement",
+        "comparison_shape",
+        "time_context"
+      ],
+      "title": "AnalyticalJob",
+      "type": "object"
+    },
+    "AnalyticalSlice": {
+      "description": "Current-versus-historical slice of the investigation.\n\nSlice boundaries, and what each slice requires of edge validity, are\ndeclared once in :mod:`.allowlists` (``SLICE_BOUNDARIES``).",
+      "enum": [
+        "current",
+        "historical",
+        "current_vs_historical"
+      ],
+      "title": "AnalyticalSlice",
+      "type": "string"
+    },
+    "AssertionBasis": {
+      "description": "Measured, source-asserted and inferred distinctions.\n\nThe governing rule is \"the graph determines what is relevant; canonical\nservices determine what is measurable\". ``MEASURED`` therefore means a\ncanonical Ops service produced the number and minted evidence for it;\n``SOURCE_ASSERTED`` means a provider (or a human in a provider field)\nsaid so; ``INFERRED`` means the investigation concluded it. Only\n``MEASURED`` may be presented as certain.",
+      "enum": [
+        "measured",
+        "source_asserted",
+        "inferred"
+      ],
+      "title": "AssertionBasis",
+      "type": "string"
+    },
+    "BoundedTimeContext": {
+      "additionalProperties": false,
+      "description": "The bounded time window, and which slice of history it addresses.",
+      "properties": {
+        "analytical_slice": {
+          "$ref": "#/$defs/AnalyticalSlice"
+        },
+        "as_of": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "As Of"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "historical_comparability": {
+          "$ref": "#/$defs/HistoricalComparability"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "timezone",
+        "analytical_slice",
+        "historical_comparability"
+      ],
+      "title": "BoundedTimeContext",
+      "type": "object"
+    },
+    "ClarificationNeed": {
+      "additionalProperties": false,
+      "description": "A question the investigation needs answered before it can proceed.",
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/ClarificationNeedKind"
+        },
+        "prompt": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "prompt"
+      ],
+      "title": "ClarificationNeed",
+      "type": "object"
+    },
+    "ClarificationNeedKind": {
+      "enum": [
+        "ambiguous_subject",
+        "missing_time_context",
+        "missing_comparison_basis",
+        "unresolved_conversational_reference",
+        "unsupported_by_available_sources"
+      ],
+      "title": "ClarificationNeedKind",
+      "type": "string"
+    },
+    "CohortCompleteness": {
+      "enum": [
+        "complete",
+        "truncated",
+        "best_effort_uncertain"
+      ],
+      "title": "CohortCompleteness",
+      "type": "string"
+    },
+    "CohortEvidenceClassification": {
+      "description": "Closed reasons a cohort member may carry no evidence handle.\n\nThe same \"evidence refs XOR an explicit no-evidence classification \u2014\nnever both, never neither\" pattern as\n``contracts_v2.embedded.MetricEvidenceClassification`` and\n``contracts_v2.deficiency.DeficiencyEvidenceClassification``, applied to\ncohort membership here.",
+      "enum": [
+        "explicitly_named_by_question",
+        "canonical_registry_membership"
+      ],
+      "title": "CohortEvidenceClassification",
+      "type": "string"
+    },
+    "CohortExclusion": {
+      "additionalProperties": false,
+      "description": "A subject considered for the cohort and deliberately left out.",
+      "properties": {
+        "canonical_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/CohortExclusionReason"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        }
+      },
+      "required": [
+        "subject_kind",
+        "canonical_id",
+        "reason",
+        "rationale"
+      ],
+      "title": "CohortExclusion",
+      "type": "object"
+    },
+    "CohortExclusionReason": {
+      "enum": [
+        "out_of_authorized_scope",
+        "insufficient_evidence",
+        "not_comparable_slice",
+        "archived_or_inactive",
+        "truncation_budget",
+        "ambiguous_identity",
+        "excluded_by_question"
+      ],
+      "title": "CohortExclusionReason",
+      "type": "string"
+    },
+    "CohortInclusionBasis": {
+      "description": "Why a subject is in the comparison cohort.\n\nThere is deliberately no ``unspecified`` member and the field is\n``min_length=1``: \"an unrelated project appears in the cohort\" is a named\nfault mode, and the cheapest way for an arm to commit it is to include a\nmember with no stated basis at all.",
+      "enum": [
+        "explicitly_named",
+        "shared_dependency",
+        "shared_team_ownership",
+        "same_portfolio",
+        "same_initiative",
+        "comparable_delivery_profile",
+        "peer_of_named_subject"
+      ],
+      "title": "CohortInclusionBasis",
+      "type": "string"
+    },
+    "CohortMember": {
+      "additionalProperties": false,
+      "description": "A subject in the comparison cohort, with its inclusion justified.",
+      "properties": {
+        "canonical_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "inclusion_basis": {
+          "items": {
+            "$ref": "#/$defs/CohortInclusionBasis"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "title": "Inclusion Basis",
+          "type": "array"
+        },
+        "inclusion_evidence_classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CohortEvidenceClassification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inclusion_evidence_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Inclusion Evidence Ids",
+          "type": "array"
+        },
+        "inclusion_rationale": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Inclusion Rationale",
+          "type": "string"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        }
+      },
+      "required": [
+        "subject_kind",
+        "canonical_id",
+        "display_label",
+        "inclusion_basis",
+        "inclusion_rationale",
+        "relevance"
+      ],
+      "title": "CohortMember",
+      "type": "object"
+    },
+    "ComparisonCohort": {
+      "additionalProperties": false,
+      "description": "The comparison cohort, its exclusions, and how complete it is.",
+      "properties": {
+        "authorization_filtered_count": {
+          "minimum": 0,
+          "title": "Authorization Filtered Count",
+          "type": "integer"
+        },
+        "cohort_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Cohort Id",
+          "type": "string"
+        },
+        "cohort_uncertainty": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cohort Uncertainty"
+        },
+        "comparison_shape": {
+          "$ref": "#/$defs/ComparisonShape"
+        },
+        "completeness": {
+          "$ref": "#/$defs/CohortCompleteness"
+        },
+        "exclusions": {
+          "items": {
+            "$ref": "#/$defs/CohortExclusion"
+          },
+          "maxItems": 50,
+          "title": "Exclusions",
+          "type": "array"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/CohortMember"
+          },
+          "maxItems": 50,
+          "title": "Members",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "ask_dev_comparison_cohort.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "supported_comparison_dimensions": {
+          "items": {
+            "$ref": "#/$defs/ComparisonDimension"
+          },
+          "maxItems": 12,
+          "title": "Supported Comparison Dimensions",
+          "type": "array"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schema_version",
+        "cohort_id",
+        "comparison_shape",
+        "completeness",
+        "authorization_filtered_count"
+      ],
+      "title": "ComparisonCohort",
+      "type": "object"
+    },
+    "ComparisonDimension": {
+      "description": "Axes a cohort may be compared on.\n\nEvery member is a *unit-of-work or system* axis. None is per-person, and\nnone may be derived per-person: person-level productivity, workload and\nstaffing ranking is prohibited outright, and this enum is one of the two\nstructural places that ban is enforced (the other being the absence of a\nperson member on :class:`InvestigationSubjectKind`).",
+      "enum": [
+        "delivery_throughput",
+        "cycle_time",
+        "review_load",
+        "work_in_progress",
+        "dependency_exposure",
+        "incident_load",
+        "deployment_frequency",
+        "investment_mix",
+        "open_deficiency_count",
+        "status_declaration_gap",
+        "capacity_load_ratio",
+        "data_coverage"
+      ],
+      "title": "ComparisonDimension",
+      "type": "string"
+    },
+    "ComparisonShape": {
+      "description": "The requested comparison or singular-subject shape.",
+      "enum": [
+        "singular_subject",
+        "explicit_cohort",
+        "discovered_cohort",
+        "portfolio_wide",
+        "organization_wide"
+      ],
+      "title": "ComparisonShape",
+      "type": "string"
+    },
+    "ConfidenceQualifier": {
+      "enum": [
+        "measured_certain",
+        "qualified",
+        "uncertain",
+        "unsupported"
+      ],
+      "title": "ConfidenceQualifier",
+      "type": "string"
+    },
+    "ConflictResolution": {
+      "enum": [
+        "unresolved",
+        "resolved_by_precedence",
+        "resolved_by_recency",
+        "deferred_to_canonical_service"
+      ],
+      "title": "ConflictResolution",
+      "type": "string"
+    },
+    "DevCitationLink": {
+      "additionalProperties": false,
+      "properties": {
+        "internal_path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^/[^\\s]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Internal Path"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        }
+      },
+      "title": "DevCitationLink",
+      "type": "object"
+    },
+    "DevEvidenceFlags": {
+      "additionalProperties": false,
+      "properties": {
+        "conflicting": {
+          "default": false,
+          "title": "Conflicting",
+          "type": "boolean"
+        },
+        "deleted": {
+          "default": false,
+          "title": "Deleted",
+          "type": "boolean"
+        },
+        "redacted": {
+          "default": false,
+          "title": "Redacted",
+          "type": "boolean"
+        },
+        "stale": {
+          "default": false,
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "unavailable": {
+          "default": false,
+          "title": "Unavailable",
+          "type": "boolean"
+        },
+        "uncertain": {
+          "default": false,
+          "title": "Uncertain",
+          "type": "boolean"
+        },
+        "untrusted_content": {
+          "default": true,
+          "title": "Untrusted Content",
+          "type": "boolean"
+        }
+      },
+      "title": "DevEvidenceFlags",
+      "type": "object"
+    },
+    "DevEvidenceRefV2": {
+      "additionalProperties": false,
+      "properties": {
+        "citation_text": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation Text"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "evidence_ref_id": {
+          "maxLength": 44,
+          "minLength": 44,
+          "pattern": "^ev1_[0-9a-f]{40}$",
+          "title": "Evidence Ref Id",
+          "type": "string"
+        },
+        "flags": {
+          "$ref": "#/$defs/DevEvidenceFlags"
+        },
+        "freshness": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevCitationLink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_evidence_ref.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_system": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source System",
+          "type": "string"
+        },
+        "source_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Version",
+          "type": "string"
+        },
+        "valid_entity_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Valid Entity Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "evidence_ref_id",
+        "source_system",
+        "source_version",
+        "entity_type",
+        "entity_id",
+        "display_label",
+        "observed_at",
+        "freshness",
+        "provenance",
+        "confidence",
+        "flags"
+      ],
+      "title": "DevEvidenceRefV2",
+      "type": "object"
+    },
+    "DriverAnalysis": {
+      "additionalProperties": false,
+      "description": "Every driver candidate, and which of them are principal.",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/DriverCandidate"
+          },
+          "maxItems": 50,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "candidates_truncated": {
+          "title": "Candidates Truncated",
+          "type": "boolean"
+        },
+        "principal_driver_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Principal Driver Ids",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "ask_dev_driver_analysis.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schema_version",
+        "candidates_truncated"
+      ],
+      "title": "DriverAnalysis",
+      "type": "object"
+    },
+    "DriverCandidate": {
+      "additionalProperties": false,
+      "description": "A candidate driver, its standing, and everything that standing rests on.",
+      "properties": {
+        "affected_subject_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Affected Subject Ids",
+          "type": "array"
+        },
+        "assertion_basis": {
+          "$ref": "#/$defs/AssertionBasis"
+        },
+        "category": {
+          "$ref": "#/$defs/DriverCategory"
+        },
+        "confidence_qualifier": {
+          "$ref": "#/$defs/ConfidenceQualifier"
+        },
+        "conflict_note": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conflict Note"
+        },
+        "conflicting_evidence_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Conflicting Evidence Ids",
+          "type": "array"
+        },
+        "driver_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Driver Id",
+          "type": "string"
+        },
+        "exclusion_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DriverExclusionReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "role": {
+          "$ref": "#/$defs/DriverRole"
+        },
+        "staffing_qualification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StaffingQualification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "standing": {
+          "$ref": "#/$defs/DriverStanding"
+        },
+        "summary": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "supporting_evidence_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Supporting Evidence Ids",
+          "type": "array"
+        },
+        "supporting_path_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supporting Path Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "driver_id",
+        "category",
+        "summary",
+        "affected_subject_ids",
+        "role",
+        "standing",
+        "assertion_basis",
+        "confidence_qualifier",
+        "relevance"
+      ],
+      "title": "DriverCandidate",
+      "type": "object"
+    },
+    "DriverCategory": {
+      "enum": [
+        "delivery_pressure",
+        "review_pressure",
+        "operational_pressure",
+        "dependency_pressure",
+        "investment_mix",
+        "capacity_or_staffing",
+        "scope_change",
+        "quality_or_defect",
+        "external_blocker",
+        "data_coverage"
+      ],
+      "title": "DriverCategory",
+      "type": "string"
+    },
+    "DriverExclusionReason": {
+      "description": "Why a candidate did not reach principal-driver standing.",
+      "enum": [
+        "no_supporting_path",
+        "evidence_conflict_unresolved",
+        "not_currently_relevant",
+        "symptom_of_another_candidate",
+        "unauthorized_evidence",
+        "insufficient_measurement"
+      ],
+      "title": "DriverExclusionReason",
+      "type": "string"
+    },
+    "DriverRole": {
+      "description": "Symptom-versus-driver classification.\n\n``CONTEXTUAL_CORRELATE`` is the honest third option: something that moved\nat the same time and is worth reporting but is neither the cause nor a\nconsequence. Collapsing it into ``DRIVER`` is precisely how unsupported\nattribution enters an answer.",
+      "enum": [
+        "driver",
+        "symptom",
+        "contextual_correlate"
+      ],
+      "title": "DriverRole",
+      "type": "string"
+    },
+    "DriverStanding": {
+      "enum": [
+        "principal_driver",
+        "contributing_driver",
+        "candidate_only",
+        "excluded"
+      ],
+      "title": "DriverStanding",
+      "type": "string"
+    },
+    "EvidenceCoverage": {
+      "additionalProperties": false,
+      "description": "The evidence index, what was missing, and what the packet cannot say.",
+      "properties": {
+        "authorization_filtered_count": {
+          "minimum": 0,
+          "title": "Authorization Filtered Count",
+          "type": "integer"
+        },
+        "clarification_needs": {
+          "items": {
+            "$ref": "#/$defs/ClarificationNeed"
+          },
+          "maxItems": 10,
+          "title": "Clarification Needs",
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/SourceConflict"
+          },
+          "maxItems": 25,
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "evidence_index": {
+          "items": {
+            "$ref": "#/$defs/InvestigationEvidenceEntry"
+          },
+          "maxItems": 200,
+          "title": "Evidence Index",
+          "type": "array"
+        },
+        "evidence_truncated": {
+          "title": "Evidence Truncated",
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/PacketLimitation"
+          },
+          "maxItems": 25,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "missing_sources": {
+          "items": {
+            "$ref": "#/$defs/MissingSource"
+          },
+          "maxItems": 25,
+          "title": "Missing Sources",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "ask_dev_evidence_coverage.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_health": {
+          "items": {
+            "$ref": "#/$defs/SourceHealthObservation"
+          },
+          "maxItems": 25,
+          "title": "Source Health",
+          "type": "array"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schema_version",
+        "authorization_filtered_count",
+        "evidence_truncated"
+      ],
+      "title": "EvidenceCoverage",
+      "type": "object"
+    },
+    "FreshnessState": {
+      "enum": [
+        "fresh",
+        "stale",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "FreshnessState",
+      "type": "string"
+    },
+    "HistoricalComparability": {
+      "description": "Whether a historical slice can be fairly compared at all.\n\n``NOT_COMPARABLE_MISSING_EDGE_VALIDITY`` is the CHAOS-3569 state: native\nhistorical edge validity is not implemented, so as-of traversal cannot\nbe reconstructed for those rows. The correction plan is explicit that\nsuch rows are **NOT COMPARABLE, not blockers** \u2014 a packet that declares\nthis state is still a *valid* packet and may still be ``SUPPORTED``\n(pinned by ``test_not_comparable_historical_slice_is_valid_and_\nsupported``). What it may not do is stay silent: the packet must also\ncarry a ``HISTORICAL_SLICE_NOT_COMPARABLE`` limitation.",
+      "enum": [
+        "not_applicable",
+        "comparable",
+        "not_comparable_missing_edge_validity",
+        "not_comparable_missing_baseline"
+      ],
+      "title": "HistoricalComparability",
+      "type": "string"
+    },
+    "InvestigationEvidenceEntry": {
+      "additionalProperties": false,
+      "description": "One evidence item, and what in this packet it actually supports.",
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/DevEvidenceRefV2"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "supports_driver_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Driver Ids",
+          "type": "array"
+        },
+        "supports_entity_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Entity Ids",
+          "type": "array"
+        },
+        "supports_path_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Path Ids",
+          "type": "array"
+        },
+        "supports_subject_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Subject Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "evidence",
+        "source_class",
+        "relevance"
+      ],
+      "title": "InvestigationEvidenceEntry",
+      "type": "object"
+    },
+    "InvestigationOutcome": {
+      "description": "What the investigation concluded \u2014 *not* what the user is told.\n\nDeliberately distinct from ``contracts_v2.base.PublicOutcome``: that\nenum is the public answer-envelope vocabulary of an Ask Dev answer, and\nreusing it here would make the packet look like an answer. A packet is\nan input to the Ask Dev frame, never a substitute for it.",
+      "enum": [
+        "supported",
+        "supported_with_gaps",
+        "needs_clarification",
+        "no_match",
+        "unsupported"
+      ],
+      "title": "InvestigationOutcome",
+      "type": "string"
+    },
+    "InvestigationSubjectKind": {
+      "description": "What an investigation may take as a subject, cohort member or node.\n\nA superset of the *organizational* kinds an Ask Dev question can name,\nand a strict subset of \"anything in the work graph\": there is no person\nkind, by design (see the module docstring). ``EntityKind``\n(``contracts_v2.base``) is the answer-frame subject vocabulary and is\ndeliberately not reused here \u2014 it carries ``pull_request``/``issue`` as\n*subjects* of a status answer, whereas this enum has to describe\nportfolio, initiative and service nodes that a status answer never takes\nas its subject but a lineage path routinely crosses.",
+      "enum": [
+        "team",
+        "project",
+        "portfolio",
+        "initiative",
+        "repository",
+        "service",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "dependency"
+      ],
+      "title": "InvestigationSubjectKind",
+      "type": "string"
+    },
+    "InvestigationVersions": {
+      "additionalProperties": false,
+      "description": "Every version an investigation result is reproducible against.",
+      "properties": {
+        "corpus_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Corpus Version"
+        },
+        "packet_schema_version": {
+          "const": "ask_dev_investigation_packet.v1",
+          "title": "Packet Schema Version",
+          "type": "string"
+        },
+        "projection_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Projection Version",
+          "type": "string"
+        },
+        "query_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Query Version",
+          "type": "string"
+        },
+        "ranking_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Ranking Version",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "ask_dev_investigation_versions.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_contract_versions": {
+          "items": {
+            "$ref": "#/$defs/SourceContractVersion"
+          },
+          "maxItems": 25,
+          "minItems": 1,
+          "title": "Source Contract Versions",
+          "type": "array"
+        },
+        "trial": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrialMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schema_version",
+        "packet_schema_version",
+        "query_version",
+        "ranking_version",
+        "projection_version",
+        "source_contract_versions"
+      ],
+      "title": "InvestigationVersions",
+      "type": "object"
+    },
+    "JobUncertainty": {
+      "description": "How precisely the analytical job could be interpreted.\n\n``BROAD_WITH_UNCERTAINTY`` exists because the correction addendum bans\nrequiring a fully pre-enumerated intent before investigation may begin:\n\"what is going sideways?\" is a legitimate job whose subject set is\ndiscovered, not declared. A broad or ambiguous job must carry at least\none interpretation limitation, which is what stops the state from being\na free pass.",
+      "enum": [
+        "precise",
+        "broad_with_uncertainty",
+        "ambiguous"
+      ],
+      "title": "JobUncertainty",
+      "type": "string"
+    },
+    "LineageHop": {
+      "additionalProperties": false,
+      "description": "One traversed edge.\n\n``source_entity_id`` is always the entity traversal started from and\n``target_entity_id`` the entity it arrived at; ``direction`` says whether\nthat traversal followed the relationship's canonical orientation or ran\nagainst it. Separating traversal order from canonical orientation is\nwhat makes a reversed relationship detectable at all \u2014 with a single\ncombined field, \"team owns project\" and \"project owned by team\" are the\nsame bytes.",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/RelationshipDirection"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "relationship": {
+          "$ref": "#/$defs/RelationshipType"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "source_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source Entity Id",
+          "type": "string"
+        },
+        "source_entity_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        },
+        "target_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Target Entity Id",
+          "type": "string"
+        },
+        "target_entity_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        }
+      },
+      "required": [
+        "source_entity_id",
+        "source_entity_kind",
+        "relationship",
+        "direction",
+        "target_entity_id",
+        "target_entity_kind",
+        "relevance"
+      ],
+      "title": "LineageHop",
+      "type": "object"
+    },
+    "LineagePath": {
+      "additionalProperties": false,
+      "description": "A bounded chain of hops, and why it was included.",
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "hops": {
+          "items": {
+            "$ref": "#/$defs/LineageHop"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Hops",
+          "type": "array"
+        },
+        "inclusion_reason": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Inclusion Reason",
+          "type": "string"
+        },
+        "origin_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Origin Entity Id",
+          "type": "string"
+        },
+        "path_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Path Id",
+          "type": "string"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "source_health": {
+          "$ref": "#/$defs/SourceRequirementState"
+        },
+        "terminal_entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Terminal Entity Id",
+          "type": "string"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path_id",
+        "origin_entity_id",
+        "terminal_entity_id",
+        "hops",
+        "inclusion_reason",
+        "relevance",
+        "truncated",
+        "source_health"
+      ],
+      "title": "LineagePath",
+      "type": "object"
+    },
+    "MissingSource": {
+      "additionalProperties": false,
+      "description": "A source the investigation wanted and did not get.",
+      "properties": {
+        "impact": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "state": {
+          "$ref": "#/$defs/SourceRequirementState"
+        }
+      },
+      "required": [
+        "source_class",
+        "state",
+        "impact"
+      ],
+      "title": "MissingSource",
+      "type": "object"
+    },
+    "PacketLimitation": {
+      "additionalProperties": false,
+      "description": "One safe, closed-vocabulary limitation the packet is disclosing.",
+      "properties": {
+        "detail": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PacketLimitationKind"
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "title": "PacketLimitation",
+      "type": "object"
+    },
+    "PacketLimitationKind": {
+      "enum": [
+        "missing_source",
+        "stale_source",
+        "conflicting_evidence",
+        "authorization_filtered",
+        "truncated_traversal",
+        "absent_staffing_denominator",
+        "historical_slice_not_comparable",
+        "interpretation_uncertainty"
+      ],
+      "title": "PacketLimitationKind",
+      "type": "string"
+    },
+    "QuestionFamilyID": {
+      "description": "The ten frozen families of the corrected trial.",
+      "enum": [
+        "struggling_teams",
+        "pressure_signals",
+        "project_capacity",
+        "staffing_language",
+        "project_status_drivers",
+        "portfolio_dependency_risk",
+        "declared_versus_actual",
+        "ambiguous_identity",
+        "colloquial_follow_up",
+        "clarification_and_no_match"
+      ],
+      "title": "QuestionFamilyID",
+      "type": "string"
+    },
+    "RelatedContext": {
+      "additionalProperties": false,
+      "description": "Related entities, the paths that reach them, and the authorized set.",
+      "properties": {
+        "authorization_filtered_count": {
+          "minimum": 0,
+          "title": "Authorization Filtered Count",
+          "type": "integer"
+        },
+        "authorized_entity_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 500,
+          "title": "Authorized Entity Ids",
+          "type": "array"
+        },
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/RelatedEntity"
+          },
+          "maxItems": 100,
+          "title": "Entities",
+          "type": "array"
+        },
+        "entities_truncated": {
+          "title": "Entities Truncated",
+          "type": "boolean"
+        },
+        "paths": {
+          "items": {
+            "$ref": "#/$defs/LineagePath"
+          },
+          "maxItems": 100,
+          "title": "Paths",
+          "type": "array"
+        },
+        "paths_truncated": {
+          "title": "Paths Truncated",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "ask_dev_related_context.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schema_version",
+        "authorization_filtered_count",
+        "entities_truncated",
+        "paths_truncated"
+      ],
+      "title": "RelatedContext",
+      "type": "object"
+    },
+    "RelatedEntity": {
+      "additionalProperties": false,
+      "description": "A canonical entity the investigation pulled in, and its justification.\n\n``supporting_path_ids`` is ``min_length=1``: an entity nothing connects\nto the subject is not related context, it is noise that displaces the\nlineage actually asked for.",
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        },
+        "inclusion_reason": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Inclusion Reason",
+          "type": "string"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "supporting_path_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Supporting Path Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "entity_id",
+        "entity_kind",
+        "display_label",
+        "inclusion_reason",
+        "supporting_path_ids",
+        "relevance"
+      ],
+      "title": "RelatedEntity",
+      "type": "object"
+    },
+    "RelationshipDirection": {
+      "description": "Which way a hop was traversed relative to the relationship's own\ncanonical orientation (declared in :mod:`.relationships`).\n\nA hop that claims ``FORWARD`` while its endpoint kinds match only the\nreverse orientation is exactly the named \"a relationship is reversed\"\nfault, and is rejected by ``LineageHop.validate_direction_matches_\nallowlist``.",
+      "enum": [
+        "forward",
+        "reverse"
+      ],
+      "title": "RelationshipDirection",
+      "type": "string"
+    },
+    "RelationshipType": {
+      "description": "The closed technical relationship vocabulary for the trial.",
+      "enum": [
+        "depends_on",
+        "blocked_by",
+        "owned_by_team",
+        "contributes_to",
+        "parent_of",
+        "implemented_by",
+        "reviews",
+        "deploys",
+        "operates",
+        "references",
+        "belongs_to_portfolio",
+        "shares_dependency_with"
+      ],
+      "title": "RelationshipType",
+      "type": "string"
+    },
+    "RelevanceState": {
+      "description": "Whether a node, path, driver or evidence item is *currently* relevant.",
+      "enum": [
+        "current",
+        "recently_current",
+        "historical_only",
+        "unknown"
+      ],
+      "title": "RelevanceState",
+      "type": "string"
+    },
+    "SourceClass": {
+      "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health",
+        "cognitive_load",
+        "investment_allocation",
+        "health_profile",
+        "deficiency_inventory",
+        "temporal_context"
+      ],
+      "title": "SourceClass",
+      "type": "string"
+    },
+    "SourceConflict": {
+      "additionalProperties": false,
+      "description": "Two or more evidence items that disagree.",
+      "properties": {
+        "conflict_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Conflict Id",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 2,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "resolution": {
+          "$ref": "#/$defs/ConflictResolution"
+        }
+      },
+      "required": [
+        "conflict_id",
+        "evidence_ref_ids",
+        "description",
+        "resolution"
+      ],
+      "title": "SourceConflict",
+      "type": "object"
+    },
+    "SourceContractVersion": {
+      "additionalProperties": false,
+      "description": "Which version of a source's own contract the investigation read.",
+      "properties": {
+        "contract_version": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        }
+      },
+      "required": [
+        "source_class",
+        "contract_version"
+      ],
+      "title": "SourceContractVersion",
+      "type": "object"
+    },
+    "SourceHealthObservation": {
+      "additionalProperties": false,
+      "description": "The observed state of one source class during the investigation.",
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "state": {
+          "$ref": "#/$defs/SourceRequirementState"
+        }
+      },
+      "required": [
+        "source_class",
+        "state"
+      ],
+      "title": "SourceHealthObservation",
+      "type": "object"
+    },
+    "SourceRequirementState": {
+      "description": "Per-source fulfillment state (CHAOS-3294 deliverable list, verbatim).\n\nDistinct from ``dev_source_requirement.v1.requirement_level`` (the\na-priori ``mandatory | conditional | optional | not_applicable``\ndeclaration): this enum is the *observed*, executed outcome recorded on\n``dev_source_observation.v1.observed_state`` once a plan step actually\nran. Kept in ``base`` because both the plan and result contract modules\nreference it (the plan's applicability rules describe which states are\nacceptable; the result records which state was actually observed).",
+      "enum": [
+        "available_current",
+        "available_stale",
+        "available_unknown",
+        "unconfigured",
+        "unavailable",
+        "unauthorized_or_not_visible",
+        "not_applicable",
+        "truncated"
+      ],
+      "title": "SourceRequirementState",
+      "type": "string"
+    },
+    "StaffingDenominatorState": {
+      "description": "How much allocation evidence backs a capacity/staffing claim.\n\nThe correction addendum is explicit on both halves of this: a missing\ndenominator must **reduce confidence and require qualification**, and it\nmust **not automatically make capacity questions unsupported**. Both\nhalves are pinned by tests \u2014 ``DENOMINATOR_ABSENT`` with a\n``MEASURED_CERTAIN`` qualifier is rejected, and ``DENOMINATOR_ABSENT``\nwith a ``QUALIFIED`` qualifier is accepted.",
+      "enum": [
+        "allocation_evidence_available",
+        "partial_allocation_evidence",
+        "denominator_absent"
+      ],
+      "title": "StaffingDenominatorState",
+      "type": "string"
+    },
+    "StaffingQualification": {
+      "additionalProperties": false,
+      "description": "How much allocation evidence stands behind a capacity claim.",
+      "properties": {
+        "denominator_source_classes": {
+          "items": {
+            "$ref": "#/$defs/SourceClass"
+          },
+          "maxItems": 10,
+          "title": "Denominator Source Classes",
+          "type": "array"
+        },
+        "denominator_state": {
+          "$ref": "#/$defs/StaffingDenominatorState"
+        },
+        "qualification_note": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Qualification Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "denominator_state",
+        "qualification_note"
+      ],
+      "title": "StaffingQualification",
+      "type": "object"
+    },
+    "SubjectCandidate": {
+      "additionalProperties": false,
+      "description": "One candidate canonical subject and why it is a candidate.\n\n``match_signals`` is ``min_length=1``: a ranked candidate with no stated\nsignal is the shape in which a wrong-but-similarly-named project reaches\nrank 1 unexaminably.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "canonical_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "commitment_state": {
+          "$ref": "#/$defs/SubjectCommitmentState"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "match_confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Match Confidence",
+          "type": "number"
+        },
+        "match_rationale": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Match Rationale",
+          "type": "string"
+        },
+        "match_signals": {
+          "items": {
+            "$ref": "#/$defs/SubjectMatchEvidence"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Match Signals",
+          "type": "array"
+        },
+        "rank": {
+          "maximum": 25,
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/InvestigationSubjectKind"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "rank",
+        "subject_kind",
+        "canonical_id",
+        "display_label",
+        "commitment_state",
+        "match_rationale",
+        "match_signals",
+        "match_confidence",
+        "relevance"
+      ],
+      "title": "SubjectCandidate",
+      "type": "object"
+    },
+    "SubjectCommitmentState": {
+      "description": "Proposed-versus-committed subject state.\n\n``PROPOSED`` is the normal state during discovery, and the correction\naddendum is explicit that *exact subject commitment must not be a\nprerequisite for authorized candidate and context discovery* \u2014 so a\npacket with zero committed subjects and a populated related-context\nsection is legal, and\n``test_chaos_3615_packet_contract.py::\ntest_discovery_without_any_commitment_is_legal`` pins that.",
+      "enum": [
+        "proposed",
+        "committed",
+        "rejected",
+        "ambiguous"
+      ],
+      "title": "SubjectCommitmentState",
+      "type": "string"
+    },
+    "SubjectDiscovery": {
+      "additionalProperties": false,
+      "description": "Candidate subjects, what was committed, and what stayed unresolved.\n\nCommitment is *not* a prerequisite for the rest of the packet: a\ndiscovery section with zero committed subjects is legal and is exercised\nby a positive fixture, because the correction addendum forbids requiring\nexact subject commitment before authorized context discovery.",
+      "properties": {
+        "authorization_filtered_count": {
+          "minimum": 0,
+          "title": "Authorization Filtered Count",
+          "type": "integer"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/SubjectCandidate"
+          },
+          "maxItems": 25,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "candidates_truncated": {
+          "title": "Candidates Truncated",
+          "type": "boolean"
+        },
+        "committed_subject_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Committed Subject Ids",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "ask_dev_subject_discovery.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TruncationReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unresolved_mentions": {
+          "items": {
+            "$ref": "#/$defs/UnresolvedMention"
+          },
+          "maxItems": 10,
+          "title": "Unresolved Mentions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "authorization_filtered_count",
+        "candidates_truncated"
+      ],
+      "title": "SubjectDiscovery",
+      "type": "object"
+    },
+    "SubjectMatchEvidence": {
+      "additionalProperties": false,
+      "description": "What matched, and what backs the claim that it matched.",
+      "properties": {
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "matched_text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Matched Text",
+          "type": "string"
+        },
+        "signal": {
+          "$ref": "#/$defs/SubjectMatchSignal"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        }
+      },
+      "required": [
+        "signal",
+        "matched_text",
+        "source_class"
+      ],
+      "title": "SubjectMatchEvidence",
+      "type": "object"
+    },
+    "SubjectMatchSignal": {
+      "description": "What actually caused a candidate to match the question's reference.\n\nThis is the anti-drift vocabulary for fault mode\n``wrong_but_similar_subject_ranked_first``: a candidate cannot be\ncommitted on ``FUZZY_LABEL`` alone, because a similarly-named project is\nexactly what fuzzy label matching returns.",
+      "enum": [
+        "exact_canonical_id",
+        "exact_display_name",
+        "alias",
+        "acronym",
+        "previous_name",
+        "provider_identifier",
+        "conversational_reference",
+        "surface_context_reference",
+        "fuzzy_label"
+      ],
+      "title": "SubjectMatchSignal",
+      "type": "string"
+    },
+    "SurfaceContextRef": {
+      "additionalProperties": false,
+      "description": "A safe reference to the surface or conversation the question came from.\n\nDeliberately three closed/opaque fields and no URL: see\n``vocabulary.SurfaceKind``.",
+      "properties": {
+        "entity_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entity Id"
+        },
+        "entity_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationSubjectKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "surface_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Surface Id",
+          "type": "string"
+        },
+        "surface_kind": {
+          "$ref": "#/$defs/SurfaceKind"
+        }
+      },
+      "required": [
+        "surface_kind",
+        "surface_id"
+      ],
+      "title": "SurfaceContextRef",
+      "type": "object"
+    },
+    "SurfaceKind": {
+      "description": "Safe surface/conversation context references.\n\nClosed rather than free text on purpose: a surface reference is the one\nfield on an investigation packet whose natural implementation is \"paste\nthe URL the user was looking at\", and a URL is both an unbounded\ndisclosure channel and the exact shape of a dashboard redirect.",
+      "enum": [
+        "dashboard",
+        "project_page",
+        "team_page",
+        "portfolio_page",
+        "report",
+        "conversation"
+      ],
+      "title": "SurfaceKind",
+      "type": "string"
+    },
+    "TrialMetadata": {
+      "additionalProperties": false,
+      "description": "Evaluation metadata \u2014 never product truth.\n\nArm identity lives here and only here, and the field that holds it is\noptional on :class:`InvestigationVersions`. That is the structural\nstatement of \"arm identity should be evaluation metadata\": a native\npacket is complete without it, no consumer may branch on it, and no\nfield anywhere in this contract is mandatory only for one arm.",
+      "properties": {
+        "arm_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Arm Id",
+          "type": "string"
+        },
+        "fixture_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fixture Version"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*\\.v\\d+(?:\\.\\d+)*$",
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        }
+      },
+      "required": [
+        "arm_id",
+        "producer_id"
+      ],
+      "title": "TrialMetadata",
+      "type": "object"
+    },
+    "TruncationReason": {
+      "enum": [
+        "path_budget",
+        "node_budget",
+        "cohort_budget",
+        "evidence_budget",
+        "time_budget",
+        "authorization_filter",
+        "source_unavailable"
+      ],
+      "title": "TruncationReason",
+      "type": "string"
+    },
+    "UnresolvedMention": {
+      "additionalProperties": false,
+      "description": "A reference in the question that discovery could not resolve.",
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "mention_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Mention Id",
+          "type": "string"
+        },
+        "mention_text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Mention Text",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/UnresolvedMentionReason"
+        }
+      },
+      "required": [
+        "mention_id",
+        "mention_text",
+        "reason"
+      ],
+      "title": "UnresolvedMention",
+      "type": "object"
+    },
+    "UnresolvedMentionReason": {
+      "enum": [
+        "no_candidate",
+        "multiple_candidates",
+        "authorization_filtered",
+        "out_of_scope"
+      ],
+      "title": "UnresolvedMentionReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev-investigation/v1/ask_dev_investigation_packet.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A bounded, authorized, backend-neutral investigation result.\n\nNot a final user answer, not a dashboard response, not a graph-native\nquery response, not an LLM reasoning trace, not arbitrary traversal\noutput. It is the input the Ask Dev frame reasons over, and the artifact\nboth trial arms are scored on.",
+  "properties": {
+    "analytical_job": {
+      "$ref": "#/$defs/AnalyticalJob"
+    },
+    "comparison_cohort": {
+      "$ref": "#/$defs/ComparisonCohort"
+    },
+    "driver_analysis": {
+      "$ref": "#/$defs/DriverAnalysis"
+    },
+    "evidence_coverage": {
+      "$ref": "#/$defs/EvidenceCoverage"
+    },
+    "organization_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Organization Id",
+      "type": "string"
+    },
+    "outcome": {
+      "$ref": "#/$defs/InvestigationOutcome"
+    },
+    "packet_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Packet Id",
+      "type": "string"
+    },
+    "produced_at": {
+      "format": "date-time",
+      "title": "Produced At",
+      "type": "string"
+    },
+    "related_context": {
+      "$ref": "#/$defs/RelatedContext"
+    },
+    "schema_version": {
+      "const": "ask_dev_investigation_packet.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "subject_discovery": {
+      "$ref": "#/$defs/SubjectDiscovery"
+    },
+    "versions": {
+      "$ref": "#/$defs/InvestigationVersions"
+    }
+  },
+  "required": [
+    "schema_version",
+    "packet_id",
+    "organization_id",
+    "produced_at",
+    "outcome",
+    "analytical_job",
+    "subject_discovery",
+    "comparison_cohort",
+    "related_context",
+    "driver_analysis",
+    "evidence_coverage",
+    "versions"
+  ],
+  "title": "AskDevInvestigationPacket",
+  "type": "object"
+}

@@ -876,7 +876,11 @@ FAULT_MODE_REGISTRY: Mapping[FaultModeID, FaultMode] = {
         "A lineage path routes through an entity the caller may not see, "
         "leaking its existence through the path even if its own record is "
         "never returned. Rejected: every endpoint of every hop, and every "
-        "related entity, must be in the packet's authorized entity set.",
+        "related entity, must be in the packet's authorized entity set. "
+        "Residual, stated rather than glossed: that set is producer-declared, "
+        "so the contract proves the traversal was consistent with the claim, "
+        "not that the claim is true -- CHAOS-3616 must also score this "
+        "dimension against a real authorization oracle.",
         RejectingMechanism.CONTRACT_VALIDATOR,
         ("RelatedContext", "validate_paths_stay_inside_authorized_set"),
         (_D.ZERO_UNAUTHORIZED_RESULTS, _D.LINEAGE_PATH_PRECISION),

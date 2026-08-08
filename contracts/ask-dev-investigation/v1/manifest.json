@@ -311,7 +311,7 @@
     },
     {
       "path": "registries/fault_modes.json",
-      "sha256": "c291788b5836f44c74af317b86c97c792158fd822bbe0c4b9958379c8f8d5b5b"
+      "sha256": "27aa1ef8622b385a00e19a661a68af11231821934a142644b5da810102ec96e0"
     },
     {
       "path": "registries/trial_allowlists.json",

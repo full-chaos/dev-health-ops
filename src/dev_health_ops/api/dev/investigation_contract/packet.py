@@ -560,8 +560,7 @@ class ComparisonCohort(ContractModelV2):
         if self.comparison_shape is ComparisonShape.SINGULAR_SUBJECT:
             if len(self.members) > 1:
                 raise ValueError(
-                    "a singular-subject shape cannot carry more than one "
-                    "cohort member"
+                    "a singular-subject shape cannot carry more than one cohort member"
                 )
             return self
         if self.comparison_shape in COHORT_BEARING_SHAPES:
@@ -586,9 +585,7 @@ class ComparisonCohort(ContractModelV2):
         )
         uncertain = self.completeness is CohortCompleteness.BEST_EFFORT_UNCERTAIN
         if uncertain and self.cohort_uncertainty is None:
-            raise ValueError(
-                "a best-effort cohort must say what it is uncertain about"
-            )
+            raise ValueError("a best-effort cohort must say what it is uncertain about")
         if not uncertain and self.cohort_uncertainty is not None:
             raise ValueError(
                 "cohort_uncertainty is only meaningful on a best-effort cohort"
@@ -765,6 +762,16 @@ class RelatedContext(ContractModelV2):
         restricted entity still discloses that the entity exists and that it
         connects two things the caller can see — which is the leak, even
         when its own record is never returned.
+
+        **What this cannot check, stated plainly.** ``authorized_entity_ids``
+        is declared by the producer, so this validator proves *internal
+        consistency* — the packet did not traverse anything it did not also
+        claim was authorized — and not that the claim is true. An arm that
+        listed the whole organization as authorized would pass here. That
+        residual is why ``ZERO_UNAUTHORIZED_RESULTS`` is scored by CHAOS-3616
+        against a real authorization oracle as well as by this check, and
+        why the honest description of this guard is "makes an unauthorized
+        traversal impossible to hide", not "makes it impossible".
         """
 
         authorized = set(self.authorized_entity_ids)
@@ -875,8 +882,7 @@ class DriverCandidate(ContractModelV2):
                 )
             if not self.supporting_evidence_ids:
                 raise ValueError(
-                    f"driver {self.driver_id} is principal with no supporting "
-                    "evidence"
+                    f"driver {self.driver_id} is principal with no supporting evidence"
                 )
             if self.relevance not in CURRENTLY_RELEVANT_STATES:
                 raise ValueError(
@@ -1328,6 +1334,14 @@ class AskDevInvestigationPacket(ContractModelV2):
         on the index's own ``supports_*`` fields — stops an evidence dump
         from claiming attachment to paths, entities, drivers or subjects the
         packet never declared.
+
+        **What this cannot check.** Closure is checked *within the packet*.
+        Whether a handle would actually verify against
+        ``evidence_service.EvidenceHandleService`` is a runtime,
+        org-scoped question a static contract cannot answer — the grammar
+        pins the handle's shape, and dereferencing pins its validity. A
+        packet that passes here can still cite a handle that no longer
+        resolves.
         """
 
         indexed = {
@@ -1354,9 +1368,7 @@ class AskDevInvestigationPacket(ContractModelV2):
 
         known_paths = {path.path_id for path in self.related_context.paths}
         known_entities = {entity.entity_id for entity in self.related_context.entities}
-        known_drivers = {
-            driver.driver_id for driver in self.driver_analysis.candidates
-        }
+        known_drivers = {driver.driver_id for driver in self.driver_analysis.candidates}
         known_subjects = {
             candidate.canonical_id for candidate in self.subject_discovery.candidates
         } | {member.canonical_id for member in self.comparison_cohort.members}
@@ -1380,10 +1392,7 @@ class AskDevInvestigationPacket(ContractModelV2):
     def validate_drivers_reference_declared_material(self) -> Self:
         known_paths = {path.path_id for path in self.related_context.paths}
         known_subjects = (
-            {
-                candidate.canonical_id
-                for candidate in self.subject_discovery.candidates
-            }
+            {candidate.canonical_id for candidate in self.subject_discovery.candidates}
             | {member.canonical_id for member in self.comparison_cohort.members}
             | {entity.entity_id for entity in self.related_context.entities}
         )
@@ -1446,14 +1455,11 @@ class AskDevInvestigationPacket(ContractModelV2):
         if self.outcome is InvestigationOutcome.NEEDS_CLARIFICATION:
             if not self.evidence_coverage.clarification_needs:
                 raise ValueError(
-                    "a needs-clarification outcome must record what it needs "
-                    "clarified"
+                    "a needs-clarification outcome must record what it needs clarified"
                 )
         if self.outcome is InvestigationOutcome.NO_MATCH:
             if self.subject_discovery.committed_subject_ids:
-                raise ValueError(
-                    "a no-match outcome cannot also commit to a subject"
-                )
+                raise ValueError("a no-match outcome cannot also commit to a subject")
             if not (
                 self.evidence_coverage.clarification_needs
                 or self.evidence_coverage.limitations

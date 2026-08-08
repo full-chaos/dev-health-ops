@@ -123,7 +123,7 @@
       }
     },
     {
-      "bad_behaviour": "A lineage path routes through an entity the caller may not see, leaking its existence through the path even if its own record is never returned. Rejected: every endpoint of every hop, and every related entity, must be in the packet's authorized entity set.",
+      "bad_behaviour": "A lineage path routes through an entity the caller may not see, leaking its existence through the path even if its own record is never returned. Rejected: every endpoint of every hop, and every related entity, must be in the packet's authorized entity set. Residual, stated rather than glossed: that set is producer-declared, so the contract proves the traversal was consistent with the claim, not that the claim is true -- CHAOS-3616 must also score this dimension against a real authorization oracle.",
       "dimension_ids": [
         "zero_unauthorized_results",
         "lineage_path_precision"

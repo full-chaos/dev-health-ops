@@ -188,6 +188,26 @@ to then be **accepted**. A guard whose removal changes nothing is not the
 guard the registry claims it is. The script is wired into the suite and
 fails if any registered fault mode has no injection case.
 
+## What this contract cannot check
+
+Three limits are worth stating explicitly, because a reader who believes
+the contract covers them will stop looking.
+
+- **Authorization is producer-declared.** `authorized_entity_ids` comes from
+  the arm, so the guard proves the traversal was consistent with the claim,
+  not that the claim is true. An arm that declared the whole organization
+  authorized would pass. `ZERO_UNAUTHORIZED_RESULTS` must therefore also be
+  scored against a real authorization oracle in CHAOS-3616.
+- **Evidence closure is closure within the packet.** Whether a handle would
+  verify against `EvidenceHandleService` is a runtime, org-scoped question;
+  the grammar pins the handle's shape and dereferencing pins its validity.
+- **Relevance is not correctness.** The contract can require that a cohort
+  member state a basis and a rationale, and that a driver carry lineage and
+  evidence. Whether the member actually belongs, or the driver actually
+  drives, is an oracle judgment — which is exactly why the fault-mode
+  registry distinguishes `contract_validator` from `oracle_judgment` rather
+  than claiming everything is enforced here.
+
 ## How a future arm must use this
 
 Both arms are out of scope for CHAOS-3615. When they are authorized:

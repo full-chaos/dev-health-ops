@@ -14,8 +14,8 @@ on evidence rather than on impression.
   1–2 used `gpt-5-mini`; Ask Dev actually runs `gpt-5-nano`. Every number in
   runs 1–2 was therefore taken one tier above deployed parity. §8.
 - **A frontier tier now separates a model ceiling from a framework limit.**
-  Across the two committed runs `gpt-5.6-luna` scores 1/4 then 2/4 on class
-  (c), against 1/4 for the mid tier in both — so no tier exceeds 2 of 4,
+  `gpt-5.6-luna` scores 1/4 in run 6 and 2/4 in run 7 on class (c), against
+  1/4 for the mid tier in run 6 and run 7 alike — so no tier exceeds 2 of 4,
   and the frontier's margin is at most one oracle and is not stable across
   runs. §3.4.
 - **A previously reported prompt-injection result is WITHDRAWN.** It came
@@ -244,9 +244,12 @@ So the honest statements are:
   Two of the four oracles fail at every tier in every run (the standings
   are in the tables above). The binding constraint looks like the
   extraction contract and harness rather than model capability.
-- **The one *stable* differentiator is `O3_supersession`**, which the three
-  larger models pass and the two smaller ones fail — the only place in the
-  corpus where a capability ordering is reproducible across runs.
+- **`O3_supersession` is the closest thing to a differentiator, and even it
+  is not stable.** Its pass/fail grouping MOVED between the two committed
+  runs — the frontier tier is on the other side of it in run 6 than in run
+  7 (that flip is §7's drift datum). §4 states this in the same terms:
+  "ladder" overstates what the corpus shows. There is no capability
+  ordering here that reproduces across runs.
 
 **Two oracles fail at every tier in every run**, and one of them now has a
 cause recorded in the committed artifact rather than inferred. Every tier's
@@ -1086,12 +1089,36 @@ is allowed to contain:
   `GENERATED:comparative-facts` block — best and worst tier score, the
   spread, and the full per-tier ranking — rendered from the records, with a
   test that it matches a fresh render.
-- **Hand-written prose may not make a comparative claim about tier
-  performance at all.** A test scans the prose (excluding fenced
-  illustrations and the generated block) for a list of comparative
-  constructions — superlatives, attainment verbs, and equality or ordering
-  phrasings — and fails on any of them. Prose may point at the generated
-  block; it may not characterise it.
+- **Hand-written comparatives are scanned for and rejected — by a literal
+  marker list, which is exactly the method this section calls broken.**
+  Stated precisely, because overstating it is how the last three rounds
+  ended: the test lowercases the prose, removes the generated block and
+  fenced illustrations, and fails on any of a fixed list of comparative
+  strings (superlatives, attainment verbs, equality and ordering
+  phrasings). A comparative that NAMES its run is allowed through and
+  checked instead against both runs' artifacts, so cross-run statements are
+  verified rather than exempted.
+
+  **The residual, named honestly: a number-free comparative phrased outside
+  that list still slips through.** This is not hypothetical — the live
+  example is the one this round caught, a claim that an oracle's pass/fail
+  grouping was "reproducible across runs" when the frontier tier sits on
+  opposite sides of it in the two runs. No numeric guard could see it, and
+  no marker matched it. Full semantic comparative detection was considered
+  and deliberately not attempted: it has no floor. The mitigation that
+  actually works is the generated block — a claim that is *generated*
+  cannot go stale, and prose that points instead of characterising has
+  nothing to get wrong.
+
+**Round five, and the reviewing probe missed it once too.** The
+"reproducible across runs" claim predated round four and survived a probe
+that was looking for exactly this class. That is worth recording for the
+same reason the rest of this section is: the guard set here was assembled by
+repeatedly being wrong, not derived, and the next reader should treat it as
+evidence of what has been caught rather than proof of what cannot happen.
+Widened this round: a preposition variant of an ordering phrase, and the
+tier↔score pairing check, which previously allowed only punctuation between
+a tier name and its number and so could not see "`<tier>` scores N/4".
 
 **The class that is now impossible:** a tier count, a class-score fraction,
 a tier↔score pairing, a superlative, or ANY comparative claim about tier

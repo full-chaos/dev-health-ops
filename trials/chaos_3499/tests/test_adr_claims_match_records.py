@@ -431,9 +431,29 @@ def test_no_tier_is_paired_with_a_score_that_is_not_its_own(
         short = model.split("/")[-1]
         for name in {model, short}:
             # tier name, then up to ~40 chars of punctuation/words, then n/4
+            # Allow a few intervening words: "`luna` scores 1/4" was
+            # invisible when only punctuation could sit between the name and
+            # the number. Pipes are excluded so a match cannot jump a
+            # table-cell boundary and pair a tier with a neighbour's score.
             for match in re.finditer(
-                rf"{re.escape(name)}[`\s,:*]*(\d{{1,2}}/{denominator})\b", text
+                rf"{re.escape(name)}[`\s,:*]*(?:[a-z]+\s+){{0,3}}"
+                rf"(\d{{1,2}}/{denominator})\b",
+                text,
             ):
+                window = text[max(0, match.start() - 90) : match.end() + 20]
+                if "run 6" in window:
+                    # A pairing explicitly labelled as run 6 is checked
+                    # against RUN 6, not against the current records.
+                    run6 = _run6_class_c_scores()
+                    key = next(
+                        (k for k in run6 if name in k or k.split("-local")[0] in name),
+                        None,
+                    )
+                    if (
+                        key is not None
+                        and match.group(1) == f"{run6[key]}/{denominator}"
+                    ):
+                        continue
                 if match.group(1) != correct:
                     start = max(0, match.start() - 40)
                     wrong.append(
@@ -518,6 +538,9 @@ _COMPARATIVE_MARKERS = (
     "matches the mid",
     "ties with",
     "one ahead of",
+    "one ahead in",
+    "one behind",
+    "level with",
     "outperform",
     "ahead of the mid",
     "behind the mid",
@@ -527,6 +550,53 @@ _COMPARATIVE_MARKERS = (
     "gap is two oracles",
     "one oracle wide",
 )
+
+#: The commit whose artifact IS run 6. Run 6 predates the records format,
+#: so its numbers can only be read from that committed markdown -- weaker
+#: evidence than run 7's records, and treated as its own source rather than
+#: mixed in with them.
+_RUN6_COMMIT = "b0983d17e"
+
+
+def _run6_class_c_scores() -> dict[str, int]:
+    """Per-tier class-(c) authored score, read from run 6's own artifact.
+
+    Cross-run claims used to be un-guardable because run 6 is not in the
+    records. Parsing its committed artifact makes them checkable instead of
+    exempt -- an exemption is where the next stale claim lands.
+    """
+    import subprocess
+
+    md = subprocess.run(
+        [
+            "git",
+            "show",
+            f"{_RUN6_COMMIT}:trials/chaos_3499/docs/measured-trial-results.md",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    authored = (
+        "O3_supersession",
+        "O5_conflicts",
+        "O5_conflicts_injected",
+        "O6_recurring_pattern",
+    )
+    scores: dict[str, int] = {}
+    for section in md.split("## Tier: ")[1:]:
+        key = re.search(r"tier key: `([^`]+)`", section).group(1)
+        passed = 0
+        for oracle in authored:
+            line = [ln for ln in section.splitlines() if ln.startswith(f"| {oracle} ")]
+            if not line:
+                continue
+            cells = [c.strip() for c in line[0].strip("|").split("|")]
+            verdict = re.search(r"`(\w+)` @", cells[-1]).group(1)
+            passed += verdict == "pass"
+        scores[key] = passed
+    return scores
+
 
 _GENERATED_BEGIN = "<!-- GENERATED:comparative-facts BEGIN -->"
 _GENERATED_END = "<!-- GENERATED:comparative-facts END -->"
@@ -576,6 +646,12 @@ def test_hand_written_prose_makes_no_comparative_tier_claim() -> None:
             window = prose[start : match.end() + 90]
             if "tier" not in window and "luna" not in window and "mini" not in window:
                 continue  # not a claim about tier performance
+            if "run 6" in window or "run 7" in window:
+                # A comparative that NAMES its run is a cross-run statement,
+                # checked by test_cross_run_margin_claims_match_both_artifacts
+                # rather than banned. Unlabelled comparatives stay banned:
+                # those are the ones that silently go stale.
+                continue
             offenders.append(f"{marker!r} in: ...{window}...")
     assert not offenders, (
         "hand-written comparative claim(s) about tier performance. Cite "
@@ -619,4 +695,60 @@ def test_tier_ranks_stated_anywhere_match_the_records(records: dict) -> None:
         named = match.group(3)
         assert any(named in t or t in named for t in top), (
             f"prose names {named!r} as the best tier; records say {sorted(top)}"
+        )
+
+
+def test_cross_run_margin_claims_match_both_artifacts(records: dict) -> None:
+    """Cross-run comparatives are VERIFIED, not exempted.
+
+    A comparative that names its run is skipped by the prose ban -- so it
+    has to be checked somewhere, or the skip is just a hole with a comment
+    on it. Run 7 comes from the records; run 6 from its own committed
+    artifact, since it predates the records format.
+    """
+    authored = sorted(
+        {
+            row["oracle_id"]
+            for t in records["tiers"]
+            for row in t["rows"]
+            if row["question_class"] == "c"
+            and row["arm"] == "extraction_llm"
+            and row["verdict"] != "not_measured"
+        }
+    )
+    run7 = {
+        t["tier_key"]: sum(
+            1
+            for row in t["rows"]
+            if row["arm"] == "extraction_llm"
+            and row["oracle_id"] in authored
+            and row["verdict"] == "pass"
+        )
+        for t in records["tiers"]
+    }
+    run6 = _run6_class_c_scores()
+    assert set(run6) == set(run7), "the two runs measured different tier sets"
+
+    # The document's cross-run claim: the frontier's margin over the mid
+    # tier is at most one oracle, and it MOVED between the runs.
+    margins = {
+        "run 6": run6["gpt-5.6-luna"] - run6["gpt-5-mini"],
+        "run 7": run7["gpt-5.6-luna"] - run7["gpt-5-mini"],
+    }
+    assert max(abs(m) for m in margins.values()) <= 1, (
+        f"the frontier/mid margin exceeded one oracle: {margins}; the ADR's "
+        "'at most one oracle' claim needs rewriting"
+    )
+    assert len(set(margins.values())) > 1, (
+        f"the margin no longer MOVED between runs ({margins}); the ADR's "
+        "instability claim is now false"
+    )
+    prose = _prose_outside_generated_block((_DOCS / "adr-draft.md").read_text())
+    for run_label, expected in (
+        ("run 6", run6["gpt-5.6-luna"]),
+        ("run 7", run7["gpt-5.6-luna"]),
+    ):
+        assert f"{expected}/{len(authored)} in {run_label}" in prose, (
+            f"the ADR should state luna's {run_label} score as "
+            f"{expected}/{len(authored)}"
         )

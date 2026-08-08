@@ -42,7 +42,9 @@ def test_active_incidents_query_projects_mapped_canonical_rows_with_org_scope(
     assert "incident.service_id = mapping.service_id" in query
     assert "repo_id IS NOT NULL" in query
     assert "is_active = 1" in query
-    assert "valid_from <= {as_of:DateTime64(6, 'UTC')}" in query
+    # CHAOS-3570: a NULL valid_from ("valid since before records began")
+    # must satisfy the as-of filter -- NULL <= x is false in ClickHouse.
+    assert "(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})" in query
     assert "resolved_at IS NOT NULL" in query
     assert "incident.id AS incident_id" in query
 

@@ -40,6 +40,14 @@ def test_incident_query_uses_canonical_service_mapping_projection(monkeypatch):
     assert "incident.service_id = mapping.service_id" in query
     assert "is_active = 1" in query
     assert query.count("WHERE org_id = {org_id:String}") >= 2
+    # CHAOS-3570: a NULL valid_from ("valid since before records began")
+    # must satisfy the as-of filter -- NULL <= x is false in ClickHouse.
+    assert "(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})" in query
+    # CHAOS-3604: operational_service_repository_mappings has no
+    # is_deleted column -- filtering it here crashes the query outright
+    # against a live ClickHouse engine. Never re-add it.
+    mapping_clause = query.split("INNER JOIN")[1]
+    assert "is_deleted" not in mapping_clause
 
 
 def test_infer_repo_source_prefers_settings():

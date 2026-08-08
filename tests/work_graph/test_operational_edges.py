@@ -380,3 +380,20 @@ def test_repo_scoped_build_rejects_cross_repo_pr_edges_from_note_body() -> None:
     assert len(pr_edges) == 1
     assert "pull/7" in pr_edges[0].evidence
     assert pr_edges[0].repo_id == requested_repo_id
+
+
+def test_mapping_query_treats_null_valid_from_as_satisfying_as_of_filter() -> None:
+    # CHAOS-3570: a NULL valid_from ("valid since before records began")
+    # must satisfy the as-of filter -- NULL <= x is false in ClickHouse.
+    now = datetime(2026, 7, 17, tzinfo=timezone.utc)
+    sink = MagicMock()
+    sink.query_dicts.return_value = []
+
+    build_operational_incident_edges(sink, "org-a", now, 7, 0.3)
+
+    mapping_query = next(
+        call.args[0]
+        for call in sink.query_dicts.call_args_list
+        if "operational_service_repository_mappings" in call.args[0]
+    )
+    assert "(valid_from IS NULL OR valid_from <= {now:DateTime})" in mapping_query

@@ -103,10 +103,24 @@ def build_incidents_query() -> str:
     current_mappings = current_operational_rows_sql(
         "operational_service_repository_mappings",
         (
-            "is_deleted = 0",
+            # CHAOS-3604: no `is_deleted` predicate here -- unlike
+            # operational_incidents, operational_service_repository_mappings
+            # has no `is_deleted` column. A stray `is_deleted = 0` filter
+            # here previously crashed this query outright against a live
+            # ClickHouse engine ("Correlated subqueries are not supported in
+            # JOINs yet") because the analyzer resolved the unknown column
+            # name across the JOIN into the sibling incident subquery's own
+            # `is_deleted` instead of raising a normal missing-column error.
+            # The mapping table has no soft-delete column at all, so no
+            # replacement filter belongs here -- do not re-add one.
+            # Pre-existing, unrelated to CHAOS-3570; fixed alongside it
+            # because it blocked live-verifying this reader.
             "is_active = 1",
             "repo_id IS NOT NULL",
-            "valid_from <= {as_of:DateTime64(6, 'UTC')}",
+            # CHAOS-3570: valid_from is Nullable; NULL <= x is false in
+            # ClickHouse, so a NULL valid_from ("valid since before records
+            # began") must be treated as satisfying the as-of filter.
+            "(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
             "(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
         ),
     )

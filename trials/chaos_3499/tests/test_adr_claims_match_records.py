@@ -591,8 +591,12 @@ def _run6_class_c_scores() -> dict[str, int]:
         passed = 0
         for oracle in authored:
             line = [ln for ln in section.splitlines() if ln.startswith(f"| {oracle} ")]
-            if not line:
-                continue
+            assert line, (
+                f"run-6 artifact has no row for {oracle} in tier {key}; the "
+                "parser is stale. Skipping would under-count run 6 and make "
+                "the cross-run guard compare against a wrong baseline AND "
+                "pass -- an under-count must be loud."
+            )
             cells = [c.strip() for c in line[0].strip("|").split("|")]
             verdict_match = re.search(r"`(\w+)` @", cells[-1])
             assert verdict_match, (

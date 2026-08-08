@@ -1120,15 +1120,20 @@ Widened this round: a preposition variant of an ordering phrase, and the
 tier↔score pairing check, which previously allowed only punctuation between
 a tier name and its number and so could not see "`<tier>` scores N/4".
 
-**The class that is now impossible:** a tier count, a class-score fraction,
-a tier↔score pairing, a superlative, or ANY comparative claim about tier
-performance cannot sit in this document contradicting the records — in any
-spelling, wrapping, or digit/word form, and whether or not it contains a
-number — without a test failing. The number-free case is the one that
-needed round four. What remains possible, and is deliberately not claimed to be
-closed, is stale *qualitative* prose carrying no number (an example is in
-the fenced block above) that
-carries no number; §8.3 was fixed by deleting its restated figures and
-pointing at §3.4 instead, so that section can no longer drift, but the
-general case of prose adjectives is not machine-checked. That residual is
-stated rather than hidden.
+**What the tests actually enforce.** A **tier count**, a **class-score
+fraction**, a **tier↔score pairing**, a **superlative of the form "no tier
+exceeds N"**, or a comparative matching one of the **listed marker
+strings** cannot sit in this document contradicting the records — in any
+spelling, wrapping, or digit/word form — without a test failing. Cross-run
+claims that name their run are verified against both runs' artifacts rather
+than exempted.
+
+**What they do NOT enforce** is stated immediately above and is not
+narrowed here: a comparative phrased outside the marker list, particularly
+a number-free one, can still pass every test. That is not hypothetical —
+it is how the "reproducible across runs" claim survived into round five,
+and a human probe rather than a test is what caught it. **A future reviewer
+should treat this class as still worth probing.** §8.3 was fixed by
+deleting its restated figures and pointing at §3.4, so that section in
+particular can no longer drift; the general case of characterising prose is
+not machine-checked.

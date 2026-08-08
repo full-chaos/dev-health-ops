@@ -1,15 +1,21 @@
 # Phase 3 evidence summary — CHAOS-3219 armed corpus run
 
-**Verdict: MEASURED. Filled from the grade record, not from expectation.**
+**Run verdict: MEASURED. Phase verdict: CLOSED (2026-08-07 ~17:10 PT).**
+Filled from the grade and closure record, not from expectation.
 
-Sources, and the only two this document is filled from:
+Sources this document is filled from, in order of authority:
 
 * the **2026-08-07 grade comment on CHAOS-3219** (`Phase 3 armed corpus run — GRADED: MEASURED`);
-* the body of **ops PR #1597** (`CHAOS-3219 Phase 3 close`), which is the durable evidence record and reproduces the grade verbatim.
+* the **Phase 3 closure comment on CHAOS-3219** (`Phase 3 — CLOSED (2026-08-07 ~17:10 PT)`);
+* the body of **ops PR #1597** (`CHAOS-3219 Phase 3 close`), merged to `main` as `6b7517364`, which is the durable evidence record and reproduces the grade verbatim;
+* the run's own **`.p3-logs/RUN-CONDITIONS.md`** and boot log, for environment facts the three narrative sources do not carry.
 
-Anything neither source carries is left as an explicit `<PLACEHOLDER: …>` rather than
+Anything none of these carries is left as an explicit `<PLACEHOLDER: …>` rather than
 reconstructed. A reconstructed figure in an evidence document is indistinguishable
 from a measured one once it is written down.
+
+The corpus corrections described in section 4F are **on `main`** as of `6b7517364`;
+they are not pending.
 
 Graded against [`PRE-REGISTRATION.phase3.v2.md`](PRE-REGISTRATION.phase3.v2.md) **as
 amended pre-run in `4f974f2c7`**. The amendment fired v2's own re-derive rule after
@@ -30,7 +36,7 @@ pre-registration was not touched after the run.
 | Engine identity digest | `12b961997a122ff6e7a711db0a3a5724bdb668a28c262f2fdf94c88be3675e59` |
 | Provider role / cases | `legacy_agent`, 96 |
 | API container | `77d8499c18a3` (pinned) |
-| `WORLD_DIGEST` | `<PLACEHOLDER: re-minted world; digest not carried by either source>` |
+| `WORLD_DIGEST` | `fea90782a6b462597c41173e5d5e40728c4bf5c291631b1a42a3215ef14758e5` — live matched the pinned file |
 | Superseded attempts | Attempt 1 — killed unmeasured by the 09:26 machine reboot. Attempt 2 (09:47 PT) — UNMEASURED (degraded): 59/90 active cases hit HTTP 429 `cost_limit_reached`; root causes ticketed CHAOS-3573 and CHAOS-3575. An 11:04 PT run measured 122/12 and settled Phase 2 exit; **it is not this grade** — run #3 supersedes it. |
 
 ## 2. Run-validity preconditions
@@ -41,7 +47,7 @@ carried from the pre-registration.
 | Precondition | Required | Observed | Verdict |
 | --- | --- | --- | --- |
 | Engine identity digest matches | `12b96199…` | `IDENTITY MATCH 12b961997a12…` role `legacy_agent`, 96 cases | PASS |
-| `WORLD_DIGEST` matches pinned snapshot | match | `<PLACEHOLDER: not carried by either source>` | `<PLACEHOLDER>` |
+| `WORLD_DIGEST` matches pinned snapshot | match | `world restore: WORLD_DIGEST fea90782a6b46259… verified against /app/tests/acceptance/world/ask-dev-world.v1/WORLD_DIGEST`; 86 ClickHouse + 10 Postgres tables restored | PASS |
 | QUA flags unset in the API container's own environment | unset | `QUA_VERIFIED=not-armed (shadow=0 commit=0)` | PASS |
 | Items collected | 134 | 134 | PASS |
 | Items skipped | 0 | 0 | PASS |
@@ -58,6 +64,21 @@ carried from the pre-registration.
 The pin check earns its place here. It was added during this run (`c16cd2e36`) so a
 competing `compose up` is *named* at the stage boundary rather than surfacing four
 stages later as `service "api" is not running`.
+
+### Caveat recorded before any result was seen: the world was re-minted
+
+`RUN-CONDITIONS.md` records, **pre-grade**, that the snapshot moved from the graded
+11:11 run's `6dda65a695befc98…` to this run's `fea90782a6b46259…` (PR #1583's re-mint).
+That is **not drift and not a MISS** — v2 requires only that the live world match the
+pinned file, which it does. But this run measures against a *different world* than the
+one v2's predictions were derived from, and the corpus depends on world data.
+
+The caveat was written down in advance precisely so the re-mint could not be reached
+for afterwards as a convenient explanation, with the honest statement that *"the fix
+behaved differently"* and *"the world changed"* cannot be separated without a
+discriminating check. **Section 4F is that discriminating check**, and it clears the
+re-mint: the absence reason changed in lockstep with the span declaration and is
+computed from the declared-spans flag, not from world data.
 
 ## 3. Headline result
 
@@ -196,14 +217,26 @@ New signatures not anticipated by the pre-registration: **none**.
 | Field | Value |
 | --- | --- |
 | Harness | armed corpus run, Compose acceptance stack, 8/8 services healthy |
-| Boot recipe | `scripts/acceptance/armed_corpus_boot.sh` |
-| Provider | scripted (`ASK_DEV_SCRIPTED_PROVIDER_*`), no live provider |
+| Boot recipe | `scripts/acceptance/armed_corpus_boot.sh` (in-tree), `BOOT_EXIT_CODE=0` |
+| Compose files | `compose.yml` + `tests/acceptance/compose.ask-dev.yml` + `scripts/acceptance/acceptance_allowance_override.yml`, all in-tree and tracked |
+| Compose project | `dev-health-ask-dev-acceptance` |
+| Images | Built from the repo tree by `docker compose up -d --build --wait`, **not pulled tags** — so the image identity is the branch SHA, and there is no published digest to pin |
+| Python | 3.14 in the API image (`requires-python >= 3.14`); the runner side uses the worktree venv at `.venv/bin/python` |
+| API bind | `127.0.0.1:18099` (18080 deliberately left to the dev stack's `acr-api`) |
 | API container | `77d8499c18a3`, pinned and re-checked at three stage boundaries |
+| Provider | scripted (`ASK_DEV_SCRIPTED_PROVIDER_*`), no live provider |
 | Allowance | 6 orgs × 500,000,000 microUSD, counter absent at boot |
-| Compose file(s) | `<PLACEHOLDER: not carried by either source>` |
-| Images / digests | `<PLACEHOLDER: not carried by either source>` |
-| Python version | `<PLACEHOLDER: not carried by either source>` |
-| Host | `<PLACEHOLDER: not carried by either source>` |
+| Host | `<PLACEHOLDER: not recorded — RUN-CONDITIONS.md documents that the machine was probed quiet before boot (no gate lock, no `local_validate`, no foreign agent), but does not identify the host>` |
+
+The allowance override is worth reading as a run condition rather than a knob. It
+exists because attempt 2's 429 storm was root-caused to a **false premise in the
+harness**: `ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD` is the operator *maximum* an
+org may be configured up to, not the effective limit, which resolves to the
+`100,000,000` default when no per-org row is stored. The runner budgeted against $200
+while the server enforced $100. `500,000,000` is the reachable ceiling
+(`PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD` clamps both layers) and is ~1.64× the
+~$304M the 90-case corpus needs. **No product constant was changed**, and the
+pre-registration was not touched.
 
 Two boot-recipe defects were found **by running the recipe, not by reading it**, and
 are part of this run's record:
@@ -248,8 +281,8 @@ coverage claim, because a reader who sees "covered" stops checking.
 | `deg.provider.unsupported` and `readiness.capabilities.unsupported-model` flip DECLARED-BLOCKED | Provider-unsupported and unsupported-model readiness paths are unverified | CHAOS-3588 |
 | **QUA shadow: NOT MEASURED** | Correctly disarmed throughout, and explicitly out of scope per v2 Amendment 3. This run says nothing about shadow behavior in either direction | CHAOS-3389 / CHAOS-3525 |
 | 43 declared-blocked corpus cases were not executed | Mid-conversation and multi-turn behavior (CHAOS-3454), prompt injection via ingested content (CHAOS-3456), budget/plan-size exhaustion (CHAOS-3455), redacted evidence and `missing_credentials` readiness (CHAOS-3461), cross-tenant refusal for team/user/evidence ids (CHAOS-3459), conversation purge and retention (CHAOS-3547), alias/acronym two-turn resolution (CHAOS-3475), kill switches (CHAOS-3549), filtered and inherited scope (CHAOS-3543, CHAOS-3542), partially-resolved TEAM subjects (CHAOS-3429), truncated work-graph disclosure (CHAOS-3428), attributed "light on feature work" (CHAOS-3394) | as listed |
-| Scripted provider, not a live one | Live-provider behavior is not exercised by this run | — |
-| `WORLD_DIGEST` for run #3 not carried by the grade record | The world-pin match is asserted by the boot, not reproduced in this summary | `<PLACEHOLDER: recover from RUN-CONDITIONS.md>` |
+| Scripted provider, not a live one | Live-provider behavior is not exercised by this run. The QUA commit path was proven live **separately**, outside this run — CHAOS-3532 check #4, the fuzzy-mention scenario end-to-end on merged `main` | CHAOS-3532 (closed) |
+| Host identity not recorded | The run cannot be reproduced on the same machine from this record alone; the machine-quiet probes are recorded, the machine is not | — |
 
 ## 10. Verdict
 
@@ -267,6 +300,19 @@ red, `deg.provider.unsupported`, is the predicted red on the predicted clause.
 `readiness.capabilities.degraded`'s green is recorded as vacuous and is not citable as
 coverage.
 
-**Exit decision and who made it:** `<PLACEHOLDER: Phase 3 exit not yet declared on
-CHAOS-3219 at the time of writing; Phase 2 exit was declared by chris 2026-08-07
-13:39 PT>`
+**Exit decision.** **Phase 3 — CLOSED, 2026-08-07 ~17:10 PT**, declared on CHAOS-3219,
+citing evidence PR **#1597** merged to `main` as **`6b7517364`**. The durable record is
+that PR's body plus the graded-run comment, with artifacts in-tree (`.p3-logs`, 134
+receipts under `tests/acceptance/artifacts/wave4/`). Phase 2 exit had been declared
+separately by chris at 13:39 PT the same day.
+
+Closing state as declared: every substantive v2 prediction landed including the
+code-routing discriminator; one predicted red; two misses self-inflicted by a corpus
+edit, owned with mechanism and corrected in the merged tree with an asserted exemption
+and mutation-proven guards; three readiness/degraded cases flipped DECLARED-BLOCKED on
+CHAOS-3588, whose underlying mechanism CHAOS-3546 retired.
+
+**Method note carried from the closure, because it is the point.** Three of that day's
+defects — the boot recipe's worktree path, the stack-collision diagnosis, and the
+corpus-edit miss — were **invisible to careful review and caught by execution on the
+first run**. Recipes and claims get executed, not read.

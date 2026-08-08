@@ -427,33 +427,50 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # did NOT run and why, so no log reader and no artifact scraper can mistake
 # this run for one that exercised the matrix. When the web config IS present
 # the leg is mandatory and any failure still aborts the run.
+# MANDATORY (CHAOS-3510 landed the config on web main). The previous
+# revision SKIPPED this leg with a loud marker when the config was absent.
+# That skip was scaffolding for exactly one condition -- the ops half of this
+# feature merged before the web half -- and that condition no longer exists:
+# playwright.ask-dev-wave4.config.ts is on dev-health-web main.
+#
+# The scaffolding is REMOVED rather than left dormant. A skip path that is
+# correct today and unreachable tomorrow is how a gate quietly stops gating:
+# it survives because nothing fails when it fires, and the next person to
+# delete or rename the config gets a green run and a marker nobody greps for.
+#
+# Unconditional on purpose. A developer pointing --web-root at a checkout
+# predating CHAOS-3510 is TOLD, loudly, what to update -- "tolerant for local
+# convenience" is precisely how the dormant path would survive.
 wave4_config="${web_root}/playwright.ask-dev-wave4.config.ts"
 if [[ ! -f "${wave4_config}" ]]; then
-  echo "WAVE4_ACCESS_MATRIX=NOT_RUN reason=config-absent web_root=${web_root}" >&2
-  echo "The Wave 4 access matrix did NOT execute: ${wave4_config} does not exist." >&2
-  echo "This run proves NOTHING about the Context Fabric Validation access matrix." >&2
-  echo "Point --web-root at a checkout carrying the config (CHAOS-3510) to run it." >&2
-else
-  if [[ ! -s "${org_ids_output}" ]]; then
-    echo "Wave 4 access matrix cannot run: ${org_ids_output} is missing or empty." >&2
-    echo "prepare_ask_dev_acceptance.py must have written the org-ids artifact" >&2
-    echo "(schema ask_dev_acceptance_org_ids.v1) before this point. Refusing to" >&2
-    echo "run the matrix against unknown tenants rather than skipping it." >&2
-    exit 1
-  fi
-  echo "WAVE4_ACCESS_MATRIX=RUNNING web_root=${web_root}"
-  ASK_DEV_LIVE_ACCEPTANCE=1 \
-  ASK_DEV_COMPOSE_WEB_READY=1 \
-  ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
-  ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
-  ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
-  ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
-  PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
-  TEST_SUPERUSER_EMAIL=admin@devhealth.example \
-  TEST_SUPERUSER_PASSWORD=devhealth123 \
-    "${web_root}/node_modules/.bin/playwright" test \
-    -c "${wave4_config}"
+  echo "WAVE4_ACCESS_MATRIX=FAILED reason=config-absent web_root=${web_root}" >&2
+  echo "The Wave 4 access matrix config is REQUIRED and was not found:" >&2
+  echo "  ${wave4_config}" >&2
+  echo "It has been on dev-health-web main since CHAOS-3510. A --web-root" >&2
+  echo "without it is a checkout predating that change; update or rebase it." >&2
+  echo "This leg is mandatory: refusing to report a run that never exercised" >&2
+  echo "the Context Fabric Validation access matrix." >&2
+  exit 1
 fi
+if [[ ! -s "${org_ids_output}" ]]; then
+  echo "Wave 4 access matrix cannot run: ${org_ids_output} is missing or empty." >&2
+  echo "prepare_ask_dev_acceptance.py must have written the org-ids artifact" >&2
+  echo "(schema ask_dev_acceptance_org_ids.v1) before this point. Refusing to" >&2
+  echo "run the matrix against unknown tenants rather than skipping it." >&2
+  exit 1
+fi
+echo "WAVE4_ACCESS_MATRIX=RUNNING web_root=${web_root}"
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_COMPOSE_WEB_READY=1 \
+ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
+ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
+ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
+PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${web_root}/node_modules/.bin/playwright" test \
+  -c "${wave4_config}"
 
 # CHAOS-3219 Phase 5 (CI lane): keep the stack up for a caller that has more
 # to run against it -- specifically scripts/acceptance/run_wave4_corpus.sh,

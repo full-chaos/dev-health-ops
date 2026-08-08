@@ -24,9 +24,12 @@ fails. Trial-internal material does not belong on the customer site.
 | [`corpus/oracles.py`](corpus/oracles.py) | **Deliverable 2.** 20 expected-evidence oracles, authored before any arm ran. |
 | [`harness/`](harness/) | Contracts, oracle engine, fault modes, arm-agnostic runner. |
 | [`harness/arms/`](harness/arms/) | **Bring-up step 1.** The two baseline-component adapters (`native`, `episode_readback`), against the pinned corpus directly — no fixture files, no live stack, no LLM spend. See its module docstring for what a static-snapshot adapter can and cannot prove. |
-| [`harness/arms/extraction.py`](harness/arms/extraction.py), [`harness/arms/source_documents.py`](harness/arms/source_documents.py) | **Bring-up step 2.** The extraction candidate arm's plumbing (never a baseline component), and the hand-authored source prose two smoke oracles read. |
-| [`harness/llm/`](harness/llm/) | Provider-agnostic OpenAI-compatible client, env-driven (`LLM_PROVIDER=local` today; `cloud` accepted but not wired). |
-| [`tests/`](tests/) | Fault-mode self-tests, corpus coverage guards, independent re-derivation, baseline-component per-class rendering, extraction-arm smoke (env-gated on a local model). |
+| [`harness/arms/extraction.py`](harness/arms/extraction.py), [`harness/arms/source_documents.py`](harness/arms/source_documents.py) | **Bring-up steps 2–3.** The extraction candidate arm (never a baseline component), axis-aware `AS_OF` filtering (step 3), and the hand-authored source prose four oracles read (two smoke, two class-(b)). |
+| [`harness/llm/`](harness/llm/) | Provider-agnostic OpenAI-compatible client, env-driven — `LLM_PROVIDER=local` (LM Studio) or `cloud` (real OpenAI API, `gpt-5-mini` via the Responses API, step 3). |
+| [`run_measured_sweep.py`](run_measured_sweep.py) | **Step 3.** Standalone (not pytest-collected) script that runs the composed baseline vs the extraction candidate over the full pinned corpus against the real cloud model and writes `docs/measured-trial-results.md`. Real, billable spend — not part of CI or `run_oracles.sh`. |
+| [`docs/measured-trial-results.md`](docs/measured-trial-results.md) | **Deliverable 4.** The one measured sweep's rendered per-class `ComparisonReport`, run parameters, and interpretation notes — no headline number. |
+| [`docs/adr-draft.md`](docs/adr-draft.md) | **Deliverable 5.** First ADR skeleton: per-class results, §14 framing, closure-expressibility observations, open questions. Deliberately no recommendation. |
+| [`tests/`](tests/) | Fault-mode self-tests, corpus coverage guards, independent re-derivation, baseline-component per-class rendering, extraction-arm smoke (env-gated on a local model, includes offline axis-filter pins). |
 
 ## Running
 
@@ -35,19 +38,26 @@ uv sync --all-extras --dev          # once per fresh worktree
 bash trials/chaos_3499/run_oracles.sh
 ```
 
-Current state, **excluding** `test_extraction_smoke.py`: **263 passed, 197
+Current state, **excluding** `test_extraction_smoke.py`: **275 passed, 197
 skipped** (the skips are fault×oracle pairs where the fault genuinely cannot
 apply — they are reported, and a guard fails if any fault is inapplicable
 everywhere). This part never depends on any external service.
 
-`test_extraction_smoke.py` (7 tests) IS part of `run_oracles.sh` — it lives
-in `tests/` like everything else — but it is gated on a local
-OpenAI-compatible model (e.g. LM Studio) at `LOCAL_LLM_BASE_URL` (default
-`http://localhost:1234/v1`). Every test that needs the model skips loudly,
-with the connection failure as the reason, if it is not reachable, so the
-totals genuinely vary by environment: **270 passed, 197 skipped** with a
-local model up, **266 passed, 201 skipped** without one. Neither number is a
-measured trial result — the smoke suite prints its own per-oracle
+`test_extraction_smoke.py` (14 tests as of step 3 — three offline, pinning
+the axis filter directly against fake model output, need no live model at
+all) IS part of `run_oracles.sh` — it lives in `tests/` like everything
+else — but the remainder is gated on a local OpenAI-compatible model (e.g.
+LM Studio) at `LOCAL_LLM_BASE_URL` (default `http://localhost:1234/v1`).
+Every test that needs the model skips loudly, with the connection failure
+as the reason, if it is not reachable, so the total genuinely varies by
+environment: **289 passed, 197 skipped** confirmed with a local model up
+(step-3 measurement; the tests themselves pin `LOCAL_LLM_BASE_URL` to the
+documented default regardless of ambient env, so the "model down" number
+could not be reproduced from this shell without stopping a real local
+service — expect it a few tests lower, all in
+`test_extraction_smoke.py`, per the module docstring's skip discipline).
+Neither number is a measured trial result — the smoke suite prints its own
+per-oracle
 observations, separately, labeled UNSCORED (see `harness/arms/extraction.py`
 and `harness/llm/client.py`'s module docstrings).
 
@@ -120,11 +130,26 @@ Two things the report refuses to do quietly:
   deliverables 1–3, as separately reviewable changesets. The two
   *baseline-component* adapters (`harness/arms/`) exist as of bring-up step
   1 — against the pinned corpus, no live stack, no LLM spend.
-- **No measured or scored LLM extraction trial.** Step 2 built the first
+- **Step 2 (superseded by step 3, kept for history).** Built the first
   *candidate* arm's plumbing (`harness/arms/extraction.py`) and smoke-tested
   it against a local model (`google/gemma-4-e4b` via LM Studio) on exactly
-  two oracles authored with source prose so far — a quality signal and a
-  security (prompt-injection) signal, both explicitly labeled UNSCORED. No
-  cloud call has been made; no oracle has been scored into an ADR number.
-  Measured/scored trial runs, full corpus source-prose authoring, and
-  cloud-vs-local per arm are step 3, gated on review of this step.
+  two oracles authored with source prose — a quality signal and a security
+  (prompt-injection) signal, both explicitly labeled UNSCORED. No cloud call
+  had been made; no oracle had been scored into an ADR number yet.
+- **Step 3: one real, cloud-measured sweep — still a partial corpus, not a
+  full one.** `LLM_PROVIDER=cloud` now calls the real OpenAI API
+  (`gpt-5-mini`, the repo's own production default, via the Responses API —
+  see `harness/llm/client.py`'s module docstring). Class (b)
+  (`O2_blocking_valid`/`O2_blocking_observed`) gained real source material
+  and axis-aware `AS_OF` filtering (`harness/arms/extraction.py`'s
+  `_apply_as_of_filter`), making it the first class to render structurally
+  COMPARABLE against CHAOS-3563's now-merged declared-state history. One
+  measured sweep has been run and committed as a trial artifact
+  (`docs/measured-trial-results.md`) alongside a first ADR draft skeleton
+  (`docs/adr-draft.md`, deliberately no recommendation). **Still true:**
+  only 4 of 20 oracles have authored source material (the two step-2
+  oracles plus the two new class-(b) ones) — classes (a) and (c) are mostly
+  `NOT_RUN`, not silently, and not because the candidate lost anything; see
+  the artifact's interpretation notes and the ADR draft §5 for exactly what
+  is and is not covered. Full corpus source-prose authoring and the
+  Graphiti/direct-store arms remain future work.

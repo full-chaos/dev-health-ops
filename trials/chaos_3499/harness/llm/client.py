@@ -12,11 +12,24 @@ plumbing directly against a local (or, later, cloud) model.
 Env vars:
 
 ``LLM_PROVIDER``
-    ``"local"`` (default) or ``"cloud"``. ``"cloud"`` is accepted but not
-    wired to a real provider yet -- raises :class:`LLMUnavailable` with a
-    clear "not implemented" reason rather than silently falling back to
-    local. Step 2 scope is local-model plumbing only, per orchestrator
-    direction; cloud-vs-local per arm is a step-3 decision.
+    ``"local"`` (default) or ``"cloud"``.
+
+    ``"cloud"`` talks to the real OpenAI API (``https://api.openai.com/v1``
+    by default) using ``OPENAI_API_KEY``. Model defaults to ``gpt-5-mini``
+    -- read from this repo's own production config
+    (``DEFAULT_MODEL_BY_PROVIDER["openai"]``,
+    ``src/dev_health_ops/llm/providers/base.py``) rather than picked by
+    this trial, per CHAOS-3499 step 3 direction: the trial measures the
+    production-class model, not a hand-picked one. ``gpt-5`` family models
+    are routed through the Responses API (``client.responses.create``),
+    matching ``OpenAIGPT5Provider``
+    (``src/dev_health_ops/llm/providers/openai.py``) -- NOT Chat
+    Completions, which that same production code reserves for pre-GPT-5
+    models. They also do not accept a caller-selected ``temperature``
+    (``openai_capabilities.supports_temperature`` returns ``False`` for
+    any model starting with ``gpt-5``/``o1``/``o3``); this client omits the
+    parameter for that family rather than sending one the API would
+    reject, exactly like production does.
 ``LOCAL_LLM_BASE_URL``
     Overrides the local provider's base URL. Defaults to
     ``http://localhost:1234/v1`` -- the address a process running directly
@@ -36,6 +49,15 @@ Env vars:
     :class:`LLMUnavailable` naming the reason.
 ``LOCAL_LLM_MODEL``
     Defaults to ``"google/gemma-4-e4b"``.
+``OPENAI_API_KEY``
+    Required when ``LLM_PROVIDER=cloud``. No local-style dummy default --
+    an empty/missing key is a real :class:`LLMUnavailable`, not a silent
+    attempt against the real, billable API.
+``OPENAI_MODEL``
+    Overrides the cloud model. Defaults to ``gpt-5-mini`` (see above).
+``OPENAI_BASE_URL``
+    Overrides the cloud base URL. Defaults to
+    ``https://api.openai.com/v1``.
 """
 
 from __future__ import annotations
@@ -47,6 +69,25 @@ from urllib.parse import urlparse
 
 DEFAULT_LOCAL_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_LOCAL_MODEL = "google/gemma-4-e4b"
+
+DEFAULT_CLOUD_BASE_URL = "https://api.openai.com/v1"
+#: Matches src/dev_health_ops/llm/providers/base.py's
+#: DEFAULT_MODEL_BY_PROVIDER["openai"] as of this trial's step-3 research --
+#: a literal, not an import, per this module's own "must not reach into the
+#: product's own machinery" principle (see module docstring); a plain data
+#: constant would be a smaller coupling than the policy/budget/entitlement
+#: machinery that principle is actually about, but pinning it here keeps
+#: the trial fully self-contained and the resolved id auditable in one
+#: place rather than silently following upstream drift.
+DEFAULT_CLOUD_MODEL = "gpt-5-mini"
+
+#: Model name prefixes production routes through the Responses API instead
+#: of Chat Completions (src/dev_health_ops/llm/providers/openai.py's
+#: _is_gpt5_family) -- and which reject a caller-selected temperature
+#: (openai_capabilities.supports_temperature). Duplicated here rather than
+#: imported for the same "self-contained trial client" reason as
+#: DEFAULT_CLOUD_MODEL above.
+_RESPONSES_API_MODEL_PREFIXES = ("gpt-5", "gpt-6", "openai/gpt-oss")
 
 #: Hosts LLM_PROVIDER=local is permitted to reach. Anything else is a real
 #: (possibly billable) endpoint, which "local" must never silently become a
@@ -99,10 +140,18 @@ class LLMConfig:
                 api_key=os.environ.get("LOCAL_LLM_API_KEY", "lm-studio-local"),
             )
         if provider == "cloud":
-            raise LLMUnavailable(
-                "LLM_PROVIDER=cloud is accepted but not wired to a real "
-                "provider yet -- step 2 scope is local-model plumbing only. "
-                "Set LLM_PROVIDER=local (or leave it unset)."
+            api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            if not api_key:
+                raise LLMUnavailable(
+                    "LLM_PROVIDER=cloud but OPENAI_API_KEY is unset/empty -- "
+                    "a real, billable provider needs a real key; this is "
+                    "not something to silently fall back to local for."
+                )
+            return cls(
+                provider="cloud",
+                base_url=os.environ.get("OPENAI_BASE_URL", DEFAULT_CLOUD_BASE_URL),
+                model=os.environ.get("OPENAI_MODEL", DEFAULT_CLOUD_MODEL),
+                api_key=api_key,
             )
         raise LLMUnavailable(
             f"unknown LLM_PROVIDER={provider!r}; expected 'local' or 'cloud'"
@@ -115,19 +164,32 @@ class LLMResponse:
     model: str
 
 
+def _is_responses_api_model(model: str) -> bool:
+    return (model or "").strip().lower().startswith(_RESPONSES_API_MODEL_PREFIXES)
+
+
 def complete(
     system_prompt: str,
     user_prompt: str,
     *,
     config: LLMConfig | None = None,
 ) -> LLMResponse:
-    """One chat completion, raising :class:`LLMUnavailable` on any failure
-    to reach the provider, or on a response with nothing to read.
+    """One completion, raising :class:`LLMUnavailable` on any failure to
+    reach the provider, or on a response with nothing to read.
 
-    Deliberately no retry loop: per step-2 direction, a smoke that cannot
-    reach its provider is a reportable finding, not something to poll past.
-    ``max_retries=0`` on the client makes that explicit rather than relying
-    on the SDK default.
+    Deliberately no retry loop: per step-2 direction (unchanged in step 3),
+    a call that cannot reach its provider or parse is a reportable finding,
+    not something to poll past inside this function -- see this module's
+    docstring on ``max_retries=0``. A bounded, LOGGED retry policy for
+    infra-level failures only belongs at the sweep-orchestration layer,
+    which sees run-level context this function does not; folding it in
+    here would blur "the provider was down" into "the provider was down
+    and we tried again," a distinction the sweep discipline needs intact.
+
+    Dispatches to the Responses API for ``gpt-5``-family models (matching
+    production's ``OpenAIGPT5Provider`` -- see this module's docstring) and
+    Chat Completions for everything else (local models via LM Studio, and
+    any non-GPT-5 cloud model).
     """
     cfg = config or LLMConfig.from_env()
     try:
@@ -136,10 +198,45 @@ def complete(
         raise LLMUnavailable(f"openai package not importable: {exc}") from exc
 
     client = OpenAI(
-        base_url=cfg.base_url, api_key=cfg.api_key, timeout=60.0, max_retries=0
+        base_url=cfg.base_url, api_key=cfg.api_key, timeout=120.0, max_retries=0
     )
+
+    if _is_responses_api_model(cfg.model):
+        try:
+            response = client.responses.create(
+                model=cfg.model,
+                instructions=system_prompt,
+                input=user_prompt,
+                # gpt-5-family rejects a caller-selected temperature (see
+                # module docstring) -- deliberately no "temperature" kwarg.
+            )
+        except (APIConnectionError, APIError) as exc:
+            raise LLMUnavailable(
+                f"could not reach {cfg.provider} provider at {cfg.base_url} "
+                f"(model={cfg.model}, responses API): "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        content = getattr(response, "output_text", "") or ""
+        if not content.strip():
+            # Best-effort fallback extraction, matching production's own
+            # OpenAIGPT5Provider -- some responses carry text only inside
+            # output[].content[] rather than the output_text convenience
+            # property.
+            parts: list[str] = []
+            for item in getattr(response, "output", []) or []:
+                for c in getattr(item, "content", []) or []:
+                    if getattr(c, "type", None) in ("output_text", "text"):
+                        parts.append(getattr(c, "text", "") or "")
+            content = "".join(parts)
+        if not content.strip():
+            raise LLMUnavailable(
+                f"{cfg.provider} provider at {cfg.base_url} (model={cfg.model}) "
+                "returned no output_text -- nothing to read as a completion"
+            )
+        return LLMResponse(content=content, model=cfg.model)
+
     try:
-        response = client.chat.completions.create(
+        chat_response = client.chat.completions.create(
             model=cfg.model,
             temperature=0,
             messages=[
@@ -156,12 +253,12 @@ def complete(
             "host.docker.internal, and swapping the two looks exactly like "
             "the provider being down."
         ) from exc
-    if not response.choices:
+    if not chat_response.choices:
         raise LLMUnavailable(
             f"{cfg.provider} provider at {cfg.base_url} (model={cfg.model}) "
             "returned no choices -- nothing to read as a completion"
         )
-    content = response.choices[0].message.content or ""
+    content = chat_response.choices[0].message.content or ""
     return LLMResponse(content=content, model=cfg.model)
 
 

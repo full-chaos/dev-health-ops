@@ -42,6 +42,24 @@ never a mocked or fabricated response -- see ``harness/llm/client.py``'s
 **Step 2 scope: smoke only.** No retry-until-parseable loop, no measured or
 scored trial run. See ``tests/test_extraction_smoke.py`` for the
 (env-gated, LM-Studio-required) harness this arm is exercised under.
+
+**Step 3 addition: axis-aware ``AS_OF`` filtering.** Class (b) oracles
+(``O2_blocking_valid`` / ``O2_blocking_observed``) ask the same subject as
+of the same instant on two different time axes and expect DIFFERENT
+answers -- this only works if the adapter can tell a fact that was TRUE on
+07-15 from one that was merely KNOWN by 07-15. The model is asked to emit
+an optional ``"temporal"`` block per fact (``valid_from``/``valid_to``/
+``recorded_at``), sourced strictly from text exactly like ``"closes"`` --
+never invented, never defaulted to the trial's own clock. ``answer()``
+then applies a purely mechanical, deterministic filter against
+``query.as_of``/``query.axis`` using only those model-emitted dates (see
+``_apply_as_of_filter``): this is arithmetic on data the model already
+committed to, the same category of adapter-side post-processing
+``_apply_model_emitted_closures`` already does, not a new avenue for the
+adapter to manufacture metadata. A fact with no relevant date for the
+axis asked is dropped from an ``AS_OF`` query, not guessed into either
+bucket -- silence about a date is a fact the model did not extract, and an
+oracle that required it fails on exactly that honest absence.
 """
 
 from __future__ import annotations
@@ -58,16 +76,24 @@ from ..contracts import (
     EntityRef,
     FactFlags,
     Invalidation,
+    QueryMode,
+    TemporalContextQuery,
     TemporalFact,
+    TimeAxis,
 )
 from ..llm import client as llm_client
 from ..llm.client import LLMUnavailable
 from ..oracle import Oracle
 from ..runner import ArmRole
-from .source_documents import SMOKE_SOURCE_DOCUMENTS, SourceDocument
+from .source_documents import SOURCE_DOCUMENTS, SourceDocument
 
 ARM_NAME = "extraction_llm"
-_PROJECTION_VERSION = "extraction.v1"
+#: Bumped v1 -> v2 in step 3: the extraction contract materially changed
+#: (the "temporal" block -- valid_from/valid_to/recorded_at -- and
+#: axis-aware AS_OF filtering are new). Stamped onto every extracted
+#: TemporalFact and reported as the sweep's prompt/schema version -- a
+#: reader comparing two runs needs to know they used the same contract.
+_PROJECTION_VERSION = "extraction.v2"
 
 _SYSTEM_PROMPT = """\
 You are a fact-extraction engine for a software engineering knowledge graph.
@@ -95,6 +121,14 @@ on every fact you extract from that same document.
 Set "conflicting": true only when two documents assert incompatible things
 about the same subject and predicate.
 
+Some documents distinguish TWO dates for the same fact: the date it became
+TRUE (its own effective/valid start, and if stated, when it stopped being
+true), and the date it was RECORDED, LOGGED, or DISCOVERED -- these can
+differ, for example a fact backfilled into a system weeks after it took
+effect. When the text states these dates, extract them separately in the
+"temporal" block below. Never infer or guess a date that is not written in
+the text; omit the field (or use null) if the text does not state it.
+
 Output ONLY a JSON array, nothing else -- no prose, no markdown fences.
 Each element has exactly this shape:
 {
@@ -104,6 +138,18 @@ Each element has exactly this shape:
   "claim_kind": "observed" or "inferred",
   "evidence_ref": "<the document_id of the document this fact came from>",
   "flags": {"conflicting": <bool>, "untrusted_content": <bool>},
+  "temporal": null OR {
+    "valid_from": "<ISO-8601 date this fact BECAME true, EXPLICITLY STATED
+      in the text, or null>",
+    "valid_to": "<ISO-8601 date this fact STOPPED being true, EXPLICITLY
+      STATED in the text, or null if it is still true or no end date is
+      stated>",
+    "recorded_at": "<ISO-8601 date this fact was RECORDED/LOGGED/entered
+      into the system, ONLY if the text explicitly gives a recording date
+      that differs from (or is otherwise distinct from) when it became
+      true -- e.g. a backfilled entry. Null if the text states no such
+      separate date.>"
+  },
   "closes": null OR {
     "subject_kind": "<entity kind of the fact THIS ONE replaces>",
     "subject_id": "<canonical id>",
@@ -124,13 +170,50 @@ If no facts are found, output exactly: []
 """
 
 
+def _axis_context(oracle: Oracle) -> str:
+    """As-of/axis framing for the model, or "" for a non-``AS_OF`` query.
+
+    Naming the axis in the prompt does not make extraction free -- the
+    model still has to find and correctly attribute two distinct dates in
+    the source text (see ``_SYSTEM_PROMPT``'s "temporal" block) -- but a
+    model given no hint that the distinction matters has no reason to look
+    for a second date at all. This is priming toward a fair attempt, not a
+    substitute for extracting the dates themselves.
+    """
+    query = oracle.query
+    if query.query_mode is not QueryMode.AS_OF or query.axis is None:
+        return ""
+    as_of = query.as_of.isoformat() if query.as_of else "(unspecified)"
+    if query.axis is TimeAxis.VALID_TIME:
+        axis_explanation = (
+            "the VALID_TIME axis: what was actually TRUE as of that date, "
+            "REGARDLESS of when it was recorded, logged, or discovered. A "
+            "fact backfilled or discovered later still counts if its own "
+            "stated effective date is on or before this instant."
+        )
+    else:
+        axis_explanation = (
+            "the OBSERVED_TIME axis: what was RECORDED, LOGGED, or KNOWN "
+            "as of that date, REGARDLESS of when it actually became true. "
+            "A fact that was already true but not yet recorded/discovered "
+            "by this instant does NOT count."
+        )
+    return (
+        f"\nThis question is evaluated as of {as_of}, on {axis_explanation} "
+        'Extract each fact\'s "temporal" block (valid_from/valid_to/'
+        "recorded_at) precisely as the text states it -- this question's "
+        "correct answer depends on that distinction.\n"
+    )
+
+
 def _user_prompt(oracle: Oracle, documents: tuple[SourceDocument, ...]) -> str:
     relations = ", ".join(oracle.query.allowed_relation_types) or "(any)"
     subjects = ", ".join(f"{s.kind}:{s.id}" for s in oracle.query.subjects) or "(any)"
     doc_blocks = "\n\n---\n\n".join(doc.text for doc in documents)
     return (
         f"Allowed relationship types: {relations}\n"
-        f"Entities of interest: {subjects}\n\n"
+        f"Entities of interest: {subjects}\n"
+        f"{_axis_context(oracle)}\n"
         f"Source documents:\n\n{doc_blocks}"
     )
 
@@ -160,6 +243,26 @@ def _required_str(raw: dict, key: str) -> str:
     return value
 
 
+def _parse_iso_date(value: object) -> datetime | None:
+    """A date the model itself must supply from source text.
+
+    Returns None for anything that is not a parseable ISO-8601 value --
+    never a fallback to the current time or any other adapter-chosen
+    default. Shared by closure dates (``"closes".closed_at``) and the
+    ``"temporal"`` block (``valid_from``/``valid_to``/``recorded_at``): the
+    same "extracted or absent, never invented" discipline applies to both.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def _to_temporal_fact(raw: dict, *, indexed_at: datetime) -> TemporalFact | None:
     """Convert one parsed LLM row into a TemporalFact, or None if malformed.
 
@@ -168,6 +271,24 @@ def _to_temporal_fact(raw: dict, *, indexed_at: datetime) -> TemporalFact | None
     what an oracle exists to catch. ``claim_kind`` is required: a row
     missing it is exactly as malformed as one missing ``subject_id`` -- see
     this module's docstring.
+
+    ``valid_from``/``valid_to`` and ``observed_at`` come from the model's
+    own ``"temporal"`` block when it states them (see ``_axis_context`` and
+    ``_apply_as_of_filter``); ``observed_at`` falls back to ``indexed_at``
+    (this run's own clock) only when the model gave no recording date --
+    the same "no signal -> the trial's own clock" default this field
+    already had before the temporal block existed, harmless for every
+    oracle that does not key off it.
+
+    A ``valid_to`` stated here is SELF-EVIDENCING -- the same document that
+    asserts the fact also states its own end, not a separate fact's
+    ``"closes"`` block naming this one (that cross-fact case is
+    ``_apply_model_emitted_closures``'s job). §16's provenance-closure gate
+    requires every closed validity window to carry ``invalidated_by``
+    regardless of which path closed it, so this mirrors ``native.py``'s own
+    self-evidencing precedent: the fact's own ``evidence_refs`` stand as the
+    invalidation provenance, because it genuinely is one document with both
+    endpoints -- not a fabricated reference.
     """
     try:
         subject = EntityRef(
@@ -182,35 +303,67 @@ def _to_temporal_fact(raw: dict, *, indexed_at: datetime) -> TemporalFact | None
         return None
     evidence_ref = raw.get("evidence_ref")
     evidence_refs = (str(evidence_ref),) if evidence_ref else ()
+    temporal = raw.get("temporal")
+    temporal = temporal if isinstance(temporal, dict) else {}
+    valid_from = _parse_iso_date(temporal.get("valid_from"))
+    valid_to = _parse_iso_date(temporal.get("valid_to"))
+    recorded_at = _parse_iso_date(temporal.get("recorded_at"))
+    invalidated_by = None
+    if valid_to is not None:
+        invalidated_by = Invalidation(
+            refs=evidence_refs, invalidation_claim_kind=claim_kind
+        )
     return TemporalFact(
         fact_id=f"tf_extraction_{subject.id}_{predicate}_{obj.id}",
         subject_ref=subject,
         predicate=predicate,
         object_ref=obj,
-        observed_at=indexed_at,
+        observed_at=recorded_at or indexed_at,
         claim_kind=claim_kind,
         projection_version=_PROJECTION_VERSION,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        invalidated_by=invalidated_by,
         evidence_refs=evidence_refs,
         flags=_flags(raw),
     )
 
 
-def _parse_closed_at(value: object) -> datetime | None:
-    """A closure date the model itself must supply from source text.
+def _apply_as_of_filter(
+    facts: tuple[TemporalFact, ...], query: TemporalContextQuery
+) -> tuple[TemporalFact, ...]:
+    """Deterministic ``AS_OF``/axis filtering over model-emitted dates only.
 
-    Returns None for anything that is not a parseable ISO-8601 value --
-    never a fallback to the current time or any other adapter-chosen
-    default. A None here means the fact stays open.
+    Arithmetic on dates the model already committed to in its
+    ``"temporal"`` block -- the same category of adapter-side
+    post-processing ``_apply_model_emitted_closures`` already performs, not
+    a new avenue for the adapter to manufacture metadata. A no-op for any
+    query that is not ``AS_OF`` (every other mode passes through
+    unchanged).
+
+    A fact with no relevant date for the axis asked is DROPPED, not
+    guessed into either bucket: silence about a date is a fact the model
+    did not extract, and an oracle requiring it fails on that honest
+    absence rather than on an adapter's guess.
     """
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed
+    if query.query_mode is not QueryMode.AS_OF or query.axis is None:
+        return facts
+    as_of = query.as_of
+    if as_of is None:
+        return facts
+    if query.axis is TimeAxis.VALID_TIME:
+        return tuple(
+            fact
+            for fact in facts
+            if fact.valid_from is not None
+            and fact.valid_from <= as_of
+            and (fact.valid_to is None or fact.valid_to > as_of)
+        )
+    # OBSERVED_TIME: was it recorded/known by as_of? A fact with no
+    # model-stated recording date fell back to this run's own indexing
+    # clock in _to_temporal_fact, which is always after any corpus as_of --
+    # so it is correctly dropped here too, not smuggled through.
+    return tuple(fact for fact in facts if fact.observed_at <= as_of)
 
 
 def _apply_model_emitted_closures(
@@ -244,7 +397,7 @@ def _apply_model_emitted_closures(
             target_predicate = _required_str(closes, "predicate")
         except KeyError:
             continue
-        closed_at = _parse_closed_at(closes.get("closed_at"))
+        closed_at = _parse_iso_date(closes.get("closed_at"))
         if closed_at is None:
             continue
         target_index = by_identity.get(
@@ -271,7 +424,7 @@ def answer(oracle: Oracle) -> ArmResponse:
     documents produces, or an honest NOT_RUN if either the source material
     or the provider is unavailable.
     """
-    documents = SMOKE_SOURCE_DOCUMENTS.get(oracle.oracle_id)
+    documents = SOURCE_DOCUMENTS.get(oracle.oracle_id)
     if not documents:
         return ArmResponse.not_run(
             ARM_NAME, "no_source_material_authored_for_this_oracle_yet"
@@ -306,6 +459,7 @@ def answer(oracle: Oracle) -> ArmResponse:
         if fact is not None:
             parsed.append((fact, row))
     facts = _apply_model_emitted_closures(parsed)
+    facts = _apply_as_of_filter(facts, oracle.query)
 
     return ArmResponse(
         arm=ARM_NAME,

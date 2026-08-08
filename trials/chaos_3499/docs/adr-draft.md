@@ -9,7 +9,8 @@ on evidence rather than on impression.
 
 **What changed by run 7** (2026-08-08), relative to the earlier draft:
 
-- **One tier became five, and the deployed one is finally measured.** Runs
+- **The matrix went from a single model to the full set below, and the
+  deployed one is finally measured.** Runs
   1–2 used `gpt-5-mini`; Ask Dev actually runs `gpt-5-nano`. Every number in
   runs 1–2 was therefore taken one tier above deployed parity. §8.
 - **A frontier tier now separates a model ceiling from a framework limit.**
@@ -116,7 +117,7 @@ cloud ceiling.**
 
 Per-oracle, identical across all five tiers:
 
-| Oracle | native | episode readback | extraction (all 4 tiers) |
+| Oracle | native | episode readback | extraction (every tier) |
 |---|---|---|---|
 | `O7_valid` | **PASS** | fail | fail |
 | `O7_unpinned` | fail | fail | fail |
@@ -134,7 +135,7 @@ sounds like:
   CHAOS-3570 (a still-open production bug in a different table), and
   `O7_unpinned` fails natively too. So class (a) is better read as "neither
   approach answers 2 of these 3" than as "native is strong here."
-- **Consistency across a 4-tier range is itself the finding.** A result
+- **Consistency across the whole tier range is itself the finding.** A result
   that is identical at gemma-e4b and at gpt-5-mini is unlikely to be model
   quality. Extraction not answering natively-answerable questions looks
   structural, not a matter of picking a better model.
@@ -267,7 +268,7 @@ parity — against only 4 authored oracles.
 |---|---|---|---|---|---|
 | 1 (10:24Z) | gpt-5-mini | 0/3 NOT MEASURED | 2/2 | 1/15 | Contract-defective prompt (see below) |
 | 2 (11:14Z) | gpt-5-mini | 0/3 NOT MEASURED | 2/2 | 2/15 | Fixed contract; was canonical until run 3 |
-| 3 | 4 tiers | **0/3, comparable** | 2/2 all tiers | 0–2/15 by tier | §3.1 |
+| 3 | nano/mini/e4b/31b | **0/3, comparable** | 2/2 all tiers | by tier | §3.1 |
 
 Run 1 carried a prompt/filter contract defect (#1603 finding 1): the prompt
 told the model to omit `recorded_at` for a same-day fact, which the `AS_OF`
@@ -585,8 +586,8 @@ measured the technique one tier ABOVE deployed parity, and any conclusion
 drawn from them about what the product would do was, strictly, unearned.
 
 Run 3 removes that confound by measuring the same corpus, the same prompt
-version (`extraction.v2`), and the same oracles against four explicitly
-named tiers:
+version (`extraction.v2`), and the same oracles against the
+explicitly named tiers below:
 
 The `tier key` column is the identifier the generated artifact
 (`docs/measured-trial-results.md`) keys its summary table and section
@@ -710,11 +711,12 @@ class, the cost regime is not a constraint at all.** That is a genuinely
 useful thing to know: it is the one place where a cheap local model is not
 a compromise.
 
-**Capability that no tier buys — class (c).** Scores over the 4 authored
-oracles: `gpt-5-mini` 1/4, `gpt-5.6-luna` 1/4, `gemma-4-31b` 1/4,
-`gpt-5-nano` 0/4, `gemma-4-e4b` 0/4. The frontier tier exists precisely to
-tell a model ceiling from a framework limit, and **it is flat with the mid
-tier.** Reading:
+**Capability that no tier buys — class (c).** Per-tier scores over the
+authored class-(c) oracles are in §3.4 and are not restated here, so this
+section cannot drift from them. The frontier tier exists precisely to tell
+a model ceiling from a framework limit, and across the two committed runs
+**its margin over the mid tier is at most one oracle and is not stable**
+(§3.4). Reading:
 
 - **No model purchase closes this gap.** Spending up to the frontier buys
   nothing on this corpus. The binding constraint is the extraction contract
@@ -946,3 +948,65 @@ was taken during the run that was committed.** A measurement that did not
 happen was described as having happened. It changed no number here, because
 identity evidence is now in-band and persisted, but the reporting was
 wrong and is corrected in the record.
+
+
+### 9.6 Closure on stale numeric prose
+
+Stale numbers survived into this document three times: two manual sweeps
+and one exact-match guard each missed instances that were live. Per the
+house rule, the third occurrence gets a closure argument rather than a
+fourth sweep.
+
+**Why the earlier attempts failed.** The diagnosis was not carelessness in
+any single pass; it was that all three attempts matched *phrases*:
+
+1. **Digit versus word** — patterns looked for the word form; the document
+   used the digit form.
+2. **Line wrapping** — `grep` is line-based, so a phrase split across a
+   newline could not match any single-line pattern however it was spelled.
+3. **Exact variants** — a longer noun phrase matched none of the shorter
+   patterns.
+
+The exact strings that escaped, quoted here so the failure is legible
+(these are illustrations, and the guards strip fenced blocks for precisely
+this reason):
+
+```text
+all 4 tiers            <- digit form, word-only pattern
+4-tier range           <- digit form, hyphenated
+No tier\nexceeds 1/4    <- wrapped across a newline
+four explicitly named tiers   <- variant of "four tiers"
+```
+
+A fourth list of phrases fails the same way, because the failure is the
+method, not the list.
+
+**What is enforced now.** Numeric claims are checked *structurally*, from
+the records, in
+[`tests/test_adr_claims_match_records.py`](../tests/test_adr_claims_match_records.py):
+
+- All comparisons run on **normalised text** (lowercased, whitespace
+  collapsed), which removes case and wrapping as failure modes entirely.
+- **Tier counts** are extracted by pattern in any spelling — digit or word,
+  hyphenated or spaced — and must equal the count declared in the records.
+- **Every fraction** in the document must be derivable from the records, or
+  be listed in a small `_HISTORICAL_FRACTIONS` table with a stated reason.
+  An undeclared historical number is indistinguishable from a stale one.
+- **Tier↔score pairings** are checked, because the set-based fraction check
+  is not sufficient on its own: §8.3 paired the frontier tier with the mid
+  tier's score after the frontier had moved, and that score is a legitimate
+  fraction elsewhere in the document — so a set-based guard blesses it.
+  What was stale was the pairing, not the number.
+- The **artifact** carries no hand-written numbers at all: it is rendered
+  from the records, byte-equality is pinned, and re-rendering **refuses**
+  if the corpus hashes have moved.
+
+**The class that is now impossible:** a tier count, a class-score fraction,
+or a tier↔score pairing cannot sit in this document contradicting the
+records — in any spelling, wrapping, or digit/word form — without a test
+failing. What remains possible, and is deliberately not claimed to be
+closed, is stale *qualitative* prose ("flat with the mid tier") that
+carries no number; §8.3 was fixed by deleting its restated figures and
+pointing at §3.4 instead, so that section can no longer drift, but the
+general case of prose adjectives is not machine-checked. That residual is
+stated rather than hidden.

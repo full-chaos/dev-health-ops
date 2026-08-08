@@ -1069,6 +1069,11 @@ def _build_records(
         "run_started_at": run_started_at,
         "run_finished_at": run_finished_at,
         "corpus_provenance": _corpus_provenance(),
+        # Serialized, not looked up at render time. A renderer that read the
+        # LIVE corpus would re-render a historical run with today's coverage
+        # text and the byte-equality test would bless the drift.
+        "coverage_statement": _render_coverage_statement(),
+        "dependency_state_class_b": CHAOS_3563_STATE,
         "declared_tiers": [t.key for t in MODEL_TIERS],
         "measured_tiers": [o.tier.key for o in outcomes],
         "tiers": [_records_for(o) for o in outcomes],
@@ -1241,6 +1246,43 @@ def _matrix_summary_from_records(records: dict) -> str:
     return "\n".join(lines)
 
 
+class ProvenanceMismatch(Exception):
+    """The recorded corpus hashes do not match the files on disk.
+
+    Raised rather than warned. Re-rendering a historical run against a
+    changed corpus produces a document that LOOKS regenerated and is
+    describing different questions than the ones that were asked -- and the
+    byte-equality test would then certify the drift instead of catching it.
+    """
+
+
+def verify_provenance(records: dict) -> None:
+    """Fail closed if the corpus has moved since these records were made."""
+    recorded = records.get("corpus_provenance") or {}
+    if not recorded:
+        raise ProvenanceMismatch(
+            "records carry no corpus provenance; refusing to render, because "
+            "nothing would tie this document to the corpus it describes"
+        )
+    current = _corpus_provenance()
+    drifted = {
+        name: (digest, current.get(name))
+        for name, digest in recorded.items()
+        if current.get(name) != digest
+    }
+    if drifted:
+        detail = "; ".join(
+            f"{name}: recorded {rec[:12]}… now {(cur or 'MISSING')[:12]}…"
+            for name, (rec, cur) in sorted(drifted.items())
+        )
+        raise ProvenanceMismatch(
+            "corpus files have changed since these records were produced "
+            f"({detail}). Re-render is refused: the measurement answered the "
+            "OLD questions, so regenerating against the new ones would "
+            "silently misattribute it. Re-run the sweep instead."
+        )
+
+
 def render_markdown_from_records(records: dict) -> str:
     """The committed markdown, derived ENTIRELY from the committed records.
 
@@ -1252,6 +1294,7 @@ def render_markdown_from_records(records: dict) -> str:
     ``test_committed_markdown_is_reproducible_from_committed_records``
     fails if the two ever drift.
     """
+    verify_provenance(records)
     lines = [
         "# CHAOS-3499 measured trial results",
         "",
@@ -1267,7 +1310,7 @@ def render_markdown_from_records(records: dict) -> str:
         "",
         f"- run started: `{records['run_started_at']}`",
         f"- run finished: `{records['run_finished_at']}`",
-        f"- dependency state for class (b): `{CHAOS_3563_STATE}`",
+        f"- dependency state for class (b): `{records['dependency_state_class_b']}`",
         "- temperature: API default (gpt-5-family rejects a caller-selected",
         "  value -- see `harness/llm/client.py`'s module docstring and",
         "  `src/dev_health_ops/llm/providers/openai_capabilities.py`'s",
@@ -1316,7 +1359,7 @@ def render_markdown_from_records(records: dict) -> str:
         "",
         "## Corpus coverage",
         "",
-        _render_coverage_statement(),
+        records["coverage_statement"],
         "",
     ]
     for tier in records["tiers"]:

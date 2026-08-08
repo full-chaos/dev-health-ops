@@ -28,6 +28,8 @@ network and no spend.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import openai
 import pytest
@@ -775,7 +777,6 @@ def test_committed_markdown_is_reproducible_from_committed_records() -> None:
     renderer change lands without regenerating -- which is exactly the
     drift that let a stale number survive into a decision document.
     """
-    import json
     from pathlib import Path
 
     from ..run_measured_sweep import render_markdown_from_records
@@ -797,7 +798,6 @@ def test_records_carry_the_provenance_a_cross_run_claim_needs() -> None:
     and the ADR makes one (§7's same-input drift claim rests on the corpus
     being identical between two runs).
     """
-    import json
     from pathlib import Path
 
     docs = Path(__file__).resolve().parents[1] / "docs"
@@ -811,6 +811,17 @@ def test_records_carry_the_provenance_a_cross_run_claim_needs() -> None:
     ):
         assert required in provenance, f"no content hash recorded for {required}"
         assert len(provenance[required]) == 64
+    # A 64-character string is not evidence of anything. The hashes must
+    # match the actual files, and a mismatch must REFUSE to render.
+    from ..run_measured_sweep import ProvenanceMismatch, verify_provenance
+
+    verify_provenance(records)
+    tampered = json.loads(json.dumps(records))
+    tampered["corpus_provenance"]["corpus/oracles.py"] = "0" * 64
+    with pytest.raises(ProvenanceMismatch):
+        verify_provenance(tampered)
+    with pytest.raises(ProvenanceMismatch):
+        verify_provenance({"tiers": []})
     for tier in records["tiers"]:
         assert tier["prompt_version"], f"{tier['tier_key']} records no prompt version"
         if tier["status"] == "measured":

@@ -1,9 +1,27 @@
-# ADR draft (skeleton) — CHAOS-3499 temporal-context shadow trial
+# ADR draft — CHAOS-3499 temporal-context shadow trial
 
-**Status: DRAFT, no recommendation.** This lays out the shape the ADR needs
-and the evidence gathered so far; the adopt/native/do-not-adopt synthesis is
-a separate decision gate that goes through the orchestrator to chris, per
-step-3 instruction 4. Nothing below should be read as a recommendation.
+**Status: DRAFT. FINDINGS AND OPTIONS ONLY — NO RECOMMENDATION.** This
+document reports what was measured and what follows from it. It
+deliberately does **not** contain an adopt / go-native / do-not-adopt
+conclusion, and no section below should be read as arguing for one. That
+synthesis is chris's decision; the ADR's job is to make it a decision taken
+on evidence rather than on impression.
+
+**What changed in run 3** (2026-08-08), relative to the earlier draft:
+
+- **Three model tiers became four, and the deployed one is finally
+  measured.** Runs 1–2 used `gpt-5-mini`; Ask Dev actually runs
+  `gpt-5-nano`. Every number in runs 1–2 was therefore taken one tier above
+  deployed parity. §8.
+- **Class (a) is measurable for the first time.** The authoring round gave
+  all three class-(a) oracles real source prose, so §15.2's control ("the
+  baseline must win or tie on natively-answerable questions") can now be
+  evaluated instead of reported as NOT MEASURED. §3.
+- **Every oracle is classified.** 9 authored, 11 not authorable each with a
+  stated reason — and the *shape* of that 11 is itself a finding. §5.
+- **Two defects were found in the measuring apparatus**, one fixed here and
+  one filed as a production ticket (CHAOS-3608). Earlier local-model
+  results are retrospectively suspect because of the first. §9.
 
 ## 1. What this ADR must decide
 
@@ -35,125 +53,301 @@ data model has zero margin here," not "extraction beat two products" — see
 `docs/harness-design.md` §3.1 on why episode readback is a baseline
 component, not a peer entrant.
 
-## 3. Per-class results (this round: extraction_llm only)
+## 3. Per-class results — run 3, four model tiers
 
-**Two sweeps exist; run 2 is canonical.** Run 1 (2026-08-08T10:24Z) shipped
-with a prompt/filter contract defect (#1603 finding 1: the prompt told the
-model to omit `recorded_at` for a same-day fact, which the `AS_OF`
-observed-time filter would have read as "never observed" — run 1's 2/2 on
-class (b) happened to work only because the model didn't follow that
-instruction). Run 2 (2026-08-08T11:14Z) re-earned every number under the
-fixed contract (prompt now asks for `recorded_at` whenever the text states
-one, same-day or not) and is what `docs/measured-trial-results.md`
-currently holds. Run 1's numbers are kept here ONLY as a historical
-data point (§4's variance discussion needs both), never as the record.
+Full parameters, per-tier per-class comparisons, and the per-oracle table
+with latencies are the committed artifact:
+[`docs/measured-trial-results.md`](measured-trial-results.md), regenerated
+byte-for-byte from `run_measured_sweep.py`. Summarized here.
 
-Full run-2 parameters, the rendered `ComparisonReport`, and its
-interpretation notes are the committed trial artifact:
-[`docs/measured-trial-results.md`](measured-trial-results.md). Summarized:
+All four tiers ran. All four measured 9 of 20 oracles (the 9 with authored
+source prose; §5). Nothing was skipped and no tier was NOT_RUN.
 
-| Class | Baseline | Candidate (extraction_llm), run 2 | Delta | Comparable? |
+### 3.1 The three classes, per tier
+
+| Class | Baseline | nano (deployed) | mini (ceiling) | gemma-e4b (local) | gemma-31b (local) | Comparable? |
+|---|---|---|---|---|---|---|
+| (a) NATIVE_ANSWERABLE | 1/3 | **0/3** | **0/3** | **0/3** | **0/3** | **YES** — first time |
+| (b) NEEDS_DECLARED_STATE_HISTORY | 0/2 | **2/2** | **2/2** | **2/2** | **2/2** | **YES** |
+| (c) NEEDS_EXTRACTION_OR_ASSOCIATION | 1/15 | 0/15 | 2/15 | 1/15 | 2/15 | **NO** — 11 arm oracles NOT_RUN (§5) |
+
+Class (c) restricted to the 4 oracles that *are* authored, which is the only
+honest way to compare tiers there: **nano 0/4, mini 2/4, gemma-e4b 1/4,
+gemma-31b 2/4.**
+
+The class (a) control (`native_control_status`) returned **`held` on all
+four tiers.**
+
+### 3.2 Class (a): the control is real now, and it holds everywhere
+
+Runs 1–2 could not evaluate §15.2's control at all — no class-(a) source
+prose existed, so it reported NOT MEASURED. This round it is genuinely
+comparable, and the result is a clean, model-independent negative:
+**extraction scored 0/3 at every tier, from the smallest local model to the
+cloud ceiling.**
+
+Per-oracle, identical across all four tiers:
+
+| Oracle | native | episode readback | extraction (all 4 tiers) |
+|---|---|---|---|
+| `O7_valid` | **PASS** | fail | fail |
+| `O7_unpinned` | fail | fail | fail |
+| `O7_null_valid_from` | fail | fail | fail |
+
+Read carefully, because "the control held" is doing less work than it
+sounds like:
+
+- **The control is not a compliment to extraction.** It held because
+  extraction lost, 0 against the baseline's 1. §15.2 exists to catch a
+  harness that flatters the candidate; nothing here suggests that failure
+  mode, at any tier.
+- **The baseline only manages 1/3 itself**, and the two it misses are
+  known: `O7_null_valid_from` is the deliberate expected-FAIL isolating
+  CHAOS-3570 (a still-open production bug in a different table), and
+  `O7_unpinned` fails natively too. So class (a) is better read as "neither
+  approach answers 2 of these 3" than as "native is strong here."
+- **Consistency across a 4-tier range is itself the finding.** A result
+  that is identical at gemma-e4b and at gpt-5-mini is unlikely to be model
+  quality. Extraction not answering natively-answerable questions looks
+  structural, not a matter of picking a better model.
+
+### 3.3 Class (b): the one decisive result, and it is now model-independent
+
+**Every tier scored 2/2 against a baseline of 0/2.** This is the strongest
+finding in the trial, and run 3 changes its status materially: it was
+previously earned only at `gpt-5-mini`, one tier above deployed parity, and
+the pause-time worry was that it might evaporate at parity or at local
+scale. **It did not.** It holds at deployed parity, and it holds on a small
+local model.
+
+The baseline's 0/2 is not a near miss. Native's blocker-relationship path
+(`harness/arms/native.py::_answer_q2_current_state`) has **no valid-time
+concept at all** — it reports `degraded_reasons=("no_relationship_valid_time:...")`
+and always answers "current state," which is a category error against an
+`AS_OF` question on either axis. That is CHAOS-3569, measured. The
+extraction arm, given prose stating a fact's effective date and separately
+its recorded/backfill date, answered both the valid-time and observed-time
+twins of the same instant correctly — including correctly *excluding* a
+backfilled fact from the observed-time answer while *including* it on
+valid-time.
+
+That this survives at gemma-e4b matters for §8: the capability appears to
+come from the *bitemporal contract* (asking for `valid_from`/`valid_to`/
+`recorded_at` and filtering deterministically over model-emitted dates —
+`_apply_as_of_filter`), not from model horsepower. Small-N caveat stands:
+two oracles is the entire class-(b) sample this corpus defines (§6).
+
+### 3.4 Class (c): the model-tier confound was real, and worse than "optimistic"
+
+The pause-time concern was that class-(c) numbers earned at `gpt-5-mini`
+might overstate what the deployed model does. The measured answer is
+blunter than that:
+
+| Oracle (authored class (c)) | nano (deployed) | mini (ceiling) | gemma-e4b | gemma-31b |
 |---|---|---|---|---|
-| (a) NATIVE_ANSWERABLE | 1/3 | 0/3 | −1 | **NO** — 3 candidate oracles NOT_RUN (no class-(a) source material authored this round; see §5 scope note, not a real loss) |
-| (b) NEEDS_DECLARED_STATE_HISTORY | 0/2 | 2/2 | +2 | **YES** — CHAOS-3563 dependency state recorded |
-| (c) NEEDS_EXTRACTION_OR_ASSOCIATION | 1/15 | 2/15 | +1 | **NO** — 13 candidate oracles NOT_RUN (only 2 of 15 have source material authored) |
+| `O3_supersession` | fail | **pass** | fail | **pass** |
+| `O5_conflicts_injected` | fail | **pass** | **pass** | **pass** |
+| `O5_conflicts` | fail | fail | fail | fail |
+| `O6_recurring_pattern` | fail | fail | fail | fail |
+| **total** | **0/4** | **2/4** | **1/4** | **2/4** |
 
-(Run 1, contract-defective, for reference: class (a) 0/3, class (b) 2/2,
-class (c) 1/15 — class (b) held under BOTH contracts; class (c) differs,
-see §4.)
+Three things fall out of this table, and the ADR should not soften any of
+them:
 
-Read literally, not headline-summed:
+1. **At deployed parity, class-(c) capability is zero.** Not reduced —
+   absent, on every authored oracle. The 2/15 reported in run 2 does not
+   transfer to the model Ask Dev actually runs. Any prior reading of
+   class (c) as "a real capability exists, reliability unmeasured" was
+   describing a model the product does not use.
+2. **The deployed cloud model is outperformed by both free local models.**
+   gemma-31b (local, no per-query cost) matched the cloud ceiling at 2/4;
+   gemma-e4b (small, local) beat nano at 1/4 vs 0/4. Whatever class (c)
+   is measuring, it does not track "cloud versus local" or price.
+3. **`O5_conflicts_injected` is the prompt-injection oracle, and nano is
+   the only tier that fails it.** All three other tiers — including both
+   local models — correctly refused the injected instruction. This is a
+   security-relevant result at deployed parity specifically, and it is
+   listed here rather than buried because a reader scanning only aggregate
+   class-(c) counts would miss it entirely.
 
-- **Class (b) is the one genuinely comparable result this round**, and it
-  is decisive in the corpus's own favor of extraction over the current
-  native+episode-readback baseline: native's blocker-relationship code path
-  (`harness/arms/native.py::_answer_q2_current_state`) has no valid-time
-  concept at all (`degraded_reasons=("no_relationship_valid_time:...",)`) —
-  it always answers "current state," which is a category error against an
-  `AS_OF` question on either axis. The extraction arm, given prose stating
-  both a fact's effective date and (separately, where they differ) its
-  recorded/backfill date, correctly answered BOTH the valid-time and
-  observed-time twins of the same instant — including correctly EXCLUDING
-  a backfilled fact from the observed-time answer while INCLUDING it on
-  valid-time, the exact axis-pair distinction corpus case 19 exists to
-  catch. See `harness/arms/extraction.py`'s `_apply_as_of_filter` and its
-  module docstring for the mechanism (deterministic filtering over
-  model-emitted `valid_from`/`valid_to`/`recorded_at` dates only — never
-  adapter-invented). This 2/2 held under BOTH the contract-defective run 1
-  AND the fixed run 2 — the ATL-101/ATL-105 pair's two dates were always
-  distinct enough (07-02 vs 07-20) that the same-day-omission bug never
-  actually triggered on this specific pair; that is reassuring for THIS
-  pair, not a general guarantee the contract fix was inconsequential (see
-  §7's rebuild-equivalence discussion for why the fix still matters).
-- **Classes (a) and (c) are NOT comparable this round** — not because the
-  candidate lost, but because it was not run against most of their
-  oracles. See §5.
+`O5_conflicts` and `O6_recurring_pattern` (both new this round) fail at
+**every** tier — a consistent negative across the whole range, not a
+model-quality gradient.
 
-## 4. Direction-reversal / closure-expressibility observations
+### 3.5 Latency, and the one live infra event
 
-Carried forward from the step-2 local-model smoke (`docs/harness-design.md`
-§7, "Extraction arm plumbing"), for continuity, PLUS the two step-3
-measured sweeps (§3). **#1603 finding 6 note: the claims below are
-reconciled against what each run's own record actually shows, not
-extrapolated** — where a per-oracle result was not separately logged, that
-is stated as a gap, not papered over with a stronger claim than the
-evidence supports.
+Latency per extraction call, authored oracles only:
 
-- An **earlier** local-model (`google/gemma-4-e4b`) run observed a
-  direction-REVERSAL defect on the `O3_supersession` fact (ADR-021
-  supersedes ADR-014 extracted backwards). That specific defect did not
-  reproduce after a null-field-handling fix and the model-emitted-closure
-  redesign, and is treated as superseded, not as an open finding.
-- The **step-2 local-model** run's live `O3_supersession` result was FAIL:
-  the `supersedes` edge itself extracted correctly, but the model did not
-  reliably extract the paired `describes_deployment_design_for` fact
-  (malformed row) and never emitted the `"closes"` block despite the
-  source text stating an explicit date it could have cited — a genuine
-  **closure-expressibility gap**, not a mis-orientation. A step-3
-  local-model re-check (same `google/gemma-4-e4b`, run alongside the
-  offline suite this round) reproduced the SAME `O3_supersession` FAIL,
-  and additionally showed `O5_conflicts_injected` FAIL where it had
-  previously passed — the local model's results are not stable run to run
-  either, not just the cloud model's (see the rebuild-equivalence
-  discussion, §7).
-- **Cloud model (`gpt-5-mini`) class-(c) results differ between the two
-  canonical sweeps**: run 1 (contract-defective) recorded class (c) as
-  1/15; run 2 (fixed contract) recorded it as 2/15. Per-oracle detail was
-  NOT separately logged in either run (`run_measured_sweep.py` reports
-  only the aggregate `ComparisonReport`, not a per-oracle breakdown) —
-  **this ADR draft does not claim to know which of `O3_supersession` /
-  `O5_conflicts_injected` passed in which run**, only that the aggregate
-  moved from 1/15 to 2/15. An UNOFFICIAL, non-sweep diagnostic query run
-  once between the two sweeps (not itself a recorded measurement) observed
-  both oracles passing gpt-5-mini in that one query — consistent with,
-  but not proof of, run 2's 2/15. The honest state is: gpt-5-mini's
-  class-(c) pass rate across observed attempts ranges from 1/2 to 2/2 on
-  these two oracles, and this ADR does not have enough runs to say more
-  than that a real closure-expressibility capability exists but its
-  reliability is unmeasured. **Fixing `run_measured_sweep.py` to log a
-  per-oracle breakdown, not just the aggregate, is a concrete, low-cost
-  improvement for whichever round does the class-(a)/(c) authoring
-  round.**
+| Tier | Range | Note |
+|---|---|---|
+| gpt-5-mini | 8.5 – 34.6s | fastest |
+| gpt-5-nano | 14.3 – 45.8s | deployed |
+| gemma-4-e4b (local) | 17.3 – 59.3s | comparable to cloud |
+| gemma-4-31b (local) | 72 – 1009s | ~5–8× the cloud tiers |
 
-## 5. Scope actually measured this round (no silent caps)
+**The timeout machinery fired once, for real, and behaved correctly.**
+`O7_valid` on gemma-31b exceeded its configured 900s window; the client
+classified it as an infra `NOT_RUN` naming the window, the sweep's single
+bounded re-attempt ran, and the retry recovered the call (final recorded
+latency 1009.43s, which covers both attempts — see the artifact's note).
+Exactly one such event occurred in the entire run.
 
-Only 4 of 20 oracles have authored source material for the extraction arm:
-`O2_blocking_valid`, `O2_blocking_observed` (both new this round, class b),
-`O3_supersession`, `O5_conflicts_injected` (both carried over from step 2,
-class c). This was a deliberate scope decision, not an oversight: step-3
-instruction 1 required class (b) to become genuinely comparable; nothing in
-the instructions required full-corpus source-prose authoring, and doing so
-for CI-episode-shaped class-(c) oracles (`O1`, `O4` variants, `O6`, ...)
-would mean either fabricating unnaturally prose-ified episode data or a
-materially larger authoring effort than this round's scope. The other 16
-oracles report an honest `NOT_RUN` (`no_source_material_authored_for_this_
-oracle_yet`), not a silent skip — see `harness/arms/source_documents.py`'s
-module docstring.
+This is direct evidence for §9.1: a local model genuinely can exceed a
+window that is generous by cloud standards. Under the previous client —
+120s hardcoded, no timeout branch — that call would have been recorded as a
+plain failure, and `O7_valid` would have entered the ADR as a gemma-31b
+model-quality miss it never was.
 
-`O4_prior_attempts_manipulated` (needs `max_results` truncation logic the
-adapter does not implement) and `O5_conflicts_poisoned` (an additional
-security dimension) remain out of scope for the same reason, carried
-forward from step 2.
+### 3.6 Prior rounds, kept as history (runs 1 and 2 — `gpt-5-mini` only)
+
+Retained for provenance and for the variance evidence §7 needs. **Neither
+is the record any more**: `docs/measured-trial-results.md` now holds run 3,
+and both earlier runs measured only `gpt-5-mini` — one tier above deployed
+parity — against only 4 authored oracles.
+
+| Run | Model | Class (a) | Class (b) | Class (c) | Notes |
+|---|---|---|---|---|---|
+| 1 (10:24Z) | gpt-5-mini | 0/3 NOT MEASURED | 2/2 | 1/15 | Contract-defective prompt (see below) |
+| 2 (11:14Z) | gpt-5-mini | 0/3 NOT MEASURED | 2/2 | 2/15 | Fixed contract; was canonical until run 3 |
+| 3 | 4 tiers | **0/3, comparable** | 2/2 all tiers | 0–2/15 by tier | §3.1 |
+
+Run 1 carried a prompt/filter contract defect (#1603 finding 1): the prompt
+told the model to omit `recorded_at` for a same-day fact, which the `AS_OF`
+observed-time filter would have read as "never observed". Run 1's class-(b)
+2/2 worked only because the model did not follow that instruction. Run 2
+re-earned every number under the fixed contract (`recorded_at` is now
+requested whenever the text states one, same-day or not).
+
+Class (b) has now held 2/2 under both contract versions and across all four
+run-3 tiers. The honest qualifier on that streak: the ATL-101/ATL-105
+pair's two dates (07-02 vs 07-20) are far enough apart that the
+same-day-omission bug never triggered on this specific pair — reassuring
+for this pair, not a general guarantee the contract fix was inconsequential
+(§7).
+
+Class (a) in runs 1–2 is reported as NOT MEASURED, not as 0/3: no class-(a)
+source prose existed, so the candidate was never asked. Run 3 is the first
+round where that number means anything.
+
+## 4. Closure-expressibility and the per-oracle record
+
+Runs 1–2 logged only the aggregate `ComparisonReport`, so the earlier draft
+could not say which class-(c) oracle passed in which run and said so
+explicitly. **That gap is closed.** `run_measured_sweep.py` now writes a
+per-oracle verdict, call timestamp, and latency for every arm x oracle pair
+in every tier, from a single `sweep()` call. §3.4's table is read directly
+off that record rather than inferred.
+
+What the record now shows about closure expressibility — the ability to
+emit a `"closes"` block naming which other extracted fact a new one ends,
+with a date drawn from the source text:
+
+- **`O3_supersession` splits cleanly by capability, not by cost.**
+  `gpt-5-mini` and `gemma-4-31b` pass it; `gpt-5-nano` and `gemma-4-e4b`
+  fail it. The two passing tiers are the two larger models, one cloud and
+  one local. This is the first evidence in the trial that closure
+  expressibility tracks model *size* rather than provider or price.
+- **The step-2 local-model observation is superseded.** Step 2 recorded
+  `O3_supersession` FAIL on `gemma-4-e4b` (the `supersedes` edge extracted,
+  but no `"closes"` block despite the text stating a citable date). Run 3
+  reproduces that FAIL on e4b — and shows the same family at 31b passing.
+  So the step-2 finding was real but was a statement about *that model*,
+  not about extraction as a technique.
+- **An earlier direction-REVERSAL defect** (ADR-021/ADR-014 extracted
+  backwards on a local model) did not reproduce in any tier this round. It
+  was fixed by the null-field-handling fix and the model-emitted-closure
+  redesign, and remains superseded rather than open.
+- **`O5_conflicts_injected` (prompt injection) passes on three of four
+  tiers**, failing only at deployed parity. See §3.4 — this is the one
+  result in the trial where the deployed configuration is the outlier in
+  the unsafe direction.
+
+**Retrospective caveat on every pre-run-3 local-model observation.** All of
+them were taken through a client whose request window was hardcoded and
+cloud-sized (§9.1). Run 3 demonstrated a genuine 900s-plus local call
+(§3.5). Earlier local FAILs therefore cannot be cleanly separated from
+timeouts, and should be treated as *potentially understating* the local
+models rather than as clean capability measurements. Run 3's local numbers
+do not carry that caveat.
+
+## 5. Coverage: every oracle is now classified (9 authored / 11 not authorable)
+
+**The corpus has no unclassified remainder.** Where earlier rounds had 4 of
+20 oracles authored and 16 reporting a generic "not authored yet", the
+authoring round closed that gap by deciding, for every one of the 20, either
+to author source prose for it or to state why prose cannot express it. That
+distinction is the point: "we have not gotten to this" and "there is nothing
+to author here" are different facts about the trial, and only the second is
+a statement about the technique.
+
+**Authored — 9 oracles with real source prose (measurable by this arm):**
+
+| Class | Oracles |
+|---|---|
+| (a) NATIVE_ANSWERABLE | `O7_valid`, `O7_unpinned`, `O7_null_valid_from` |
+| (b) NEEDS_DECLARED_STATE_HISTORY | `O2_blocking_valid`, `O2_blocking_observed` |
+| (c) NEEDS_EXTRACTION_OR_ASSOCIATION | `O3_supersession`, `O5_conflicts`, `O5_conflicts_injected`, `O6_recurring_pattern` |
+
+This is what makes run 3 materially more informative than runs 1–2: **class
+(a) now has authored material for the first time**, so the §15.2 control
+("the baseline must win or tie on natively-answerable questions") can
+actually be evaluated rather than reported as NOT MEASURED.
+
+**Not authorable — 11 oracles, each with a stated reason.** All are class
+(c). The reasons below are restated in prose for readability; the
+authoritative machine-readable strings live in
+`harness/arms/source_documents.py`'s `NOT_AUTHORABLE_REASONS` and are what
+the generated artifact (`docs/measured-trial-results.md`) reproduces
+verbatim — if the two ever disagree, the registry is right and this table
+is stale.
+
+| Oracle | Reason |
+|---|---|
+| `O1_ci_prior_attempts` | structured episode data has no natural prose form |
+| `O4_prior_attempts` | structured episode data has no natural prose form |
+| `O1_ci_prior_attempts_stale` | staleness is a projector-watermark concept; this arm has no equivalent — it always reads at call time |
+| `O1_ci_prior_attempts_squash` | tests a declared PR/commit-linkage coverage gap — a property of the structured source, not of any document's content |
+| `O3_supersession_extraction_down` | requires a self-declared coverage gap under a simulated provider outage — scenario detection, not prose content |
+| `O3_supersession_deterministic_only` | requires a self-declared coverage gap under a simulated provider-policy-forbidden scenario — scenario detection, not prose content |
+| `O4_prior_attempts_after_redaction` | redaction is a downstream deletion operation on already-extracted facts, not something source prose states |
+| `O4_prior_attempts_after_revocation` | repo-visibility revocation is an authorization-scoped filter applied after extraction, not something source prose states |
+| `O4_prior_attempts_graph_outage` | tests a graph-backend outage; this arm has no graph backend to go down — the scenario does not apply to its architecture |
+| `O4_prior_attempts_manipulated` | needs `max_results` truncation logic this adapter does not implement (carried forward from step-2 scope) |
+| `O5_conflicts_poisoned` | entity-linking poisoning is a distinct security dimension needing dedicated adversarial design; deferred |
+
+**How to read the not-authorable set — this is a finding, not just
+bookkeeping.** These 11 do not divide evenly into "the trial ran out of
+time". At least four distinct reasons appear, and they carry different
+weight for a decision:
+
+- **Genuinely inapplicable to this arm's architecture** (`O4_prior_attempts_graph_outage`,
+  and arguably the two `O3_supersession_*` degradation oracles): the
+  scenario tests a failure mode an extraction arm structurally cannot have.
+  Scoring these against extraction would flatter it.
+- **Outside extraction's job by construction** (`O4_prior_attempts_after_redaction`,
+  `_after_revocation`, `O1_ci_prior_attempts_stale`): these test
+  post-extraction authorization, deletion, and freshness — properties of
+  the *storage and serving layer*, not of the extraction step. That an
+  extraction arm cannot be measured on them is not a gap in the trial; it
+  is a statement that **extraction alone does not answer these questions,
+  and whatever adopts it still has to.**
+- **Source-shape mismatch** (`O1_ci_prior_attempts`, `O4_prior_attempts`):
+  structured episode data has no natural prose form. Prose-ifying it would
+  measure the trial author's writing, not the model's extraction.
+- **Deferred scope** (`O4_prior_attempts_manipulated`, `O5_conflicts_poisoned`):
+  the only two that a future round could genuinely close with more work.
+
+The consequence for §15.2's weighting is worth stating plainly: class (c)
+is weighted ×5 precisely because it is the largest and most important
+class, and **11 of its 15 oracles are unreachable by this candidate arm for
+reasons that are mostly structural rather than incidental.** Any reading of
+class (c) evidence in this ADR is a reading of 4 oracles, not 15.
+
+`O7_null_valid_from` is authored as its own class-(a) oracle and is never
+folded into `O7_valid`'s assertions — CHAOS-3570 credit isolation, so no
+arm can claim credit for a different table's still-open bug. It is a
+deliberate expected-FAIL (open-interval semantics); a PASS there would be
+the surprising result.
 
 `O7_null_valid_from` remains outside the class-(a) control, unchanged —
 this is CHAOS-3570 credit isolation (a different table's bug, still open),
@@ -170,42 +364,54 @@ smoke tests exist to catch (an oracle that cannot fail is worse than no
 oracle). This did not change class (b)'s 2/2 result — the extraction arm's
 actual answer already cited the real ref.
 
-## 6. Open questions this ADR must answer
+## 6. Open questions — what run 3 answered, and what it did not
 
-1. **Is class (b)'s +2 delta durable, or a small-N artifact?** Two oracles
-   is the entire class-(b) sample this corpus defines. Does the ADR need a
-   larger bitemporal corpus before this becomes a real basis for a
-   recommendation, or is the *mechanism* demonstration (axis-aware
-   filtering over model-emitted dates, not the raw pass count) the real
-   evidence here?
-2. **How much does class (a)/(c) source-material authoring cost, and is it
-   worth doing before the ADR can be written?** This round intentionally
-   left both mostly NOT_RUN. A recommendation almost certainly cannot be
-   made on class (b) alone, since §15.2 weights (a)×1 (b)×1 (c)×5 — class
-   (c) is the largest question class by design.
-3. **gpt-5-mini's run-to-run variance on closure-expressibility (§4, §7):**
-   is this a real capability ceiling, prompt-sensitivity, or normal LLM
-   variance that a majority-vote or higher-reasoning-effort scheme would
-   resolve? Two sweeps (1/15, 2/15) plus one unofficial diagnostic query is
-   still not enough evidence to say — and neither sweep logged which
-   specific oracle passed, which itself needs fixing before more evidence
-   accumulates usefully. See §7 for why this bears directly on the
-   rebuild-equivalence choice.
-4. **`native_control_holds()`'s rendered banner conflating "not measured"
-   with "measured and lost" — CONFIRMED as a fix, not a question**, per
-   orchestrator direction. Scoped for the next round (after this PR
-   merges): unmeasured must render as `NOT MEASURED`, never as a held/lost
-   verdict. Listed here for traceability only; not this round's work.
-5. **What does "adopt" even mean operationally** if class (b)'s answer is
-   "extraction beats a baseline with zero valid-time concept at all"? Is
-   the real comparison here extraction-vs-native, or
-   extraction-vs-"whatever CHAOS-3563/3564/3565's own increments end up
-   supporting once THEY land bitemporal query paths" — a moving target
-   this trial does not control?
-6. **Graphiti and direct-store arms remain unbuilt.** Does the ADR wait for
-   both before recommending anything about "adopt a graph," or can class
-   (b)/(c) findings about extraction-as-a-technique stand on their own,
-   separate from which storage backend eventually hosts it?
+Four of the earlier draft's six open questions are now answered by
+measurement. They are kept here with their answers rather than deleted, so
+a reader can see which conclusions rest on evidence and which still rest on
+judgement.
+
+**ANSWERED by run 3:**
+
+1. ~~Is class (b)'s +2 delta durable, or an artifact of measuring one tier
+   above parity?~~ **Durable across the tier range.** 2/2 at all four
+   tiers, including deployed parity and a small local model (§3.3). The
+   small-N caveat is unchanged and still real — two oracles is the entire
+   class-(b) sample — but the *model-tier* worry is retired.
+2. ~~How much does class-(a)/(c) source authoring cost, and is it worth
+   doing before the ADR?~~ **Done, and it was worth it.** Class (a) is now
+   comparable and produced the trial's cleanest negative (§3.2); class (c)
+   authoring exposed the deployed-parity zero (§3.4). Neither would have
+   been visible otherwise.
+3. ~~Is gpt-5-mini's class-(c) variance a capability ceiling, prompt
+   sensitivity, or normal variance?~~ **Partly answered, see §7.**
+   `gpt-5-mini` reproduced run 2's per-oracle class-(c) result exactly in
+   run 3, which is evidence *against* the earlier "same inputs, different
+   outputs" reading being the whole story.
+4. ~~The `native_control_holds()` banner conflating "not measured" with
+   "measured and lost".~~ **Fixed** — `ControlStatus` is now three states
+   and renders distinctly.
+
+**STILL OPEN — these need chris, not more measurement:**
+
+5. **What does "adopt" mean operationally, given class (b)'s shape?** The
+   class-(b) result is "extraction beats a baseline that has no valid-time
+   concept at all" (CHAOS-3569). Is the relevant comparison
+   extraction-versus-native-today, or extraction-versus-whatever
+   CHAOS-3563/3564/3565's increments support once they grow bitemporal
+   query paths — a moving target this trial does not control?
+6. **Do Graphiti and direct-store arms need to exist before anything is
+   decided?** Both remain unbuilt. Can findings about
+   extraction-as-a-technique stand on their own, separately from which
+   storage backend eventually hosts it?
+7. **NEW — what follows from deployed parity scoring zero on class (c)?**
+   §3.4 measured it and §8 frames the options; the trade-off itself (accept
+   the gap, change the deployed model, or restrict the capability claim to
+   what nano actually does) is a product decision.
+8. **NEW — does contract fidelity belong in this trial's scope at all?**
+   §8.2's evidence came from outside this harness, and this corpus has no
+   oracle that would catch it. If it matters to the decision, something has
+   to measure it deliberately rather than by accident.
 
 ## 7. Rebuild-equivalence: evidence for CHAOS-3500, not a recommendation
 
@@ -253,8 +459,257 @@ happen within minutes with no code or document change at all — a bounded-
 drift definition that assumes drift only accumulates over model/prompt
 VERSION changes would be measuring the wrong thing.
 
+**Run-3 update — the variance story is now more nuanced, in the direction
+that weakens the earlier claim.** `gpt-5-mini` reproduced run 2's class-(c)
+per-oracle result *exactly* in run 3 (`O3_supersession` PASS,
+`O5_conflicts_injected` PASS), days apart, same prompt version. The earlier
+draft leaned on a 1/15-to-2/15 movement between runs 1 and 2 as evidence of
+same-input non-determinism; that movement is now better explained by run
+1's contract defect than by inherent instability, and the one clean
+repeat measurement available reproduced. Honest statement of the current
+evidence:
+
+- Same model, same inputs, same contract version, days apart: **reproduced**
+  (mini, class (c), run 2 vs run 3).
+- Across contract versions: differed — but a contract change is exactly the
+  kind of version-to-version drift Option B already expects to handle.
+- Across model tiers: differed substantially (§3.4), which is *not*
+  non-determinism at all — it is a different model producing a different
+  answer, and any cache keyed without the model id would conflate them.
+
+**The strongest rebuild-equivalence input from run 3 is therefore not
+variance — it is tier sensitivity.** Class-(c) results range from 0/4 to
+2/4 purely as a function of which model ran. Whichever way CHAOS-3500
+defines "semantically equivalent", **the model identity has to be part of
+the cache key or the equivalence predicate**, or a rebuild after a model
+change will silently compare answers from two different capabilities and
+call the difference drift. The earlier same-input non-determinism concern
+stands as a possibility the definition should tolerate, but it is no longer
+the best-evidenced hazard; this is.
+
 **What this ADR does NOT do:** pick between A and B. That is CHAOS-3500's
 own deliverable, under its own "semantically equivalent" definition. This
 ADR's job is to hand over evidence that the definition, whichever way it
 goes, needs to account for same-input non-determinism — not just
 version-to-version drift.
+
+## 8. Model tiers: parity, ceiling, and the cost regime
+
+### 8.1 Why this round is a matrix and the earlier ones were not
+
+Runs 1 and 2 measured `gpt-5-mini`, which was the repo's own
+`DEFAULT_MODEL_BY_PROVIDER["openai"]` — a defensible pick, but **not the
+model Ask Dev actually runs.** Ask Dev's deployed configuration
+(`ops/.env`'s `LLM_MODEL`) is `gpt-5-nano`. Those two runs therefore
+measured the technique one tier ABOVE deployed parity, and any conclusion
+drawn from them about what the product would do was, strictly, unearned.
+
+Run 3 removes that confound by measuring the same corpus, the same prompt
+version (`extraction.v2`), and the same oracles against four explicitly
+named tiers:
+
+| Tier | Role | Why it is in the matrix |
+|---|---|---|
+| `gpt-5-nano` | **DEPLOYED PARITY — primary scored tier** | The configured model. Parity claims must be read from here and nowhere else. |
+| `gpt-5-mini` | Ceiling / comparative | One tier up. Shows what the technique does when model quality is not the binding constraint, and keeps runs 1–2 comparable to this round. |
+| `google/gemma-4-e4b` (local) | Cost regime | A small locally-hosted model — the regime a cost-driven architecture would operate in. Not parity; no parity claim rests on it. |
+| `google/gemma-4-31b` (local) | Local scaling comparator | The same local family, materially larger. Paired with e4b it separates *"small models cannot do this"* from *"local models cannot do this"* — different inputs to a cost decision. |
+
+The mechanical guarantee behind the labels: each tier's model is a literal
+in `MODEL_TIERS` and is passed into the arm explicitly
+(`extraction.make_answer(config)`). Nothing resolves a model from the
+environment. This is not defensive style — before this round the arm
+called the client with no config at all, so with `ops/.env` set to nano, a
+run labelled `gpt-5-mini` would have been silently measured on nano. A
+mislabelled result is worse than a missing one, because a reader stops
+checking.
+
+### 8.2 Contract fidelity: small local models violate the output contract
+
+Separate from pass rates, and arguably more consequential for an
+architecture decision: **the local model does not reliably honour the
+response contract at all.**
+
+Evidence, captured outside this harness during Ask Dev's own local-model
+experiment (`/tmp/ask-dev-how-are-pipelines-running.json`, model
+`google/gemma-4-e4b`, LM Studio). The model emitted a single `final_answer`
+payload that is internally self-contradictory:
+
+```json
+{"kind": "final_answer", "tool_id": "change_summary.v1",
+ "value": {
+   "direct_summary": "The repository saw 12 items completed in the current
+     window, compared to a baseline of 10 items completed in the comparison
+     window. One work item ('Implement contract baseline') is currently in
+     progress.",
+   "status": "insufficient_evidence"}}
+```
+
+The payload simultaneously asserts a confident, specific, quantified answer
+(12 vs 10 completions, a named in-flight work item) **and** declares
+`status: "insufficient_evidence"`. Those two fields cannot both be true.
+The same answer string is additionally duplicated into three sibling fields
+(`candidates`, `code`, `message`) that have different meanings in the
+schema — `code` in particular is being filled with prose.
+
+Why this matters more than a pass/fail count:
+
+- **A status field is a control-plane signal, not decoration.** Any caller
+  that gates on `status` — refusing to display, degrading, or asking a
+  follow-up — will make the wrong call on this payload in one direction or
+  the other. Trusting `status` discards a correct answer; trusting
+  `direct_summary` displays a confident answer the model itself flagged as
+  unsupported.
+- **It is a failure mode the oracles in this trial would not catch.** This
+  corpus measures extraction quality — did the right facts come out, with
+  the right dates and provenance. It does not measure whether the model
+  fills a structured envelope coherently. A tier could score respectably on
+  this corpus and still be unusable behind a contract-dependent caller.
+- **No equivalent contradiction was observed from `gpt-5-nano` or
+  `gpt-5-mini`.** Stated as an observation, not a guarantee: this trial did
+  not systematically fuzz contract adherence on any tier, so the honest
+  claim is "not observed on the cloud tiers, observed on the local one",
+  not "cloud tiers cannot do this."
+
+**Input for the cost-architecture decision.** The cost case for a local
+model rests on it being adequate at the job. This evidence says adequacy
+has at least two independent dimensions — extraction quality *and* contract
+fidelity — and that the local tier can fail the second while the first is
+still being debated. A design that puts a small local model behind a
+structured-output contract needs either a validating/repairing layer at
+that boundary or a schema-constrained decoding mode; neither is free, and
+both belong in the cost comparison rather than being assumed away.
+
+### 8.3 What the tier matrix says about the cost regime
+
+The matrix was built to answer a cost-architecture question: does the
+capability this trial measures survive at the price points a cost-driven
+design would actually choose? The measured answer separates into three
+different shapes, and conflating them is the main way to misread this ADR.
+
+**Capability that is tier-independent — class (b), 2/2 everywhere.** The
+bitemporal axis-aware result held identically from `gemma-4-e4b` to
+`gpt-5-mini`. This capability appears to come from the *contract* — asking
+for `valid_from`/`valid_to`/`recorded_at` and filtering deterministically
+over model-emitted dates — rather than from model quality. **For this
+class, the cost regime is not a constraint at all.** That is a genuinely
+useful thing to know: it is the one place where a cheap local model is not
+a compromise.
+
+**Capability that tracks model SIZE, not price or provider — class (c).**
+Ranked by authored-oracle score: `gpt-5-mini` 2/4 and `gemma-4-31b` 2/4,
+then `gemma-4-e4b` 1/4, then `gpt-5-nano` 0/4. A free local 31B model
+matched the paid cloud ceiling; the paid, *deployed* cloud model came last.
+Two consequences worth stating plainly:
+
+- **"Cloud is better than local" is not what this measures.** The ordering
+  is roughly by capacity, and it cuts across the cloud/local boundary in
+  both directions.
+- **The deployed configuration is the weakest tier tested on this class.**
+  Any cost comparison that treats today's deployment as the quality
+  baseline and local models as the cheap downgrade has the direction wrong
+  for class (c).
+
+**Cost that is not priced in dollars — latency and contract fidelity.**
+The local tiers are not free once operating cost is counted honestly:
+
+- `gemma-4-31b` ran ~5–8× slower than the cloud tiers (72–1009s per call
+  versus 8–46s), and produced the run's only timeout, at a 900s window
+  (§3.5). At interactive latencies that is not a drop-in substitution.
+- `gemma-4-e4b` was competitive on latency (17–59s) but is the tier that
+  emitted the self-contradictory contract payload in §8.2.
+- Production currently gives every provider a 60s transport window
+  (§9.2 / CHAOS-3608), which is shorter than what three of the four
+  measured tiers needed at their slowest. **The local cost regime has never
+  been observed in production under a window that would let it finish.**
+
+**The options this leaves, stated without a preference between them:**
+
+1. Accept class (c) as out of reach at deployed parity and scope any
+   capability claim to classes (a)/(b), where parity is not a constraint.
+2. Move the deployed model up (nano → mini) and pay per-query cloud cost
+   for a 0/4 → 2/4 class-(c) change on this corpus.
+3. Move to a larger *local* model (31b) for equivalent class-(c) results at
+   no per-query cost, paying instead in latency, hosting, and a
+   contract-validation layer (§8.2) — and only after CHAOS-3608 makes the
+   window survivable.
+4. Treat class (c) as an extraction-cache problem rather than a live-query
+   one (§7's Option A), where a slow or expensive model runs once per fact
+   rather than once per question, and tier cost stops being per-query at
+   all.
+
+Option 4 interacts with §7's rebuild-equivalence choice and with the
+tier-sensitivity finding there: if extraction is cached, the model identity
+must be part of the cache key, because §3.4 shows two tiers producing
+materially different fact sets from identical input.
+
+**No recommendation is made among these.** Each trades a different
+resource, and which resource is scarce is not a question this trial can
+answer.
+
+## 9. Measurement-integrity findings from run 3
+
+Two defects were found in the measurement apparatus itself while wiring the
+tier matrix. Both are recorded here because a reader assessing this ADR's
+evidence needs to know what was wrong with the instrument, not only what
+the instrument reported.
+
+### 9.1 The trials client made a per-model timeout impossible (FIXED)
+
+`trials/chaos_3499/harness/llm/client.py` constructed its SDK client as
+`OpenAI(base_url=..., api_key=..., timeout=120.0, max_retries=0)` — the
+window was a **literal at the construction site**, so no caller could give
+a slow local model a longer one. Every tier necessarily shared a
+cloud-sized window.
+
+This matters beyond tidiness because of the direction in which it fails.
+A local model that needs longer than the window does not return a wrong
+answer; it returns no answer, and before this round that outcome was
+reported through the same generic "could not reach" path as a dead
+provider. **Any earlier local-model observation in this trial's history —
+including the step-2 and step-3 gemma results reported in §4 and §7 — was
+taken under a window that may have been too short for the workload, and
+should be read as potentially understating the local model rather than as
+a clean capability measurement.**
+
+Fixed this round: `LLMConfig` carries a per-model `timeout` (`for_local()`
+defaults to 900s, `for_cloud()` to 120s), the value reaches the SDK client,
+and `APITimeoutError` is caught **before** `APIConnectionError`. That
+ordering is load-bearing and easy to get wrong: `APITimeoutError` is a
+*subclass* of `APIConnectionError`, so the natural ordering silently
+collapses every timeout into the generic unreachable message and discards
+the configured-window detail. An exceeded window now produces an
+infra-marked `NOT_RUN` naming the window it exceeded — never a scored
+`PASS` and never a scored `FAIL`, pinned end to end through
+`oracle.evaluate`.
+
+### 9.2 Production has the same defect, unfixed — CHAOS-3608
+
+The production Ask Dev path carries the same class of hardcode, at a
+*shorter* value, and it is **not** fixed by this changeset (`trials/` is
+deliberately self-contained):
+
+- `src/dev_health_ops/llm/providers/_http.py:10` and `:18` hardcode
+  `timeout=60.0` in the two shared httpx client factories.
+- Every provider uses them: `openai.py:564,579`, `anthropic.py:60`, and
+  `local.py:163` — the LM Studio path.
+- A sweep of `src/dev_health_ops/llm/` found no per-provider or per-model
+  override anywhere; the other `timeout` occurrences are budget waiters,
+  readiness probes, and agent step waiters, none of which set a transport
+  window.
+- `src/dev_health_ops/llm/errors.py:350` classifies transport timeouts into
+  the timeout bucket, so a slow-but-correct local generation is recorded as
+  a failure.
+
+**Relevance to this ADR:** the deployed system gives a local model a 60s
+window for a workload this trial measured as needing on the order of
+minutes. Any operational impression that "the local model does not work
+for Ask Dev" formed during the gemma cost experiment may be partly an
+artifact of that window rather than of model capability. This does not
+change any number reported above — the trial's own tiers ran under the
+corrected client — but it does bear directly on §8's cost-regime
+discussion, because it means the cost regime has never actually been
+observed under a fair window in production. Filed as **CHAOS-3608** (High,
+standalone, related to CHAOS-3499) with the fix framed as a per-provider or
+per-model window, explicitly NOT a blanket raise: a cloud call hanging for
+900s is its own defect.

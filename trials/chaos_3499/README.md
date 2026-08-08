@@ -25,8 +25,8 @@ fails. Trial-internal material does not belong on the customer site.
 | [`harness/`](harness/) | Contracts, oracle engine, fault modes, arm-agnostic runner. |
 | [`harness/arms/`](harness/arms/) | **Bring-up step 1.** The two baseline-component adapters (`native`, `episode_readback`), against the pinned corpus directly — no fixture files, no live stack, no LLM spend. See its module docstring for what a static-snapshot adapter can and cannot prove. |
 | [`harness/arms/extraction.py`](harness/arms/extraction.py), [`harness/arms/source_documents.py`](harness/arms/source_documents.py) | **Bring-up steps 2–3.** The extraction candidate arm (never a baseline component), axis-aware `AS_OF` filtering (step 3), and the hand-authored source prose four oracles read (two smoke, two class-(b)). |
-| [`harness/llm/`](harness/llm/) | Provider-agnostic OpenAI-compatible client, env-driven — `LLM_PROVIDER=local` (LM Studio) or `cloud` (real OpenAI API, `gpt-5-mini` via the Responses API, step 3). |
-| [`run_measured_sweep.py`](run_measured_sweep.py) | **Step 3.** Standalone (not pytest-collected) script that runs the composed baseline vs the extraction candidate over the full pinned corpus against the real cloud model and writes `docs/measured-trial-results.md`. Real, billable spend — not part of CI or `run_oracles.sh`. |
+| [`harness/llm/`](harness/llm/) | Provider-agnostic OpenAI-compatible client. `LLMConfig.for_cloud()` / `for_local()` name the model EXPLICITLY and carry a **per-model timeout** (local 900s vs cloud 120s); `from_env()` remains only for the env-gated local smoke. A request that exceeds its window raises an infra-marked `LLMUnavailable` → NOT_RUN, never a scored result. |
+| [`run_measured_sweep.py`](run_measured_sweep.py) | **Step 3 / run 3.** Standalone (not pytest-collected) script that runs the composed baseline vs the extraction candidate over the full pinned corpus against a **matrix of named model tiers** (`MODEL_TIERS`: gpt-5-nano = deployed parity/PRIMARY, gpt-5-mini = ceiling, gemma-4-e4b + gemma-4-31b = optional local cost-regime arms) and writes `docs/measured-trial-results.md`. Real, billable spend for the cloud tiers — not part of CI or `run_oracles.sh`. No tier resolves its model from the environment. |
 | [`docs/measured-trial-results.md`](docs/measured-trial-results.md) | **Deliverable 4.** The CANONICAL measured sweep's rendered per-class `ComparisonReport`, run parameters, and generated (never hand-edited) interpretation notes — no headline number. A prior run superseded by a prompt/filter contract fix is kept only as history in `docs/adr-draft.md` §3/§4, not here. |
 | [`docs/adr-draft.md`](docs/adr-draft.md) | **Deliverable 5.** First ADR skeleton: per-class results (both sweeps), §14 framing, closure-expressibility observations across four runs, a rebuild-equivalence evidence section for CHAOS-3500, open questions. Deliberately no recommendation. |
 | [`tests/`](tests/) | Fault-mode self-tests, corpus coverage guards, independent re-derivation, baseline-component per-class rendering, extraction-arm smoke (env-gated on a local model, includes offline axis-filter pins). |
@@ -157,11 +157,26 @@ Two things the report refuses to do quietly:
   (`docs/measured-trial-results.md`) — both runs are accounted for in a
   first ADR draft skeleton (`docs/adr-draft.md`, deliberately no
   recommendation), which also turns the cross-run variance into evidence
-  for CHAOS-3500's still-unlanded rebuild-equivalence definition. **Still
-  true:** only 4 of 20 oracles have authored source material (the two
-  step-2 oracles plus the two new class-(b) ones) — classes (a) and (c)
-  are mostly `NOT_RUN`, not silently, and not because the candidate lost
-  anything; see the artifact's interpretation notes and the ADR draft §5
-  for exactly what is and is not covered. Full corpus source-prose
-  authoring and the
-  Graphiti/direct-store arms remain future work.
+  for CHAOS-3500's still-unlanded rebuild-equivalence definition.
+- **Run 3 (authoring round + four-tier matrix): the current record.** Two
+  changes make this round different in kind, not just in size.
+  **(1) Every oracle is classified** — 9 authored with real source prose, 11
+  declared NOT AUTHORABLE each with its own stated reason
+  (`harness/arms/source_documents.py`'s `NOT_AUTHORABLE_REASONS`). There is
+  no unclassified remainder, and class (a) has material for the first time,
+  so §15.2's control is finally evaluable (it **held on every tier**).
+  **(2) The model-tier confound is removed** — runs 1–2 measured
+  `gpt-5-mini`, but Ask Dev runs `gpt-5-nano`, so those numbers were taken
+  one tier above deployed parity. Run 3 measures four explicitly-named
+  tiers (nano = deployed parity, mini = ceiling, `gemma-4-e4b` and
+  `gemma-4-31b` = local cost regime). Headline: class (b) scored 2/2 on
+  **all four** tiers against a baseline of 0/2, so that capability is
+  tier-independent; class (c) ranged 0/4 at deployed parity to 2/4 at the
+  ceiling *and* at local-31b, so the confound was real and the deployed
+  model is the weakest tier tested on that class. Per-oracle verdicts,
+  call timestamps, and latencies are now recorded per tier — the gap that
+  made earlier rounds unable to say which oracle passed when.
+  **Still true:** classes (a) and (c) remain partly `NOT_RUN`, loudly and
+  with per-oracle reasons, and the Graphiti/direct-store arms remain
+  unbuilt. See `docs/adr-draft.md` (findings and options only — no
+  recommendation) and the artifact for exactly what is and is not covered.

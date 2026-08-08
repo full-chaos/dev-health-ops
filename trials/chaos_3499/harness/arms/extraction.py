@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from ...corpus import ground_truth as gt
@@ -82,7 +83,7 @@ from ..contracts import (
     TimeAxis,
 )
 from ..llm import client as llm_client
-from ..llm.client import LLMUnavailable
+from ..llm.client import LLMConfig, LLMUnavailable
 from ..oracle import Oracle
 from ..runner import ArmRole
 from .source_documents import NOT_AUTHORABLE_REASONS, SOURCE_DOCUMENTS, SourceDocument
@@ -456,7 +457,7 @@ def _apply_model_emitted_closures(
     return tuple(facts)
 
 
-def answer(oracle: Oracle) -> ArmResponse:
+def answer(oracle: Oracle, *, config: LLMConfig | None = None) -> ArmResponse:
     """The response an LLM extraction pass over this oracle's source
     documents produces, or an honest NOT_RUN if either the source material
     or the provider is unavailable.
@@ -468,6 +469,14 @@ def answer(oracle: Oracle) -> ArmResponse:
     "not authored yet" -- a reader of the reason string (or
     ``run_measured_sweep.py``'s per-oracle log) can tell the two apart
     without cross-referencing a second document.
+
+    ``config`` names the model EXPLICITLY. Any measured run must supply it
+    (see :func:`make_answer`): leaving it None falls back to
+    ``LLMConfig.from_env()``, which reads ``OPENAI_MODEL``/
+    ``LOCAL_LLM_MODEL`` from the ambient environment -- acceptable for the
+    env-gated local smoke test, and NEVER acceptable for a scored sweep,
+    where it would let a run labelled with one model be measured on
+    another.
     """
     documents = SOURCE_DOCUMENTS.get(oracle.oracle_id)
     if not documents:
@@ -483,9 +492,13 @@ def answer(oracle: Oracle) -> ArmResponse:
 
     try:
         completion = llm_client.complete(
-            _SYSTEM_PROMPT, _user_prompt(oracle, documents)
+            _SYSTEM_PROMPT, _user_prompt(oracle, documents), config=config
         )
     except LLMUnavailable as exc:
+        # Covers an unreachable provider AND a request that exceeded its
+        # configured window (see client.py's APITimeoutError branches):
+        # both land here as NOT_RUN, so a slow tier can never be recorded
+        # as a model-quality PASS or FAIL.
         return ArmResponse.not_run(ARM_NAME, str(exc))
 
     raw_json = llm_client.extract_json_array(completion.content)
@@ -526,3 +539,26 @@ def answer(oracle: Oracle) -> ArmResponse:
 # enforces this at registration time, not just by call-site convention. See
 # this module's own docstring and finding 10's ruling.
 answer.declared_role = ArmRole.CANDIDATE_ARM  # type: ignore[attr-defined]
+
+
+def make_answer(config: LLMConfig) -> Callable[[Oracle], ArmResponse]:
+    """An arm callable bound to ONE explicitly-named model.
+
+    The run-3 matrix measures the same corpus against several model tiers,
+    so each tier's arm must carry its own model rather than share whatever
+    the environment resolves to at call time. Binding it here -- instead of
+    setting env vars around each sweep -- means the model a result is
+    labelled with is the model that produced it, by construction: there is
+    no ambient value left for a mislabelling to come from.
+
+    The returned callable keeps ``declared_role``, so ``ArmRegistry``'s
+    role enforcement still applies to it (a bound arm is still a candidate
+    arm, and must never be registerable as a baseline component).
+    """
+
+    def bound(oracle: Oracle) -> ArmResponse:
+        return answer(oracle, config=config)
+
+    bound.declared_role = ArmRole.CANDIDATE_ARM  # type: ignore[attr-defined]
+    bound.model = config.model  # type: ignore[attr-defined]
+    return bound

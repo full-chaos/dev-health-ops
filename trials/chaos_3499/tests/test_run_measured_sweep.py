@@ -12,7 +12,11 @@ from __future__ import annotations
 from ..corpus.oracles import ORACLES_BY_ID
 from ..harness.oracle import AssertionResult, OracleResult, Verdict
 from ..harness.runner import TrialReport
-from ..run_measured_sweep import _oracle_reason, _render_per_oracle_table
+from ..run_measured_sweep import (
+    CallRecord,
+    _oracle_reason,
+    _render_per_oracle_table,
+)
 
 
 def _pass(oracle_id: str, arm: str) -> OracleResult:
@@ -77,15 +81,21 @@ def test_per_oracle_table_includes_every_oracle_arm_and_timestamp() -> None:
             ),
         ),
     }
-    call_timestamps = {
-        ("O3_supersession", "native"): "2026-08-08T00:00:00+00:00",
-        ("O3_supersession", "extraction_llm"): "2026-08-08T00:00:01+00:00",
-        ("O5_conflicts", "native"): "2026-08-08T00:00:00+00:00",
+    call_records = {
+        ("O3_supersession", "native"): CallRecord(
+            called_at="2026-08-08T00:00:00+00:00", latency_seconds=0.01
+        ),
+        ("O3_supersession", "extraction_llm"): CallRecord(
+            called_at="2026-08-08T00:00:01+00:00", latency_seconds=9.5
+        ),
+        ("O5_conflicts", "native"): CallRecord(
+            called_at="2026-08-08T00:00:00+00:00", latency_seconds=0.01
+        ),
         # extraction_llm never actually called O5_conflicts (NOT_RUN before
-        # any call) -- deliberately absent from call_timestamps.
+        # any call) -- deliberately absent from call_records.
     }
 
-    table = _render_per_oracle_table(oracles, reports, call_timestamps)
+    table = _render_per_oracle_table(oracles, reports, call_records)
 
     assert "O3_supersession" in table
     assert "O5_conflicts" in table
@@ -127,6 +137,6 @@ def test_per_oracle_table_distinguishes_not_authorable_from_not_yet_authored() -
             ),
         ),
     }
-    table = _render_per_oracle_table(oracles, reports, call_timestamps={})
+    table = _render_per_oracle_table(oracles, reports, call_records={})
     assert "not_authorable_for_extraction_arm" in table
     assert "structured_episode_data_has_no_natural_prose_form" in table

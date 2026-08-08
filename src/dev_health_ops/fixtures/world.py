@@ -69,6 +69,10 @@ from dev_health_ops.fixtures.runner import (
     _MISSING_TABLE_MARKERS,
     run_fixtures_generation,
 )
+from dev_health_ops.fixtures.ttl_registry import (
+    assert_pinned_now_not_too_stale,
+    drift_days_context,
+)
 from dev_health_ops.storage import run_with_store
 
 WORLD_SCHEMA_VERSION = "ask_dev_world.v1"
@@ -1973,39 +1977,60 @@ async def _generate_world(ns: argparse.Namespace, manifest: WorldManifest) -> in
         "world: seeded orgs/users/entitlements/retention/sync-config/conversations"
     )
 
+    # CHAOS-3602: `manifest.pinned_now` is a static reference baked into
+    # world.json (CHAOS-3392's frozen-clock determinism), not refreshed
+    # automatically -- and every day it goes unrefreshed erodes the TTL
+    # safety margin every generator clamp assumes. Captured BEFORE any
+    # `_frozen_clock` context is entered, so this really is real wall-clock
+    # time, not the pinned one. Raises loudly (naming the real fix) rather
+    # than letting generation silently squeeze its own history window to
+    # compensate once the drift gets too large to trust.
+    real_now = datetime.now(timezone.utc)
+    drift_days = assert_pinned_now_not_too_stale(manifest.pinned_now, real_now)
+    if drift_days:
+        logging.warning(
+            "world: pinned_now (%s) is %d day(s) behind real time (%s) -- "
+            "generation's TTL-safe date margins are narrowed by that much "
+            "to compensate (CHAOS-3602).",
+            manifest.pinned_now.isoformat(),
+            drift_days,
+            real_now.isoformat(),
+        )
+
     roster = collect_repo_roster(manifest)
     total_repos = sum(len(repos) for repos in roster.values())
     generated = 0
-    for org_alias, repo_names in roster.items():
-        org_id = manifest.org_id(org_alias)
-        for repo_full_name in sorted(repo_names):
-            repo_ns = _generation_namespace(
-                manifest,
-                org_alias=org_alias,
-                org_id=org_id,
-                repo_full_name=repo_full_name,
-                sink=ns.sink,
-                postgres_uri=postgres_uri,
-                allow_mixed_org=getattr(ns, "allow_mixed_org", False),
-            )
-            with _frozen_clock(manifest.pinned_now):
-                rc = await run_fixtures_generation(repo_ns)
-            if rc != 0:
-                logging.error(
-                    "world: fixtures generate failed for org=%s repo=%s (rc=%d)",
+    with drift_days_context(drift_days):
+        for org_alias, repo_names in roster.items():
+            org_id = manifest.org_id(org_alias)
+            for repo_full_name in sorted(repo_names):
+                repo_ns = _generation_namespace(
+                    manifest,
+                    org_alias=org_alias,
+                    org_id=org_id,
+                    repo_full_name=repo_full_name,
+                    sink=ns.sink,
+                    postgres_uri=postgres_uri,
+                    allow_mixed_org=getattr(ns, "allow_mixed_org", False),
+                )
+                with _frozen_clock(manifest.pinned_now):
+                    rc = await run_fixtures_generation(repo_ns)
+                if rc != 0:
+                    logging.error(
+                        "world: fixtures generate failed for org=%s repo=%s (rc=%d)",
+                        org_alias,
+                        repo_full_name,
+                        rc,
+                    )
+                    return rc
+                generated += 1
+                logging.info(
+                    "world: generated repo %d/%d (%s / %s)",
+                    generated,
+                    total_repos,
                     org_alias,
                     repo_full_name,
-                    rc,
                 )
-                return rc
-            generated += 1
-            logging.info(
-                "world: generated repo %d/%d (%s / %s)",
-                generated,
-                total_repos,
-                org_alias,
-                repo_full_name,
-            )
 
     await _run_clickhouse_postprocess(ns.sink, manifest)
 

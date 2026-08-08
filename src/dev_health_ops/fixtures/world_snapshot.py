@@ -120,12 +120,18 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+from dev_health_ops.fixtures.ttl_registry import (
+    TTL_SAFETY_MARGIN_DAYS,
+    assert_snapshot_not_expired,
+    clickhouse_ttl_retentions,
+    snapshot_expiry,
+)
 from dev_health_ops.fixtures.world import (
     WorldManifest,
     _require_scratch_database,
@@ -579,7 +585,68 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-async def _dump_clickhouse(client: Any, table: str, engine: str, path: Path) -> int:
+async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
+    """CHAOS-3602: refuse to snapshot a table holding rows within
+    ``TTL_SAFETY_MARGIN_DAYS`` of their own TTL deletion horizon.
+
+    ClickHouse applies TTL deletion AT MERGE TIME -- asynchronously,
+    silently, with no error, no warning. A table with horizon-adjacent rows
+    is racing the background merge scheduler: whether a row survives to be
+    read depends entirely on exactly when a merge happens to run relative
+    to when this snapshot reads the table. That race is what actually
+    happened: `fixtures world` generated a `feature_flag_event` row at
+    precisely `now - 90 days` (that table's own TTL), and it was gone by
+    the time `fixtures world-snapshot` read the table minutes later, once a
+    background merge swept it (confirmed against `system.part_log`:
+    `merge_reason: TTLDeleteMerge`, the part shrinking from 95 to 94 rows).
+
+    The real fix is fixture generation staying inside a safety margin
+    (`ttl_registry.max_safe_backdate_days`, applied at generation time).
+    This is the belt-and-braces guard that catches a violation BEFORE the
+    snapshot ever races the merge scheduler, rather than discovering it via
+    a content-oracle mismatch after data has already been silently lost.
+    """
+
+    retentions = clickhouse_ttl_retentions()
+    violations: list[str] = []
+    for table in tables:
+        retention = retentions.get(table)
+        if retention is None:
+            continue
+        safe_days = max(0, retention.retention_days - TTL_SAFETY_MARGIN_DAYS)
+        result = await asyncio.to_thread(
+            client.query,
+            f"SELECT count() FROM `{table}` "
+            f"WHERE `{retention.column}` <= now() - INTERVAL {safe_days} DAY",
+        )
+        count = int(result.result_rows[0][0]) if result.result_rows else 0
+        if count:
+            violations.append(
+                f"{table}: {count} row(s) with {retention.column} at or "
+                f"past {safe_days} days old (this table's TTL deletes at "
+                f"{retention.retention_days} days)"
+            )
+
+    if violations:
+        raise SnapshotError(
+            "world snapshot: refusing to snapshot table(s) holding rows "
+            "within their own TTL deletion margin -- a mint over "
+            "horizon-adjacent data races ClickHouse's background merge "
+            "scheduler rather than producing a deterministic artifact "
+            "(CHAOS-3602: this exact race silently dropped a "
+            "feature_flag_event row from a real mint). Regenerate the "
+            "world so every date stays inside its table's safe margin "
+            f"(dev_health_ops.fixtures.ttl_registry.max_safe_backdate_days): "
+            f"{violations}"
+        )
+
+
+_DUMP_VERIFY_ATTEMPTS = 3
+
+
+async def _dump_clickhouse(
+    client: Any, table: str, engine: str, path: Path, *, raw_source_row_count: int
+) -> int:
     """Dump one ClickHouse table, through ``FINAL`` where the engine collapses.
 
     Two decisions, both learned live:
@@ -599,17 +666,99 @@ async def _dump_clickhouse(client: Any, table: str, engine: str, path: Path) -> 
     the count). Dumping the ``FINAL`` view stores exactly the rows every
     reader can actually see and makes the restore deterministic. Nothing
     visible is lost: the discarded rows are ones ``FINAL`` already hides.
+
+    CHAOS-3602: ``raw_query``'s Native payload and a ``count()`` run moments
+    later, on a fully idle table with zero concurrent writes, have been
+    observed to silently DISAGREE -- both a mint's manifest.json and a
+    dedicated stress run recorded ``count() == 1042`` while the payload
+    ``raw_query`` had actually captured only 1041 rows of
+    ``feature_flag_event``. This is a flake in the raw Native transfer
+    itself (clickhouse-connect and/or server), not a write-visibility race
+    (reproduced with no writes in flight) and not query pagination (this
+    function issues exactly one unpaginated ``SELECT *``, no ORDER BY/LIMIT/
+    OFFSET). ~2% per-table-dump in stress testing, which is not negligible
+    across the ~90 ClickHouse tables one mint dumps.
+
+    So the payload is never trusted on the strength of a *separate* count()
+    query -- it is DECODED (via a throwaway staging table, itself covered by
+    ``_require_scratch_database`` since ``client`` only ever points at a
+    scratch database here) and the decoded row count is what gets compared,
+    retried, and ultimately recorded in the manifest. A short payload is
+    retried up to ``_DUMP_VERIFY_ATTEMPTS`` times and never written to disk.
     """
 
     final = " FINAL" if _collapses_on_merge(engine) else ""
-    payload: bytes = await asyncio.to_thread(
-        partial(client.raw_query, f"SELECT * FROM `{table}`{final}", fmt="Native")
+    verify_table = f"__snapshot_verify_{table}"
+    last_diagnostics = ""
+
+    for attempt in range(1, _DUMP_VERIFY_ATTEMPTS + 1):
+        payload: bytes = await asyncio.to_thread(
+            partial(client.raw_query, f"SELECT * FROM `{table}`{final}", fmt="Native")
+        )
+        pre_count = await asyncio.to_thread(
+            client.query, f"SELECT count() FROM `{table}`{final}"
+        )
+        expected = int(pre_count.result_rows[0][0])
+
+        # Decode what the payload ACTUALLY holds, server-side, via a
+        # throwaway staging table -- not a second independent count() on the
+        # source table, which is exactly the query that was observed to
+        # agree with a short payload above.
+        await asyncio.to_thread(
+            client.command, f"DROP TABLE IF EXISTS `{verify_table}`"
+        )
+        await asyncio.to_thread(
+            client.command, f"CREATE TABLE `{verify_table}` AS `{table}`"
+        )
+        try:
+            await asyncio.to_thread(
+                partial(
+                    client.raw_insert,
+                    table=verify_table,
+                    insert_block=payload,
+                    fmt="Native",
+                )
+            )
+            decoded = await asyncio.to_thread(
+                client.query, f"SELECT count() FROM `{verify_table}`"
+            )
+            decoded_count = int(decoded.result_rows[0][0])
+        finally:
+            await asyncio.to_thread(
+                client.command, f"DROP TABLE IF EXISTS `{verify_table}`"
+            )
+
+        if decoded_count == expected:
+            path.write_bytes(gzip.compress(payload, mtime=0))
+            return decoded_count
+
+        parts_result = await asyncio.to_thread(
+            client.query,
+            "SELECT count() FROM system.parts WHERE table = {t:String} "
+            "AND database = {db:String} AND active",
+            parameters={"t": table, "db": client.database},
+        )
+        active_parts = (
+            int(parts_result.result_rows[0][0]) if parts_result.result_rows else -1
+        )
+        last_diagnostics = (
+            f"table={table!r} attempt={attempt}/{_DUMP_VERIFY_ATTEMPTS} "
+            f"decoded_payload_rows={decoded_count} expected_count={expected} "
+            f"raw_source_row_count={raw_source_row_count} active_parts={active_parts} "
+            f"engine={engine!r}"
+        )
+        logger.warning(
+            "world snapshot: clickhouse dump payload came up short of its own "
+            "count() -- retrying. %s",
+            last_diagnostics,
+        )
+
+    raise SnapshotError(
+        "world snapshot: clickhouse dump produced a SHORT payload on every "
+        f"attempt (CHAOS-3602 -- a known intermittent raw Native transfer "
+        f"flake, not app logic). {last_diagnostics}. Refusing to write a "
+        "short snapshot artifact to disk."
     )
-    path.write_bytes(gzip.compress(payload, mtime=0))
-    counted = await asyncio.to_thread(
-        client.query, f"SELECT count() FROM `{table}`{final}"
-    )
-    return int(counted.result_rows[0][0])
 
 
 async def _reflect(conn: Any, table: str, metadata: Any) -> Any:
@@ -832,6 +981,15 @@ async def snapshot_world(
         store="postgres",
         ledger=_POSTGRES_LEDGER_TABLES,
     )
+
+    # CHAOS-3602: before dumping anything, refuse a snapshot over data that
+    # is currently racing a TTL'd table's own background merge scheduler --
+    # see _assert_no_ttl_horizon_rows for why this can't wait until after
+    # the dump.
+    await _with_clickhouse_client(
+        sink, lambda client: _assert_no_ttl_horizon_rows(client, ch_tables)
+    )
+
     if not ch_tables and not pg_tables:
         raise SnapshotError(
             "world snapshot: the generated database is indistinguishable from "
@@ -852,13 +1010,48 @@ async def snapshot_world(
         engines = await _clickhouse_table_engines(client)
         for table in ch_tables:
             path = ch_dir / f"{table}.native.gz"
-            dumped = await _dump_clickhouse(client, table, engines[table], path)
+            engine = engines[table]
+            # The verified, DECODED payload count -- see _dump_clickhouse's
+            # docstring (CHAOS-3602): a separate count() query has been
+            # observed to agree with a payload that was actually short, so
+            # this number is never sourced from one.
+            row_count = await _dump_clickhouse(
+                client, table, engine, path, raw_source_row_count=source_ch[table]
+            )
+            # Postgres has always asserted raw-vs-dumped agreement here (a
+            # table changing under the snapshot mid-dump); ClickHouse never
+            # did -- the gap found alongside CHAOS-3602. Collapsing engines
+            # (ReplacingMergeTree etc.) legitimately dedupe under FINAL, so
+            # raw and dumped counts differ BY DESIGN there (see
+            # ch_entries' own row_count comment below) -- only a bound
+            # applies: FINAL cannot ever produce MORE rows than went in.
+            # Non-collapsing engines have no such excuse: an exact mismatch
+            # means the same "changing/flaky underneath the snapshot"
+            # problem postgres already guards.
+            if _collapses_on_merge(engine):
+                if row_count > source_ch[table]:
+                    raise SnapshotError(
+                        f"world snapshot: clickhouse table {table!r} dumped "
+                        f"{row_count} FINAL rows, more than the "
+                        f"{source_ch[table]} raw rows counted before the dump "
+                        "-- FINAL cannot increase a row count. The source "
+                        "database is changing underneath the snapshot. Stop "
+                        "whatever is writing to it and re-run."
+                    )
+            elif row_count != source_ch[table]:
+                raise SnapshotError(
+                    f"world snapshot: clickhouse table {table!r} had "
+                    f"{source_ch[table]} rows when counted and {row_count} "
+                    "when dumped -- the source database is changing "
+                    "underneath the snapshot. Stop whatever is writing to "
+                    "it and re-run."
+                )
             ch_entries[table] = {
                 "file": f"clickhouse/{table}.native.gz",
                 # The number of rows the FILE holds -- which for a collapsing
                 # engine is the FINAL count, not the raw one. Recording the raw
                 # count here would describe the artifact wrongly.
-                "row_count": dumped,
+                "row_count": row_count,
                 "raw_source_row_count": source_ch[table],
                 "sha256": _sha256_file(path),
             }
@@ -913,6 +1106,12 @@ async def snapshot_world(
         # catches a manifest edit the digest cannot see (see
         # world.world_manifest_contract_hash).
         "world_manifest_contract": world_manifest_contract_hash(manifest),
+        # CHAOS-3602: recorded so a human (or `assert_snapshot_not_expired`
+        # at restore time) can see the shelf life without doing the
+        # pinned_now + TTL-margin arithmetic themselves -- past this
+        # instant, this snapshot's oldest rows are due for a live TTL merge
+        # to silently delete them before anything ever reads them.
+        "ttl_shelf_life_expiry": snapshot_expiry(manifest.pinned_now).isoformat(),
         "clickhouse": {
             "tables": ch_entries,
             "schema_fingerprint": ch_schema,
@@ -1399,6 +1598,15 @@ async def restore_world(
     _verify_snapshot_files(snapshot_dir, document)
     _require_matching_world_manifest(document, manifest)
     _require_acceptance_environment(env)
+
+    # CHAOS-3602: a minted snapshot's dates are frozen relative to
+    # world.json's pinned_now (CHAOS-3392) at mint time -- but ClickHouse's
+    # own TTL enforcement runs on REAL time, always. Once enough real time
+    # has passed since pinned_now, the snapshot's oldest rows are due for a
+    # live TTL merge to silently delete them before a boot's own content
+    # oracle or digest check ever reads them, turning into exactly the
+    # "mysterious 3am acceptance failure" this guard exists to name instead.
+    assert_snapshot_not_expired(manifest.pinned_now, datetime.now(timezone.utc))
 
     ch_tables = document["clickhouse"]["tables"]
     pg_tables = document["postgres"]["tables"]

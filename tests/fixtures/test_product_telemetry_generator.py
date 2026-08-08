@@ -10,6 +10,7 @@ from dev_health_ops.fixtures.generators.product_telemetry import (
     ProductTelemetrySeedSpec,
     product_telemetry_org_hash,
 )
+from dev_health_ops.fixtures.ttl_registry import max_safe_backdate_days
 
 FIXED_END = datetime(2026, 5, 25, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -75,6 +76,32 @@ def test_generator_payloads_omit_all_blocked_keys() -> None:
         assert not offending, (
             f"event {event.name} payload leaked blocked keys: {sorted(offending)}"
         )
+
+
+def test_generator_clamps_an_excessive_days_argument_to_the_ttl_margin() -> None:
+    """CHAOS-3602 defense-in-depth: product_telemetry_events carries `TTL
+    toDateTime(occurred_at) + INTERVAL 180 DAY DELETE`. `days` is
+    caller-supplied and the spec is frozen, so the generator must clamp a
+    LOCAL copy rather than trust the caller -- a `days` value large enough
+    to backdate past the TTL horizon would silently produce rows due for
+    TTL deletion the moment "now" advances past mint/seed time, the exact
+    mechanism that took down `feature_flag_event` in the real incident.
+    """
+
+    limit = max_safe_backdate_days("product_telemetry_events")
+    assert limit is not None
+
+    spec = _spec(days=100_000, sessions_per_day=1)
+    events = ProductTelemetryGenerator(spec).generate_events()
+    assert events, "expected non-empty event stream"
+
+    oldest = min(event.ts for event in events)
+    age_days = (FIXED_END - oldest).total_seconds() / 86400
+    assert age_days <= limit + 1, (
+        f"oldest product telemetry event is {age_days:.1f} days before "
+        f"end_time, past the safe margin ({limit} days) inside "
+        "product_telemetry_events' own TTL"
+    )
 
 
 def test_generator_covers_every_typed_event_name() -> None:

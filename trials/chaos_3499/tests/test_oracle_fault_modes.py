@@ -18,6 +18,7 @@ import dataclasses
 
 import pytest
 
+from ..corpus import ground_truth as gt
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..harness.contracts import (
     ArmOutcome,
@@ -28,7 +29,7 @@ from ..harness.contracts import (
     SourceCoverage,
     TemporalFact,
 )
-from ..harness.faults import FAULT_MODES, FaultApplication
+from ..harness.faults import FAULT_MODES, FaultApplication, hide_coverage_gap
 from ..harness.oracle import Oracle, Verdict
 from .golden import golden_response
 
@@ -98,6 +99,228 @@ def test_every_fault_mode_applies_to_at_least_one_oracle() -> None:
         if not applied_anywhere:
             inert.append(fault.fault_id)
     assert not inert, f"fault modes that never apply to any oracle: {inert}"
+
+
+#: Every (fault_id, oracle_id) pair currently INAPPLICABLE, pinned explicitly
+#: so the 174-pair skip set can only change by a conscious edit here.
+#:
+#: Without a pin, the parametrised suite above just reports these as skips --
+#: and if an oracle or fault-mode change silently made a previously-APPLIED
+#: pair inapplicable, the only visible symptom is one more skip in a wall
+#: that already has 174 of them, which reads as coverage regardless. This
+#: manifest turns that silent shrink into a named, reviewable diff.
+#:
+#: To regenerate after a deliberate corpus/fault-mode change:
+#:   for fault in FAULT_MODES:
+#:       for oracle in ALL_ORACLES:
+#:           outcome = fault.apply(oracle, golden_response(oracle, ARM))
+#:           if outcome.application is FaultApplication.INAPPLICABLE:
+#:               print((fault.fault_id, oracle.oracle_id))
+_PINNED_INAPPLICABLE_PAIRS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("answer_the_other_axis", "O1_ci_prior_attempts"),
+        ("answer_the_other_axis", "O1_ci_prior_attempts_squash"),
+        ("answer_the_other_axis", "O1_ci_prior_attempts_stale"),
+        ("answer_the_other_axis", "O3_supersession"),
+        ("answer_the_other_axis", "O3_supersession_deterministic_only"),
+        ("answer_the_other_axis", "O3_supersession_extraction_down"),
+        ("answer_the_other_axis", "O4_prior_attempts"),
+        ("answer_the_other_axis", "O4_prior_attempts_after_redaction"),
+        ("answer_the_other_axis", "O4_prior_attempts_after_revocation"),
+        ("answer_the_other_axis", "O4_prior_attempts_graph_outage"),
+        ("answer_the_other_axis", "O4_prior_attempts_manipulated"),
+        ("answer_the_other_axis", "O5_conflicts"),
+        ("answer_the_other_axis", "O5_conflicts_injected"),
+        ("answer_the_other_axis", "O5_conflicts_poisoned"),
+        ("answer_the_other_axis", "O6_recurring_pattern"),
+        ("answer_the_other_axis", "O7_unpinned"),
+        ("answer_through_outage", "O1_ci_prior_attempts"),
+        ("answer_through_outage", "O1_ci_prior_attempts_squash"),
+        ("answer_through_outage", "O1_ci_prior_attempts_stale"),
+        ("answer_through_outage", "O2_blocking_observed"),
+        ("answer_through_outage", "O2_blocking_valid"),
+        ("answer_through_outage", "O3_supersession"),
+        ("answer_through_outage", "O3_supersession_deterministic_only"),
+        ("answer_through_outage", "O3_supersession_extraction_down"),
+        ("answer_through_outage", "O4_prior_attempts"),
+        ("answer_through_outage", "O4_prior_attempts_after_redaction"),
+        ("answer_through_outage", "O4_prior_attempts_after_revocation"),
+        ("answer_through_outage", "O4_prior_attempts_manipulated"),
+        ("answer_through_outage", "O5_conflicts"),
+        ("answer_through_outage", "O5_conflicts_injected"),
+        ("answer_through_outage", "O5_conflicts_poisoned"),
+        ("answer_through_outage", "O6_recurring_pattern"),
+        ("answer_through_outage", "O7_null_valid_from"),
+        ("answer_through_outage", "O7_unpinned"),
+        ("answer_through_outage", "O7_valid"),
+        ("cite_opening_evidence_as_invalidation", "O1_ci_prior_attempts"),
+        ("cite_opening_evidence_as_invalidation", "O1_ci_prior_attempts_squash"),
+        ("cite_opening_evidence_as_invalidation", "O1_ci_prior_attempts_stale"),
+        ("cite_opening_evidence_as_invalidation", "O2_blocking_observed"),
+        ("cite_opening_evidence_as_invalidation", "O2_blocking_valid"),
+        ("cite_opening_evidence_as_invalidation", "O3_supersession_deterministic_only"),
+        ("cite_opening_evidence_as_invalidation", "O3_supersession_extraction_down"),
+        ("cite_opening_evidence_as_invalidation", "O4_prior_attempts"),
+        ("cite_opening_evidence_as_invalidation", "O4_prior_attempts_after_redaction"),
+        ("cite_opening_evidence_as_invalidation", "O4_prior_attempts_after_revocation"),
+        ("cite_opening_evidence_as_invalidation", "O4_prior_attempts_graph_outage"),
+        ("cite_opening_evidence_as_invalidation", "O4_prior_attempts_manipulated"),
+        ("cite_opening_evidence_as_invalidation", "O5_conflicts"),
+        ("cite_opening_evidence_as_invalidation", "O5_conflicts_injected"),
+        ("cite_opening_evidence_as_invalidation", "O5_conflicts_poisoned"),
+        ("cite_opening_evidence_as_invalidation", "O6_recurring_pattern"),
+        ("cite_opening_evidence_as_invalidation", "O7_null_valid_from"),
+        ("cite_opening_evidence_as_invalidation", "O7_unpinned"),
+        ("cite_opening_evidence_as_invalidation", "O7_valid"),
+        ("clear_required_flag", "O1_ci_prior_attempts"),
+        ("clear_required_flag", "O1_ci_prior_attempts_squash"),
+        ("clear_required_flag", "O2_blocking_observed"),
+        ("clear_required_flag", "O2_blocking_valid"),
+        ("clear_required_flag", "O3_supersession"),
+        ("clear_required_flag", "O3_supersession_deterministic_only"),
+        ("clear_required_flag", "O3_supersession_extraction_down"),
+        ("clear_required_flag", "O4_prior_attempts"),
+        ("clear_required_flag", "O4_prior_attempts_after_redaction"),
+        ("clear_required_flag", "O4_prior_attempts_after_revocation"),
+        ("clear_required_flag", "O4_prior_attempts_graph_outage"),
+        ("clear_required_flag", "O4_prior_attempts_manipulated"),
+        ("clear_required_flag", "O5_conflicts_poisoned"),
+        ("clear_required_flag", "O6_recurring_pattern"),
+        ("clear_required_flag", "O7_null_valid_from"),
+        ("clear_required_flag", "O7_unpinned"),
+        ("clear_required_flag", "O7_valid"),
+        ("downgrade_observed_to_inferred", "O1_ci_prior_attempts_squash"),
+        ("downgrade_observed_to_inferred", "O1_ci_prior_attempts_stale"),
+        ("downgrade_observed_to_inferred", "O3_supersession"),
+        ("downgrade_observed_to_inferred", "O3_supersession_deterministic_only"),
+        ("downgrade_observed_to_inferred", "O3_supersession_extraction_down"),
+        ("downgrade_observed_to_inferred", "O4_prior_attempts_after_revocation"),
+        ("downgrade_observed_to_inferred", "O4_prior_attempts_graph_outage"),
+        ("downgrade_observed_to_inferred", "O4_prior_attempts_manipulated"),
+        ("downgrade_observed_to_inferred", "O5_conflicts"),
+        ("downgrade_observed_to_inferred", "O5_conflicts_injected"),
+        ("downgrade_observed_to_inferred", "O7_unpinned"),
+        ("emit_forbidden_fact", "O1_ci_prior_attempts_squash"),
+        ("emit_forbidden_fact", "O1_ci_prior_attempts_stale"),
+        ("emit_forbidden_fact", "O3_supersession"),
+        ("emit_forbidden_fact", "O4_prior_attempts_graph_outage"),
+        ("emit_forbidden_fact", "O4_prior_attempts_manipulated"),
+        ("emit_forbidden_fact", "O5_conflicts"),
+        ("emit_forbidden_fact", "O7_null_valid_from"),
+        ("emit_forbidden_fact", "O7_unpinned"),
+        ("hide_source_coverage_gap", "O1_ci_prior_attempts"),
+        ("hide_source_coverage_gap", "O1_ci_prior_attempts_stale"),
+        ("hide_source_coverage_gap", "O2_blocking_observed"),
+        ("hide_source_coverage_gap", "O2_blocking_valid"),
+        ("hide_source_coverage_gap", "O3_supersession"),
+        ("hide_source_coverage_gap", "O4_prior_attempts"),
+        ("hide_source_coverage_gap", "O4_prior_attempts_after_redaction"),
+        ("hide_source_coverage_gap", "O4_prior_attempts_after_revocation"),
+        ("hide_source_coverage_gap", "O4_prior_attempts_manipulated"),
+        ("hide_source_coverage_gap", "O5_conflicts"),
+        ("hide_source_coverage_gap", "O5_conflicts_injected"),
+        ("hide_source_coverage_gap", "O5_conflicts_poisoned"),
+        ("hide_source_coverage_gap", "O6_recurring_pattern"),
+        ("hide_source_coverage_gap", "O7_null_valid_from"),
+        ("hide_source_coverage_gap", "O7_unpinned"),
+        ("hide_source_coverage_gap", "O7_valid"),
+        ("omit_expected_evidence", "O1_ci_prior_attempts_squash"),
+        ("omit_expected_evidence", "O3_supersession_deterministic_only"),
+        ("omit_expected_evidence", "O3_supersession_extraction_down"),
+        ("omit_expected_evidence", "O4_prior_attempts_graph_outage"),
+        ("restore_redacted_source_ref", "O1_ci_prior_attempts"),
+        ("restore_redacted_source_ref", "O1_ci_prior_attempts_squash"),
+        ("restore_redacted_source_ref", "O1_ci_prior_attempts_stale"),
+        ("restore_redacted_source_ref", "O2_blocking_observed"),
+        ("restore_redacted_source_ref", "O2_blocking_valid"),
+        ("restore_redacted_source_ref", "O3_supersession"),
+        ("restore_redacted_source_ref", "O3_supersession_deterministic_only"),
+        ("restore_redacted_source_ref", "O3_supersession_extraction_down"),
+        ("restore_redacted_source_ref", "O4_prior_attempts"),
+        ("restore_redacted_source_ref", "O4_prior_attempts_after_revocation"),
+        ("restore_redacted_source_ref", "O4_prior_attempts_graph_outage"),
+        ("restore_redacted_source_ref", "O4_prior_attempts_manipulated"),
+        ("restore_redacted_source_ref", "O5_conflicts"),
+        ("restore_redacted_source_ref", "O5_conflicts_injected"),
+        ("restore_redacted_source_ref", "O5_conflicts_poisoned"),
+        ("restore_redacted_source_ref", "O6_recurring_pattern"),
+        ("restore_redacted_source_ref", "O7_null_valid_from"),
+        ("restore_redacted_source_ref", "O7_unpinned"),
+        ("restore_redacted_source_ref", "O7_valid"),
+        ("reverse_edge_direction", "O1_ci_prior_attempts_squash"),
+        ("reverse_edge_direction", "O3_supersession_deterministic_only"),
+        ("reverse_edge_direction", "O3_supersession_extraction_down"),
+        ("reverse_edge_direction", "O4_prior_attempts_graph_outage"),
+        ("rewind_indexing_watermark", "O1_ci_prior_attempts_stale"),
+        ("rewind_indexing_watermark", "O4_prior_attempts_graph_outage"),
+        ("strip_evidence_provenance", "O3_supersession_deterministic_only"),
+        ("strip_evidence_provenance", "O3_supersession_extraction_down"),
+        ("strip_evidence_provenance", "O4_prior_attempts_graph_outage"),
+        ("strip_evidence_provenance", "O5_conflicts"),
+        ("strip_evidence_provenance", "O5_conflicts_injected"),
+        ("strip_invalidation_provenance", "O1_ci_prior_attempts"),
+        ("strip_invalidation_provenance", "O1_ci_prior_attempts_squash"),
+        ("strip_invalidation_provenance", "O1_ci_prior_attempts_stale"),
+        ("strip_invalidation_provenance", "O2_blocking_observed"),
+        ("strip_invalidation_provenance", "O3_supersession_deterministic_only"),
+        ("strip_invalidation_provenance", "O3_supersession_extraction_down"),
+        ("strip_invalidation_provenance", "O4_prior_attempts"),
+        ("strip_invalidation_provenance", "O4_prior_attempts_after_redaction"),
+        ("strip_invalidation_provenance", "O4_prior_attempts_after_revocation"),
+        ("strip_invalidation_provenance", "O4_prior_attempts_graph_outage"),
+        ("strip_invalidation_provenance", "O4_prior_attempts_manipulated"),
+        ("strip_invalidation_provenance", "O5_conflicts"),
+        ("strip_invalidation_provenance", "O5_conflicts_injected"),
+        ("strip_invalidation_provenance", "O5_conflicts_poisoned"),
+        ("strip_invalidation_provenance", "O6_recurring_pattern"),
+        ("strip_invalidation_provenance", "O7_null_valid_from"),
+        ("strip_invalidation_provenance", "O7_valid"),
+        ("substitute_canonical_id", "O1_ci_prior_attempts_squash"),
+        ("substitute_canonical_id", "O3_supersession_deterministic_only"),
+        ("substitute_canonical_id", "O3_supersession_extraction_down"),
+        ("substitute_canonical_id", "O4_prior_attempts_graph_outage"),
+        ("suppress_warnings", "O1_ci_prior_attempts"),
+        ("suppress_warnings", "O2_blocking_observed"),
+        ("suppress_warnings", "O2_blocking_valid"),
+        ("suppress_warnings", "O3_supersession"),
+        ("suppress_warnings", "O4_prior_attempts"),
+        ("suppress_warnings", "O4_prior_attempts_after_revocation"),
+        ("suppress_warnings", "O4_prior_attempts_manipulated"),
+        ("suppress_warnings", "O5_conflicts"),
+        ("suppress_warnings", "O5_conflicts_injected"),
+        ("suppress_warnings", "O5_conflicts_poisoned"),
+        ("suppress_warnings", "O6_recurring_pattern"),
+        ("suppress_warnings", "O7_null_valid_from"),
+        ("suppress_warnings", "O7_valid"),
+    }
+)
+
+
+def test_inapplicable_pairs_match_the_pinned_manifest() -> None:
+    """Guard against silent coverage shrinkage in the INAPPLICABLE skip set.
+
+    A pair moving INAPPLICABLE -> APPLIED is always fine (it is new
+    coverage). A pair moving the other way, or a new pair appearing
+    INAPPLICABLE, means some oracle or fault mode stopped being exercised by
+    something that used to exercise it -- and with 174 pre-existing skips,
+    one more is invisible unless something is pinned to compare against.
+    """
+    observed = frozenset(
+        (fault.fault_id, oracle.oracle_id)
+        for fault in FAULT_MODES
+        for oracle in ALL_ORACLES
+        if fault.apply(oracle, golden_response(oracle, ARM)).application
+        is FaultApplication.INAPPLICABLE
+    )
+    newly_inapplicable = observed - _PINNED_INAPPLICABLE_PAIRS
+    newly_applicable = _PINNED_INAPPLICABLE_PAIRS - observed
+    assert not newly_inapplicable and not newly_applicable, (
+        "the INAPPLICABLE (fault, oracle) manifest drifted -- "
+        f"newly INAPPLICABLE (coverage shrank, investigate): "
+        f"{sorted(newly_inapplicable)}; "
+        f"newly APPLICABLE (coverage grew, update the pinned manifest): "
+        f"{sorted(newly_applicable)}"
+    )
 
 
 def test_measurement_never_ran_fails_every_oracle() -> None:
@@ -291,3 +514,129 @@ def test_source_coverage_type_is_used_not_bypassed() -> None:
 _ANY_TIME = __import__("datetime").datetime(
     2026, 7, 31, tzinfo=__import__("datetime").UTC
 )
+
+
+def test_conflicts_injected_requires_untrusted_content_not_just_conflicting() -> None:
+    """C14: legit facts sharing the untrusted source must carry untrusted_content.
+
+    Regression for the finding that O5_CONFLICTS_INJECTED asserted only
+    `conflicting`, so an arm that laundered injected content through the
+    extractor without tagging its legitimate siblings `untrusted_content`
+    passed anyway.
+    """
+    oracle = ORACLES_BY_ID["O5_conflicts_injected"]
+    golden = golden_response(oracle, ARM)
+    assert oracle.evaluate(golden).verdict is Verdict.PASS
+
+    index, fact = next(
+        (i, f) for i, f in enumerate(golden.facts) if f.subject_ref == gt.INCIDENT_503
+    )
+    laundered = dataclasses.replace(
+        golden,
+        facts=(
+            *golden.facts[:index],
+            dataclasses.replace(
+                fact, flags=dataclasses.replace(fact.flags, untrusted_content=False)
+            ),
+            *golden.facts[index + 1 :],
+        ),
+    )
+    result = oracle.evaluate(laundered)
+    assert result.verdict is Verdict.FAIL, (
+        "an arm that dropped untrusted_content from a fact sharing the "
+        "injected source's provenance must not pass -- the conflicting flag "
+        "alone is not the invariant C14 exists to catch"
+    )
+    assert any(
+        a.assertion_id.startswith("must_include") for a in result.assertions if not a.ok
+    )
+
+
+def test_hide_coverage_gap_mutates_the_source_the_oracle_actually_checks() -> None:
+    """Regression: the old mutator picked the response's first unavailable
+    source regardless of whether any oracle assertion watched it. On a
+    two-gap scenario that could silently mutate an unwatched source, leave
+    the oracle's real coverage expectation untouched, and let the fault be
+    scored as caught when it never touched anything the oracle checks.
+    """
+    oracle = ORACLES_BY_ID["O1_ci_prior_attempts_squash"]
+    golden = golden_response(oracle, ARM)
+    assert oracle.evaluate(golden).verdict is Verdict.PASS
+
+    # An extra gap that sorts/iterates first but that no oracle assertion
+    # names -- the old code's `gaps[0]` would grab this one instead.
+    two_gaps = {
+        "aaa_unwatched_source": SourceCoverage(
+            source="aaa_unwatched_source", available=False, reason="unrelated"
+        ),
+        **golden.source_coverage,
+    }
+    response = dataclasses.replace(golden, source_coverage=two_gaps)
+
+    outcome = hide_coverage_gap(oracle, response)
+    assert outcome.application is FaultApplication.APPLIED
+    assert outcome.response.source_coverage["work_graph_pr_commit"].available is True, (
+        "the mutator must hide the gap the oracle's coverage expectation actually names"
+    )
+    assert (
+        outcome.response.source_coverage["aaa_unwatched_source"].available is False
+    ), "the unwatched gap must be left alone -- mutating it proves nothing"
+
+    result = oracle.evaluate(outcome.response)
+    assert result.verdict.is_failure, (
+        "hiding the watched gap must fail the oracle even when an unrelated "
+        "gap is also present in the response"
+    )
+
+
+def test_golden_response_scopes_by_query_subject_not_just_predicate() -> None:
+    """Regression: golden_response never passed `subjects` to gt.select, so
+    an arm that leaked predicate-matching material for an entity nobody
+    asked about (e.g. a repo_atlas_web episode when only repo_atlas_api was
+    in scope) went undetected -- the golden reference contained the same
+    leak, so no assertion could tell correct from leaky.
+    """
+    oracle = ORACLES_BY_ID["O4_prior_attempts"]
+    golden = golden_response(oracle, ARM)
+    assert golden.facts, (
+        "golden response must not be empty for this assertion to mean anything"
+    )
+    assert all(f.object_ref == gt.REPO_API for f in golden.facts), (
+        "O4_prior_attempts asked only about repo_atlas_api but the golden "
+        f"response included: {[str(f.object_ref) for f in golden.facts]}"
+    )
+
+
+def test_golden_response_declares_truncation_when_a_candidate_is_dropped() -> None:
+    """Regression: golden.py hardcoded truncated=False regardless of whether
+    max_results actually dropped a candidate.
+    """
+    oracle = ORACLES_BY_ID["O4_prior_attempts_manipulated"]
+    golden = golden_response(oracle, ARM)
+    assert len(golden.facts) == oracle.query.max_results
+    assert golden.truncated is True, (
+        "golden dropped candidates to fit max_results but stamped "
+        "truncated=False -- an arm doing the same thing would be reporting "
+        "a lossy answer as complete"
+    )
+
+
+def test_golden_response_does_not_falsely_claim_truncation() -> None:
+    """The other half of the truncation fix: no false positives either."""
+    oracle = ORACLES_BY_ID["O4_prior_attempts"]
+    golden = golden_response(oracle, ARM)
+    assert len(golden.facts) < oracle.query.max_results
+    assert golden.truncated is False
+
+
+def test_manipulated_truncation_never_lets_the_decoy_displace_real_evidence() -> None:
+    """C17, stated directly: truncation order must not be an accident of
+    GROUND_TRUTH's declaration position. Adversarial material is sorted last
+    regardless of where it is declared, so a corpus edit that reordered
+    facts could not silently let a decoy win a budget it should lose.
+    """
+    oracle = ORACLES_BY_ID["O4_prior_attempts_manipulated"]
+    golden = golden_response(oracle, ARM)
+    assert not any(f.fact_id == "tf_gt_ep_keyword_stuffed" for f in golden.facts), (
+        "the keyword-stuffed decoy must not survive the truncation budget"
+    )

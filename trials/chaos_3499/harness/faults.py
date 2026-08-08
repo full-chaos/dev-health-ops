@@ -218,6 +218,64 @@ def clear_required_flag(oracle: Oracle, response: ArmResponse) -> MutationOutcom
     return _skip(response, "oracle requires no fact flags")
 
 
+def restore_redacted_source_ref(
+    oracle: Oracle, response: ArmResponse
+) -> MutationOutcome:
+    """Serve a redacted source ref back verbatim -- the redaction that never happened.
+
+    Built from ``forbid_source_event_refs`` the same way the other must_include
+    mutators are built from their own qualifier: it targets exactly the ref
+    the oracle asserts must be gone, so a mutation that dies elsewhere proves
+    nothing about the redaction invariant.
+    """
+    for expectation in oracle.must_include:
+        if not expectation.forbid_source_event_refs:
+            continue
+        for index, fact in enumerate(response.facts):
+            if expectation.identity_matches(fact):
+                restored = tuple(
+                    set(fact.source_event_refs) | expectation.forbid_source_event_refs
+                )
+                return _applied(
+                    _swap(
+                        response,
+                        index,
+                        dataclasses.replace(fact, source_event_refs=restored),
+                    )
+                )
+    return _skip(response, "oracle forbids no source event ref")
+
+
+def cite_opening_evidence_as_invalidation(
+    oracle: Oracle, response: ArmResponse
+) -> MutationOutcome:
+    """Regress invalidation provenance to the fact's own opening evidence.
+
+    The exact CHAOS-3499 defect: citing what opened a window as what closed
+    it, when the oracle names the record that actually closed it.
+    """
+    for expectation in oracle.must_include:
+        if not expectation.require_invalidation_evidence_refs:
+            continue
+        for index, fact in enumerate(response.facts):
+            if not expectation.identity_matches(fact) or fact.invalidated_by is None:
+                continue
+            return _applied(
+                _swap(
+                    response,
+                    index,
+                    dataclasses.replace(
+                        fact,
+                        invalidated_by=dataclasses.replace(
+                            fact.invalidated_by,
+                            refs=fact.evidence_refs or fact.source_event_refs,
+                        ),
+                    ),
+                )
+            )
+    return _skip(response, "oracle requires no specific invalidation evidence")
+
+
 def emit_forbidden_fact(oracle: Oracle, response: ArmResponse) -> MutationOutcome:
     """Return something the oracle forbids: a leak, an injection, a poisoning.
 
@@ -246,10 +304,24 @@ def emit_forbidden_fact(oracle: Oracle, response: ArmResponse) -> MutationOutcom
 
 
 def hide_coverage_gap(oracle: Oracle, response: ArmResponse) -> MutationOutcome:
-    """Report an unavailable source as available: silent emptiness."""
-    gaps = [k for k, v in response.source_coverage.items() if not v.available]
+    """Report an unavailable source as available: silent emptiness.
+
+    Targets a source named in the oracle's OWN ``coverage`` expectations, not
+    just the first unavailable entry in the response. Picking an arbitrary
+    response-side gap can hit a source no assertion is watching -- on a
+    two-gap scenario that mutates the wrong key, leaves the oracle's actual
+    coverage expectation intact, and the fault is scored as caught when it
+    never touched anything the oracle checks.
+    """
+    watched = [cov.source for cov in oracle.coverage]
+    gaps = [
+        source
+        for source in watched
+        if (entry := response.source_coverage.get(source)) is not None
+        and not entry.available
+    ]
     if not gaps:
-        return _skip(response, "no declared coverage gaps")
+        return _skip(response, "no declared coverage gap the oracle asserts against")
     coverage = dict(response.source_coverage)
     key = gaps[0]
     coverage[key] = SourceCoverage(source=key, available=True, reason=None)
@@ -356,6 +428,18 @@ FAULT_MODES: tuple[FaultMode, ...] = (
         "return a required fact without its conflict/staleness flag",
         "must_include",
         clear_required_flag,
+    ),
+    FaultMode(
+        "restore_redacted_source_ref",
+        "serve a redacted source ref back verbatim, as if never redacted",
+        "must_include",
+        restore_redacted_source_ref,
+    ),
+    FaultMode(
+        "cite_opening_evidence_as_invalidation",
+        "cite the fact's own opening evidence as what closed its window",
+        "must_include",
+        cite_opening_evidence_as_invalidation,
     ),
     FaultMode(
         "emit_forbidden_fact",

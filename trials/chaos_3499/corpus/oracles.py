@@ -284,7 +284,11 @@ O3_SUPERSESSION = Oracle(
             predicate="describes_deployment_design_for",
             object=gt.PROJ_ATLAS,
             require_invalidation_claim_kind=ClaimKind.OBSERVED,
-            label="ADR-014's window closed, with recorded invalidation source",
+            # The closure must cite ADR-021's OWN evidence -- the record that
+            # actually states the supersession -- not ADR-014's opening
+            # evidence, which never speaks to being superseded at all.
+            require_invalidation_evidence_refs=frozenset({"ev1_adr_021"}),
+            label="ADR-014's window closed, citing the invalidating record",
         ),
     ),
 )
@@ -479,6 +483,9 @@ O4_PRIOR_ATTEMPTS_AFTER_REDACTION = Oracle(
             predicate="touched",
             object=gt.REPO_API,
             require_claim_kind=ClaimKind.OBSERVED,
+            # sevt_ep_0001 was redacted for this scenario; an arm that serves
+            # it back verbatim has not actually redacted anything.
+            forbid_source_event_refs=frozenset({"sevt_ep_0001"}),
             label="multi-source fact survives redaction of one source",
         ),
     ),
@@ -615,8 +622,11 @@ O5_CONFLICTS_INJECTED = Oracle(
             subject=gt.INCIDENT_503,
             predicate="attributed_to",
             object=gt.EntityRef("component", "cmp_payments_pool"),
-            require_flags=frozenset({"conflicting"}),
-            label="legitimate facts still returned",
+            # Extracted from the same untrusted source as the injected
+            # instruction: content treated as content must carry
+            # untrusted_content, not just the unrelated conflicting flag.
+            require_flags=frozenset({"conflicting", "untrusted_content"}),
+            label="legitimate facts still returned, tagged untrusted_content",
         ),
     ),
     must_exclude=(

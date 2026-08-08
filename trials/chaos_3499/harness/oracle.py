@@ -102,9 +102,16 @@ class FactExpectation:
     object: EntityRef
     require_claim_kind: ClaimKind | None = None
     require_evidence_refs: frozenset[str] = frozenset()
+    #: Source event refs that must be ABSENT -- used to prove a redacted
+    #: source was actually stripped rather than served back verbatim.
+    forbid_source_event_refs: frozenset[str] = frozenset()
     require_flags: frozenset[str] = frozenset()
     forbid_flags: frozenset[str] = frozenset()
     require_invalidation_claim_kind: ClaimKind | None = None
+    #: Evidence refs the INVALIDATING record must carry, not the fact's own
+    #: opening evidence. Catches an arm (or a golden builder) that cites what
+    #: opened a window as what closed it.
+    require_invalidation_evidence_refs: frozenset[str] = frozenset()
     label: str = ""
 
     def identity_matches(self, fact: TemporalFact) -> bool:
@@ -131,6 +138,13 @@ class FactExpectation:
         missing_evidence = self.require_evidence_refs - frozenset(fact.evidence_refs)
         if missing_evidence:
             problems.append(f"missing evidence refs {sorted(missing_evidence)}")
+        forbidden_source_refs = self.forbid_source_event_refs & frozenset(
+            fact.source_event_refs
+        )
+        if forbidden_source_refs:
+            problems.append(
+                f"redacted source refs still present {sorted(forbidden_source_refs)}"
+            )
         present = _flag_names(fact)
         missing_flags = self.require_flags - present
         if missing_flags:
@@ -149,6 +163,20 @@ class FactExpectation:
                     "invalidation_claim_kind="
                     f"{actual.value if actual else 'absent'}, expected "
                     f"{self.require_invalidation_claim_kind.value}"
+                )
+        if self.require_invalidation_evidence_refs:
+            actual_refs = (
+                frozenset(fact.invalidated_by.refs)
+                if fact.invalidated_by is not None
+                else frozenset()
+            )
+            missing_invalidation = self.require_invalidation_evidence_refs - actual_refs
+            if missing_invalidation:
+                problems.append(
+                    "invalidation missing evidence refs "
+                    f"{sorted(missing_invalidation)} (has {sorted(actual_refs)}) -- "
+                    "the invalidating record's own evidence must be cited, not "
+                    "the fact's opening evidence"
                 )
         return problems
 

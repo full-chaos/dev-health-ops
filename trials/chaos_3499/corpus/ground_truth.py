@@ -19,6 +19,7 @@ rebuild gate (§16) compares against it.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -120,6 +121,15 @@ class GroundTruthFact:
     invalidation_observed_at: datetime | None = None
     evidence_refs: tuple[str, ...] = ()
     source_event_refs: tuple[str, ...] = ()
+    #: fact_key of the record whose OWN evidence documents this fact's
+    #: closure -- distinct from this fact's opening evidence. None means this
+    #: fact is self-evidencing: a structured field (e.g. a canonical
+    #: dependency mapping) whose own record directly carries the closure, not
+    #: derived from prose elsewhere. Set this whenever the closure is only
+    #: evidenced by a DIFFERENT record (e.g. a superseding ADR's own prose) --
+    #: leaving it None there would let `invalidated_by` cite the opening
+    #: record's evidence for a closure that record never spoke to.
+    invalidated_by_fact_key: str | None = None
     repo_scope: EntityRef | None = None
     #: Corpus cases this fact was planted for; used by the coverage test.
     for_cases: tuple[str, ...] = ()
@@ -245,6 +255,11 @@ GROUND_TRUTH: tuple[GroundTruthFact, ...] = (
         claim_kind=ClaimKind.OBSERVED,
         evidence_refs=("ev1_adr_014",),
         source_event_refs=("sevt_adr_014",),
+        # ADR-014's own evidence documents its ORIGINAL design claim, not its
+        # supersession -- that is stated only in ADR-021's prose (C02/C07).
+        # Citing ev1_adr_014 for the closure would be citing the opening
+        # record's evidence as if it were the invalidating one.
+        invalidated_by_fact_key="gt_adr021_supersedes_adr014",
         repo_scope=REPO_API,
         for_cases=("C02_superseded_decision",),
     ),
@@ -577,6 +592,12 @@ def select(
     questions *want* closed windows in the answer -- "which decision
     superseded the original" is unanswerable if the superseded one has been
     filtered out for no longer holding.
+
+    ``subjects`` matches a fact whose ``subject`` OR ``object`` is one of the
+    given entities -- a query pivots on an entity that can sit on either side
+    of a relationship (e.g. "touched" points episode -> repo, but the query
+    asks about the repo). A fact matching neither is out of scope for the
+    query regardless of predicate.
     """
     selected: list[GroundTruthFact] = []
     for fact in GROUND_TRUTH:
@@ -590,7 +611,11 @@ def select(
             visibility.visible_repos
         ):
             continue
-        if subjects is not None and fact.subject not in subjects:
+        if (
+            subjects is not None
+            and fact.subject not in subjects
+            and fact.object not in subjects
+        ):
             continue
         if predicates is not None and fact.predicate not in predicates:
             continue
@@ -607,6 +632,19 @@ def select(
                     continue
             else:  # pragma: no cover - guarded by TimeAxis at call sites
                 raise ValueError(f"unknown axis {axis!r}")
+        redacted = set(fact.source_event_refs) & visibility.redacted_source_event_refs
+        if redacted:
+            # Reduced provenance, not exclusion: the fact still stands (it
+            # may still carry other evidence/source refs), but the redacted
+            # source must not still be presented as backing it. Before this,
+            # `redacted_source_event_refs` was read nowhere, so an arm that
+            # served a redacted source's content verbatim was unmeasured.
+            fact = dataclasses.replace(
+                fact,
+                source_event_refs=tuple(
+                    ref for ref in fact.source_event_refs if ref not in redacted
+                ),
+            )
         selected.append(fact)
     return tuple(selected)
 

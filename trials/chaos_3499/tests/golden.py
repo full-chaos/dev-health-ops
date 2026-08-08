@@ -69,13 +69,27 @@ class Scenario:
     #: conflicting or stale.
     flags: Mapping[str, FactFlags] = field(default_factory=dict)
     answer_is_empty: bool = False
+    #: Whether ground-truth selection scopes to the query's `subjects`.
+    #: Default True: an arm that returns predicate-matching material for an
+    #: entity nobody asked about (e.g. a repo_atlas_web episode when only
+    #: repo_atlas_api was in scope) is a real leak, and golden must model the
+    #: scoped answer to make that leak assertable. False only for O1/O3,
+    #: whose query subject (a CI failure signature; a project) has no literal
+    #: subject/object edge to the facts those questions require in this
+    #: corpus -- they are genuinely association-shaped, and forcing a literal
+    #: filter there would make golden reject its own required facts. Tracked
+    #: as a known gap rather than silently "fixed" by disabling the assertion
+    #: these two would otherwise need.
+    apply_subject_filter: bool = True
 
 
 _DEFAULT = Scenario()
+_NO_SUBJECT_FILTER = Scenario(apply_subject_filter=False)
 
 SCENARIOS: Mapping[str, Scenario] = {
-    "O1_ci_prior_attempts": _DEFAULT,
+    "O1_ci_prior_attempts": _NO_SUBJECT_FILTER,
     "O1_ci_prior_attempts_stale": Scenario(
+        apply_subject_filter=False,
         indexed_through=gt.STALLED_WATERMARK,
         warnings=("source_stale:temporal_graph.v1",),
         flags={
@@ -87,6 +101,7 @@ SCENARIOS: Mapping[str, Scenario] = {
         },
     ),
     "O1_ci_prior_attempts_squash": Scenario(
+        apply_subject_filter=False,
         warnings=(
             "source_unavailable:work_graph_pr_commit:squash_merge_linkage_absent",
         ),
@@ -101,8 +116,9 @@ SCENARIOS: Mapping[str, Scenario] = {
     ),
     "O2_blocking_valid": _DEFAULT,
     "O2_blocking_observed": _DEFAULT,
-    "O3_supersession": _DEFAULT,
+    "O3_supersession": _NO_SUBJECT_FILTER,
     "O3_supersession_extraction_down": Scenario(
+        apply_subject_filter=False,
         degraded_reasons=("extraction_provider_unavailable",),
         coverage={
             "extraction": SourceCoverage(
@@ -114,6 +130,7 @@ SCENARIOS: Mapping[str, Scenario] = {
         suppress_fact_keys=frozenset({"gt_adr021_supersedes_adr014"}),
     ),
     "O3_supersession_deterministic_only": Scenario(
+        apply_subject_filter=False,
         degraded_reasons=("extraction_disallowed_by_policy",),
         coverage={
             "extraction": SourceCoverage(
@@ -198,8 +215,20 @@ def _to_temporal_fact(
         endpoint_known = False
 
     if valid_to is not None and endpoint_known:
+        # The refs must belong to whatever record actually closed the
+        # window. Most facts are self-evidencing (a structured field whose
+        # own record carries the closure); `invalidated_by_fact_key` names a
+        # DIFFERENT record for the cases where it does not (e.g. a
+        # supersession stated only in another decision's prose) -- citing
+        # this fact's own opening evidence there would be citing what opened
+        # the window as what closed it.
+        invalidating = (
+            gt.GROUND_TRUTH_BY_KEY[source.invalidated_by_fact_key]
+            if source.invalidated_by_fact_key is not None
+            else source
+        )
         invalidated_by = Invalidation(
-            refs=source.evidence_refs or source.source_event_refs,
+            refs=invalidating.evidence_refs or invalidating.source_event_refs,
             invalidation_claim_kind=ClaimKind.OBSERVED,
         )
     elif not endpoint_known:
@@ -235,6 +264,7 @@ def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
 
     if scenario.answer_is_empty:
         facts: tuple[TemporalFact, ...] = ()
+        truncated = False
     else:
         predicates = (
             frozenset(query.allowed_relation_types)
@@ -245,11 +275,20 @@ def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
             as_of=as_of,
             axis=axis.value,
             visibility=scenario.visibility,
+            subjects=query.subjects if scenario.apply_subject_filter else None,
             predicates=predicates,
             include_adversarial=scenario.include_adversarial,
             apply_time_filter=apply_time_filter,
             suppress_fact_keys=scenario.suppress_fact_keys,
         )
+        # Adversarial (decoy) material must never rank ahead of legitimate
+        # evidence when a budget forces a cut -- that ordering, not
+        # whatever position a fact happens to occupy in the GROUND_TRUTH
+        # declaration tuple, is what a correct arm's truncation looks like.
+        # `sorted` is stable, so within each group the original (still
+        # deterministic) relative order is preserved.
+        ordered = sorted(selected, key=lambda f: f.is_adversarial)
+        truncated = len(ordered) > query.max_results
         facts = tuple(
             _to_temporal_fact(
                 source,
@@ -258,7 +297,7 @@ def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
                 apply_time_filter=apply_time_filter,
                 flags=scenario.flags.get(source.fact_key, FactFlags()),
             )
-            for source in selected
+            for source in ordered
         )[: query.max_results]
 
     return ArmResponse(
@@ -274,5 +313,5 @@ def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
             "projection": _PROJECTION_VERSION,
             "query": query.schema_version,
         },
-        truncated=False,
+        truncated=truncated,
     )

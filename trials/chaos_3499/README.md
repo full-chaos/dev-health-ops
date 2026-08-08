@@ -24,7 +24,9 @@ fails. Trial-internal material does not belong on the customer site.
 | [`corpus/oracles.py`](corpus/oracles.py) | **Deliverable 2.** 20 expected-evidence oracles, authored before any arm ran. |
 | [`harness/`](harness/) | Contracts, oracle engine, fault modes, arm-agnostic runner. |
 | [`harness/arms/`](harness/arms/) | **Bring-up step 1.** The two baseline-component adapters (`native`, `episode_readback`), against the pinned corpus directly — no fixture files, no live stack, no LLM spend. See its module docstring for what a static-snapshot adapter can and cannot prove. |
-| [`tests/`](tests/) | Fault-mode self-tests, corpus coverage guards, independent re-derivation, baseline-component per-class rendering. |
+| [`harness/arms/extraction.py`](harness/arms/extraction.py), [`harness/arms/source_documents.py`](harness/arms/source_documents.py) | **Bring-up step 2.** The extraction candidate arm's plumbing (never a baseline component), and the hand-authored source prose two smoke oracles read. |
+| [`harness/llm/`](harness/llm/) | Provider-agnostic OpenAI-compatible client, env-driven (`LLM_PROVIDER=local` today; `cloud` accepted but not wired). |
+| [`tests/`](tests/) | Fault-mode self-tests, corpus coverage guards, independent re-derivation, baseline-component per-class rendering, extraction-arm smoke (env-gated on a local model). |
 
 ## Running
 
@@ -33,9 +35,21 @@ uv sync --all-extras --dev          # once per fresh worktree
 bash trials/chaos_3499/run_oracles.sh
 ```
 
-Current state: **263 passed, 197 skipped** (the skips are fault×oracle pairs
-where the fault genuinely cannot apply — they are reported, and a guard fails
-if any fault is inapplicable everywhere).
+Current state, **excluding** `test_extraction_smoke.py`: **263 passed, 197
+skipped** (the skips are fault×oracle pairs where the fault genuinely cannot
+apply — they are reported, and a guard fails if any fault is inapplicable
+everywhere). This part never depends on any external service.
+
+`test_extraction_smoke.py` (7 tests) IS part of `run_oracles.sh` — it lives
+in `tests/` like everything else — but it is gated on a local
+OpenAI-compatible model (e.g. LM Studio) at `LOCAL_LLM_BASE_URL` (default
+`http://localhost:1234/v1`). Every test that needs the model skips loudly,
+with the connection failure as the reason, if it is not reachable, so the
+totals genuinely vary by environment: **270 passed, 197 skipped** with a
+local model up, **266 passed, 201 skipped** without one. Neither number is a
+measured trial result — the smoke suite prints its own per-oracle
+observations, separately, labeled UNSCORED (see `harness/arms/extraction.py`
+and `harness/llm/client.py`'s module docstrings).
 
 ## Why these tests are not in the CI gate
 
@@ -102,8 +116,15 @@ Two things the report refuses to do quietly:
   results. Nothing in this directory pre-decides it.
 - **No stack.** No compose file authored, no kind pod, no bring-up. All gated
   on an orchestrator-granted environment slot.
-- **No candidate arm implementations yet.** Graphiti and direct-store follow
-  review of deliverables 1–3, as separately reviewable changesets. The two
+- **No Graphiti or direct-store arm yet.** Those follow review of
+  deliverables 1–3, as separately reviewable changesets. The two
   *baseline-component* adapters (`harness/arms/`) exist as of bring-up step
   1 — against the pinned corpus, no live stack, no LLM spend.
-- **No LLM extraction.** Not a token, pending explicit cost authorization.
+- **No measured or scored LLM extraction trial.** Step 2 built the first
+  *candidate* arm's plumbing (`harness/arms/extraction.py`) and smoke-tested
+  it against a local model (`google/gemma-4-e4b` via LM Studio) on exactly
+  two oracles authored with source prose so far — a quality signal and a
+  security (prompt-injection) signal, both explicitly labeled UNSCORED. No
+  cloud call has been made; no oracle has been scored into an ADR number.
+  Measured/scored trial runs, full corpus source-prose authoring, and
+  cloud-vs-local per arm are step 3, gated on review of this step.

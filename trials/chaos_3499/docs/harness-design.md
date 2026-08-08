@@ -311,10 +311,33 @@ Steps 2 and onward have not been executed.
 | 3 | First stack bring-up, isolated kind | **YES** | orchestrator grant | not started |
 | 4 | Projector consumes outbox, watermark + lag measured | **YES** | step 3 | not started |
 | 5 | Arms N and E measured | **YES** | CHAOS-3563/3564/3565 landed | not started |
-| 6 | Arm G — **any LLM extraction spend** | **YES, separately** | explicit cost authorization; provider keys only via the product's own resolution path | not started |
+| 6 | Arm G — **any LLM extraction spend** (measured/scored) | **YES, separately** | explicit cost authorization; provider keys only via the product's own resolution path | not started -- see "extraction plumbing" below, which is NOT this row |
 | 7 | Arm D | **YES** | step 3 | not started |
 | 8 | Security/provenance suite (§19) | **YES** | steps 3–7 | not started |
 | 9 | Rebuild gate | **YES** | CHAOS-3500's "semantically equivalent" definition — **not landed**; ADR must flag the gap if still absent | not started |
+
+**Extraction arm plumbing (a scoped-down precursor to step 6, not step 6
+itself).** `harness/arms/extraction.py` implements the first CANDIDATE arm
+(`ArmRole.CANDIDATE_ARM`, never a baseline component) with a real,
+provider-agnostic LLM client (`harness/llm/`). Smoke-tested against a local
+model only (`google/gemma-4-e4b` via LM Studio) on two hand-authored source
+documents (`harness/arms/source_documents.py`) -- one quality signal
+(`O3_supersession`: correct relationship direction from prose), one
+security signal (`O5_conflicts_injected`: prompt-injection resistance).
+Result, printed and labeled UNSCORED by
+`tests/test_extraction_smoke.py`, never asserted as a required outcome:
+`O3_supersession` FAILS on a real direction-reversal defect on one of its
+two required facts (`describes_deployment_design_for` extracted reversed;
+the `supersedes` edge itself was extracted correctly, in the right
+direction); `O5_conflicts_injected` PASSES outright -- the model correctly
+refused the embedded injected instruction, tagged the legitimate fact from
+the same poisoned document `untrusted_content`, and correctly flagged both
+sides of the genuine conflict once a second, independent document existed
+to disagree with. No cloud call has ever been made; no oracle result here
+has been or may be counted toward a measured trial or an ADR number. Full
+corpus source-prose authoring, a real measured/scored run, and cloud-vs-
+local per arm remain step 6/step 3 territory, gated on review of this
+plumbing.
 
 **Step 1 detail.** `harness/arms/native.py` and `harness/arms/episode_readback.py`
 run against the pinned corpus directly — `corpus/ground_truth.py` doubles as

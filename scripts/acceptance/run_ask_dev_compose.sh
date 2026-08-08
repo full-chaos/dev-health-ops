@@ -410,24 +410,50 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # config rejects anything that is not exactly "0" or "1". Forwarding
 # ${acr_armed} (already normalized above) keeps that contract honest whether
 # or not this run armed ACR.
-if [[ ! -s "${org_ids_output}" ]]; then
-  echo "Wave 4 access matrix cannot run: ${org_ids_output} is missing or empty." >&2
-  echo "prepare_ask_dev_acceptance.py must have written the org-ids artifact" >&2
-  echo "(schema ask_dev_acceptance_org_ids.v1) before this point. Refusing to" >&2
-  echo "run the matrix against unknown tenants rather than skipping it." >&2
-  exit 1
+# PRESENCE GUARD (CHAOS-3586 follow-up). The config below lives in
+# dev-health-web and landed there AFTER this leg did -- an ordering mistake in
+# the original change: the ops half had a hard dependency on the web half and
+# merged first. Until the web change is on main, `playwright test -c <missing>`
+# exits 1 and `set -e` kills the whole run AFTER a full boot, seed and Phase 1
+# pass. That broke every launcher invocation whose --web-root is any checkout
+# without the config, including the nightly workflow.
+#
+# A source-reading contract test cannot catch this: it proves the invocation
+# exists in THIS file and can say nothing about whether the path resolves in
+# another repository. The reference is cross-repo and was dangling.
+#
+# So: skip when absent -- but a skip must never be readable as a pass. The
+# marker below is a single greppable line stating explicitly that the matrix
+# did NOT run and why, so no log reader and no artifact scraper can mistake
+# this run for one that exercised the matrix. When the web config IS present
+# the leg is mandatory and any failure still aborts the run.
+wave4_config="${web_root}/playwright.ask-dev-wave4.config.ts"
+if [[ ! -f "${wave4_config}" ]]; then
+  echo "WAVE4_ACCESS_MATRIX=NOT_RUN reason=config-absent web_root=${web_root}" >&2
+  echo "The Wave 4 access matrix did NOT execute: ${wave4_config} does not exist." >&2
+  echo "This run proves NOTHING about the Context Fabric Validation access matrix." >&2
+  echo "Point --web-root at a checkout carrying the config (CHAOS-3510) to run it." >&2
+else
+  if [[ ! -s "${org_ids_output}" ]]; then
+    echo "Wave 4 access matrix cannot run: ${org_ids_output} is missing or empty." >&2
+    echo "prepare_ask_dev_acceptance.py must have written the org-ids artifact" >&2
+    echo "(schema ask_dev_acceptance_org_ids.v1) before this point. Refusing to" >&2
+    echo "run the matrix against unknown tenants rather than skipping it." >&2
+    exit 1
+  fi
+  echo "WAVE4_ACCESS_MATRIX=RUNNING web_root=${web_root}"
+  ASK_DEV_LIVE_ACCEPTANCE=1 \
+  ASK_DEV_COMPOSE_WEB_READY=1 \
+  ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
+  ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+  ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
+  ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
+  PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
+  TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+  TEST_SUPERUSER_PASSWORD=devhealth123 \
+    "${web_root}/node_modules/.bin/playwright" test \
+    -c "${wave4_config}"
 fi
-ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_COMPOSE_WEB_READY=1 \
-ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
-ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
-ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
-ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
-PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
-TEST_SUPERUSER_EMAIL=admin@devhealth.example \
-TEST_SUPERUSER_PASSWORD=devhealth123 \
-  "${web_root}/node_modules/.bin/playwright" test \
-  -c "${web_root}/playwright.ask-dev-wave4.config.ts"
 
 # CHAOS-3219 Phase 5 (CI lane): keep the stack up for a caller that has more
 # to run against it -- specifically scripts/acceptance/run_wave4_corpus.sh,

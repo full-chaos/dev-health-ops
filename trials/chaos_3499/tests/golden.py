@@ -1,0 +1,349 @@
+"""Builds the response a perfectly-behaved arm would return.
+
+**The golden response is derived from ground truth, never from the oracle.**
+That separation is what makes ``test_golden_response_passes`` a real
+assertion: if the golden builder read the oracle's own ``must_include`` list
+and echoed it back, the test would pass for an oracle that asserts nothing
+and for one that asserts everything, and it would prove neither.
+
+What the oracle *does* supply is the query -- subjects, mode, axis, as-of,
+allowed relation types -- exactly as a real arm receives it. Everything else
+comes from :mod:`corpus.ground_truth` plus a per-oracle
+:class:`Scenario` describing the environment (what is visible, what has been
+deleted, what is degraded).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from ..corpus import ground_truth as gt
+from ..harness.contracts import (
+    PROJECTION_VERSION,
+    ArmOutcome,
+    ArmResponse,
+    ClaimKind,
+    FactFlags,
+    Invalidation,
+    QueryMode,
+    SourceCoverage,
+    TemporalFact,
+    TimeAxis,
+)
+from ..harness.oracle import Oracle
+
+#: Query modes that ask about history rather than about a single instant.
+#: For these, closed validity windows belong in the answer.
+_HISTORY_MODES = frozenset(
+    {
+        QueryMode.TIMELINE,
+        QueryMode.PRIOR_ATTEMPTS,
+        QueryMode.SUPERSEDED_DECISIONS,
+        QueryMode.RELATED_CHANGES,
+        QueryMode.RECURRING_PATTERNS,
+        QueryMode.CONFLICTS,
+    }
+)
+
+
+@dataclass(frozen=True)
+class Scenario:
+    """The environment an oracle is evaluated in.
+
+    Environment, not expectation: nothing here says which facts are correct,
+    only which facts are *reachable* and how the system is behaving.
+    """
+
+    visibility: gt.VisibilityContext = gt.ALPHA_FULL_VISIBILITY
+    outcome: ArmOutcome = ArmOutcome.ANSWERED
+    warnings: tuple[str, ...] = ()
+    degraded_reasons: tuple[str, ...] = ()
+    coverage: Mapping[str, SourceCoverage] = field(default_factory=dict)
+    indexed_through: datetime | None = gt.REQUIRED_WATERMARK
+    include_adversarial: bool = False
+    suppress_fact_keys: frozenset[str] = frozenset()
+    #: fact_key -> flags, for scenarios where the projector marks facts
+    #: conflicting or stale.
+    flags: Mapping[str, FactFlags] = field(default_factory=dict)
+    answer_is_empty: bool = False
+    #: Whether ground-truth selection scopes to the query's `subjects`.
+    #: Default True: an arm that returns predicate-matching material for an
+    #: entity nobody asked about (e.g. a repo_atlas_web episode when only
+    #: repo_atlas_api was in scope) is a real leak, and golden must model the
+    #: scoped answer to make that leak assertable. False only where it is
+    #: load-bearing:
+    #:
+    #: - O1_ci_prior_attempts / O1_ci_prior_attempts_stale: query subject is
+    #:   the CI failure signature, but the required facts are episodes
+    #:   touching repo_atlas_api -- neither side of "touched" is the
+    #:   signature at all. Genuinely association-shaped in this corpus.
+    #: - O3_supersession: query subject is proj_atlas. ONE required fact
+    #:   (ADR-014 describes_deployment_design_for proj_atlas) DOES have
+    #:   proj_atlas as its object and would survive a literal filter fine.
+    #:   The OTHER required fact (ADR-021 supersedes ADR-014) has neither
+    #:   side as proj_atlas -- supersession is a decision-to-decision edge
+    #:   with no project in it at all. Filtering by subjects=(proj_atlas,)
+    #:   would keep the first required fact and drop the second, which the
+    #:   same oracle also requires, so the whole scenario needs the
+    #:   exemption even though half its required facts would pass a literal
+    #:   filter on their own.
+    #:
+    #: Both are genuinely association-shaped for the fact a literal filter
+    #: would drop, and forcing the filter there would make golden reject its
+    #: own required facts. Tracked as a known gap rather than silently
+    #: "fixed" by disabling the assertion these need.
+    #:
+    #: The other three O1/O3 scenarios (squash, extraction-down,
+    #: deterministic-only) do NOT need the exemption -- their required facts
+    #: either already match the query subject or are asserted only via
+    #: must_exclude/coverage, so subject scoping never removes anything they
+    #: depend on. Verified empirically: flipping each to True individually
+    #: keeps its golden response passing. Left exempt, they would silently
+    #: widen the "known gap" comment above to cover ground it does not
+    #: actually stand on.
+    apply_subject_filter: bool = True
+
+
+_DEFAULT = Scenario()
+_NO_SUBJECT_FILTER = Scenario(apply_subject_filter=False)
+
+SCENARIOS: Mapping[str, Scenario] = {
+    "O1_ci_prior_attempts": _NO_SUBJECT_FILTER,
+    "O1_ci_prior_attempts_stale": Scenario(
+        apply_subject_filter=False,
+        indexed_through=gt.STALLED_WATERMARK,
+        warnings=("source_stale:temporal_graph.v1",),
+        flags={
+            "gt_ep1_touched": FactFlags(stale=True),
+            "gt_ep2_touched": FactFlags(stale=True),
+            "gt_ep3_touched": FactFlags(stale=True),
+            "gt_ep4_sole_support": FactFlags(stale=True),
+            "gt_ep5_web_repo": FactFlags(stale=True),
+        },
+    ),
+    "O1_ci_prior_attempts_squash": Scenario(
+        warnings=(
+            "source_unavailable:work_graph_pr_commit:squash_merge_linkage_absent",
+        ),
+        coverage={
+            "work_graph_pr_commit": SourceCoverage(
+                source="work_graph_pr_commit",
+                available=False,
+                reason="squash_merge_linkage_absent",
+                row_estimate=0,
+            )
+        },
+    ),
+    "O2_blocking_valid": _DEFAULT,
+    "O2_blocking_observed": _DEFAULT,
+    "O3_supersession": _NO_SUBJECT_FILTER,
+    "O3_supersession_extraction_down": Scenario(
+        degraded_reasons=("extraction_provider_unavailable",),
+        coverage={
+            "extraction": SourceCoverage(
+                source="extraction",
+                available=False,
+                reason="provider_malformed_structured_output",
+            )
+        },
+        suppress_fact_keys=frozenset({"gt_adr021_supersedes_adr014"}),
+    ),
+    "O3_supersession_deterministic_only": Scenario(
+        degraded_reasons=("extraction_disallowed_by_policy",),
+        coverage={
+            "extraction": SourceCoverage(
+                source="extraction",
+                available=False,
+                reason="provider_policy_disallows_model_providers",
+            )
+        },
+        suppress_fact_keys=frozenset({"gt_adr021_supersedes_adr014"}),
+    ),
+    "O4_prior_attempts": _DEFAULT,
+    "O4_prior_attempts_manipulated": Scenario(include_adversarial=True),
+    "O4_prior_attempts_after_redaction": Scenario(
+        visibility=gt.VisibilityContext(
+            org_id=gt.ORG_ALPHA,
+            visible_repos=gt.ALPHA_FULL_VISIBILITY.visible_repos,
+            deleted_source_event_refs=frozenset({"sevt_ep_0004"}),
+            redacted_source_event_refs=frozenset({"sevt_ep_0001"}),
+        ),
+        degraded_reasons=("provenance_redacted",),
+    ),
+    "O4_prior_attempts_after_revocation": Scenario(visibility=gt.ALPHA_WEB_REVOKED),
+    "O4_prior_attempts_graph_outage": Scenario(
+        outcome=ArmOutcome.UNAVAILABLE,
+        answer_is_empty=True,
+        indexed_through=None,
+        degraded_reasons=("temporal_graph_unavailable",),
+        coverage={
+            "temporal_graph.v1": SourceCoverage(
+                source="temporal_graph.v1",
+                available=False,
+                reason="graph_datastore_outage",
+            )
+        },
+    ),
+    "O5_conflicts": Scenario(
+        flags={
+            "gt_conflict_side_a": FactFlags(conflicting=True),
+            "gt_conflict_side_b": FactFlags(conflicting=True),
+        }
+    ),
+    "O5_conflicts_injected": Scenario(
+        flags={
+            "gt_conflict_side_a": FactFlags(conflicting=True, untrusted_content=True),
+            "gt_conflict_side_b": FactFlags(conflicting=True, untrusted_content=True),
+        }
+    ),
+    "O5_conflicts_poisoned": _DEFAULT,
+    "O6_recurring_pattern": _DEFAULT,
+    "O7_valid": _DEFAULT,
+    "O7_null_valid_from": _DEFAULT,
+    "O7_unpinned": Scenario(warnings=("temporal_default_time_bound_applied",)),
+}
+
+
+def _to_temporal_fact(
+    source: gt.GroundTruthFact,
+    *,
+    axis: TimeAxis,
+    as_of: datetime,
+    apply_time_filter: bool,
+    flags: FactFlags,
+) -> TemporalFact:
+    """Project a ground-truth fact onto the axis the query asked for.
+
+    On the observed-time axis a validity window whose *end* had not yet been
+    ingested is presented as still open, and its invalidation provenance is
+    withheld. That is not a convenience: on 15 July, Dev Health genuinely did
+    not know the window had closed, and reporting the closure would be
+    answering the valid-time question while claiming the observed-time one.
+    """
+    valid_to = source.valid_to
+    invalidated_by: Invalidation | None = None
+
+    endpoint_known = True
+    if (
+        axis is TimeAxis.OBSERVED_TIME
+        and apply_time_filter
+        and source.invalidation_observed_at is not None
+        and as_of < source.invalidation_observed_at
+    ):
+        endpoint_known = False
+
+    if valid_to is not None and endpoint_known:
+        # The refs must belong to whatever record actually closed the
+        # window. Most facts are self-evidencing (a structured field whose
+        # own record carries the closure); `invalidated_by_fact_key` names a
+        # DIFFERENT record for the cases where it does not (e.g. a
+        # supersession stated only in another decision's prose) -- citing
+        # this fact's own opening evidence there would be citing what opened
+        # the window as what closed it.
+        invalidating = (
+            gt.GROUND_TRUTH_BY_KEY[source.invalidated_by_fact_key]
+            if source.invalidated_by_fact_key is not None
+            else source
+        )
+        invalidated_by = Invalidation(
+            refs=invalidating.evidence_refs or invalidating.source_event_refs,
+            invalidation_claim_kind=ClaimKind.OBSERVED,
+        )
+    elif not endpoint_known:
+        valid_to = None
+
+    return TemporalFact(
+        fact_id=f"tf_{source.fact_key}",
+        subject_ref=source.subject,
+        predicate=source.predicate,
+        object_ref=source.object,
+        observed_at=source.observed_at,
+        claim_kind=source.claim_kind,
+        projection_version=PROJECTION_VERSION,
+        valid_from=source.valid_from,
+        valid_to=valid_to,
+        reference_time=source.valid_from,
+        invalidated_by=invalidated_by,
+        evidence_refs=source.evidence_refs,
+        source_event_refs=source.source_event_refs,
+        confidence=None,
+        flags=flags,
+    )
+
+
+def _adversarial_last(
+    facts: Sequence[gt.GroundTruthFact],
+) -> list[gt.GroundTruthFact]:
+    """Stable-sort so adversarial (decoy) material never ranks ahead of
+    legitimate evidence when a truncation budget forces a cut.
+
+    This must be a real reordering, not GROUND_TRUTH's declaration order
+    doing the work by coincidence: in the pinned corpus every planted decoy
+    happens to be declared after the real evidence it decoys, so an
+    end-to-end check against O4_prior_attempts_manipulated alone cannot
+    distinguish "this function runs" from "this function was deleted" --
+    see ``test_adversarial_last_sort_reorders_regardless_of_declaration_order``
+    in test_oracle_fault_modes.py, which builds its own reversed input
+    specifically so the sort's effect is observable.
+    """
+    return sorted(facts, key=lambda f: f.is_adversarial)
+
+
+def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
+    """The response a correct arm returns for ``oracle``'s query."""
+    scenario = SCENARIOS[oracle.oracle_id]
+    query = oracle.query
+
+    apply_time_filter = query.query_mode not in _HISTORY_MODES
+    axis = query.axis or TimeAxis.VALID_TIME
+    as_of = query.as_of or gt.TRIAL_NOW
+
+    if scenario.answer_is_empty:
+        facts: tuple[TemporalFact, ...] = ()
+        truncated = False
+    else:
+        predicates = (
+            frozenset(query.allowed_relation_types)
+            if query.allowed_relation_types
+            else None
+        )
+        selected = gt.select(
+            as_of=as_of,
+            axis=axis.value,
+            visibility=scenario.visibility,
+            subjects=query.subjects if scenario.apply_subject_filter else None,
+            predicates=predicates,
+            include_adversarial=scenario.include_adversarial,
+            apply_time_filter=apply_time_filter,
+            suppress_fact_keys=scenario.suppress_fact_keys,
+        )
+        ordered = _adversarial_last(selected)
+        truncated = len(ordered) > query.max_results
+        facts = tuple(
+            _to_temporal_fact(
+                source,
+                axis=axis,
+                as_of=as_of,
+                apply_time_filter=apply_time_filter,
+                flags=scenario.flags.get(source.fact_key, FactFlags()),
+            )
+            for source in ordered
+        )[: query.max_results]
+
+    return ArmResponse(
+        arm=arm,
+        outcome=scenario.outcome,
+        query=query,
+        facts=facts,
+        warnings=scenario.warnings,
+        degraded_reasons=scenario.degraded_reasons,
+        source_coverage=dict(scenario.coverage),
+        indexed_through=scenario.indexed_through,
+        versions={
+            "projection": PROJECTION_VERSION,
+            "query": query.schema_version,
+        },
+        truncated=truncated,
+    )

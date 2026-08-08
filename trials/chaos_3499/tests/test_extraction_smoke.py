@@ -260,6 +260,90 @@ def test_fabricated_evidence_ref_survives_verbatim_and_fails_the_oracle(
         )
 
 
+def test_malformed_rows_are_dropped_not_repaired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finding 1, pinned directly and offline against the REAL adapter (a
+    prior version of this fix had no failing test at all: re-planting the
+    old `raw.get("claim_kind") or "observed"` default left the entire
+    offline suite green).
+
+    Also pins the bonus fix found while re-verifying finding 1: a JSON
+    `null` in a required field must be dropped as malformed, never coerced
+    by `str(None)` into the literal string ``"None"``.
+
+    Three rows through one fake completion, no live model needed:
+    (a) missing `claim_kind` entirely -- must be dropped;
+    (b) a required field is JSON `null` -- must be dropped, never survives
+        as the string "None";
+    (c) a well-formed row -- must survive, as the control proving (a) and
+        (b) are not just an accident of the whole response being rejected.
+    """
+    oracle = ORACLES_BY_ID["O3_supersession"]
+    rows = [
+        {  # (a) no claim_kind at all.
+            "subject_kind": "decision",
+            "subject_id": "ADR-900",
+            "predicate": "supersedes",
+            "object_kind": "decision",
+            "object_id": "ADR-901",
+            "evidence_ref": "ev_missing_claim_kind",
+        },
+        {  # (b) JSON null in a required field.
+            "subject_kind": "decision",
+            "subject_id": "ADR-902",
+            "predicate": "supersedes",
+            "object_kind": None,
+            "object_id": None,
+            "claim_kind": "observed",
+            "evidence_ref": "ev_null_field",
+        },
+        {  # (c) control: well-formed.
+            "subject_kind": "decision",
+            "subject_id": "ADR-903",
+            "predicate": "supersedes",
+            "object_kind": "decision",
+            "object_id": "ADR-904",
+            "claim_kind": "observed",
+            "evidence_ref": "ev_well_formed",
+        },
+    ]
+    fake_content = json.dumps(rows)
+
+    def _fake_complete(
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        config: LLMConfig | None = None,
+        _content: str = fake_content,
+    ) -> LLMResponse:
+        return LLMResponse(content=_content, model="fake-smoke-model")
+
+    monkeypatch.setattr(llm_client, "complete", _fake_complete)
+
+    response = extraction.answer(oracle)
+    assert response.outcome is ArmOutcome.ANSWERED
+
+    subject_ids = {f.subject_ref.id for f in response.facts}
+    assert "ADR-900" not in subject_ids, (
+        "(a) a row missing claim_kind must be DROPPED, not granted a "
+        "default 'observed' claim"
+    )
+    assert "ADR-902" not in subject_ids, (
+        "(b) a row with a JSON null in a required field must be DROPPED"
+    )
+    assert not any(
+        f.object_ref.kind == "None" or f.object_ref.id == "None" for f in response.facts
+    ), (
+        "(b) a JSON null field must never survive as the literal string "
+        "'None' -- str(None) does this silently unless explicitly guarded"
+    )
+    assert "ADR-903" in subject_ids, (
+        "(c) control: a well-formed row must survive -- if this fails too, "
+        "(a) and (b) prove nothing about selective dropping"
+    )
+
+
 # --------------------------------------------------------------------------
 # ComparisonReport rendering with the candidate present -- requirement 3
 # and 4's "ComparisonReport renders per-class with the candidate present".

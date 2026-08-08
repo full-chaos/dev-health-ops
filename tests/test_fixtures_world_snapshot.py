@@ -701,6 +701,50 @@ class TestTtlHorizonGuard:
         assert "feature_flag_event" in message
         assert "telemetry_signal_bucket" in message
 
+    @pytest.mark.asyncio
+    async def test_an_empty_registry_fails_closed_instead_of_skipping_every_table(
+        self, monkeypatch
+    ) -> None:
+        """Codex finding (HIGH, confirmed): `clickhouse_ttl_retentions()`
+        returning `{}` (migrations-directory path broken, parser
+        regression) used to make every table read as "no TTL, nothing to
+        check" and pass with ZERO queries issued -- silently minting an
+        unchecked snapshot. Reproduced directly against a client that would
+        report a massive violation if it were ever actually queried.
+        """
+        from dev_health_ops.fixtures import world_snapshot
+
+        monkeypatch.setattr(world_snapshot, "clickhouse_ttl_retentions", lambda: {})
+        client = _FakeTtlCountClient(counts={"feature_flag_event": 999999})
+
+        with pytest.raises(SnapshotError, match="ZERO"):
+            await _assert_no_ttl_horizon_rows(client, ["feature_flag_event"])
+
+        assert client.queries == [], (
+            "must fail before issuing a single per-table query once the "
+            "registry itself looks broken"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_query_result_fails_closed_instead_of_reading_as_zero(
+        self,
+    ) -> None:
+        """Codex finding (HIGH, confirmed): an empty/malformed
+        `result.result_rows` was folded into `count = 0` -- a driver
+        returning something other than a single scalar count row (a
+        transient response-shape defect, a mocking/wiring bug) silently
+        read as "no violating rows" and let the mint proceed unchecked.
+        """
+
+        class _MalformedResultClient:
+            def query(self, q: str, parameters: dict | None = None) -> _DumpResult:
+                return _DumpResult([])  # no rows at all -- malformed
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            await _assert_no_ttl_horizon_rows(
+                _MalformedResultClient(), ["feature_flag_event"]
+            )
+
 
 class TestContentHashManifestShape:
     """The hashes are stored as a LIST of objects, not a `{table: hash}` map.

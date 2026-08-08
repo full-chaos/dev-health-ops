@@ -327,3 +327,62 @@ class TestParseSurfaceCoversPyMigrations:
             "added because this repo has them; if that changed, revisit "
             "whether these controls still describe reality"
         )
+
+
+class TestPerTableCeilingCompatibleWithShelfLife:
+    """CHAOS-3602 port, codex finding (HIGH, confirmed): a per-table
+    generator ceiling that ignores THIS module's TTL_SAFETY_MARGIN can drift
+    out of sync with the shelf-life contract ``_assert_snapshot_within_
+    shelf_life`` actually enforces at restore. Measured live before this
+    fix: ttl_registry.py's own (looser) margin let ``telemetry_signal_
+    bucket`` clamp to 80 days against a 90-day TTL -- add the full 30-day
+    advertised shelf life and a restore at that boundary finds rows 110
+    days old, 20 days PAST the horizon, already gone to a TTL merge.
+
+    The invariant that must hold for every TTL'd table: a row generated at
+    the ceiling, restored at the full advertised shelf life later, must
+    still be at or inside its own TTL horizon.
+    """
+
+    def test_every_known_ttl_table_ceiling_survives_the_full_shelf_life(self) -> None:
+        from dev_health_ops.fixtures.ttl_horizon import max_generated_age_days_for_table
+        from dev_health_ops.fixtures.ttl_registry import clickhouse_ttl_retentions
+
+        for table, retention in clickhouse_ttl_retentions().items():
+            ceiling = max_generated_age_days_for_table(table)
+            assert ceiling is not None
+            age_at_full_shelf_life = ceiling + TTL_SAFETY_MARGIN.days
+            assert age_at_full_shelf_life <= retention.retention_days, (
+                f"{table}: a row generated at the {ceiling}-day ceiling and "
+                f"restored {TTL_SAFETY_MARGIN.days} days later (the full "
+                f"advertised shelf life) would be {age_at_full_shelf_life} "
+                f"days old, past its {retention.retention_days}-day TTL -- "
+                "the restore contract promises a shelf life this ceiling "
+                "cannot actually honor"
+            )
+
+    def test_ceiling_uses_this_modules_margin_not_a_different_one(self) -> None:
+        """Pins the exact arithmetic so a future edit that quietly reuses a
+        different (e.g. ttl_registry.py's own) margin is caught."""
+        from dev_health_ops.fixtures.ttl_horizon import max_generated_age_days_for_table
+
+        assert max_generated_age_days_for_table("feature_flag_event") == (
+            90 - TTL_SAFETY_MARGIN.days
+        )
+
+    def test_a_table_with_no_ttl_has_no_ceiling(self) -> None:
+        from dev_health_ops.fixtures.ttl_horizon import max_generated_age_days_for_table
+
+        assert max_generated_age_days_for_table("projects") is None
+
+    def test_an_empty_registry_fails_closed(self, monkeypatch) -> None:
+        """Same fail-closed rule as the mint-time guard: a broken registry
+        must not silently disable this ceiling's protection."""
+        from dev_health_ops.fixtures import ttl_horizon as ttl_horizon_module
+
+        monkeypatch.setattr(
+            "dev_health_ops.fixtures.ttl_registry.clickhouse_ttl_retentions",
+            lambda: {},
+        )
+        with pytest.raises(RuntimeError, match="ZERO|empty|broke"):
+            ttl_horizon_module.max_generated_age_days_for_table("feature_flag_event")

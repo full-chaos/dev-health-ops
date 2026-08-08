@@ -110,3 +110,45 @@ def max_generated_history_days(migrations_dir: Path | None = None) -> int:
     """How far back generators may write, to stay inside the shelf life."""
 
     return tightest_ttl_days(migrations_dir) - TTL_SAFETY_MARGIN.days
+
+
+def max_generated_age_days_for_table(table: str) -> int | None:
+    """A PER-TABLE generation ceiling that stays compatible with THIS
+    module's shelf-life contract -- ``None`` if ``table`` carries no TTL.
+
+    CHAOS-3602 port, codex finding (HIGH, confirmed): a generator clamped
+    against ``ttl_registry.py``'s own margin constants
+    (``TTL_SAFETY_MARGIN_DAYS`` = 7, ``GENERATOR_SLACK_DAYS`` = 3) produces a
+    ceiling incompatible with the 30-day margin ``_assert_snapshot_within_
+    shelf_life`` actually enforces at restore: measured live,
+    ``telemetry_signal_bucket`` at that looser ceiling (80d) plus this
+    module's own advertised 30-day restore shelf life reaches 110 days old
+    against a 90-day TTL -- 20 days PAST the horizon, silently losing rows
+    to a TTL merge during a restore main's own manifest says is still safe.
+    ``release_impact_daily`` (355d + 30d vs a 365d TTL) and
+    ``product_telemetry_events`` (170d + 30d vs a 180d TTL) have the same
+    defect.
+
+    This combines ``ttl_registry.py``'s PER-TABLE retention data (more
+    precise than this module's single tightest-global horizon) with THIS
+    module's own ``TTL_SAFETY_MARGIN`` -- the one number
+    ``_assert_snapshot_within_shelf_life`` actually promises callers -- so
+    every generator's ceiling stays honest about what a restore up to the
+    full advertised shelf life can still find intact.
+    """
+
+    from dev_health_ops.fixtures.ttl_registry import clickhouse_ttl_retentions
+
+    retentions = clickhouse_ttl_retentions()
+    if not retentions:
+        raise RuntimeError(
+            f"no per-table TTL retentions found while computing a generation "
+            f"ceiling for {table!r} -- this schema is known to carry several "
+            "TTL'd tables, so an empty registry means the parser or its "
+            "migrations-directory path broke, not that the risk went away "
+            "(see tightest_ttl_days for the same rule applied globally)"
+        )
+    retention = retentions.get(table)
+    if retention is None:
+        return None
+    return max(0, retention.retention_days - TTL_SAFETY_MARGIN.days)

@@ -622,9 +622,34 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
     drift, a future generator that forgets to clamp, hand-seeded data)
     before it can race the merge scheduler, rather than discovering it via
     a content-oracle mismatch after data has already been silently lost.
+
+    Codex finding (HIGH, confirmed): this guard's entire safety depends on
+    :func:`clickhouse_ttl_retentions` actually parsing something -- a
+    migrations-directory path failure or parser regression makes it return
+    ``{}``, and the loop below treats every table as "no TTL, nothing to
+    check" and passes with ZERO queries issued. Reproduced directly: pointed
+    the registry at a nonexistent directory and confirmed this function
+    returned cleanly against a fake client that would have reported a
+    massive violation had it been queried at all. This schema is known to
+    carry several TTL'd tables, so an empty registry always means the
+    parser/path broke, never that the risk went away -- fail loudly instead
+    of silently minting an unchecked snapshot. The per-table query result is
+    held to the same standard: a malformed or empty result is never folded
+    into "0 violating rows".
     """
 
     retentions = clickhouse_ttl_retentions()
+    if not retentions:
+        raise SnapshotError(
+            "world snapshot: the ClickHouse TTL registry parsed ZERO "
+            "retention entries -- this schema is known to carry several "
+            "TTL'd tables (feature_flag_event, telemetry_signal_bucket, "
+            "release_impact_daily, product_telemetry_events), so an empty "
+            "registry means dev_health_ops.fixtures.ttl_registry's "
+            "migrations-directory parsing broke, not that the TTL-horizon "
+            "risk went away. Refusing to mint a snapshot this guard cannot "
+            "actually check (CHAOS-3602)."
+        )
     violations: list[str] = []
     for table in tables:
         retention = retentions.get(table)
@@ -636,7 +661,15 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
             f"SELECT count() FROM `{table}` "
             f"WHERE `{retention.column}` <= now() - INTERVAL {safe_days} DAY",
         )
-        count = int(result.result_rows[0][0]) if result.result_rows else 0
+        if not result.result_rows or len(result.result_rows) != 1:
+            raise SnapshotError(
+                f"world snapshot: the TTL-horizon check for table {table!r} "
+                f"returned a malformed result ({result.result_rows!r}) "
+                "instead of a single scalar count() row -- refusing to fold "
+                'that into "zero violating rows" (a measurement that did '
+                "not actually happen must fail, not silently pass)."
+            )
+        count = int(result.result_rows[0][0])
         if count:
             violations.append(
                 f"{table}: {count} row(s) with {retention.column} at or "

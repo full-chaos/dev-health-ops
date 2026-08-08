@@ -23,38 +23,30 @@ from dev_health_ops.metrics.compute_work_items import (
     compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
     compute_work_item_team_attributions,
-    resolve_team_attribution,
 )
 from dev_health_ops.metrics.job_daily import (
     REPO_ROOT,
     _discover_repos,
-    _to_utc,
 )
 from dev_health_ops.metrics.loaders.base import to_dataclass
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
-from dev_health_ops.metrics.schemas import (
-    InvestmentClassificationRecord,
-    InvestmentMetricsRecord,
-    IssueTypeMetricsRecord,
-)
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.work_item_engine_destinations import (
+    compute_work_item_engine_destinations_daily,
+)
 from dev_health_ops.metrics.work_items import (
     fetch_github_project_v2_items,
     fetch_gitlab_work_items,
     fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
 )
-from dev_health_ops.models.work_items import (
-    WorkItem,
-    WorkItemType,
-)
+from dev_health_ops.models.work_items import WorkItem
 from dev_health_ops.providers.gitlab.instance import normalize_gitlab_instance
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     load_team_resolver,
-    normalize_team_id,
 )
 from dev_health_ops.providers.usage import (
     attach_partial_observations,
@@ -1276,174 +1268,22 @@ def run_work_items_sync_job(
                 attribution_context=team_attribution_context,
             )
 
-            # --- Issue Type Metrics ---
-            issue_type_stats: dict[
-                tuple[uuid.UUID, Any, str, WorkItemType], dict[str, Any]
-            ] = {}
-
-            def _get_team(wi: Any) -> str:
-                team_id, _, _ = resolve_team_attribution(
-                    wi,
-                    team_resolver,
-                    pk_resolver,
-                    linked_issue_resolver=linked_issue_resolver,
-                    attribution_context=team_attribution_context,
-                )
-                return normalize_team_id(team_id)
-
-            def _normalize_investment_team_id(team_id: str | None) -> str | None:
-                if not team_id or team_id == "unassigned":
-                    return None
-                return team_id
-
-            start_dt = _to_utc(datetime.combine(d, time.min, tzinfo=timezone.utc))
-            end_dt = start_dt + timedelta(days=1)
-            for item in work_items:
-                r_id = getattr(item, "repo_id", None) or uuid.UUID(int=0)
-                prov = item.provider
-                team_id = _get_team(item)
-                norm_type = status_mapping.normalize_type(
-                    provider=prov,
-                    type_raw=item.type,
-                    labels=getattr(item, "labels", []),
-                )
-
-                key = (r_id, prov, team_id, norm_type)
-                if key not in issue_type_stats:
-                    issue_type_stats[key] = {
-                        "created": 0,
-                        "completed": 0,
-                        "active": 0,
-                        "cycle_hours": [],
-                    }
-
-                stats = issue_type_stats[key]
-                created = _to_utc(item.created_at)
-                if start_dt <= created < end_dt:
-                    stats["created"] += 1
-
-                if item.completed_at:
-                    completed = _to_utc(item.completed_at)
-                    if start_dt <= completed < end_dt:
-                        stats["completed"] += 1
-                        if item.started_at:
-                            started = _to_utc(item.started_at)
-                            h = (completed - started).total_seconds() / 3600.0
-                            if h >= 0:
-                                stats["cycle_hours"].append(h)
-
-                if created < end_dt and (
-                    not item.completed_at or _to_utc(item.completed_at) >= start_dt
-                ):
-                    stats["active"] += 1
-
-            issue_type_metrics_rows: list[IssueTypeMetricsRecord] = []
-            for (r_id, prov, team_id, norm_type), stat in issue_type_stats.items():
-                cycles = sorted(stat["cycle_hours"])
-                p50 = cycles[len(cycles) // 2] if cycles else 0.0
-                p90 = cycles[int(len(cycles) * 0.9)] if cycles else 0.0
-                issue_type_metrics_rows.append(
-                    IssueTypeMetricsRecord(
-                        repo_id=r_id if r_id.int != 0 else None,
-                        day=d,
-                        provider=prov,
-                        team_id=team_id,
-                        issue_type_norm=norm_type,
-                        created_count=stat["created"],
-                        completed_count=stat["completed"],
-                        active_count=stat["active"],
-                        cycle_p50_hours=p50,
-                        cycle_p90_hours=p90,
-                        lead_p50_hours=0.0,
-                        computed_at=computed_at,
-                    )
-                )
-
-            # --- Investment areas ---
-            investment_classifications: list[InvestmentClassificationRecord] = []
-            inv_metrics_map: dict[tuple[Any, str, str, str], dict[str, Any]] = {}
-
-            for item in work_items:
-                r_id = getattr(item, "repo_id", None) or uuid.UUID(int=0)
-                created = _to_utc(item.created_at)
-                if not (
-                    created < end_dt
-                    and (
-                        not item.completed_at or _to_utc(item.completed_at) >= start_dt
-                    )
-                ):
-                    continue
-
-                cls = investment_classifier.classify(
-                    {
-                        "labels": getattr(item, "labels", []),
-                        "component": getattr(item, "component", ""),
-                        "title": item.title,
-                        "provider": item.provider,
-                    }
-                )
-
-                investment_classifications.append(
-                    InvestmentClassificationRecord(
-                        repo_id=r_id if r_id.int != 0 else None,
-                        day=d,
-                        artifact_type="work_item",
-                        artifact_id=item.work_item_id,
-                        provider=item.provider,
-                        investment_area=cls.investment_area,
-                        project_stream=cls.project_stream or "",
-                        confidence=cls.confidence,
-                        rule_id=cls.rule_id,
-                        computed_at=computed_at,
-                    )
-                )
-
-                if item.completed_at:
-                    completed = _to_utc(item.completed_at)
-                    if not (start_dt <= completed < end_dt):
-                        continue
-                    team_id_value = _normalize_investment_team_id(_get_team(item)) or ""
-                    inv_key = (
-                        r_id,
-                        team_id_value,
-                        cls.investment_area,
-                        cls.project_stream or "",
-                    )
-                    if inv_key not in inv_metrics_map:
-                        inv_metrics_map[inv_key] = {
-                            "units": 0,
-                            "completed": 0,
-                            "churn": 0,
-                            "cycles": [],
-                        }
-                    inv_metrics_map[inv_key]["completed"] += 1
-                    points = getattr(item, "story_points", 1) or 1
-                    inv_metrics_map[inv_key]["units"] += int(points)
-                    if item.started_at:
-                        started = _to_utc(item.started_at)
-                        h = (completed - started).total_seconds() / 3600.0
-                        if h >= 0:
-                            inv_metrics_map[inv_key]["cycles"].append(h)
-
-            investment_metrics_rows: list[InvestmentMetricsRecord] = []
-            for (r_id, team_id, area, stream), data in inv_metrics_map.items():
-                cycles = sorted(data["cycles"])
-                p50 = cycles[len(cycles) // 2] if cycles else 0.0
-                investment_metrics_rows.append(
-                    InvestmentMetricsRecord(
-                        repo_id=r_id if r_id.int != 0 else None,
-                        day=d,
-                        team_id=team_id,
-                        investment_area=area,
-                        project_stream=stream,
-                        delivery_units=data["units"],
-                        work_items_completed=data["completed"],
-                        prs_merged=0,
-                        churn_loc=data["churn"],
-                        cycle_p50_hours=p50,
-                        computed_at=computed_at,
-                    )
-                )
+            (
+                issue_type_metrics_rows,
+                investment_classifications,
+                investment_metrics_rows,
+            ) = compute_work_item_engine_destinations_daily(
+                day=d,
+                work_items=work_items,
+                computed_at=computed_at,
+                org_id=org_id,
+                status_mapping=status_mapping,
+                investment_classifier=investment_classifier,
+                team_resolver=team_resolver,
+                project_key_resolver=pk_resolver,
+                linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
+            )
 
             for s in sinks:
                 if wi_metrics:

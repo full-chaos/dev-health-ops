@@ -1,0 +1,667 @@
+{
+  "schema_version": 1,
+  "name": "github work-item config-engine destinations and plain-MergeTree effects",
+  "build": [
+    "go",
+    "test",
+    "-run",
+    "^$",
+    "./internal/providersync/"
+  ],
+  "mutations": [
+    {
+      "id": "E1-engine-constructor-accepts-nil-status-mapping",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\tif statusMapping == nil || investmentClassifier == nil {",
+      "replace": "\tif investmentClassifier == nil {",
+      "rationale": "Status mapping and investment classification are one atomic capability; accepting the classifier alone creates a partial engine that later panics or fabricates issue-type output.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemEngineDeriverRejectsPartialEngines$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E2-engine-constructor-accepts-nil-classifier",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\tif statusMapping == nil || investmentClassifier == nil {",
+      "replace": "\tif statusMapping == nil {",
+      "rationale": "Status mapping alone is not a complete engine: both investment destinations would be unevaluated.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemEngineDeriverRejectsPartialEngines$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E3-runtime-corruption-misses-nil-status-mapping",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\tif ctx == nil || engine == nil || engine.statusMapping == nil ||\n\t\tengine.investmentClassifier == nil || claim.Validate() != nil ||",
+      "replace": "\tif ctx == nil || engine == nil || false ||\n\t\tengine.investmentClassifier == nil || claim.Validate() != nil ||",
+      "rationale": "Package-level corruption or a hostile injected engine must still fail closed before dereferencing a missing status mapping.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverRejectsCorruptedPartialEngine$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E4-runtime-corruption-misses-nil-classifier",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tengine.investmentClassifier == nil || claim.Validate() != nil ||",
+      "replace": "\t\tfalse || claim.Validate() != nil ||",
+      "rationale": "A corrupted concrete engine with no classifier cannot claim either investment destination was evaluated.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverRejectsCorruptedPartialEngine$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E5-production-constructor-drops-engine",
+      "file": "internal/providersync/github_work_items_composition.go",
+      "find": "\tengine, err := NewGitHubWorkItemEngineDeriver(\n\t\tstatusMapping, investmentClassifier,\n\t)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn &GitHubWorkItemDeriver{\n\t\tSource: githubWorkItemClickHouseDerivationContextSource{\n\t\t\tConn: conn, Lease: lease,\n\t\t},\n\t\tengine: engine,",
+      "replace": "\t_, err = NewGitHubWorkItemEngineDeriver(\n\t\tstatusMapping, investmentClassifier,\n\t)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn &GitHubWorkItemDeriver{\n\t\tSource: githubWorkItemClickHouseDerivationContextSource{\n\t\t\tConn: conn, Lease: lease,\n\t\t},\n\t\tengine: nil,",
+      "rationale": "The exported path-based constructor must return a fully installed production deriver, not merely validate two configs and discard the engine.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemDeriverLoadsBothExplicitConfigsAtomically$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E6-production-constructor-accepts-blank-status-path",
+      "file": "internal/providersync/github_work_items_composition.go",
+      "find": "\tif conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == \"\" ||\n\t\tstrings.TrimSpace(investmentConfigPath) == \"\" {",
+      "replace": "\tif conn == nil || lease == nil || false ||\n\t\tstrings.TrimSpace(investmentConfigPath) == \"\" {",
+      "rationale": "The exported constructor requires an explicit status config path and must reject blank input before any environment-aware loader can reinterpret it.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemDeriverLoadsBothExplicitConfigsAtomically$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E7-production-constructor-accepts-blank-investment-path",
+      "file": "internal/providersync/github_work_items_composition.go",
+      "find": "\tif conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == \"\" ||\n\t\tstrings.TrimSpace(investmentConfigPath) == \"\" {",
+      "replace": "\tif conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == \"\" ||\n\t\tfalse {",
+      "rationale": "A blank investment path is configuration omission, not the classifier's intentional named-missing-file fallback.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemDeriverLoadsBothExplicitConfigsAtomically$", "./internal/providersync/"]]
+    },
+    {
+      "id": "C1-engine-stamp-rounded-to-minute",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "githubWorkItemEngineDestinationStampPrecision = time.Second",
+      "replace": "githubWorkItemEngineDestinationStampPrecision = time.Minute",
+      "rationale": "All three migration columns store DateTime seconds; coarser minute rounding changes the generated version and makes readback identify a different effect.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "C2-status-mapping-does-not-see-labels",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "statusMapping.NormalizeType(item.Provider, item.Type, item.Labels)",
+      "replace": "statusMapping.NormalizeType(item.Provider, item.Type, nil)",
+      "rationale": "Production status mapping consumes provider, raw type, and labels; dropping labels turns the bug-labelled pull request in the fixture back into a generic type.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "C3-future-zero-bucket-is-dropped",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tbucket := buckets[key]\n\t\tif bucket == nil {\n\t\t\tbucket = &githubIssueTypeMetricsBucket{}\n\t\t\tbuckets[key] = bucket\n\t\t\torder = append(order, key)\n\t\t}\n\t\tcreated := item.CreatedAt.UTC()",
+      "replace": "\t\tcreated := item.CreatedAt.UTC()\n\t\tif !created.Before(end) {\n\t\t\tcontinue\n\t\t}\n\t\tbucket := buckets[key]\n\t\tif bucket == nil {\n\t\t\tbucket = &githubIssueTypeMetricsBucket{}\n\t\t\tbuckets[key] = bucket\n\t\t\torder = append(order, key)\n\t\t}",
+      "rationale": "Python opens an issue-type bucket before time filtering, so a future-only item still emits an all-zero group; moving the skip first silently loses the row.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "C4a-issue-p50-uses-lower-middle",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tvar p50, p90 float64\n\t\tif len(bucket.cycleHours) > 0 {\n\t\t\tp50 = bucket.cycleHours[len(bucket.cycleHours)/2]",
+      "replace": "\t\tvar p50, p90 float64\n\t\tif len(bucket.cycleHours) > 0 {\n\t\t\tp50 = bucket.cycleHours[(len(bucket.cycleHours)-1)/2]",
+      "rationale": "Python issue-type p50 uses upper-index selection; the two unequal cycle samples distinguish it from a lower median.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "C4b-investment-p50-uses-lower-middle",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tvar p50 float64\n\t\tif len(bucket.cycleHours) > 0 {\n\t\t\tp50 = bucket.cycleHours[len(bucket.cycleHours)/2]",
+      "replace": "\t\tvar p50 float64\n\t\tif len(bucket.cycleHours) > 0 {\n\t\t\tp50 = bucket.cycleHours[(len(bucket.cycleHours)-1)/2]",
+      "rationale": "Python investment p50 independently uses the upper middle cycle, not the issue-type implementation by proxy.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "C5-p90-index-is-not-python-upper-index",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "p90 = bucket.cycleHours[int(float64(len(bucket.cycleHours))*0.9)]",
+      "replace": "p90 = bucket.cycleHours[int(float64(len(bucket.cycleHours))*0.1)]",
+      "rationale": "The issue-type p90 is the element at int(n*0.9), not a lower quantile or interpolated percentile.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I1-classification-includes-items-completed-before-day",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tif !created.Before(end) ||\n\t\t\t(item.CompletedAt != nil && item.CompletedAt.UTC().Before(dayUTC)) {",
+      "replace": "\t\tif !created.Before(end) {",
+      "rationale": "Investment classifications cover items active during the day; an item completed before the day must not be classified into it.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I2-reachable-classifier-error-is-swallowed",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tif err != nil {\n\t\t\treturn nil, nil, err\n\t\t}",
+      "replace": "\t\tif err != nil {\n\t\t\treturn classifications, nil, nil\n\t\t}",
+      "rationale": "A config that loads but raises when a real row reaches Classify must abort the outer derivation without returning a partial manifest.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemDeriverPropagatesReachableClassifierError$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I3-work-item-component-is-absent-instead-of-empty",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tLabels: item.Labels, Component: &emptyComponent,",
+      "replace": "\t\t\tLabels: item.Labels, Component: func() *string { _ = emptyComponent; return nil }(),",
+      "rationale": "The Python work-item call site passes component='', which is observably different from an absent component for a bare-string component matcher.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverSuppliesPythonWorkItemArtifactShape$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I4-work-item-invents-a-classifier-path",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tLabels: item.Labels, Component: &emptyComponent,",
+      "replace": "\t\t\tLabels: item.Labels, Component: &emptyComponent, Paths: []string{\"synthetic\"},",
+      "rationale": "Work-item classification supplies no file paths; inventing one activates path-prefix rules that are inert on the live Python call site.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverSuppliesPythonWorkItemArtifactShape$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I5-zero-story-points-does-not-fall-back-to-one",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tif item.StoryPoints != nil && *item.StoryPoints != 0 {",
+      "replace": "\t\tif item.StoryPoints != nil {",
+      "rationale": "Python's `story_points or 1` maps both null and zero to one delivery unit.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I6-fractional-story-points-are-rounded-up",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "bucket.deliveryUnits += int(math.Trunc(points))",
+      "replace": "bucket.deliveryUnits += int(math.Ceil(points))",
+      "rationale": "Python int() truncates positive fractional story points; rounding 3.7 upward changes delivery units.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I7-closed-at-substitutes-for-completed-at-in-active-count",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tif created.Before(end) &&\n\t\t\t(item.CompletedAt == nil || !item.CompletedAt.UTC().Before(dayUTC)) {",
+      "replace": "\t\tif created.Before(end) &&\n\t\t\t(item.ClosedAt == nil || !item.ClosedAt.UTC().Before(dayUTC)) {",
+      "rationale": "The live producer deliberately uses completed_at only; a closed_at with no completed_at remains active and classified.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineClosedAtDoesNotTerminateWithoutCompletedAt$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I7b-closed-at-substitutes-for-completed-at-in-classification-activity",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tif !created.Before(end) ||\n\t\t\t(item.CompletedAt != nil && item.CompletedAt.UTC().Before(dayUTC)) {",
+      "replace": "\t\tif !created.Before(end) ||\n\t\t\t(item.ClosedAt != nil && item.ClosedAt.UTC().Before(dayUTC)) {",
+      "rationale": "Investment classifications use completed_at to determine whether a work item was active during the day; closed_at is not a substitute.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineClosedAtDoesNotTerminateWithoutCompletedAt$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I7c-closed-at-substitutes-for-completed-at-in-investment-metrics",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tif item.CompletedAt == nil {\n\t\t\tcontinue\n\t\t}\n\t\tcompleted := item.CompletedAt.UTC()",
+      "replace": "\t\tif item.ClosedAt == nil {\n\t\t\tcontinue\n\t\t}\n\t\tcompleted := item.ClosedAt.UTC()",
+      "rationale": "Investment metrics count only completed_at events in the day; a closed-only item must remain active without creating a completion metric.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineClosedAtInsideDayDoesNotCreateCompletionMetric$", "./internal/providersync/"]]
+    },
+    {
+      "id": "I8-unassigned-investment-team-is-not-normalized-to-empty",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tif team == githubWorkItemUnassignedTeamID {\n\t\t\tteam = \"\"\n\t\t}",
+      "replace": "\t\tif team == githubWorkItemUnassignedTeamID {\n\t\t\tteam = githubWorkItemUnassignedTeamID\n\t\t}",
+      "rationale": "Python maps its unassigned sentinel to None and then `or \"\"` at the investment metric row boundary.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineUnassignedInvestmentMetricUsesEmptyTeam$", "./internal/providersync/"]]
+    },
+    {
+      "id": "O1-engine-omits-real-investment-metrics-key",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\tgithubInvestmentMetricsDestination:         metrics,",
+      "replace": "\t\t\"investment_metrics_daily_disabled\":       metrics,",
+      "rationale": "Every engine destination key must be present even when its slice is empty; changing one key must fail rather than silently report a partial engine.",
+      "proof": [["go", "test", "-count=1", "-run", "^(TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay|TestGitHubWorkItemEngineDeriverRejectsCorruptedPartialEngine)$", "./internal/providersync/"]]
+    },
+    {
+      "id": "O2a-issue-row-stamps-wrong-day",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tDay:            newGitHubWorkItemDerivedDay(dayUTC),\n\t\t\tProvider:       key.provider,",
+      "replace": "\t\t\tDay:            newGitHubWorkItemDerivedDay(dayUTC.AddDate(0, 0, -1)),\n\t\t\tProvider:       key.provider,",
+      "rationale": "Issue-type metrics must stamp the exact day handed to the per-day seam.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "O2b-classification-row-stamps-wrong-day",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tDay:            newGitHubWorkItemDerivedDay(dayUTC),\n\t\t\tArtifactType:   githubWorkItemEngineArtifactType,",
+      "replace": "\t\t\tDay:            newGitHubWorkItemDerivedDay(dayUTC.AddDate(0, 0, -1)),\n\t\t\tArtifactType:   githubWorkItemEngineArtifactType,",
+      "rationale": "Each investment classification is a daily row and cannot inherit a window-level or neighboring day.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "O2c-investment-metric-row-stamps-wrong-day",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tDay:                newGitHubWorkItemDerivedDay(dayUTC),\n\t\t\tTeamID:             key.teamID,",
+      "replace": "\t\t\tDay:                newGitHubWorkItemDerivedDay(dayUTC.AddDate(0, 0, -1)),\n\t\t\tTeamID:             key.teamID,",
+      "rationale": "Investment aggregate rows must carry the current loop day so multi-day accumulation stays partitioned.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "O3a-issue-row-drops-tenant",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tLeadP50Hours:   0,\n\t\t\tComputedAt:     computedAt,\n\t\t\tOrgID:          claim.OrgID,",
+      "replace": "\t\t\tLeadP50Hours:   0,\n\t\t\tComputedAt:     computedAt,\n\t\t\tOrgID:          \"\",",
+      "rationale": "Issue-type rows must carry the frozen claim tenant before persistence.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "O3b-classification-row-drops-tenant",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tRuleID:         classification.RuleID,\n\t\t\tComputedAt:     computedAt,\n\t\t\tOrgID:          claim.OrgID,",
+      "replace": "\t\t\tRuleID:         classification.RuleID,\n\t\t\tComputedAt:     computedAt,\n\t\t\tOrgID:          \"\",",
+      "rationale": "Classification rows must carry the frozen claim tenant before persistence.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "O3c-investment-metric-row-drops-tenant",
+      "file": "internal/providersync/github_work_item_engine_destinations.go",
+      "find": "\t\t\tCycleP50Hours:      p50,\n\t\t\tComputedAt:         computedAt,\n\t\t\tOrgID:              claim.OrgID,",
+      "replace": "\t\t\tCycleP50Hours:      p50,\n\t\t\tComputedAt:         computedAt,\n\t\t\tOrgID:              \"\",",
+      "rationale": "Investment metric rows must carry the frozen claim tenant before persistence.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineDeriverUsesBothRealEnginesPerDay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P1-live-python-issue-producer-drops-explicit-tenant",
+      "file": "src/dev_health_ops/metrics/work_item_engine_destinations.py",
+      "find": "                lead_p50_hours=0.0,\n                computed_at=computed_at,\n                org_id=org_id,",
+      "replace": "                lead_p50_hours=0.0,\n                computed_at=computed_at,\n                org_id=\"\",",
+      "rationale": "The differential gate must execute the production Python helper rather than a copied oracle loop; changing its real issue row tenant must diverge from Go.",
+      "build": [".venv/bin/python", "-m", "py_compile", "src/dev_health_ops/metrics/work_item_engine_destinations.py"],
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "P2-live-python-classification-producer-drops-explicit-tenant",
+      "file": "src/dev_health_ops/metrics/work_item_engine_destinations.py",
+      "find": "                rule_id=classification.rule_id,\n                computed_at=computed_at,\n                org_id=org_id,",
+      "replace": "                rule_id=classification.rule_id,\n                computed_at=computed_at,\n                org_id=\"\",",
+      "rationale": "The live oracle must execute the production classification producer and compare its explicit tenant independently of the issue family.",
+      "build": [".venv/bin/python", "-m", "py_compile", "src/dev_health_ops/metrics/work_item_engine_destinations.py"],
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "P3-live-python-investment-metric-producer-drops-explicit-tenant",
+      "file": "src/dev_health_ops/metrics/work_item_engine_destinations.py",
+      "find": "                cycle_p50_hours=p50,\n                computed_at=computed_at,\n                org_id=org_id,",
+      "replace": "                cycle_p50_hours=p50,\n                computed_at=computed_at,\n                org_id=\"\",",
+      "rationale": "The live oracle must execute the production investment-metric producer and compare its tenant independently of both other engine families.",
+      "build": [".venv/bin/python", "-m", "py_compile", "src/dev_health_ops/metrics/work_item_engine_destinations.py"],
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "K1-issue-logical-key-omits-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\trow.OrgID, githubWorkItemEngineNullableUUID(row.RepoID), string(row.Day),\n\t\trow.Provider, row.TeamID, row.IssueTypeNorm,",
+      "replace": "\t\trow.OrgID, \"\", string(row.Day),\n\t\trow.Provider, row.TeamID, row.IssueTypeNorm,",
+      "rationale": "repo_id is absent from the physical sorting key but remains part of effect identity; two repositories may otherwise collide in one valid batch.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineLogicalKeysIncludeNullableRepoID$", "./internal/providersync/"]]
+    },
+    {
+      "id": "K2-classification-logical-key-omits-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\trow.OrgID, githubWorkItemEngineNullableUUID(row.RepoID), string(row.Day),\n\t\trow.Provider, row.ArtifactType,",
+      "replace": "\t\trow.OrgID, \"\", string(row.Day),\n\t\trow.Provider, row.ArtifactType,",
+      "rationale": "A NULL repo and a concrete repo with the same artifact identity are distinct logical effects even though the migration sorting key omits repo_id.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineLogicalKeysIncludeNullableRepoID$", "./internal/providersync/"]]
+    },
+    {
+      "id": "K3-investment-metric-logical-key-omits-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\trow.OrgID, githubWorkItemEngineNullableUUID(row.RepoID), string(row.Day), row.TeamID,",
+      "replace": "\t\trow.OrgID, \"\", string(row.Day), row.TeamID,",
+      "rationale": "Investment metrics from distinct repositories can share every physical key field and must still coexist in one effect.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineLogicalKeysIncludeNullableRepoID$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1a-issue-readback-does-not-fence-present-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.TeamID, expected.IssueTypeNorm,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "replace": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.TeamID, expected.IssueTypeNorm,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND 1 = 1`\n\t}",
+      "rationale": "Issue readback must fence a present repo_id or colliding repositories contaminate one another.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^issue_type_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1b-classification-readback-does-not-fence-present-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.ArtifactType,\n\t\t*expected.InvestmentArea, expected.ProjectStream, expected.ArtifactID,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "replace": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.ArtifactType,\n\t\t*expected.InvestmentArea, expected.ProjectStream, expected.ArtifactID,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND 1 = 1`\n\t}",
+      "rationale": "Classification readback must independently fence a present repo_id despite the physical key omitting it.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_classifications_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1c-investment-metric-readback-does-not-fence-present-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.TeamID, *expected.InvestmentArea,\n\t\texpected.ProjectStream,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "replace": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.TeamID, *expected.InvestmentArea,\n\t\texpected.ProjectStream,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND 1 = 1`\n\t}",
+      "rationale": "Investment metric readback must independently fence a present repo_id for full logical identity.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1d-issue-readback-does-not-fence-null-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.TeamID, expected.IssueTypeNorm,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "replace": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.TeamID, expected.IssueTypeNorm,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND 1 = 1`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "rationale": "The NULL repo branch is a real logical identity and cannot be implemented only for present UUIDs.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^issue_type_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1e-classification-readback-does-not-fence-null-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.ArtifactType,\n\t\t*expected.InvestmentArea, expected.ProjectStream, expected.ArtifactID,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "replace": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.ArtifactType,\n\t\t*expected.InvestmentArea, expected.ProjectStream, expected.ArtifactID,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND 1 = 1`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "rationale": "Classification NULL repo readback must exclude concrete-repo siblings sharing its physical key.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_classifications_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1f-investment-metric-readback-does-not-fence-null-repo",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.TeamID, *expected.InvestmentArea,\n\t\texpected.ProjectStream,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND repo_id IS NULL`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "replace": "\targuments := []any{\n\t\tidentity.OrgID, day, expected.TeamID, *expected.InvestmentArea,\n\t\texpected.ProjectStream,\n\t}\n\tif expected.RepoID == nil {\n\t\tquery += ` AND 1 = 1`\n\t} else {\n\t\tquery += ` AND repo_id = ?`\n\t\targuments = append(arguments, *expected.RepoID)\n\t}",
+      "rationale": "Investment metric NULL repo readback must exclude concrete-repo siblings sharing its physical key.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1g-issue-readback-does-not-fence-org",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND day = ? AND provider = ? AND team_id = ?\n\tAND issue_type_norm = ?`\n\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.TeamID, expected.IssueTypeNorm,\n\t}",
+      "replace": "WHERE 1 = 1 AND day = ? AND provider = ? AND team_id = ?\n\tAND issue_type_norm = ?`\n\targuments := []any{\n\t\tday, expected.Provider, expected.TeamID, expected.IssueTypeNorm,\n\t}",
+      "rationale": "Issue readback must not accept an identical row from a foreign organization.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^issue_type_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1h-classification-readback-does-not-fence-org",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND day = ? AND provider = ? AND artifact_type = ?\n\tAND investment_area = ? AND project_stream = ? AND artifact_id = ?`\n\targuments := []any{\n\t\tidentity.OrgID, day, expected.Provider, expected.ArtifactType,\n\t\t*expected.InvestmentArea, expected.ProjectStream, expected.ArtifactID,\n\t}",
+      "replace": "WHERE 1 = 1 AND day = ? AND provider = ? AND artifact_type = ?\n\tAND investment_area = ? AND project_stream = ? AND artifact_id = ?`\n\targuments := []any{\n\t\tday, expected.Provider, expected.ArtifactType,\n\t\t*expected.InvestmentArea, expected.ProjectStream, expected.ArtifactID,\n\t}",
+      "rationale": "Classification readback must fence organization independently of row validation at write time.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_classifications_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R1i-investment-metric-readback-does-not-fence-org",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND day = ? AND team_id = ?\n\tAND investment_area = ? AND project_stream = ?`\n\targuments := []any{\n\t\tidentity.OrgID, day, expected.TeamID, *expected.InvestmentArea,\n\t\texpected.ProjectStream,\n\t}",
+      "replace": "WHERE 1 = 1 AND day = ? AND team_id = ?\n\tAND investment_area = ? AND project_stream = ?`\n\targuments := []any{\n\t\tday, expected.TeamID, *expected.InvestmentArea,\n\t\texpected.ProjectStream,\n\t}",
+      "rationale": "Investment metric readback must fence organization before applying latest-row semantics.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R2a-issue-readback-accepts-multiple-distinct-rows",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "func compareGitHubIssueTypeMetricsVersion(\n\texpected, actual githubIssueTypeMetricsDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows != 1 {",
+      "replace": "func compareGitHubIssueTypeMetricsVersion(\n\texpected, actual githubIssueTypeMetricsDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows == 0 {",
+      "rationale": "Issue-type metrics have no current-version reader contract, so a second distinct full row is independently ambiguous even when the first equals the effect.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitHubIssueTypeMetricsVersionRequiresOneUnambiguousFullRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R2b-classification-readback-accepts-multiple-distinct-rows",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "func compareGitHubInvestmentClassificationVersion(\n\texpected, actual githubInvestmentClassificationDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows != 1 {",
+      "replace": "func compareGitHubInvestmentClassificationVersion(\n\texpected, actual githubInvestmentClassificationDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows == 0 {",
+      "rationale": "Investment classifications independently reject any second distinct full row because no production reader defines a winner.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitHubInvestmentClassificationVersionRequiresOneUnambiguousFullRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R3a-issue-readback-ignores-computed-at-divergence",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "func compareGitHubIssueTypeMetricsVersion(\n\texpected, actual githubIssueTypeMetricsDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows != 1 {\n\t\tif distinctRows == 0 {\n\t\t\treturn EffectAbsent\n\t\t}\n\t\treturn EffectConflict\n\t}\n\tif actual.OrgID != orgID {\n\t\treturn EffectConflict\n\t}\n\tif !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {",
+      "replace": "func compareGitHubIssueTypeMetricsVersion(\n\texpected, actual githubIssueTypeMetricsDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows != 1 {\n\t\tif distinctRows == 0 {\n\t\t\treturn EffectAbsent\n\t\t}\n\t\treturn EffectConflict\n\t}\n\tif actual.OrgID != orgID {\n\t\treturn EffectConflict\n\t}\n\tif false && !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {",
+      "rationale": "A single older issue row is a conflict without a latest-row reader; computed_at is part of the full persisted row contract.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitHubIssueTypeMetricsVersionRequiresOneUnambiguousFullRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R3b-classification-readback-ignores-computed-at-divergence",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "func compareGitHubInvestmentClassificationVersion(\n\texpected, actual githubInvestmentClassificationDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows != 1 {\n\t\tif distinctRows == 0 {\n\t\t\treturn EffectAbsent\n\t\t}\n\t\treturn EffectConflict\n\t}\n\tif actual.OrgID != orgID {\n\t\treturn EffectConflict\n\t}\n\tif !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {",
+      "replace": "func compareGitHubInvestmentClassificationVersion(\n\texpected, actual githubInvestmentClassificationDailyRow,\n\tdistinctRows int,\n\torgID string,\n) EffectInspection {\n\tif distinctRows != 1 {\n\t\tif distinctRows == 0 {\n\t\t\treturn EffectAbsent\n\t\t}\n\t\treturn EffectConflict\n\t}\n\tif actual.OrgID != orgID {\n\t\treturn EffectConflict\n\t}\n\tif false && !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {",
+      "rationale": "Classification computed_at is independently part of the only unambiguous full-row match the adapter can prove.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitHubInvestmentClassificationVersionRequiresOneUnambiguousFullRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R4-investment-metrics-accepts-equal-time-divergence",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif latestDistinct != 1 {",
+      "replace": "\tif latestDistinct == 0 {",
+      "rationale": "argMax has no deterministic winner for divergent tuples tied at the newest timestamp; readback must conflict rather than accept the first row scanned.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitHubInvestmentMetricsVersionRejectsAmbiguousNewestTuple$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R5-investment-metrics-ignores-version-order",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t); decided {\n\t\treturn verdict\n\t}",
+      "replace": "\t); decided && false {\n\t\treturn verdict\n\t}",
+      "rationale": "Under the production argMax contract an older persisted row is absent and a newer one conflicts before value comparison.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitHubInvestmentMetricsVersionRejectsAmbiguousNewestTuple$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R6-investment-metrics-drops-divergent-newest-tuple",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "query += ` GROUP BY repo_id, delivery_units, work_items_completed, prs_merged,\nchurn_loc, cycle_p50_hours, computed_at`",
+      "replace": "query += ` GROUP BY repo_id, delivery_units, work_items_completed, prs_merged,\nchurn_loc, cycle_p50_hours, computed_at ORDER BY computed_at DESC, delivery_units ASC LIMIT 1 BY computed_at`",
+      "rationale": "The latest computed_at must retain every divergent full value tuple; selecting one grouped tuple recreates argMax's nondeterministic equal-time winner.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "F1-issue-readback-adds-final",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "FROM issue_type_metrics_daily\nWHERE org_id",
+      "replace": "FROM issue_type_metrics_daily FINAL\nWHERE org_id",
+      "rationale": "FINAL does not deduplicate a plain MergeTree and misstates the read contract; the query must use explicit full-row grouping.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEnginePlainMergeTreeReadbacksNeverUseFinal$", "./internal/providersync/"]]
+    },
+    {
+      "id": "F2-classification-readback-adds-final",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "FROM investment_classifications_daily\nWHERE org_id",
+      "replace": "FROM investment_classifications_daily FINAL\nWHERE org_id",
+      "rationale": "Classification retry/history semantics are explicit GROUP BY semantics, not FINAL on a plain engine.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEnginePlainMergeTreeReadbacksNeverUseFinal$", "./internal/providersync/"]]
+    },
+    {
+      "id": "F3-investment-metrics-readback-adds-final",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "FROM investment_metrics_daily\nWHERE org_id",
+      "replace": "FROM investment_metrics_daily FINAL\nWHERE org_id",
+      "rationale": "Investment metric latest-row semantics are implemented by explicit timestamp selection; FINAL is a no-op on its migrated plain MergeTree.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEnginePlainMergeTreeReadbacksNeverUseFinal$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M1a-migration-chain-changes-issue-table-engine",
+      "file": "src/dev_health_ops/migrations/clickhouse/007_complexity_investment_issues.sql",
+      "find": "ENGINE = MergeTree\nPARTITION BY toYYYYMM(day)\nORDER BY (day, provider, team_id, issue_type_norm);",
+      "replace": "ENGINE = ReplacingMergeTree(computed_at)\nPARTITION BY toYYYYMM(day)\nORDER BY (day, provider, team_id, issue_type_norm);",
+      "rationale": "The integration proof must apply the real migration chain and observe the issue table's plain MergeTree engine rather than a hand-authored test schema.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^plain_merge_tree_issue_type_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M1b-migration-chain-changes-classification-table-engine",
+      "file": "src/dev_health_ops/migrations/clickhouse/007_complexity_investment_issues.sql",
+      "find": "ENGINE = MergeTree\nPARTITION BY toYYYYMM(day)\nORDER BY (day, provider, artifact_type, investment_area, project_stream, artifact_id);",
+      "replace": "ENGINE = ReplacingMergeTree(computed_at)\nPARTITION BY toYYYYMM(day)\nORDER BY (day, provider, artifact_type, investment_area, project_stream, artifact_id);",
+      "rationale": "The classification schema assertion must be sourced from the production migration chain and detect an engine drift there.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^plain_merge_tree_investment_classifications_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "M1c-migration-chain-changes-investment-metric-table-engine",
+      "file": "src/dev_health_ops/migrations/clickhouse/007_complexity_investment_issues.sql",
+      "find": "ENGINE = MergeTree\nPARTITION BY toYYYYMM(day)\nORDER BY (day, team_id, investment_area, project_stream)\nSETTINGS allow_nullable_key = 1;",
+      "replace": "ENGINE = ReplacingMergeTree(computed_at)\nPARTITION BY toYYYYMM(day)\nORDER BY (day, team_id, investment_area, project_stream)\nSETTINGS allow_nullable_key = 1;",
+      "rationale": "The investment metric schema assertion must traverse the real migrations and independently reject a non-plain engine.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^plain_merge_tree_investment_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T1a-issue-row-org-not-validated",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "func validGitHubIssueTypeMetricsRow(\n\tidentity GitHubWorkItemEffectIdentity,\n\trow githubIssueTypeMetricsDailyRow,\n) bool {\n\t_, dayErr := row.Day.time()\n\treturn row.OrgID == identity.OrgID && row.Provider == identity.Provider &&",
+      "replace": "func validGitHubIssueTypeMetricsRow(\n\tidentity GitHubWorkItemEffectIdentity,\n\trow githubIssueTypeMetricsDailyRow,\n) bool {\n\t_, dayErr := row.Day.time()\n\treturn row.Provider == identity.Provider &&",
+      "rationale": "The issue adapter must reject a forged row tenant before either batch creation or readback.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^issue_type$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T1b-classification-row-org-not-validated",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "func validGitHubInvestmentClassificationRow(\n\tidentity GitHubWorkItemEffectIdentity,\n\trow githubInvestmentClassificationDailyRow,\n) bool {\n\t_, dayErr := row.Day.time()\n\treturn row.OrgID == identity.OrgID && row.Provider == identity.Provider &&",
+      "replace": "func validGitHubInvestmentClassificationRow(\n\tidentity GitHubWorkItemEffectIdentity,\n\trow githubInvestmentClassificationDailyRow,\n) bool {\n\t_, dayErr := row.Day.time()\n\treturn row.Provider == identity.Provider &&",
+      "rationale": "The classification adapter independently validates the row's tenant before persistence or inspection.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^classification$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T2-investment-metric-row-org-not-validated",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\treturn row.OrgID == identity.OrgID && dayErr == nil &&",
+      "replace": "\treturn dayErr == nil &&",
+      "rationale": "Investment metric rows also carry their own org and must match the identity before any batch or query is reached.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^metrics$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S1a-issue-insert-swaps-created-and-completed-projection",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\t\tuint32(row.CreatedCount), uint32(row.CompletedCount), uint32(row.ActiveCount),",
+      "replace": "\t\t\tuint32(row.CompletedCount), uint32(row.CreatedCount), uint32(row.ActiveCount),",
+      "rationale": "The migrated issue sink column order must match its Append value projection, independently of row computation.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^issue_type_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S1b-classification-insert-swaps-artifact-and-provider-projection",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\t\trow.RepoID, day, row.ArtifactType, row.ArtifactID, row.Provider,",
+      "replace": "\t\t\trow.RepoID, day, row.ArtifactType, row.Provider, row.ArtifactID,",
+      "rationale": "The classification INSERT must preserve artifact_id/provider value order against the production migration schema.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_classifications_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S1c-investment-metric-insert-swaps-units-and-completed-projection",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\t\tuint32(row.DeliveryUnits), uint32(row.WorkItemsCompleted), uint32(row.PRsMerged),",
+      "replace": "\t\t\tuint32(row.WorkItemsCompleted), uint32(row.DeliveryUnits), uint32(row.PRsMerged),",
+      "rationale": "The investment metric INSERT independently pins delivery_units/work_items_completed value order.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S2a-issue-insert-does-not-truncate-computed-at-to-seconds",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\t\trow.CycleP50Hours, row.CycleP90Hours, row.LeadP50Hours,\n\t\t\tgithubWorkItemDerivedSeconds(row.ComputedAt), identity.OrgID,",
+      "replace": "\t\t\trow.CycleP50Hours, row.CycleP90Hours, row.LeadP50Hours,\n\t\t\tgithubWorkItemDerivedSeconds(row.ComputedAt.Add(1000000000)), identity.OrgID,",
+      "rationale": "The issue writer must project the exact DateTime-second version expected by readback from a nanosecond-bearing input.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^issue_type_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S2b-classification-insert-does-not-truncate-computed-at-to-seconds",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\tif err := batch.Append(\n\t\t\trow.RepoID, day, row.ArtifactType, row.ArtifactID, row.Provider,\n\t\t\t*row.InvestmentArea, row.ProjectStream, row.Confidence, *row.RuleID,\n\t\t\tgithubWorkItemDerivedSeconds(row.ComputedAt), identity.OrgID,",
+      "replace": "\t\tif err := batch.Append(\n\t\t\trow.RepoID, day, row.ArtifactType, row.ArtifactID, row.Provider,\n\t\t\t*row.InvestmentArea, row.ProjectStream, row.Confidence, *row.RuleID,\n\t\t\tgithubWorkItemDerivedSeconds(row.ComputedAt.Add(1000000000)), identity.OrgID,",
+      "rationale": "The classification writer independently preserves the expected second-precision version under its DateTime migration column.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_classifications_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S2c-investment-metric-insert-does-not-truncate-computed-at-to-seconds",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\t\t\tuint64(row.ChurnLOC), row.CycleP50Hours,\n\t\t\tgithubWorkItemDerivedSeconds(row.ComputedAt), identity.OrgID,",
+      "replace": "\t\t\tuint64(row.ChurnLOC), row.CycleP50Hours,\n\t\t\tgithubWorkItemDerivedSeconds(row.ComputedAt.Add(1000000000)), identity.OrgID,",
+      "rationale": "The investment metric writer independently stamps the expected second-precision version from a nanosecond-bearing row.",
+      "build": ["go", "test", "-tags=integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags=integration", "-count=1", "-run", "^TestGitHubWorkItemEngineEffectsAgainstMigratedSchema$/^investment_metrics_daily$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L1a-issue-write-preflight-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubIssueTypeMetricsSortingKey) {\n\t\treturn ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\tif len(rows) == 0 {",
+      "replace": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubIssueTypeMetricsSortingKey) {\n\t\treturn ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn err\n\t}\n\tif len(rows) == 0 {",
+      "rationale": "The issue adapter must refuse a lost lease before PrepareBatch and observe zero prepares.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^issue_type$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L1b-classification-write-preflight-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentClassificationSortingKey) {\n\t\treturn ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\tif len(rows) == 0 {",
+      "replace": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentClassificationSortingKey) {\n\t\treturn ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn err\n\t}\n\tif len(rows) == 0 {",
+      "rationale": "The classification adapter independently fences its first write-side lease assertion.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^classification$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L1c-investment-metric-write-preflight-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentMetricsSortingKey) {\n\t\treturn ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\tif len(rows) == 0 {",
+      "replace": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentMetricsSortingKey) {\n\t\treturn ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn err\n\t}\n\tif len(rows) == 0 {",
+      "rationale": "The investment metric adapter independently fences lease ownership before creating a batch.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^metrics$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L2a-issue-write-post-append-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\treturn batch.Send()\n}\n\nfunc (sink GitHubIssueTypeMetricsClickHouseEffects) InspectGitHubWorkItemEffect(",
+      "replace": "\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn err\n\t}\n\treturn batch.Send()\n}\n\nfunc (sink GitHubIssueTypeMetricsClickHouseEffects) InspectGitHubWorkItemEffect(",
+      "rationale": "The issue adapter rechecks ownership after Append and must abort rather than Send on loss.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^issue_type$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L2b-classification-write-post-append-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\treturn batch.Send()\n}\n\nfunc (sink GitHubInvestmentClassificationsClickHouseEffects) InspectGitHubWorkItemEffect(",
+      "replace": "\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn err\n\t}\n\treturn batch.Send()\n}\n\nfunc (sink GitHubInvestmentClassificationsClickHouseEffects) InspectGitHubWorkItemEffect(",
+      "rationale": "The classification adapter independently rechecks its lease after appending and before sending.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^classification$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L2c-investment-metric-write-post-append-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\treturn batch.Send()\n}\n\nfunc (sink GitHubInvestmentMetricsClickHouseEffects) InspectGitHubWorkItemEffect(",
+      "replace": "\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn err\n\t}\n\treturn batch.Send()\n}\n\nfunc (sink GitHubInvestmentMetricsClickHouseEffects) InspectGitHubWorkItemEffect(",
+      "rationale": "The investment metric adapter independently aborts instead of sending after post-append lease loss.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^metrics$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L3a-issue-readback-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubIssueTypeMetricsSortingKey) {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(rows) == 0 {",
+      "replace": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubIssueTypeMetricsSortingKey) {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(rows) == 0 {",
+      "rationale": "Issue readback must stop before any query when lease ownership is lost.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^issue_type$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L3b-classification-readback-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentClassificationSortingKey) {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(rows) == 0 {",
+      "replace": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentClassificationSortingKey) {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(rows) == 0 {",
+      "rationale": "Classification readback independently refuses to query after lease loss.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^classification$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L3c-investment-metric-readback-lease-error-ignored",
+      "file": "internal/providersync/github_work_item_engine_effects_clickhouse.go",
+      "find": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentMetricsSortingKey) {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(rows) == 0 {",
+      "replace": "\tif !githubWorkItemDerivedUniqueSortingKeys(rows, githubInvestmentMetricsSortingKey) {\n\t\treturn EffectConflict, ErrInvalidConfiguration\n\t}\n\tif err := sink.Lease.Assert(ctx); false && err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(rows) == 0 {",
+      "rationale": "Investment metric readback independently fences its ClickHouse query behind a live lease.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitHubWorkItemEngineAdaptersFailClosedOnDependencyTenantAndLease$/^metrics$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W1-composition-omits-classification-adapter",
+      "file": "internal/providersync/github_work_items_composition.go",
+      "find": "\t\tInvestmentClassificationsDaily: GitHubInvestmentClassificationsClickHouseEffects{\n\t\t\tConn: conn, Lease: lease,\n\t\t},",
+      "replace": "\t\tInvestmentClassificationsDaily: nil,",
+      "rationale": "The production sink constructor must wire the classification adapter; a nil slot keeps the 16-surface composite incomplete.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W2-composition-omits-investment-metrics-adapter",
+      "file": "internal/providersync/github_work_items_composition.go",
+      "find": "\t\tInvestmentMetricsDaily: GitHubInvestmentMetricsClickHouseEffects{\n\t\t\tConn: conn, Lease: lease,\n\t\t},",
+      "replace": "\t\tInvestmentMetricsDaily: nil,",
+      "rationale": "The production sink constructor must wire investment metrics into the complete feature-only composite.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W3-composition-omits-issue-type-adapter",
+      "file": "internal/providersync/github_work_items_composition.go",
+      "find": "\t\tIssueTypeMetricsDaily: GitHubIssueTypeMetricsClickHouseEffects{\n\t\t\tConn: conn, Lease: lease,\n\t\t},",
+      "replace": "\t\tIssueTypeMetricsDaily: nil,",
+      "rationale": "The production sink constructor must wire issue-type metrics rather than returning an apparently complete sink with a nil slot.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen$", "./internal/providersync/"]]
+    }
+  ]
+}

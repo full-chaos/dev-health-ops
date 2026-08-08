@@ -194,6 +194,14 @@ func (executor CompleteRouteExecutor) Execute(
 			if err != nil {
 				return err
 			}
+			manifest.Batch.Result, manifest.Batch.Watermark, err =
+				applyGitHubWorkItemsIncompletePolicy(
+					session.Claim.Provider, session.Claim.Dataset,
+					manifest.Batch.Result, manifest.Batch.Watermark,
+				)
+			if err != nil {
+				return ErrEffectLedgerConflict
+			}
 			if err := manifest.Batch.validate(descriptor); err != nil ||
 				!manifest.NormalizedAt.Equal(normalizedAt) {
 				return ErrEffectLedgerConflict
@@ -283,6 +291,12 @@ func (executor CompleteRouteExecutor) Execute(
 				workContext, session.Claim, credential, client, normalizedAt,
 			)
 		}
+		if err != nil {
+			return err
+		}
+		batch.Result, batch.Watermark, err = applyGitHubWorkItemsIncompletePolicy(
+			session.Claim.Provider, session.Claim.Dataset, batch.Result, batch.Watermark,
+		)
 		if err != nil {
 			return err
 		}

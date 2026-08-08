@@ -6,21 +6,21 @@
     "build",
     "./internal/providersync/"
   ],
-  "$limitation": "This first unregistered layer pins the exact Python write-surface manifest. Semantic rows, alias completion, collectors, effects, derived metrics, and activation add their own mutations in subsequent stack layers; none of the five aliases is route-ready here.",
+  "$limitation": "This plan pins the neutral semantic work-item manifest and earlier foundation seams. It does not by itself prove CHAOS-3606 activation, single-writer admission, runtime configuration, collector behavior, effects, or alias completion; those have their own plans and focused gates.",
   "mutations": [
     {
       "id": "F1-ai-attribution-is-an-in-band-destination",
-      "file": "internal/providersync/execution_registry.go",
-      "find": "\t\t\"ai_attribution\",\n\t\t\"estimate_coverage_metrics_daily\",",
-      "replace": "\t\t\"estimate_coverage_metrics_daily\",",
-      "rationale": "the GitHub Python work-item unit conditionally writes AI attribution beside the raw and derived work-item effects, so the complete-route manifest must include it for recovery and atomic ownership",
+      "file": "internal/workitemcontract/manifest.go",
+      "find": "\t{Name: \"ai_attribution\", GitHubEffect: true, LinearExpiredLeaseRetry: true},\n\t{Name: \"estimate_coverage_metrics_daily\", GitHubEffect: true, LinearExpiredLeaseRetry: true},",
+      "replace": "\t{Name: \"estimate_coverage_metrics_daily\", GitHubEffect: true, LinearExpiredLeaseRetry: true},",
+      "rationale": "the GitHub Python work-item unit conditionally writes AI attribution beside the raw and derived work-item effects, so the neutral semantic manifest must retain it for atomic ownership",
       "proof": [
         [
           "go",
           "test",
           "-count=1",
           "-run",
-          "^TestWorkItemRouteDestinationsMatchTheRetrySafePythonUnitSurface$",
+          "^TestGitHubWorkItemRouteDestinationManifest$",
           "./internal/providersync/"
         ]
       ]
@@ -97,7 +97,7 @@
           "test",
           "-count=1",
           "-run",
-          "^TestWorkItemAliasCompletionMetadata/(all_enabled_aliases_use_canonical_order|enabled_subset_excludes_false_aliases)$",
+          "^TestWorkItemAliasCompletionMetadata/(all_enabled_aliases_use_canonical_order|non_github_subset_excludes_false_aliases)$",
           "./internal/providersync/"
         ]
       ]

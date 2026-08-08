@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -23,6 +24,13 @@ type providerSyncEntitlementFunc func(context.Context, string) error
 func (require providerSyncEntitlementFunc) Require(ctx context.Context, orgID string) error {
 	return require(ctx, orgID)
 }
+
+// githubWorkItemsBuildExecutorConn is deliberately only a non-nil driver.Conn
+// marker. Both GitHub work-item constructors store their connection during
+// BuildExecutor construction and perform I/O only when the handler executes,
+// which lets this test reach the production config propagation seam without a
+// ClickHouse server.
+type githubWorkItemsBuildExecutorConn struct{ driver.Conn }
 
 // TestBuildProviderSyncHandlerSharesOneMetricsInstance is CHAOS-3118
 // mutation-tested evidence for dev_health_provider_*, not a behavioral
@@ -97,6 +105,64 @@ func TestBuildProviderSyncHandlerSharesOneMetricsInstance(t *testing.T) {
 				"exact CHAOS-3118 defect",
 			executor.Metrics, providerMetrics,
 		)
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsGitHubWorkItemsWithValidatedRuntimeConfig(t *testing.T) {
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	runtimeConfig, err := githubWorkItemsRuntimeConfigFrom(validGitHubWorkItemsRuntimeConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+		nil,
+		providersync.CompleteRouteSwitches{GithubWorkItems: true},
+		nil,
+		&githubWorkItemsBuildExecutorConn{},
+		nil,
+		nil,
+		nil,
+		nil,
+		slog.Default(),
+		runtimeConfig,
+	)
+	if handler == nil || handler.BuildExecutor == nil {
+		t.Fatal("provider sync handler is not constructed")
+	}
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "github", Dataset: "work-items",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildExecutor with validated paths: %v", err)
+	}
+	if _, ok := executor.Handler.(providersync.GitHubWorkItemsRouteHandler); !ok {
+		t.Fatalf("executor handler=%T", executor.Handler)
+	}
+	if _, ok := executor.Committer.Sink.(providersync.GitHubWorkItemClickHouseEffects); !ok {
+		t.Fatalf("executor sink=%T", executor.Committer.Sink)
+	}
+
+	withoutPaths, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+		nil,
+		providersync.CompleteRouteSwitches{GithubWorkItems: true},
+		nil,
+		&githubWorkItemsBuildExecutorConn{},
+		nil,
+		nil,
+		nil,
+		nil,
+		slog.Default(),
+		githubWorkItemsRuntimeConfig{},
+	)
+	_, err = withoutPaths.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "github", Dataset: "work-items",
+		}},
+	})
+	if !errors.Is(err, providersync.ErrInvalidConfiguration) {
+		t.Fatalf("BuildExecutor without explicit paths error=%v want ErrInvalidConfiguration", err)
 	}
 }
 
@@ -498,6 +564,10 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 			cfg:  config.Config{WorkerGithubTestsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GithubTests: true},
 		},
+		"github_work_items": {
+			cfg:  config.Config{WorkerGithubWorkItemsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GithubWorkItems: true},
+		},
 		"linear": {
 			cfg:  config.Config{WorkerLinearWorkItemsEnabled: true},
 			want: providersync.CompleteRouteSwitches{LinearWorkItems: true},
@@ -788,6 +858,7 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"jira_incidents":       {WorkerJiraIncidentsEnabled: true},
 		"github_blame":         {WorkerGithubBlameEnabled: true},
 		"github_tests":         {WorkerGithubTestsEnabled: true},
+		"github_work_items":    {WorkerGithubWorkItemsEnabled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !providerSyncWorkerEnabled(cfg) {

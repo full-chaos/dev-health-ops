@@ -50,8 +50,8 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	if len(components) != 0 {
 		t.Fatalf("components = %d, want no pool lifecycle without DSNs", len(components))
 	}
-	if registry.RequiredCount() != 8 {
-		t.Fatalf("required checks = %d, want 8", registry.RequiredCount())
+	if registry.RequiredCount() != 9 {
+		t.Fatalf("required checks = %d, want 9", registry.RequiredCount())
 	}
 	// Every accepted profile now owns registered kinds, so queue telemetry is
 	// always required and a worker without a database cannot serve a complete
@@ -219,6 +219,89 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 		if (err != nil) != test.wantErr {
 			t.Fatalf("%s error=%v wantErr=%v", test.name, err, test.wantErr)
 		}
+	}
+}
+
+func TestGitHubWorkItemsRouteReadinessUsesTheProductionRuntimeConfig(t *testing.T) {
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	valid := validGitHubWorkItemsRuntimeConfig(t)
+	for _, test := range []struct {
+		name    string
+		config  config.Config
+		runtime bool
+		wantErr bool
+	}{
+		{name: "complete", config: valid, runtime: true},
+		{name: "missing runtime", config: valid, wantErr: true},
+		{
+			name: "missing explicit status mapping path",
+			config: config.Config{
+				WorkerGithubWorkItemsEnabled:              true,
+				WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := providerRouteSwitchesReady(test.config, &test.runtime)(context.Background())
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error=%v wantErr=%v", err, test.wantErr)
+			}
+		})
+	}
+
+	t.Setenv("STATUS_MAPPING_PATH", " ")
+	if err := providerRouteSwitchesReady(valid, new(bool))(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("ambient status mapping error=%v want worker dependency unavailable", err)
+	}
+}
+
+func TestGitHubProjectsV2StartupReadinessWarnsOnlyForOrphanedEnvironment(t *testing.T) {
+	t.Setenv("GITHUB_PROJECTS_V2", "")
+	database := &fakeWorkerDatabase{}
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	check := githubProjectsV2StartupReadiness(database, logger)
+	if err := check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if database.projectsV2Queries != 0 || output.Len() != 0 {
+		t.Fatalf("empty environment queried=%d log=%q", database.projectsV2Queries, output.String())
+	}
+
+	const legacyValue = "acme:3,should-never-be-logged:12"
+	t.Setenv("GITHUB_PROJECTS_V2", legacyValue)
+	if err := check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if database.projectsV2Queries != 1 || !strings.Contains(output.String(), "GITHUB_PROJECTS_V2") ||
+		strings.Contains(output.String(), legacyValue) {
+		t.Fatalf("env-only warning queries=%d log=%q", database.projectsV2Queries, output.String())
+	}
+	// Health probes may rerun, but startup warning volume must stay one per
+	// process configuration rather than log-spamming readiness polling.
+	if err := check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(output.String(), "GITHUB_PROJECTS_V2"); count != 2 {
+		// One occurrence is in the message and one in the structured field.
+		t.Fatalf("warning count=%d log=%q", count, output.String())
+	}
+
+	durable := &fakeWorkerDatabase{projectsV2Configured: true}
+	var durableOutput bytes.Buffer
+	if err := githubProjectsV2StartupReadiness(
+		durable, slog.New(slog.NewTextHandler(&durableOutput, nil)),
+	)(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if durable.projectsV2Queries != 1 || durableOutput.Len() != 0 {
+		t.Fatalf("durable config queried=%d log=%q", durable.projectsV2Queries, durableOutput.String())
+	}
+
+	unavailable := &fakeWorkerDatabase{domainErr: errors.New("domain unavailable")}
+	if err := githubProjectsV2StartupReadiness(unavailable, logger)(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) || unavailable.projectsV2Queries != 0 {
+		t.Fatalf("domain failure error=%v queries=%d", err, unavailable.projectsV2Queries)
 	}
 }
 
@@ -834,16 +917,19 @@ func TestPoolReadinessErrorsAreCollapsedToStableFailure(t *testing.T) {
 }
 
 type fakeWorkerDatabase struct {
-	domainErr        error
-	queueErr         error
-	schemaErr        error
-	domainSaturation float64
-	queueSaturation  float64
-	telemetry        queueTelemetrySampler
-	telemetryErr     error
-	telemetryConfig  riverstore.QueueTelemetryConfig
-	closed           atomic.Bool
-	acquireObserver  postgres.PoolAcquireObserver
+	domainErr            error
+	queueErr             error
+	schemaErr            error
+	domainSaturation     float64
+	queueSaturation      float64
+	telemetry            queueTelemetrySampler
+	telemetryErr         error
+	telemetryConfig      riverstore.QueueTelemetryConfig
+	closed               atomic.Bool
+	acquireObserver      postgres.PoolAcquireObserver
+	projectsV2Configured bool
+	projectsV2Err        error
+	projectsV2Queries    int
 }
 
 type namedComponent string
@@ -967,6 +1053,11 @@ func selectNamedSpecs(
 
 func (database *fakeWorkerDatabase) DomainReady(context.Context) error {
 	return database.domainErr
+}
+
+func (database *fakeWorkerDatabase) GitHubProjectsV2Configured(context.Context) (bool, error) {
+	database.projectsV2Queries++
+	return database.projectsV2Configured, database.projectsV2Err
 }
 
 func (database *fakeWorkerDatabase) QueueReady(context.Context) error {

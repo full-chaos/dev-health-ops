@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"slices"
 	"strings"
 )
 
@@ -51,6 +50,15 @@ var providerExecutorRegistry = map[string]ExecutorKind{
 	"gitlab/incidents":           ExecutorNativeGo,
 	"github/blame":               ExecutorNativeGo,
 	"github/tests":               ExecutorNativeGo,
+	// GitHub's five work-item dataset identities are one complete native
+	// execution family. The planner emits only a canonical `work-items` claim;
+	// the four sibling identities remain in the capability contract so their
+	// per-alias watermark/audit completion stays visible.
+	"github/work-items":         ExecutorNativeGo,
+	"github/work-item-labels":   ExecutorNativeGo,
+	"github/work-item-projects": ExecutorNativeGo,
+	"github/work-item-history":  ExecutorNativeGo,
+	"github/work-item-comments": ExecutorNativeGo,
 }
 
 // ProviderExecutor reports the fixed executor kind for a provider/dataset pair.
@@ -178,6 +186,13 @@ type CompleteRouteSwitches struct {
 	GithubBlame bool
 	// GithubTests gates the shared complete TestOps route and its six effects.
 	GithubTests bool
+	// GithubWorkItems gates the one complete GitHub work-items execution family.
+	// Python only ever plans its canonical `work-items` claim; the four alias
+	// descriptors stay route-ready for capability/audit truth but intentionally
+	// remain disabled for a direct persisted alias claim. That rejects malformed
+	// direct aliases before credentials, HTTP, effects, or watermarks rather
+	// than treating one alias as a partial writer.
+	GithubWorkItems bool
 }
 
 // Descriptor resolves the canonical capability descriptor for a claimed
@@ -202,14 +217,28 @@ func (switches CompleteRouteSwitches) Descriptor(
 		Executor:     ProviderExecutor(provider, dataset),
 		NativeShadow: nativeShadowReady(provider, dataset),
 	}
-	workItemAlias := slices.Contains(linearBackfillWorkItemDatasets, dataset)
+	// The GitHub work-item implementation owns this family identity. Do not
+	// derive route activation from Linear's expired-lease recovery oracle: both
+	// happen to name the five planner aliases, but their evolution is separate.
+	workItemAlias := isWorkItemFamilyDataset(dataset)
 	switch {
-	case provider == "github" && dataset == "work-items":
-		// The composite handler and all 16 sink effects exist, but this pair
-		// remains unregistered until its final parity and activation layers land.
-		// Carry the recovery requirement now so activation cannot accidentally
-		// use mutable-provider recollection after a crash.
-		descriptor.PreparedManifestRecovery = true
+	case provider == "github" && workItemAlias:
+		// The five Python dataset identities describe one indivisible work-item
+		// crawl. The capability matrix deliberately reports all five as native
+		// and ready so producer/matrix drift cannot re-open one partial alias.
+		// Only the canonical claim can execute, however: planner.py collapses a
+		// family into dataset="work-items" plus per-alias processor flags. A
+		// direct sibling alias is malformed persisted state and must trip the
+		// providerunit route-reconciliation guard before construction/I/O.
+		descriptor.Destinations = workItemRouteDestinations()
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.GithubWorkItems
+			// Mutable provider selection requires exact prepared-snapshot recovery
+			// before the first sink effect. It is a canonical-claim property, not
+			// a reason to pretend a direct sibling alias is executable.
+			descriptor.PreparedManifestRecovery = true
+		}
 	case (provider == "linear" || provider == "jira") && workItemAlias:
 		descriptor.RouteDataset = "work-items"
 		descriptor.Destinations = workItemRouteDestinations()
@@ -351,22 +380,8 @@ func githubPRSocialRouteDestinations() []string {
 }
 
 func workItemRouteDestinations() []string {
-	return []string{
-		"ai_attribution",
-		"estimate_coverage_metrics_daily",
-		"investment_classifications_daily",
-		"investment_metrics_daily",
-		"issue_type_metrics_daily",
-		"sprints",
-		"work_item_cycle_times",
-		"work_item_dependencies",
-		"work_item_interactions",
-		"work_item_metrics_daily",
-		"work_item_reopen_events",
-		"work_item_state_durations_daily",
-		"work_item_team_attributions",
-		"work_item_transitions",
-		"work_item_user_metrics_daily",
-		"work_items",
-	}
+	// The effect construction manifest is the neutral semantic owner of the
+	// GitHub family. Linear expired-lease recovery retains an independent retry
+	// eligibility policy, even where it currently names the same destinations.
+	return githubWorkItemRouteDestinations()
 }

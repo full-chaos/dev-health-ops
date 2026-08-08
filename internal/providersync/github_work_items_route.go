@@ -32,15 +32,9 @@ type GitHubWorkItemsRequestUsage struct {
 
 // GitHubWorkItemsIncomplete preserves optional degradation as typed data.
 // Cause is a stable local/provider class and never provider response text.
-//
-// UNMET OBLIGATION — the activation layer must read these. Today nothing does:
-// Collect is the only producer of the `incomplete` result key and the tree has
-// no consumer. The degraded run is safe purely because this route is
-// unregistered and hardcodes Watermark: nil on every path. Whoever registers
-// the five-alias family must make alias watermark fan-out refuse to advance for
-// a run carrying entries here, and must ship the test that proves a degraded
-// run advances no alias watermark. Do not give this route a real watermark
-// before that reader exists.
+// applyGitHubWorkItemsIncompletePolicy is the sole completion reader: complete
+// batches may advance claim.BeforeAt, while any durable entry suppresses all
+// five alias watermarks and leaves the family eligible for a future revisit.
 type GitHubWorkItemsIncomplete struct {
 	Component string `json:"component"`
 	SubjectID string `json:"subject_id,omitempty"`
@@ -395,17 +389,22 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, usage.wrap(err)
 	}
+	var watermark *time.Time
+	if len(incomplete) == 0 && claim.BeforeAt != nil {
+		value := claim.BeforeAt.UTC()
+		watermark = &value
+	}
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: map[string]any{
-			"work_items_synced": len(rows.WorkItems),
-			"projects_v2":       projectState,
-			"incomplete":        incomplete,
+			"work_items_synced":                len(rows.WorkItems),
+			"projects_v2":                      projectState,
+			githubWorkItemsIncompleteResultKey: incomplete,
 			"observations": map[string]any{
 				"provider_usage": usage.snapshot(),
 			},
 		},
-		Watermark: nil,
+		Watermark: watermark,
 		Evidence:  evidence,
 	}, nil
 }

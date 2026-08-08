@@ -352,8 +352,8 @@
     {
       "id": "degradation-reaches-the-durable-unit-row",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "\"incomplete\":        incomplete,",
-      "replace": "\"incomplete\":        []GitHubWorkItemsIncomplete{},",
+      "find": "githubWorkItemsIncompleteResultKey: incomplete,",
+      "replace": "githubWorkItemsIncompleteResultKey: []GitHubWorkItemsIncomplete{},",
       "rationale": "continuing past an optional-data failure is only allowed because the omission is recorded; dropping the entries from the result would make a degraded run indistinguishable from a clean one in the durable unit row",
       "proof": [
         [
@@ -435,11 +435,11 @@
       ]
     },
     {
-      "id": "unregistered-composite-has-no-watermark",
+      "id": "complete-composite-emits-authoritative-watermark",
       "file": "internal/providersync/github_work_items_route.go",
-      "find": "Watermark: nil,",
-      "replace": "Watermark: claim.BeforeAt,",
-      "rationale": "the unregistered foundation cannot advance a watermark before activation and crash-recovery approval",
+      "find": "if len(incomplete) == 0 && claim.BeforeAt != nil {",
+      "replace": "if false && claim.BeforeAt != nil {",
+      "rationale": "D17's first clause: a complete composite emits claim.BeforeAt as the authoritative candidate so all five aliases can advance atomically after effects commit",
       "proof": [
         [
           "go",
@@ -447,6 +447,23 @@
           "-count=1",
           "-run",
           "^TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "incomplete-composite-withholds-authoritative-watermark",
+      "file": "internal/providersync/github_work_items_route.go",
+      "find": "if len(incomplete) == 0 && claim.BeforeAt != nil {",
+      "replace": "if true && claim.BeforeAt != nil {",
+      "rationale": "D17's first clause is mutated alone: optional enrichment failure still lands effects but must never emit a candidate that could advance any of the five aliases",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^(TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage|TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects)$",
           "./internal/providersync/"
         ]
       ]

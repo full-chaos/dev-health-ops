@@ -3,7 +3,10 @@ package providersync
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 func TestWorkItemAliasCompletionMetadata(t *testing.T) {
@@ -26,27 +29,14 @@ func TestWorkItemAliasCompletionMetadata(t *testing.T) {
 		{
 			name:     "all enabled aliases use canonical order",
 			provider: "github", dataset: "work-items",
-			flags: map[string]bool{
-				"sync_prs":                          true,
-				"family_dataset_work_item_comments": true,
-				"family_dataset_work_items":         true,
-				"family_dataset_work_item_history":  true,
-				"family_dataset_work_item_projects": true,
-				"family_dataset_work_item_labels":   true,
-			},
-			result: map[string]any{"records": 7},
-			wantKeys: []string{
-				"work-items", "work-item-labels", "work-item-projects",
-				"work-item-history", "work-item-comments",
-			},
-			wantAudit: []string{
-				"work-items", "work-item-labels", "work-item-projects",
-				"work-item-history", "work-item-comments",
-			},
+			flags:     allWorkItemFamilyFlags(true),
+			result:    map[string]any{"records": 7},
+			wantKeys:  workitemcontract.FamilyDatasets(),
+			wantAudit: workitemcontract.FamilyDatasets(),
 		},
 		{
-			name:     "enabled subset excludes false aliases",
-			provider: "github", dataset: "work-items",
+			name:     "non github subset excludes false aliases",
+			provider: "gitlab", dataset: "work-items",
 			flags: map[string]bool{
 				"family_dataset_work_items":         false,
 				"family_dataset_work_item_labels":   true,
@@ -66,26 +56,20 @@ func TestWorkItemAliasCompletionMetadata(t *testing.T) {
 		},
 		{
 			name:     "all aliases disabled fails closed",
-			provider: "github", dataset: "work-items",
+			provider: "gitlab", dataset: "work-items",
 			flags:  map[string]bool{"family_dataset_work_items": false},
 			result: map[string]any{"records": 1}, wantErr: ErrInvalidConfiguration,
 		},
 		{
 			name:     "unknown enabled alias fails closed",
 			provider: "github", dataset: "work-items",
-			flags: map[string]bool{
-				"family_dataset_work_items": true,
-				"family_dataset_unknown":    true,
-			},
+			flags:  workItemFamilyFlagsWithUnknown(true),
 			result: map[string]any{"records": 1}, wantErr: ErrInvalidConfiguration,
 		},
 		{
 			name:     "unknown disabled alias also fails closed",
 			provider: "github", dataset: "work-items",
-			flags: map[string]bool{
-				"family_dataset_work_items": true,
-				"family_dataset_unknown":    false,
-			},
+			flags:  workItemFamilyFlagsWithUnknown(false),
 			result: map[string]any{"records": 1}, wantErr: ErrInvalidConfiguration,
 		},
 		{
@@ -97,7 +81,7 @@ func TestWorkItemAliasCompletionMetadata(t *testing.T) {
 		{
 			name:     "handler cannot predeclare completion audit",
 			provider: "github", dataset: "work-items",
-			flags: map[string]bool{"family_dataset_work_items": true},
+			flags: allWorkItemFamilyFlags(true),
 			result: map[string]any{
 				"records": 1, "family_datasets": []string{"work-items"},
 			},
@@ -140,6 +124,59 @@ func TestWorkItemAliasCompletionMetadata(t *testing.T) {
 	}
 }
 
+func TestGitHubWorkItemAliasCompletionRequiresAtomicFamily(t *testing.T) {
+	allEnabled := allWorkItemFamilyFlags(true)
+
+	for _, familyDataset := range workitemcontract.FamilyDatasets() {
+		flag := expectedWorkItemFamilyFlag(familyDataset)
+		for _, mutation := range []struct {
+			name  string
+			apply func(map[string]bool)
+		}{
+			{
+				name: "omitted",
+				apply: func(flags map[string]bool) {
+					delete(flags, flag)
+				},
+			},
+			{
+				name: "disabled",
+				apply: func(flags map[string]bool) {
+					flags[flag] = false
+				},
+			},
+		} {
+			mutation := mutation
+			t.Run(flag+"_"+mutation.name, func(t *testing.T) {
+				flags := make(map[string]bool, len(allEnabled))
+				for flag, enabled := range allEnabled {
+					flags[flag] = enabled
+				}
+				mutation.apply(flags)
+
+				keys, audited, err := workItemAliasCompletionMetadata(
+					"github", "work-items", flags, map[string]any{"records": 1},
+				)
+				if !errors.Is(err, ErrInvalidConfiguration) {
+					t.Fatalf("error=%v want=%v flags=%v", err, ErrInvalidConfiguration, flags)
+				}
+				if keys != nil || audited != nil {
+					t.Fatalf("failed metadata returned keys=%v result=%v", keys, audited)
+				}
+			})
+		}
+	}
+}
+
+func TestWorkItemFamilyFlagDerivationMatchesProcessorContract(t *testing.T) {
+	t.Parallel()
+	for _, dataset := range workitemcontract.FamilyDatasets() {
+		if got, want := workItemFamilyFlagForDataset(dataset), expectedWorkItemFamilyFlag(dataset); got != want {
+			t.Fatalf("family flag for %q=%q want=%q", dataset, got, want)
+		}
+	}
+}
+
 func TestWorkItemAliasProcessorFlagsRejectNonBooleanEncoding(t *testing.T) {
 	var flags map[string]bool
 	err := decodeClaimJSON(
@@ -157,4 +194,22 @@ func cloneStringAnyMap(input map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func allWorkItemFamilyFlags(enabled bool) map[string]bool {
+	flags := make(map[string]bool, len(workitemcontract.FamilyDatasets()))
+	for _, dataset := range workitemcontract.FamilyDatasets() {
+		flags[expectedWorkItemFamilyFlag(dataset)] = enabled
+	}
+	return flags
+}
+
+func workItemFamilyFlagsWithUnknown(enabled bool) map[string]bool {
+	flags := allWorkItemFamilyFlags(true)
+	flags["family_dataset_unknown"] = enabled
+	return flags
+}
+
+func expectedWorkItemFamilyFlag(dataset string) string {
+	return "family_dataset_" + strings.ReplaceAll(dataset, "-", "_")
 }

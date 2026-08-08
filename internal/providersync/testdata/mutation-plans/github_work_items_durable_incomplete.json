@@ -1,0 +1,403 @@
+{
+  "schema_version": 1,
+  "name": "github/work-items durable incomplete recovery and tenant fence",
+  "build": [
+    "go",
+    "test",
+    "-run",
+    "^$",
+    "./internal/providersync/"
+  ],
+  "$limitation": "The route collector's optional-versus-blocking classification is already clause-mutated in github_work_items_route.json. This plan mutates the D17 durable reader, each executor/completion invocation, atomic five-alias admission, and the PostgreSQL tenant/rerun fences. Real ClickHouse readback is proven by the integration test but not repeatedly mutation-scored because the same exact prepared manifest is already bound by github_work_items_recovery.json.",
+  "mutations": [
+    {
+      "id": "D17-1-reader-is-github-scoped",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if strings.ToLower(strings.TrimSpace(provider)) != \"github\" {",
+      "replace": "if false {",
+      "rationale": "the durable incomplete key belongs only to GitHub; other providers must retain their established completion semantics",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyDoesNotAffectOtherRoutes$/other_provider$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-2-reader-is-work-items-scoped",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if strings.ToLower(strings.TrimSpace(dataset)) != \"work-items\" {",
+      "replace": "if false {",
+      "rationale": "the GitHub work-items evidence key must not alter independent GitHub route completion",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyDoesNotAffectOtherRoutes$/other_dataset$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-3-non-json-evidence-fails-closed",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if err != nil {\n\t\treturn nil, nil, ErrInvalidConfiguration\n\t}\n\tif bytes.Equal(encoded, []byte(\"null\")) {",
+      "replace": "if err != nil {\n\t\treturn result, watermark, nil\n\t}\n\tif bytes.Equal(encoded, []byte(\"null\")) {",
+      "rationale": "an in-memory value that cannot enter the prepared JSON snapshot must not be accepted as completed evidence",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/not_json_encodable$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-4-missing-or-null-evidence-fails-closed",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if bytes.Equal(encoded, []byte(\"null\")) {",
+      "replace": "if false {",
+      "rationale": "missing, explicit null, and typed-null evidence cannot be confused with a proven complete empty slice",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/(nil_result|missing_key|null|encoded_null)$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-5-unknown-evidence-fields-fail-closed",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "\tdecoder.DisallowUnknownFields()",
+      "replace": "\tif false { decoder.DisallowUnknownFields() }",
+      "rationale": "durable recovery cannot silently discard a future or misspelled incompleteness field that an older worker does not understand",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/unknown_field$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-6-evidence-must-decode-as-a-typed-list",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if err := decoder.Decode(&incomplete); err != nil {\n\t\treturn nil, nil, ErrInvalidConfiguration\n\t}",
+      "replace": "if err := decoder.Decode(&incomplete); err != nil {\n\t\treturn result, watermark, nil\n\t}",
+      "rationale": "a durable object or scalar cannot stand in for the ordered typed incompleteness manifest",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/wrong_shape$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-7-evidence-list-is-bounded",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if len(incomplete) > maxEffectRows {",
+      "replace": "if false && len(incomplete) > maxEffectRows {",
+      "rationale": "a hostile durable snapshot cannot allocate or replay an unbounded evidence manifest",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/too_many_entries$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-10-cause-is-required",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if partial.Cause == \"\" {",
+      "replace": "if false && partial.Cause == \"\" {",
+      "rationale": "a component without a typed failure cause cannot be safely classified as optional",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/blank_cause$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-11-cause-is-canonical",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if partial.Cause != strings.TrimSpace(partial.Cause) {",
+      "replace": "if false && partial.Cause != strings.TrimSpace(partial.Cause) {",
+      "rationale": "cause classification must use exact stable local classes, never whitespace variants",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/padded_cause$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-12-subject-identity-is-canonical",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if partial.SubjectID != strings.TrimSpace(partial.SubjectID) {",
+      "replace": "if false && partial.SubjectID != strings.TrimSpace(partial.SubjectID) {",
+      "rationale": "optional per-entity evidence must preserve one deterministic subject identity across prepared replay",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/padded_subject$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-13-only-ratified-optional-evidence-may-complete",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if !githubWorkItemsIncompleteIsOptional(partial) {",
+      "replace": "if false && !githubWorkItemsIncompleteIsOptional(partial) {",
+      "rationale": "unknown components and blocking causes must fail closed instead of landing a completed-but-truncated family",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence$/(unknown_component|blocking_cause)$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-14-any-incomplete-entry-withholds-watermark",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "if len(incomplete) != 0 {",
+      "replace": "if false && len(incomplete) != 0 {",
+      "rationale": "typed optional evidence may land every effect but must withhold all five alias watermarks on live and durable replay",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyWithholdsWatermarkAfterSnapshotJSONRoundTrip$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-15-complete-watermark-is-normalized-to-utc",
+      "file": "internal/providersync/github_work_items_incomplete.go",
+      "find": "valueUTC := watermark.UTC()",
+      "replace": "valueUTC := *watermark",
+      "rationale": "the completed candidate must retain deterministic UTC representation before alias fan-out",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemsIncompletePolicyPreservesCompleteWatermark$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-16-recovered-manifest-runs-the-reader",
+      "file": "internal/providersync/complete_route.go",
+      "find": "\t\t\t\t\tsession.Claim.Provider, session.Claim.Dataset,\n\t\t\t\t\tmanifest.Batch.Result, manifest.Batch.Watermark,",
+      "replace": "\t\t\t\t\t\"\", session.Claim.Dataset,\n\t\t\t\t\tmanifest.Batch.Result, manifest.Batch.Watermark,",
+      "rationale": "prepared recovery must re-read the durable typed evidence and suppress a hostile persisted candidate without credentials or provider fetch",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-17-live-manifest-runs-the-reader",
+      "file": "internal/providersync/complete_route.go",
+      "find": "\t\t\tsession.Claim.Provider, session.Claim.Dataset, batch.Result, batch.Watermark,",
+      "replace": "\t\t\t\"\", session.Claim.Dataset, batch.Result, batch.Watermark,",
+      "rationale": "a newly collected handler cannot forge a watermark beside typed incompleteness before snapshot preparation",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestCompleteRouteExecutorSuppressesForgedLiveIncompleteWatermark$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-18-postgres-completion-runs-the-reader",
+      "file": "internal/providersync/repository_postgres.go",
+      "find": "\t\tclaim.Provider, claim.Dataset, result, watermark,",
+      "replace": "\t\t\"\", claim.Dataset, result, watermark,",
+      "rationale": "the terminal transaction defensively suppresses a forged watermark even when a caller bypasses the executor",
+      "build": [
+        "go",
+        "test",
+        "-tags=integration",
+        "-run",
+        "^$",
+        "./internal/providersync/"
+      ],
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags=integration",
+          "-count=1",
+          "-run",
+          "^TestPostgresLeaseClaimRenewRecoveryAndTerminalFence$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-19-github-family-enforces-atomic-mode",
+      "file": "internal/providersync/work_item_alias_completion.go",
+      "find": "if provider == \"github\" {",
+      "replace": "if false {",
+      "rationale": "GitHub canonical work-items is uniquely activated as one atomic five-alias family; other providers retain subset semantics",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemAliasCompletionRequiresAtomicFamily$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-20-every-github-family-alias-is-required",
+      "file": "internal/providersync/work_item_alias_completion.go",
+      "find": "\t\t\tif !processorFlags[workItemFamilyFlagForDataset(familyDataset)] {",
+      "replace": "\t\t\tif false && !processorFlags[workItemFamilyFlagForDataset(familyDataset)] {",
+      "rationale": "omitting or disabling any one of the five family flags must fail before effects or watermarks",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubWorkItemAliasCompletionRequiresAtomicFamily$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-20a-family-contract-is-not-truncated",
+      "file": "internal/providersync/work_item_alias_completion.go",
+      "find": "familyDatasets := workitemcontract.FamilyDatasets()",
+      "replace": "familyDatasets := workitemcontract.FamilyDatasets()[:4]",
+      "rationale": "completion must consume every identity from the canonical family owner so a future alias cannot be omitted from audit, atomic admission, or watermark fan-out",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^(TestWorkItemAliasCompletionMetadata/all_enabled_aliases_use_canonical_order|TestGitHubWorkItemAliasCompletionRequiresAtomicFamily)$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-20b-family-flag-spelling-is-derived",
+      "file": "internal/providersync/work_item_alias_completion.go",
+      "find": "return workItemFamilyFlagPrefix + strings.ReplaceAll(dataset, \"-\", \"_\")",
+      "replace": "return workItemFamilyFlagPrefix + dataset",
+      "rationale": "each canonical hyphenated dataset must map to the processor flag spelling Python persists, without a second hand-maintained alias table",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestWorkItemFamilyFlagDerivationMatchesProcessorContract$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "D17-21-snapshot-fk-is-tenant-composite",
+      "file": "src/dev_health_ops/alembic/versions/0093_tenant_fence_effect_snapshots.py",
+      "find": "\"FOREIGN KEY (org_id, sync_run_unit_id) \"\n        f\"REFERENCES {_UNITS} (org_id, id) ON DELETE CASCADE NOT VALID\"",
+      "replace": "\"FOREIGN KEY (sync_run_unit_id) \"\n        f\"REFERENCES {_UNITS} (id) ON DELETE CASCADE NOT VALID\"",
+      "rationale": "the snapshot row must reference the unit through the same tenant and unit identity, not only a globally colliding unit UUID",
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0093_tenant_fence_effect_snapshots.py"
+      ],
+      "proof": [
+        [
+          ".venv/bin/pytest",
+          "-q",
+          "tests/test_effect_snapshot_migration.py::test_0093_enforces_snapshot_tenant_unit_fk_on_real_postgres"
+        ]
+      ]
+    },
+    {
+      "id": "D17-22-rerun-drops-stale-concurrent-index",
+      "file": "src/dev_health_ops/alembic/versions/0093_tenant_fence_effect_snapshots.py",
+      "find": "f\"DROP INDEX CONCURRENTLY IF EXISTS {_PARENT_INDEX}\"",
+      "replace": "f\"DROP INDEX CONCURRENTLY IF EXISTS {_PARENT_UNIQUE}\"",
+      "rationale": "a canceled build can leave the target index name behind; upgrade must remove that exact stale artifact before rebuilding",
+      "build": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0093_tenant_fence_effect_snapshots.py"
+      ],
+      "proof": [
+        [
+          ".venv/bin/pytest",
+          "-q",
+          "tests/test_effect_snapshot_migration.py::test_0093_enforces_snapshot_tenant_unit_fk_on_real_postgres"
+        ]
+      ]
+    }
+  ]
+}

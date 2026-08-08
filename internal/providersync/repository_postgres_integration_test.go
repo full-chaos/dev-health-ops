@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -304,6 +305,78 @@ WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
 		)
 	}
 
+	// Optional GitHub enrichment failures are durable completion evidence, but
+	// they are not evidence that the five-alias family is current. Even if a
+	// caller forges a candidate watermark, Complete must persist the effects'
+	// typed incompleteness and suppress every alias watermark atomically.
+	degradedUnitID := uuid.NewString()
+	seedWorkItemAliasUnit(t, ctx, pool, degradedUnitID, "incremental", `{
+		"sync_prs": true,
+		"family_dataset_work_items": true,
+		"family_dataset_work_item_labels": true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history": true,
+		"family_dataset_work_item_comments": true
+	}`)
+	degradedClaimedAt := completedAt.Add(time.Second)
+	degradedClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: degradedUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
+		Now: degradedClaimedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var degradedResult map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"records": 7,
+		"incomplete": [{"component":"milestones","cause":"transient"}]
+	}`), &degradedResult); err != nil {
+		t.Fatal(err)
+	}
+	forgedWatermark := degradedClaimedAt.Add(time.Hour)
+	degradedCompletedAt := degradedClaimedAt.Add(time.Second)
+	if err := repository.Complete(
+		ctx, degradedClaim, degradedResult, &forgedWatermark,
+		degradedClaimedAt, degradedCompletedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var degradedStatus string
+	var degradedEvidenceMatches, degradedAuditMatches bool
+	var degradedWatermarkCount int
+	if err := pool.QueryRow(ctx, `
+SELECT status,
+       result::jsonb -> 'incomplete' =
+         '[{"component":"milestones","cause":"transient"}]'::jsonb,
+       result::jsonb -> 'family_datasets' =
+         '["work-items","work-item-labels","work-item-projects","work-item-history","work-item-comments"]'::jsonb
+FROM public.sync_run_units
+WHERE id = $1`, degradedUnitID).Scan(
+		&degradedStatus, &degradedEvidenceMatches, &degradedAuditMatches,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*)
+FROM public.sync_watermarks
+WHERE org_id = 'org-acme'
+  AND source_id = 'acme/api'
+  AND dataset_key IN (
+    'work-items', 'work-item-labels', 'work-item-projects',
+    'work-item-history', 'work-item-comments'
+  )`,
+	).Scan(&degradedWatermarkCount); err != nil {
+		t.Fatal(err)
+	}
+	if degradedStatus != "success" || !degradedEvidenceMatches ||
+		!degradedAuditMatches || degradedWatermarkCount != 0 {
+		t.Fatalf(
+			"degraded status=%q evidence=%t audit=%t alias_watermarks=%d",
+			degradedStatus, degradedEvidenceMatches, degradedAuditMatches,
+			degradedWatermarkCount,
+		)
+	}
+
 	// The Python planner collapses the enabled GitHub work-item family onto one
 	// canonical work-items unit. Completion keeps that claim identity while
 	// atomically fanning its watermark and result audit back out to the enabled
@@ -313,9 +386,11 @@ WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
 		"sync_prs": true,
 		"family_dataset_work_items": true,
 		"family_dataset_work_item_labels": true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history": true,
 		"family_dataset_work_item_comments": true
 	}`)
-	familyClaimedAt := completedAt.Add(time.Second)
+	familyClaimedAt := degradedCompletedAt.Add(time.Second)
 	familyClaim, err := repository.Claim(ctx, ClaimRequest{
 		UnitID: familyUnitID, OrgID: "org-acme", Owner: uuid.NewString(),
 		Now: familyClaimedAt, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
@@ -331,7 +406,10 @@ WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
 	familyWatermark := familyClaimedAt.Add(time.Second)
 	wantFamilyWatermark := *familyClaim.BeforeAt
 	if err := repository.Complete(
-		ctx, familyClaim, map[string]any{"records": 7}, &familyWatermark,
+		ctx, familyClaim, map[string]any{
+			"records":    7,
+			"incomplete": []GitHubWorkItemsIncomplete{},
+		}, &familyWatermark,
 		familyClaimedAt, familyClaimedAt.Add(2*time.Second),
 	); err != nil {
 		t.Fatal(err)
@@ -342,7 +420,7 @@ WHERE sync_run_id = $1 AND kind = 'finalize_sync_run' AND status = 'pending'`,
 	if err := pool.QueryRow(ctx, `
 SELECT status, dataset_key,
        result::jsonb -> 'family_datasets' =
-         '["work-items","work-item-labels","work-item-comments"]'::jsonb
+         '["work-items","work-item-labels","work-item-projects","work-item-history","work-item-comments"]'::jsonb
 FROM public.sync_run_units
 WHERE id = $1`, familyUnitID).Scan(
 		&familyStatus, &familyDataset, &familyAuditMatches,
@@ -354,12 +432,15 @@ SELECT count(*), string_agg(dataset_key, ',' ORDER BY dataset_key)
 FROM public.sync_watermarks
 WHERE org_id = 'org-acme'
   AND source_id = 'acme/api'
-  AND dataset_key IN ('work-items', 'work-item-labels', 'work-item-comments')
+  AND dataset_key IN (
+    'work-items', 'work-item-labels', 'work-item-projects',
+    'work-item-history', 'work-item-comments'
+  )
   AND last_synced_at = $1`, wantFamilyWatermark).Scan(&watermarkCount, &watermarkKeys); err != nil {
 		t.Fatal(err)
 	}
 	if familyStatus != "success" || familyDataset != "work-items" || !familyAuditMatches ||
-		watermarkCount != 3 || watermarkKeys != "work-item-comments,work-item-labels,work-items" {
+		watermarkCount != 5 || watermarkKeys != "work-item-comments,work-item-history,work-item-labels,work-item-projects,work-items" {
 		t.Fatalf(
 			"family status=%q dataset=%q audit=%t watermarks=%d keys=%q",
 			familyStatus, familyDataset, familyAuditMatches, watermarkCount, watermarkKeys,
@@ -384,7 +465,10 @@ WHERE org_id = 'org-acme'
 	}
 	malformedWatermark := familyWatermark.Add(time.Hour)
 	if err := repository.Complete(
-		ctx, malformedClaim, map[string]any{"records": 1}, &malformedWatermark,
+		ctx, malformedClaim, map[string]any{
+			"records":    1,
+			"incomplete": []GitHubWorkItemsIncomplete{},
+		}, &malformedWatermark,
 		malformedClaimedAt, malformedClaimedAt.Add(time.Second),
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("malformed family completion error=%v", err)
@@ -468,15 +552,17 @@ func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			budget_first_deferred_at timestamptz,
 			first_blocked_at timestamptz,
 			expired_lease_retry_count integer NOT NULL DEFAULT 0,
-			last_retry_reason text, updated_at timestamptz NOT NULL
+			last_retry_reason text, updated_at timestamptz NOT NULL,
+			CONSTRAINT uq_sync_run_units_org_id_id_effect_snapshots
+				UNIQUE (org_id, id)
 		)`,
-		// Must stay byte-for-byte equivalent to migration 0092. This fixture
+		// Must stay equivalent to the 0092+0093 snapshot schema. This fixture
 		// previously dropped all three CHECK constraints and widened
 		// content_digest to text, so every integration test here ran against a
 		// schema more permissive than production -- the class of gap where a
 		// test proves the code works on a table that does not exist anywhere
 		// real. tests/test_effect_snapshot_migration.py::
-		// test_integration_fixture_ddl_matches_migration_0088 fails if the two
+		// test_integration_fixture_ddl_matches_snapshot_migrations fails if the two
 		// drift apart.
 		snapshotFixtureDDL,
 		`CREATE TABLE public.sync_watermarks (
@@ -541,7 +627,7 @@ func seedProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	}
 }
 
-// snapshotFixtureDDL mirrors migration 0092 exactly, constraints included.
+// snapshotFixtureDDL mirrors the 0092 table plus 0093 tenant FK.
 const snapshotFixtureDDL = `CREATE TABLE public.sync_run_unit_effect_snapshots (
 	org_id text NOT NULL,
 	sync_run_unit_id uuid NOT NULL,
@@ -560,6 +646,8 @@ const snapshotFixtureDDL = `CREATE TABLE public.sync_run_unit_effect_snapshots (
 	CONSTRAINT ck_sync_run_unit_effect_snapshots_schema_version
 		CHECK (schema_version = 'v1'),
 	PRIMARY KEY (org_id, sync_run_unit_id, generation),
-	FOREIGN KEY (sync_run_unit_id) REFERENCES public.sync_run_units(id)
+	CONSTRAINT fk_sync_run_unit_effect_snapshots_tenant_unit
+		FOREIGN KEY (org_id, sync_run_unit_id)
+		REFERENCES public.sync_run_units(org_id, id)
 		ON DELETE CASCADE
 )`

@@ -71,6 +71,36 @@ PROVIDER_MATRIX_UPDATE=1 go test ./internal/providersync \
 - `route_destinations` is empty for pairs with no known sink manifest yet.
   Recording a guessed manifest would be worse than recording none.
 
+## Activation status for the GitHub work-item family
+
+CHAOS-3606 makes all five planner-collapsed identities `native_go` and
+`route_ready: true`: `work-items`, `work-item-labels`, `work-item-projects`,
+`work-item-history`, and `work-item-comments`. Each reports the same complete,
+ordered sixteen-destination manifest for matrix, audit, and recovery truth.
+That is deliberately not five partial writers: only the canonical
+`github/work-items` claim is `RouteEnabled` when
+`WORKER_GITHUB_WORK_ITEMS_ENABLED=true`. A direct persisted sibling alias is
+released for route reconciliation before executor construction, credentials,
+HTTP, effects, or watermark work.
+
+The producer admits that canonical claim only when all five exact
+`family_dataset_*` flags are boolean `true`; missing, false, string-like, or
+unknown family flags and direct aliases are refused before either River outbox
+or Celery staging. The shared provider-unit switch is the single-writer
+boundary: forward selection stops the Python writer before Go can execute;
+rollback disables Go routing before the valid canonical Python claim becomes
+admissible again. This changes no deployment profile, scheduler, or cutover
+ownership: every checked-in switch remains default-off.
+
+The native route requires explicit,
+`WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH` and
+`WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH` values. Readiness validates
+the same values the executor receives, and rejects any ambient
+`STATUS_MAPPING_PATH` override rather than silently loading a different file.
+GitHub Projects v2 is read only from durable enabled-integration configuration
+or claim credentials; an environment-only `GITHUB_PROJECTS_V2` setting emits a
+startup readiness warning and never becomes a collector configuration input.
+
 ## Activation status for `(github, repo-metadata)`
 
 CHAOS-3123 flipped the pair to `native_go` / `route_ready: true` on

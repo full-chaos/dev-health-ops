@@ -953,9 +953,11 @@ def _is_linear_work_item_family(provider: str, dataset_key: str) -> bool:
 # bookkeeping over the same issue crawl). Emitting one unit per dataset re-ran
 # the full ingest 5x. The planner instead emits ONE composite unit (canonical
 # ``dataset_key="work-items"``) carrying a boolean ``family_dataset_<key>`` flag
-# per enabled dataset; the worker fans those back out into per-dataset
-# watermarks + audit metadata on success. Provider-agnostic: github/gitlab/jira/
-# linear all expose these keys.
+# per participating dataset; the worker fans those back out into per-dataset
+# watermarks + audit metadata on success. GitHub's activated Go route is the
+# deliberate exception: every canonical GitHub unit claims all five aliases,
+# even when one is caught up, because the route owns one indivisible writer
+# family. GitLab, Jira, and Linear retain their contributing-dataset flags.
 _WORK_ITEM_FAMILY_DATASET_ORDER: tuple[str, ...] = (
     "work-items",
     "work-item-labels",
@@ -1053,8 +1055,17 @@ def _build_work_item_family_units(
     composite_windows = _merge_family_windows([windows for _, windows in contributing])
 
     processor_flags: dict[str, bool] = dict(canonical_spec.processor_flags)
-    for dataset, _windows in contributing:
-        processor_flags[_family_dataset_flag(dataset.dataset_key)] = True
+    if provider == "github":
+        # CHAOS-3606: GitHub's native route has one all-five-alias writer. A
+        # caught-up sibling still has no independent Python owner while this
+        # canonical unit runs, so its flag records atomic route ownership rather
+        # than whether that sibling contributed a window to this tick's merge.
+        # The merged window above remains derived only from non-empty inputs.
+        family_flag_datasets = _WORK_ITEM_FAMILY_DATASET_ORDER
+    else:
+        family_flag_datasets = tuple(dataset.dataset_key for dataset, _ in contributing)
+    for dataset_key in family_flag_datasets:
+        processor_flags[_family_dataset_flag(dataset_key)] = True
     if provider == "github":
         # CHAOS-646: thread the PRS-as-work-items signal onto the composite so
         # ``_work_item_kwargs`` sets ``include_pull_requests`` correctly.

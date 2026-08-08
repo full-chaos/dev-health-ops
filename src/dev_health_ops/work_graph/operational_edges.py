@@ -43,7 +43,10 @@ def build_operational_incident_edges(
     deployment_window = _timestamp_window("deployed_at", from_date, to_date)
     mapping_filters = (
         "is_active = 1",
-        "valid_from <= {now:DateTime}",
+        # CHAOS-3570: valid_from is Nullable; NULL <= x is false in
+        # ClickHouse, so a NULL valid_from ("valid since before records
+        # began") must be treated as satisfying the as-of filter.
+        "(valid_from IS NULL OR valid_from <= {now:DateTime})",
         "(valid_to IS NULL OR valid_to > {now:DateTime})",
         *(("repo_id = {repo_id:UUID}",) if repo_id else ()),
     )

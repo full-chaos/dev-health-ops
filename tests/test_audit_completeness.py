@@ -40,6 +40,25 @@ def test_incident_query_uses_canonical_service_mapping_projection(monkeypatch):
     assert "incident.service_id = mapping.service_id" in query
     assert "is_active = 1" in query
     assert query.count("WHERE org_id = {org_id:String}") >= 2
+    # CHAOS-3570: a NULL valid_from ("valid since before records began")
+    # must satisfy the as-of filter -- NULL <= x is false in ClickHouse.
+    assert "(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})" in query
+    # CHAOS-3604: operational_service_repository_mappings has no
+    # is_deleted column -- filtering it here crashes the query outright
+    # against a live ClickHouse engine. Never re-add it.
+    mapping_clause = query.split("INNER JOIN")[1]
+    assert "is_deleted" not in mapping_clause
+    # Codex review (CHAOS-3570 PR #1605): a service can carry more than one
+    # currently-active mapping identity to the same repository, so the
+    # incident/mapping JOIN must collapse to one (repo_id, incident.id) pair
+    # before countIf aggregates -- otherwise one incident is counted once
+    # per coexisting mapping identity. This ALWAYS-ON offline test is the
+    # only CI-visible tripwire for that collapse: the behavioral proof lives
+    # in a @pytest.mark.clickhouse live test, which CI filters out of both
+    # unit_tests() and ci_tests() (and would self-skip against CI's own
+    # CLICKHOUSE_URI=.../default anyway) -- so this text pin is what a
+    # regression in either CI tier can actually catch.
+    assert "LIMIT 1 BY mapping.repo_id, incident.id" in query
 
 
 def test_infer_repo_source_prefers_settings():

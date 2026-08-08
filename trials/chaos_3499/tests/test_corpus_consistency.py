@@ -164,3 +164,48 @@ def test_revocation_removes_exactly_the_revoked_repository() -> None:
         f"revoking repo_atlas_web removed {removed}; expected exactly the "
         "web-repo episode -- over-removal is as wrong as under-removal"
     )
+
+
+def test_closed_facts_declare_their_closure_provenance() -> None:
+    """Every closed fact (``valid_to`` set) must make an explicit,
+    reviewable choice about who documents its closure: either it is pinned
+    self-evidencing in ``gt.SELF_EVIDENCING_CLOSURES`` (a structured record
+    whose own fields carry validity), or it names the record that actually
+    closed it via ``invalidated_by_fact_key``. Never both, never neither --
+    a fact left to default silently is exactly how gt_adr014_superseded's
+    closure ended up citing its own opening evidence for a supersession it
+    never spoke to (CHAOS-3499 finding 6), before this rule existed.
+    """
+    for fact in gt.GROUND_TRUTH:
+        if fact.valid_to is None:
+            continue
+        self_evidencing = fact.fact_key in gt.SELF_EVIDENCING_CLOSURES
+        names_invalidator = fact.invalidated_by_fact_key is not None
+        assert self_evidencing != names_invalidator, (
+            f"{fact.fact_key} has valid_to set and must declare its closure "
+            f"provenance EXACTLY one way: pinned self-evidencing="
+            f"{self_evidencing}, invalidated_by_fact_key="
+            f"{fact.invalidated_by_fact_key!r} -- never both, never neither"
+        )
+        if names_invalidator:
+            assert fact.invalidated_by_fact_key in gt.GROUND_TRUTH_BY_KEY, (
+                f"{fact.fact_key}.invalidated_by_fact_key names unknown "
+                f"fact {fact.invalidated_by_fact_key!r}"
+            )
+
+    # No stale entries: everything pinned self-evidencing must still exist,
+    # still be closed, and still carry no invalidator -- otherwise the pin
+    # itself is the thing silently drifting from the facts it describes.
+    for fact_key in gt.SELF_EVIDENCING_CLOSURES:
+        pinned_fact = gt.GROUND_TRUTH_BY_KEY.get(fact_key)
+        assert pinned_fact is not None, (
+            f"SELF_EVIDENCING_CLOSURES names unknown fact {fact_key!r}"
+        )
+        assert pinned_fact.valid_to is not None, (
+            f"{fact_key} is pinned self-evidencing but has no valid_to to "
+            "even be a closure"
+        )
+        assert pinned_fact.invalidated_by_fact_key is None, (
+            f"{fact_key} is pinned self-evidencing but ALSO sets "
+            "invalidated_by_fact_key -- pick one"
+        )

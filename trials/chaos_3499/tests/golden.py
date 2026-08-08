@@ -15,7 +15,7 @@ deleted, what is degraded).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -73,13 +73,37 @@ class Scenario:
     #: Default True: an arm that returns predicate-matching material for an
     #: entity nobody asked about (e.g. a repo_atlas_web episode when only
     #: repo_atlas_api was in scope) is a real leak, and golden must model the
-    #: scoped answer to make that leak assertable. False only for O1/O3,
-    #: whose query subject (a CI failure signature; a project) has no literal
-    #: subject/object edge to the facts those questions require in this
-    #: corpus -- they are genuinely association-shaped, and forcing a literal
-    #: filter there would make golden reject its own required facts. Tracked
-    #: as a known gap rather than silently "fixed" by disabling the assertion
-    #: these two would otherwise need.
+    #: scoped answer to make that leak assertable. False only where it is
+    #: load-bearing:
+    #:
+    #: - O1_ci_prior_attempts / O1_ci_prior_attempts_stale: query subject is
+    #:   the CI failure signature, but the required facts are episodes
+    #:   touching repo_atlas_api -- neither side of "touched" is the
+    #:   signature at all. Genuinely association-shaped in this corpus.
+    #: - O3_supersession: query subject is proj_atlas. ONE required fact
+    #:   (ADR-014 describes_deployment_design_for proj_atlas) DOES have
+    #:   proj_atlas as its object and would survive a literal filter fine.
+    #:   The OTHER required fact (ADR-021 supersedes ADR-014) has neither
+    #:   side as proj_atlas -- supersession is a decision-to-decision edge
+    #:   with no project in it at all. Filtering by subjects=(proj_atlas,)
+    #:   would keep the first required fact and drop the second, which the
+    #:   same oracle also requires, so the whole scenario needs the
+    #:   exemption even though half its required facts would pass a literal
+    #:   filter on their own.
+    #:
+    #: Both are genuinely association-shaped for the fact a literal filter
+    #: would drop, and forcing the filter there would make golden reject its
+    #: own required facts. Tracked as a known gap rather than silently
+    #: "fixed" by disabling the assertion these need.
+    #:
+    #: The other three O1/O3 scenarios (squash, extraction-down,
+    #: deterministic-only) do NOT need the exemption -- their required facts
+    #: either already match the query subject or are asserted only via
+    #: must_exclude/coverage, so subject scoping never removes anything they
+    #: depend on. Verified empirically: flipping each to True individually
+    #: keeps its golden response passing. Left exempt, they would silently
+    #: widen the "known gap" comment above to cover ground it does not
+    #: actually stand on.
     apply_subject_filter: bool = True
 
 
@@ -101,7 +125,6 @@ SCENARIOS: Mapping[str, Scenario] = {
         },
     ),
     "O1_ci_prior_attempts_squash": Scenario(
-        apply_subject_filter=False,
         warnings=(
             "source_unavailable:work_graph_pr_commit:squash_merge_linkage_absent",
         ),
@@ -118,7 +141,6 @@ SCENARIOS: Mapping[str, Scenario] = {
     "O2_blocking_observed": _DEFAULT,
     "O3_supersession": _NO_SUBJECT_FILTER,
     "O3_supersession_extraction_down": Scenario(
-        apply_subject_filter=False,
         degraded_reasons=("extraction_provider_unavailable",),
         coverage={
             "extraction": SourceCoverage(
@@ -130,7 +152,6 @@ SCENARIOS: Mapping[str, Scenario] = {
         suppress_fact_keys=frozenset({"gt_adr021_supersedes_adr014"}),
     ),
     "O3_supersession_deterministic_only": Scenario(
-        apply_subject_filter=False,
         degraded_reasons=("extraction_disallowed_by_policy",),
         coverage={
             "extraction": SourceCoverage(
@@ -253,6 +274,24 @@ def _to_temporal_fact(
     )
 
 
+def _adversarial_last(
+    facts: Sequence[gt.GroundTruthFact],
+) -> list[gt.GroundTruthFact]:
+    """Stable-sort so adversarial (decoy) material never ranks ahead of
+    legitimate evidence when a truncation budget forces a cut.
+
+    This must be a real reordering, not GROUND_TRUTH's declaration order
+    doing the work by coincidence: in the pinned corpus every planted decoy
+    happens to be declared after the real evidence it decoys, so an
+    end-to-end check against O4_prior_attempts_manipulated alone cannot
+    distinguish "this function runs" from "this function was deleted" --
+    see ``test_adversarial_last_sort_reorders_regardless_of_declaration_order``
+    in test_oracle_fault_modes.py, which builds its own reversed input
+    specifically so the sort's effect is observable.
+    """
+    return sorted(facts, key=lambda f: f.is_adversarial)
+
+
 def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
     """The response a correct arm returns for ``oracle``'s query."""
     scenario = SCENARIOS[oracle.oracle_id]
@@ -281,13 +320,7 @@ def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
             apply_time_filter=apply_time_filter,
             suppress_fact_keys=scenario.suppress_fact_keys,
         )
-        # Adversarial (decoy) material must never rank ahead of legitimate
-        # evidence when a budget forces a cut -- that ordering, not
-        # whatever position a fact happens to occupy in the GROUND_TRUTH
-        # declaration tuple, is what a correct arm's truncation looks like.
-        # `sorted` is stable, so within each group the original (still
-        # deterministic) relative order is preserved.
-        ordered = sorted(selected, key=lambda f: f.is_adversarial)
+        ordered = _adversarial_last(selected)
         truncated = len(ordered) > query.max_results
         facts = tuple(
             _to_temporal_fact(

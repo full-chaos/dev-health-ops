@@ -94,6 +94,11 @@ O1_CI_PRIOR_ATTEMPTS = Oracle(
         ),
     ),
     max_inferred_facts=0,
+    # Query subject is the CI failure signature; required facts are episodes
+    # touching repo_atlas_api, neither side of which is the signature at
+    # all. Association-shaped in this corpus -- see golden.py's matching
+    # Scenario.apply_subject_filter docstring for the full explanation.
+    require_subject_scoped=False,
 )
 
 O1_CI_PRIOR_ATTEMPTS_STALE = Oracle(
@@ -124,6 +129,8 @@ O1_CI_PRIOR_ATTEMPTS_STALE = Oracle(
     # stalled projection. Demanding freshness here would make the oracle
     # unsatisfiable and turn a declared-staleness test into a liveness test.
     require_warnings=frozenset({"source_stale:temporal_graph.v1"}),
+    # Same association-shaped exemption as O1_CI_PRIOR_ATTEMPTS above.
+    require_subject_scoped=False,
 )
 
 O1_CI_PRIOR_ATTEMPTS_SQUASH = Oracle(
@@ -291,6 +298,15 @@ O3_SUPERSESSION = Oracle(
             label="ADR-014's window closed, citing the invalidating record",
         ),
     ),
+    # The ADR-021-supersedes-ADR-014 fact above has neither side as
+    # proj_atlas -- supersession is a decision-to-decision edge with no
+    # project in it at all -- so a literal subject filter would drop a fact
+    # this oracle itself requires. (The OTHER required fact, ADR-014
+    # describes_deployment_design_for proj_atlas, would pass such a filter
+    # fine; it is the supersedes edge that forces the exemption for the
+    # whole oracle. See golden.py's matching Scenario.apply_subject_filter
+    # docstring.)
+    require_subject_scoped=False,
 )
 
 O3_SUPERSESSION_EXTRACTION_DOWN = Oracle(
@@ -474,8 +490,11 @@ O4_PRIOR_ATTEMPTS_AFTER_REDACTION = Oracle(
     query=_Q4_QUERY,
     rationale=(
         "Over-deletion and under-deletion are both failures and this oracle "
-        "asserts against both in one shot: the multi-source fact must "
-        "survive with reduced provenance, the sole-source fact must vanish."
+        "asserts against both in one shot: the fact backed by two "
+        "provenance channels (one evidence ref, one source event ref) must "
+        "survive redaction of the source-event channel, reduced to its "
+        "evidence ref alone; the fact backed by only one channel and "
+        "nothing else must vanish when that channel is deleted."
     ),
     must_include=(
         FactExpectation(
@@ -483,10 +502,18 @@ O4_PRIOR_ATTEMPTS_AFTER_REDACTION = Oracle(
             predicate="touched",
             object=gt.REPO_API,
             require_claim_kind=ClaimKind.OBSERVED,
-            # sevt_ep_0001 was redacted for this scenario; an arm that serves
-            # it back verbatim has not actually redacted anything.
+            # sevt_ep_0001 (this fact's ONE source_event_ref) was redacted
+            # for this scenario -- an arm that serves it back verbatim, via
+            # EITHER provenance channel, has not actually redacted anything.
+            # Post-redaction this is a fact with an empty source_event_refs,
+            # standing on its remaining evidence_ref alone -- not a
+            # "multi-source" fact in any sense that survives redaction
+            # intact.
             forbid_source_event_refs=frozenset({"sevt_ep_0001"}),
-            label="multi-source fact survives redaction of one source",
+            label=(
+                "fact survives redaction of its one source_event_ref, now "
+                "backed solely by its evidence_ref"
+            ),
         ),
     ),
     must_exclude=(

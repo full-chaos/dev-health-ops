@@ -31,7 +31,7 @@ from ..harness.contracts import (
 )
 from ..harness.faults import FAULT_MODES, FaultApplication, hide_coverage_gap
 from ..harness.oracle import Oracle, Verdict
-from .golden import golden_response
+from .golden import _adversarial_last, golden_response
 
 ARM = "golden-reference"
 
@@ -102,12 +102,12 @@ def test_every_fault_mode_applies_to_at_least_one_oracle() -> None:
 
 
 #: Every (fault_id, oracle_id) pair currently INAPPLICABLE, pinned explicitly
-#: so the 174-pair skip set can only change by a conscious edit here.
+#: so the 197-pair skip set can only change by a conscious edit here.
 #:
 #: Without a pin, the parametrised suite above just reports these as skips --
 #: and if an oracle or fault-mode change silently made a previously-APPLIED
 #: pair inapplicable, the only visible symptom is one more skip in a wall
-#: that already has 174 of them, which reads as coverage regardless. This
+#: that already has 197 of them, which reads as coverage regardless. This
 #: manifest turns that silent shrink into a named, reviewable diff.
 #:
 #: To regenerate after a deliberate corpus/fault-mode change:
@@ -224,6 +224,9 @@ _PINNED_INAPPLICABLE_PAIRS: frozenset[tuple[str, str]] = frozenset(
         ("hide_source_coverage_gap", "O7_null_valid_from"),
         ("hide_source_coverage_gap", "O7_unpinned"),
         ("hide_source_coverage_gap", "O7_valid"),
+        ("leak_out_of_subject_fact", "O1_ci_prior_attempts"),
+        ("leak_out_of_subject_fact", "O1_ci_prior_attempts_stale"),
+        ("leak_out_of_subject_fact", "O3_supersession"),
         ("omit_expected_evidence", "O1_ci_prior_attempts_squash"),
         ("omit_expected_evidence", "O3_supersession_deterministic_only"),
         ("omit_expected_evidence", "O3_supersession_extraction_down"),
@@ -253,6 +256,26 @@ _PINNED_INAPPLICABLE_PAIRS: frozenset[tuple[str, str]] = frozenset(
         ("reverse_edge_direction", "O4_prior_attempts_graph_outage"),
         ("rewind_indexing_watermark", "O1_ci_prior_attempts_stale"),
         ("rewind_indexing_watermark", "O4_prior_attempts_graph_outage"),
+        ("smuggle_redacted_ref_via_evidence", "O1_ci_prior_attempts"),
+        ("smuggle_redacted_ref_via_evidence", "O1_ci_prior_attempts_squash"),
+        ("smuggle_redacted_ref_via_evidence", "O1_ci_prior_attempts_stale"),
+        ("smuggle_redacted_ref_via_evidence", "O2_blocking_observed"),
+        ("smuggle_redacted_ref_via_evidence", "O2_blocking_valid"),
+        ("smuggle_redacted_ref_via_evidence", "O3_supersession"),
+        ("smuggle_redacted_ref_via_evidence", "O3_supersession_deterministic_only"),
+        ("smuggle_redacted_ref_via_evidence", "O3_supersession_extraction_down"),
+        ("smuggle_redacted_ref_via_evidence", "O4_prior_attempts"),
+        ("smuggle_redacted_ref_via_evidence", "O4_prior_attempts_after_revocation"),
+        ("smuggle_redacted_ref_via_evidence", "O4_prior_attempts_graph_outage"),
+        ("smuggle_redacted_ref_via_evidence", "O4_prior_attempts_manipulated"),
+        ("smuggle_redacted_ref_via_evidence", "O5_conflicts"),
+        ("smuggle_redacted_ref_via_evidence", "O5_conflicts_injected"),
+        ("smuggle_redacted_ref_via_evidence", "O5_conflicts_poisoned"),
+        ("smuggle_redacted_ref_via_evidence", "O6_recurring_pattern"),
+        ("smuggle_redacted_ref_via_evidence", "O7_null_valid_from"),
+        ("smuggle_redacted_ref_via_evidence", "O7_unpinned"),
+        ("smuggle_redacted_ref_via_evidence", "O7_valid"),
+        ("strip_evidence_provenance", "O1_ci_prior_attempts_squash"),
         ("strip_evidence_provenance", "O3_supersession_deterministic_only"),
         ("strip_evidence_provenance", "O3_supersession_extraction_down"),
         ("strip_evidence_provenance", "O4_prior_attempts_graph_outage"),
@@ -607,6 +630,45 @@ def test_golden_response_scopes_by_query_subject_not_just_predicate() -> None:
     )
 
 
+def test_arm_response_leaking_out_of_subject_fact_fails_the_oracle() -> None:
+    """Regression: finding 10 pinned subject scoping in the golden BUILDER,
+    but nothing checked a real arm's response -- an arm serving a
+    repo_atlas_web episode when only repo_atlas_api was queried passed
+    O4_prior_attempts anyway, because the leak was never asserted against.
+
+    RED evidence: with require_subject_scoped forced off (simulating the
+    oracle before this fix), the exact same leaked response evaluates to
+    PASS. See PR comment for the reproduction transcript.
+    """
+    oracle = ORACLES_BY_ID["O4_prior_attempts"]
+    golden = golden_response(oracle, ARM)
+    leak = TemporalFact(
+        fact_id="tf_gt_ep5_web_repo",
+        subject_ref=gt.EPISODE_WEB_REPO,
+        predicate="touched",
+        object_ref=gt.REPO_WEB,
+        observed_at=gt.TRIAL_NOW,
+        claim_kind=ClaimKind.OBSERVED,
+        projection_version="temporal-projector.v1",
+        evidence_refs=("ev1_ep_0005",),
+    )
+    leaked = dataclasses.replace(golden, facts=(*golden.facts, leak))
+
+    result = oracle.evaluate(leaked)
+    assert result.verdict is Verdict.FAIL, (
+        "an arm leaking material for an entity outside query.subjects must "
+        "fail, not pass because the leaked fact happened to match a "
+        "predicate nobody excluded"
+    )
+    assert "subject_scoped" in result.failed_assertion_ids()
+
+    # Control: the same mutation with subject scoping disabled (the old
+    # behaviour) must still pass -- proving the new assertion, not some
+    # other side effect, is what catches the leak.
+    old_oracle = dataclasses.replace(oracle, require_subject_scoped=False)
+    assert old_oracle.evaluate(leaked).verdict is Verdict.PASS
+
+
 def test_golden_response_declares_truncation_when_a_candidate_is_dropped() -> None:
     """Regression: golden.py hardcoded truncated=False regardless of whether
     max_results actually dropped a candidate.
@@ -630,13 +692,74 @@ def test_golden_response_does_not_falsely_claim_truncation() -> None:
 
 
 def test_manipulated_truncation_never_lets_the_decoy_displace_real_evidence() -> None:
-    """C17, stated directly: truncation order must not be an accident of
-    GROUND_TRUTH's declaration position. Adversarial material is sorted last
-    regardless of where it is declared, so a corpus edit that reordered
-    facts could not silently let a decoy win a budget it should lose.
+    """C17, stated directly, against the REAL corpus.
+
+    On its own this is a weak witness for the sort: in the pinned corpus
+    the keyword-stuffed decoy already happens to be GROUND_TRUTH's
+    last-declared fact among O4_prior_attempts_manipulated's candidates, so
+    this assertion holds whether or not `_adversarial_last` actually runs.
+    Kept as an end-to-end regression companion; the tests below are what
+    actually exercise the sort.
     """
     oracle = ORACLES_BY_ID["O4_prior_attempts_manipulated"]
     golden = golden_response(oracle, ARM)
     assert not any(f.fact_id == "tf_gt_ep_keyword_stuffed" for f in golden.facts), (
         "the keyword-stuffed decoy must not survive the truncation budget"
     )
+
+
+def test_adversarial_last_sort_reorders_regardless_of_declaration_order() -> None:
+    """Direct unit test of the ordering primitive golden_response relies on.
+
+    Regression for the verifier's finding that the end-to-end test above
+    cannot fail against a deleted sort: GROUND_TRUTH happens to declare
+    every planted decoy after the real evidence it decoys, so removing
+    `_adversarial_last` from golden_response does not change
+    O4_prior_attempts_manipulated's output at all. This test builds its OWN
+    input order (decoy first) so the sort's effect is directly observable,
+    independent of GROUND_TRUTH's declaration order.
+    """
+    decoy = gt.GROUND_TRUTH_BY_KEY["gt_ep_keyword_stuffed"]
+    real = gt.GROUND_TRUTH_BY_KEY["gt_ep1_touched"]
+    assert decoy.is_adversarial
+    assert not real.is_adversarial
+
+    ordered = _adversarial_last([decoy, real])
+    assert [f.fact_key for f in ordered] == [real.fact_key, decoy.fact_key], (
+        "adversarial material must be reordered after legitimate evidence "
+        "even when GROUND_TRUTH-equivalent input declares it first"
+    )
+
+
+def test_golden_response_still_orders_correctly_when_declaration_order_is_reversed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end companion to the direct unit test above.
+
+    Monkeypatches GROUND_TRUTH so the keyword-stuffed decoy is declared
+    BEFORE the three real attempts -- the opposite of the pinned corpus.
+    Without `_adversarial_last` actually wired into golden_response, the
+    decoy would now occupy one of the three truncation slots and a real
+    attempt would be dropped; this fails loudly if that wiring regresses.
+    """
+    decoy = gt.GROUND_TRUTH_BY_KEY["gt_ep_keyword_stuffed"]
+    others = tuple(f for f in gt.GROUND_TRUTH if f.fact_key != decoy.fact_key)
+    reversed_ground_truth = (decoy, *others)
+    assert reversed_ground_truth.index(decoy) < reversed_ground_truth.index(
+        gt.GROUND_TRUTH_BY_KEY["gt_ep1_touched"]
+    )
+
+    monkeypatch.setattr(gt, "GROUND_TRUTH", reversed_ground_truth)
+
+    oracle = ORACLES_BY_ID["O4_prior_attempts_manipulated"]
+    golden = golden_response(oracle, ARM)
+    assert len(golden.facts) == 3
+    assert not any(f.fact_id == "tf_gt_ep_keyword_stuffed" for f in golden.facts), (
+        "with the decoy declared FIRST, only a real sort (not declaration "
+        "order) keeps it out of the truncated response"
+    )
+    assert {f.fact_id for f in golden.facts} == {
+        "tf_gt_ep1_touched",
+        "tf_gt_ep2_touched",
+        "tf_gt_ep3_touched",
+    }

@@ -138,8 +138,14 @@ class FactExpectation:
         missing_evidence = self.require_evidence_refs - frozenset(fact.evidence_refs)
         if missing_evidence:
             problems.append(f"missing evidence refs {sorted(missing_evidence)}")
-        forbidden_source_refs = self.forbid_source_event_refs & frozenset(
-            fact.source_event_refs
+        # Checked against BOTH provenance channels, not just source_event_refs:
+        # a redacted source is redacted, full stop, and must not be citable
+        # via evidence_refs either. Checking only one channel would let a
+        # response smuggle the redacted ref back in through the other one
+        # and still pass -- redaction measured on one of two channels is not
+        # redaction.
+        forbidden_source_refs = self.forbid_source_event_refs & (
+            frozenset(fact.source_event_refs) | frozenset(fact.evidence_refs)
         )
         if forbidden_source_refs:
             problems.append(
@@ -229,6 +235,18 @@ class Oracle:
     max_inferred_facts: int | None = None
     expect_outcome: ArmOutcome = ArmOutcome.ANSWERED
     require_indexed_through_at_or_after: datetime | None = None
+    #: Whether every returned fact must have its subject OR object among
+    #: query.subjects. Default True: a real arm serving material for an
+    #: entity nobody asked about (e.g. a repo_atlas_web episode when the
+    #: query subject was repo_atlas_api only) is a leak that finding-10's
+    #: fix made assertable in golden.py's builder but left invisible to real
+    #: arms, since nothing in Oracle.evaluate checked it. False only for the
+    #: same load-bearing exemptions golden.py's Scenario.apply_subject_filter
+    #: carries (see that field's docstring for why): the query subject has
+    #: no literal ground-truth edge to a fact this oracle requires, so
+    #: asserting scope here would make the oracle reject its own correct
+    #: answer.
+    require_subject_scoped: bool = True
 
     def __post_init__(self) -> None:
         if self.query.query_mode is QueryMode.AS_OF and self.query.axis is None:
@@ -285,6 +303,7 @@ class Oracle:
             results.append(self._assert_excluded(expectation, response.facts))
         for coverage in self.coverage:
             results.append(self._assert_coverage(coverage, response))
+        results.append(self._assert_subject_scoped(response.facts))
         results.append(self._assert_warnings(response))
         results.append(self._assert_provenance_closure(response.facts))
         if self.max_inferred_facts is not None:
@@ -400,6 +419,36 @@ class Oracle:
                     f"reason={reason!r} lacks {coverage.expect_reason_contains!r}",
                 )
         return AssertionResult(assertion_id, Verdict.PASS, "declared as expected")
+
+    def _assert_subject_scoped(self, facts: Sequence[TemporalFact]) -> AssertionResult:
+        """No fact may sit outside the entities the query actually asked about.
+
+        Complements golden.py's Scenario.apply_subject_filter, which only
+        makes the *reference* answer scoped -- with nothing checking a real
+        arm's response, an arm that leaked material for an unqueried entity
+        (finding 10's exact scenario) passed every oracle anyway, because the
+        leak was never asserted against.
+        """
+        if not self.require_subject_scoped or not self.query.subjects:
+            return AssertionResult(
+                "subject_scoped", Verdict.PASS, "oracle does not scope by subject"
+            )
+        subjects = frozenset(self.query.subjects)
+        out_of_scope = [
+            f.fact_id
+            for f in facts
+            if f.subject_ref not in subjects and f.object_ref not in subjects
+        ]
+        return AssertionResult(
+            assertion_id="subject_scoped",
+            verdict=Verdict.FAIL if out_of_scope else Verdict.PASS,
+            detail=(
+                f"fact(s) outside query subjects {sorted(s.id for s in subjects)}: "
+                f"{out_of_scope}"
+                if out_of_scope
+                else "all facts within query subjects"
+            ),
+        )
 
     def _assert_warnings(self, response: ArmResponse) -> AssertionResult:
         present = frozenset(response.warnings)

@@ -246,6 +246,34 @@ def restore_redacted_source_ref(
     return _skip(response, "oracle forbids no source event ref")
 
 
+def smuggle_redacted_ref_via_evidence(
+    oracle: Oracle, response: ArmResponse
+) -> MutationOutcome:
+    """Serve a redacted ref back through evidence_refs instead of source_event_refs.
+
+    The other half of the redaction-laundering path: an arm that cannot
+    re-emit a redacted ref as a source event might still cite it as
+    evidence. Checking only source_event_refs for the forbidden ref would
+    let this smuggling attempt pass; the qualifier checks both channels.
+    """
+    for expectation in oracle.must_include:
+        if not expectation.forbid_source_event_refs:
+            continue
+        for index, fact in enumerate(response.facts):
+            if expectation.identity_matches(fact):
+                smuggled = tuple(
+                    set(fact.evidence_refs) | expectation.forbid_source_event_refs
+                )
+                return _applied(
+                    _swap(
+                        response,
+                        index,
+                        dataclasses.replace(fact, evidence_refs=smuggled),
+                    )
+                )
+    return _skip(response, "oracle forbids no source event ref")
+
+
 def cite_opening_evidence_as_invalidation(
     oracle: Oracle, response: ArmResponse
 ) -> MutationOutcome:
@@ -299,6 +327,39 @@ def emit_forbidden_fact(oracle: Oracle, response: ArmResponse) -> MutationOutcom
         claim_kind=ClaimKind.OBSERVED,
         projection_version="temporal-projector.v1",
         evidence_refs=("ev1_should_not_be_here",),
+    )
+    return _applied(dataclasses.replace(response, facts=(*response.facts, leaked)))
+
+
+def leak_out_of_subject_fact(oracle: Oracle, response: ArmResponse) -> MutationOutcome:
+    """Return a fact for an entity nobody asked about -- finding 10's leak.
+
+    Unlike ``emit_forbidden_fact``, this is not built from the oracle's
+    ``must_exclude`` (a leak outside query.subjects is wrong regardless of
+    whether anyone thought to name it as forbidden); it is a synthetic
+    subject/object guaranteed not to collide with the oracle's own query
+    subjects.
+    """
+    if not oracle.require_subject_scoped or not oracle.query.subjects:
+        return _skip(response, "oracle does not scope by subject")
+    subjects = frozenset(oracle.query.subjects)
+    leaked = TemporalFact(
+        fact_id="tf_forbidden_out_of_subject_leak",
+        subject_ref=EntityRef("agent_episode", "ep_out_of_subject_leak"),
+        predicate="touched",
+        object_ref=EntityRef("repository", "repo_out_of_subject_leak"),
+        observed_at=(
+            response.facts[0].observed_at
+            if response.facts
+            else response.indexed_through or _FALLBACK_TIME
+        ),
+        claim_kind=ClaimKind.OBSERVED,
+        projection_version="temporal-projector.v1",
+        evidence_refs=("ev1_out_of_subject_leak",),
+    )
+    assert leaked.subject_ref not in subjects and leaked.object_ref not in subjects, (
+        "synthetic leak entity collided with a real query subject -- fault "
+        "mode needs a different synthetic id"
     )
     return _applied(dataclasses.replace(response, facts=(*response.facts, leaked)))
 
@@ -436,6 +497,12 @@ FAULT_MODES: tuple[FaultMode, ...] = (
         restore_redacted_source_ref,
     ),
     FaultMode(
+        "smuggle_redacted_ref_via_evidence",
+        "cite a redacted ref through evidence_refs instead of source_event_refs",
+        "must_include",
+        smuggle_redacted_ref_via_evidence,
+    ),
+    FaultMode(
         "cite_opening_evidence_as_invalidation",
         "cite the fact's own opening evidence as what closed its window",
         "must_include",
@@ -446,6 +513,12 @@ FAULT_MODES: tuple[FaultMode, ...] = (
         "return material the oracle forbids (leak, injection, poisoning)",
         "must_exclude",
         emit_forbidden_fact,
+    ),
+    FaultMode(
+        "leak_out_of_subject_fact",
+        "return a fact for an entity the query never asked about",
+        "subject_scoped",
+        leak_out_of_subject_fact,
     ),
     FaultMode(
         "strip_evidence_provenance",

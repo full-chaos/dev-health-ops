@@ -548,6 +548,34 @@ GROUND_TRUTH: tuple[GroundTruthFact, ...] = (
 GROUND_TRUTH_BY_KEY = {fact.fact_key: fact for fact in GROUND_TRUTH}
 
 
+#: Closed facts (``valid_to is not None``) whose OWN evidence/source-event
+#: refs genuinely document the closure -- a structured field on the same
+#: canonical record (e.g. a dependency-tracker row, or
+#: operational_service_repository_mappings' own valid_from/valid_to), not a
+#: closure stated only in a DIFFERENT record's prose.
+#:
+#: Every closed fact must choose exactly one of two ways to declare its
+#: closure provenance: pinned here (self-evidencing), or via
+#: ``invalidated_by_fact_key`` (names the record that actually closed it).
+#: Neither is a default -- ``test_closed_facts_declare_their_closure_provenance``
+#: in test_corpus_consistency.py fails on a closed fact that is neither,
+#: which is exactly how gt_adr014_superseded's closure ended up silently
+#: citing its own opening evidence (CHAOS-3499 finding 6) before this rule
+#: existed: nothing forced a conscious choice, so it defaulted to "self",
+#: incorrectly.
+SELF_EVIDENCING_CLOSURES: frozenset[str] = frozenset(
+    {
+        # A structured dependency-tracker row: the same record's own
+        # resolved status closes the window, not a separate document.
+        "gt_blocks_101_110",
+        # Structured valid-time row: operational_service_repository_mappings
+        # carries valid_from/valid_to directly on the same record (see
+        # corpus/questions.py's Q7 classification evidence).
+        "gt_svc_repo_v1",
+    }
+)
+
+
 # --------------------------------------------------------------------------
 # Reference selection -- ORACLE-SIDE ONLY
 # --------------------------------------------------------------------------

@@ -214,9 +214,29 @@ class ArmResponse:
     indexed_through: datetime | None = None
     versions: Mapping[str, str] = field(default_factory=dict)
     truncated: bool = False
+    #: True ONLY for a failure to REACH the provider (connection refused,
+    #: DNS, or a request that exceeded its configured window). Typed on
+    #: purpose: the sweep's bounded re-attempt policy keys on this field and
+    #: must NEVER key on substring-matching a reason string, because a
+    #: parse-failure reason embeds model-controlled output and a model that
+    #: emitted the marker phrase could otherwise buy itself a retry of a
+    #: genuine quality failure.
+    infra_failure: bool = False
+    #: How many times this arm actually called a provider for this oracle.
+    #: 0 means no call happened at all (no source material, not authorable,
+    #: or a baseline arm) -- which is what lets the artifact render an
+    #: honest "n/a" latency instead of a fabricated 0.00s.
+    provider_attempts: int = 0
 
     @classmethod
-    def not_run(cls, arm: str, reason: str) -> ArmResponse:
+    def not_run(
+        cls,
+        arm: str,
+        reason: str,
+        *,
+        infra: bool = False,
+        provider_attempts: int = 0,
+    ) -> ArmResponse:
         """Build the response that represents *no measurement happened*.
 
         Callers must use this instead of skipping, so the absence of a
@@ -227,6 +247,8 @@ class ArmResponse:
             arm=arm,
             outcome=ArmOutcome.NOT_RUN,
             degraded_reasons=(f"measurement_not_run:{reason}",),
+            infra_failure=infra,
+            provider_attempts=provider_attempts,
         )
 
 

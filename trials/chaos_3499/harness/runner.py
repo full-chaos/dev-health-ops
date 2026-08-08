@@ -65,11 +65,24 @@ class ClassScore:
         """Clean means every oracle in the class was measured and passed."""
         return self.total > 0 and self.failed == 0 and self.not_measured == 0
 
+    @property
+    def measured(self) -> int:
+        """Oracles actually measured -- the only honest denominator.
+
+        ``total`` includes NOT_MEASURED rows. Scoring against it renders a
+        class where 11 of 15 oracles were never run as "0/15", which a
+        reader takes for a measured 15-case result. The unmeasured count is
+        reported BESIDE the score, never folded into it.
+        """
+        return self.passed + self.failed
+
     def render(self) -> str:
-        return (
-            f"class {self.question_class.value}: {self.passed}/{self.total} pass, "
-            f"{self.failed} fail, {self.not_measured} NOT MEASURED"
-        )
+        scored = f"{self.passed}/{self.measured} measured"
+        if self.not_measured:
+            scored += (
+                f" (+{self.not_measured} NOT MEASURED, excluded from the denominator)"
+            )
+        return f"class {self.question_class.value}: {scored}, {self.failed} fail"
 
 
 @dataclass(frozen=True)
@@ -312,11 +325,14 @@ class ClassComparison:
     def render(self) -> str:
         line = (
             f"  class {self.question_class.value}: baseline "
-            f"{self.baseline.passed}/{self.baseline.total}, arm "
-            f"{self.arm.passed}/{self.arm.total}, delta {self.delta:+d}"
+            f"{self.baseline.passed}/{self.baseline.measured}, arm "
+            f"{self.arm.passed}/{self.arm.measured}"
         )
         if self.is_comparable:
-            return line
+            return f"{line}, delta {self.delta:+d}"
+        # NO numeric delta on a NOT-COMPARABLE row. A signed number invites
+        # exactly the comparison the row is declaring invalid, and readers
+        # quote the number and drop the caveat.
         reasons = []
         if self.baseline.not_measured:
             reasons.append(
@@ -327,6 +343,28 @@ class ClassComparison:
         if self.dependency is not None and not self.dependency.recorded:
             reasons.append(f"{self.dependency.issue} state {self.dependency.state}")
         return f"{line}  -- NOT COMPARABLE: {'; '.join(reasons)}"
+
+
+class ControlStatus(str, Enum):
+    """The class (a) control's three DISTINCT outcomes -- authoring-round
+    fix for a real ambiguity: a plain bool could not tell a reader "we
+    looked and the baseline lost" (a harness-suspect finding) apart from
+    "we never looked" (a scope gap in this round's source-material
+    authoring). Conflating the two let an honest coverage gap render with
+    the same alarming banner as an actual regression.
+    """
+
+    #: Comparable (both baseline and arm measured every class-(a) oracle)
+    #: and the baseline won or tied, as PRD §15.2 requires.
+    HELD = "held"
+    #: Comparable, but the candidate beat the baseline on natively-
+    #: answerable questions -- the harness-suspect case §15.2 exists to
+    #: catch.
+    LOST = "lost"
+    #: NOT comparable -- the candidate (or the baseline) has not been
+    #: measured against every class-(a) oracle yet. Says nothing about
+    #: whether the control would hold if it were measured.
+    NOT_MEASURED = "not_measured"
 
 
 @dataclass(frozen=True)
@@ -356,27 +394,52 @@ class ComparisonReport:
             for klass in ALL_QUESTION_CLASSES
         )
 
-    def native_control_holds(self) -> bool:
-        """PRD §15.2: on class (a) the baseline must win or tie.
-
-        If it does not, the finding is about the harness, not about the
-        baseline -- and no class-(c) result from the same run should be
-        believed until that is explained.
+    def native_control_status(self) -> ControlStatus:
+        """PRD §15.2: on class (a) the baseline must win or tie -- but that
+        claim is only meaningful once class (a) is actually comparable.
+        See :class:`ControlStatus` for why this is three states, not a
+        bool: "not measured" and "measured and lost" are different
+        findings requiring different reactions, and a reader must be able
+        to tell them apart from the report alone.
         """
         for comparison in self.by_class():
             if comparison.question_class is QuestionClass.NATIVE_ANSWERABLE:
-                return comparison.is_comparable and comparison.delta <= 0
-        return False
+                if not comparison.is_comparable:
+                    return ControlStatus.NOT_MEASURED
+                return (
+                    ControlStatus.HELD if comparison.delta <= 0 else ControlStatus.LOST
+                )
+        return ControlStatus.NOT_MEASURED  # no class (a) in this report at all.
+
+    def native_control_holds(self) -> bool:
+        """Convenience: True only for a CONFIRMED-held control.
+
+        False covers both LOST and NOT_MEASURED alike -- a caller that
+        only needs "is this report trustworthy as-is" can use this; a
+        caller that needs to render or react to WHY it is False must use
+        :meth:`native_control_status` instead. Kept for the callers this
+        trial already has that only ever needed the boolean.
+        """
+        return self.native_control_status() is ControlStatus.HELD
 
     def render(self) -> str:
         lines = [f"baseline: {self.baseline.arm}   vs   arm: {self.arm.arm}"]
         for comparison in self.by_class():
             lines.append(comparison.render())
-        if not self.native_control_holds():
+        status = self.native_control_status()
+        if status is ControlStatus.LOST:
             lines.append(
                 "  !! class (a) control did NOT hold: the baseline should win "
                 "or tie on natively-answerable questions. Treat every other "
                 "row in this report as unexplained until this is resolved."
+            )
+        elif status is ControlStatus.NOT_MEASURED:
+            lines.append(
+                "  class (a) control NOT MEASURED: the candidate arm has not "
+                "been measured against every class-(a) oracle this round, so "
+                "the control can be neither confirmed nor refuted -- this is "
+                "NOT a lost control. See the class (a) row above for which "
+                "oracles are unmeasured."
             )
         return "\n".join(lines)
 

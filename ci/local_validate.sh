@@ -23,8 +23,10 @@
 #      (== test.yml test-matrix), with the local socks5h proxy neutralized.
 #   6. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
 #      apply the schema to a SCRATCH db, run the clickhouse-marked attribution
-#      tests, AND execute the new argMax query against a real engine. The scratch
-#      db is DROPPED on exit via a trap.
+#      tests, execute the new argMax query against a real engine, AND (PR #1602
+#      round-2 review NEW-3) run test_project_declared_state_history_
+#      clickhouse_live.py's own clickhouse-marked differential proofs. The
+#      scratch db is DROPPED on exit via a trap.
 #
 # *** SAFETY CONTRACT ***
 #   The local container 'dev-health-clickhouse-1' db 'default' holds REAL dev data.
@@ -190,16 +192,20 @@ DEVHOPS="${ROOT}/.venv/bin/dev-hops"
 #     convert "runs" into "skips" if this gate ever selected it. It does not:
 #     that module is pytest.mark.clickhouse-marked, gate_unit_suite() below
 #     runs only `-m "not benchmark and not clickhouse"`, and ch_tests() below
-#     never runs a broader `-m clickhouse` pytest pass (only the direct
-#     ch_argmax_proof script) — confirmed with --collect-only against this
-#     gate's exact invocation (zero matches) and absent from full gate run
-#     logs entirely (no pass/fail/skip line, meaning never collected, not
-#     silently skipped). The module's own skip message says as much: "run via
-#     ci/run_live_backend_e2e.sh, not ci/local_validate.sh". If this gate ever
-#     starts selecting clickhouse-marked tests, this unset needs the
-#     conditional-keep shape used elsewhere for the live-e2e lane (scrub by
-#     default, retain when LIVE_E2E_BASE_URL is also set) instead of staying
-#     unconditional.
+#     never runs a broader, DIRECTORY-WIDE `-m clickhouse` pytest pass over
+#     `tests/` (only the direct ch_argmax_proof script, plus — PR #1602
+#     round-2 review NEW-3 — a single, explicitly-NAMED clickhouse-marked
+#     test FILE, never a `tests/` collection) — confirmed with
+#     --collect-only against this gate's exact invocation (zero matches for
+#     the REDIS_URL-needing module specifically) and absent from full gate
+#     run logs entirely (no pass/fail/skip line, meaning never collected,
+#     not silently skipped). The module's own skip message says as much:
+#     "run via ci/run_live_backend_e2e.sh, not ci/local_validate.sh". If
+#     this gate ever starts selecting clickhouse-marked tests more broadly
+#     (a directory or `-m clickhouse` sweep, not one named file), this
+#     unset needs the conditional-keep shape used elsewhere for the
+#     live-e2e lane (scrub by default, retain when LIVE_E2E_BASE_URL is
+#     also set) instead of staying unconditional.
 #
 #     A SEPARATE Codex-review concern on this same var was investigated and
 #     REFUTED (recorded here, not silently dropped, so it isn't re-raised):
@@ -907,14 +913,54 @@ ch_provision() {
   printf '   %s -> %s\n' "$(c_green 'CLICKHOUSE_URI')" "${SCRATCH_URI} (scratch)"
 }
 
+# PR #1602 round-2 review NEW-3: `test_project_declared_state_history_
+# clickhouse_live.py`'s own clickhouse-marked tests (the F1/F3/F4/F5/F6 and
+# NEW-1/NEW-2 differential proofs against a REAL engine -- tuple-arg NULL
+# skipping, watermark suppression, floor-vs-created-after-as_of, insert
+# ordering, argMax/RMT tie-break agreement, writer-timezone round-tripping)
+# ran in NO automated lane before this fix: CI excludes `-m clickhouse`
+# entirely, and this gate's own ch_tests() only ever ran the narrow
+# ch_argmax_proof script above, which never touches this file. Mutants of
+# those findings' own guards survived the ENTIRE offline unit suite and
+# died only when this ONE file was run by hand — this stage is what makes
+# them load-bearing. Named explicitly (never a directory-wide `-m
+# clickhouse` sweep — see the REDIS_URL comment far above on why that
+# matters for a DIFFERENT clickhouse-marked module in this same package).
+ch_declared_state_history_tests() {
+  OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest \
+    tests/api/dev/test_project_declared_state_history_clickhouse_live.py \
+    -m clickhouse -ra --tb=short -q
+}
+
+# CHAOS-3563 round-3 review A: migration 075 reconciles a stale
+# project_declared_state_history shape (074 was amended in place multiple
+# times; a DB that ran an older shape never re-runs it, since the migration
+# runner tracks applied migrations by VERSION NUMBER, not content -- see
+# 075's own docstring). This gate's own ch-migrate stage above only ever
+# proves the NO-OP path (a fresh scratch DB always starts current) -- it
+# cannot, by construction, exercise the actual healing path a stale real
+# database would need. This file builds an old-shape table BY HAND (never
+# via 074/075's own scripts) and proves 075 heals it for real.
+ch_migration_075_reconcile_tests() {
+  OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest \
+    tests/test_migration_075_reconcile_clickhouse_live.py \
+    -m clickhouse -ra --tb=short -q
+}
+
 # CH-marked tests (need production DDL) + the direct argMax live-exec proof.
 # Runs AFTER the unit suite, reusing the provisioned scratch db.
 ch_tests() {
   if [ "${CH_READY:-0}" != "1" ]; then
     skip "argMax live-exec proof" "scratch CH not provisioned"
+    skip "declared-state-history live tests" "scratch CH not provisioned"
+    skip "migration 075 reconcile live tests" "scratch CH not provisioned"
     return 0
   fi
   run_stage "argMax live-exec proof (real engine)" ch_argmax_proof
+  run_stage "declared-state-history live tests (real engine)" ch_declared_state_history_tests
+  run_stage "migration 075 reconcile live tests (real engine)" ch_migration_075_reconcile_tests
 }
 
 print_summary() {

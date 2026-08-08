@@ -2698,7 +2698,8 @@
         "cognitive_load",
         "investment_allocation",
         "health_profile",
-        "deficiency_inventory"
+        "deficiency_inventory",
+        "temporal_context"
       ],
       "title": "SourceClass",
       "type": "string"

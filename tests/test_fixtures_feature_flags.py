@@ -1,6 +1,9 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+from dev_health_ops.fixtures.ttl_registry import max_safe_backdate_days
 from dev_health_ops.metrics.schemas import (
     FeatureFlagEventRecord,
     FeatureFlagRecord,
@@ -190,3 +193,99 @@ class TestGenerateReleaseImpactDaily:
         valid = {"production", "staging"}
         for r in records:
             assert r.environment in valid
+
+
+class TestFeatureFlagDatesStayInsideTheirTtlMargin:
+    """CHAOS-3602: feature_flag_event carries `TTL toDateTime(event_ts) +
+    INTERVAL 90 DAY DELETE`. A flag backdated to exactly `now - 90 days`
+    (the old, unguarded `random.randint(7, 90)` range's own upper bound)
+    becomes due for silent TTL deletion the moment `now` advances past mint
+    time -- caught live when a mint's content oracle found a restored row
+    one short of what `fixtures world` had generated minutes earlier. Every
+    generated `created_at` (and therefore every "create" event's
+    `event_ts`) must stay a safe margin inside the table's own horizon.
+    """
+
+    def test_no_flag_is_created_at_or_past_the_ttl_margin(self) -> None:
+        limit = max_safe_backdate_days("feature_flag_event")
+        assert limit is not None
+        now = datetime.now(timezone.utc)
+
+        oldest_seen_days = 0.0
+        # Large sample: the OLD `random.randint(7, 90)` range would almost
+        # certainly produce something exceeding `limit` (83) within this
+        # many draws -- P(a single draw never exceeds 83) = 76/84, so
+        # across 300 independently-seeded draws the chance old code passes
+        # this test by luck alone is astronomically small.
+        for i in range(300):
+            generator = SyntheticDataGenerator(repo_name="acme/demo-app", seed=i)
+            flags = generator.generate_feature_flags(count=15, org_id="test-org")
+            for flag in flags:
+                assert flag.created_at is not None
+                age_days = (now - flag.created_at).total_seconds() / 86400
+                oldest_seen_days = max(oldest_seen_days, age_days)
+                assert age_days <= limit + 0.01, (
+                    f"flag {flag.flag_key} created_at is {age_days:.2f} days "
+                    f"old, past the safe margin ({limit} days) inside "
+                    "feature_flag_event's own TTL horizon"
+                )
+        # Sanity: the test actually exercised dates near the boundary, not
+        # only close-to-zero ones that would trivially pass either way.
+        assert oldest_seen_days > limit - 5
+
+    def test_no_feature_flag_event_is_past_the_ttl_margin(self) -> None:
+        """The "create" event inherits the flag's own created_at as its
+        event_ts -- this is the exact row that disappeared in the real
+        incident, so pin the guarantee at the event level too."""
+        limit = max_safe_backdate_days("feature_flag_event")
+        assert limit is not None
+        now = datetime.now(timezone.utc)
+
+        for i in range(50):
+            generator = SyntheticDataGenerator(repo_name="acme/demo-app", seed=i)
+            flags = generator.generate_feature_flags(count=15, org_id="test-org")
+            events = generator.generate_feature_flag_events(flags, org_id="test-org")
+            for evt in events:
+                age_days = (now - evt.event_ts).total_seconds() / 86400
+                assert age_days <= limit + 0.01, (
+                    f"event {evt.dedupe_key} event_ts is {age_days:.2f} days "
+                    f"old, past the safe margin ({limit} days)"
+                )
+
+
+class TestDaysBasedGeneratorsRespectTheirTtlMargin:
+    """telemetry_signal_bucket and release_impact_daily both take a
+    caller-supplied `days` window rather than an internal hardcoded range,
+    but must still refuse to backdate past their own TTL horizons -- the
+    same defense-in-depth CHAOS-3602 fix applied consistently, not just to
+    the one table that actually broke."""
+
+    def test_telemetry_signal_buckets_clamp_an_excessive_days_argument(
+        self, generator: SyntheticDataGenerator
+    ) -> None:
+        limit = max_safe_backdate_days("telemetry_signal_bucket")
+        assert limit is not None
+
+        buckets = generator.generate_telemetry_signal_buckets(days=1000)
+        now = datetime.now(timezone.utc)
+        oldest = min(b.bucket_start for b in buckets)
+        age_days = (now - oldest).total_seconds() / 86400
+        assert age_days <= limit + 0.5, (
+            f"oldest telemetry bucket is {age_days:.1f} days old, past the "
+            f"safe margin ({limit} days) inside telemetry_signal_bucket's TTL"
+        )
+
+    def test_release_impact_daily_clamps_an_excessive_days_argument(
+        self, generator: SyntheticDataGenerator
+    ) -> None:
+        limit = max_safe_backdate_days("release_impact_daily")
+        assert limit is not None
+
+        records = generator.generate_release_impact_daily(days=1000)
+        now = datetime.now(timezone.utc).date()
+        oldest_day = min(r.day for r in records)
+        age_days = (now - oldest_day).days
+        assert age_days <= limit, (
+            f"oldest release_impact_daily row is {age_days} days old, past "
+            f"the safe margin ({limit} days) inside its own TTL"
+        )

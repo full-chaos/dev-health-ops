@@ -688,6 +688,10 @@ class DeletionResultResponse(BaseModel):
     timestamp: str
     postgres: DeletionScopeResponse
     clickhouse: DeletionScopeResponse
+    #: PR #1602 review F8: successful EXTERNAL_DERIVED_STORES visits, typed
+    #: parallel to `postgres`/`clickhouse` rather than folded into
+    #: `warnings`.
+    external: DeletionScopeResponse
     disabled_jobs: int
     credentials_deleted: int
     warnings: list[str]

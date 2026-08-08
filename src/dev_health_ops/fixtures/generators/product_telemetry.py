@@ -22,6 +22,7 @@ from typing import Any
 
 from dev_health_ops.api.product_telemetry.persist import BLOCKED_PAYLOAD_KEYS
 from dev_health_ops.api.product_telemetry.schemas import ProductTelemetryEvent
+from dev_health_ops.fixtures.ttl_horizon import max_generated_age_days_for_table
 
 SCHEMA_VERSION = "2026-05-telemetry-v1"
 SOURCE = "dev-health-web"
@@ -410,13 +411,28 @@ class ProductTelemetryGenerator:
     def generate_events(self) -> list[ProductTelemetryEvent]:
         """Generate the full event stream for the configured spec."""
         end_time = self.spec.end_time or datetime.now(timezone.utc)
+        # CHAOS-3602: `self.spec.days` is caller-supplied and the spec is
+        # frozen, so clamp a LOCAL copy against product_telemetry_events'
+        # own TTL horizon rather than trusting the caller or mutating the
+        # spec -- the oldest generated event must stay a safe margin inside
+        # the table's TTL, or it risks the same silent TTL-merge deletion
+        # that hit feature_flag_event. Uses ttl_horizon.py's canonical
+        # TTL_SAFETY_MARGIN (30 days) so this clamp stays compatible with
+        # the 30-day restore shelf life `_assert_snapshot_within_shelf_life`
+        # actually enforces (codex finding, confirmed: a looser margin let
+        # a restore at the advertised shelf life land past this table's own
+        # TTL horizon). `is None`, never `or` (codex round-2 finding,
+        # confirmed): a legitimate ceiling of exactly 0 must clamp to 0, not
+        # fall back to the caller's unclamped `self.spec.days`.
+        _ceiling = max_generated_age_days_for_table("product_telemetry_events")
+        days = self.spec.days if _ceiling is None else min(self.spec.days, _ceiling)
         # Half-open: start_day is inclusive, end_day is exclusive.
-        start_day = (end_time - timedelta(days=self.spec.days)).replace(
+        start_day = (end_time - timedelta(days=days)).replace(
             hour=9, minute=0, second=0, microsecond=0
         )
 
         events: list[ProductTelemetryEvent] = []
-        for day_offset in range(self.spec.days):
+        for day_offset in range(days):
             day_start = start_day + timedelta(days=day_offset)
             for session_index in range(self.spec.sessions_per_day):
                 # Spread sessions across a workday-ish window.

@@ -19,11 +19,13 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from dev_health_ops.fixtures.world_snapshot import (
     _CLICKHOUSE_LEDGER_TABLES,
+    _DUMP_VERIFY_ATTEMPTS,
     _POSTGRES_LEDGER_TABLES,
     ACCEPTANCE_ENVIRONMENT,
     SNAPSHOT_SCHEMA_VERSION,
@@ -31,10 +33,12 @@ from dev_health_ops.fixtures.world_snapshot import (
     RestoreRefusedError,
     SnapshotError,
     _assert_content_identity,
+    _assert_no_ttl_horizon_rows,
     _assert_round_trip,
     _assert_schema_compatible,
     _changed_tables,
     _decode_value,
+    _dump_clickhouse,
     _encode_value,
     _require_acceptance_environment,
     _require_empty_targets,
@@ -468,6 +472,358 @@ class TestClickHouseContentOracle:
             _assert_content_identity(
                 source={},
                 target={"teams": "b" * 64},
+            )
+
+
+class _DumpResult:
+    def __init__(self, rows: list[list[Any]]) -> None:
+        self.result_rows = rows
+
+
+class _FakeShortPayloadClient:
+    """CHAOS-3602: `raw_query`'s Native payload and a same-session `count()`
+    have been observed to silently disagree on a fully idle, unchanging
+    table. This fake makes that disagreement DETERMINISTIC: each entry in
+    ``payload_row_counts`` is what a real decode of that attempt's payload
+    would count (i.e. what a throwaway staging table would report after
+    `raw_insert`-ing it), while `source_count` is what the source table's own
+    `count()` reports EVERY time -- exactly like the real incident, where
+    that query kept saying 1042 even on the attempt whose payload actually
+    held only 1041 rows.
+    """
+
+    database = "ask_dev_world_scratch"
+
+    def __init__(self, *, payload_row_counts: list[int], source_count: int) -> None:
+        self.payload_row_counts = list(payload_row_counts)
+        self.source_count = source_count
+        self.raw_query_calls = 0
+        self.raw_insert_calls = 0
+        self.commands: list[str] = []
+        self._last_inserted_index: int | None = None
+
+    def raw_query(self, query: str, fmt: str | None = None) -> bytes:
+        assert fmt == "Native"
+        assert (
+            "ORDER BY" not in query and "LIMIT" not in query and "OFFSET" not in query
+        )
+        index = self.raw_query_calls
+        self.raw_query_calls += 1
+        # The "payload" is just a tag identifying which attempt produced it --
+        # this fake never really encodes/decodes Native bytes, only tracks
+        # which attempt's (fake) payload was inserted where.
+        return f"payload-{index}".encode()
+
+    def query(self, query: str, parameters: dict | None = None) -> _DumpResult:
+        if "system.parts" in query:
+            return _DumpResult([[3]])
+        if "__snapshot_verify_" in query:
+            assert self._last_inserted_index is not None, (
+                "decoded a verify table before any raw_insert into it"
+            )
+            return _DumpResult([[self.payload_row_counts[self._last_inserted_index]]])
+        # The SOURCE table's own count() -- observed live to say the FULL
+        # count even on an attempt whose payload was short.
+        return _DumpResult([[self.source_count]])
+
+    def command(self, cmd: str, parameters: dict | None = None) -> None:
+        self.commands.append(cmd)
+
+    def raw_insert(
+        self, table: str, insert_block: bytes, fmt: str | None = None
+    ) -> None:
+        assert fmt == "Native"
+        assert table.startswith("__snapshot_verify_")
+        self.raw_insert_calls += 1
+        index = int(insert_block.decode().removeprefix("payload-"))
+        self._last_inserted_index = index
+
+
+class TestClickHouseDumpPayloadVerification:
+    """CHAOS-3602: the mint's own content oracle caught `feature_flag_event`
+    missing a row after a real `_dump_clickhouse` call. The manifest it
+    produced recorded `raw_source_row_count: 1042` AND `row_count: 1042` --
+    both counts agreed -- yet the actual `.native.gz` file, decoded by hand,
+    held only 1041 distinct rows. Stress testing against the live, IDLE
+    table (zero concurrent writes) reproduced it again directly: repeated
+    `raw_query(Native)` dumps of unchanging data intermittently came up one
+    row short, at roughly a 2% per-dump rate. Ruled out: query pagination
+    (this function issues one unpaginated `SELECT *`, confirmed by reading
+    it) and write-visibility timing (reproduced with no writes in flight).
+    The only correct fix is to never trust a separate `count()` query --
+    decode the payload itself and compare THAT.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_short_payload_is_retried_and_the_recovered_attempt_is_what_gets_written(
+        self, tmp_path: Path
+    ) -> None:
+        """Attempt 1's payload decodes to 1041 (short); attempt 2's decodes
+        to 1042 (matches). The OLD code -- which never decoded the payload,
+        only trusted a same-session count() -- would have accepted attempt 1
+        immediately, since that count() said 1042 the whole time. The fix
+        must retry past it and write only the verified attempt's bytes.
+        """
+
+        client = _FakeShortPayloadClient(
+            payload_row_counts=[1041, 1042], source_count=1042
+        )
+        path = tmp_path / "feature_flag_event.native.gz"
+
+        row_count = await _dump_clickhouse(
+            client,
+            "feature_flag_event",
+            "MergeTree()",
+            path,
+            raw_source_row_count=1042,
+        )
+
+        assert row_count == 1042, "must report the DECODED count, not a trusted count()"
+        assert client.raw_query_calls == 2, (
+            "must have retried once after the short attempt"
+        )
+        assert client.raw_insert_calls == 2, (
+            "must decode-verify EVERY attempt, not just trust the first"
+        )
+        assert path.exists()
+        # The bytes actually on disk must be attempt 2's (the verified one),
+        # never attempt 1's short payload.
+        assert path.read_bytes() != b""
+        import gzip as _gzip
+
+        written = _gzip.decompress(path.read_bytes())
+        assert written == b"payload-1", (
+            "the SHORT attempt-1 payload must never reach disk"
+        )
+
+    @pytest.mark.asyncio
+    async def test_short_on_every_attempt_raises_and_writes_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """The exhausted-retries path: every attempt's payload decodes short.
+        Old code had no such concept -- it would have written the FIRST
+        short payload and reported the source table's count() as if it
+        described the file. New code must fail loudly and touch no file.
+        """
+
+        client = _FakeShortPayloadClient(
+            payload_row_counts=[1041] * _DUMP_VERIFY_ATTEMPTS, source_count=1042
+        )
+        path = tmp_path / "feature_flag_event.native.gz"
+
+        with pytest.raises(SnapshotError, match="CHAOS-3602"):
+            await _dump_clickhouse(
+                client,
+                "feature_flag_event",
+                "MergeTree()",
+                path,
+                raw_source_row_count=1042,
+            )
+
+        assert client.raw_query_calls == _DUMP_VERIFY_ATTEMPTS
+        assert not path.exists(), "a payload that never verified must never reach disk"
+
+    @pytest.mark.asyncio
+    async def test_a_payload_that_verifies_on_the_first_attempt_needs_no_retry(
+        self, tmp_path: Path
+    ) -> None:
+        """The ordinary, overwhelming-majority case: no flake at all."""
+
+        client = _FakeShortPayloadClient(payload_row_counts=[1042], source_count=1042)
+        path = tmp_path / "feature_flag_event.native.gz"
+
+        row_count = await _dump_clickhouse(
+            client,
+            "feature_flag_event",
+            "MergeTree()",
+            path,
+            raw_source_row_count=1042,
+        )
+
+        assert row_count == 1042
+        assert client.raw_query_calls == 1
+        assert path.exists()
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_pre_count_result_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-2 finding (MEDIUM, confirmed): `int(pre_count.
+        result_rows[0][0])` used to be unvalidated -- `result_rows == [[]]`
+        (one row, ZERO columns) raised an uncontrolled `IndexError` instead
+        of a named `SnapshotError`. Every count() in this retry loop now
+        goes through `_scalar_count`.
+        """
+
+        class _MalformedPreCountClient:
+            def raw_query(self, q: str, fmt: str | None = None) -> bytes:
+                return b"payload"
+
+            def query(self, q: str, parameters: dict | None = None) -> _DumpResult:
+                return _DumpResult([[]])  # one row, zero columns
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            await _dump_clickhouse(
+                _MalformedPreCountClient(),
+                "feature_flag_event",
+                "MergeTree()",
+                tmp_path / "feature_flag_event.native.gz",
+                raw_source_row_count=1042,
+            )
+
+
+class TestScalarCount:
+    """Codex round-2 finding (MEDIUM, confirmed): a bare `len(result_rows)
+    != 1` check let `result_rows == [[]]` (one row, ZERO columns) through to
+    an unvalidated `[0][0]` -- an uncontrolled IndexError, not a named
+    SnapshotError. `[[0, "extra"]]` (an unexpected extra column) passed
+    silently. `_scalar_count` is the one function every count() call site in
+    this module goes through now.
+    """
+
+    def test_a_single_scalar_row_is_accepted(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        assert _scalar_count(_DumpResult([[7]]), context="test") == 7
+
+    def test_zero_rows_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([]), context="test")
+
+    def test_one_row_zero_columns_is_rejected_not_an_indexerror(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[]]), context="test")
+
+    def test_one_row_two_columns_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[0, "extra"]]), context="test")
+
+    def test_two_rows_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[1], [2]]), context="test")
+
+    def test_a_default_is_returned_instead_of_raising_when_given(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        assert _scalar_count(_DumpResult([]), context="test", default=-1) == -1
+
+
+class _FakeTtlCountClient:
+    """Reports a controllable row count for whichever table's TTL-horizon
+    query is issued -- keyed by table name appearing in the query text,
+    which is how `_assert_no_ttl_horizon_rows` actually builds its SQL."""
+
+    def __init__(self, *, counts: dict[str, int]) -> None:
+        self.counts = counts
+        self.queries: list[str] = []
+
+    def query(self, q: str, parameters: dict | None = None) -> _DumpResult:
+        self.queries.append(q)
+        for table, count in self.counts.items():
+            if f"FROM `{table}`" in q:
+                return _DumpResult([[count]])
+        return _DumpResult([[0]])
+
+
+class TestTtlHorizonGuard:
+    """CHAOS-3602: a mint over data currently racing a TTL'd table's own
+    background merge scheduler is nondeterministic BY DESIGN -- ClickHouse
+    applies TTL deletion at merge time, silently, with no error. This guard
+    must catch it BEFORE any dump, not after a content-oracle mismatch has
+    already meant real data loss.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_table_with_no_horizon_adjacent_rows_passes(self) -> None:
+        client = _FakeTtlCountClient(counts={"feature_flag_event": 0})
+        await _assert_no_ttl_horizon_rows(client, ["feature_flag_event"])
+
+    @pytest.mark.asyncio
+    async def test_a_table_with_horizon_adjacent_rows_is_refused(self) -> None:
+        client = _FakeTtlCountClient(counts={"feature_flag_event": 3})
+        with pytest.raises(SnapshotError, match="feature_flag_event"):
+            await _assert_no_ttl_horizon_rows(client, ["feature_flag_event"])
+
+    @pytest.mark.asyncio
+    async def test_a_table_with_no_known_ttl_is_never_queried(self) -> None:
+        """No TTL, no risk -- and no wasted query for every one of the ~90
+        tables a mint dumps that were never at risk in the first place."""
+        client = _FakeTtlCountClient(counts={})
+        await _assert_no_ttl_horizon_rows(client, ["projects"])
+        assert client.queries == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_violating_tables_are_all_named_in_one_error(self) -> None:
+        client = _FakeTtlCountClient(
+            counts={"feature_flag_event": 1, "telemetry_signal_bucket": 5}
+        )
+        with pytest.raises(SnapshotError) as exc_info:
+            await _assert_no_ttl_horizon_rows(
+                client, ["feature_flag_event", "telemetry_signal_bucket", "projects"]
+            )
+        message = str(exc_info.value)
+        assert "feature_flag_event" in message
+        assert "telemetry_signal_bucket" in message
+
+    @pytest.mark.asyncio
+    async def test_a_broken_ttl_vocabulary_fails_closed_before_any_query(
+        self, monkeypatch
+    ) -> None:
+        """This guard's OWN contract: whatever `assert_ttl_vocabulary_is_
+        consistent` decides, this function must propagate it as a
+        `SnapshotError` before issuing a single per-table query. The
+        vocabulary-consistency logic itself (empty registry, partial
+        registry, a fifth TTL table the precise parser misses via an
+        unmatched syntax variant, a registry extra, a KNOWN_TTL_TABLES
+        entry that's gone stale, ...) is exhaustively covered in
+        `tests/test_ttl_registry.py::TestVocabularyConsistency` -- this
+        test proves this guard actually calls it and wraps its failure
+        correctly, not that the check's own logic is correct.
+        """
+        from dev_health_ops.fixtures import world_snapshot
+
+        def _broken() -> None:
+            raise RuntimeError("synthetic vocabulary break: table_x")
+
+        monkeypatch.setattr(
+            world_snapshot, "assert_ttl_vocabulary_is_consistent", _broken
+        )
+        client = _FakeTtlCountClient(counts={"feature_flag_event": 999999})
+
+        with pytest.raises(SnapshotError, match="synthetic vocabulary break"):
+            await _assert_no_ttl_horizon_rows(client, ["feature_flag_event"])
+
+        assert client.queries == [], (
+            "must fail before issuing a single per-table query once the "
+            "vocabulary check itself fails"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_query_result_fails_closed_instead_of_reading_as_zero(
+        self,
+    ) -> None:
+        """Codex finding (HIGH, confirmed): an empty/malformed
+        `result.result_rows` was folded into `count = 0` -- a driver
+        returning something other than a single scalar count row (a
+        transient response-shape defect, a mocking/wiring bug) silently
+        read as "no violating rows" and let the mint proceed unchecked.
+        """
+
+        class _MalformedResultClient:
+            def query(self, q: str, parameters: dict | None = None) -> _DumpResult:
+                return _DumpResult([])  # no rows at all -- malformed
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            await _assert_no_ttl_horizon_rows(
+                _MalformedResultClient(), ["feature_flag_event"]
             )
 
 

@@ -49,6 +49,19 @@ from pathlib import Path
 #: literal scattered across generators.
 TTL_SAFETY_MARGIN = timedelta(days=30)
 
+#: Extra, STRICT headroom `max_generated_age_days_for_table` keeps below
+#: ``retention_days - TTL_SAFETY_MARGIN.days``, on top of the margin itself.
+#: Codex round-2 finding (HIGH, confirmed): without this, a row generated at
+#: the naive ceiling and restored at the full advertised shelf life lands
+#: EXACTLY on its table's TTL horizon (a 90-day TTL, 60-day ceiling, 30-day
+#: shelf life = exactly 90 days old) -- and this project's own live pre-dump
+#: guard already treats a row `<= now() - N DAY` old as unsafe, while
+#: ClickHouse's TTL deletion is asynchronous and can fire at or before that
+#: exact instant. One day is the minimum that turns "ceiling + shelf_life <=
+#: retention" into a STRICT "<", so hitting the boundary exactly is no
+#: longer possible for any known table.
+PER_TABLE_CEILING_HEADROOM_DAYS = 1
+
 _TTL_PATTERN = re.compile(
     r"TTL\s+.*?\+\s*INTERVAL\s+(?P<days>\d+)\s+DAY\s+DELETE", re.IGNORECASE
 )
@@ -110,3 +123,79 @@ def max_generated_history_days(migrations_dir: Path | None = None) -> int:
     """How far back generators may write, to stay inside the shelf life."""
 
     return tightest_ttl_days(migrations_dir) - TTL_SAFETY_MARGIN.days
+
+
+def max_generated_age_days_for_table(table: str) -> int | None:
+    """A PER-TABLE generation ceiling that stays compatible with THIS
+    module's shelf-life contract -- ``None`` if ``table`` carries no TTL.
+
+    CHAOS-3602 port, codex finding (HIGH, confirmed): a generator clamped
+    against ``ttl_registry.py``'s own margin constants
+    (``TTL_SAFETY_MARGIN_DAYS`` = 7, ``GENERATOR_SLACK_DAYS`` = 3) produces a
+    ceiling incompatible with the 30-day margin ``_assert_snapshot_within_
+    shelf_life`` actually enforces at restore: measured live,
+    ``telemetry_signal_bucket`` at that looser ceiling (80d) plus this
+    module's own advertised 30-day restore shelf life reaches 110 days old
+    against a 90-day TTL -- 20 days PAST the horizon, silently losing rows
+    to a TTL merge during a restore main's own manifest says is still safe.
+    ``release_impact_daily`` (355d + 30d vs a 365d TTL) and
+    ``product_telemetry_events`` (170d + 30d vs a 180d TTL) have the same
+    defect.
+
+    This combines ``ttl_registry.py``'s PER-TABLE retention data (more
+    precise than this module's single tightest-global horizon) with THIS
+    module's own ``TTL_SAFETY_MARGIN`` -- the one number
+    ``_assert_snapshot_within_shelf_life`` actually promises callers -- so
+    every generator's ceiling stays honest about what a restore up to the
+    full advertised shelf life can still find intact.
+
+    Codex round-2 finding (HIGH, confirmed): an empty registry was not the
+    only fail-open path -- a PARTIAL registry (every OTHER known TTL table
+    parses fine, one does not) makes ``retentions.get(table)`` return
+    ``None`` for the missing one, indistinguishable from "genuinely no
+    TTL", so an unparseable table silently loses its clamp entirely.
+
+    Codex round-3 finding (HIGH, confirmed): checking against
+    :data:`ttl_registry.KNOWN_TTL_TABLES` alone only catches a table
+    falling OUT of an otherwise-working registry -- a table that never
+    enters the registry (an unmatched TTL syntax variant) AND was never
+    added to ``KNOWN_TTL_TABLES`` satisfies that check trivially.
+    Reproduced directly with a synthetic ``TTL occurred_at + INTERVAL 4
+    WEEK`` (a real ClickHouse form the precise, ``DAY``-only parser cannot
+    match). See :func:`ttl_registry.assert_ttl_vocabulary_is_consistent`
+    for the independent third source that closes this.
+
+    Codex round-2 finding (HIGH, confirmed): a NON-STRICT ``ceiling +
+    TTL_SAFETY_MARGIN.days <= retention_days`` allows landing EXACTLY on
+    the TTL horizon (a 90-day TTL, 60-day ceiling, full 30-day shelf life
+    all in effect at once = exactly 90 days old) -- and this project's own
+    live pre-dump guard already treats ``<= now() - N DAY`` as unsafe, while
+    ClickHouse's TTL deletion is asynchronous and can fire at or before that
+    exact instant. ``PER_TABLE_CEILING_HEADROOM_DAYS`` below buys one full
+    day of strict margin so the invariant
+    (``tests/test_fixtures_ttl_horizon.py::TestPerTableCeilingCompatibleWith
+    ShelfLife``) can require ``<`` rather than ``<=``.
+    """
+
+    from dev_health_ops.fixtures.ttl_registry import (
+        assert_ttl_vocabulary_is_consistent,
+        clickhouse_ttl_retentions,
+    )
+
+    try:
+        assert_ttl_vocabulary_is_consistent()
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"{exc} (while computing a generation ceiling for {table!r}; "
+            "see tightest_ttl_days for the same rule applied globally)"
+        ) from exc
+    retentions = clickhouse_ttl_retentions()
+    retention = retentions.get(table)
+    if retention is None:
+        return None
+    return max(
+        0,
+        retention.retention_days
+        - TTL_SAFETY_MARGIN.days
+        - PER_TABLE_CEILING_HEADROOM_DAYS,
+    )

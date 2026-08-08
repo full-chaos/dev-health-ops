@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
+from dev_health_ops.fixtures.ttl_horizon import max_generated_age_days_for_table
 from dev_health_ops.metrics.schemas import (
     FeatureFlagEventRecord,
     FeatureFlagLinkRecord,
@@ -305,6 +306,22 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         release_refs: list[str] | None = None,
     ) -> list[TelemetrySignalBucketRecord]:
         """Generate hourly telemetry signal buckets."""
+        # CHAOS-3602: defense in depth -- `days` is caller-supplied (from
+        # `--days`/the world manifest), not intrinsic to this generator, so
+        # clamp it against this table's own TTL horizon (per the migration-
+        # derived registry, not a second hardcoded number) rather than
+        # trusting the caller never to pass something that backdates past it.
+        # Uses THIS repo's canonical TTL_SAFETY_MARGIN (ttl_horizon.py, 30
+        # days) -- not ttl_registry.py's own (looser) margin constants --
+        # so a row this clamp allows stays compatible with the 30-day
+        # restore shelf life `_assert_snapshot_within_shelf_life` actually
+        # enforces (codex finding, confirmed: the looser margin let a
+        # restore up to the advertised shelf life land 20 days past this
+        # table's own TTL horizon). `is None` (never `or`, codex round-2
+        # finding, confirmed): a legitimate ceiling of exactly 0 must clamp
+        # to 0, not fall back to the caller's unclamped `days`.
+        _ceiling = max_generated_age_days_for_table("telemetry_signal_bucket")
+        days = days if _ceiling is None else min(days, _ceiling)
         buckets: list[TelemetrySignalBucketRecord] = []
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
@@ -371,6 +388,12 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         release_refs: list[str] | None = None,
     ) -> list[ReleaseImpactDailyRecord]:
         """Generate daily release impact metrics."""
+        # CHAOS-3602: same defense-in-depth clamp as
+        # generate_telemetry_signal_buckets -- `days` is caller-supplied.
+        # `is None`, never `or` (codex round-2 finding, confirmed): see the
+        # sibling comment above.
+        _ceiling = max_generated_age_days_for_table("release_impact_daily")
+        days = days if _ceiling is None else min(days, _ceiling)
         records: list[ReleaseImpactDailyRecord] = []
         now = datetime.now(timezone.utc)
         end_date = now.date()

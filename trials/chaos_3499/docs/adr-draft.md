@@ -7,21 +7,26 @@ conclusion, and no section below should be read as arguing for one. That
 synthesis is chris's decision; the ADR's job is to make it a decision taken
 on evidence rather than on impression.
 
-**What changed in run 3** (2026-08-08), relative to the earlier draft:
+**What changed by run 7** (2026-08-08), relative to the earlier draft:
 
 - **One tier became five, and the deployed one is finally measured.** Runs
   1–2 used `gpt-5-mini`; Ask Dev actually runs `gpt-5-nano`. Every number in
   runs 1–2 was therefore taken one tier above deployed parity. §8.
-- **A frontier tier now separates a model ceiling from a framework limit,
-  and the answer is FRAMEWORK.** `gpt-5.6-luna` scores the same 1/4 on
-  class (c) as the mid tier. §3.4.
+- **A frontier tier now separates a model ceiling from a framework limit.**
+  Across the two committed runs `gpt-5.6-luna` scores 1/4 then 2/4 on class
+  (c), against 1/4 for the mid tier in both — so no tier exceeds 2 of 4,
+  and the frontier's margin is at most one oracle and is not stable across
+  runs. §3.4.
 - **A previously reported prompt-injection result is WITHDRAWN.** It came
   from an oracle laxer than its own clean twin. §3.4.
-- **The measurement is now durable.** Raw per-oracle records (verdicts,
-  failed-assertion ids, model-identity evidence, latency, retries) are
-  committed as `measured-trial-results.records.json`; the markdown is a
-  VIEW of them. Presentation fixes no longer require paying for a new
-  sweep — which is what previously tempted re-use of stale numbers. §9.5.
+- **The measurement is durable, and that is now a fact rather than a
+  claim.** `measured-trial-results.records.json` holds the run: per-oracle
+  verdicts, failed-assertion ids, identity evidence, latency, retries,
+  prompt version, control status, and **content hashes of every file that
+  defines what was measured**. The markdown is rendered FROM it by a single
+  renderer, and a test pins byte-equality — so a presentation fix costs no
+  model spend and the artifact cannot drift from its evidence. An earlier
+  draft asserted this before it was true. §9.5.
 - **Class (a) is measurable for the first time.** The authoring round gave
   all three class-(a) oracles real source prose, so §15.2's control ("the
   baseline must win or tie on natively-answerable questions") can now be
@@ -78,12 +83,25 @@ source prose; §5). Nothing was skipped and no tier was NOT_RUN.
 |---|---|---|---|---|---|---|---|
 | (a) NATIVE_ANSWERABLE | 1/3 | **0/3** | **0/3** | **0/3** | **0/3** | **0/3** | **YES** |
 | (b) NEEDS_DECLARED_STATE_HISTORY | 0/2 | **2/2** | **2/2** | **2/2** | **2/2** | **2/2** | **YES** |
-| (c) NEEDS_EXTRACTION_OR_ASSOCIATION | 1/4 measured | 0/4 | 1/4 | 2/4 | 0/4 | 1/4 | **NO** — 11 arm oracles NOT_RUN (§5) |
+| (c) NEEDS_EXTRACTION_OR_ASSOCIATION | **0/4** on the shared population (1/15 full) | 0/4 | 1/4 | 2/4 | 0/4 | 1/4 | **NO** — 11 arm oracles NOT_RUN (§5) |
 
-Denominators are **measured oracles only**. An earlier draft rendered class
-(c) as `0/15` with 11 NOT_RUN, which reads as a measured 15-case score; the
-unmeasured rows are now reported beside the score, never inside it, and a
-NOT-COMPARABLE row carries no signed delta.
+**Two populations, named explicitly, because they are not interchangeable
+and an earlier draft mixed them.** Class (c) has 15 oracles; only **4** have
+authored source material, so only those 4 can be measured by the extraction
+arm at all (§5).
+
+- **Shared-authored population (4 oracles)** — the only population on which
+  baseline and arm are comparable, and the one every per-tier number in
+  this row uses. On it the **baseline scores 0/4**.
+- **Full population (15 oracles)** — the baseline runs on all of them and
+  scores **1/15**. That single pass is `O4_prior_attempts`, which is **not
+  one of the four authored oracles**, so it cannot appear in any
+  arm-vs-baseline comparison.
+
+An earlier draft printed the baseline's full-population `1/4`-shaped figure
+in the shared-population column, which the records contradict. Denominators
+elsewhere are measured-only; an earlier draft rendered class (c) as `0/15`
+with 11 NOT_RUN, which reads as a measured 15-case score.
 
 The class (a) control (`native_control_status`) returned **`held` on all
 five tiers.**
@@ -580,7 +598,7 @@ the artifact without guessing.
 | `gpt-5-nano` | `gpt-5-nano` | **DEPLOYED PARITY — primary scored tier** | The configured model. Parity claims must be read from here and nowhere else. |
 | `gpt-5-mini` | `gpt-5-mini` | Ceiling / comparative | One tier up. Shows what the technique does when model quality is not the binding constraint, and keeps runs 1–2 comparable to this round. |
 | `google/gemma-4-e4b` | `gemma-4-e4b-local` | Local cost floor | A small locally-hosted model — the cheapest regime a cost-driven architecture could operate in. Not parity; no parity claim rests on it. |
-| `google/gemma-4-31b` | `gemma-4-31b-local` | **Flash-class quality proxy — NOT a deployment candidate** | Stands in for hosted mid-tier models (Gemini 3.5-flash / flash-lite, 3.6-flash) that this trial did not call directly. Its **answer quality** is the datum. It is not proposed for deployment in any environment — its latency disqualifies it, and that latency is expected for a locally-hosted 31B model, not a defect being reported. |
+| `google/gemma-4-31b` | `gemma-4-31b-local` | **Flash-class quality proxy** (excluded as a deployment candidate by the decision owner, see below) | Stands in for hosted mid-tier models (Gemini 3.5-flash / flash-lite, 3.6-flash) that this trial did not call directly. Its **answer quality** is the datum. Its measured latency is ~70–1000s per call (§3.5) — reported here as a fact. **Deployment candidacy is excluded by the decision owner (chris, 2026-08-08) as a stated constraint on latency grounds; that exclusion is his, not this document's.** The ADR itself recommends nothing, here or anywhere. |
 
 **Reading the 31b row correctly matters**, because it is the row most
 easily misread. It is in the matrix to answer *"what would flash-class

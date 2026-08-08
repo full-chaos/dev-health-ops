@@ -761,3 +761,59 @@ def test_records_for_a_not_run_tier_carry_no_fabricated_rows() -> None:
     assert payload["status"] == "not_run"
     assert payload["rows"] == []
     assert payload["not_run_reason"] == "LM Studio down"
+
+
+def test_committed_markdown_is_reproducible_from_committed_records() -> None:
+    """[codex final H3] "records.json is the source of truth" was a claim,
+    not a fact: the markdown was rendered from in-memory objects while the
+    records were written alongside it, so the two could disagree and only
+    one was committed evidence.
+
+    This is the guard that makes it true. It re-renders the committed
+    markdown from the committed records, with NO model calls, and requires
+    byte equality. It fails if anyone edits the artifact by hand, or if a
+    renderer change lands without regenerating -- which is exactly the
+    drift that let a stale number survive into a decision document.
+    """
+    import json
+    from pathlib import Path
+
+    from ..run_measured_sweep import render_markdown_from_records
+
+    docs = Path(__file__).resolve().parents[1] / "docs"
+    records = json.loads((docs / "measured-trial-results.records.json").read_text())
+    committed = (docs / "measured-trial-results.md").read_text()
+
+    assert render_markdown_from_records(records) == committed, (
+        "the committed markdown is NOT reproducible from the committed "
+        "records -- regenerate it rather than hand-editing, or the artifact "
+        "and its evidence have diverged"
+    )
+
+
+def test_records_carry_the_provenance_a_cross_run_claim_needs() -> None:
+    """[codex final H3] A records file that says what the answers were but
+    not what the QUESTIONS were cannot support a cross-run comparison --
+    and the ADR makes one (§7's same-input drift claim rests on the corpus
+    being identical between two runs).
+    """
+    import json
+    from pathlib import Path
+
+    docs = Path(__file__).resolve().parents[1] / "docs"
+    records = json.loads((docs / "measured-trial-results.records.json").read_text())
+    provenance = records.get("corpus_provenance", {})
+    for required in (
+        "corpus/oracles.py",
+        "corpus/ground_truth.py",
+        "harness/arms/source_documents.py",
+        "harness/arms/extraction.py",
+    ):
+        assert required in provenance, f"no content hash recorded for {required}"
+        assert len(provenance[required]) == 64
+    for tier in records["tiers"]:
+        assert tier["prompt_version"], f"{tier['tier_key']} records no prompt version"
+        if tier["status"] == "measured":
+            assert tier["control_status"], (
+                f"{tier['tier_key']} records no control status"
+            )

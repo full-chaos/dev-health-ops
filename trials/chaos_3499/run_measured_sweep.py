@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import os
 import sys
@@ -255,6 +256,31 @@ MODEL_TIERS: tuple[ModelTier, ...] = (
         optional=True,
     ),
 )
+
+
+def _corpus_provenance() -> dict[str, str]:
+    """Content hashes of every file that defines what was measured.
+
+    Without these, a records file says what the answers were but not what
+    the questions were, so two runs whose corpus differs are
+    indistinguishable in the record. These are what let a later reader
+    prove that runs N and N+1 asked the SAME thing -- the exact check the
+    cross-run drift claim in the ADR depends on.
+    """
+    here = Path(__file__).parent
+    files = {
+        "corpus/oracles.py": here / "corpus" / "oracles.py",
+        "corpus/ground_truth.py": here / "corpus" / "ground_truth.py",
+        "harness/arms/source_documents.py": here
+        / "harness"
+        / "arms"
+        / "source_documents.py",
+        "harness/arms/extraction.py": here / "harness" / "arms" / "extraction.py",
+    }
+    return {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in sorted(files.items())
+    }
 
 
 def select_tiers(keys: Sequence[str] | None) -> list[ModelTier]:
@@ -739,14 +765,36 @@ def _records_for(outcome: TierOutcome) -> dict:
                         ),
                     }
                 )
+    report = outcome.report
     return {
         "tier_key": tier.key,
+        "label": tier.label,
+        "role": tier.role,
+        "primary": tier.primary,
+        "optional": tier.optional,
         "requested_model": tier.model,
         "provider": tier.provider,
+        "base_url": outcome.config.base_url if outcome.config else None,
         "timeout_seconds": tier.timeout,
+        "prompt_version": _PROJECTION_VERSION,
         "status": outcome.status,
         "not_run_reason": outcome.not_run_reason,
-        "identity_evidence": outcome.identity_evidence,
+        "identity_evidence": dict(outcome.identity_evidence),
+        "control_status": (
+            report.native_control_status().value if report is not None else None
+        ),
+        # The rendered per-class block is STORED, not recomputed at render
+        # time. That is what makes the markdown a pure function of this
+        # file: a renderer that recomputed would be a second implementation
+        # able to disagree with the one that produced the measurement.
+        "rendered_comparison": report.render() if report is not None else None,
+        "oracles_total": len(outcome.oracles),
+        "oracles_measured_by_candidate": (
+            sum(1 for r in report.arm.results if r.verdict is not Verdict.NOT_MEASURED)
+            if report is not None
+            else 0
+        ),
+        "arms": list(outcome.reports.keys()) if outcome.reports else [],
         "started_at": outcome.started_at,
         "finished_at": outcome.finished_at,
         "rows": rows,
@@ -976,12 +1024,234 @@ def _render_coverage_statement() -> str:
     return "\n".join(lines)
 
 
+_INTERPRETATION_NOTES: list[str] = [
+    "## Interpretation notes",
+    "",
+    "This section is generated boilerplate about how to READ the report",
+    "shape above, not a narrative about this specific run's numbers --",
+    "run-specific observations (variance across runs, cross-run",
+    "comparisons, etc.) belong in `docs/adr-draft.md`, which this file",
+    "is never hand-edited to match; regenerating this artifact must",
+    "always reproduce it byte-for-byte from this script (#1603 finding",
+    "7) -- if a claim needs updating, it is either the shape guidance",
+    "below, or it belongs in the ADR draft instead.",
+    "",
+    '- **Class (a) "NOT MEASURED" is not the same as "LOST."**',
+    "  `native_control_status()` returns one of three states (see",
+    "  `harness/runner.py`'s `ControlStatus`): `held`, `lost`, or",
+    "  `not_measured`. Only `lost` means the baseline was actually",
+    "  outscored; `not_measured` means the candidate has not been run",
+    "  against every class-(a) oracle yet. The rendered banner (if any)",
+    "  already makes this distinction in its own wording.",
+    "- **No headline number, by construction.** `ComparisonReport` has",
+    "  no method that aggregates across classes into one score --",
+    "  per §15.2, weighting (a)x1 (b)x1 (c)x5 into one number would",
+    "  flatter any extraction-capable candidate regardless of merit.",
+    "  Read each class row on its own terms.",
+    "- **A NOT_RUN row is never a model-quality result.** An oracle",
+    "  without authored source material, an unreachable provider, and a",
+    "  call that exceeded its tier's configured window all land as",
+    "  NOT_RUN with their own distinguishable reason string. None of",
+    "  them is a pass and none of them is a fail.",
+    "- **Latency is per arm x oracle call**, covering the whole arm",
+    "  invocation including the one bounded infra re-attempt if it",
+    "  happened -- so a retried call's latency is legitimately about",
+    "  double, and the retry is logged separately.",
+    "",
+]
+
+
+def _build_records(
+    outcomes: Sequence[TierOutcome], run_started_at: str, run_finished_at: str
+) -> dict:
+    """The measurement, as committed data. See render_markdown_from_records."""
+    return {
+        "run_started_at": run_started_at,
+        "run_finished_at": run_finished_at,
+        "corpus_provenance": _corpus_provenance(),
+        "declared_tiers": [t.key for t in MODEL_TIERS],
+        "measured_tiers": [o.tier.key for o in outcomes],
+        "tiers": [_records_for(o) for o in outcomes],
+    }
+
+
 def _render_artifact(
     *,
     outcomes: Sequence[TierOutcome],
     run_started_at: str,
     run_finished_at: str,
 ) -> str:
+    """Thin shim: build the records, then render THOSE.
+
+    Deliberately not a second renderer. A markdown path that read
+    in-memory objects while the records were written alongside it
+    could disagree with the committed evidence, and only one of the
+    two was committed.
+    """
+    return render_markdown_from_records(
+        _build_records(outcomes, run_started_at, run_finished_at)
+    )
+
+
+# ==========================================================================
+# records -> markdown. The ONLY renderer.
+# ==========================================================================
+
+
+def _latency_cell_from_row(row: dict) -> str:
+    if row.get("latency_seconds") is None:
+        return "n/a"
+    return f"{row['latency_seconds']:.2f}s"
+
+
+def _per_oracle_table_from_records(tier: dict) -> str:
+    arms = tier["arms"]
+    header = "| Oracle | Class | " + " | ".join(
+        f"{a} (verdict @ called / Latency)" for a in arms
+    )
+    header += " |"
+    sep = "|---|---|" + "|".join("---" for _ in arms) + "|"
+    lines = [header, sep]
+    by_oracle: dict[str, dict[str, dict]] = {}
+    order: list[str] = []
+    for row in tier["rows"]:
+        if row["oracle_id"] not in by_oracle:
+            by_oracle[row["oracle_id"]] = {}
+            order.append(row["oracle_id"])
+        by_oracle[row["oracle_id"]][row["arm"]] = row
+    for oracle_id in order:
+        first = next(iter(by_oracle[oracle_id].values()))
+        cells = [oracle_id, first["question_class"]]
+        for arm in arms:
+            row = by_oracle[oracle_id][arm]
+            when = row["called_at"] or "n/a"
+            cell = f"`{row['verdict']}` @ `{when}` / `{_latency_cell_from_row(row)}`"
+            if row.get("provider_attempts", 0) > 1:
+                cell += f" [attempts={row['provider_attempts']}]"
+            if row.get("timed_out"):
+                cell += (
+                    " **[TIMED OUT — infra, recovered by bounded re-attempt]**"
+                    if row.get("recovered_after_retry")
+                    else " **[TIMED OUT — infra, NOT recovered]**"
+                )
+            if row["verdict"] == "not_measured" and row.get("not_run_reason"):
+                cell += f" ({row['not_run_reason']})"
+            elif row["verdict"] == "fail" and row.get("failed_assertions"):
+                cell += " — failed: " + "; ".join(
+                    f"`{f['assertion_id']}`" for f in row["failed_assertions"]
+                )
+            cells.append(cell)
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def _tier_section_from_records(tier: dict) -> str:
+    lines = [
+        f"## Tier: {tier['label']}",
+        "",
+        f"- tier key: `{tier['tier_key']}`",
+        f"- model: `{tier['requested_model']}`",
+        f"- provider: `{tier['provider']}`",
+        f"- configured timeout: `{tier['timeout_seconds']}s`",
+        f"- role: {tier['role']}",
+    ]
+    if tier["primary"]:
+        lines.append(
+            "- **PRIMARY SCORED TIER** -- this is the deployed "
+            "configuration; read parity statements from this section."
+        )
+    if tier["optional"]:
+        lines.append(
+            "- OPTIONAL tier -- informative only; its absence is recorded, not fatal."
+        )
+    lines.append("")
+    if tier["status"] != "measured":
+        lines += [
+            f"**STATUS: NOT_RUN** -- reason: {tier['not_run_reason']}",
+            "",
+            "No results are reported for this tier because none were "
+            "produced. This section deliberately carries no comparison "
+            "rows and no scores: a tier that did not run has nothing to "
+            "report, and rendering an empty result set as zeroes would "
+            "read as a measured zero.",
+            "",
+        ]
+        return "\n".join(lines)
+    total = tier["oracles_total"]
+    measured = tier["oracles_measured_by_candidate"]
+    ident = tier["identity_evidence"]
+    lines += [
+        "**STATUS: MEASURED**",
+        "",
+        f"- base URL: `{tier['base_url']}`",
+        f"- prompt/schema version: `{tier['prompt_version']}`",
+        f"- started: `{tier['started_at']}`",
+        f"- finished: `{tier['finished_at']}`",
+        f"- {total} oracles total; {measured} measured by the extraction "
+        f"candidate arm; {total - measured} NOT_RUN",
+        f"- class (a) control status: `{tier['control_status']}`",
+        "- **model identity evidence** (what backs the claim that THIS model "
+        "produced these rows): provider enumerated "
+        f"`{ident.get('listed_models', 'n/a')}`; "
+        "model ids the provider reported as served across answered calls: "
+        f"`{ident.get('served_models_observed', 'n/a')}`. "
+        "A request whose response carried no model metadata, or whose "
+        "served id did not match the request, was recorded NOT_RUN rather "
+        "than attributed to this tier.",
+        "",
+        "### Per-class comparison",
+        "",
+        "```",
+        tier["rendered_comparison"],
+        "```",
+        "",
+        "### Per-oracle results",
+        "",
+        "Every arm x oracle verdict, the wall-clock instant that arm was "
+        "called, and the call's latency. Latency renders `n/a` -- never "
+        "`0.00s` -- when the arm returned NOT_RUN before any provider call "
+        "happened.",
+        "",
+        _per_oracle_table_from_records(tier),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _matrix_summary_from_records(records: dict) -> str:
+    lines = [
+        "| Tier | Model | Status | Class (a) control | Candidate measured | Reason if NOT_RUN |",
+        "|---|---|---|---|---|---|",
+    ]
+    for tier in records["tiers"]:
+        if tier["status"] == "measured":
+            control = f"`{tier['control_status']}`"
+            measured_cell = (
+                f"{tier['oracles_measured_by_candidate']}/{tier['oracles_total']}"
+            )
+            reason = ""
+        else:
+            control = "n/a"
+            measured_cell = "n/a"
+            reason = tier["not_run_reason"] or "unrecorded"
+        lines.append(
+            f"| `{tier['tier_key']}` | `{tier['requested_model']}` | "
+            f"`{tier['status']}` | {control} | {measured_cell} | {reason} |"
+        )
+    return "\n".join(lines)
+
+
+def render_markdown_from_records(records: dict) -> str:
+    """The committed markdown, derived ENTIRELY from the committed records.
+
+    This is what makes "records are the source of truth" true rather than
+    aspirational. Previously the markdown was rendered from in-memory
+    objects and the records were written alongside it, so the two could
+    disagree and only one of them was committed evidence. Now the markdown
+    is a view, a presentation fix costs no model spend, and
+    ``test_committed_markdown_is_reproducible_from_committed_records``
+    fails if the two ever drift.
+    """
     lines = [
         "# CHAOS-3499 measured trial results",
         "",
@@ -990,13 +1260,31 @@ def _render_artifact(
         "committed. It is NOT a headline number -- there isn't one;",
         "`ComparisonReport` cannot render one by construction.",
         "",
-        f"- run started: `{run_started_at}`",
-        f"- run finished: `{run_finished_at}`",
+        "**This document is rendered from "
+        "`measured-trial-results.records.json`, which is the source of "
+        "truth.** Every number below is reproducible from that file with no "
+        "model calls; a test pins byte-equality.",
+        "",
+        f"- run started: `{records['run_started_at']}`",
+        f"- run finished: `{records['run_finished_at']}`",
         f"- dependency state for class (b): `{CHAOS_3563_STATE}`",
         "- temperature: API default (gpt-5-family rejects a caller-selected",
         "  value -- see `harness/llm/client.py`'s module docstring and",
         "  `src/dev_health_ops/llm/providers/openai_capabilities.py`'s",
         "  `supports_temperature`)",
+        "",
+        "## Corpus provenance",
+        "",
+        "Content hashes of the files that define WHAT was measured. Two runs",
+        "with identical hashes asked the same questions; a cross-run",
+        "comparison that does not check these is comparing unknowns.",
+        "",
+        "| File | sha256 |",
+        "|---|---|",
+    ]
+    for name, digest in sorted(records.get("corpus_provenance", {}).items()):
+        lines.append(f"| `{name}` | `{digest}` |")
+    lines += [
         "",
         "## Model tier matrix",
         "",
@@ -1006,78 +1294,35 @@ def _render_artifact(
         "that produced it cannot disagree.",
         "",
     ]
-
-    # A subset run must announce itself. An artifact holding 1 of 5 declared
-    # tiers is indistinguishable from a complete matrix to a reader who does
-    # not already know how many tiers exist -- exactly the silent-cap
-    # failure this trial's own no-silent-caps rule forbids.
-    measured_keys = {o.tier.key for o in outcomes}
-    omitted = [t for t in MODEL_TIERS if t.key not in measured_keys]
+    measured_keys = {t["tier_key"] for t in records["tiers"]}
+    omitted = [k for k in records["declared_tiers"] if k not in measured_keys]
     if omitted:
         lines += [
             "> **PARTIAL RUN — this artifact does NOT contain every declared",
-            f"> tier.** {len(measured_keys)} of {len(MODEL_TIERS)} declared",
-            "> tiers were measured here. The tiers NOT measured in this run,",
-            "> and therefore absent below, are:",
+            f"> tier.** {len(measured_keys)} of {len(records['declared_tiers'])}",
+            "> declared tiers were measured here. The tiers NOT measured in",
+            "> this run, and therefore absent below, are:",
             "",
         ]
-        for tier in omitted:
-            lines.append(f"> - `{tier.key}` (`{tier.model}`)")
+        lines += [f"> - `{k}`" for k in omitted]
         lines += [
             "",
             "> Their results, if any, live in a different run's artifact --",
-            "> do not read the table below as the whole matrix, and do not",
-            "> compare a tier measured here against one measured in another",
-            "> run without carrying the run identity with it.",
+            "> do not read the table below as the whole matrix.",
             "",
         ]
-
     lines += [
-        _render_tier_matrix_summary(outcomes),
+        _matrix_summary_from_records(records),
         "",
         "## Corpus coverage",
         "",
         _render_coverage_statement(),
         "",
     ]
-    for outcome in outcomes:
-        lines.append(_render_tier_section(outcome))
+    for tier in records["tiers"]:
+        lines.append(_tier_section_from_records(tier))
         lines.append("")
-    lines += [
-        "## Interpretation notes",
-        "",
-        "This section is generated boilerplate about how to READ the report",
-        "shape above, not a narrative about this specific run's numbers --",
-        "run-specific observations (variance across runs, cross-run",
-        "comparisons, etc.) belong in `docs/adr-draft.md`, which this file",
-        "is never hand-edited to match; regenerating this artifact must",
-        "always reproduce it byte-for-byte from this script (#1603 finding",
-        "7) -- if a claim needs updating, it is either the shape guidance",
-        "below, or it belongs in the ADR draft instead.",
-        "",
-        '- **Class (a) "NOT MEASURED" is not the same as "LOST."**',
-        "  `native_control_status()` returns one of three states (see",
-        "  `harness/runner.py`'s `ControlStatus`): `held`, `lost`, or",
-        "  `not_measured`. Only `lost` means the baseline was actually",
-        "  outscored; `not_measured` means the candidate has not been run",
-        "  against every class-(a) oracle yet. The rendered banner (if any)",
-        "  already makes this distinction in its own wording.",
-        "- **No headline number, by construction.** `ComparisonReport` has",
-        "  no method that aggregates across classes into one score --",
-        "  per §15.2, weighting (a)x1 (b)x1 (c)x5 into one number would",
-        "  flatter any extraction-capable candidate regardless of merit.",
-        "  Read each class row on its own terms.",
-        "- **A NOT_RUN row is never a model-quality result.** An oracle",
-        "  without authored source material, an unreachable provider, and a",
-        "  call that exceeded its tier's configured window all land as",
-        "  NOT_RUN with their own distinguishable reason string. None of",
-        "  them is a pass and none of them is a fail.",
-        "- **Latency is per arm x oracle call**, covering the whole arm",
-        "  invocation including the one bounded infra re-attempt if it",
-        "  happened -- so a retried call's latency is legitimately about",
-        "  double, and the retry is logged separately.",
-        "",
-    ]
+    lines += _INTERPRETATION_NOTES
     return "\n".join(lines)
 
 
@@ -1134,28 +1379,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.artifact
         else Path(__file__).parent / "docs" / "measured-trial-results.md"
     )
-    artifact_path.write_text(
-        _render_artifact(
-            outcomes=outcomes,
-            run_started_at=run_started_at,
-            run_finished_at=run_finished_at,
-        )
-    )
+    # Records first, markdown FROM the records -- never the other way round,
+    # and never two independent renderings of the same run.
+    records = _build_records(outcomes, run_started_at, run_finished_at)
     records_path = artifact_path.with_suffix(".records.json")
-    records_path.write_text(
-        json.dumps(
-            {
-                "run_started_at": run_started_at,
-                "run_finished_at": run_finished_at,
-                "declared_tiers": [t.key for t in MODEL_TIERS],
-                "measured_tiers": [o.tier.key for o in outcomes],
-                "tiers": [_records_for(o) for o in outcomes],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    )
+    records_path.write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
+    artifact_path.write_text(render_markdown_from_records(records))
+
     _log(f"artifact written: {artifact_path}")
     _log(f"raw records written: {records_path}")
 

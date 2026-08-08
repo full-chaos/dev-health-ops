@@ -1,4 +1,10 @@
 {
+  "corpus_provenance": {
+    "corpus/ground_truth.py": "8c00a2e4313cad283466a5ee4ee4798e06547b34ea1dde8d4f969aaaff9a2390",
+    "corpus/oracles.py": "3607162ddb809a52f64265e57cb92af28f7e3e44fd7bcddef39b6147537288aa",
+    "harness/arms/extraction.py": "4940654f916912b71816680453d22213eed993a6c4364e11b2494e7390bed809",
+    "harness/arms/source_documents.py": "7a5dd854c00122f83b07377de0a5317d03016d1401c3428b96de70726b785d30"
+  },
   "declared_tiers": [
     "gpt-5-nano",
     "gpt-5-mini",
@@ -17,6 +23,13 @@
   "run_started_at": "2026-08-08T15:57:27.043152+00:00",
   "tiers": [
     {
+      "arms": [
+        "native",
+        "episode_readback",
+        "extraction_llm"
+      ],
+      "base_url": "https://api.openai.com/v1",
+      "control_status": "held",
       "finished_at": "2026-08-08T16:01:24.692508+00:00",
       "identity_evidence": {
         "listed_models": [
@@ -156,9 +169,17 @@
           "gpt-5-nano-2025-08-07"
         ]
       },
+      "label": "gpt-5-nano (deployed parity)",
       "not_run_reason": null,
+      "optional": false,
+      "oracles_measured_by_candidate": 9,
+      "oracles_total": 20,
+      "primary": true,
+      "prompt_version": "extraction.v2",
       "provider": "cloud",
+      "rendered_comparison": "baseline: baseline   vs   arm: extraction_llm\n  class a: baseline 1/3, arm 0/3, delta -1\n  class b: baseline 0/2, arm 2/2, delta +2\n  class c: baseline 1/15, arm 0/4  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED",
       "requested_model": "gpt-5-nano",
+      "role": "DEPLOYED PARITY -- Ask Dev's configured model (ops/.env LLM_MODEL) as of 2026-08-08. This is the tier any claim about what the product would actually do must be read from.",
       "rows": [
         {
           "arm": "native",
@@ -1359,6 +1380,13 @@
       "timeout_seconds": 120.0
     },
     {
+      "arms": [
+        "native",
+        "episode_readback",
+        "extraction_llm"
+      ],
+      "base_url": "https://api.openai.com/v1",
+      "control_status": "held",
       "finished_at": "2026-08-08T16:05:18.258811+00:00",
       "identity_evidence": {
         "listed_models": [
@@ -1498,9 +1526,17 @@
           "gpt-5-mini-2025-08-07"
         ]
       },
+      "label": "gpt-5-mini (mid-tier comparative)",
       "not_run_reason": null,
+      "optional": false,
+      "oracles_measured_by_candidate": 9,
+      "oracles_total": 20,
+      "primary": false,
+      "prompt_version": "extraction.v2",
       "provider": "cloud",
+      "rendered_comparison": "baseline: baseline   vs   arm: extraction_llm\n  class a: baseline 1/3, arm 0/3, delta -1\n  class b: baseline 0/2, arm 2/2, delta +2\n  class c: baseline 1/15, arm 1/4  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED",
       "requested_model": "gpt-5-mini",
+      "role": "MID-TIER COMPARATIVE -- one step above deployed parity. Runs 1 and 2 used this tier, so keeping it in the matrix is what makes those historical numbers comparable to this round's. NOT the ceiling: gpt-5-nano and gpt-5-mini were both selected for CATEGORIZATION and landscape-shape explanation in the app, not for multi-turn, fuzzy-lookup, or interpretive question answering -- so neither tier establishes what a model can do at the top of the capability axis this corpus actually exercises. That is what the frontier tier below is for.",
       "rows": [
         {
           "arm": "native",
@@ -2696,6 +2732,13 @@
       "timeout_seconds": 120.0
     },
     {
+      "arms": [
+        "native",
+        "episode_readback",
+        "extraction_llm"
+      ],
+      "base_url": "https://api.openai.com/v1",
+      "control_status": "held",
       "finished_at": "2026-08-08T16:05:51.027417+00:00",
       "identity_evidence": {
         "listed_models": [
@@ -2835,9 +2878,17 @@
           "gpt-5.6-luna"
         ]
       },
+      "label": "gpt-5.6-luna (frontier discriminator)",
       "not_run_reason": null,
+      "optional": false,
+      "oracles_measured_by_candidate": 9,
+      "oracles_total": 20,
+      "primary": false,
+      "prompt_version": "extraction.v2",
       "provider": "cloud",
+      "rendered_comparison": "baseline: baseline   vs   arm: extraction_llm\n  class a: baseline 1/3, arm 0/3, delta -1\n  class b: baseline 0/2, arm 2/2, delta +2\n  class c: baseline 1/15, arm 2/4  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED",
       "requested_model": "gpt-5.6-luna",
+      "role": "FRONTIER DISCRIMINATOR -- present to answer exactly ONE question: is the class-(c) deficit a MODEL ceiling or a FRAMEWORK limitation? A flat result here (~2/4, matching gpt-5-mini and gemma-4-31b) says the binding constraint is the extraction contract and harness, and that no model purchase buys past it. A jump toward 4/4 says there is a real capability curve with a known top, and the tier table becomes a genuine cost/quality frontier. It is a DISCRIMINATOR, not a deployment proposal.",
       "rows": [
         {
           "arm": "native",
@@ -4024,6 +4075,13 @@
       "timeout_seconds": 120.0
     },
     {
+      "arms": [
+        "native",
+        "episode_readback",
+        "extraction_llm"
+      ],
+      "base_url": "http://localhost:1234/v1",
+      "control_status": "held",
       "finished_at": "2026-08-08T16:09:52.299694+00:00",
       "identity_evidence": {
         "listed_models": [
@@ -4039,9 +4097,17 @@
           "google/gemma-4-e4b"
         ]
       },
+      "label": "google/gemma-4-e4b (local cost-regime arm)",
       "not_run_reason": null,
+      "optional": true,
+      "oracles_measured_by_candidate": 9,
+      "oracles_total": 20,
+      "primary": false,
+      "prompt_version": "extraction.v2",
       "provider": "local",
+      "rendered_comparison": "baseline: baseline   vs   arm: extraction_llm\n  class a: baseline 1/3, arm 0/3, delta -1\n  class b: baseline 0/2, arm 2/2, delta +2\n  class c: baseline 1/15, arm 0/4  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED",
       "requested_model": "google/gemma-4-e4b",
+      "role": "COST REGIME, NOT PARITY -- a locally-hosted small model, informative for the ADR's cost-architecture input only. It is not the deployed configuration and no parity claim rests on it. Optional: if LM Studio is not serving, this tier records NOT_RUN and the run continues.",
       "rows": [
         {
           "arm": "native",
@@ -5250,6 +5316,13 @@
       "timeout_seconds": 900.0
     },
     {
+      "arms": [
+        "native",
+        "episode_readback",
+        "extraction_llm"
+      ],
+      "base_url": "http://localhost:1234/v1",
+      "control_status": "held",
       "finished_at": "2026-08-08T16:34:31.663231+00:00",
       "identity_evidence": {
         "listed_models": [
@@ -5265,9 +5338,17 @@
           "google/gemma-4-31b"
         ]
       },
+      "label": "google/gemma-4-31b (local scaling comparator)",
       "not_run_reason": null,
+      "optional": true,
+      "oracles_measured_by_candidate": 9,
+      "oracles_total": 20,
+      "primary": false,
+      "prompt_version": "extraction.v2",
       "provider": "local",
+      "rendered_comparison": "baseline: baseline   vs   arm: extraction_llm\n  class a: baseline 1/3, arm 0/3, delta -1\n  class b: baseline 0/2, arm 2/2, delta +2\n  class c: baseline 1/15, arm 1/4  -- NOT COMPARABLE: 11 arm oracle(s) NOT MEASURED",
       "requested_model": "google/gemma-4-31b",
+      "role": "COST REGIME / LOCAL SCALING -- the same locally-hosted family at a materially larger size. Paired with the e4b tier it separates 'small models cannot do this' from 'LOCAL models cannot do this', which are different inputs to a cost-architecture decision. Not the deployed configuration; no parity claim rests on it. Optional, and ordered last so it never contends with the e4b arm for the same local server.",
       "rows": [
         {
           "arm": "native",

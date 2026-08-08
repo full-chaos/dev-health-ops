@@ -5,6 +5,8 @@ trial artifact -- the rendered per-class comparison, per model tier,
 committed. It is NOT a headline number -- there isn't one;
 `ComparisonReport` cannot render one by construction.
 
+**This document is rendered from `measured-trial-results.records.json`, which is the source of truth.** Every number below is reproducible from that file with no model calls; a test pins byte-equality.
+
 - run started: `2026-08-08T15:57:27.043152+00:00`
 - run finished: `2026-08-08T16:34:31.663375+00:00`
 - dependency state for class (b): `CHAOS-3563 declared-state history MERGED as 33a7f85d0 (ops feature/chaos-3498-context-fabric, 2026-08-08): project_declared_state_history + durable floor table live via migrations 074/075, argMax read path with content-hash tie-break, three-outcome floor contract.`
@@ -12,6 +14,19 @@ committed. It is NOT a headline number -- there isn't one;
   value -- see `harness/llm/client.py`'s module docstring and
   `src/dev_health_ops/llm/providers/openai_capabilities.py`'s
   `supports_temperature`)
+
+## Corpus provenance
+
+Content hashes of the files that define WHAT was measured. Two runs
+with identical hashes asked the same questions; a cross-run
+comparison that does not check these is comparing unknowns.
+
+| File | sha256 |
+|---|---|
+| `corpus/ground_truth.py` | `8c00a2e4313cad283466a5ee4ee4798e06547b34ea1dde8d4f969aaaff9a2390` |
+| `corpus/oracles.py` | `3607162ddb809a52f64265e57cb92af28f7e3e44fd7bcddef39b6147537288aa` |
+| `harness/arms/extraction.py` | `4940654f916912b71816680453d22213eed993a6c4364e11b2494e7390bed809` |
+| `harness/arms/source_documents.py` | `7a5dd854c00122f83b07377de0a5317d03016d1401c3428b96de70726b785d30` |
 
 ## Model tier matrix
 

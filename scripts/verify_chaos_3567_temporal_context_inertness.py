@@ -118,14 +118,24 @@ import dev_health_ops.api.dev.investigation_plans.wave_3_1_plans  # noqa: F401
 {_RUN_GUARD_SUITE}
 """
 
-# (label, snippet, expect_pytest_success, expect_runtime_error_before_pytest)
-_RUNS: tuple[tuple[str, str, bool, bool], ...] = (
-    ("baseline (no plant)", _RUN_GUARD_SUITE, True, False),
+# (label, snippet, expect_pytest_success, expect_runtime_error_before_pytest,
+#  expected_failed_test, expected_marker)
+#
+# ``expected_failed_test`` is the bare test function name that must appear in
+# a ``FAILED <path>::<name>`` line in stdout (None when pytest is expected to
+# either fully pass or never run at all). ``expected_marker`` is an
+# additional required substring: the exact pytest summary line fragment
+# (e.g. "5 passed" / "1 failed, 4 passed") for the two pytest-executed
+# shapes, or the named guard's own error text for the import-error shape.
+_RUNS: tuple[tuple[str, str, bool, bool, str | None, str], ...] = (
+    ("baseline (no plant)", _RUN_GUARD_SUITE, True, False, None, "5 passed"),
     (
         "plant 1: NATIVE_EVIDENCE_SOURCES widened alone",
         _PLANT_NATIVE_EVIDENCE_SOURCES,
         False,
         False,
+        "test_native_evidence_sources_is_exactly_pinned_to_eight_members",
+        "1 failed, 4 passed",
     ),
     (
         "plant 2a: plan source_requirements widened alone "
@@ -133,18 +143,27 @@ _RUNS: tuple[tuple[str, str, bool, bool], ...] = (
         _PLANT_PLAN_ONLY,
         False,
         True,
+        None,
+        "CHAOS-3337",
     ),
     (
         "plant 2b: plan source_requirements + persistence allowlist widened together",
         _PLANT_PLAN_AND_ALLOWLIST,
         False,
         False,
+        "test_temporal_context_is_not_referenced_by_any_registered_plan",
+        "1 failed, 4 passed",
     ),
 )
 
 
 def _run(
-    label: str, snippet: str, expect_pytest_success: bool, expect_import_error: bool
+    label: str,
+    snippet: str,
+    expect_pytest_success: bool,
+    expect_import_error: bool,
+    expected_failed_test: str | None,
+    expected_marker: str,
 ) -> bool:
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(snippet)],
@@ -157,15 +176,35 @@ def _run(
     outcome_ok = (result.returncode == 0) == expect_pytest_success
     shape_ok = import_error_fired == expect_import_error
 
+    # N1 fix (independent fix-verify review, 2026-08-07): the checks above
+    # are exit-code/shape only. A plant whose body dies before pytest ever
+    # runs -- e.g. a bare ``raise SystemExit(<n>)`` -- can still produce an
+    # exit code and "no RuntimeError in stderr" shape that accidentally
+    # match a failing-pytest expectation, certifying coverage that never
+    # actually happened. Every run's *content* must additionally prove
+    # pytest reached and failed the SPECIFIC named test (not merely "some"
+    # failure), or -- for the collection-error shape -- that the SPECIFIC
+    # named guard (CHAOS-3337) fired, not just any RuntimeError anywhere in
+    # the import chain.
+    if expect_import_error:
+        content_ok = (
+            expected_marker in result.stderr and "RuntimeError" in result.stderr
+        )
+    elif expected_failed_test is not None:
+        failed_line = f"FAILED {GUARD_TEST_PATH}::{expected_failed_test}"
+        content_ok = failed_line in result.stdout and expected_marker in result.stdout
+    else:
+        content_ok = expected_marker in result.stdout and "FAILED " not in result.stdout
+
     print(f"=== {label} ===")
     print(
         f"exit={result.returncode} pytest_ran={pytest_ran} "
-        f"import_error_before_pytest={import_error_fired}"
+        f"import_error_before_pytest={import_error_fired} content_ok={content_ok}"
     )
     tail_stdout = result.stdout.strip().splitlines()[-8:]
     for line in tail_stdout:
         print(f"  stdout| {line}")
-    if import_error_fired or result.returncode not in (0, 1):
+    if import_error_fired or result.returncode not in (0, 1) or not content_ok:
         tail_stderr = result.stderr.strip().splitlines()[-6:]
         for line in tail_stderr:
             print(f"  stderr| {line}")
@@ -181,13 +220,37 @@ def _run(
             f"UNEXPECTED: {label} expected import_error_before_pytest="
             f"{expect_import_error}, got {import_error_fired}"
         )
-    return outcome_ok and shape_ok
+    if not content_ok:
+        print(
+            f"UNEXPECTED: {label} expected content marker {expected_marker!r} "
+            f"(failed_test={expected_failed_test!r}) not found in captured output "
+            "-- exit code/shape matched but the specific evidence did not, which "
+            "means this run's coverage claim cannot be certified"
+        )
+    return outcome_ok and shape_ok and content_ok
 
 
 def main() -> int:
     ok = True
-    for label, snippet, expect_pytest_success, expect_import_error in _RUNS:
-        ok = _run(label, snippet, expect_pytest_success, expect_import_error) and ok
+    for (
+        label,
+        snippet,
+        expect_pytest_success,
+        expect_import_error,
+        expected_failed_test,
+        expected_marker,
+    ) in _RUNS:
+        ok = (
+            _run(
+                label,
+                snippet,
+                expect_pytest_success,
+                expect_import_error,
+                expected_failed_test,
+                expected_marker,
+            )
+            and ok
+        )
     if ok:
         print(
             "ALL RUNS MATCHED EXPECTATIONS -- the guard suite's coverage claims hold."

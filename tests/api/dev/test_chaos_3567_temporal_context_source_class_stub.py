@@ -20,8 +20,12 @@ finding, 2026-08-07): every real (non-test, non-fixture) caller of
 ``DataHealthService.inspect`` in this tree --
 ``production_runtime.py:1533,2401`` (both pass the literal
 ``NATIVE_EVIDENCE_SOURCES`` constant, pinned exactly below),
-``tools/evidence.py:67`` (a thin passthrough of its own caller's
-``required_sources``, itself only ever called with the same constant), and
+``tools/evidence.py:67`` (``AskDevEvidenceTools.data_health_v1``, a thin
+passthrough of its own caller's ``required_sources`` -- it has NO callers of
+its own today; the string ``"data_health_v1"`` appears elsewhere only as a
+wire-tool-name pin, not a call site. When Wave 2 wires it into the bounded
+orchestrator's tool registry, that new call site carries no allowlist of its
+own and must be re-swept then), and
 ``graphql/resolvers/dev_evidence.py:182-186`` (the one caller-influenceable
 site -- a GraphQL request may pass ``input.required_sources``, but the
 resolver rejects anything outside ``{*NATIVE_EVIDENCE_SOURCES, "acr"}``
@@ -302,7 +306,20 @@ def test_no_step_can_register_against_temporal_context_without_a_declared_requir
         )
     )
 
-    with pytest.raises(StepRequirementMismatchError):
+    # `registry_validation.validate_registry` raises this same exception
+    # class from three independent sites (forward requirement lookup,
+    # duplicate-consumption, and attribution/level mismatch); a bare
+    # `pytest.raises(StepRequirementMismatchError)` survives deletion of the
+    # specific forward-raise this test exists to exercise, because any of
+    # the other paths (or none, if the whole check were deleted and a wider
+    # bug elsewhere still tripped a different validator) could satisfy it.
+    # Anchor to the forward-raise's own message
+    # (registry_validation.py:144-150) so this test can only pass via the
+    # guard it names.
+    with pytest.raises(
+        StepRequirementMismatchError,
+        match="which is not a declared source_requirement",
+    ):
         validate_registry(
             plans_by_intent={QuestionIntentID.BOUNDED_INVESTIGATION: plan},
             steps=registry,

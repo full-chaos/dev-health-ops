@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
+from dev_health_ops.fixtures.ttl_registry import max_generated_age_days
 from dev_health_ops.metrics.schemas import (
     FeatureFlagEventRecord,
     FeatureFlagLinkRecord,
@@ -305,6 +306,12 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         release_refs: list[str] | None = None,
     ) -> list[TelemetrySignalBucketRecord]:
         """Generate hourly telemetry signal buckets."""
+        # CHAOS-3602: defense in depth -- `days` is caller-supplied (from
+        # `--days`/the world manifest), not intrinsic to this generator, so
+        # clamp it against this table's own TTL horizon (per the migration-
+        # derived registry, not a second hardcoded number) rather than
+        # trusting the caller never to pass something that backdates past it.
+        days = min(days, max_generated_age_days("telemetry_signal_bucket") or days)
         buckets: list[TelemetrySignalBucketRecord] = []
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
@@ -371,6 +378,9 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         release_refs: list[str] | None = None,
     ) -> list[ReleaseImpactDailyRecord]:
         """Generate daily release impact metrics."""
+        # CHAOS-3602: same defense-in-depth clamp as
+        # generate_telemetry_signal_buckets -- `days` is caller-supplied.
+        days = min(days, max_generated_age_days("release_impact_daily") or days)
         records: list[ReleaseImpactDailyRecord] = []
         now = datetime.now(timezone.utc)
         end_date = now.date()

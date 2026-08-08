@@ -301,20 +301,41 @@ logging**, which §18 requires be audited rather than assumed.
 
 ## 7. Bring-up plan — every step gated
 
-Nothing below has been executed.
+Steps 2 and onward have not been executed.
 
-| # | Step | Needs a slot? | Blocking dependency |
-|---|---|---|---|
-| 0 | Corpus, oracles, fault self-tests | no — pure Python, already green | — |
-| 1 | Arm adapters against fixture data (no stack) | no | — |
-| 2 | Author `compose.temporal-trial.yml` + kind pod manifest | no — authoring only | — |
-| 3 | First stack bring-up, isolated kind | **YES** | orchestrator grant |
-| 4 | Projector consumes outbox, watermark + lag measured | **YES** | step 3 |
-| 5 | Arms N and E measured | **YES** | CHAOS-3563/3564/3565 landed |
-| 6 | Arm G — **any LLM extraction spend** | **YES, separately** | explicit cost authorization; provider keys only via the product's own resolution path |
-| 7 | Arm D | **YES** | step 3 |
-| 8 | Security/provenance suite (§19) | **YES** | steps 3–7 |
-| 9 | Rebuild gate | **YES** | CHAOS-3500's "semantically equivalent" definition — **not landed**; ADR must flag the gap if still absent |
+| # | Step | Needs a slot? | Blocking dependency | Status |
+|---|---|---|---|---|
+| 0 | Corpus, oracles, fault self-tests | no — pure Python, already green | — | DONE |
+| 1 | Arm adapters against fixture data (no stack) | no | — | **DONE** |
+| 2 | Author `compose.temporal-trial.yml` + kind pod manifest | no — authoring only | — | not started |
+| 3 | First stack bring-up, isolated kind | **YES** | orchestrator grant | not started |
+| 4 | Projector consumes outbox, watermark + lag measured | **YES** | step 3 | not started |
+| 5 | Arms N and E measured | **YES** | CHAOS-3563/3564/3565 landed | not started |
+| 6 | Arm G — **any LLM extraction spend** | **YES, separately** | explicit cost authorization; provider keys only via the product's own resolution path | not started |
+| 7 | Arm D | **YES** | step 3 | not started |
+| 8 | Security/provenance suite (§19) | **YES** | steps 3–7 | not started |
+| 9 | Rebuild gate | **YES** | CHAOS-3500's "semantically equivalent" definition — **not landed**; ADR must flag the gap if still absent | not started |
+
+**Step 1 detail.** `harness/arms/native.py` and `harness/arms/episode_readback.py`
+run against the pinned corpus directly — `corpus/ground_truth.py` doubles as
+the fixture, so there is no separate file to keep in sync. Registered via
+`ArmRegistry(ArmRole.BASELINE_COMPONENT)`; `compose_baseline` and both
+`TrialReport`/`ComparisonReport` per-class rendering are confirmed against
+the real results, not synthetic fixtures (`tests/test_baseline_components.py`).
+Native passes its own class (a) control (`O7_valid`) and reproduces the
+documented `O7_null_valid_from`/present-state-blocker defects exactly;
+episode readback answers `O4_prior_attempts` outright and is honestly
+displaced by the C17 decoy under a tight budget. Both correctly degrade
+(never silently) on every question their data model cannot answer, and on
+every scenario-specific oracle (staleness, redaction, revocation,
+extraction-down, graph-outage, squash-coverage) that needs a dynamic state a
+static snapshot cannot represent — see the module's own docstring for why
+that is a step-1 boundary, not a bug. No candidate arm exists yet;
+`compare()` was exercised against a registered-unavailable placeholder to
+prove the NOT COMPARABLE path fires for a real (not hand-built) unmeasured
+arm, and class (b) was confirmed to render NOT COMPARABLE under the
+harness's own default (UNRECORDED_DEPENDENCY) rather than a fabricated
+CHAOS-3563 state.
 
 The isolated-kind path (step 3) is the requested grant: it does not contend
 with dev compose or the acceptance stack.

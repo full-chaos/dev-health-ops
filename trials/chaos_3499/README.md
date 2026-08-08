@@ -21,9 +21,10 @@ fails. Trial-internal material does not belong on the customer site.
 | [`corpus/cases.py`](corpus/cases.py) | The 21 PRD §15.1 corpus cases. Each names the defect it catches, not the data it holds. |
 | [`corpus/questions.py`](corpus/questions.py) | The 7 evaluation questions with class (a)/(b)/(c) assignment and the evidence that decided each. |
 | [`corpus/ground_truth.py`](corpus/ground_truth.py) | The synthetic world. Both time axes recorded per fact; pinned constants, never the wall clock. |
-| [`corpus/oracles.py`](corpus/oracles.py) | **Deliverable 2.** 19 expected-evidence oracles, authored before any arm ran. |
+| [`corpus/oracles.py`](corpus/oracles.py) | **Deliverable 2.** 20 expected-evidence oracles, authored before any arm ran. |
 | [`harness/`](harness/) | Contracts, oracle engine, fault modes, arm-agnostic runner. |
-| [`tests/`](tests/) | Fault-mode self-tests, corpus coverage guards, independent re-derivation. |
+| [`harness/arms/`](harness/arms/) | **Bring-up step 1.** The two baseline-component adapters (`native`, `episode_readback`), against the pinned corpus directly — no fixture files, no live stack, no LLM spend. See its module docstring for what a static-snapshot adapter can and cannot prove. |
+| [`tests/`](tests/) | Fault-mode self-tests, corpus coverage guards, independent re-derivation, baseline-component per-class rendering. |
 
 ## Running
 
@@ -32,7 +33,7 @@ uv sync --all-extras --dev          # once per fresh worktree
 bash trials/chaos_3499/run_oracles.sh
 ```
 
-Current state: **217 passed, 136 skipped** (the skips are fault×oracle pairs
+Current state: **263 passed, 197 skipped** (the skips are fault×oracle pairs
 where the fault genuinely cannot apply — they are reported, and a guard fails
 if any fault is inapplicable everywhere).
 
@@ -101,6 +102,8 @@ Two things the report refuses to do quietly:
   results. Nothing in this directory pre-decides it.
 - **No stack.** No compose file authored, no kind pod, no bring-up. All gated
   on an orchestrator-granted environment slot.
-- **No arm implementations yet.** They follow review of deliverables 1–3, as
-  separately reviewable changesets.
+- **No candidate arm implementations yet.** Graphiti and direct-store follow
+  review of deliverables 1–3, as separately reviewable changesets. The two
+  *baseline-component* adapters (`harness/arms/`) exist as of bring-up step
+  1 — against the pinned corpus, no live stack, no LLM spend.
 - **No LLM extraction.** Not a token, pending explicit cost authorization.

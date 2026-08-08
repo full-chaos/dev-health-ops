@@ -39,7 +39,7 @@ import pytest
 
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..harness.arms import extraction, native
-from ..harness.arms.source_documents import SMOKE_SOURCE_DOCUMENTS
+from ..harness.arms.source_documents import SOURCE_DOCUMENTS
 from ..harness.contracts import ALL_QUESTION_CLASSES, ArmOutcome, QuestionClass
 from ..harness.llm import client as llm_client
 from ..harness.llm.client import (
@@ -128,7 +128,7 @@ def test_oracle_with_no_source_material_is_not_run_not_silently_skipped() -> Non
     document, so the arm must never even attempt a call.
     """
     oracle = ORACLES_BY_ID["O1_ci_prior_attempts"]
-    assert oracle.oracle_id not in SMOKE_SOURCE_DOCUMENTS
+    assert oracle.oracle_id not in SOURCE_DOCUMENTS
     response = extraction.answer(oracle)
     assert response.outcome is ArmOutcome.NOT_RUN
     assert response.degraded_reasons == (
@@ -149,7 +149,7 @@ def test_extraction_arm_round_trips_through_real_oracles(
 
     observations: dict[str, str] = {}
     model_name = None
-    for oracle_id in sorted(SMOKE_SOURCE_DOCUMENTS):
+    for oracle_id in sorted(SOURCE_DOCUMENTS):
         oracle = ORACLES_BY_ID[oracle_id]
         response = extraction.answer(oracle)
         assert response.outcome in (ArmOutcome.ANSWERED, ArmOutcome.NOT_RUN), (
@@ -196,15 +196,26 @@ def test_fabricated_evidence_ref_survives_verbatim_and_fails_the_oracle(
     adapter neither validates nor substitutes it -- and the resulting
     response must FAIL. The fake fact deliberately supplies only ONE
     required identity with none of its other qualifiers (no closure, no
-    flags): for O3_supersession this fails on the fabricated ref directly
-    (`require_evidence_refs` demands the real one); for O5_conflicts_injected,
-    which has no `require_evidence_refs` of its own, it fails on the missing
-    required flags instead -- the ref-survival assertion is unconditional
-    either way and does not depend on which qualifier catches the response.
+    flags): for O3_supersession and both O2 oracles this fails on the
+    fabricated ref directly (`require_evidence_refs` demands the real one
+    -- #1603 finding 5 added O2_blocking_observed's pin, matching its
+    O2_blocking_valid twin); for O5_conflicts_injected, which has no
+    `require_evidence_refs` of its own, it fails on the missing required
+    flags instead -- the ref-survival assertion is unconditional either
+    way and does not depend on which qualifier catches the response.
+
+    O2's two oracles are `AS_OF` queries, so `extraction._apply_as_of_filter`
+    would otherwise drop this fake fact before it ever reaches the oracle
+    (no `"temporal"` block -> no `valid_from` -> filtered out under the
+    VALID_TIME axis), which would prove nothing about ref pass-through. The
+    fake row's `"temporal"` block below is deliberately wide enough to
+    survive EITHER axis at `AS_OF_JUL_15` (`valid_from` well before it,
+    `valid_to` open, `recorded_at` well before it too) and is simply unused
+    data for the non-`AS_OF` oracles.
     """
     fabricated_ref = "ev_fabricated_never_planted_by_any_corpus_fixture"
 
-    for oracle_id in sorted(SMOKE_SOURCE_DOCUMENTS):
+    for oracle_id in sorted(SOURCE_DOCUMENTS):
         oracle = ORACLES_BY_ID[oracle_id]
         required = oracle.must_include[0]
         fake_row = {
@@ -216,6 +227,11 @@ def test_fabricated_evidence_ref_survives_verbatim_and_fails_the_oracle(
             "claim_kind": "observed",
             "evidence_ref": fabricated_ref,
             "flags": {"conflicting": False, "untrusted_content": False},
+            "temporal": {
+                "valid_from": "2026-07-01T00:00:00",
+                "valid_to": None,
+                "recorded_at": "2026-07-01T00:00:00",
+            },
         }
         fake_content = json.dumps([fake_row])
 
@@ -341,6 +357,277 @@ def test_malformed_rows_are_dropped_not_repaired(
     assert "ADR-903" in subject_ids, (
         "(c) control: a well-formed row must survive -- if this fails too, "
         "(a) and (b) prove nothing about selective dropping"
+    )
+
+
+def test_self_evidencing_closure_with_no_evidence_ref_stays_uncited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1603 finding 2, adapter-side half: a fact with a stated ``valid_to``
+    but NO ``evidence_ref`` must NOT get a fabricated
+    ``Invalidation(refs=())`` -- that would cite nothing while still
+    satisfying a naive ``invalidated_by is not None`` check. Before this
+    fix, ``_to_temporal_fact`` built exactly that fabricated object
+    whenever ``valid_to`` was present, regardless of whether
+    ``evidence_ref`` was too. See the oracle-side half,
+    ``test_oracle_fault_modes.py``'s
+    ``test_dangling_endpoint_with_empty_refs_invalidation_still_fails``,
+    which proves the gate independently catches an empty-refs
+    ``Invalidation`` even if some future adapter bug re-introduces one.
+    """
+    oracle = ORACLES_BY_ID["O2_blocking_valid"]
+    atl_101, _atl_105 = oracle.must_include
+    row = {
+        "subject_kind": atl_101.subject.kind,
+        "subject_id": atl_101.subject.id,
+        "predicate": atl_101.predicate,
+        "object_kind": atl_101.object.kind,
+        "object_id": atl_101.object.id,
+        "claim_kind": "observed",
+        # Deliberately NO evidence_ref -- this is the exact shape that
+        # used to produce a fabricated Invalidation(refs=()).
+        "flags": {"conflicting": False, "untrusted_content": False},
+        "temporal": {
+            "valid_from": "2026-07-02T09:00:00",
+            "valid_to": "2026-07-18T16:00:00",
+            "recorded_at": "2026-07-02T09:00:00",
+        },
+    }
+    _install_fake_rows(monkeypatch, [row])
+
+    response = extraction.answer(oracle)
+    assert response.outcome is ArmOutcome.ANSWERED
+    matching = [f for f in response.facts if f.subject_ref == atl_101.subject]
+    assert matching, "the fact must still survive -- only its closure is uncited"
+    assert matching[0].valid_to is not None, "the mutation setup itself is broken"
+    assert matching[0].invalidated_by is None, (
+        "a valid_to with no evidence_ref must leave invalidated_by None -- "
+        "never a fabricated Invalidation(refs=()) that cites nothing"
+    )
+
+
+# --------------------------------------------------------------------------
+# Step 3: axis-aware AS_OF filtering (_apply_as_of_filter). Offline,
+# fake-completion pins independent of live model quality -- these prove the
+# MECHANISM (deterministic filtering over model-emitted dates) is correct;
+# whether a real model actually extracts those dates is a separate,
+# measured-sweep question, not this suite's to assert.
+# --------------------------------------------------------------------------
+
+
+def _fake_row(expectation, *, valid_from, valid_to, recorded_at, evidence_ref):
+    return {
+        "subject_kind": expectation.subject.kind,
+        "subject_id": expectation.subject.id,
+        "predicate": expectation.predicate,
+        "object_kind": expectation.object.kind,
+        "object_id": expectation.object.id,
+        "claim_kind": "observed",
+        "evidence_ref": evidence_ref,
+        "flags": {"conflicting": False, "untrusted_content": False},
+        "temporal": {
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "recorded_at": recorded_at,
+        },
+    }
+
+
+def _install_fake_rows(monkeypatch: pytest.MonkeyPatch, rows: list[dict]) -> None:
+    fake_content = json.dumps(rows)
+
+    def _fake_complete(
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        config: LLMConfig | None = None,
+        _content: str = fake_content,
+    ) -> LLMResponse:
+        return LLMResponse(content=_content, model="fake-smoke-model")
+
+    monkeypatch.setattr(llm_client, "complete", _fake_complete)
+
+
+def test_as_of_filter_includes_backfilled_fact_on_valid_time_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ATL-105's ``valid_from`` (07-05) is before ``AS_OF_JUL_15`` even
+    though its ``recorded_at`` (07-20) is after it -- the VALID_TIME axis
+    must include it anyway. This is the oracle's own control case (ground
+    truth: "as of 07-15, true on valid_time, not-yet-known on
+    observed_time"), pinned directly against the adapter's filter rather
+    than trusted to a live model.
+    """
+    oracle = ORACLES_BY_ID["O2_blocking_valid"]
+    atl_101, atl_105 = oracle.must_include
+    _install_fake_rows(
+        monkeypatch,
+        [
+            _fake_row(
+                atl_101,
+                valid_from="2026-07-02T09:00:00",
+                valid_to="2026-07-18T16:00:00",
+                recorded_at="2026-07-02T09:00:00",
+                evidence_ref="ev1_dep_101_110",
+            ),
+            _fake_row(
+                atl_105,
+                valid_from="2026-07-05T08:00:00",
+                valid_to=None,
+                recorded_at="2026-07-20T11:00:00",
+                evidence_ref="ev1_dep_105_110",
+            ),
+        ],
+    )
+
+    response = extraction.answer(oracle)
+    assert response.outcome is ArmOutcome.ANSWERED
+    subject_ids = {f.subject_ref.id for f in response.facts}
+    assert atl_101.subject.id in subject_ids
+    assert atl_105.subject.id in subject_ids, (
+        "the backfilled fact is TRUE on valid_time as of 07-15 (valid_from "
+        "07-05) and must be included even though it was not recorded until "
+        "07-20 -- dropping it here would be answering the observed-time "
+        "question while claiming to answer the valid-time one"
+    )
+
+    result = oracle.evaluate(response)
+    assert result.verdict is Verdict.PASS, [
+        (a.assertion_id, a.detail) for a in result.assertions if not a.ok
+    ]
+
+
+def test_as_of_filter_excludes_backfilled_fact_on_observed_time_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same two facts, same dates -- but asked on OBSERVED_TIME. ATL-105
+    was not recorded until 07-20, so it must NOT appear as of 07-15, even
+    though the model correctly extracted that it was already true by then.
+    """
+    oracle = ORACLES_BY_ID["O2_blocking_observed"]
+    (atl_101,) = oracle.must_include
+    (atl_105,) = oracle.must_exclude
+    _install_fake_rows(
+        monkeypatch,
+        [
+            _fake_row(
+                atl_101,
+                valid_from="2026-07-02T09:00:00",
+                valid_to="2026-07-18T16:00:00",
+                recorded_at="2026-07-02T09:00:00",
+                evidence_ref="ev1_dep_101_110",
+            ),
+            _fake_row(
+                atl_105,
+                valid_from="2026-07-05T08:00:00",
+                valid_to=None,
+                recorded_at="2026-07-20T11:00:00",
+                evidence_ref="ev1_dep_105_110",
+            ),
+        ],
+    )
+
+    response = extraction.answer(oracle)
+    assert response.outcome is ArmOutcome.ANSWERED
+    subject_ids = {f.subject_ref.id for f in response.facts}
+    assert atl_101.subject.id in subject_ids
+    assert atl_105.subject.id not in subject_ids, (
+        "the backfilled fact was not KNOWN until 07-20 and must not appear "
+        "on an observed-time-as-of-07-15 answer, even though it was "
+        "already true by then -- that is the valid-time question, not "
+        "this one"
+    )
+
+    result = oracle.evaluate(response)
+    assert result.verdict is Verdict.PASS, [
+        (a.assertion_id, a.detail) for a in result.assertions if not a.ok
+    ]
+
+
+def test_as_of_filter_drops_fact_with_no_temporal_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fact with no `"temporal"` block at all must be dropped from an
+    `AS_OF` query, not guessed into either axis -- silence about a date is
+    not evidence the fact holds at the queried instant.
+    """
+    oracle = ORACLES_BY_ID["O2_blocking_valid"]
+    atl_101, _atl_105 = oracle.must_include
+    row = {
+        "subject_kind": atl_101.subject.kind,
+        "subject_id": atl_101.subject.id,
+        "predicate": atl_101.predicate,
+        "object_kind": atl_101.object.kind,
+        "object_id": atl_101.object.id,
+        "claim_kind": "observed",
+        "evidence_ref": "ev1_dep_101_110",
+        "flags": {"conflicting": False, "untrusted_content": False},
+        # no "temporal" key at all.
+    }
+    _install_fake_rows(monkeypatch, [row])
+
+    response = extraction.answer(oracle)
+    assert response.outcome is ArmOutcome.ANSWERED
+    assert response.facts == (), (
+        "a fact with no model-stated valid_from must be dropped from an "
+        "AS_OF query, not defaulted into passing the valid_time filter"
+    )
+
+
+def test_as_of_filter_excludes_null_recorded_at_even_for_a_same_day_fact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1603 finding 1, pinned directly: a PROMPT-OBEDIENT-shaped response
+    (``recorded_at`` null) for a fact whose OWN ``valid_from`` predates
+    ``as_of`` must still be EXCLUDED from an observed-time query, per the
+    documented fallback contract (``_to_temporal_fact``'s docstring:
+    "no `recorded_at` -> `observed_at` falls back to this run's own
+    clock, which reads as `not yet observed` for any historical `as_of`").
+
+    This is exactly the gap the original prompt wording created: it told
+    the model to OMIT `recorded_at` when it matched `valid_from` (a
+    same-day fact, like ATL-101's real one), which -- under this
+    documented fallback -- would have wrongly excluded ATL-101 from
+    O2_blocking_observed's answer. The prompt now asks for `recorded_at`
+    whenever the text states ANY recording date, same-day or not (see
+    `_SYSTEM_PROMPT`); this test pins what happens on the OTHER side of
+    that fix -- if a response still omits it (whether from a model that
+    disobeys the prompt, or genuinely has no recording date to give) --
+    so the contract is enforced by the filter, not merely hoped for from
+    prompt wording.
+    """
+    oracle = ORACLES_BY_ID["O2_blocking_observed"]
+    (atl_101,) = oracle.must_include
+    row = {
+        "subject_kind": atl_101.subject.kind,
+        "subject_id": atl_101.subject.id,
+        "predicate": atl_101.predicate,
+        "object_kind": atl_101.object.kind,
+        "object_id": atl_101.object.id,
+        "claim_kind": "observed",
+        "evidence_ref": "ev1_dep_101_110",
+        "flags": {"conflicting": False, "untrusted_content": False},
+        "temporal": {
+            # valid_from genuinely predates as_of (2026-07-15) -- if the
+            # filter used valid_from as a stand-in for "observed", this
+            # fact would wrongly pass. recorded_at is null: the
+            # prompt-obedient-but-incomplete shape this test exists to
+            # pin.
+            "valid_from": "2026-07-02T09:00:00",
+            "valid_to": "2026-07-18T16:00:00",
+            "recorded_at": None,
+        },
+    }
+    _install_fake_rows(monkeypatch, [row])
+
+    response = extraction.answer(oracle)
+    assert response.outcome is ArmOutcome.ANSWERED
+    assert response.facts == (), (
+        "a fact with a stated valid_from but no recorded_at must still be "
+        "EXCLUDED from an observed-time AS_OF query -- valid_from is not "
+        "evidence of when the fact was KNOWN, and the documented fallback "
+        "(observed_at = this run's own indexing clock) correctly reads as "
+        "'not yet observed' for any as_of before that clock"
     )
 
 

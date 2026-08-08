@@ -8,6 +8,7 @@ on a reachable provider; nothing here should be.
 
 from __future__ import annotations
 
+import httpx
 import openai
 import pytest
 
@@ -101,42 +102,91 @@ class _FakeChoicesResponse:
         self.choices = choices
 
 
-class _FakeCompletions:
-    def __init__(self, response: _FakeChoicesResponse) -> None:
+class _FakeResponsesResult:
+    def __init__(self, output_text: str) -> None:
+        self.output_text = output_text
+        self.output: list = []
+
+
+class _RaisingOrReturning:
+    """A fake ``create()`` endpoint: records the kwargs it was called with,
+    then either raises a pre-set exception (simulating a real SDK failure)
+    or returns a pre-built response -- never both. One instance is a
+    single, independent endpoint (chat completions XOR responses); the two
+    branches of :func:`complete` each get their OWN instance below, so a
+    test exercising one never accidentally observes or feeds the other.
+    """
+
+    def __init__(self, response=None, error: Exception | None = None) -> None:
         self._response = response
+        self._error = error
         self.create_kwargs: dict | None = None
 
-    def create(self, **kwargs) -> _FakeChoicesResponse:
+    def create(self, **kwargs):
         self.create_kwargs = kwargs
+        if self._error is not None:
+            raise self._error
         return self._response
 
 
 class _FakeChat:
-    def __init__(self, completions: _FakeCompletions) -> None:
+    def __init__(self, completions: _RaisingOrReturning) -> None:
         self.completions = completions
 
 
 class _FakeOpenAIClient:
-    """Records the kwargs it was constructed with, and returns a
-    pre-built response -- stands in for openai.OpenAI without any network
-    access at all.
+    """Records the kwargs it was constructed with; ``.chat.completions``
+    and ``.responses`` are two INDEPENDENT fake endpoints (only one is
+    exercised in the cloud client's mutually-exclusive dispatch, but they
+    must never share state) -- stands in for openai.OpenAI without any
+    network access at all.
     """
 
     last_instance: _FakeOpenAIClient | None = None
 
-    def __init__(self, response: _FakeChoicesResponse, **init_kwargs) -> None:
+    def __init__(
+        self,
+        chat_response=None,
+        chat_error: Exception | None = None,
+        responses_response=None,
+        responses_error: Exception | None = None,
+        **init_kwargs,
+    ) -> None:
         self.init_kwargs = init_kwargs
-        self.chat = _FakeChat(_FakeCompletions(response))
+        self.chat = _FakeChat(_RaisingOrReturning(chat_response, chat_error))
+        self.responses = _RaisingOrReturning(responses_response, responses_error)
         _FakeOpenAIClient.last_instance = self
 
 
 def _install_fake_openai(
-    monkeypatch: pytest.MonkeyPatch, response: _FakeChoicesResponse
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    chat_response: _FakeChoicesResponse | None = None,
+    chat_error: Exception | None = None,
+    responses_response: _FakeResponsesResult | None = None,
+    responses_error: Exception | None = None,
 ) -> None:
     def _factory(**init_kwargs):
-        return _FakeOpenAIClient(response, **init_kwargs)
+        return _FakeOpenAIClient(
+            chat_response=chat_response,
+            chat_error=chat_error,
+            responses_response=responses_response,
+            responses_error=responses_error,
+            **init_kwargs,
+        )
 
     monkeypatch.setattr(openai, "OpenAI", _factory)
+
+
+def _connection_error(message: str = "boom") -> openai.APIConnectionError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return openai.APIConnectionError(message=message, request=request)
+
+
+def _status_error(status_code: int, message: str = "denied") -> openai.APIStatusError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(status_code, request=request, text=message)
+    return openai.APIStatusError(message=message, response=response, body=None)
 
 
 def test_complete_constructs_client_with_max_retries_zero(
@@ -147,7 +197,9 @@ def test_complete_constructs_client_with_max_retries_zero(
     """
     fake_message = type("Msg", (), {"content": "[]"})()
     fake_choice = type("Choice", (), {"message": fake_message})()
-    _install_fake_openai(monkeypatch, _FakeChoicesResponse(choices=[fake_choice]))
+    _install_fake_openai(
+        monkeypatch, chat_response=_FakeChoicesResponse(choices=[fake_choice])
+    )
     cfg = LLMConfig(
         provider="local", base_url="http://localhost:1234/v1", model="fake", api_key="x"
     )
@@ -161,9 +213,146 @@ def test_complete_raises_on_empty_choices(monkeypatch: pytest.MonkeyPatch) -> No
     choices list instead of raising the same honest LLMUnavailable every
     other provider failure produces.
     """
-    _install_fake_openai(monkeypatch, _FakeChoicesResponse(choices=[]))
+    _install_fake_openai(monkeypatch, chat_response=_FakeChoicesResponse(choices=[]))
     cfg = LLMConfig(
         provider="local", base_url="http://localhost:1234/v1", model="fake", api_key="x"
     )
     with pytest.raises(LLMUnavailable, match="no choices"):
         complete("system", "user", config=cfg)
+
+
+# --------------------------------------------------------------------------
+# #1603 finding 3: APIConnectionError (infra, retryable by the sweep) and
+# APIStatusError (a real response the provider returned -- auth, rate
+# limit, bad request; never retried) must produce DIFFERENT LLMUnavailable
+# messages. The sweep's bounded-infra-retry policy
+# (run_measured_sweep.py's _INFRA_FAILURE_MARKER) matches on "could not
+# reach" -- a status error's message must never contain that phrase, or a
+# permanent config/quota error would get retried as if it were transient.
+# --------------------------------------------------------------------------
+
+_CLOUD_CFG = LLMConfig(
+    provider="cloud",
+    base_url="https://api.openai.com/v1",
+    model="gpt-5-mini",
+    api_key="x",
+)
+
+
+def test_connection_error_message_is_the_infra_marker_chat_completions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_openai(monkeypatch, chat_error=_connection_error())
+    cfg = LLMConfig(
+        provider="local", base_url="http://localhost:1234/v1", model="fake", api_key="x"
+    )
+    with pytest.raises(LLMUnavailable, match="could not reach"):
+        complete("system", "user", config=cfg)
+
+
+def test_status_error_message_is_not_the_infra_marker_chat_completions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 401/429/etc is a REAL answer from the provider, not a
+    connectivity problem -- it must never be phrased "could not reach",
+    or the sweep's bounded infra-retry would retry a permanent error.
+    """
+    _install_fake_openai(monkeypatch, chat_error=_status_error(401, "bad key"))
+    cfg = LLMConfig(
+        provider="local", base_url="http://localhost:1234/v1", model="fake", api_key="x"
+    )
+    with pytest.raises(LLMUnavailable) as exc_info:
+        complete("system", "user", config=cfg)
+    message = str(exc_info.value)
+    assert "could not reach" not in message
+    assert "401" in message
+    assert "APIStatusError" in message or "AuthenticationError" in message
+
+
+def test_connection_error_message_is_the_infra_marker_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_openai(monkeypatch, responses_error=_connection_error())
+    with pytest.raises(LLMUnavailable, match="could not reach"):
+        complete("system", "user", config=_CLOUD_CFG)
+
+
+def test_status_error_message_is_not_the_infra_marker_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_openai(
+        monkeypatch, responses_error=_status_error(429, "rate limited")
+    )
+    with pytest.raises(LLMUnavailable) as exc_info:
+        complete("system", "user", config=_CLOUD_CFG)
+    message = str(exc_info.value)
+    assert "could not reach" not in message
+    assert "429" in message
+
+
+# --------------------------------------------------------------------------
+# #1603 finding 4: temperature support must be derived from ONE shared
+# predicate (_supports_temperature), not hardcoded per branch -- an
+# o1/o3-family model reached via OPENAI_MODEL falls through to the Chat
+# Completions branch (it is not gpt-5-family, so _is_responses_api_model
+# is False for it) and must NOT get temperature=0, which the real API
+# rejects for that family exactly like it does for gpt-5.
+# --------------------------------------------------------------------------
+
+
+def test_o3_mini_chat_completions_call_omits_temperature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_message = type("Msg", (), {"content": "[]"})()
+    fake_choice = type("Choice", (), {"message": fake_message})()
+    _install_fake_openai(
+        monkeypatch, chat_response=_FakeChoicesResponse(choices=[fake_choice])
+    )
+    cfg = LLMConfig(
+        provider="cloud",
+        base_url="https://api.openai.com/v1",
+        model="o3-mini",
+        api_key="x",
+    )
+    complete("system", "user", config=cfg)
+    assert _FakeOpenAIClient.last_instance is not None
+    kwargs = _FakeOpenAIClient.last_instance.chat.completions.create_kwargs
+    assert kwargs is not None
+    assert kwargs["temperature"] is openai.omit, (
+        "o3-mini rejects a caller-selected temperature -- the kwarg must "
+        "be the SDK's omit sentinel, not 0 and not absent-but-unchecked"
+    )
+
+
+def test_temperature_supporting_model_still_gets_temperature_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control for the test above: the fix must not accidentally omit
+    temperature for every model.
+    """
+    fake_message = type("Msg", (), {"content": "[]"})()
+    fake_choice = type("Choice", (), {"message": fake_message})()
+    _install_fake_openai(
+        monkeypatch, chat_response=_FakeChoicesResponse(choices=[fake_choice])
+    )
+    cfg = LLMConfig(
+        provider="local", base_url="http://localhost:1234/v1", model="fake", api_key="x"
+    )
+    complete("system", "user", config=cfg)
+    assert _FakeOpenAIClient.last_instance is not None
+    kwargs = _FakeOpenAIClient.last_instance.chat.completions.create_kwargs
+    assert kwargs is not None
+    assert kwargs["temperature"] == 0
+
+
+def test_gpt5_responses_api_call_never_sends_temperature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_openai(
+        monkeypatch, responses_response=_FakeResponsesResult(output_text="[]")
+    )
+    complete("system", "user", config=_CLOUD_CFG)
+    assert _FakeOpenAIClient.last_instance is not None
+    kwargs = _FakeOpenAIClient.last_instance.responses.create_kwargs
+    assert kwargs is not None
+    assert "temperature" not in kwargs

@@ -36,6 +36,7 @@ Every Ask Dev answer carries its own outcome, its provenance, what it could not 
 
 The outcome is the first thing to read, because it decides whether the rest of the answer means anything.
 
+<!-- BEGIN ASK-DEV OUTCOME LABELS -->
 | Outcome | Shown as | What it means |
 | --- | --- | --- |
 | `answered` | Answered | The question was answered within the coverage stated |
@@ -47,6 +48,8 @@ The outcome is the first thing to read, because it decides whether the rest of t
 | `denied` | Not permitted | You do not have access to ask about this |
 | `refused` | Not something Ask Dev can do | The question asked Ask Dev to act, not to read |
 | `failed` | Something went wrong | The run did not complete. Nothing partial is presented as a result |
+<!-- END ASK-DEV OUTCOME LABELS -->
+
 
 Only `answered` and `answered_with_gaps` carry content. On every other outcome, the answer deliberately contains **no** narrative, findings, metrics, evidence, or follow-up suggestions — just the outcome, one plain sentence, one suggested next step, and the identifiers needed to reference the run. That emptiness is the design: a no-answer result never leaks a half-formed conclusion.
 
@@ -56,21 +59,27 @@ Only `answered` and `answered_with_gaps` carry content. On every other outcome, 
 
 Ask Dev distinguishes two different reasons it will not do something, and words them differently on purpose.
 
+<!-- BEGIN ASK-DEV REFUSAL COPY -->
 | You asked it to | Outcome | What you see | Suggested next step |
 | --- | --- | --- | --- |
 | Run a command, execute code or a query, or change data | `refused` | *Ask Dev can only read and summarize your data; it can't run commands or make changes.* | *Ask a read-only question about your data instead.* |
 | Fetch an external URL, or generate open-ended content | `unsupported` | *This question is not supported yet.* | *Try a status, health, or metric question instead.* |
+<!-- END ASK-DEV REFUSAL COPY -->
+
 
 The distinction matters. "Refused" means the capability is deliberately absent and always will be — Ask Dev does not write, execute, or act. "Not supported yet" means the question shape is outside the current product, which is a boundary that can move. Neither is an error, and neither is a partial attempt: a refused request is never executed and then rolled back; it is never started.
 
 The other no-answer outcomes read the same way — one sentence and one next step:
 
+<!-- BEGIN ASK-DEV NO-ANSWER COPY -->
 | Outcome | You see | Suggested next step |
 | --- | --- | --- |
 | `not_found` | *No matching subject was found for this question.* | *Check the name and try again.* |
 | `temporarily_unavailable` | *This answer is temporarily unavailable. Please try again shortly.* | *Try the question again in a few minutes.* |
 | `denied` | *You do not have access to ask about this.* | *Ask an administrator for access to this area.* |
 | `failed` | *Something went wrong while preparing this answer.* | *Try the question again.* |
+<!-- END ASK-DEV NO-ANSWER COPY -->
+
 
 ## Provenance and disclosure
 
@@ -107,7 +116,7 @@ Evidence is the point of the answer, not a citation ornament.
 - Excerpts are **inert plain text**, stripped of HTML, links, and common secrets, capped at 64 KiB, and treated as untrusted source content.
 - Evidence entries carry their own state — stale, unavailable, redacted, deleted, uncertain, conflicting, or untrusted content — and their own observed-at time and freshness.
 - Some measures cite evidence at the aggregate or source-class level rather than per record. Where that is the case, the answer says so instead of implying record-level backing it does not have.
-- Occasionally a part of an answer is withheld and shown as *This part of the answer could not be shown.* That is a deliberate safety projection, not a rendering failure.
+- Occasionally a part of an answer is withheld and shown as <!-- BEGIN ASK-DEV WITHHELD COPY -->*This part of the answer could not be shown.*<!-- END ASK-DEV WITHHELD COPY --> That is a deliberate safety projection, not a rendering failure.
 
 Every answer also records the definitions it ran under — plan, metric definition, rule, query, and interpreter versions — so a result can be compared against a later one on equal terms.
 

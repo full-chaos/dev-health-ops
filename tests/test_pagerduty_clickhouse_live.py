@@ -687,12 +687,20 @@ def test_audit_incidents_query_dedupes_coexisting_mapping_identities(
     backfill; see work_graph.operational_edges's own preferred_mappings
     dedup for the same fan-out). Without deduping the incident/mapping
     JOIN, one incident was counted once per coexisting mapping identity.
-    Plants exactly two such active mapping identities for the same
-    service/repo pair -- one dated, one NULL-start -- and asserts the
-    resolved incident is counted exactly once.
+
+    Plants two coexisting active mapping identities (one dated, one
+    NULL-start) for the SAME service/repo pair -- asserting the dedup key's
+    incident.id half -- *and* a third active mapping for the SAME service to
+    a DIFFERENT repository -- asserting the dedup key's repo_id half. A
+    dedup that collapsed on incident.id alone (dropping repo_id from the
+    key) would pass the first case but silently lose the second repo's
+    incident from the audit entirely, since service->multiple-repos is a
+    normal, supported configuration (see
+    work_graph.operational_edges:117-119).
     """
     org_id = "test-chaos-3570-dupe-mapping-dedup"
     repo_id = UUID("55555555-5555-5555-5555-555555555555")
+    other_repo_id = UUID("66666666-6666-6666-6666-666666666666")
     resolved_at = SOURCE_TIME + timedelta(hours=4)
     normalizer = PagerDutyNormalizer(
         org_id=org_id,
@@ -754,6 +762,27 @@ def test_audit_incidents_query_dedupes_coexisting_mapping_identities(
         valid_to=None,
         is_active=True,
     )
+    # A third active mapping for the SAME service to a DIFFERENT repo --
+    # both repos must appear in the result, each counted once.
+    mapping_other_repo = ServiceRepositoryMapping(
+        org_id=org_id,
+        provider="pagerduty",
+        provider_instance_id=PROVIDER_INSTANCE_ID,
+        source_entity_type="service_repository_mapping",
+        external_id="service-dupe:github:other/repo:admin",
+        source_version_at=resolved_at,
+        observed_at=resolved_at,
+        last_synced=resolved_at,
+        service_id=service.id,
+        repo_id=other_repo_id,
+        repo_provider="github",
+        repo_full_name="full-chaos/other-repo",
+        mapping_kind="admin",
+        rule_id="service_repository_mapping.admin.v1",
+        valid_from=SOURCE_TIME,
+        valid_to=None,
+        is_active=True,
+    )
 
     async def persist_projection_inputs() -> None:
         async with ClickHouseStore(pagerduty_scratch_dsn) as store:
@@ -761,7 +790,7 @@ def test_audit_incidents_query_dedupes_coexisting_mapping_identities(
             await store.insert_operational_services([service])
             await store.insert_operational_incidents([resolved_incident])
             await store.insert_operational_service_repository_mappings(
-                [mapping_dated, mapping_null_start]
+                [mapping_dated, mapping_null_start, mapping_other_repo]
             )
 
     asyncio.run(persist_projection_inputs())
@@ -778,11 +807,17 @@ def test_audit_incidents_query_dedupes_coexisting_mapping_identities(
                 "as_of": as_of,
             },
         )
-        assert rows
-        assert rows[0]["repo_id"] == repo_id
-        assert rows[0]["count"] == 1, (
+        counts_by_repo = {row["repo_id"]: row["count"] for row in rows}
+        assert set(counts_by_repo) == {repo_id, other_repo_id}, (
+            "expected one row per repository mapped from the service -- a "
+            "dedup keyed on incident.id alone (dropping repo_id) would "
+            "collapse these into one row and silently lose a repo's "
+            "incident from the audit"
+        )
+        assert counts_by_repo[repo_id] == 1, (
             "one incident double-counted across two coexisting active "
             "mapping identities for the same service/repo pair"
         )
+        assert counts_by_repo[other_repo_id] == 1
     finally:
         sink.close()

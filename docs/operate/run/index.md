@@ -12,5 +12,6 @@ lifecycle: active
 - [Workers and jobs](workers-and-jobs.md)
 - [Ingestion and backfill operations](ingestion-and-backfills.md)
 - [Safe operational controls](operational-controls.md)
+- [Roll out Ask Dev runtime changes](ask-dev-rollout.md)
 
 Prefer bounded, observable controls over direct database or queue mutation.

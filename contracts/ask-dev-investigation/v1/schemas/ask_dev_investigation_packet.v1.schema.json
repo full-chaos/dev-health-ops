@@ -114,6 +114,9 @@
           "default": null,
           "title": "As Of"
         },
+        "edge_validity_basis": {
+          "$ref": "#/$defs/EdgeValidityBasis"
+        },
         "end": {
           "format": "date-time",
           "title": "End",
@@ -139,7 +142,8 @@
         "end",
         "timezone",
         "analytical_slice",
-        "historical_comparability"
+        "historical_comparability",
+        "edge_validity_basis"
       ],
       "title": "BoundedTimeContext",
       "type": "object"
@@ -918,6 +922,16 @@
         "excluded"
       ],
       "title": "DriverStanding",
+      "type": "string"
+    },
+    "EdgeValidityBasis": {
+      "description": "What backs a slice's claim that its relationships were valid *then*.\n\nAdded after adversarial review round 1 (finding M7). ``SLICE_BOUNDARIES``\ndeclared that historical slices require edge validity, but nothing on the\nwire recorded whether an arm actually had it \u2014 so a packet could label a\nhistorical slice ``COMPARABLE`` while having read the live projection,\nproducing a confident and entirely false delta.\n\n``NOT_REQUIRED`` is the current slice. ``OBSERVED_INTERVALS`` means every\ntraversed edge carried a validity interval covering the as-of instant, and\nis the only basis on which a historical slice may be ``COMPARABLE``.\n``UNAVAILABLE`` is the CHAOS-3569 state and forces\n``NOT_COMPARABLE_MISSING_EDGE_VALIDITY``.",
+      "enum": [
+        "not_required",
+        "observed_intervals",
+        "unavailable"
+      ],
+      "title": "EdgeValidityBasis",
       "type": "string"
     },
     "EvidenceCoverage": {

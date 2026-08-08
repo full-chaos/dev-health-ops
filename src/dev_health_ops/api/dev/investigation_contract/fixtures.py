@@ -125,6 +125,7 @@ def _analytical_job() -> dict[str, Any]:
             "analytical_slice": "current",
             "as_of": None,
             "historical_comparability": "not_applicable",
+            "edge_validity_basis": "not_required",
         },
         "surface_context_refs": [
             {
@@ -348,7 +349,13 @@ def _related_context() -> dict[str, Any]:
                 "source_health": "available_current",
             },
         ],
-        "authorized_entity_ids": [SUBJECT, TEAM, SERVICE, DEPENDENCY],
+        # The packet-wide authorization envelope: every entity named
+        # ANYWHERE in the packet must appear here, not just the ones on a
+        # lineage path (adversarial review round 1, finding H2). DECOY is a
+        # ranked-then-rejected candidate the caller could see, so it belongs
+        # in the set; a candidate the caller may not see is filtered out and
+        # counted, never listed.
+        "authorized_entity_ids": [SUBJECT, DECOY, TEAM, SERVICE, DEPENDENCY],
         "authorization_filtered_count": 0,
         "entities_truncated": False,
         "paths_truncated": False,
@@ -509,6 +516,24 @@ def _evidence_coverage() -> dict[str, Any]:
                 "detail": None,
             },
             {
+                "source_class": "work_item",
+                "state": "available_current",
+                "observed_at": NOW,
+                "detail": None,
+            },
+            {
+                "source_class": "status_change",
+                "state": "available_current",
+                "observed_at": NOW,
+                "detail": None,
+            },
+            {
+                "source_class": "pull_request",
+                "state": "available_current",
+                "observed_at": NOW,
+                "detail": None,
+            },
+            {
                 "source_class": "deployment",
                 "state": "available_stale",
                 "observed_at": NOW,
@@ -658,6 +683,7 @@ def _not_comparable_historical_packet() -> dict[str, Any]:
         "analytical_slice": "current_vs_historical",
         "as_of": AS_OF,
         "historical_comparability": "not_comparable_missing_edge_validity",
+        "edge_validity_basis": "unavailable",
     }
     packet["evidence_coverage"]["limitations"].append(
         {
@@ -684,7 +710,19 @@ def _qualified_capacity_packet() -> dict[str, Any]:
     """
 
     packet = _packet()
-    packet["analytical_job"]["question_family"] = "project_capacity"
+    # staffing_language rather than project_capacity: this variant keeps the
+    # golden's singular-subject shape, and project_capacity is a cohort family
+    # (the family-obligation validator rejects the mismatch, which is the
+    # point of that guard).
+    packet["analytical_job"]["question_family"] = "staffing_language"
+    packet["evidence_coverage"]["source_health"].append(
+        {
+            "source_class": "cognitive_load",
+            "state": "available_current",
+            "observed_at": NOW,
+            "detail": None,
+        }
+    )
     packet["driver_analysis"]["candidates"][1] = {
         "driver_id": DRIVER_REVIEW,
         "category": "capacity_or_staffing",
@@ -791,6 +829,14 @@ def _needs_clarification_packet() -> dict[str, Any]:
         candidate["standing"] = "candidate_only"
         candidate["exclusion_reason"] = None
     packet["driver_analysis"]["principal_driver_ids"] = []
+    packet["evidence_coverage"]["source_health"].append(
+        {
+            "source_class": "source_health",
+            "state": "available_current",
+            "observed_at": NOW,
+            "detail": "Source availability was checked before widening.",
+        }
+    )
     packet["evidence_coverage"]["clarification_needs"] = [
         {
             "kind": "ambiguous_subject",
@@ -1150,6 +1196,7 @@ def _fault_historical_slice_without_as_of() -> dict[str, Any]:
     job = _analytical_job()
     job["time_context"]["analytical_slice"] = "historical"
     job["time_context"]["historical_comparability"] = "comparable"
+    job["time_context"]["edge_validity_basis"] = "observed_intervals"
     return job
 
 
@@ -1211,6 +1258,125 @@ def _fault_coverage_unknown_extra_field() -> dict[str, Any]:
     return coverage
 
 
+# --- Round-1 adversarial review: one negative per newly closed hole ------
+
+
+def _fault_unauthorized_cohort_member() -> dict[str, Any]:
+    """FAULT (H2): a cohort member outside the authorized entity set."""
+
+    packet = _packet()
+    packet["comparison_cohort"]["members"][0]["canonical_id"] = "proj_private_other_org"
+    packet["driver_analysis"]["candidates"][0]["affected_subject_ids"] = [SERVICE]
+    packet["driver_analysis"]["candidates"][1]["affected_subject_ids"] = [TEAM]
+    packet["driver_analysis"]["candidates"][2]["affected_subject_ids"] = [TEAM]
+    packet["evidence_coverage"]["evidence_index"][0]["supports_subject_ids"] = []
+    packet["evidence_coverage"]["evidence_index"][0]["supports_entity_ids"] = [TEAM]
+    return packet
+
+
+def _fault_unauthorized_evidence_entity() -> dict[str, Any]:
+    """FAULT (H2): indexed evidence naming an entity the caller cannot see."""
+
+    packet = _packet()
+    entry = packet["evidence_coverage"]["evidence_index"][1]
+    entry["evidence"]["entity_id"] = "dep_private_other_org"
+    return packet
+
+
+def _fault_non_allowlisted_source() -> dict[str, Any]:
+    """FAULT (H3): coverage claimed from CHAOS-3567's inert temporal stub."""
+
+    packet = _packet()
+    packet["evidence_coverage"]["source_health"].append(
+        {
+            "source_class": "temporal_context",
+            "state": "available_current",
+            "observed_at": NOW,
+            "detail": None,
+        }
+    )
+    return packet
+
+
+def _fault_family_shape_mismatch() -> dict[str, Any]:
+    """FAULT (H4): claiming a cohort family while answering a single subject."""
+
+    packet = _packet()
+    packet["analytical_job"]["question_family"] = "struggling_teams"
+    return packet
+
+
+def _fault_family_required_source_unaccounted() -> dict[str, Any]:
+    """FAULT (H4): a required source neither observed nor declared missing."""
+
+    packet = _packet()
+    packet["evidence_coverage"]["source_health"] = [
+        item
+        for item in packet["evidence_coverage"]["source_health"]
+        if item["source_class"] != "deployment"
+    ]
+    packet["evidence_coverage"]["limitations"] = [
+        limitation
+        for limitation in packet["evidence_coverage"]["limitations"]
+        if limitation["kind"] != "stale_source"
+    ]
+    return packet
+
+
+def _fault_path_never_reaches_entity() -> dict[str, Any]:
+    """FAULT (M5): a real path cited by an entity it never touches."""
+
+    context = _related_context()
+    context["entities"][1]["supporting_path_ids"] = [PATH_OWNERSHIP]
+    return context
+
+
+def _fault_source_both_observed_and_missing() -> dict[str, Any]:
+    """FAULT (M6): contradictory coverage claims for the same source."""
+
+    coverage = _evidence_coverage()
+    coverage["missing_sources"].append(
+        {
+            "source_class": "work_graph",
+            "state": "unavailable",
+            "impact": "Reported unavailable while also reported available_current.",
+        }
+    )
+    return coverage
+
+
+def _fault_comparable_history_without_edge_validity() -> dict[str, Any]:
+    """FAULT (M7): a historical comparison read off the live projection."""
+
+    job = _analytical_job()
+    job["time_context"] = {
+        "start": AS_OF,
+        "end": WINDOW_END,
+        "timezone": "America/Los_Angeles",
+        "analytical_slice": "historical",
+        "as_of": AS_OF,
+        "historical_comparability": "comparable",
+        "edge_validity_basis": "not_required",
+    }
+    return job
+
+
+def _fault_unavailable_edge_validity_claimed_comparable() -> dict[str, Any]:
+    """FAULT (M7): CHAOS-3569 state relabelled as a softer non-comparability."""
+
+    job = _analytical_job()
+    job["time_context"] = {
+        "start": AS_OF,
+        "end": WINDOW_END,
+        "timezone": "America/Los_Angeles",
+        "analytical_slice": "historical",
+        "as_of": AS_OF,
+        "historical_comparability": "not_comparable_missing_baseline",
+        "edge_validity_basis": "unavailable",
+    }
+    return job
+
+
 def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     """Arm-shaped payloads that MUST fail validation, keyed by contract.
 
@@ -1245,6 +1411,23 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                 "not_comparable_slice_undisclosed",
                 _fault_undisclosed_not_comparable_slice(),
             ),
+            (
+                "cohort_member_outside_authorized_set",
+                _fault_unauthorized_cohort_member(),
+            ),
+            (
+                "evidence_entity_outside_authorized_set",
+                _fault_unauthorized_evidence_entity(),
+            ),
+            (
+                "source_class_off_the_trial_allowlist",
+                _fault_non_allowlisted_source(),
+            ),
+            ("question_family_shape_mismatch", _fault_family_shape_mismatch()),
+            (
+                "family_required_source_unaccounted",
+                _fault_family_required_source_unaccounted(),
+            ),
         ],
         "ask_dev_analytical_job.v1": [
             (
@@ -1253,6 +1436,14 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ),
             ("current_slice_carrying_as_of", _fault_current_slice_with_as_of()),
             ("historical_slice_without_as_of", _fault_historical_slice_without_as_of()),
+            (
+                "comparable_history_without_edge_validity",
+                _fault_comparable_history_without_edge_validity(),
+            ),
+            (
+                "unavailable_edge_validity_mislabelled",
+                _fault_unavailable_edge_validity_claimed_comparable(),
+            ),
         ],
         "ask_dev_subject_discovery.v1": [
             ("commitment_on_fuzzy_label_alone", _fault_commitment_on_fuzzy_label()),
@@ -1276,6 +1467,10 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("path_crosses_unauthorized_entity", _fault_unauthorized_path_entity()),
             ("disconnected_path_presented_as_chain", _fault_disconnected_path()),
             ("entity_citing_undeclared_path", _fault_context_entity_without_path()),
+            (
+                "path_cited_but_never_reaching_entity",
+                _fault_path_never_reaches_entity(),
+            ),
         ],
         "ask_dev_driver_analysis.v1": [
             (
@@ -1316,6 +1511,10 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             (
                 "graph_native_field_smuggled_as_extra",
                 _fault_coverage_unknown_extra_field(),
+            ),
+            (
+                "source_both_observed_and_missing",
+                _fault_source_both_observed_and_missing(),
             ),
         ],
         "ask_dev_investigation_versions.v1": [

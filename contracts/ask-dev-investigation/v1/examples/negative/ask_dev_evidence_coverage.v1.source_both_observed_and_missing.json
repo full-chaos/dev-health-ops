@@ -140,6 +140,10 @@
   "evidence_truncated": false,
   "limitations": [
     {
+      "detail": "Investment allocation is unconfigured for this organization; capacity statements are out of scope for this packet.",
+      "kind": "missing_source"
+    },
+    {
       "detail": "Deployment evidence is 31 hours old; a release landing since then would not be reflected.",
       "kind": "stale_source"
     }
@@ -149,6 +153,11 @@
       "impact": "No allocation denominator is available, so no staffing claim is made about this project.",
       "source_class": "investment_allocation",
       "state": "unconfigured"
+    },
+    {
+      "impact": "Reported unavailable while also reported available_current.",
+      "source_class": "work_graph",
+      "state": "unavailable"
     }
   ],
   "schema_version": "ask_dev_evidence_coverage.v1",

@@ -27,7 +27,7 @@
       "observed_at": "2026-08-08T12:00:00Z",
       "relevance": "current",
       "supporting_path_ids": [
-        "path_dependency"
+        "path_ownership"
       ]
     },
     {

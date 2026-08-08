@@ -18,12 +18,12 @@
     }
   ],
   "time_context": {
-    "analytical_slice": "current",
-    "as_of": null,
+    "analytical_slice": "historical",
+    "as_of": "2026-05-08T00:00:00Z",
     "edge_validity_basis": "not_required",
     "end": "2026-08-08T00:00:00Z",
-    "historical_comparability": "not_applicable",
-    "start": "2026-07-09T00:00:00Z",
+    "historical_comparability": "comparable",
+    "start": "2026-05-08T00:00:00Z",
     "timezone": "America/Los_Angeles"
   }
 }

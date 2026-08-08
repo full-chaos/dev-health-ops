@@ -19,12 +19,12 @@
       }
     ],
     "time_context": {
-      "analytical_slice": "current_vs_historical",
-      "as_of": "2026-05-08T00:00:00Z",
-      "edge_validity_basis": "unavailable",
+      "analytical_slice": "current",
+      "as_of": null,
+      "edge_validity_basis": "not_required",
       "end": "2026-08-08T00:00:00Z",
-      "historical_comparability": "not_comparable_missing_edge_validity",
-      "start": "2026-05-08T00:00:00Z",
+      "historical_comparability": "not_applicable",
+      "start": "2026-07-09T00:00:00Z",
       "timezone": "America/Los_Angeles"
     }
   },
@@ -283,14 +283,6 @@
       {
         "detail": "Investment allocation is unconfigured for this organization; capacity statements are out of scope for this packet.",
         "kind": "missing_source"
-      },
-      {
-        "detail": "Deployment evidence is 31 hours old; a release landing since then would not be reflected.",
-        "kind": "stale_source"
-      },
-      {
-        "detail": "Relationship edges carry no validity interval, so the as-of state cannot be reconstructed; the historical half of this comparison is reported NOT COMPARABLE rather than as no change.",
-        "kind": "historical_slice_not_comparable"
       }
     ],
     "missing_sources": [
@@ -331,12 +323,6 @@
         "observed_at": "2026-08-08T12:00:00Z",
         "source_class": "pull_request",
         "state": "available_current"
-      },
-      {
-        "detail": "Last deployment sync completed 31 hours ago.",
-        "observed_at": "2026-08-08T12:00:00Z",
-        "source_class": "deployment",
-        "state": "available_stale"
       }
     ],
     "truncation_reason": null

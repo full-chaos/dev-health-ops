@@ -52,7 +52,8 @@ from dev_health_ops.api.dev.contracts_v2.base import (
 )
 from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
 
-from .question_families import QuestionFamilyID
+from .allowlists import SLICE_BOUNDARIES, TRIAL_SOURCE_ALLOWLIST
+from .question_families import QUESTION_FAMILY_REGISTRY, QuestionFamilyID
 from .relationships import RELATIONSHIP_ALLOWLIST, RelationshipType
 from .vocabulary import (
     ASSERTED_DRIVER_STANDINGS,
@@ -79,11 +80,13 @@ from .vocabulary import (
     DriverExclusionReason,
     DriverRole,
     DriverStanding,
+    EdgeValidityBasis,
     HistoricalComparability,
     InvestigationOutcome,
     InvestigationSubjectKind,
     JobUncertainty,
     PacketLimitationKind,
+    PacketSection,
     RelationshipDirection,
     RelevanceState,
     StaffingDenominatorState,
@@ -125,6 +128,16 @@ __all__ = [
     "TrialMetadata",
     "UnresolvedMention",
 ]
+
+
+def _path_entity_ids(path: LineagePath) -> set[str]:
+    """Every entity a path touches, endpoints and intermediates alike."""
+
+    touched: set[str] = {path.origin_entity_id, path.terminal_entity_id}
+    for hop in path.hops:
+        touched.add(hop.source_entity_id)
+        touched.add(hop.target_entity_id)
+    return touched
 
 
 def _require_truncation_reason(
@@ -200,6 +213,7 @@ class BoundedTimeContext(ContractModelV2):
     analytical_slice: AnalyticalSlice
     as_of: AwareDatetime | None = None
     historical_comparability: HistoricalComparability
+    edge_validity_basis: EdgeValidityBasis
 
     @model_validator(mode="after")
     def validate_window_and_slice(self) -> Self:
@@ -217,6 +231,11 @@ class BoundedTimeContext(ContractModelV2):
                     "the current slice's only legal comparability state is "
                     "'not_applicable'"
                 )
+            if self.edge_validity_basis is not EdgeValidityBasis.NOT_REQUIRED:
+                raise ValueError(
+                    "the current slice reads the live projection, so its only "
+                    "legal edge_validity_basis is 'not_required'"
+                )
             return self
         if self.as_of is None:
             raise ValueError(
@@ -227,6 +246,52 @@ class BoundedTimeContext(ContractModelV2):
             raise ValueError(
                 f"the {self.analytical_slice} slice must state whether it is "
                 "comparable; 'not_applicable' is reserved for the current slice"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_comparability_is_backed_by_edge_validity(self) -> Self:
+        """A historical comparison must have actually had edge validity.
+
+        Adversarial review round 1, finding M7. ``SLICE_BOUNDARIES`` declared
+        that historical slices require edge validity, but nothing on the wire
+        recorded whether the arm had it — so a packet could read the *live*
+        projection, label the slice ``COMPARABLE``, and emit a confident and
+        entirely false delta. The declaration was a comment; this makes it a
+        constraint.
+
+        The three rules are the contrapositives of each other: a slice that
+        needs edge validity may not claim it was ``NOT_REQUIRED``; only
+        ``OBSERVED_INTERVALS`` may back ``COMPARABLE``; and ``UNAVAILABLE`` —
+        the CHAOS-3569 state — forces the matching not-comparable reason
+        rather than a vaguer one.
+        """
+
+        boundary = SLICE_BOUNDARIES[self.analytical_slice]
+        if not boundary.requires_edge_validity:
+            return self
+        if self.edge_validity_basis is EdgeValidityBasis.NOT_REQUIRED:
+            raise ValueError(
+                f"the {self.analytical_slice} slice requires edge validity, so "
+                "'not_required' is not a legal edge_validity_basis for it"
+            )
+        comparable = self.historical_comparability is HistoricalComparability.COMPARABLE
+        observed = self.edge_validity_basis is EdgeValidityBasis.OBSERVED_INTERVALS
+        if comparable and not observed:
+            raise ValueError(
+                f"the {self.analytical_slice} slice claims COMPARABLE on an "
+                f"edge_validity_basis of {self.edge_validity_basis}; without "
+                "observed validity intervals the as-of state was not "
+                "reconstructed and any delta is fabricated"
+            )
+        if self.edge_validity_basis is EdgeValidityBasis.UNAVAILABLE and (
+            self.historical_comparability
+            is not HistoricalComparability.NOT_COMPARABLE_MISSING_EDGE_VALIDITY
+        ):
+            raise ValueError(
+                "edge validity is unavailable, so the comparability state must "
+                "be 'not_comparable_missing_edge_validity' (the CHAOS-3569 "
+                f"state), not {self.historical_comparability}"
             )
         return self
 
@@ -743,13 +808,34 @@ class RelatedContext(ContractModelV2):
 
     @model_validator(mode="after")
     def validate_entities_are_reachable(self) -> Self:
-        known_paths = {path.path_id for path in self.paths}
+        """Cited paths must exist **and** must actually reach the entity.
+
+        Adversarial review round 1, finding M5. The original check only
+        rejected dangling path ids, so an entity could cite a real path that
+        terminates somewhere else entirely — the Auth Gateway service citing
+        the project-owns-team path — and the packet would present two
+        unrelated true facts as a single line of reasoning. Existence is not
+        attachment.
+        """
+
+        by_id = {path.path_id: path for path in self.paths}
         for entity in self.entities:
-            dangling = sorted(set(entity.supporting_path_ids) - known_paths)
+            dangling = sorted(set(entity.supporting_path_ids) - set(by_id))
             if dangling:
                 raise ValueError(
                     f"related entity {entity.entity_id} cites paths that were "
                     f"never declared: {dangling}"
+                )
+            unreached = sorted(
+                path_id
+                for path_id in entity.supporting_path_ids
+                if entity.entity_id not in _path_entity_ids(by_id[path_id])
+            )
+            if unreached:
+                raise ValueError(
+                    f"related entity {entity.entity_id} cites paths that never "
+                    f"reach it: {unreached}; a path that does not touch the "
+                    "entity is not why the entity is here"
                 )
         return self
 
@@ -1178,6 +1264,21 @@ class EvidenceCoverage(ContractModelV2):
                 "limitations repeats a kind; one disclosure per kind keeps the "
                 "list a real summary rather than a pile"
             )
+        contradictory = sorted(
+            str(item) for item in set(health_classes) & set(missing_classes)
+        )
+        if contradictory:
+            # Adversarial review round 1, finding M6. Uniqueness was checked
+            # *within* each list but never *between* them, so a producer could
+            # report work_graph as available_current in source_health and
+            # unavailable in missing_sources at the same time -- and then pick
+            # whichever reading flattered its coverage score.
+            raise ValueError(
+                "these source classes are reported both as observed and as "
+                f"missing: {contradictory}; a source cannot be simultaneously "
+                "available and absent, and a consumer cannot know which "
+                "coverage claim to score"
+            )
         return self
 
     @model_validator(mode="after")
@@ -1290,6 +1391,180 @@ class AskDevInvestigationPacket(ContractModelV2):
                 f"({self.comparison_cohort.comparison_shape}) contradicts the "
                 f"job's ({self.analytical_job.comparison_shape})"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_every_entity_is_authorized(self) -> Self:
+        """The authorization envelope covers the **whole packet**, not one section.
+
+        Adversarial review round 1, finding H2. ``RelatedContext``'s own guard
+        checks the entities and hop endpoints it owns, and nothing else — so a
+        cohort member, a subject candidate, a driver's affected subject or an
+        indexed evidence item could name an entity outside the authorized set
+        and the packet still validated. Every one of those is a label or an
+        identifier reaching a consumer, which is the leak; scoping the check
+        to lineage only protected the least likely route.
+
+        Residual, unchanged and still worth repeating: the authorized set is
+        producer-declared, so this proves the packet is internally consistent
+        with its own claim, not that the claim is true. See
+        ``RelatedContext.validate_paths_stay_inside_authorized_set``.
+        """
+
+        authorized = set(self.related_context.authorized_entity_ids)
+        offenders: dict[str, set[str]] = {}
+
+        def flag(where: str, entity_id: str) -> None:
+            if entity_id not in authorized:
+                offenders.setdefault(where, set()).add(entity_id)
+
+        for candidate in self.subject_discovery.candidates:
+            flag("subject_discovery.candidates", candidate.canonical_id)
+        for member in self.comparison_cohort.members:
+            flag("comparison_cohort.members", member.canonical_id)
+        for exclusion in self.comparison_cohort.exclusions:
+            flag("comparison_cohort.exclusions", exclusion.canonical_id)
+        for driver in self.driver_analysis.candidates:
+            for subject_id in driver.affected_subject_ids:
+                flag("driver_analysis.affected_subject_ids", subject_id)
+        for entry in self.evidence_coverage.evidence_index:
+            flag("evidence_coverage.evidence_index", entry.evidence.entity_id)
+        for ref in self.analytical_job.surface_context_refs:
+            if ref.entity_id is not None:
+                flag("analytical_job.surface_context_refs", ref.entity_id)
+
+        if offenders:
+            detail = "; ".join(
+                f"{where}: {sorted(ids)}" for where, ids in sorted(offenders.items())
+            )
+            raise ValueError(
+                "these entities appear in the packet but not in "
+                f"related_context.authorized_entity_ids -- {detail}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_sources_are_allowlisted(self) -> Self:
+        """Every source class named anywhere must be on the trial allowlist.
+
+        Adversarial review round 1, finding H3. ``TRIAL_SOURCE_ALLOWLIST``
+        deliberately excludes ``SourceClass.TEMPORAL_CONTEXT`` — CHAOS-3567's
+        inert stub — but the packet's ``source_class`` fields were typed as
+        the full platform enum and no validator consulted the allowlist, so
+        an arm could claim coverage from a source the trial does not score
+        and that has no adapter behind it at all.
+
+        Enforced rather than narrowed at the type level on purpose: the field
+        type stays ``SourceClass`` so the packet keeps speaking the platform's
+        vocabulary, and the *trial's* bound stays visible as a rule that can
+        be relaxed for a later trial without a wire change.
+        """
+
+        allowed = set(TRIAL_SOURCE_ALLOWLIST)
+        offenders: dict[str, set[str]] = {}
+
+        def flag(where: str, source_class: SourceClass) -> None:
+            if source_class not in allowed:
+                offenders.setdefault(where, set()).add(str(source_class))
+
+        for candidate in self.subject_discovery.candidates:
+            for signal in candidate.match_signals:
+                flag("subject_discovery.match_signals", signal.source_class)
+        for driver in self.driver_analysis.candidates:
+            if driver.staffing_qualification is not None:
+                for (
+                    source_class
+                ) in driver.staffing_qualification.denominator_source_classes:
+                    flag("driver_analysis.staffing_qualification", source_class)
+        for entry in self.evidence_coverage.evidence_index:
+            flag("evidence_coverage.evidence_index", entry.source_class)
+        for observation in self.evidence_coverage.source_health:
+            flag("evidence_coverage.source_health", observation.source_class)
+        for missing in self.evidence_coverage.missing_sources:
+            flag("evidence_coverage.missing_sources", missing.source_class)
+        for version in self.versions.source_contract_versions:
+            flag("versions.source_contract_versions", version.source_class)
+
+        if offenders:
+            detail = "; ".join(
+                f"{where}: {sorted(names)}"
+                for where, names in sorted(offenders.items())
+            )
+            raise ValueError(
+                f"these source classes are not on the trial allowlist -- {detail}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_question_family_obligations(self) -> Self:
+        """The declared family's obligations bind the packet that claims it.
+
+        Adversarial review round 1, finding H4. The family registry described
+        what each family requires — permitted comparison shapes, source
+        classes, populated sections — and nothing checked any of it, so an
+        arm could label a discovered-cohort investigation
+        ``project_status_drivers`` (the family with the loosest evidence
+        requirements), skip the work, and still land in the per-family
+        scoring table under a family it never actually answered. That
+        corrupts exactly the report CHAOS-3616 exists to produce.
+
+        Required sources are satisfied by being *accounted for*, not by being
+        present: an arm that could not read deployments may declare that in
+        ``missing_sources``. What it may not do is stay silent, which is the
+        difference between a disclosed gap and an undisclosed one.
+        """
+
+        family = QUESTION_FAMILY_REGISTRY[self.analytical_job.question_family]
+
+        shape = self.analytical_job.comparison_shape
+        if shape not in family.permitted_comparison_shapes:
+            permitted = sorted(str(item) for item in family.permitted_comparison_shapes)
+            raise ValueError(
+                f"family {family.family_id} does not permit the "
+                f"{shape} comparison shape (permitted: {permitted}); a packet "
+                "cannot claim a family whose shape it does not answer"
+            )
+
+        accounted = (
+            {entry.source_class for entry in self.evidence_coverage.evidence_index}
+            | {item.source_class for item in self.evidence_coverage.source_health}
+            | {item.source_class for item in self.evidence_coverage.missing_sources}
+        )
+        unaccounted = sorted(
+            str(item) for item in set(family.required_source_classes) - accounted
+        )
+        if unaccounted:
+            raise ValueError(
+                f"family {family.family_id} requires source classes that this "
+                f"packet neither observed nor declared missing: {unaccounted}"
+            )
+
+        populated = {
+            PacketSection.ANALYTICAL_JOB: True,
+            PacketSection.SUBJECT_DISCOVERY: bool(self.subject_discovery.candidates),
+            PacketSection.COMPARISON_COHORT: bool(self.comparison_cohort.members),
+            PacketSection.RELATED_CONTEXT: bool(self.related_context.entities),
+            PacketSection.DRIVER_ANALYSIS: bool(self.driver_analysis.candidates),
+            PacketSection.EVIDENCE_COVERAGE: bool(
+                self.evidence_coverage.evidence_index
+            ),
+            PacketSection.VERSIONS: True,
+        }
+        # Only a packet that claims to have answered owes the full section
+        # set. A clarification or no-match packet legitimately has no cohort
+        # and no drivers -- requiring them would force an arm to invent both
+        # rather than admit it could not resolve the subject.
+        if self.outcome in SUPPORTED_OUTCOMES:
+            empty = sorted(
+                str(section)
+                for section in family.required_packet_sections
+                if not populated[section]
+            )
+            if empty:
+                raise ValueError(
+                    f"family {family.family_id} requires these packet sections "
+                    f"to be populated, and they are empty: {empty}"
+                )
         return self
 
     @model_validator(mode="after")

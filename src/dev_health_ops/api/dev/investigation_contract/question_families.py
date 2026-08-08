@@ -642,7 +642,15 @@ QUESTION_FAMILY_REGISTRY: Mapping[QuestionFamilyID, QuestionFamily] = {
             "how's the project going",
             "give me the update",
         ),
-        (_SHAPE.SINGULAR_SUBJECT, _SHAPE.DISCOVERED_COHORT),
+        # ORGANIZATION_WIDE belongs here and nowhere else. "What is going
+        # sideways?" -- one of this family's own exact variants -- is
+        # org-wide by nature, and this is the family in which an arm is
+        # supposed to land when it cannot resolve a named subject. The
+        # packet-level widening guard then requires that such a packet be
+        # *asking* (NEEDS_CLARIFICATION plus a subject clarification need)
+        # rather than answering, so permitting the shape here does not
+        # permit the fault.
+        (_SHAPE.SINGULAR_SUBJECT, _SHAPE.DISCOVERED_COHORT, _SHAPE.ORGANIZATION_WIDE),
         (
             _SC.WORK_GRAPH,
             _SC.SOURCE_HEALTH,

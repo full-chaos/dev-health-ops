@@ -6,68 +6,93 @@
         {
           "case": "organization_widening_after_unresolved_reference",
           "path": "examples/negative/ask_dev_investigation_packet.v1.organization_widening_after_unresolved_reference.json",
-          "sha256": "850a2dd60008542327742be77008e77a69a8b9de9d294a711553c1d6e2f74b47"
+          "sha256": "9a8c9fb94dc787abb97a48cc6c5e633773a80af7b8a100317496e9368c2b7efd"
         },
         {
           "case": "dashboard_redirect_without_direct_judgment",
           "path": "examples/negative/ask_dev_investigation_packet.v1.dashboard_redirect_without_direct_judgment.json",
-          "sha256": "3e1cbdf8d6738bacdf42399a994ab042e46b37098660bc63cb493a458dcdc70d"
+          "sha256": "446c6830235e7e9f393caa07b9929163093116456add59c097c36159fc959321"
         },
         {
           "case": "evidence_citation_absent_from_index",
           "path": "examples/negative/ask_dev_investigation_packet.v1.evidence_citation_absent_from_index.json",
-          "sha256": "2fe3ea3cfa33d0c1ccaa12e9f74768187161a339f8ae850e45a734bf0eaf1157"
+          "sha256": "f1da3e01f099502c26e8a07e051b2fc0c9a4a0def1e0d2f2a00c28b217b9876e"
         },
         {
           "case": "no_match_without_limitation_or_clarification",
           "path": "examples/negative/ask_dev_investigation_packet.v1.no_match_without_limitation_or_clarification.json",
-          "sha256": "d086e3d33ae6f31aa910bef649461a6e6593977130bd97085e3b9ed699fa386a"
+          "sha256": "09654c72eb445daaafcb3f4f95478829d7a1565b14f2497cddacfcdc97aa9983"
         },
         {
           "case": "authorization_filtering_undisclosed",
           "path": "examples/negative/ask_dev_investigation_packet.v1.authorization_filtering_undisclosed.json",
-          "sha256": "bb2b52cceeac6d40d89ba29b0613b8e44444e80dc31751562842973f4848a6c6"
+          "sha256": "ebdf714b833971d1f37dc346f06f2fe9495daaad2ee5b2cd22d856fada75c92d"
         },
         {
           "case": "not_comparable_slice_undisclosed",
           "path": "examples/negative/ask_dev_investigation_packet.v1.not_comparable_slice_undisclosed.json",
-          "sha256": "c68babae7de8b4523b8c9c87c0e50671a31dd9ec3a110b15bbdbddcf3a09d2e2"
+          "sha256": "ec9c02cda2b20c24c085e1c6f13702488dc2cedead678dd65fc3d67eef54bbaf"
+        },
+        {
+          "case": "cohort_member_outside_authorized_set",
+          "path": "examples/negative/ask_dev_investigation_packet.v1.cohort_member_outside_authorized_set.json",
+          "sha256": "3c9a05384080291b782338899ed9f9c86257aecfdae3010fcbbd4da75037d839"
+        },
+        {
+          "case": "evidence_entity_outside_authorized_set",
+          "path": "examples/negative/ask_dev_investigation_packet.v1.evidence_entity_outside_authorized_set.json",
+          "sha256": "797d6cd2b71584a3cff141d1dfef45f868c131a00fd093580f8c62adb002e839"
+        },
+        {
+          "case": "source_class_off_the_trial_allowlist",
+          "path": "examples/negative/ask_dev_investigation_packet.v1.source_class_off_the_trial_allowlist.json",
+          "sha256": "cc631191e631035067ea7105a044664127d0a59f938eeefb2055e10bf408d803"
+        },
+        {
+          "case": "question_family_shape_mismatch",
+          "path": "examples/negative/ask_dev_investigation_packet.v1.question_family_shape_mismatch.json",
+          "sha256": "4699b790b3627a73c72ed10f96a682a6797d8eb43a8d809ba0b39b263a492e59"
+        },
+        {
+          "case": "family_required_source_unaccounted",
+          "path": "examples/negative/ask_dev_investigation_packet.v1.family_required_source_unaccounted.json",
+          "sha256": "24e5425bf217870c1418c36fa651aed286e6452fce52e70cd73de8941160b0dc"
         }
       ],
       "positive": {
         "path": "examples/positive/ask_dev_investigation_packet.v1.json",
-        "sha256": "1b405da8bbbef4d37245137f09ec0370a4ee21b1fcef6dcc5cc6e353d86aa701"
+        "sha256": "c1b8d933fe963e211d3d29a0686bc4d63e3458f1ac8bfd3f39c737094f5639fc"
       },
       "positive_variants": [
         {
           "case": "discovery_without_commitment",
           "path": "examples/positive/ask_dev_investigation_packet.v1.discovery_without_commitment.json",
-          "sha256": "522171950ac06a3fc60a38492903fba3f5183445b68db50226d17c65f92aa75d"
+          "sha256": "7bf4b59111a442a55e767ffe89ba0850769937f905b317e79e3e425db549d3b3"
         },
         {
           "case": "not_comparable_historical_slice",
           "path": "examples/positive/ask_dev_investigation_packet.v1.not_comparable_historical_slice.json",
-          "sha256": "6d58a2717317ac379f41e12e3f73443efd62fc2f453438d24d8c33dfcb733089"
+          "sha256": "15c318248d9bf2afd1068e2be117235e3d6856b91c4b4b64022571c50ff1e686"
         },
         {
           "case": "qualified_capacity_without_denominator",
           "path": "examples/positive/ask_dev_investigation_packet.v1.qualified_capacity_without_denominator.json",
-          "sha256": "48ed8afb7031a23795ef9353855073f78c7b2a0927f5052a60608418b4918e68"
+          "sha256": "f2196c11de554f6f796ddf5bd7baf10853b088bd0b5b95e17a301296b1f9d345"
         },
         {
           "case": "needs_clarification_with_widening",
           "path": "examples/positive/ask_dev_investigation_packet.v1.needs_clarification_with_widening.json",
-          "sha256": "91e343acc73807d6b5eacc1ef9145d22bf1bb108c00fa20b7c121bb4a5999fa4"
+          "sha256": "f00e82b5f9f78ebf6cf577028885c6d5072612928f04b1f2cf46514bdf031c80"
         },
         {
           "case": "trial_metadata_present",
           "path": "examples/positive/ask_dev_investigation_packet.v1.trial_metadata_present.json",
-          "sha256": "c89fe18af567f1d3326d3f80f2f0a92925ef641738676ddb67a25a2e134209d1"
+          "sha256": "ad527f8d02e9750dcb2ff7bce45312a22899c4ec27beb5faea617b346f988fa9"
         }
       ],
       "schema": {
         "path": "schemas/ask_dev_investigation_packet.v1.schema.json",
-        "sha256": "1b29712f4d4a8cb36c5addc4fc7bcc89ca79b928a56c4dbb41a5824143e6d7a0"
+        "sha256": "1778efab1665b2d474f36e744d53ca4368ac7d4ee33eff25db843da017693a30"
       },
       "schema_version": "ask_dev_investigation_packet.v1"
     },
@@ -76,27 +101,37 @@
         {
           "case": "uncertain_job_without_limitations",
           "path": "examples/negative/ask_dev_analytical_job.v1.uncertain_job_without_limitations.json",
-          "sha256": "d948775a338f59e38607f9961ab58f0a138c94ffefc38035773cd298118cb5ad"
+          "sha256": "7936de2b0a6fc411d14891ccb86ae4d82381b93c53acb1185da3266169e68cdd"
         },
         {
           "case": "current_slice_carrying_as_of",
           "path": "examples/negative/ask_dev_analytical_job.v1.current_slice_carrying_as_of.json",
-          "sha256": "1fb1d62c319b645a8e8a58b8f4081ecca57c0dea2602155fc1962ea167170cfc"
+          "sha256": "c71ccf3268a47a9232145356e705a56f4f77271c6e9279027af2b4e75163bf26"
         },
         {
           "case": "historical_slice_without_as_of",
           "path": "examples/negative/ask_dev_analytical_job.v1.historical_slice_without_as_of.json",
-          "sha256": "04ad6afe348dbb8e49243384f32fc47f7c9bb8a88cebe8b8153d16da4bdad474"
+          "sha256": "31f4488fec65dc0f66fbe1ce05ce05afb45b044b8086c1d044b7b74b4feff0b2"
+        },
+        {
+          "case": "comparable_history_without_edge_validity",
+          "path": "examples/negative/ask_dev_analytical_job.v1.comparable_history_without_edge_validity.json",
+          "sha256": "6ce0376fbcc373d502ac02f16bb40d35ccae70f47f01630376ce3ebe0d0370c2"
+        },
+        {
+          "case": "unavailable_edge_validity_mislabelled",
+          "path": "examples/negative/ask_dev_analytical_job.v1.unavailable_edge_validity_mislabelled.json",
+          "sha256": "d3c75d0a62758a678f567577adca570d79ba9275f51744699fe653b582ed4aba"
         }
       ],
       "positive": {
         "path": "examples/positive/ask_dev_analytical_job.v1.json",
-        "sha256": "a8edf583be6c160d166a3349be577e0333f82f73032d6cca1e9c29022be6a43b"
+        "sha256": "f1bb59ce5b8f49e51e2a28a854e7a7693764a9fc389e5bd1f542a451e4c4ba85"
       },
       "positive_variants": [],
       "schema": {
         "path": "schemas/ask_dev_analytical_job.v1.schema.json",
-        "sha256": "49cc6d49ff393e6dd9d258b5c55d69f827026cc311314c84acca0d034e3da0b3"
+        "sha256": "b30ea7667adb697f3776508e3558fe48cf2e6c755da5dd6ca3418b272015ecef"
       },
       "schema_version": "ask_dev_analytical_job.v1"
     },
@@ -168,7 +203,7 @@
         {
           "case": "reversed_relationship_direction",
           "path": "examples/negative/ask_dev_related_context.v1.reversed_relationship_direction.json",
-          "sha256": "1b9ae4b29234d541ce9716f2b9490426d1d25edf0777fce2f794c7898b3c9952"
+          "sha256": "98c7cee4ee9a0d2332e8da7dfde9c79fc7a633223c8d4c2a0f3b88272d8f3395"
         },
         {
           "case": "path_crosses_unauthorized_entity",
@@ -178,17 +213,22 @@
         {
           "case": "disconnected_path_presented_as_chain",
           "path": "examples/negative/ask_dev_related_context.v1.disconnected_path_presented_as_chain.json",
-          "sha256": "2995ac90fcf378d07ea4099b8f8ac7a415552e543a17c58ec43ce28342d5e001"
+          "sha256": "7bf4b4b41af816b002bc4d11b9e7d7ccc9ace684004a8656a5b1ff5eade6cbf2"
         },
         {
           "case": "entity_citing_undeclared_path",
           "path": "examples/negative/ask_dev_related_context.v1.entity_citing_undeclared_path.json",
-          "sha256": "d6f424a6c2df00a1c62a207170ae06f16f2fe11de4a83491e8d77a5035690238"
+          "sha256": "09a20760e251e0b4970363d5d617912f56e2f581a8c408175bbc02fd258e48aa"
+        },
+        {
+          "case": "path_cited_but_never_reaching_entity",
+          "path": "examples/negative/ask_dev_related_context.v1.path_cited_but_never_reaching_entity.json",
+          "sha256": "e8d5b2a787d7891e7947f4a5107c45bc31309b46c922013fe55a7905a1da6b6b"
         }
       ],
       "positive": {
         "path": "examples/positive/ask_dev_related_context.v1.json",
-        "sha256": "20448c2d2324605673e125072b89e79e7e10e2459df905fc247caf852c33e662"
+        "sha256": "ba06c3ab06d642b38f13992bf24ede2eae26b433da6b26809280a6536c8ff77a"
       },
       "positive_variants": [],
       "schema": {
@@ -246,27 +286,32 @@
         {
           "case": "evidence_supporting_nothing",
           "path": "examples/negative/ask_dev_evidence_coverage.v1.evidence_supporting_nothing.json",
-          "sha256": "b04bcfb83d865f4c2a61ea39e5efcdc748578efdac92a7d129702befdcc3b98b"
+          "sha256": "c8dbd3b320aa4285ac6db7afc327a2e8e9547ec9f064a360f662ee9292ae98f4"
         },
         {
           "case": "missing_source_undisclosed",
           "path": "examples/negative/ask_dev_evidence_coverage.v1.missing_source_undisclosed.json",
-          "sha256": "d77f3e2d3783ba7dc0b7f2c9283991631c8abbc33387ce4e04022ae3d8a05ffa"
+          "sha256": "ed8388037416953e207e0d210508f0bb03ce3470d4f41e8dbccb520e637b74fa"
         },
         {
           "case": "conflict_citing_unindexed_evidence",
           "path": "examples/negative/ask_dev_evidence_coverage.v1.conflict_citing_unindexed_evidence.json",
-          "sha256": "ee22fdac9c48de7298d55010aacb4698fc9a04e28a8f676dd6feb355c3f7b2f5"
+          "sha256": "25a7fcd0ee647073f1ea8f05b6008cb3d4b7ff97b3a1a8bfafc7302d03566e3d"
         },
         {
           "case": "graph_native_field_smuggled_as_extra",
           "path": "examples/negative/ask_dev_evidence_coverage.v1.graph_native_field_smuggled_as_extra.json",
-          "sha256": "b34ef86603302e280ad90ab4e1ad6bbe88c1a95a4370894774573d3b823c95d6"
+          "sha256": "12bb820f35d62797549e19e30b5723882ef4dd8607873b342a5e6813aa7aacc4"
+        },
+        {
+          "case": "source_both_observed_and_missing",
+          "path": "examples/negative/ask_dev_evidence_coverage.v1.source_both_observed_and_missing.json",
+          "sha256": "226e25164d48d1b9f9afda8b8d66774f9db9b969e9f05af50e2f7eb5f69f6b01"
         }
       ],
       "positive": {
         "path": "examples/positive/ask_dev_evidence_coverage.v1.json",
-        "sha256": "3f7def2371533e9b059eefb2d4fdb06dc8009b46bf476204f009b8943415294f"
+        "sha256": "47fc5b283faac6781e7e13e1b244b821fed5685a017fe7e8e80e4daf650eab1b"
       },
       "positive_variants": [],
       "schema": {
@@ -303,7 +348,7 @@
   "registries": [
     {
       "path": "registries/question_families.json",
-      "sha256": "e25dc201c365ec1f7efed79f97fc4bb823a941236d06212a3fcd9726175064eb"
+      "sha256": "9f6b01e15c63c4cbed9d7d4b2394d2bc8636e13a7ebc11c7eab024ef96de3c5b"
     },
     {
       "path": "registries/scoring_dimensions.json",
@@ -318,5 +363,11 @@
       "sha256": "d8bfea26a9585407d3df0dd850b698cfa7bf15102917d366c48a5d3c0b26ad4e"
     }
   ],
-  "schema_version": "ask_dev_investigation_contract_manifest.v1"
+  "schema_version": "ask_dev_investigation_contract_manifest.v1",
+  "validation_policy": {
+    "canonical_validator": "dev_health_ops.api.dev.investigation_contract.packet.INVESTIGATION_CONTRACT_MODELS",
+    "json_schema_scope": "structural_only",
+    "note": "The generated JSON Schemas describe field shape, not the contract's semantics. A packet that validates against the schema alone has not been checked for authorization scope, evidence closure, driver standing, family obligations, historical comparability or any other cross-field rule. Any consumer -- including a future non-Python arm -- must run the canonical validator or reimplement these rules and prove equivalence against examples/negative.",
+    "schema_only_validation_is_sufficient": false
+  }
 }

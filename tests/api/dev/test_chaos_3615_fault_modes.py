@@ -30,6 +30,7 @@ would fail if the guard were gone".
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -37,6 +38,7 @@ from pydantic import BaseModel, ValidationError
 
 from dev_health_ops.api.dev.investigation_contract import (
     INVESTIGATION_CONTRACT_MODELS,
+    AnalyticalJob,
     AskDevInvestigationPacket,
     ComparisonCohort,
     DriverAnalysis,
@@ -582,6 +584,153 @@ def test_trial_metadata_is_optional_and_changes_nothing_else() -> None:
         "the trial-metadata variant differs from the golden in fields other "
         "than versions.trial/corpus_version, so arm identity is not isolated"
     )
+
+
+# --------------------------------------------------------------------------
+# Round-1 adversarial review: holes found by attacking the first draft
+#
+# Each of these was a packet the first version of the contract ACCEPTED. They
+# are kept as tests rather than folded into the sections above because the
+# named eleven fault shapes came from the corrective plan, while these came
+# from an adversary reading the implementation — a different provenance, and
+# a different thing to keep honest.
+# --------------------------------------------------------------------------
+
+
+def test_cohort_member_outside_the_authorized_set_is_rejected() -> None:
+    """H2. Authorization covered lineage only; a cohort member walked past it."""
+
+    _rejects(
+        AskDevInvestigationPacket,
+        _negative(PACKET, "cohort_member_outside_authorized_set"),
+        "not in related_context.authorized_entity_ids",
+    )
+
+
+def test_evidence_naming_an_unauthorized_entity_is_rejected() -> None:
+    """H2. An indexed evidence item is a label reaching a consumer too."""
+
+    _rejects(
+        AskDevInvestigationPacket,
+        _negative(PACKET, "evidence_entity_outside_authorized_set"),
+        "not in related_context.authorized_entity_ids",
+    )
+
+
+def test_source_class_off_the_trial_allowlist_is_rejected() -> None:
+    """H3. CHAOS-3567's inert temporal stub was claimable as coverage."""
+
+    _rejects(
+        AskDevInvestigationPacket,
+        _negative(PACKET, "source_class_off_the_trial_allowlist"),
+        "not on the trial allowlist",
+    )
+
+
+def test_question_family_shape_mismatch_is_rejected() -> None:
+    """H4. Family was metadata: an arm could claim the easiest one and skip its work."""
+
+    _rejects(
+        AskDevInvestigationPacket,
+        _negative(PACKET, "question_family_shape_mismatch"),
+        "does not permit the singular_subject comparison shape",
+    )
+
+
+def test_family_required_source_neither_observed_nor_declared_missing() -> None:
+    """H4. A required source may be absent — it may not be unmentioned."""
+
+    _rejects(
+        AskDevInvestigationPacket,
+        _negative(PACKET, "family_required_source_unaccounted"),
+        "neither observed nor declared missing",
+    )
+
+
+def test_declaring_a_required_source_missing_is_still_legal() -> None:
+    """Positive control for the family-obligation guard.
+
+    The golden declares ``investment_allocation`` unconfigured and is
+    accepted. If the guard had required every source to be *present*, an arm
+    would be pushed to fabricate coverage rather than disclose the gap —
+    the opposite of what the rule is for.
+    """
+
+    from dev_health_ops.api.dev.investigation_contract.fixtures import (
+        positive_fixtures,
+    )
+
+    packet = AskDevInvestigationPacket.model_validate(positive_fixtures()[PACKET])
+    assert any(
+        missing.source_class == "investment_allocation"
+        for missing in packet.evidence_coverage.missing_sources
+    )
+
+
+def test_path_cited_by_an_entity_it_never_reaches_is_rejected() -> None:
+    """M5. Existence is not attachment: the path terminated somewhere else."""
+
+    _rejects(
+        RelatedContext,
+        _negative("ask_dev_related_context.v1", "path_cited_but_never_reaching_entity"),
+        "cites paths that never reach it",
+    )
+
+
+def test_source_reported_both_observed_and_missing_is_rejected() -> None:
+    """M6. Two contradictory coverage claims, whichever flatters the score."""
+
+    _rejects(
+        EvidenceCoverage,
+        _negative("ask_dev_evidence_coverage.v1", "source_both_observed_and_missing"),
+        "both as observed and as missing",
+    )
+
+
+def test_comparable_history_without_edge_validity_is_rejected() -> None:
+    """M7. A historical delta computed off the live projection is fabricated."""
+
+    _rejects(
+        AnalyticalJob,
+        _negative(
+            "ask_dev_analytical_job.v1", "comparable_history_without_edge_validity"
+        ),
+        "is not a legal edge_validity_basis",
+    )
+
+
+def test_unavailable_edge_validity_must_use_the_chaos_3569_state() -> None:
+    """M7. The gap may not be relabelled as a vaguer non-comparability."""
+
+    _rejects(
+        AnalyticalJob,
+        _negative("ask_dev_analytical_job.v1", "unavailable_edge_validity_mislabelled"),
+        "not_comparable_missing_edge_validity",
+    )
+
+
+def test_observed_edge_intervals_still_permit_a_comparable_history() -> None:
+    """Positive control for the edge-validity guard.
+
+    An arm that genuinely reconstructed the as-of state must still be able
+    to say so, or the rule would permanently ban the capability CHAOS-3569
+    exists to deliver.
+    """
+
+    from dev_health_ops.api.dev.investigation_contract.fixtures import (
+        positive_fixtures,
+    )
+
+    job = deepcopy(positive_fixtures()["ask_dev_analytical_job.v1"])
+    job["time_context"] = {
+        **job["time_context"],
+        "analytical_slice": "historical",
+        "as_of": "2026-05-08T00:00:00Z",
+        "historical_comparability": "comparable",
+        "edge_validity_basis": "observed_intervals",
+    }
+    parsed = AnalyticalJob.model_validate(job)
+    assert parsed.time_context.historical_comparability == "comparable"
 
 
 @pytest.mark.parametrize("contract", sorted(INVESTIGATION_CONTRACT_MODELS))

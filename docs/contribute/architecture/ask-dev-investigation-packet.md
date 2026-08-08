@@ -190,14 +190,31 @@ fails if any registered fault mode has no injection case.
 
 ## What this contract cannot check
 
-Three limits are worth stating explicitly, because a reader who believes
-the contract covers them will stop looking.
+Four limits are worth stating explicitly, because a reader who believes the
+contract covers them will stop looking.
 
+- **The generated JSON Schema is structural only.** Pydantic emits
+  `required`/`type`/`enum`/`pattern`/`minItems` and nothing else, so none of
+  the cross-field rules above survive into the schema. Measured, not
+  estimated: **3 of 41** negative fixtures are caught by the schema and 38
+  are not — a consumer that schema-validates and stops would accept a packet
+  that commits to the wrong subject on a fuzzy match, routes a path through
+  an unauthorized entity, or promotes a symptom to principal driver. The
+  canonical validator is the Python model; `manifest.json`'s
+  `validation_policy` says so in the artifact tree itself, and
+  `test_chaos_3615_schema_validator_differential.py` runs both
+  implementations over every fixture and pins exactly which each one catches.
+  Hand-encoding the rules into JSON Schema was rejected: it would be the
+  duplicate schema definition the corrective plan forbids, and a second
+  hand-written implementation is precisely the divergence that test exists
+  to detect.
 - **Authorization is producer-declared.** `authorized_entity_ids` comes from
-  the arm, so the guard proves the traversal was consistent with the claim,
-  not that the claim is true. An arm that declared the whole organization
-  authorized would pass. `ZERO_UNAUTHORIZED_RESULTS` must therefore also be
-  scored against a real authorization oracle in CHAOS-3616.
+  the arm, so the guard proves the packet is internally consistent with its
+  own claim, not that the claim is true. An arm that declared the whole
+  organization authorized would pass. `ZERO_UNAUTHORIZED_RESULTS` must
+  therefore also be scored against a real authorization oracle in
+  CHAOS-3616. The check does cover the *whole* packet — subjects, cohort,
+  drivers, evidence and surface refs, not only lineage.
 - **Evidence closure is closure within the packet.** Whether a handle would
   verify against `EvidenceHandleService` is a runtime, org-scoped question;
   the grammar pins the handle's shape and dereferencing pins its validity.

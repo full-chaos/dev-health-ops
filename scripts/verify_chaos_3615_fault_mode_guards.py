@@ -47,8 +47,10 @@ from pydantic import BaseModel, ValidationError
 
 from dev_health_ops.api.dev.investigation_contract import (
     ALL_FAULT_MODE_IDS,
+    FAULT_MODE_REGISTRY,
     INVESTIGATION_CONTRACT_MODELS,
     FaultModeID,
+    RejectingMechanism,
 )
 from dev_health_ops.api.dev.investigation_contract import packet as packet_module
 from dev_health_ops.api.dev.investigation_contract.fixtures import negative_fixtures
@@ -278,6 +280,59 @@ def _run_case(name: str) -> int:
     return 0
 
 
+def _cross_check_against_registry() -> list[str]:
+    """Every case must name exactly the guard the registry names.
+
+    Adversarial review round 1, finding M8. The case table duplicated the
+    model and validator names by hand and only the *set of fault ids* was
+    checked, so a validator renamed in the registry would leave this script
+    neutralizing a stale mapping and still printing GUARD PROOF PASSED — a
+    green proof of the wrong thing, which is worse than no proof.
+    """
+
+    problems: list[str] = []
+    for case in CASES:
+        fault = FAULT_MODE_REGISTRY[case.fault_mode]
+        mechanism = fault.rejecting_mechanism
+        if mechanism is RejectingMechanism.CONTRACT_VALIDATOR:
+            reference = fault.validator_reference
+            if reference is None:
+                problems.append(
+                    f"{case.fault_mode}: registry claims a contract validator "
+                    "but names none"
+                )
+                continue
+            if case.validator is None:
+                problems.append(
+                    f"{case.fault_mode}: registry names validator "
+                    f"{reference.model_name}.{reference.validator_name} but the "
+                    "case injects a field default instead"
+                )
+                continue
+            if (case.target_model, case.validator) != (
+                reference.model_name,
+                reference.validator_name,
+            ):
+                problems.append(
+                    f"{case.fault_mode}: case neutralizes "
+                    f"{case.target_model}.{case.validator} but the registry "
+                    f"names {reference.model_name}.{reference.validator_name}"
+                )
+        elif mechanism is RejectingMechanism.REQUIRED_FIELD:
+            if case.validator is not None or case.defaulted_field is None:
+                problems.append(
+                    f"{case.fault_mode}: registry says the field grammar "
+                    "rejects this, so the case must inject a field default"
+                )
+        else:
+            problems.append(
+                f"{case.fault_mode}: rejecting mechanism {mechanism} has no "
+                "injection semantics; an oracle-judged fault must not claim a "
+                "contract-level proof"
+            )
+    return problems
+
+
 def _run_all() -> int:
     covered = {case.fault_mode for case in CASES}
     missing = sorted(str(item) for item in set(ALL_FAULT_MODE_IDS) - covered)
@@ -289,6 +344,12 @@ def _run_all() -> int:
         return 1
     if len(covered) != len(CASES):
         print("FAIL: the case table lists a fault mode twice")
+        return 1
+    drift = _cross_check_against_registry()
+    if drift:
+        print("FAIL: injection cases have drifted from the fault-mode registry:")
+        for problem in drift:
+            print(f"  - {problem}")
         return 1
 
     failures: list[str] = []

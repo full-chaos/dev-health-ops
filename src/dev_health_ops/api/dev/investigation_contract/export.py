@@ -253,6 +253,38 @@ def expected_artifacts() -> dict[str, str]:
     manifest = {
         "schema_version": "ask_dev_investigation_contract_manifest.v1",
         "compatibility": "internal-trial-artifact-not-client-served",
+        # Adversarial review round 1, finding H1. Pydantic emits structural
+        # JSON Schema only: required/type/enum/pattern/length. None of this
+        # contract's cross-field rules -- commitment evidence, authorization
+        # scope, symptom-vs-driver standing, evidence closure, family
+        # obligations -- survive into the emitted schema, so a consumer that
+        # schema-validates and stops accepts almost every arm-shaped bad
+        # packet in examples/negative. Saying so here, in the artifact a
+        # consumer actually reads, rather than leaving it to be discovered.
+        #
+        # The split is measured by execution, not asserted: see
+        # tests/api/dev/test_chaos_3615_schema_validator_differential.py,
+        # which runs every negative fixture through a real JSON Schema
+        # validator AND the Python model and pins exactly which fixtures each
+        # one catches.
+        "validation_policy": {
+            "canonical_validator": (
+                "dev_health_ops.api.dev.investigation_contract.packet"
+                ".INVESTIGATION_CONTRACT_MODELS"
+            ),
+            "json_schema_scope": "structural_only",
+            "schema_only_validation_is_sufficient": False,
+            "note": (
+                "The generated JSON Schemas describe field shape, not the "
+                "contract's semantics. A packet that validates against the "
+                "schema alone has not been checked for authorization scope, "
+                "evidence closure, driver standing, family obligations, "
+                "historical comparability or any other cross-field rule. Any "
+                "consumer -- including a future non-Python arm -- must run "
+                "the canonical validator or reimplement these rules and prove "
+                "equivalence against examples/negative."
+            ),
+        },
         "contracts": manifest_entries,
         "registries": registry_entries,
     }

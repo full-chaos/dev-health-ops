@@ -47,6 +47,7 @@ __all__ = [
     "ALL_DRIVER_EXCLUSION_REASONS",
     "ALL_DRIVER_ROLES",
     "ALL_DRIVER_STANDINGS",
+    "ALL_EDGE_VALIDITY_BASES",
     "ALL_HISTORICAL_COMPARABILITY_STATES",
     "ALL_INVESTIGATION_OUTCOMES",
     "ALL_INVESTIGATION_SUBJECT_KINDS",
@@ -76,6 +77,7 @@ __all__ = [
     "DriverExclusionReason",
     "DriverRole",
     "DriverStanding",
+    "EdgeValidityBasis",
     "HistoricalComparability",
     "InvestigationOutcome",
     "InvestigationSubjectKind",
@@ -265,6 +267,34 @@ NOT_COMPARABLE_STATES: frozenset[HistoricalComparability] = frozenset(
         HistoricalComparability.NOT_COMPARABLE_MISSING_EDGE_VALIDITY,
         HistoricalComparability.NOT_COMPARABLE_MISSING_BASELINE,
     }
+)
+
+
+class EdgeValidityBasis(StrEnum):
+    """What backs a slice's claim that its relationships were valid *then*.
+
+    Added after adversarial review round 1 (finding M7). ``SLICE_BOUNDARIES``
+    declared that historical slices require edge validity, but nothing on the
+    wire recorded whether an arm actually had it — so a packet could label a
+    historical slice ``COMPARABLE`` while having read the live projection,
+    producing a confident and entirely false delta.
+
+    ``NOT_REQUIRED`` is the current slice. ``OBSERVED_INTERVALS`` means every
+    traversed edge carried a validity interval covering the as-of instant, and
+    is the only basis on which a historical slice may be ``COMPARABLE``.
+    ``UNAVAILABLE`` is the CHAOS-3569 state and forces
+    ``NOT_COMPARABLE_MISSING_EDGE_VALIDITY``.
+    """
+
+    NOT_REQUIRED = "not_required"
+    OBSERVED_INTERVALS = "observed_intervals"
+    UNAVAILABLE = "unavailable"
+
+
+ALL_EDGE_VALIDITY_BASES: tuple[EdgeValidityBasis, ...] = (
+    EdgeValidityBasis.NOT_REQUIRED,
+    EdgeValidityBasis.OBSERVED_INTERVALS,
+    EdgeValidityBasis.UNAVAILABLE,
 )
 
 

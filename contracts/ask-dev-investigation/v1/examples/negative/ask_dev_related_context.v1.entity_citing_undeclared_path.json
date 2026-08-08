@@ -2,6 +2,7 @@
   "authorization_filtered_count": 0,
   "authorized_entity_ids": [
     "proj_nightfall_migration",
+    "proj_nightfall",
     "team_platform",
     "svc_auth_gateway",
     "dep_authlib"

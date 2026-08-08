@@ -20,6 +20,7 @@
   "time_context": {
     "analytical_slice": "historical",
     "as_of": null,
+    "edge_validity_basis": "observed_intervals",
     "end": "2026-08-08T00:00:00Z",
     "historical_comparability": "comparable",
     "start": "2026-07-09T00:00:00Z",

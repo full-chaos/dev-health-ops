@@ -697,7 +697,8 @@
       ],
       "permitted_comparison_shapes": [
         "singular_subject",
-        "discovered_cohort"
+        "discovered_cohort",
+        "organization_wide"
       ],
       "prohibited_reductions": [
         "single_dashboard_metric",

@@ -19,12 +19,12 @@
       }
     ],
     "time_context": {
-      "analytical_slice": "current_vs_historical",
-      "as_of": "2026-05-08T00:00:00Z",
-      "edge_validity_basis": "unavailable",
+      "analytical_slice": "current",
+      "as_of": null,
+      "edge_validity_basis": "not_required",
       "end": "2026-08-08T00:00:00Z",
-      "historical_comparability": "not_comparable_missing_edge_validity",
-      "start": "2026-05-08T00:00:00Z",
+      "historical_comparability": "not_applicable",
+      "start": "2026-07-09T00:00:00Z",
       "timezone": "America/Los_Angeles"
     }
   },
@@ -180,7 +180,7 @@
           "citation_text": "Dependency has no released version carrying the change.",
           "confidence": 1.0,
           "display_label": "authlib release status",
-          "entity_id": "dep_authlib",
+          "entity_id": "dep_private_other_org",
           "entity_type": "dependency",
           "evidence_ref_id": "ev1_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
           "flags": {},
@@ -287,10 +287,6 @@
       {
         "detail": "Deployment evidence is 31 hours old; a release landing since then would not be reflected.",
         "kind": "stale_source"
-      },
-      {
-        "detail": "Relationship edges carry no validity interval, so the as-of state cannot be reconstructed; the historical half of this comparison is reported NOT COMPARABLE rather than as no change.",
-        "kind": "historical_slice_not_comparable"
       }
     ],
     "missing_sources": [

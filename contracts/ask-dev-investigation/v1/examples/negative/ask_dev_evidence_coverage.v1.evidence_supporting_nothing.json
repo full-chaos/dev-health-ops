@@ -199,6 +199,24 @@
       "state": "available_current"
     },
     {
+      "detail": null,
+      "observed_at": "2026-08-08T12:00:00Z",
+      "source_class": "work_item",
+      "state": "available_current"
+    },
+    {
+      "detail": null,
+      "observed_at": "2026-08-08T12:00:00Z",
+      "source_class": "status_change",
+      "state": "available_current"
+    },
+    {
+      "detail": null,
+      "observed_at": "2026-08-08T12:00:00Z",
+      "source_class": "pull_request",
+      "state": "available_current"
+    },
+    {
       "detail": "Last deployment sync completed 31 hours ago.",
       "observed_at": "2026-08-08T12:00:00Z",
       "source_class": "deployment",

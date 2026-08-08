@@ -172,13 +172,28 @@ class ClickHouseStore:
 
     @staticmethod
     def _normalize_datetime(value: Any) -> Any:
+        """Normalize to a timezone-AWARE UTC datetime for clickhouse-connect.
+
+        PR #1602 round-2 review NEW-2 (HIGH, BLOCKS) found the identical bug
+        pattern in ``metrics/sinks/clickhouse/_insert.py``'s sibling
+        ``_dt_to_clickhouse_datetime``: converting to UTC and then stripping
+        ``tzinfo`` before handing the value to clickhouse-connect, which
+        reinterprets a NAIVE datetime using the WRITER PROCESS's own local
+        system timezone -- a second, spurious conversion. This function has
+        the same shape and feeds the same client, including this PR's own
+        ``insert_projects`` write into ``project_declared_state_history``
+        (CHAOS-3563 review F2), so it carries the identical fix: return an
+        AWARE UTC datetime (never stripped), and treat a naive input as
+        already-UTC (this codebase's convention) rather than leaving it
+        naive and vulnerable to the same reinterpretation.
+        """
         if value is None:
             return None
         if not isinstance(value, datetime):
             return value
         if value.tzinfo is None:
-            return value
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     @staticmethod
     def _json_or_none(value: Any) -> str | None:
@@ -1967,23 +1982,32 @@ class ClickHouseStore:
                     or synced_at,
                 }
             )
-        await self._insert_rows(
-            "projects",
-            [
-                "id",
-                "org_id",
-                "provider",
-                "project_key",
-                "name",
-                "is_active",
-                "state",
-                "target_date",
-                "url",
-                "updated_at",
-                "last_synced",
-            ],
-            payload,
-        )
+        columns = [
+            "id",
+            "org_id",
+            "provider",
+            "project_key",
+            "name",
+            "is_active",
+            "state",
+            "target_date",
+            "url",
+            "updated_at",
+            "last_synced",
+        ]
+        # `projects` first, `project_declared_state_history` second (PR #1602
+        # review F5's ordering, applied to this writer too): if migration 074
+        # has not run yet here, the history insert fails loud AFTER
+        # `projects` already committed, not before.
+        await self._insert_rows("projects", columns, payload)
+        # PR #1602 review F2 (CONFIRMED): mirror into the additive history
+        # table too -- `_PROJECT_DECLARED_FACTS_SQL` (CHAOS-3563) reads
+        # `project_declared_state_history` exclusively now. A `projects`-only
+        # writer's declared state would otherwise silently vanish from that
+        # read the moment `projects`' own ReplacingMergeTree collapses it,
+        # exactly the gap migration 074 exists to close -- this writer must
+        # not reopen it.
+        await self._insert_rows("project_declared_state_history", columns, payload)
 
     async def insert_members(self, rows: list[Any]) -> None:
         if not rows:

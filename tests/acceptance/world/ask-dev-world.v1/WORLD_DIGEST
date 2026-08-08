@@ -99,6 +99,20 @@
           "row_count": 6
         }
       },
+      "project_declared_state_history": {
+        "disabled": {
+          "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "row_count": 0
+        },
+        "primary": {
+          "content_hash": "6c105600242dc106f99052f707c1c5a0edbf9cdcdbf8d775c8097b7ddf17d123",
+          "row_count": 14
+        },
+        "sibling": {
+          "content_hash": "a6d4db07cf54be758e37b242b4411c3504a4fd2010c8199c823a9abc733a618d",
+          "row_count": 1
+        }
+      },
       "projects": {
         "disabled": {
           "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -189,12 +203,12 @@
           "row_count": 0
         },
         "primary": {
-          "content_hash": "60071a496536045393ff710f415fe62fcae0d873c40134b5881dcf71a65ab485",
-          "row_count": 361
+          "content_hash": "56e202a228c726fdda7c790f66f0214406b75103b692813db35998cc1b0d8023",
+          "row_count": 357
         },
         "sibling": {
-          "content_hash": "baa8addb63a7665cc88ea24933adbf766b7fb3c599892b3c19850f1fb4002d2d",
-          "row_count": 22
+          "content_hash": "4473214cafdfe32636c6d82403ed1dcdf37dc4387981fe1690bcbfe14ed54294",
+          "row_count": 21
         }
       }
     },
@@ -209,7 +223,7 @@
           "row_count": 4
         },
         "sibling": {
-          "content_hash": "94ec1ff5e0168f8fa86fe6959ed0a8f3f4781d6f70fbc4e63d4a16050a94524b",
+          "content_hash": "abd6c108737301156572dc997af6b908184264f9c8295de141509506d5df4d23",
           "row_count": 2
         }
       },
@@ -313,13 +327,13 @@
       },
       "users": {
         "world": {
-          "content_hash": "7c327cc687565fb9af48db8eac3f7438e0b39100dc76f3257d54f38ad860fd39",
+          "content_hash": "bff02bb66a8abd6ae3b17041318663fd078d33af7eface6eba05989278352ef8",
           "row_count": 16
         }
       }
     }
   },
-  "digest": "2e1e254d3ee8b799fd58234e865ccf1361c2753c412d1b526bf4e79d1e445232",
+  "digest": "095684fb9e8781431c0d12f66fdc2e92ea21fab5ac810afeb2cac4f2710ebef2",
   "master_seed": 3219000,
   "schema_version": "ask_dev_world.v1"
 }

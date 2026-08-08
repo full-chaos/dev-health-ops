@@ -65,7 +65,7 @@ source prose; §5). Nothing was skipped and no tier was NOT_RUN.
 
 ### 3.1 The three classes, per tier
 
-| Class | Baseline | nano (deployed) | mini (ceiling) | gemma-e4b (local) | gemma-31b (local) | Comparable? |
+| Class | Baseline | nano (deployed parity) | mini (ceiling) | gemma-e4b (local cost floor) | gemma-31b (flash-class quality proxy) | Comparable? |
 |---|---|---|---|---|---|---|
 | (a) NATIVE_ANSWERABLE | 1/3 | **0/3** | **0/3** | **0/3** | **0/3** | **YES** — first time |
 | (b) NEEDS_DECLARED_STATE_HISTORY | 0/2 | **2/2** | **2/2** | **2/2** | **2/2** | **YES** |
@@ -159,10 +159,14 @@ them:
    transfer to the model Ask Dev actually runs. Any prior reading of
    class (c) as "a real capability exists, reliability unmeasured" was
    describing a model the product does not use.
-2. **The deployed cloud model is outperformed by both free local models.**
-   gemma-31b (local, no per-query cost) matched the cloud ceiling at 2/4;
-   gemma-e4b (small, local) beat nano at 1/4 vs 0/4. Whatever class (c)
-   is measuring, it does not track "cloud versus local" or price.
+2. **The deployed model is the weakest tier tested here, and the ordering
+   is by model class rather than by provider or price.** The flash-class
+   quality proxy (gemma-31b) matched the cloud ceiling at 2/4, and even the
+   small local model beat deployed parity 1/4 to 0/4. Read this as
+   evidence about *quality tiers*, not as a cost argument in either
+   direction — §8.1 records why a provider switch argued on cost grounds
+   is weak, and §8.1 also explains why gemma-31b is a proxy for hosted
+   flash-class models rather than a deployment candidate itself.
 3. **`O5_conflicts_injected` is the prompt-injection oracle, and nano is
    the only tier that fails it.** All three other tiers — including both
    local models — correctly refused the injected instruction. This is a
@@ -183,7 +187,7 @@ Latency per extraction call, authored oracles only:
 | gpt-5-mini | 8.5 – 34.6s | fastest |
 | gpt-5-nano | 14.3 – 45.8s | deployed |
 | gemma-4-e4b (local) | 17.3 – 59.3s | comparable to cloud |
-| gemma-4-31b (local) | 72 – 1009s | ~5–8× the cloud tiers |
+| gemma-4-31b (local) | 72 – 1009s | expected for a local 31B model; see §8.1 — this tier is a quality proxy, not a deployment candidate, so its latency is context, not a finding |
 
 **The timeout machinery fired once, for real, and behaved correctly.**
 `O7_valid` on gemma-31b exceeded its configured 900s window; the client
@@ -512,8 +516,22 @@ named tiers:
 |---|---|---|
 | `gpt-5-nano` | **DEPLOYED PARITY — primary scored tier** | The configured model. Parity claims must be read from here and nowhere else. |
 | `gpt-5-mini` | Ceiling / comparative | One tier up. Shows what the technique does when model quality is not the binding constraint, and keeps runs 1–2 comparable to this round. |
-| `google/gemma-4-e4b` (local) | Cost regime | A small locally-hosted model — the regime a cost-driven architecture would operate in. Not parity; no parity claim rests on it. |
-| `google/gemma-4-31b` (local) | Local scaling comparator | The same local family, materially larger. Paired with e4b it separates *"small models cannot do this"* from *"local models cannot do this"* — different inputs to a cost decision. |
+| `google/gemma-4-e4b` (local) | Local cost floor | A small locally-hosted model — the cheapest regime a cost-driven architecture could operate in. Not parity; no parity claim rests on it. |
+| `google/gemma-4-31b` (local) | **Flash-class quality proxy — NOT a deployment candidate** | Stands in for hosted mid-tier models (Gemini 3.5-flash / flash-lite, 3.6-flash) that this trial did not call directly. Its **answer quality** is the datum. It is not proposed for deployment in any environment — its latency disqualifies it, and that latency is expected for a locally-hosted 31B model, not a defect being reported. |
+
+**Reading the 31b row correctly matters**, because it is the row most
+easily misread. It is in the matrix to answer *"what would flash-class
+quality buy us?"* — not *"should we run gemma-31b?"* The answer to the
+second question is no, and nothing below argues otherwise. Paired with
+e4b it also separates *"small models cannot do this"* from *"local models
+cannot do this"*, which are different facts.
+
+A cost caveat belongs with that proxy, recorded here so a later reader does
+not reconstruct an argument the evidence does not support: **the hosted
+flash-class tiers this proxy stands for are not believed to be cheaper than
+`gpt-5-nano` / `gpt-5.6-luna` / `gpt-5.4-mini`.** A provider switch argued
+on cost grounds is therefore weak on its face. The 31b numbers are evidence
+about a *quality class*, not about a cheaper bill.
 
 The mechanical guarantee behind the labels: each tier's model is a literal
 in `MODEL_TIERS` and is passed into the arm explicitly
@@ -596,52 +614,70 @@ class, the cost regime is not a constraint at all.** That is a genuinely
 useful thing to know: it is the one place where a cheap local model is not
 a compromise.
 
-**Capability that tracks model SIZE, not price or provider — class (c).**
+**Capability that tracks model CLASS, not provider or price — class (c).**
 Ranked by authored-oracle score: `gpt-5-mini` 2/4 and `gemma-4-31b` 2/4,
-then `gemma-4-e4b` 1/4, then `gpt-5-nano` 0/4. A free local 31B model
-matched the paid cloud ceiling; the paid, *deployed* cloud model came last.
-Two consequences worth stating plainly:
+then `gemma-4-e4b` 1/4, then `gpt-5-nano` 0/4. Read through §8.1's framing,
+the useful statement is not about gemma specifically:
 
-- **"Cloud is better than local" is not what this measures.** The ordering
-  is roughly by capacity, and it cuts across the cloud/local boundary in
-  both directions.
-- **The deployed configuration is the weakest tier tested on this class.**
-  Any cost comparison that treats today's deployment as the quality
-  baseline and local models as the cheap downgrade has the direction wrong
-  for class (c).
+- **Flash-class quality would buy the `O3_supersession` and
+  `O5_conflicts_injected` results that deployed parity currently misses.**
+  That is what the 31b proxy is evidence for. It scored what the cloud
+  ceiling scored.
+- **The deployed configuration is the weakest tier tested on this class**,
+  at 0/4. Any comparison treating today's deployment as the quality
+  baseline has the direction wrong for class (c).
+- **"Cloud versus local" is not the axis.** The ordering runs roughly by
+  model class and cuts across the cloud/local boundary in both directions.
+- **This is not a cost argument in either direction.** Per §8.1, the hosted
+  flash-class tiers the 31b proxy represents are not believed to undercut
+  `gpt-5-nano` / `gpt-5.6-luna` / `gpt-5.4-mini`. So the class-(c) gap is a
+  *quality-tier* decision with a cost attached, not a saving waiting to be
+  collected.
 
-**Cost that is not priced in dollars — latency and contract fidelity.**
-The local tiers are not free once operating cost is counted honestly:
+**Costs that are not priced per token.** Two apply to the genuinely cheap
+regime (`gemma-4-e4b`, the local cost floor), and both belong in any
+comparison that treats it as the low-cost option:
 
-- `gemma-4-31b` ran ~5–8× slower than the cloud tiers (72–1009s per call
-  versus 8–46s), and produced the run's only timeout, at a 900s window
-  (§3.5). At interactive latencies that is not a drop-in substitution.
-- `gemma-4-e4b` was competitive on latency (17–59s) but is the tier that
-  emitted the self-contradictory contract payload in §8.2.
-- Production currently gives every provider a 60s transport window
-  (§9.2 / CHAOS-3608), which is shorter than what three of the four
-  measured tiers needed at their slowest. **The local cost regime has never
-  been observed in production under a window that would let it finish.**
+- **Contract fidelity.** `gemma-4-e4b` is the tier that emitted the
+  self-contradictory payload in §8.2. Putting a small local model behind a
+  structured-output contract needs a validating/repairing layer or
+  schema-constrained decoding; neither is free.
+- **Production cannot currently run the local regime at all.** Every
+  provider gets a 60s transport window (§9.2 / CHAOS-3608), shorter than
+  what several measured tiers needed at their slowest. **The local cost
+  floor has never been observed in production under a window that would
+  let it finish** — so no operational impression of it is yet trustworthy.
+
+`gemma-4-31b`'s latency is deliberately excluded from that list: it is a
+quality proxy, not a deployment candidate, and its slowness is expected
+rather than a finding (§8.1, §3.5).
 
 **The options this leaves, stated without a preference between them:**
 
-1. Accept class (c) as out of reach at deployed parity and scope any
-   capability claim to classes (a)/(b), where parity is not a constraint.
-2. Move the deployed model up (nano → mini) and pay per-query cloud cost
-   for a 0/4 → 2/4 class-(c) change on this corpus.
-3. Move to a larger *local* model (31b) for equivalent class-(c) results at
-   no per-query cost, paying instead in latency, hosting, and a
-   contract-validation layer (§8.2) — and only after CHAOS-3608 makes the
-   window survivable.
-4. Treat class (c) as an extraction-cache problem rather than a live-query
-   one (§7's Option A), where a slow or expensive model runs once per fact
-   rather than once per question, and tier cost stops being per-query at
-   all.
+1. **Accept the class-(c) gap at deployed parity** and scope any capability
+   claim to classes (a)/(b), where parity is not a constraint at all.
+2. **Move up a quality tier** — `gpt-5-nano` → `gpt-5-mini`, or a
+   flash-class hosted model of the kind the 31b proxy stands for — and pay
+   the higher per-query price for a 0/4 → 2/4 class-(c) change on this
+   corpus. Note this is a quality purchase, not a cost saving.
+3. **Treat class (c) as an extraction-cache problem rather than a
+   live-query one** (§7's Option A): a better or slower model runs once per
+   fact rather than once per question, so tier cost stops being per-query
+   and the quality/price trade changes shape entirely.
+4. **Do nothing on class (c) yet** — 11 of its 15 oracles are structurally
+   unreachable by this arm (§5), so the measured sample is 4. That may be
+   too thin a base for any tier decision.
 
-Option 4 interacts with §7's rebuild-equivalence choice and with the
-tier-sensitivity finding there: if extraction is cached, the model identity
-must be part of the cache key, because §3.4 shows two tiers producing
-materially different fact sets from identical input.
+Option 3 interacts with §7's rebuild-equivalence choice and with the
+tier-sensitivity finding there: if extraction is cached, **the model
+identity must be part of the cache key**, because §3.4 shows different
+tiers producing materially different fact sets from identical input.
+
+Two findings are independent of whichever option is chosen, and are the
+part of this section least likely to change: **class (b) needs no tier
+decision at all** (2/2 everywhere, §3.3), and **the `O5_conflicts_injected`
+failure is specific to deployed parity** (§3.4) — a security-relevant
+result that a purely cost- or quality-framed discussion would skip past.
 
 **No recommendation is made among these.** Each trades a different
 resource, and which resource is scarce is not a question this trial can

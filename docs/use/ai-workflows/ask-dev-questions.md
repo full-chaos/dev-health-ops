@@ -19,8 +19,15 @@ Ask Dev answers a bounded set of question families about work your organization 
 
 For the surfaces themselves — the in-app window, the `/dev` workspace, shared conversation history, and retention — see [Ask Dev, Context Fabric, and agent context](index.md#ask-dev-context-fabric-and-agent-context). For what an answer's parts mean, see [Read an Ask Dev answer](ask-dev-answers.md).
 
-!!! note "Screenshot placeholder — WEB lane"
-    Representative current screenshot of the Ask Dev window with a supported question in progress, desktop, both themes. Owned by the Ask Dev web lane; not authored here.
+<figure class="fc-product-figure" markdown="1">
+![The Ask Dev window mid-investigation: the submitted question above a "Starting the investigation" progress indicator and Cancel action, dark theme.](../../assets/ask-dev/ask-dev-questions-in-progress-desktop-dark.png)
+<figcaption>Ask Dev window with a supported question in progress, desktop, dark theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when the Ask Dev window layout changes materially.</figcaption>
+</figure>
+
+<figure class="fc-product-figure" markdown="1">
+![The Ask Dev window mid-investigation: the submitted question above a "Starting the investigation" progress indicator and Cancel action, light theme.](../../assets/ask-dev/ask-dev-questions-in-progress-desktop-light.png)
+<figcaption>Ask Dev window with a supported question in progress, desktop, light theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when the Ask Dev window layout changes materially.</figcaption>
+</figure>
 
 ## Name the subject so Ask Dev can find it
 

@@ -774,62 +774,36 @@ class TestTtlHorizonGuard:
         assert "telemetry_signal_bucket" in message
 
     @pytest.mark.asyncio
-    async def test_an_empty_registry_fails_closed_instead_of_skipping_every_table(
+    async def test_a_broken_ttl_vocabulary_fails_closed_before_any_query(
         self, monkeypatch
     ) -> None:
-        """Codex finding (HIGH, confirmed): `clickhouse_ttl_retentions()`
-        returning `{}` (migrations-directory path broken, parser
-        regression) used to make every table read as "no TTL, nothing to
-        check" and pass with ZERO queries issued -- silently minting an
-        unchecked snapshot. Reproduced directly against a client that would
-        report a massive violation if it were ever actually queried.
+        """This guard's OWN contract: whatever `assert_ttl_vocabulary_is_
+        consistent` decides, this function must propagate it as a
+        `SnapshotError` before issuing a single per-table query. The
+        vocabulary-consistency logic itself (empty registry, partial
+        registry, a fifth TTL table the precise parser misses via an
+        unmatched syntax variant, a registry extra, a KNOWN_TTL_TABLES
+        entry that's gone stale, ...) is exhaustively covered in
+        `tests/test_ttl_registry.py::TestVocabularyConsistency` -- this
+        test proves this guard actually calls it and wraps its failure
+        correctly, not that the check's own logic is correct.
         """
         from dev_health_ops.fixtures import world_snapshot
 
-        monkeypatch.setattr(world_snapshot, "clickhouse_ttl_retentions", lambda: {})
+        def _broken() -> None:
+            raise RuntimeError("synthetic vocabulary break: table_x")
+
+        monkeypatch.setattr(
+            world_snapshot, "assert_ttl_vocabulary_is_consistent", _broken
+        )
         client = _FakeTtlCountClient(counts={"feature_flag_event": 999999})
 
-        with pytest.raises(SnapshotError, match="missing known"):
+        with pytest.raises(SnapshotError, match="synthetic vocabulary break"):
             await _assert_no_ttl_horizon_rows(client, ["feature_flag_event"])
 
         assert client.queries == [], (
             "must fail before issuing a single per-table query once the "
-            "registry itself looks broken"
-        )
-
-    @pytest.mark.asyncio
-    async def test_a_partial_registry_fails_closed_too(self, monkeypatch) -> None:
-        """Codex round-2 finding (HIGH, confirmed): "non-empty" is not the
-        same guarantee as "complete". Dropping just one known TTL'd table
-        from an otherwise-full registry used to let a massive violation for
-        THAT exact table pass silently -- `retentions.get(table)` returning
-        `None` is indistinguishable from "genuinely no TTL" at this call
-        site. Every table in KNOWN_TTL_TABLES must be present.
-        """
-        from dev_health_ops.fixtures import world_snapshot
-        from dev_health_ops.fixtures.ttl_registry import (
-            KNOWN_TTL_TABLES,
-            clickhouse_ttl_retentions,
-        )
-
-        real = clickhouse_ttl_retentions()
-        partial = {
-            table: retention
-            for table, retention in real.items()
-            if table != "telemetry_signal_bucket"
-        }
-        assert "telemetry_signal_bucket" in KNOWN_TTL_TABLES
-        monkeypatch.setattr(
-            world_snapshot, "clickhouse_ttl_retentions", lambda: partial
-        )
-        client = _FakeTtlCountClient(counts={"telemetry_signal_bucket": 999999})
-
-        with pytest.raises(SnapshotError, match="telemetry_signal_bucket"):
-            await _assert_no_ttl_horizon_rows(client, ["telemetry_signal_bucket"])
-
-        assert client.queries == [], (
-            "must fail before issuing a single per-table query once the "
-            "registry looks incomplete"
+            "vocabulary check itself fails"
         )
 
     @pytest.mark.asyncio

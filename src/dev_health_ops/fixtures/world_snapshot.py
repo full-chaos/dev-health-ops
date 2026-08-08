@@ -128,8 +128,8 @@ from typing import Any
 
 from dev_health_ops.fixtures.ttl_horizon import TTL_SAFETY_MARGIN
 from dev_health_ops.fixtures.ttl_registry import (
-    KNOWN_TTL_TABLES,
     TTL_SAFETY_MARGIN_DAYS,
+    assert_ttl_vocabulary_is_consistent,
     clickhouse_ttl_retentions,
     snapshot_expiry,
 )
@@ -674,27 +674,30 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
     table still parsing fine) let a fake client reporting 999999 violating
     rows for that exact table pass silently -- ``retentions.get(table)``
     returning ``None`` is indistinguishable from "genuinely no TTL" at this
-    call site. Every table in :data:`KNOWN_TTL_TABLES` must be present, not
-    merely the registry being non-empty.
+    call site.
+
+    Codex round-3 finding (HIGH, confirmed): checking against
+    :data:`KNOWN_TTL_TABLES` alone only catches a table falling OUT of an
+    otherwise-working registry -- a table that never enters the registry
+    (an unmatched TTL syntax variant) AND was never added to
+    ``KNOWN_TTL_TABLES`` satisfies that check trivially. Reproduced
+    directly: a synthetic ``TTL occurred_at + INTERVAL 4 WEEK`` (a real
+    ClickHouse form the precise parser's ``DAY``-only regex cannot match)
+    is invisible to :func:`clickhouse_ttl_retentions` entirely, so the
+    previous ``KNOWN_TTL_TABLES - retentions.keys()`` check passed
+    vacuously. :func:`assert_ttl_vocabulary_is_consistent` closes this with
+    an independent third source (see its own docstring).
 
     The per-table query result is held to the same standard: a malformed or
     empty result is never folded into "0 violating rows" (see
     :func:`_scalar_count`).
     """
 
+    try:
+        assert_ttl_vocabulary_is_consistent()
+    except RuntimeError as exc:
+        raise SnapshotError(f"world snapshot: {exc}") from exc
     retentions = clickhouse_ttl_retentions()
-    missing_known = KNOWN_TTL_TABLES - retentions.keys()
-    if missing_known:
-        raise SnapshotError(
-            "world snapshot: the ClickHouse TTL registry is missing known "
-            f"TTL'd table(s) {sorted(missing_known)} -- a registry that "
-            "parses SOME tables but not ALL of "
-            f"dev_health_ops.fixtures.ttl_registry.KNOWN_TTL_TABLES means "
-            "the parser or its migrations-directory path broke for at "
-            "least one table, not that those tables stopped carrying a "
-            "TTL. Refusing to mint a snapshot this guard cannot actually "
-            "check for every known-at-risk table (CHAOS-3602)."
-        )
     violations: list[str] = []
     for table in tables:
         retention = retentions.get(table)

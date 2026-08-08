@@ -153,9 +153,17 @@ def max_generated_age_days_for_table(table: str) -> int | None:
     only fail-open path -- a PARTIAL registry (every OTHER known TTL table
     parses fine, one does not) makes ``retentions.get(table)`` return
     ``None`` for the missing one, indistinguishable from "genuinely no
-    TTL", so an unparseable table silently loses its clamp entirely. Every
-    table in :data:`ttl_registry.KNOWN_TTL_TABLES` must be present before
-    ANY lookup against this registry is trusted.
+    TTL", so an unparseable table silently loses its clamp entirely.
+
+    Codex round-3 finding (HIGH, confirmed): checking against
+    :data:`ttl_registry.KNOWN_TTL_TABLES` alone only catches a table
+    falling OUT of an otherwise-working registry -- a table that never
+    enters the registry (an unmatched TTL syntax variant) AND was never
+    added to ``KNOWN_TTL_TABLES`` satisfies that check trivially.
+    Reproduced directly with a synthetic ``TTL occurred_at + INTERVAL 4
+    WEEK`` (a real ClickHouse form the precise, ``DAY``-only parser cannot
+    match). See :func:`ttl_registry.assert_ttl_vocabulary_is_consistent`
+    for the independent third source that closes this.
 
     Codex round-2 finding (HIGH, confirmed): a NON-STRICT ``ceiling +
     TTL_SAFETY_MARGIN.days <= retention_days`` allows landing EXACTLY on
@@ -170,22 +178,18 @@ def max_generated_age_days_for_table(table: str) -> int | None:
     """
 
     from dev_health_ops.fixtures.ttl_registry import (
-        KNOWN_TTL_TABLES,
+        assert_ttl_vocabulary_is_consistent,
         clickhouse_ttl_retentions,
     )
 
-    retentions = clickhouse_ttl_retentions()
-    missing_known = KNOWN_TTL_TABLES - retentions.keys()
-    if missing_known:
+    try:
+        assert_ttl_vocabulary_is_consistent()
+    except RuntimeError as exc:
         raise RuntimeError(
-            f"the ClickHouse TTL registry is missing known TTL'd table(s) "
-            f"{sorted(missing_known)} while computing a generation ceiling "
-            f"for {table!r} -- a registry that parses SOME tables but not "
-            "ALL of dev_health_ops.fixtures.ttl_registry.KNOWN_TTL_TABLES "
-            "means the parser or its migrations-directory path broke for "
-            "at least one table, not that those tables stopped carrying a "
-            "TTL (see tightest_ttl_days for the same rule applied globally)"
-        )
+            f"{exc} (while computing a generation ceiling for {table!r}; "
+            "see tightest_ttl_days for the same rule applied globally)"
+        ) from exc
+    retentions = clickhouse_ttl_retentions()
     retention = retentions.get(table)
     if retention is None:
         return None

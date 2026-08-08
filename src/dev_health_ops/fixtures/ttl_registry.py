@@ -96,6 +96,108 @@ KNOWN_TTL_TABLES: frozenset[str] = frozenset(
     }
 )
 
+# Codex round-3 finding (HIGH, confirmed): a table matched here but NOT
+# extracted by `_CREATE_TABLE_RE`/`_TTL_RE` proves the precise parser missed
+# a real TTL clause. Deliberately loose -- no line anchor on the table name,
+# no specific time unit -- so it stays correct against TTL syntax the
+# precise, structured parser does not handle. Reproduced directly: a
+# synthetic `TTL occurred_at + INTERVAL 4 WEEK` (a real ClickHouse form;
+# `_TTL_RE` requires the literal word "DAY") is invisible to
+# `clickhouse_ttl_retentions` entirely -- the table enters neither the
+# registry nor (having never been seen) `KNOWN_TTL_TABLES`, so the previous
+# `KNOWN_TTL_TABLES - retentions.keys()` check passed vacuously and every
+# TTL-dependent guard treated the table as risk-free.
+_COARSE_CREATE_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(?P<table>[A-Za-z_]\w*)`?",
+    re.IGNORECASE,
+)
+
+
+def _coarse_ttl_table_sweep() -> frozenset[str]:
+    """A second, INDEPENDENT, deliberately LOOSER pass over the same
+    migration source used by :func:`clickhouse_ttl_retentions`.
+
+    Flags a statement as TTL-bearing on the bare substrings "TTL" and
+    "INTERVAL" alone -- no required time unit, no anchored table pattern --
+    so a real TTL clause the precise parser's stricter regex cannot match
+    still gets counted here. This function's whole job is to be WRONG in
+    the permissive direction (a superset of the precise registry); catching
+    it being wrong in the other direction is exactly what
+    :func:`assert_ttl_vocabulary_is_consistent` is for.
+    """
+
+    if not _MIGRATIONS_DIR.exists():
+        return frozenset()
+
+    tables: set[str] = set()
+    for path in sorted(_MIGRATIONS_DIR.glob("*")):
+        if path.suffix not in {".sql", ".py"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for statement in text.split(";"):
+            upper = statement.upper()
+            if "TTL" not in upper or "INTERVAL" not in upper:
+                continue
+            match = _COARSE_CREATE_TABLE_RE.search(statement)
+            if match:
+                tables.add(match.group("table"))
+    return frozenset(tables)
+
+
+def assert_ttl_vocabulary_is_consistent() -> None:
+    """Cross-checks THREE independent descriptions of "which tables carry a
+    TTL" against each other -- the precise parser (:func:`clickhouse_ttl_
+    retentions`), an independent coarse sweep (:func:`_coarse_ttl_table_
+    sweep`), and the hand-maintained :data:`KNOWN_TTL_TABLES` -- and fails
+    loudly the moment any two disagree, in EITHER direction.
+
+    Codex round-3 finding (HIGH, confirmed): every previous check compared
+    the registry against KNOWN_TTL_TABLES alone, which only catches a table
+    falling OUT of an otherwise-working registry. A table that never enters
+    the registry (an unmatched TTL syntax variant) AND was never added to
+    KNOWN_TTL_TABLES (nobody knew about it) satisfies "the registry covers
+    every known table" trivially -- the vocabulary was checking itself
+    against itself. The coarse sweep is the independent third source that
+    breaks that circularity: precision (does the parser over-match?) is
+    checked by comparing against the coarse sweep's recall, and the coarse
+    sweep's own correctness is exactly why it is deliberately permissive
+    rather than structured.
+    """
+
+    precise = set(clickhouse_ttl_retentions().keys())
+    coarse = set(_coarse_ttl_table_sweep())
+    known = set(KNOWN_TTL_TABLES)
+
+    problems: list[str] = []
+    if coarse - precise:
+        problems.append(
+            "the coarse sweep found TTL'd table(s) the precise parser "
+            f"missed: {sorted(coarse - precise)}"
+        )
+    if precise - coarse:
+        problems.append(
+            "the precise parser found TTL'd table(s) the coarse sweep "
+            "missed -- should be impossible, since the coarse sweep is a "
+            f"strict superset by construction: {sorted(precise - coarse)}"
+        )
+    if coarse - known:
+        problems.append(
+            "TTL'd table(s) not yet added to KNOWN_TTL_TABLES: "
+            f"{sorted(coarse - known)}"
+        )
+    if known - coarse:
+        problems.append(
+            "KNOWN_TTL_TABLES entry no longer found carrying a TTL clause "
+            f"(renamed, dropped, or the migration changed shape): "
+            f"{sorted(known - coarse)}"
+        )
+    if problems:
+        raise RuntimeError(
+            "TTL table vocabulary is inconsistent across the precise "
+            "parser, an independent coarse sweep, and the hand-maintained "
+            "KNOWN_TTL_TABLES registry (CHAOS-3602) -- " + "; ".join(problems)
+        )
+
 
 @lru_cache(maxsize=1)
 def clickhouse_ttl_retentions() -> dict[str, TtlRetention]:

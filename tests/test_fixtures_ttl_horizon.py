@@ -384,14 +384,18 @@ class TestPerTableCeilingCompatibleWithShelfLife:
 
     def test_an_empty_registry_fails_closed(self, monkeypatch) -> None:
         """Same fail-closed rule as the mint-time guard: a broken registry
-        must not silently disable this ceiling's protection."""
+        must not silently disable this ceiling's protection. Now routed
+        through `assert_ttl_vocabulary_is_consistent` (codex round-3) --
+        the independent coarse sweep, reading the REAL migrations
+        unaffected by this patch, is what actually surfaces the
+        disagreement."""
         from dev_health_ops.fixtures import ttl_horizon as ttl_horizon_module
 
         monkeypatch.setattr(
             "dev_health_ops.fixtures.ttl_registry.clickhouse_ttl_retentions",
             lambda: {},
         )
-        with pytest.raises(RuntimeError, match="ZERO|empty|broke"):
+        with pytest.raises(RuntimeError, match="inconsistent"):
             ttl_horizon_module.max_generated_age_days_for_table("feature_flag_event")
 
     def test_a_partial_registry_fails_closed_too(self, monkeypatch) -> None:

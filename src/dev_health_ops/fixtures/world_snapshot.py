@@ -128,6 +128,7 @@ from typing import Any
 
 from dev_health_ops.fixtures.ttl_horizon import TTL_SAFETY_MARGIN
 from dev_health_ops.fixtures.ttl_registry import (
+    KNOWN_TTL_TABLES,
     TTL_SAFETY_MARGIN_DAYS,
     clickhouse_ttl_retentions,
     snapshot_expiry,
@@ -603,6 +604,38 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _scalar_count(result: Any, *, context: str, default: int | None = None) -> int:
+    """Extract a single scalar ``count()`` from a ClickHouse query result --
+    never trusting ``result_rows[0][0]`` unvalidated.
+
+    Codex round-2 finding (MEDIUM, confirmed): a bare ``len(result_rows) !=
+    1`` check let ``result_rows == [[]]`` (one row, ZERO columns) through,
+    which then raised an uncontrolled ``IndexError`` at ``[0][0]`` instead
+    of a named ``SnapshotError`` -- and ``result_rows == [[0, "extra"]]``
+    (an unexpected extra column) passed silently. Every ``count()`` call
+    site in this module -- the TTL-horizon guard, both counts in the dump-
+    verification retry loop -- now goes through this ONE function, so a
+    response-shape defect fails the same, named way everywhere instead of
+    differently depending on which call site happened to hit it.
+
+    ``default`` is for a genuinely diagnostic-only caller (a warning
+    message, not a pass/fail decision) that would rather log a sentinel
+    than abort on a malformed *diagnostic* query; omitted, this raises.
+    """
+
+    rows = getattr(result, "result_rows", None)
+    if not rows or len(rows) != 1 or len(rows[0]) != 1:
+        if default is not None:
+            return default
+        raise SnapshotError(
+            f"world snapshot: {context} returned a malformed result "
+            f"({rows!r}) instead of a single scalar count() row -- "
+            'refusing to fold that into "0" (a measurement that did not '
+            "actually happen must fail, not silently pass)."
+        )
+    return int(rows[0][0])
+
+
 async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
     """CHAOS-3602: refuse to snapshot a table holding rows within
     ``TTL_SAFETY_MARGIN_DAYS`` of their own TTL deletion horizon.
@@ -633,22 +666,34 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
     massive violation had it been queried at all. This schema is known to
     carry several TTL'd tables, so an empty registry always means the
     parser/path broke, never that the risk went away -- fail loudly instead
-    of silently minting an unchecked snapshot. The per-table query result is
-    held to the same standard: a malformed or empty result is never folded
-    into "0 violating rows".
+    of silently minting an unchecked snapshot.
+
+    Codex round-2 finding (HIGH, confirmed): "non-empty" is not the same
+    guarantee as "complete". Reproduced directly: dropping just
+    ``telemetry_signal_bucket`` from an otherwise-full registry (every OTHER
+    table still parsing fine) let a fake client reporting 999999 violating
+    rows for that exact table pass silently -- ``retentions.get(table)``
+    returning ``None`` is indistinguishable from "genuinely no TTL" at this
+    call site. Every table in :data:`KNOWN_TTL_TABLES` must be present, not
+    merely the registry being non-empty.
+
+    The per-table query result is held to the same standard: a malformed or
+    empty result is never folded into "0 violating rows" (see
+    :func:`_scalar_count`).
     """
 
     retentions = clickhouse_ttl_retentions()
-    if not retentions:
+    missing_known = KNOWN_TTL_TABLES - retentions.keys()
+    if missing_known:
         raise SnapshotError(
-            "world snapshot: the ClickHouse TTL registry parsed ZERO "
-            "retention entries -- this schema is known to carry several "
-            "TTL'd tables (feature_flag_event, telemetry_signal_bucket, "
-            "release_impact_daily, product_telemetry_events), so an empty "
-            "registry means dev_health_ops.fixtures.ttl_registry's "
-            "migrations-directory parsing broke, not that the TTL-horizon "
-            "risk went away. Refusing to mint a snapshot this guard cannot "
-            "actually check (CHAOS-3602)."
+            "world snapshot: the ClickHouse TTL registry is missing known "
+            f"TTL'd table(s) {sorted(missing_known)} -- a registry that "
+            "parses SOME tables but not ALL of "
+            f"dev_health_ops.fixtures.ttl_registry.KNOWN_TTL_TABLES means "
+            "the parser or its migrations-directory path broke for at "
+            "least one table, not that those tables stopped carrying a "
+            "TTL. Refusing to mint a snapshot this guard cannot actually "
+            "check for every known-at-risk table (CHAOS-3602)."
         )
     violations: list[str] = []
     for table in tables:
@@ -661,15 +706,9 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
             f"SELECT count() FROM `{table}` "
             f"WHERE `{retention.column}` <= now() - INTERVAL {safe_days} DAY",
         )
-        if not result.result_rows or len(result.result_rows) != 1:
-            raise SnapshotError(
-                f"world snapshot: the TTL-horizon check for table {table!r} "
-                f"returned a malformed result ({result.result_rows!r}) "
-                "instead of a single scalar count() row -- refusing to fold "
-                'that into "zero violating rows" (a measurement that did '
-                "not actually happen must fail, not silently pass)."
-            )
-        count = int(result.result_rows[0][0])
+        count = _scalar_count(
+            result, context=f"the TTL-horizon check for table {table!r}"
+        )
         if count:
             violations.append(
                 f"{table}: {count} row(s) with {retention.column} at or "
@@ -747,7 +786,9 @@ async def _dump_clickhouse(
         pre_count = await asyncio.to_thread(
             client.query, f"SELECT count() FROM `{table}`{final}"
         )
-        expected = int(pre_count.result_rows[0][0])
+        expected = _scalar_count(
+            pre_count, context=f"the pre-dump count() for table {table!r}"
+        )
 
         # Decode what the payload ACTUALLY holds, server-side, via a
         # throwaway staging table -- not a second independent count() on the
@@ -771,7 +812,13 @@ async def _dump_clickhouse(
             decoded = await asyncio.to_thread(
                 client.query, f"SELECT count() FROM `{verify_table}`"
             )
-            decoded_count = int(decoded.result_rows[0][0])
+            decoded_count = _scalar_count(
+                decoded,
+                context=(
+                    f"the decoded-payload count() for table {table!r} "
+                    f"(attempt {attempt})"
+                ),
+            )
         finally:
             await asyncio.to_thread(
                 client.command, f"DROP TABLE IF EXISTS `{verify_table}`"
@@ -787,8 +834,13 @@ async def _dump_clickhouse(
             "AND database = {db:String} AND active",
             parameters={"t": table, "db": client.database},
         )
-        active_parts = (
-            int(parts_result.result_rows[0][0]) if parts_result.result_rows else -1
+        # Diagnostic-only (feeds the warning message below, not a decision):
+        # a malformed result here logs a sentinel rather than aborting the
+        # retry loop over a formatting query.
+        active_parts = _scalar_count(
+            parts_result,
+            context=f"the system.parts diagnostic for table {table!r}",
+            default=-1,
         )
         last_diagnostics = (
             f"table={table!r} attempt={attempt}/{_DUMP_VERIFY_ATTEMPTS} "

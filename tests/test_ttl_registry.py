@@ -12,6 +12,7 @@ import pytest
 
 from dev_health_ops.fixtures import ttl_registry as ttl_registry_module
 from dev_health_ops.fixtures.ttl_registry import (
+    KNOWN_TTL_TABLES,
     MAX_PINNED_NOW_STALENESS_DAYS,
     RESTORE_SIDE_SLACK_DAYS,
     TTL_SAFETY_MARGIN_DAYS,
@@ -42,14 +43,12 @@ class TestParsesTheRealMigrations:
 
     def test_every_known_ttl_table_is_discovered(self) -> None:
         """Pins the full current set so a migration adding/removing a TTL
-        is a visible, deliberate test change -- not a silent gap."""
+        is a visible, deliberate test change -- not a silent gap. Checked
+        against the SAME `KNOWN_TTL_TABLES` constant the runtime fail-closed
+        checks use, not a second hand-copied literal that could drift from
+        it independently."""
         retentions = clickhouse_ttl_retentions()
-        assert retentions.keys() >= {
-            "feature_flag_event",
-            "telemetry_signal_bucket",
-            "release_impact_daily",
-            "product_telemetry_events",
-        }
+        assert retentions.keys() >= KNOWN_TTL_TABLES
 
     def test_a_table_with_no_ttl_has_no_safe_backdate_limit(self) -> None:
         assert max_safe_backdate_days("projects") is None

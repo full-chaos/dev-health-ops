@@ -67,6 +67,36 @@ class TtlRetention:
     retention_days: int
 
 
+#: Codex round-2 finding (HIGH, confirmed): an empty registry is not the
+#: only way :func:`clickhouse_ttl_retentions` can fail open -- a parser
+#: regression or migration-format change can miss ONE table's TTL clause
+#: while every other table still parses fine, and ``retentions.get(table)``
+#: returning ``None`` is indistinguishable from "genuinely no TTL" at every
+#: call site. Reproduced directly: dropping ``telemetry_signal_bucket``
+#: alone from an otherwise-full registry let a 999999-row violation for
+#: that exact table pass `_assert_no_ttl_horizon_rows` silently.
+#:
+#: This CLOSED VOCABULARY is the backstop: every table known to carry a
+#: production TTL today. `_assert_no_ttl_horizon_rows` and
+#: `ttl_horizon.max_generated_age_days_for_table` both require the parsed
+#: registry to cover ALL of these before trusting ANY lookup against it --
+#: a registry missing even one of them fails closed instead of silently
+#: treating the missing table as risk-free. A future migration adding a new
+#: TTL'd table is a deliberate, visible change to this set (mirrored by
+#: `tests/test_ttl_registry.py::test_every_known_ttl_table_is_discovered`),
+#: not something this code can discover on its own -- that residual is the
+#: same one `ttl_horizon.tightest_ttl_days` already accepts for the same
+#: reason (see its own docstring).
+KNOWN_TTL_TABLES: frozenset[str] = frozenset(
+    {
+        "feature_flag_event",
+        "telemetry_signal_bucket",
+        "release_impact_daily",
+        "product_telemetry_events",
+    }
+)
+
+
 @lru_cache(maxsize=1)
 def clickhouse_ttl_retentions() -> dict[str, TtlRetention]:
     """Every ClickHouse table carrying a row-level TTL, keyed by table name.

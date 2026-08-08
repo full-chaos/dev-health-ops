@@ -49,6 +49,19 @@ from pathlib import Path
 #: literal scattered across generators.
 TTL_SAFETY_MARGIN = timedelta(days=30)
 
+#: Extra, STRICT headroom `max_generated_age_days_for_table` keeps below
+#: ``retention_days - TTL_SAFETY_MARGIN.days``, on top of the margin itself.
+#: Codex round-2 finding (HIGH, confirmed): without this, a row generated at
+#: the naive ceiling and restored at the full advertised shelf life lands
+#: EXACTLY on its table's TTL horizon (a 90-day TTL, 60-day ceiling, 30-day
+#: shelf life = exactly 90 days old) -- and this project's own live pre-dump
+#: guard already treats a row `<= now() - N DAY` old as unsafe, while
+#: ClickHouse's TTL deletion is asynchronous and can fire at or before that
+#: exact instant. One day is the minimum that turns "ceiling + shelf_life <=
+#: retention" into a STRICT "<", so hitting the boundary exactly is no
+#: longer possible for any known table.
+PER_TABLE_CEILING_HEADROOM_DAYS = 1
+
 _TTL_PATTERN = re.compile(
     r"TTL\s+.*?\+\s*INTERVAL\s+(?P<days>\d+)\s+DAY\s+DELETE", re.IGNORECASE
 )
@@ -135,20 +148,50 @@ def max_generated_age_days_for_table(table: str) -> int | None:
     ``_assert_snapshot_within_shelf_life`` actually promises callers -- so
     every generator's ceiling stays honest about what a restore up to the
     full advertised shelf life can still find intact.
+
+    Codex round-2 finding (HIGH, confirmed): an empty registry was not the
+    only fail-open path -- a PARTIAL registry (every OTHER known TTL table
+    parses fine, one does not) makes ``retentions.get(table)`` return
+    ``None`` for the missing one, indistinguishable from "genuinely no
+    TTL", so an unparseable table silently loses its clamp entirely. Every
+    table in :data:`ttl_registry.KNOWN_TTL_TABLES` must be present before
+    ANY lookup against this registry is trusted.
+
+    Codex round-2 finding (HIGH, confirmed): a NON-STRICT ``ceiling +
+    TTL_SAFETY_MARGIN.days <= retention_days`` allows landing EXACTLY on
+    the TTL horizon (a 90-day TTL, 60-day ceiling, full 30-day shelf life
+    all in effect at once = exactly 90 days old) -- and this project's own
+    live pre-dump guard already treats ``<= now() - N DAY`` as unsafe, while
+    ClickHouse's TTL deletion is asynchronous and can fire at or before that
+    exact instant. ``PER_TABLE_CEILING_HEADROOM_DAYS`` below buys one full
+    day of strict margin so the invariant
+    (``tests/test_fixtures_ttl_horizon.py::TestPerTableCeilingCompatibleWith
+    ShelfLife``) can require ``<`` rather than ``<=``.
     """
 
-    from dev_health_ops.fixtures.ttl_registry import clickhouse_ttl_retentions
+    from dev_health_ops.fixtures.ttl_registry import (
+        KNOWN_TTL_TABLES,
+        clickhouse_ttl_retentions,
+    )
 
     retentions = clickhouse_ttl_retentions()
-    if not retentions:
+    missing_known = KNOWN_TTL_TABLES - retentions.keys()
+    if missing_known:
         raise RuntimeError(
-            f"no per-table TTL retentions found while computing a generation "
-            f"ceiling for {table!r} -- this schema is known to carry several "
-            "TTL'd tables, so an empty registry means the parser or its "
-            "migrations-directory path broke, not that the risk went away "
-            "(see tightest_ttl_days for the same rule applied globally)"
+            f"the ClickHouse TTL registry is missing known TTL'd table(s) "
+            f"{sorted(missing_known)} while computing a generation ceiling "
+            f"for {table!r} -- a registry that parses SOME tables but not "
+            "ALL of dev_health_ops.fixtures.ttl_registry.KNOWN_TTL_TABLES "
+            "means the parser or its migrations-directory path broke for "
+            "at least one table, not that those tables stopped carrying a "
+            "TTL (see tightest_ttl_days for the same rule applied globally)"
         )
     retention = retentions.get(table)
     if retention is None:
         return None
-    return max(0, retention.retention_days - TTL_SAFETY_MARGIN.days)
+    return max(
+        0,
+        retention.retention_days
+        - TTL_SAFETY_MARGIN.days
+        - PER_TABLE_CEILING_HEADROOM_DAYS,
+    )

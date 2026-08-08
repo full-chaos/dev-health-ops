@@ -19,6 +19,7 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -475,7 +476,7 @@ class TestClickHouseContentOracle:
 
 
 class _DumpResult:
-    def __init__(self, rows: list[list[int]]) -> None:
+    def __init__(self, rows: list[list[Any]]) -> None:
         self.result_rows = rows
 
 
@@ -643,6 +644,77 @@ class TestClickHouseDumpPayloadVerification:
         assert client.raw_query_calls == 1
         assert path.exists()
 
+    @pytest.mark.asyncio
+    async def test_a_malformed_pre_count_result_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-2 finding (MEDIUM, confirmed): `int(pre_count.
+        result_rows[0][0])` used to be unvalidated -- `result_rows == [[]]`
+        (one row, ZERO columns) raised an uncontrolled `IndexError` instead
+        of a named `SnapshotError`. Every count() in this retry loop now
+        goes through `_scalar_count`.
+        """
+
+        class _MalformedPreCountClient:
+            def raw_query(self, q: str, fmt: str | None = None) -> bytes:
+                return b"payload"
+
+            def query(self, q: str, parameters: dict | None = None) -> _DumpResult:
+                return _DumpResult([[]])  # one row, zero columns
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            await _dump_clickhouse(
+                _MalformedPreCountClient(),
+                "feature_flag_event",
+                "MergeTree()",
+                tmp_path / "feature_flag_event.native.gz",
+                raw_source_row_count=1042,
+            )
+
+
+class TestScalarCount:
+    """Codex round-2 finding (MEDIUM, confirmed): a bare `len(result_rows)
+    != 1` check let `result_rows == [[]]` (one row, ZERO columns) through to
+    an unvalidated `[0][0]` -- an uncontrolled IndexError, not a named
+    SnapshotError. `[[0, "extra"]]` (an unexpected extra column) passed
+    silently. `_scalar_count` is the one function every count() call site in
+    this module goes through now.
+    """
+
+    def test_a_single_scalar_row_is_accepted(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        assert _scalar_count(_DumpResult([[7]]), context="test") == 7
+
+    def test_zero_rows_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([]), context="test")
+
+    def test_one_row_zero_columns_is_rejected_not_an_indexerror(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[]]), context="test")
+
+    def test_one_row_two_columns_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[0, "extra"]]), context="test")
+
+    def test_two_rows_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[1], [2]]), context="test")
+
+    def test_a_default_is_returned_instead_of_raising_when_given(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        assert _scalar_count(_DumpResult([]), context="test", default=-1) == -1
+
 
 class _FakeTtlCountClient:
     """Reports a controllable row count for whichever table's TTL-horizon
@@ -717,12 +789,47 @@ class TestTtlHorizonGuard:
         monkeypatch.setattr(world_snapshot, "clickhouse_ttl_retentions", lambda: {})
         client = _FakeTtlCountClient(counts={"feature_flag_event": 999999})
 
-        with pytest.raises(SnapshotError, match="ZERO"):
+        with pytest.raises(SnapshotError, match="missing known"):
             await _assert_no_ttl_horizon_rows(client, ["feature_flag_event"])
 
         assert client.queries == [], (
             "must fail before issuing a single per-table query once the "
             "registry itself looks broken"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_partial_registry_fails_closed_too(self, monkeypatch) -> None:
+        """Codex round-2 finding (HIGH, confirmed): "non-empty" is not the
+        same guarantee as "complete". Dropping just one known TTL'd table
+        from an otherwise-full registry used to let a massive violation for
+        THAT exact table pass silently -- `retentions.get(table)` returning
+        `None` is indistinguishable from "genuinely no TTL" at this call
+        site. Every table in KNOWN_TTL_TABLES must be present.
+        """
+        from dev_health_ops.fixtures import world_snapshot
+        from dev_health_ops.fixtures.ttl_registry import (
+            KNOWN_TTL_TABLES,
+            clickhouse_ttl_retentions,
+        )
+
+        real = clickhouse_ttl_retentions()
+        partial = {
+            table: retention
+            for table, retention in real.items()
+            if table != "telemetry_signal_bucket"
+        }
+        assert "telemetry_signal_bucket" in KNOWN_TTL_TABLES
+        monkeypatch.setattr(
+            world_snapshot, "clickhouse_ttl_retentions", lambda: partial
+        )
+        client = _FakeTtlCountClient(counts={"telemetry_signal_bucket": 999999})
+
+        with pytest.raises(SnapshotError, match="telemetry_signal_bucket"):
+            await _assert_no_ttl_horizon_rows(client, ["telemetry_signal_bucket"])
+
+        assert client.queries == [], (
+            "must fail before issuing a single per-table query once the "
+            "registry looks incomplete"
         )
 
     @pytest.mark.asyncio

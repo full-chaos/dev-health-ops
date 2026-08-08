@@ -162,11 +162,48 @@ class TestGenerateTelemetrySignalBuckets:
             assert b.signal_count >= 1
             assert b.session_count >= 100
 
+    def test_a_zero_ceiling_actually_clamps_instead_of_falling_back(
+        self, generator: SyntheticDataGenerator, monkeypatch
+    ) -> None:
+        """Codex round-2 finding (HIGH, confirmed): `X or days` treats a
+        legitimate ceiling of exactly 0 as falsy and falls back to the
+        caller's unclamped `days` -- the exact case a TTL right at its own
+        margin (or a deliberately-conservative registry state) would hit.
+        Requesting 100 days with a ceiling of 0 must produce (near-)nothing,
+        not ~100 days of buckets.
+        """
+        monkeypatch.setattr(
+            "dev_health_ops.fixtures.generators.interactions.max_generated_age_days_for_table",
+            lambda table: 0,
+        )
+        buckets = generator.generate_telemetry_signal_buckets(days=100)
+        assert len(buckets) < 10, (
+            f"got {len(buckets)} buckets requesting 100 days with a 0-day "
+            "ceiling -- the ceiling was not applied (fell back to the "
+            "unclamped request instead of clamping to 0)"
+        )
+
 
 class TestGenerateReleaseImpactDaily:
     def test_returns_nonempty(self, generator: SyntheticDataGenerator) -> None:
         records = generator.generate_release_impact_daily(days=7)
         assert len(records) > 0
+
+    def test_a_zero_ceiling_actually_clamps_instead_of_falling_back(
+        self, generator: SyntheticDataGenerator, monkeypatch
+    ) -> None:
+        """Codex round-2 finding (HIGH, confirmed): see the sibling test on
+        TestGenerateTelemetrySignalBuckets -- same `or` vs `is None` defect.
+        """
+        monkeypatch.setattr(
+            "dev_health_ops.fixtures.generators.interactions.max_generated_age_days_for_table",
+            lambda table: 0,
+        )
+        records = generator.generate_release_impact_daily(days=100)
+        assert records == [], (
+            f"got {len(records)} records requesting 100 days with a 0-day "
+            "ceiling -- the ceiling was not applied"
+        )
 
     def test_coverage_ratio_in_range(self, generator: SyntheticDataGenerator) -> None:
         records = generator.generate_release_impact_daily(days=5)

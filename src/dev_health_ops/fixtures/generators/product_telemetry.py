@@ -421,12 +421,11 @@ class ProductTelemetryGenerator:
         # the 30-day restore shelf life `_assert_snapshot_within_shelf_life`
         # actually enforces (codex finding, confirmed: a looser margin let
         # a restore at the advertised shelf life land past this table's own
-        # TTL horizon).
-        days = min(
-            self.spec.days,
-            max_generated_age_days_for_table("product_telemetry_events")
-            or self.spec.days,
-        )
+        # TTL horizon). `is None`, never `or` (codex round-2 finding,
+        # confirmed): a legitimate ceiling of exactly 0 must clamp to 0, not
+        # fall back to the caller's unclamped `self.spec.days`.
+        _ceiling = max_generated_age_days_for_table("product_telemetry_events")
+        days = self.spec.days if _ceiling is None else min(self.spec.days, _ceiling)
         # Half-open: start_day is inclusive, end_day is exclusive.
         start_day = (end_time - timedelta(days=days)).replace(
             hour=9, minute=0, second=0, microsecond=0

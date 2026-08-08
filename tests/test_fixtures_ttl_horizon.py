@@ -341,7 +341,10 @@ class TestPerTableCeilingCompatibleWithShelfLife:
 
     The invariant that must hold for every TTL'd table: a row generated at
     the ceiling, restored at the full advertised shelf life later, must
-    still be at or inside its own TTL horizon.
+    still be STRICTLY inside its own TTL horizon -- codex round-2 (HIGH,
+    confirmed): landing EXACTLY on the horizon is not safe, since this
+    project's own live pre-dump guard already treats a row `<= now() - N
+    DAY` old as unsafe and ClickHouse's TTL deletion is asynchronous.
     """
 
     def test_every_known_ttl_table_ceiling_survives_the_full_shelf_life(self) -> None:
@@ -352,22 +355,26 @@ class TestPerTableCeilingCompatibleWithShelfLife:
             ceiling = max_generated_age_days_for_table(table)
             assert ceiling is not None
             age_at_full_shelf_life = ceiling + TTL_SAFETY_MARGIN.days
-            assert age_at_full_shelf_life <= retention.retention_days, (
+            assert age_at_full_shelf_life < retention.retention_days, (
                 f"{table}: a row generated at the {ceiling}-day ceiling and "
                 f"restored {TTL_SAFETY_MARGIN.days} days later (the full "
                 f"advertised shelf life) would be {age_at_full_shelf_life} "
-                f"days old, past its {retention.retention_days}-day TTL -- "
-                "the restore contract promises a shelf life this ceiling "
-                "cannot actually honor"
+                f"days old -- at or past its {retention.retention_days}-day "
+                "TTL is not strictly inside it. The restore contract "
+                "promises a shelf life this ceiling cannot actually honor "
+                "with real margin to spare"
             )
 
     def test_ceiling_uses_this_modules_margin_not_a_different_one(self) -> None:
         """Pins the exact arithmetic so a future edit that quietly reuses a
         different (e.g. ttl_registry.py's own) margin is caught."""
-        from dev_health_ops.fixtures.ttl_horizon import max_generated_age_days_for_table
+        from dev_health_ops.fixtures.ttl_horizon import (
+            PER_TABLE_CEILING_HEADROOM_DAYS,
+            max_generated_age_days_for_table,
+        )
 
         assert max_generated_age_days_for_table("feature_flag_event") == (
-            90 - TTL_SAFETY_MARGIN.days
+            90 - TTL_SAFETY_MARGIN.days - PER_TABLE_CEILING_HEADROOM_DAYS
         )
 
     def test_a_table_with_no_ttl_has_no_ceiling(self) -> None:
@@ -385,4 +392,33 @@ class TestPerTableCeilingCompatibleWithShelfLife:
             lambda: {},
         )
         with pytest.raises(RuntimeError, match="ZERO|empty|broke"):
+            ttl_horizon_module.max_generated_age_days_for_table("feature_flag_event")
+
+    def test_a_partial_registry_fails_closed_too(self, monkeypatch) -> None:
+        """Codex round-2 finding (HIGH, confirmed): a NON-empty registry
+        missing just ONE known TTL'd table used to be indistinguishable
+        from "genuinely no TTL" for that table -- reproduced directly with
+        a fake client that would have reported 999999 violating rows for
+        `telemetry_signal_bucket` had it ever been queried. Every table in
+        KNOWN_TTL_TABLES must be present, not merely the registry being
+        non-empty.
+        """
+        from dev_health_ops.fixtures import ttl_horizon as ttl_horizon_module
+        from dev_health_ops.fixtures.ttl_registry import (
+            KNOWN_TTL_TABLES,
+            clickhouse_ttl_retentions,
+        )
+
+        real = clickhouse_ttl_retentions()
+        partial = {
+            table: retention
+            for table, retention in real.items()
+            if table != "telemetry_signal_bucket"
+        }
+        assert "telemetry_signal_bucket" in KNOWN_TTL_TABLES
+        monkeypatch.setattr(
+            "dev_health_ops.fixtures.ttl_registry.clickhouse_ttl_retentions",
+            lambda: partial,
+        )
+        with pytest.raises(RuntimeError, match="telemetry_signal_bucket"):
             ttl_horizon_module.max_generated_age_days_for_table("feature_flag_event")

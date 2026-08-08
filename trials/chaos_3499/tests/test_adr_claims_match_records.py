@@ -493,3 +493,130 @@ def test_superlative_claims_about_the_best_tier_match_the_records(
     assert re.search(rf"no tier exceeds\s*{best}\s*(?:/|of)\s*{denominator}", text), (
         f"the ADR should state the measured maximum ({best} of {denominator})"
     )
+
+
+# --------------------------------------------------------------------------
+# Round four. The class survived four sweeps, two closures, and the closure
+# commit itself. The generalization: stop guarding phrasings and guard the
+# CONSTRUCTION -- and where a construction cannot be verified mechanically,
+# forbid it in hand-written prose rather than hope the next one is checked.
+# --------------------------------------------------------------------------
+
+#: Comparative / superlative constructions about tier performance. Some
+#: carry no digits at all ("scores the same as the mid tier"), which is
+#: precisely why every numeric guard was blind to the worst instance.
+_COMPARATIVE_MARKERS = (
+    "best available tier",
+    "best measured",
+    "best tier",
+    "highest tier",
+    "reaches",
+    "tops out",
+    "scores the same",
+    "the same as the mid",
+    "flat with",
+    "matches the mid",
+    "ties with",
+    "one ahead of",
+    "outperform",
+    "ahead of the mid",
+    "behind the mid",
+    "widest",
+    "narrowest",
+    "gap is one oracle",
+    "gap is two oracles",
+    "one oracle wide",
+)
+
+_GENERATED_BEGIN = "<!-- GENERATED:comparative-facts BEGIN -->"
+_GENERATED_END = "<!-- GENERATED:comparative-facts END -->"
+
+
+def _prose_outside_generated_block(raw: str) -> str:
+    """Hand-written prose only: fenced illustrations and the generated
+    comparative block are both removed."""
+    without_generated = re.sub(
+        re.escape(_GENERATED_BEGIN) + r".*?" + re.escape(_GENERATED_END),
+        " ",
+        raw,
+        flags=re.S,
+    )
+    return _normalised(without_generated)
+
+
+def test_the_generated_comparative_block_matches_the_records(records: dict) -> None:
+    """(a) of the structural rule: comparatives live in a GENERATED section."""
+    from ..run_measured_sweep import render_comparative_facts
+
+    raw = (_DOCS / "adr-draft.md").read_text()
+    match = re.search(
+        re.escape(_GENERATED_BEGIN) + r".*?" + re.escape(_GENERATED_END), raw, re.S
+    )
+    assert match, "the ADR has no generated comparative-facts block"
+    assert match.group(0).strip() == render_comparative_facts(records).strip(), (
+        "the ADR's generated comparative block is stale; regenerate it "
+        "rather than editing it by hand"
+    )
+
+
+def test_hand_written_prose_makes_no_comparative_tier_claim() -> None:
+    """(b) of the structural rule, and the round-four generalization.
+
+    A comparative about tier performance in hand-written prose cannot be
+    verified in general -- "scores the same as the mid tier" has no number
+    to check, and it flipped a conclusion the decision owner acts on. So
+    prose may POINT at the generated block; it may not characterise it.
+    """
+    raw = (_DOCS / "adr-draft.md").read_text()
+    prose = _prose_outside_generated_block(raw)
+    offenders = []
+    for marker in _COMPARATIVE_MARKERS:
+        for match in re.finditer(re.escape(marker), prose):
+            start = max(0, match.start() - 90)
+            window = prose[start : match.end() + 90]
+            if "tier" not in window and "luna" not in window and "mini" not in window:
+                continue  # not a claim about tier performance
+            offenders.append(f"{marker!r} in: ...{window}...")
+    assert not offenders, (
+        "hand-written comparative claim(s) about tier performance. Cite "
+        "§3.4's generated block instead of characterising it:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_tier_ranks_stated_anywhere_match_the_records(records: dict) -> None:
+    """Ranks are derived, not trusted: if prose ever says a tier is first or
+    last, it must agree with the records-derived ordering.
+    """
+    authored = sorted(
+        {
+            row["oracle_id"]
+            for t in records["tiers"]
+            for row in t["rows"]
+            if row["question_class"] == "c"
+            and row["arm"] == "extraction_llm"
+            and row["verdict"] != "not_measured"
+        }
+    )
+    scores = {
+        t["tier_key"]: sum(
+            1
+            for row in t["rows"]
+            if row["arm"] == "extraction_llm"
+            and row["oracle_id"] in authored
+            and row["verdict"] == "pass"
+        )
+        for t in records["tiers"]
+    }
+    best = max(scores.values())
+    top = {k for k, v in scores.items() if v == best}
+    prose = _prose_outside_generated_block((_DOCS / "adr-draft.md").read_text())
+    # If prose names a tier as the best/top performer, it must be one.
+    for match in re.finditer(
+        r"(best|top|highest)[- ]?(performing|scoring)?\s*tier[^.]{0,60}?`([^`]+)`",
+        prose,
+    ):
+        named = match.group(3)
+        assert any(named in t or t in named for t in top), (
+            f"prose names {named!r} as the best tier; records say {sorted(top)}"
+        )

@@ -1283,6 +1283,66 @@ def verify_provenance(records: dict) -> None:
         )
 
 
+COMPARATIVE_FACTS_BEGIN = "<!-- GENERATED:comparative-facts BEGIN -->"
+COMPARATIVE_FACTS_END = "<!-- GENERATED:comparative-facts END -->"
+
+
+def render_comparative_facts(records: dict) -> str:
+    """Every comparative statement about tier performance, GENERATED.
+
+    Round four of the same defect class. Hand-written comparatives kept
+    contradicting the records in forms no phrase-guard anticipated -- "the
+    best available tier reaches 1/4", "the frontier scores the same as the
+    mid tier" (that one carries no digits at all, so every numeric guard was
+    blind to it). The fix is not another guard on last round's sentence: it
+    is to stop writing the sentences by hand. Prose may point at this block;
+    it may not characterise what the block says.
+    """
+    authored = sorted(
+        {
+            row["oracle_id"]
+            for t in records["tiers"]
+            for row in t["rows"]
+            if row["question_class"] == "c"
+            and row["arm"] == "extraction_llm"
+            and row["verdict"] != "not_measured"
+        }
+    )
+    scores = {}
+    for tier in records["tiers"]:
+        scores[tier["tier_key"]] = sum(
+            1
+            for row in tier["rows"]
+            if row["arm"] == "extraction_llm"
+            and row["oracle_id"] in authored
+            and row["verdict"] == "pass"
+        )
+    denominator = len(authored)
+    best = max(scores.values())
+    worst = min(scores.values())
+    best_tiers = sorted(k for k, v in scores.items() if v == best)
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    lines = [
+        COMPARATIVE_FACTS_BEGIN,
+        "",
+        "_Generated from `measured-trial-results.records.json`. Do not edit,",
+        "and do not restate these figures in prose -- cite this block._",
+        "",
+        f"- Class-(c) authored population: **{denominator} oracles**.",
+        f"- Best measured tier score: **{best}/{denominator}** "
+        f"({', '.join('`' + t + '`' for t in best_tiers)}).",
+        f"- Worst measured tier score: **{worst}/{denominator}**.",
+        f"- Spread between best and worst: **{best - worst} oracle(s)**.",
+        "",
+        "| Rank | Tier | Class-(c) authored score |",
+        "|---|---|---|",
+    ]
+    for index, (key, value) in enumerate(ranked, start=1):
+        lines.append(f"| {index} | `{key}` | {value}/{denominator} |")
+    lines += ["", COMPARATIVE_FACTS_END]
+    return "\n".join(lines)
+
+
 def render_markdown_from_records(records: dict) -> str:
     """The committed markdown, derived ENTIRELY from the committed records.
 

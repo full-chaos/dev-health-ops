@@ -174,6 +174,27 @@ the mechanism generalises needs a larger bitemporal corpus (§6).
 
 ### 3.4 Class (c): framework-bound, and unstable at the top
 
+<!-- GENERATED:comparative-facts BEGIN -->
+
+_Generated from `measured-trial-results.records.json`. Do not edit,
+and do not restate these figures in prose -- cite this block._
+
+- Class-(c) authored population: **4 oracles**.
+- Best measured tier score: **2/4** (`gpt-5.6-luna`).
+- Worst measured tier score: **0/4**.
+- Spread between best and worst: **2 oracle(s)**.
+
+| Rank | Tier | Class-(c) authored score |
+|---|---|---|
+| 1 | `gpt-5.6-luna` | 2/4 |
+| 2 | `gemma-4-31b-local` | 1/4 |
+| 3 | `gpt-5-mini` | 1/4 |
+| 4 | `gemma-4-e4b-local` | 0/4 |
+| 5 | `gpt-5-nano` | 0/4 |
+
+<!-- GENERATED:comparative-facts END -->
+
+
 Run 7, extraction arm, the 4 authored oracles:
 
 | Oracle | nano | mini | **luna (frontier)** | gemma-e4b | gemma-31b |
@@ -187,9 +208,23 @@ Run 7, extraction arm, the 4 authored oracles:
 **Read across BOTH committed runs, not just this one.** Run 6
 (`b0983d17e`) and run 7 are both committed artifacts, measured on identical
 oracles, ground truth, source documents and prompt version (`extraction.v2`
-— verified by zero diff in all four files between the two commits):
+— verified as a zero diff across `corpus/oracles.py`,
+`corpus/ground_truth.py`, `harness/arms/source_documents.py` and the
+extraction PROMPT itself; `harness/arms/extraction.py` did change between
+those commits, but only in model-identity labelling (removing a fallback
+from served-model to requested-model), which cannot alter an extraction
+result. Note also that run 6 predates the records file, so this was
+verified from the source tree at each commit, NOT from committed record
+hashes — cross-run hash verification only becomes possible from run 7
+onward):
 
-| Tier | run 6 | run 7 |
+Run-6 figures below are read from that commit's committed markdown, and
+run-7 figures from the records file. **Run 6 predates the records format**,
+so its numbers cannot be re-derived by the guards that check run 7 — they
+are transcribed from a committed artifact, which is weaker evidence and is
+labelled as such rather than silently mixed in.
+
+| Tier | run 6 (from committed markdown) | run 7 (from records) |
 |---|---|---|
 | nano | 0/4 | 0/4 |
 | mini | 1/4 | 1/4 |
@@ -200,13 +235,14 @@ oracles, ground truth, source documents and prompt version (`extraction.v2`
 So the honest statements are:
 
 - **No tier exceeds 2 of 4, and the frontier tier's margin over the mid
-  tier is at most one oracle — and is not stable across runs.** Luna was
-  flat with mini in run 6 and one ahead in run 7. This is a much weaker
-  claim than "the frontier buys you class (c)", and it is the claim the
-  evidence supports.
+  tier is at most one oracle — and is not stable across runs.** The per-run
+  standings are in the cross-run table above; the point here is that they
+  MOVED between the two runs. This is a much weaker claim than "the
+  frontier buys you class (c)", and it is the claim the evidence
+  supports.
 - **Spending up to the frontier does not change the shape of the result.**
-  Two of the four oracles fail at every tier in every run; the deployed
-  model reaches zero in both. The binding constraint looks like the
+  Two of the four oracles fail at every tier in every run (the standings
+  are in the tables above). The binding constraint looks like the
   extraction contract and harness rather than model capability.
 - **The one *stable* differentiator is `O3_supersession`**, which the three
   larger models pass and the two smaller ones fail — the only place in the
@@ -260,7 +296,7 @@ from the committed record.
 ### 3.6 Prior rounds, kept as history (runs 1 and 2 — `gpt-5-mini` only)
 
 Retained for provenance and for the variance evidence §7 needs. **Neither
-is the record any more**: `docs/measured-trial-results.md` now holds run 3,
+is the record any more**: `docs/measured-trial-results.md` now holds run 7,
 and both earlier runs measured only `gpt-5-mini` — one tier above deployed
 parity — against only 4 authored oracles.
 
@@ -277,8 +313,8 @@ observed-time filter would have read as "never observed". Run 1's class-(b)
 re-earned every number under the fixed contract (`recorded_at` is now
 requested whenever the text states one, same-day or not).
 
-Class (b) has now held 2/2 under both contract versions and across all five
-run-3 tiers. The honest qualifier on that streak: the ATL-101/ATL-105
+Class (b) has held 2/2 under both contract versions and at every tier of
+every run since. The honest qualifier on that streak: the ATL-101/ATL-105
 pair's two dates (07-02 vs 07-20) are far enough apart that the
 same-day-omission bug never triggered on this specific pair — reassuring
 for this pair, not a general guarantee the contract fix was inconsequential
@@ -440,10 +476,13 @@ judgement.
    been visible otherwise.
 3. ~~Is class-(c) variance a capability ceiling, prompt sensitivity, or
    normal variance?~~ **Answered, and it is at least two of the three.**
-   The frontier tier scores the same as the mid tier (§3.4), so it is not a
-   capability ceiling that money moves; and the same tier flipped an oracle
-   between two runs on identical inputs (§7), so genuine non-determinism is
-   present as well.
+   Across the two committed runs the frontier tier's margin over the mid
+   tier is at most one oracle and is not stable — level in run 6, one ahead
+   in run 7 (see §3.4's generated block for the current standings). An
+   unstable ≤1-oracle margin is evidence against a stable, purchasable
+   ceiling; it is NOT a claim that the tiers score the same. And the same
+   tier flipped an oracle between two runs on identical inputs (§7), so
+   genuine non-determinism is present as well.
 4. ~~The `native_control_holds()` banner conflating "not measured" with
    "measured and lost".~~ **Fixed** — `ControlStatus` is now three states
    and renders distinctly.
@@ -599,7 +638,7 @@ the artifact without guessing.
 | `gpt-5-nano` | `gpt-5-nano` | **DEPLOYED PARITY — primary scored tier** | The configured model. Parity claims must be read from here and nowhere else. |
 | `gpt-5-mini` | `gpt-5-mini` | Ceiling / comparative | One tier up. Shows what the technique does when model quality is not the binding constraint, and keeps runs 1–2 comparable to this round. |
 | `google/gemma-4-e4b` | `gemma-4-e4b-local` | Local cost floor | A small locally-hosted model — the cheapest regime a cost-driven architecture could operate in. Not parity; no parity claim rests on it. |
-| `google/gemma-4-31b` | `gemma-4-31b-local` | **Flash-class quality proxy** (excluded as a deployment candidate by the decision owner, see below) | Stands in for hosted mid-tier models (Gemini 3.5-flash / flash-lite, 3.6-flash) that this trial did not call directly. Its **answer quality** is the datum. Its measured latency is ~70–1000s per call (§3.5) — reported here as a fact. **Deployment candidacy is excluded by the decision owner (chris, 2026-08-08) as a stated constraint on latency grounds; that exclusion is his, not this document's.** The ADR itself recommends nothing, here or anywhere. |
+| `google/gemma-4-31b` | `gemma-4-31b-local` | **Flash-class quality proxy** — excluded as a deployment candidate, and RETIRED from future runs, by the decision owner (see below) | Stands in for hosted mid-tier models (Gemini 3.5-flash / flash-lite, 3.6-flash) that this trial did not call directly. Its **answer quality** is the datum. Its measured latency is ~70–1000s per call (§3.5) — reported here as a fact. **Deployment candidacy is excluded by the decision owner (chris, 2026-08-08) as a stated constraint on latency grounds; that exclusion is his, not this document's.** The same decision owner has since **retired this tier from future runs** (chris, 2026-08-08), giving speed as part of the rationale and judging that it "adds little over e4b" — his words and his judgement, quoted rather than restated as a measured finding; the measured 31b-versus-e4b difference is in §3.4's generated block. Run 7's 31b column stays as measured history: nothing is deleted or re-run. The ADR itself recommends nothing, here or anywhere. |
 
 **Reading the 31b row correctly matters**, because it is the row most
 easily misread. It is in the matrix to answer *"what would flash-class
@@ -721,9 +760,11 @@ a model ceiling from a framework limit, and across the two committed runs
 - **No model purchase closes this gap.** Spending up to the frontier buys
   nothing on this corpus. The binding constraint is the extraction contract
   and harness.
-- **The deployed-parity gap is one oracle wide, and unstable.** Nano's 0/4
-  is real, but the best available tier reaches 1/4 — and *which* oracle
-  passes varies by tier and even between runs of the same tier (§4, §7).
+- **The deployed-parity gap and the spread between best and worst are in
+  §3.4's generated block; this section does not restate them.** What is
+  worth saying here and cannot be read off a number: *which* oracle passes
+  varies by tier and even between runs of the same tier (§4, §7), so the
+  spread is not a stable ranking you can purchase against.
 - **This is not a cost argument in either direction.** Per §8.1 the hosted
   flash-class tiers are not believed to undercut
   `gpt-5-nano`/`gpt-5.6-luna`/`gpt-5.4-mini`, and the frontier result says
@@ -768,6 +809,15 @@ prompt-injection result is now 1/5, passing only at the frontier tier**
 **No recommendation is made among these.** Each trades a different
 resource, and which resource is scarce is not a question this trial can
 answer.
+
+**Decision-owner position on future tiers (chris, 2026-08-08), recorded as
+context rather than as a finding.** The Gemini API is believed to be
+supported in the provider layer, so Gemini models could be measured
+directly in a future round. The standing choice for now is a real frontier
+model (`gpt-5.6-luna`) for the frontier tier, with `gemma-4-e4b` kept as
+the local proxy for Gemini-Flash-class models. This is the decision owner's
+stated position, not a measured result of this trial and not a
+recommendation by it.
 
 ## 9. Measurement-integrity findings from run 3
 
@@ -976,6 +1026,8 @@ all 4 tiers            <- digit form, word-only pattern
 4-tier range           <- digit form, hyphenated
 No tier\nexceeds 1/4    <- wrapped across a newline
 four explicitly named tiers   <- variant of "four tiers"
+flat with the mid tier        <- number-free comparative, all guards blind
+the best available tier reaches 1/4   <- comparative, derivable fraction
 ```
 
 A fourth list of phrases fails the same way, because the failure is the
@@ -1009,11 +1061,46 @@ the records, in
   from the records, byte-equality is pinned, and re-rendering **refuses**
   if the corpus hashes have moved.
 
+**Round four, and the closure commit itself carried two instances.** The
+guards above went green while the document still carried these two claims:
+
+```text
+the best available tier reaches 1/4      <- comparative around a fraction
+                                            that is another tier's, so the
+                                            set-based guard blessed it
+the frontier tier scores the same as     <- NO DIGITS AT ALL, so every
+the mid tier                                numeric guard was blind, and it
+                                            flipped a conclusion the
+                                            decision owner acts on
+```
+
+Neither was caught by the round-three guards. Two further stale statements survived alongside them: one naming the wrong
+run as the artifact's contents, and one overstating which files were
+unchanged between two commits (§3.4 now states that comparison in the same
+accurate form §7 uses).
+
+The response was to stop guarding phrasings and change what the document
+is allowed to contain:
+
+- **Comparatives are GENERATED.** §3.4 carries a
+  `GENERATED:comparative-facts` block — best and worst tier score, the
+  spread, and the full per-tier ranking — rendered from the records, with a
+  test that it matches a fresh render.
+- **Hand-written prose may not make a comparative claim about tier
+  performance at all.** A test scans the prose (excluding fenced
+  illustrations and the generated block) for a list of comparative
+  constructions — superlatives, attainment verbs, and equality or ordering
+  phrasings — and fails on any of them. Prose may point at the generated
+  block; it may not characterise it.
+
 **The class that is now impossible:** a tier count, a class-score fraction,
-or a tier↔score pairing cannot sit in this document contradicting the
-records — in any spelling, wrapping, or digit/word form — without a test
-failing. What remains possible, and is deliberately not claimed to be
-closed, is stale *qualitative* prose ("flat with the mid tier") that
+a tier↔score pairing, a superlative, or ANY comparative claim about tier
+performance cannot sit in this document contradicting the records — in any
+spelling, wrapping, or digit/word form, and whether or not it contains a
+number — without a test failing. The number-free case is the one that
+needed round four. What remains possible, and is deliberately not claimed to be
+closed, is stale *qualitative* prose carrying no number (an example is in
+the fenced block above) that
 carries no number; §8.3 was fixed by deleting its restated figures and
 pointing at §3.4 instead, so that section can no longer drift, but the
 general case of prose adjectives is not machine-checked. That residual is

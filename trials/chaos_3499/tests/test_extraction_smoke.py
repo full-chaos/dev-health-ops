@@ -39,7 +39,7 @@ import pytest
 
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..harness.arms import extraction, native
-from ..harness.arms.source_documents import SOURCE_DOCUMENTS
+from ..harness.arms.source_documents import NOT_AUTHORABLE_REASONS, SOURCE_DOCUMENTS
 from ..harness.contracts import ALL_QUESTION_CLASSES, ArmOutcome, QuestionClass
 from ..harness.llm import client as llm_client
 from ..harness.llm.client import (
@@ -123,12 +123,51 @@ def test_unreachable_provider_returns_not_run_not_a_crash(
     )
 
 
-def test_oracle_with_no_source_material_is_not_run_not_silently_skipped() -> None:
+def test_not_authorable_oracle_is_not_run_with_its_specific_reason() -> None:
     """No LM Studio dependency at all -- this oracle has no authored
     document, so the arm must never even attempt a call.
+
+    Authoring round: `O1_ci_prior_attempts` is now explicitly registered
+    in `NOT_AUTHORABLE_REASONS` (structured episode data has no natural
+    prose form for this arm), so its NOT_RUN reason is that SPECIFIC
+    string, not the generic "not authored yet" one -- see
+    `test_generic_not_yet_authored_reason_is_distinct_from_not_authorable`
+    for the other branch.
     """
     oracle = ORACLES_BY_ID["O1_ci_prior_attempts"]
     assert oracle.oracle_id not in SOURCE_DOCUMENTS
+    assert oracle.oracle_id in NOT_AUTHORABLE_REASONS
+    response = extraction.answer(oracle)
+    assert response.outcome is ArmOutcome.NOT_RUN
+    assert response.degraded_reasons == (
+        "measurement_not_run:not_authorable_for_extraction_arm:"
+        f"{NOT_AUTHORABLE_REASONS[oracle.oracle_id]}",
+    )
+
+
+def test_generic_not_yet_authored_reason_is_distinct_from_not_authorable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other branch of `answer()`'s NOT_RUN dispatch: an oracle_id in
+    NEITHER dict gets the generic "not authored yet" reason, never the
+    NOT-AUTHORABLE one. Every real oracle is now in one dict or the other
+    (the authoring round's whole point), so this is pinned by monkeypatching
+    a real oracle's id out of both dicts for the duration of the test,
+    rather than asserting it against a real oracle that happens to
+    qualify -- none does anymore, which is itself the coverage this test
+    protects against silently regressing back into existing.
+    """
+    monkeypatch.setattr(
+        extraction,
+        "SOURCE_DOCUMENTS",
+        {k: v for k, v in SOURCE_DOCUMENTS.items() if k != "O3_supersession"},
+    )
+    monkeypatch.setattr(
+        extraction,
+        "NOT_AUTHORABLE_REASONS",
+        {k: v for k, v in NOT_AUTHORABLE_REASONS.items() if k != "O3_supersession"},
+    )
+    oracle = ORACLES_BY_ID["O3_supersession"]
     response = extraction.answer(oracle)
     assert response.outcome is ArmOutcome.NOT_RUN
     assert response.degraded_reasons == (

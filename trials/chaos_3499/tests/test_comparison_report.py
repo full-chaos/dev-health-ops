@@ -19,6 +19,7 @@ from ..harness.runner import (
     ArmRegistry,
     ArmRole,
     ComparisonReport,
+    ControlStatus,
     DependencyState,
     compare,
     compose_baseline,
@@ -216,6 +217,9 @@ def test_class_a_control_failure_is_shouted_not_buried() -> None:
     )
     assert not report.native_control_holds()
     assert "class (a) control did NOT hold" in report.render()
+    # Authoring-round addition: the DISTINCT-status method must agree with
+    # the rendered banner, not just the collapsed bool.
+    assert report.native_control_status() is ControlStatus.LOST
 
 
 def test_class_a_control_holds_when_baseline_ties() -> None:
@@ -233,6 +237,38 @@ def test_class_a_control_holds_when_baseline_ties() -> None:
         },
     )
     assert report.native_control_holds()
+    assert report.native_control_status() is ControlStatus.HELD
+    rendered = report.render()
+    assert "did NOT hold" not in rendered
+    assert "NOT MEASURED" not in rendered
+
+
+def test_class_a_control_not_measured_renders_distinctly_from_lost() -> None:
+    """Authoring-round fix, pinned directly: a candidate that has not been
+    measured against class (a) at all must render as NOT MEASURED, never
+    with the "did NOT hold" banner a genuine loss gets -- the two are
+    different findings (a scope gap versus a harness-suspect regression)
+    and a reader must be able to tell them apart from the report text
+    alone, not have to cross-reference native_control_holds()'s bool.
+    """
+    registry = _registry(
+        native=(_perfect_arm, ArmRole.BASELINE_COMPONENT),
+        graphiti=(_dead_arm("graphiti"), ArmRole.CANDIDATE_ARM),
+    )
+    (report,) = compare(
+        ALL_ORACLES,
+        registry,
+        dependencies={
+            QuestionClass.NEEDS_DECLARED_STATE_HISTORY: DependencyState(
+                issue="CHAOS-3563", state="recorded for this test"
+            )
+        },
+    )
+    assert not report.native_control_holds()
+    assert report.native_control_status() is ControlStatus.NOT_MEASURED
+    rendered = report.render()
+    assert "class (a) control NOT MEASURED" in rendered
+    assert "did NOT hold" not in rendered
 
 
 def test_report_never_emits_a_single_headline_number() -> None:

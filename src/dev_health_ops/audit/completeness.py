@@ -124,19 +124,37 @@ def build_incidents_query() -> str:
             "(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
         ),
     )
+    # A service can carry more than one currently-active mapping identity to
+    # the same repository (e.g. an admin_configuration row alongside a
+    # bounded_service_repository_heuristic row -- see
+    # work_graph.operational_edges.build_operational_incident_edges's own
+    # preferred_mappings dedup for the same fan-out). Without deduping the
+    # join, one incident is counted once per coexisting mapping identity.
+    # Mirror active_incidents_query's own reviewed
+    # `ORDER BY ... LIMIT 1 BY repo_id, incident_id` pattern: collapse to one
+    # (repo_id, incident_id) pair before aggregating.
     return f"""
     SELECT
-      mapping.repo_id,
+      repo_id,
       countIf(
-        incident.started_at >= {{start:DateTime}}
-        AND incident.started_at < {{end:DateTime}}
+        started_at >= {{start:DateTime}}
+        AND started_at < {{end:DateTime}}
       ) AS count,
-      max(incident.last_synced) AS last_synced
-    FROM {current_incidents} AS incident
-    INNER JOIN {current_mappings} AS mapping
-      ON incident.org_id = mapping.org_id
-     AND incident.service_id = mapping.service_id
-    GROUP BY mapping.repo_id
+      max(last_synced) AS last_synced
+    FROM (
+        SELECT
+          mapping.repo_id AS repo_id,
+          incident.id AS incident_id,
+          incident.started_at AS started_at,
+          incident.last_synced AS last_synced
+        FROM {current_incidents} AS incident
+        INNER JOIN {current_mappings} AS mapping
+          ON incident.org_id = mapping.org_id
+         AND incident.service_id = mapping.service_id
+        ORDER BY mapping.repo_id, incident.id, incident.last_synced DESC
+        LIMIT 1 BY mapping.repo_id, incident.id
+    )
+    GROUP BY repo_id
     """
 
 

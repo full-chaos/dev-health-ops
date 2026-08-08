@@ -674,3 +674,115 @@ def test_audit_incidents_query_has_no_soft_delete_predicate_on_mapping_table(
         assert rows[0]["count"] == 1
     finally:
         sink.close()
+
+
+def test_audit_incidents_query_dedupes_coexisting_mapping_identities(
+    pagerduty_scratch_dsn: str,
+) -> None:
+    """Codex review of CHAOS-3570: broadening the as-of predicate to admit
+    NULL valid_from rows widens exposure to a pre-existing double-count --
+    a service can carry more than one currently-active mapping identity to
+    the same repository at once (e.g. an admin_configuration row alongside
+    a bounded_service_repository_heuristic row with a NULL valid_from
+    backfill; see work_graph.operational_edges's own preferred_mappings
+    dedup for the same fan-out). Without deduping the incident/mapping
+    JOIN, one incident was counted once per coexisting mapping identity.
+    Plants exactly two such active mapping identities for the same
+    service/repo pair -- one dated, one NULL-start -- and asserts the
+    resolved incident is counted exactly once.
+    """
+    org_id = "test-chaos-3570-dupe-mapping-dedup"
+    repo_id = UUID("55555555-5555-5555-5555-555555555555")
+    resolved_at = SOURCE_TIME + timedelta(hours=4)
+    normalizer = PagerDutyNormalizer(
+        org_id=org_id,
+        provider_instance_id=PROVIDER_INSTANCE_ID,
+        observed_at=resolved_at,
+    )
+    service = normalizer.service(
+        Service(id="service-dupe", name="Dupe Mapping Service", updated_at=SOURCE_TIME)
+    )
+    resolved_incident = normalizer.incident(
+        Incident(
+            id="incident-dupe",
+            title="Coexisting mapping identities regression",
+            status="resolved",
+            service=PagerDutyModel(id="service-dupe"),
+            created_at=SOURCE_TIME,
+            resolved_at=resolved_at,
+            last_status_change_at=resolved_at,
+            updated_at=resolved_at,
+        )
+    )
+    # Given: two DISTINCT active mapping identities (different external_id,
+    # so different canonical ids) for the SAME service -> repo pair.
+    mapping_dated = ServiceRepositoryMapping(
+        org_id=org_id,
+        provider="pagerduty",
+        provider_instance_id=PROVIDER_INSTANCE_ID,
+        source_entity_type="service_repository_mapping",
+        external_id="service-dupe:github:x/y:admin",
+        source_version_at=resolved_at,
+        observed_at=resolved_at,
+        last_synced=resolved_at,
+        service_id=service.id,
+        repo_id=repo_id,
+        repo_provider="github",
+        repo_full_name="full-chaos/dupe-mapping",
+        mapping_kind="admin",
+        rule_id="service_repository_mapping.admin.v1",
+        valid_from=SOURCE_TIME,
+        valid_to=None,
+        is_active=True,
+    )
+    mapping_null_start = ServiceRepositoryMapping(
+        org_id=org_id,
+        provider="pagerduty",
+        provider_instance_id=PROVIDER_INSTANCE_ID,
+        source_entity_type="service_repository_mapping",
+        external_id="service-dupe:github:x/y:heuristic",
+        source_version_at=resolved_at,
+        observed_at=resolved_at,
+        last_synced=resolved_at,
+        service_id=service.id,
+        repo_id=repo_id,
+        repo_provider="github",
+        repo_full_name="full-chaos/dupe-mapping",
+        mapping_kind="bounded_service_repository_heuristic",
+        rule_id="service_repository_mapping.bounded_name_match.v1",
+        valid_from=None,
+        valid_to=None,
+        is_active=True,
+    )
+
+    async def persist_projection_inputs() -> None:
+        async with ClickHouseStore(pagerduty_scratch_dsn) as store:
+            store.org_id = org_id
+            await store.insert_operational_services([service])
+            await store.insert_operational_incidents([resolved_incident])
+            await store.insert_operational_service_repository_mappings(
+                [mapping_dated, mapping_null_start]
+            )
+
+    asyncio.run(persist_projection_inputs())
+
+    sink = ClickHouseMetricsSink(pagerduty_scratch_dsn)
+    try:
+        as_of = resolved_at + timedelta(seconds=1)
+        rows = sink.query_dicts(
+            build_incidents_query(),
+            {
+                "org_id": org_id,
+                "start": SOURCE_TIME,
+                "end": SOURCE_TIME + timedelta(days=1),
+                "as_of": as_of,
+            },
+        )
+        assert rows
+        assert rows[0]["repo_id"] == repo_id
+        assert rows[0]["count"] == 1, (
+            "one incident double-counted across two coexisting active "
+            "mapping identities for the same service/repo pair"
+        )
+    finally:
+        sink.close()

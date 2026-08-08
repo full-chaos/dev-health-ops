@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .contracts import ArmResponse, QuestionClass
-from .oracle import Oracle, OracleResult, Verdict
+from .oracle import AssertionResult, Oracle, OracleResult, Verdict
 
 ArmCallable = Callable[[Oracle], ArmResponse]
 
@@ -127,12 +127,38 @@ def run_oracle(oracle: Oracle, arm_name: str, arm: ArmCallable) -> OracleResult:
     propagating and aborting the sweep. Aborting would leave the remaining
     oracles unrun *and* unreported, which is the exact silent-coverage-loss
     this harness exists to prevent.
+
+    That same guarantee has to cover ``oracle.evaluate`` too. A crash inside
+    evaluation (e.g. a tz-naive watermark comparing against an aware one in
+    ``_assert_watermark``) is not the arm's fault, but it is exactly as
+    capable of aborting :func:`run_trial` mid-sweep and dropping every oracle
+    after it, unrun and unreported -- the one failure mode this module's own
+    docstring promises cannot happen. It is recorded as a loud FAIL rather
+    than propagated.
     """
     try:
         response = arm(oracle)
     except Exception as exc:  # noqa: BLE001 - the failure IS the measurement
         response = ArmResponse.not_run(arm_name, f"{type(exc).__name__}: {exc}")
-    return oracle.evaluate(response)
+    try:
+        return oracle.evaluate(response)
+    except Exception as exc:  # noqa: BLE001 - the failure IS the measurement
+        return OracleResult(
+            oracle_id=oracle.oracle_id,
+            arm=arm_name,
+            question_class=oracle.question_class,
+            assertions=(
+                AssertionResult(
+                    assertion_id="oracle_evaluation_crashed",
+                    verdict=Verdict.FAIL,
+                    detail=(
+                        f"oracle.evaluate() raised {type(exc).__name__}: {exc}; "
+                        "recorded as a loud failure rather than aborting the "
+                        "sweep and dropping the remaining oracles unreported"
+                    ),
+                ),
+            ),
+        )
 
 
 def run_trial(

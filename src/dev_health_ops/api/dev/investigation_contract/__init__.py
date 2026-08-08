@@ -1,0 +1,266 @@
+"""CHAOS-3615: the backend-neutral Ask Dev investigation-packet contract.
+
+``ask_dev_investigation_packet.v1`` is the **shared, frozen wire shape** that
+every arm of the corrected CHAOS-3614 trial must emit — the current/native
+arm (CHAOS-3618) and the future graph-assisted arm (CHAOS-3617) alike — so
+that neither arm can define its own questions, its own output shape, or its
+own definition of success after seeing the other's results.
+
+Three properties are load-bearing and are enforced by tests, not by
+convention:
+
+1. **Backend neutrality.** No graph-backend vocabulary appears anywhere on
+   the wire. Arm identity lives in :class:`TrialMetadata`, which is an
+   *optional* field of :class:`InvestigationVersions` — evaluation metadata,
+   never product truth. See
+   ``tests/api/dev/test_chaos_3615_backend_neutrality.py``.
+2. **A packet is an investigation result, not an answer.** It carries what
+   was discovered and how well it is supported. It never carries prose an
+   assistant would speak, a dashboard redirect, a graph-native query
+   response, or an LLM reasoning trace.
+3. **The graph proposes; canonical services verify.** Every measurable claim
+   carries an :class:`AssertionBasis` (measured / source-asserted / inferred)
+   and, for the measured case, real evidence handles minted by
+   ``evidence_service.EvidenceHandleService`` — the *existing* evidence
+   identity scheme (``EvidenceHandle``/``DevEvidenceRefV2``), deliberately
+   not a parallel one.
+
+Artifact root: ``contracts/ask-dev-investigation/v1`` — deliberately its own
+tree rather than a member of ``CONTRACT_MODELS_V2``, because
+``contracts/ask-dev/v2`` is reserved for wire contracts served to real
+clients (``scripts/acceptance/corpus/receipt.py:6-7``) and this packet is
+never client-served.
+
+Architecture write-up, including the cross-repository ownership map:
+``docs/contribute/architecture/ask-dev-investigation-packet.md``.
+"""
+
+from __future__ import annotations
+
+from .allowlists import (
+    ALL_ANALYTICAL_SLICES,
+    SLICE_BOUNDARIES,
+    TRIAL_SOURCE_ALLOWLIST,
+    TRIAL_SOURCE_RATIONALE,
+    SliceBoundary,
+    validate_slice_boundaries,
+    validate_trial_source_allowlist,
+)
+from .packet import (
+    INVESTIGATION_CONTRACT_MODELS,
+    AnalyticalJob,
+    AskDevInvestigationPacket,
+    BoundedTimeContext,
+    ClarificationNeed,
+    CohortExclusion,
+    CohortMember,
+    ComparisonCohort,
+    DriverAnalysis,
+    DriverCandidate,
+    EvidenceCoverage,
+    InvestigationEvidenceEntry,
+    InvestigationVersions,
+    LineageHop,
+    LineagePath,
+    MissingSource,
+    PacketLimitation,
+    RelatedContext,
+    RelatedEntity,
+    SourceConflict,
+    SourceContractVersion,
+    SourceHealthObservation,
+    StaffingQualification,
+    SubjectCandidate,
+    SubjectDiscovery,
+    SubjectMatchEvidence,
+    SurfaceContextRef,
+    TrialMetadata,
+    UnresolvedMention,
+)
+from .question_families import (
+    ALL_PROHIBITED_REDUCTIONS,
+    ALL_QUESTION_FAMILY_IDS,
+    MANDATORY_PROHIBITED_REDUCTIONS,
+    QUESTION_FAMILY_REGISTRY,
+    ProhibitedReduction,
+    QuestionFamily,
+    QuestionFamilyID,
+    QuestionVariant,
+    QuestionVariantKind,
+    StaffingDenominatorPolicy,
+    validate_question_family_registry,
+)
+from .relationships import (
+    ALL_RELATIONSHIP_TYPES,
+    RELATIONSHIP_ALLOWLIST,
+    EntityPair,
+    RelationshipOrientation,
+    RelationshipType,
+    validate_relationship_allowlist,
+)
+from .scoring import (
+    ALL_FAULT_MODE_IDS,
+    ALL_SCORING_DIMENSION_IDS,
+    FAULT_MODE_REGISTRY,
+    SCORING_DIMENSION_REGISTRY,
+    DimensionPolarity,
+    FaultMode,
+    FaultModeID,
+    MeasurementKind,
+    RejectingMechanism,
+    ScoringDimension,
+    ScoringDimensionID,
+    ValidatorReference,
+    validate_scoring_registry,
+)
+from .vocabulary import (
+    ALL_ASSERTION_BASES,
+    ALL_COMPARISON_DIMENSIONS,
+    ALL_COMPARISON_SHAPES,
+    ALL_DRIVER_CATEGORIES,
+    ALL_DRIVER_ROLES,
+    ALL_DRIVER_STANDINGS,
+    ALL_INVESTIGATION_OUTCOMES,
+    ALL_INVESTIGATION_SUBJECT_KINDS,
+    ALL_PACKET_SECTIONS,
+    ALL_STAFFING_DENOMINATOR_STATES,
+    ALL_TRUNCATION_REASONS,
+    AnalyticalSlice,
+    AssertionBasis,
+    ClarificationNeedKind,
+    CohortCompleteness,
+    CohortEvidenceClassification,
+    CohortExclusionReason,
+    CohortInclusionBasis,
+    ComparisonDimension,
+    ComparisonShape,
+    ConfidenceQualifier,
+    ConflictResolution,
+    DriverCategory,
+    DriverExclusionReason,
+    DriverRole,
+    DriverStanding,
+    HistoricalComparability,
+    InvestigationOutcome,
+    InvestigationSubjectKind,
+    JobUncertainty,
+    PacketLimitationKind,
+    PacketSection,
+    RelationshipDirection,
+    RelevanceState,
+    StaffingDenominatorState,
+    SubjectCommitmentState,
+    SubjectMatchSignal,
+    SurfaceKind,
+    TruncationReason,
+    UnresolvedMentionReason,
+)
+
+__all__ = [
+    "ALL_ANALYTICAL_SLICES",
+    "ALL_ASSERTION_BASES",
+    "ALL_COMPARISON_DIMENSIONS",
+    "ALL_COMPARISON_SHAPES",
+    "ALL_DRIVER_CATEGORIES",
+    "ALL_DRIVER_ROLES",
+    "ALL_DRIVER_STANDINGS",
+    "ALL_FAULT_MODE_IDS",
+    "ALL_INVESTIGATION_OUTCOMES",
+    "ALL_INVESTIGATION_SUBJECT_KINDS",
+    "ALL_PACKET_SECTIONS",
+    "ALL_PROHIBITED_REDUCTIONS",
+    "ALL_QUESTION_FAMILY_IDS",
+    "ALL_RELATIONSHIP_TYPES",
+    "ALL_SCORING_DIMENSION_IDS",
+    "ALL_STAFFING_DENOMINATOR_STATES",
+    "ALL_TRUNCATION_REASONS",
+    "FAULT_MODE_REGISTRY",
+    "INVESTIGATION_CONTRACT_MODELS",
+    "MANDATORY_PROHIBITED_REDUCTIONS",
+    "QUESTION_FAMILY_REGISTRY",
+    "RELATIONSHIP_ALLOWLIST",
+    "SCORING_DIMENSION_REGISTRY",
+    "SLICE_BOUNDARIES",
+    "TRIAL_SOURCE_ALLOWLIST",
+    "TRIAL_SOURCE_RATIONALE",
+    "AnalyticalJob",
+    "AnalyticalSlice",
+    "AskDevInvestigationPacket",
+    "AssertionBasis",
+    "BoundedTimeContext",
+    "ClarificationNeed",
+    "ClarificationNeedKind",
+    "CohortCompleteness",
+    "CohortEvidenceClassification",
+    "CohortExclusion",
+    "CohortExclusionReason",
+    "CohortInclusionBasis",
+    "CohortMember",
+    "ComparisonCohort",
+    "ComparisonDimension",
+    "ComparisonShape",
+    "ConfidenceQualifier",
+    "ConflictResolution",
+    "DimensionPolarity",
+    "DriverAnalysis",
+    "DriverCandidate",
+    "DriverCategory",
+    "DriverExclusionReason",
+    "DriverRole",
+    "DriverStanding",
+    "EntityPair",
+    "EvidenceCoverage",
+    "FaultMode",
+    "FaultModeID",
+    "HistoricalComparability",
+    "InvestigationEvidenceEntry",
+    "InvestigationOutcome",
+    "InvestigationSubjectKind",
+    "InvestigationVersions",
+    "JobUncertainty",
+    "LineageHop",
+    "LineagePath",
+    "MeasurementKind",
+    "MissingSource",
+    "PacketLimitation",
+    "PacketLimitationKind",
+    "PacketSection",
+    "ProhibitedReduction",
+    "QuestionFamily",
+    "QuestionFamilyID",
+    "QuestionVariant",
+    "QuestionVariantKind",
+    "RejectingMechanism",
+    "RelatedContext",
+    "RelatedEntity",
+    "RelationshipDirection",
+    "RelationshipOrientation",
+    "RelationshipType",
+    "RelevanceState",
+    "ScoringDimension",
+    "ScoringDimensionID",
+    "SliceBoundary",
+    "SourceConflict",
+    "SourceContractVersion",
+    "SourceHealthObservation",
+    "StaffingDenominatorPolicy",
+    "StaffingDenominatorState",
+    "StaffingQualification",
+    "SubjectCandidate",
+    "SubjectCommitmentState",
+    "SubjectDiscovery",
+    "SubjectMatchEvidence",
+    "SubjectMatchSignal",
+    "SurfaceContextRef",
+    "SurfaceKind",
+    "TrialMetadata",
+    "TruncationReason",
+    "UnresolvedMention",
+    "UnresolvedMentionReason",
+    "ValidatorReference",
+    "validate_question_family_registry",
+    "validate_relationship_allowlist",
+    "validate_scoring_registry",
+    "validate_slice_boundaries",
+    "validate_trial_source_allowlist",
+]

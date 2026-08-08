@@ -1,0 +1,193 @@
+{
+  "fault_modes": [
+    {
+      "bad_behaviour": "An arm commits to 'Nightfall' when the question meant 'Nightfall Migration', on the strength of a fuzzy label match alone. The contract cannot know which is correct -- that is the oracle's job -- but it can refuse the shape that makes the mistake invisible: a committed subject whose every match signal is fuzzy, or a ranked candidate with no stated signal at all.",
+      "dimension_ids": [
+        "subject_top_1",
+        "subject_top_3",
+        "alias_acronym_rename_resolution",
+        "clarification_candidate_precision",
+        "conversational_reference_resolution"
+      ],
+      "fault_mode_id": "wrong_but_similar_subject_ranked_first",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_commitment_on_fuzzy_label_alone_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "A wrong but similarly named subject ranks above the correct target",
+      "validator_reference": {
+        "model_name": "SubjectDiscovery",
+        "validator_name": "validate_commitment_is_evidenced"
+      }
+    },
+    {
+      "bad_behaviour": "The question named a subject, resolution failed, and the arm answered about the whole organization instead of asking. Rejected unless the packet's outcome is NEEDS_CLARIFICATION and it carries a subject clarification need.",
+      "dimension_ids": [
+        "no_unsafe_organization_widening",
+        "clarification_candidate_precision"
+      ],
+      "fault_mode_id": "organization_widening_after_unresolved_reference",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_organization_widening_after_unresolved_mention_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "Organization-wide widening after an unresolved named reference",
+      "validator_reference": {
+        "model_name": "AskDevInvestigationPacket",
+        "validator_name": "validate_no_unsafe_organization_widening"
+      }
+    },
+    {
+      "bad_behaviour": "An arm floods the evidence index with whatever it had most of -- commits, comments -- none of it attached to any included entity, path or driver, burying the lineage that was actually asked for. Rejected in both directions: an indexed item that supports nothing, and a referenced handle that is not indexed.",
+      "dimension_ids": [
+        "evidence_closure",
+        "relevant_entity_recall",
+        "relevant_relationship_recall",
+        "lineage_path_precision",
+        "cross_source_association"
+      ],
+      "fault_mode_id": "irrelevant_evidence_displaces_lineage",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_evidence_that_supports_nothing_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "Irrelevant high-volume evidence displaces the expected lineage",
+      "validator_reference": {
+        "model_name": "InvestigationEvidenceEntry",
+        "validator_name": "validate_supports_something"
+      }
+    },
+    {
+      "bad_behaviour": "'Cycle time is up' promoted to principal driver with no lineage explaining why. Rejected: principal standing requires the DRIVER role, at least one supporting path, at least one evidence handle, and current relevance.",
+      "dimension_ids": [
+        "symptom_versus_driver_distinction",
+        "principal_driver_precision",
+        "unsupported_attribution_rate",
+        "current_relevance"
+      ],
+      "fault_mode_id": "symptom_labelled_as_principal_driver",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_symptom_promoted_to_principal_driver_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "A symptom is labelled the principal driver without supporting paths",
+      "validator_reference": {
+        "model_name": "DriverCandidate",
+        "validator_name": "validate_principal_standing_is_earned"
+      }
+    },
+    {
+      "bad_behaviour": "'This project is understaffed' asserted as measured fact with no allocation denominator. Rejected. The mirror-image drift is rejected too, by a positive test: a missing denominator with a QUALIFIED confidence qualifier is a legal, useful packet -- missing staffing data reduces confidence, it does not make the question unsupported.",
+      "dimension_ids": [
+        "zero_unsupported_staffing_certainty",
+        "unsupported_attribution_rate"
+      ],
+      "fault_mode_id": "staffing_certainty_without_allocation_evidence",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_certain_staffing_claim_without_denominator_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "A staffing claim is presented as certain without allocation evidence",
+      "validator_reference": {
+        "model_name": "DriverCandidate",
+        "validator_name": "validate_staffing_claims_are_qualified"
+      }
+    },
+    {
+      "bad_behaviour": "A cohort member with no stated inclusion basis, no rationale, or neither evidence nor an explicit no-evidence classification. Whether a *well-explained* member is factually relevant remains an oracle judgment; what the contract removes is the ability to add one silently.",
+      "dimension_ids": [
+        "cohort_precision",
+        "cohort_recall",
+        "cohort_inclusion_explainability",
+        "cohort_exclusion_explainability"
+      ],
+      "fault_mode_id": "unrelated_cohort_member",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_cohort_member_without_inclusion_evidence_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "The cohort includes an unrelated project",
+      "validator_reference": {
+        "model_name": "CohortMember",
+        "validator_name": "validate_inclusion_is_evidenced"
+      }
+    },
+    {
+      "bad_behaviour": "'Team owns project' emitted as 'project owns team', or a blocked-by edge pointing the wrong way. Rejected against the relationship allowlist's declared canonical orientation.",
+      "dimension_ids": [
+        "lineage_direction_correctness",
+        "lineage_path_precision"
+      ],
+      "fault_mode_id": "reversed_relationship_direction",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_reversed_relationship_direction_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "A relationship is reversed",
+      "validator_reference": {
+        "model_name": "LineageHop",
+        "validator_name": "validate_direction_matches_allowlist"
+      }
+    },
+    {
+      "bad_behaviour": "A lineage path routes through an entity the caller may not see, leaking its existence through the path even if its own record is never returned. Rejected: every endpoint of every hop, and every related entity, must be in the packet's authorized entity set. Residual, stated rather than glossed: that set is producer-declared, so the contract proves the traversal was consistent with the claim, not that the claim is true -- CHAOS-3616 must also score this dimension against a real authorization oracle.",
+      "dimension_ids": [
+        "zero_unauthorized_results",
+        "lineage_path_precision"
+      ],
+      "fault_mode_id": "path_crosses_unauthorized_entity",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_path_through_unauthorized_entity_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "A path crosses an unauthorized entity",
+      "validator_reference": {
+        "model_name": "RelatedContext",
+        "validator_name": "validate_paths_stay_inside_authorized_set"
+      }
+    },
+    {
+      "bad_behaviour": "A packet claims SUPPORTED while carrying no asserted driver at all -- the structural form of 'here are some links, you work it out'. Rejected: a supported outcome requires at least one principal or contributing driver, each of which must itself be path- and evidence-backed.",
+      "dimension_ids": [
+        "answer_usefulness_beyond_dashboard",
+        "principal_driver_precision",
+        "principal_driver_recall"
+      ],
+      "fault_mode_id": "dashboard_redirect_without_direct_judgment",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_supported_outcome_without_any_asserted_driver_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "Dashboard redirection appears without a direct judgment",
+      "validator_reference": {
+        "model_name": "AskDevInvestigationPacket",
+        "validator_name": "validate_supported_outcome_asserts_a_judgment"
+      }
+    },
+    {
+      "bad_behaviour": "The dangerous defaults are all the reassuring ones: authorization_filtered_count = 0, truncated = False. Each would let an arm that filtered or truncated look like one that did not. Every such field on this contract is required with no default, so omitting it is a validation error rather than a comforting zero.",
+      "dimension_ids": [
+        "cohort_exclusion_explainability",
+        "zero_unauthorized_results",
+        "useful_uncertainty_behaviour"
+      ],
+      "fault_mode_id": "absent_required_field_silently_defaults",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_disclosure_fields_have_no_reassuring_default",
+      "rejecting_mechanism": "required_field",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "An absent required field silently defaults to a privileged value",
+      "validator_reference": null
+    },
+    {
+      "bad_behaviour": "A cohort that claims to compare while declaring zero comparison dimensions; a question family reduced to one prompt and one metric; a scoring dimension no fault mode can fail. Each is well-formed and proves nothing. Rejected at the contract layer for cohorts and at the registry layer for families and dimensions.",
+      "dimension_ids": [
+        "comparative_judgment_support",
+        "cohort_recall",
+        "useful_uncertainty_behaviour",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage"
+      ],
+      "fault_mode_id": "wildcard_or_optional_field_makes_check_vacuous",
+      "proving_test": "tests/api/dev/test_chaos_3615_fault_modes.py::test_cohort_claiming_comparison_without_dimensions_is_rejected",
+      "rejecting_mechanism": "contract_validator",
+      "schema_version": "ask_dev_fault_mode.v1",
+      "title": "A wildcard or optional field makes a check vacuous",
+      "validator_reference": {
+        "model_name": "ComparisonCohort",
+        "validator_name": "validate_comparison_is_not_vacuous"
+      }
+    }
+  ],
+  "schema_version": "ask_dev_fault_mode_registry.v1"
+}

@@ -107,6 +107,17 @@ dev = [
   # CHAOS-3034 compatibility probe only. Production Python code must enqueue
   # through the worker_job_outbox fallback unless a compatible client ships.
   "riverqueue==0.7.0",
+  # CHAOS-3615: the differential oracle between the canonical Pydantic
+  # contract and its generated Draft 2020-12 schemas
+  # (tests/api/dev/test_chaos_3615_schema_validator_differential.py). Test
+  # scope only -- no src/ module imports it, because the exporter must stay
+  # runnable without dev extras.
+  "jsonschema>=4.20.0",
+  # Declared rather than left to `mypy --install-types`: the gate's mypy
+  # stage auto-installs stubs, so a missing declaration passes the gate and
+  # then blocks the pre-commit hook (which runs plain `mypy`). Same pattern
+  # as pandas-stubs / types-grpcio above.
+  "types-jsonschema>=4.20.0",
 ]
 enterprise-sso = ["signxml>=3.0.0"]
 

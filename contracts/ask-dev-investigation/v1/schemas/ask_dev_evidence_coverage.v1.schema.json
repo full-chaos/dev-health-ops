@@ -1,0 +1,643 @@
+{
+  "$defs": {
+    "ClarificationNeed": {
+      "additionalProperties": false,
+      "description": "A question the investigation needs answered before it can proceed.",
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/ClarificationNeedKind"
+        },
+        "prompt": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "prompt"
+      ],
+      "title": "ClarificationNeed",
+      "type": "object"
+    },
+    "ClarificationNeedKind": {
+      "enum": [
+        "ambiguous_subject",
+        "missing_time_context",
+        "missing_comparison_basis",
+        "unresolved_conversational_reference",
+        "unsupported_by_available_sources"
+      ],
+      "title": "ClarificationNeedKind",
+      "type": "string"
+    },
+    "ConflictResolution": {
+      "enum": [
+        "unresolved",
+        "resolved_by_precedence",
+        "resolved_by_recency",
+        "deferred_to_canonical_service"
+      ],
+      "title": "ConflictResolution",
+      "type": "string"
+    },
+    "DevCitationLink": {
+      "additionalProperties": false,
+      "properties": {
+        "internal_path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^/[^\\s]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Internal Path"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        }
+      },
+      "title": "DevCitationLink",
+      "type": "object"
+    },
+    "DevEvidenceFlags": {
+      "additionalProperties": false,
+      "properties": {
+        "conflicting": {
+          "default": false,
+          "title": "Conflicting",
+          "type": "boolean"
+        },
+        "deleted": {
+          "default": false,
+          "title": "Deleted",
+          "type": "boolean"
+        },
+        "redacted": {
+          "default": false,
+          "title": "Redacted",
+          "type": "boolean"
+        },
+        "stale": {
+          "default": false,
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "unavailable": {
+          "default": false,
+          "title": "Unavailable",
+          "type": "boolean"
+        },
+        "uncertain": {
+          "default": false,
+          "title": "Uncertain",
+          "type": "boolean"
+        },
+        "untrusted_content": {
+          "default": true,
+          "title": "Untrusted Content",
+          "type": "boolean"
+        }
+      },
+      "title": "DevEvidenceFlags",
+      "type": "object"
+    },
+    "DevEvidenceRefV2": {
+      "additionalProperties": false,
+      "properties": {
+        "citation_text": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation Text"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Type",
+          "type": "string"
+        },
+        "evidence_ref_id": {
+          "maxLength": 44,
+          "minLength": 44,
+          "pattern": "^ev1_[0-9a-f]{40}$",
+          "title": "Evidence Ref Id",
+          "type": "string"
+        },
+        "flags": {
+          "$ref": "#/$defs/DevEvidenceFlags"
+        },
+        "freshness": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevCitationLink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_evidence_ref.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_system": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Source System",
+          "type": "string"
+        },
+        "source_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Version",
+          "type": "string"
+        },
+        "valid_entity_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Valid Entity Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "evidence_ref_id",
+        "source_system",
+        "source_version",
+        "entity_type",
+        "entity_id",
+        "display_label",
+        "observed_at",
+        "freshness",
+        "provenance",
+        "confidence",
+        "flags"
+      ],
+      "title": "DevEvidenceRefV2",
+      "type": "object"
+    },
+    "FreshnessState": {
+      "enum": [
+        "fresh",
+        "stale",
+        "unavailable",
+        "unknown"
+      ],
+      "title": "FreshnessState",
+      "type": "string"
+    },
+    "InvestigationEvidenceEntry": {
+      "additionalProperties": false,
+      "description": "One evidence item, and what in this packet it actually supports.",
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/DevEvidenceRefV2"
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "supports_driver_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Driver Ids",
+          "type": "array"
+        },
+        "supports_entity_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Entity Ids",
+          "type": "array"
+        },
+        "supports_path_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Path Ids",
+          "type": "array"
+        },
+        "supports_subject_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supports Subject Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "evidence",
+        "source_class",
+        "relevance"
+      ],
+      "title": "InvestigationEvidenceEntry",
+      "type": "object"
+    },
+    "MissingSource": {
+      "additionalProperties": false,
+      "description": "A source the investigation wanted and did not get.",
+      "properties": {
+        "impact": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "state": {
+          "$ref": "#/$defs/SourceRequirementState"
+        }
+      },
+      "required": [
+        "source_class",
+        "state",
+        "impact"
+      ],
+      "title": "MissingSource",
+      "type": "object"
+    },
+    "PacketLimitation": {
+      "additionalProperties": false,
+      "description": "One safe, closed-vocabulary limitation the packet is disclosing.",
+      "properties": {
+        "detail": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PacketLimitationKind"
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "title": "PacketLimitation",
+      "type": "object"
+    },
+    "PacketLimitationKind": {
+      "enum": [
+        "missing_source",
+        "stale_source",
+        "conflicting_evidence",
+        "authorization_filtered",
+        "truncated_traversal",
+        "absent_staffing_denominator",
+        "historical_slice_not_comparable",
+        "interpretation_uncertainty"
+      ],
+      "title": "PacketLimitationKind",
+      "type": "string"
+    },
+    "RelevanceState": {
+      "description": "Whether a node, path, driver or evidence item is *currently* relevant.",
+      "enum": [
+        "current",
+        "recently_current",
+        "historical_only",
+        "unknown"
+      ],
+      "title": "RelevanceState",
+      "type": "string"
+    },
+    "SourceClass": {
+      "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health",
+        "cognitive_load",
+        "investment_allocation",
+        "health_profile",
+        "deficiency_inventory",
+        "temporal_context"
+      ],
+      "title": "SourceClass",
+      "type": "string"
+    },
+    "SourceConflict": {
+      "additionalProperties": false,
+      "description": "Two or more evidence items that disagree.",
+      "properties": {
+        "conflict_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Conflict Id",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 2,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "resolution": {
+          "$ref": "#/$defs/ConflictResolution"
+        }
+      },
+      "required": [
+        "conflict_id",
+        "evidence_ref_ids",
+        "description",
+        "resolution"
+      ],
+      "title": "SourceConflict",
+      "type": "object"
+    },
+    "SourceHealthObservation": {
+      "additionalProperties": false,
+      "description": "The observed state of one source class during the investigation.",
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "source_class": {
+          "$ref": "#/$defs/SourceClass"
+        },
+        "state": {
+          "$ref": "#/$defs/SourceRequirementState"
+        }
+      },
+      "required": [
+        "source_class",
+        "state"
+      ],
+      "title": "SourceHealthObservation",
+      "type": "object"
+    },
+    "SourceRequirementState": {
+      "description": "Per-source fulfillment state (CHAOS-3294 deliverable list, verbatim).\n\nDistinct from ``dev_source_requirement.v1.requirement_level`` (the\na-priori ``mandatory | conditional | optional | not_applicable``\ndeclaration): this enum is the *observed*, executed outcome recorded on\n``dev_source_observation.v1.observed_state`` once a plan step actually\nran. Kept in ``base`` because both the plan and result contract modules\nreference it (the plan's applicability rules describe which states are\nacceptable; the result records which state was actually observed).",
+      "enum": [
+        "available_current",
+        "available_stale",
+        "available_unknown",
+        "unconfigured",
+        "unavailable",
+        "unauthorized_or_not_visible",
+        "not_applicable",
+        "truncated"
+      ],
+      "title": "SourceRequirementState",
+      "type": "string"
+    },
+    "TruncationReason": {
+      "enum": [
+        "path_budget",
+        "node_budget",
+        "cohort_budget",
+        "evidence_budget",
+        "time_budget",
+        "authorization_filter",
+        "source_unavailable"
+      ],
+      "title": "TruncationReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev-investigation/v1/ask_dev_evidence_coverage.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The evidence index, what was missing, and what the packet cannot say.",
+  "properties": {
+    "authorization_filtered_count": {
+      "minimum": 0,
+      "title": "Authorization Filtered Count",
+      "type": "integer"
+    },
+    "clarification_needs": {
+      "items": {
+        "$ref": "#/$defs/ClarificationNeed"
+      },
+      "maxItems": 10,
+      "title": "Clarification Needs",
+      "type": "array"
+    },
+    "conflicts": {
+      "items": {
+        "$ref": "#/$defs/SourceConflict"
+      },
+      "maxItems": 25,
+      "title": "Conflicts",
+      "type": "array"
+    },
+    "evidence_index": {
+      "items": {
+        "$ref": "#/$defs/InvestigationEvidenceEntry"
+      },
+      "maxItems": 200,
+      "title": "Evidence Index",
+      "type": "array"
+    },
+    "evidence_truncated": {
+      "title": "Evidence Truncated",
+      "type": "boolean"
+    },
+    "limitations": {
+      "items": {
+        "$ref": "#/$defs/PacketLimitation"
+      },
+      "maxItems": 25,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "missing_sources": {
+      "items": {
+        "$ref": "#/$defs/MissingSource"
+      },
+      "maxItems": 25,
+      "title": "Missing Sources",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "ask_dev_evidence_coverage.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_health": {
+      "items": {
+        "$ref": "#/$defs/SourceHealthObservation"
+      },
+      "maxItems": 25,
+      "title": "Source Health",
+      "type": "array"
+    },
+    "truncation_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TruncationReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "schema_version",
+    "authorization_filtered_count",
+    "evidence_truncated"
+  ],
+  "title": "EvidenceCoverage",
+  "type": "object"
+}

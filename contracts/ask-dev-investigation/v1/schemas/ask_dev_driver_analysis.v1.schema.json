@@ -1,0 +1,342 @@
+{
+  "$defs": {
+    "AssertionBasis": {
+      "description": "Measured, source-asserted and inferred distinctions.\n\nThe governing rule is \"the graph determines what is relevant; canonical\nservices determine what is measurable\". ``MEASURED`` therefore means a\ncanonical Ops service produced the number and minted evidence for it;\n``SOURCE_ASSERTED`` means a provider (or a human in a provider field)\nsaid so; ``INFERRED`` means the investigation concluded it. Only\n``MEASURED`` may be presented as certain.",
+      "enum": [
+        "measured",
+        "source_asserted",
+        "inferred"
+      ],
+      "title": "AssertionBasis",
+      "type": "string"
+    },
+    "ConfidenceQualifier": {
+      "enum": [
+        "measured_certain",
+        "qualified",
+        "uncertain",
+        "unsupported"
+      ],
+      "title": "ConfidenceQualifier",
+      "type": "string"
+    },
+    "DriverCandidate": {
+      "additionalProperties": false,
+      "description": "A candidate driver, its standing, and everything that standing rests on.",
+      "properties": {
+        "affected_subject_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Affected Subject Ids",
+          "type": "array"
+        },
+        "assertion_basis": {
+          "$ref": "#/$defs/AssertionBasis"
+        },
+        "category": {
+          "$ref": "#/$defs/DriverCategory"
+        },
+        "confidence_qualifier": {
+          "$ref": "#/$defs/ConfidenceQualifier"
+        },
+        "conflict_note": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conflict Note"
+        },
+        "conflicting_evidence_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Conflicting Evidence Ids",
+          "type": "array"
+        },
+        "driver_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Driver Id",
+          "type": "string"
+        },
+        "exclusion_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DriverExclusionReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "relevance": {
+          "$ref": "#/$defs/RelevanceState"
+        },
+        "role": {
+          "$ref": "#/$defs/DriverRole"
+        },
+        "staffing_qualification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StaffingQualification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "standing": {
+          "$ref": "#/$defs/DriverStanding"
+        },
+        "summary": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "supporting_evidence_ids": {
+          "items": {
+            "maxLength": 44,
+            "minLength": 44,
+            "pattern": "^ev1_[0-9a-f]{40}$",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "title": "Supporting Evidence Ids",
+          "type": "array"
+        },
+        "supporting_path_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Supporting Path Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "driver_id",
+        "category",
+        "summary",
+        "affected_subject_ids",
+        "role",
+        "standing",
+        "assertion_basis",
+        "confidence_qualifier",
+        "relevance"
+      ],
+      "title": "DriverCandidate",
+      "type": "object"
+    },
+    "DriverCategory": {
+      "enum": [
+        "delivery_pressure",
+        "review_pressure",
+        "operational_pressure",
+        "dependency_pressure",
+        "investment_mix",
+        "capacity_or_staffing",
+        "scope_change",
+        "quality_or_defect",
+        "external_blocker",
+        "data_coverage"
+      ],
+      "title": "DriverCategory",
+      "type": "string"
+    },
+    "DriverExclusionReason": {
+      "description": "Why a candidate did not reach principal-driver standing.",
+      "enum": [
+        "no_supporting_path",
+        "evidence_conflict_unresolved",
+        "not_currently_relevant",
+        "symptom_of_another_candidate",
+        "unauthorized_evidence",
+        "insufficient_measurement"
+      ],
+      "title": "DriverExclusionReason",
+      "type": "string"
+    },
+    "DriverRole": {
+      "description": "Symptom-versus-driver classification.\n\n``CONTEXTUAL_CORRELATE`` is the honest third option: something that moved\nat the same time and is worth reporting but is neither the cause nor a\nconsequence. Collapsing it into ``DRIVER`` is precisely how unsupported\nattribution enters an answer.",
+      "enum": [
+        "driver",
+        "symptom",
+        "contextual_correlate"
+      ],
+      "title": "DriverRole",
+      "type": "string"
+    },
+    "DriverStanding": {
+      "enum": [
+        "principal_driver",
+        "contributing_driver",
+        "candidate_only",
+        "excluded"
+      ],
+      "title": "DriverStanding",
+      "type": "string"
+    },
+    "RelevanceState": {
+      "description": "Whether a node, path, driver or evidence item is *currently* relevant.",
+      "enum": [
+        "current",
+        "recently_current",
+        "historical_only",
+        "unknown"
+      ],
+      "title": "RelevanceState",
+      "type": "string"
+    },
+    "SourceClass": {
+      "description": "The closed platform vocabulary of investigable source classes.\n\nA *source class* names a kind of platform data an investigation step can\ndraw on. It is deliberately a closed enum rather than an ``OpaqueID``,\nbecause the same token is what ``dev_coverage``'s\n``unavailable_required_sources``/``stale_required_sources`` disclose on a\n**denied** answer (see ``validators.NO_ANSWER_FRAME_FIELD_POLICY``):\nadversarial review round 3 used the free-form ``OpaqueID`` shape to smuggle\na subject-derived identifier (``\"private/Nightfall\"``) out through a frame\nwhose every other field was correctly empty. A closed vocabulary means the\ncoverage counts stay answerable for a denial while carrying nothing a\nproducer chose.\n\nAdding a source class is therefore a deliberate contract change, not an\nincidental string: a new adapter must add its member here (and regenerate\nthe exported schemas) before it can appear on the wire.",
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health",
+        "cognitive_load",
+        "investment_allocation",
+        "health_profile",
+        "deficiency_inventory",
+        "temporal_context"
+      ],
+      "title": "SourceClass",
+      "type": "string"
+    },
+    "StaffingDenominatorState": {
+      "description": "How much allocation evidence backs a capacity/staffing claim.\n\nThe correction addendum is explicit on both halves of this: a missing\ndenominator must **reduce confidence and require qualification**, and it\nmust **not automatically make capacity questions unsupported**. Both\nhalves are pinned by tests \u2014 ``DENOMINATOR_ABSENT`` with a\n``MEASURED_CERTAIN`` qualifier is rejected, and ``DENOMINATOR_ABSENT``\nwith a ``QUALIFIED`` qualifier is accepted.",
+      "enum": [
+        "allocation_evidence_available",
+        "partial_allocation_evidence",
+        "denominator_absent"
+      ],
+      "title": "StaffingDenominatorState",
+      "type": "string"
+    },
+    "StaffingQualification": {
+      "additionalProperties": false,
+      "description": "How much allocation evidence stands behind a capacity claim.",
+      "properties": {
+        "denominator_source_classes": {
+          "items": {
+            "$ref": "#/$defs/SourceClass"
+          },
+          "maxItems": 10,
+          "title": "Denominator Source Classes",
+          "type": "array"
+        },
+        "denominator_state": {
+          "$ref": "#/$defs/StaffingDenominatorState"
+        },
+        "qualification_note": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Qualification Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "denominator_state",
+        "qualification_note"
+      ],
+      "title": "StaffingQualification",
+      "type": "object"
+    },
+    "TruncationReason": {
+      "enum": [
+        "path_budget",
+        "node_budget",
+        "cohort_budget",
+        "evidence_budget",
+        "time_budget",
+        "authorization_filter",
+        "source_unavailable"
+      ],
+      "title": "TruncationReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev-investigation/v1/ask_dev_driver_analysis.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Every driver candidate, and which of them are principal.",
+  "properties": {
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/DriverCandidate"
+      },
+      "maxItems": 50,
+      "title": "Candidates",
+      "type": "array"
+    },
+    "candidates_truncated": {
+      "title": "Candidates Truncated",
+      "type": "boolean"
+    },
+    "principal_driver_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Principal Driver Ids",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "ask_dev_driver_analysis.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "truncation_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TruncationReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidates_truncated"
+  ],
+  "title": "DriverAnalysis",
+  "type": "object"
+}

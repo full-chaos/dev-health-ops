@@ -1,0 +1,32 @@
+{
+  "authorization_filtered_count": 0,
+  "cohort_id": "cohort_nightfall_singular",
+  "cohort_uncertainty": null,
+  "comparison_shape": "singular_subject",
+  "completeness": "complete",
+  "exclusions": [
+    {
+      "canonical_id": "proj_nightfall",
+      "rationale": "Archived project with a near-identical name; excluded so the near-miss is recorded rather than silently dropped.",
+      "reason": "ambiguous_identity",
+      "subject_kind": "project"
+    }
+  ],
+  "members": [
+    {
+      "canonical_id": "proj_nightfall_migration",
+      "display_label": "Nightfall Migration",
+      "inclusion_basis": [
+        "explicitly_named"
+      ],
+      "inclusion_evidence_classification": "explicitly_named_by_question",
+      "inclusion_evidence_ids": [],
+      "inclusion_rationale": "The question names this project directly; it is the sole subject rather than a member of a comparison set.",
+      "relevance": "current",
+      "subject_kind": "project"
+    }
+  ],
+  "schema_version": "ask_dev_comparison_cohort.v1",
+  "supported_comparison_dimensions": [],
+  "truncation_reason": null
+}

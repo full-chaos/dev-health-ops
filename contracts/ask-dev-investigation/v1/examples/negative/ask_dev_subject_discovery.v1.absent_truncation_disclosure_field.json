@@ -1,0 +1,57 @@
+{
+  "authorization_filtered_count": 0,
+  "candidates": [
+    {
+      "candidate_id": "cand_1",
+      "canonical_id": "proj_nightfall_migration",
+      "commitment_state": "committed",
+      "display_label": "Nightfall Migration",
+      "match_confidence": 0.97,
+      "match_rationale": "The question's phrase 'the Nightfall migration' matches this project's registered display name exactly, and the surface the question was asked from is this project's overview page.",
+      "match_signals": [
+        {
+          "evidence_ref_ids": [
+            "ev1_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+          ],
+          "matched_text": "Nightfall Migration",
+          "signal": "exact_display_name",
+          "source_class": "work_graph"
+        },
+        {
+          "evidence_ref_ids": [],
+          "matched_text": "surface_project_overview",
+          "signal": "surface_context_reference",
+          "source_class": "work_graph"
+        }
+      ],
+      "rank": 1,
+      "relevance": "current",
+      "subject_kind": "project"
+    },
+    {
+      "candidate_id": "cand_2",
+      "canonical_id": "proj_nightfall",
+      "commitment_state": "rejected",
+      "display_label": "Nightfall",
+      "match_confidence": 0.41,
+      "match_rationale": "A similarly named archived project. Retained as a ranked candidate so the near-miss is visible rather than silently discarded.",
+      "match_signals": [
+        {
+          "evidence_ref_ids": [],
+          "matched_text": "Nightfall",
+          "signal": "fuzzy_label",
+          "source_class": "work_graph"
+        }
+      ],
+      "rank": 2,
+      "relevance": "historical_only",
+      "subject_kind": "project"
+    }
+  ],
+  "committed_subject_ids": [
+    "proj_nightfall_migration"
+  ],
+  "schema_version": "ask_dev_subject_discovery.v1",
+  "truncation_reason": null,
+  "unresolved_mentions": []
+}

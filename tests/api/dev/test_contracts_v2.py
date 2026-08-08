@@ -27,6 +27,18 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from dev_health_ops.api.dev import contracts_v2 as v2
+
+# CHAOS-3615: imported for its side effect on the class hierarchy, not for a
+# name. `_all_v2_contract_models()` discovers models by walking
+# `ContractModelV2.__subclasses__()`, which only sees the investigation-packet
+# models once their module has been imported -- and `_NON_HANDLE_IDENTIFIER_
+# REASONS` classifies 33 of their fields. Without this import the reasons
+# table names fields Python has never heard of and the closure assertion
+# `set(_NON_HANDLE_IDENTIFIER_REASONS) <= known` fails whenever this module
+# runs alone. Relying on another test module's collection to make this pass
+# was an order-dependent green: `pytest tests/api/dev/test_contracts_v2.py`
+# on its own went 1 failed, 274 passed.
+from dev_health_ops.api.dev import investigation_contract as _investigation_contract
 from dev_health_ops.api.dev.contract_fixtures import (
     TEAM_ID,
     committed_team_commit,
@@ -2204,6 +2216,10 @@ def test_round2_v1_projection_of_a_no_answer_outcome_carries_no_frame_text() -> 
 
 
 def _all_v2_contract_models() -> list[type[v2.ContractModelV2]]:
+    # Touch the investigation-contract package so its ContractModelV2
+    # subclasses are registered before the walk below, and so the import
+    # above cannot be pruned as unused.
+    assert _investigation_contract.INVESTIGATION_CONTRACT_MODELS
     found: set[type[v2.ContractModelV2]] = set()
     stack: list[type[v2.ContractModelV2]] = [v2.ContractModelV2]
     while stack:

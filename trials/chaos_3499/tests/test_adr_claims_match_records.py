@@ -585,15 +585,21 @@ def _run6_class_c_scores() -> dict[str, int]:
     )
     scores: dict[str, int] = {}
     for section in md.split("## Tier: ")[1:]:
-        key = re.search(r"tier key: `([^`]+)`", section).group(1)
+        key_match = re.search(r"tier key: `([^`]+)`", section)
+        assert key_match, "run-6 artifact section has no tier key; parser is stale"
+        key = key_match.group(1)
         passed = 0
         for oracle in authored:
             line = [ln for ln in section.splitlines() if ln.startswith(f"| {oracle} ")]
             if not line:
                 continue
             cells = [c.strip() for c in line[0].strip("|").split("|")]
-            verdict = re.search(r"`(\w+)` @", cells[-1]).group(1)
-            passed += verdict == "pass"
+            verdict_match = re.search(r"`(\w+)` @", cells[-1])
+            assert verdict_match, (
+                f"run-6 artifact row for {oracle} has no parseable verdict; "
+                "the parser is stale and this guard would silently under-count"
+            )
+            passed += verdict_match.group(1) == "pass"
         scores[key] = passed
     return scores
 

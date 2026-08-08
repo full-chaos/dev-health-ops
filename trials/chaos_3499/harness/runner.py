@@ -65,11 +65,24 @@ class ClassScore:
         """Clean means every oracle in the class was measured and passed."""
         return self.total > 0 and self.failed == 0 and self.not_measured == 0
 
+    @property
+    def measured(self) -> int:
+        """Oracles actually measured -- the only honest denominator.
+
+        ``total`` includes NOT_MEASURED rows. Scoring against it renders a
+        class where 11 of 15 oracles were never run as "0/15", which a
+        reader takes for a measured 15-case result. The unmeasured count is
+        reported BESIDE the score, never folded into it.
+        """
+        return self.passed + self.failed
+
     def render(self) -> str:
-        return (
-            f"class {self.question_class.value}: {self.passed}/{self.total} pass, "
-            f"{self.failed} fail, {self.not_measured} NOT MEASURED"
-        )
+        scored = f"{self.passed}/{self.measured} measured"
+        if self.not_measured:
+            scored += (
+                f" (+{self.not_measured} NOT MEASURED, excluded from the denominator)"
+            )
+        return f"class {self.question_class.value}: {scored}, {self.failed} fail"
 
 
 @dataclass(frozen=True)
@@ -312,11 +325,14 @@ class ClassComparison:
     def render(self) -> str:
         line = (
             f"  class {self.question_class.value}: baseline "
-            f"{self.baseline.passed}/{self.baseline.total}, arm "
-            f"{self.arm.passed}/{self.arm.total}, delta {self.delta:+d}"
+            f"{self.baseline.passed}/{self.baseline.measured}, arm "
+            f"{self.arm.passed}/{self.arm.measured}"
         )
         if self.is_comparable:
-            return line
+            return f"{line}, delta {self.delta:+d}"
+        # NO numeric delta on a NOT-COMPARABLE row. A signed number invites
+        # exactly the comparison the row is declaring invalid, and readers
+        # quote the number and drop the caveat.
         reasons = []
         if self.baseline.not_measured:
             reasons.append(

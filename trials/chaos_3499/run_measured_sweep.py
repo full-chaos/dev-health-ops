@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import os
 import sys
 import time
@@ -303,7 +304,7 @@ def resolve_tier_config(tier: ModelTier) -> LLMConfig:
     raise LLMUnavailable(f"tier {tier.key!r} has unknown provider {tier.provider!r}")
 
 
-def probe_provider(config: LLMConfig) -> str | None:
+def probe_provider(config: LLMConfig, evidence: dict | None = None) -> str | None:
     """``None`` if the provider answers, else a reason string.
 
     Exists so an unreachable OPTIONAL tier becomes a recorded NOT_RUN with
@@ -337,9 +338,16 @@ def probe_provider(config: LLMConfig) -> str | None:
         served_ids = {m.id for m in listing}
     except Exception:  # noqa: BLE001 - endpoint may not enumerate
         served_ids = set()
-    if served_ids and not any(
-        i == config.model or i.startswith(config.model) for i in served_ids
-    ):
+    if evidence is not None:
+        evidence["listed_models"] = sorted(served_ids)
+    if not served_ids:
+        return (
+            f"provider at {config.base_url} answered the probe but "
+            "enumerated NO models, so the requested model "
+            f"{config.model!r} cannot be confirmed present. Refusing to "
+            "measure an unverifiable tier identity."
+        )
+    if not any(i == config.model or i.startswith(config.model) for i in served_ids):
         return (
             f"provider at {config.base_url} is reachable but does not list "
             f"the requested model {config.model!r}. Refusing to measure: a "
@@ -537,6 +545,11 @@ class TierOutcome:
     report: ComparisonReport | None
     reports: Mapping | None
     call_records: Mapping[tuple[str, str], CallRecord] = field(default_factory=dict)
+    #: What actually backs this tier's model identity: the ids the provider
+    #: enumerated, and the served id read back from responses. Persisted so
+    #: "this row was produced by this model" is an auditable claim rather
+    #: than a label.
+    identity_evidence: Mapping[str, object] = field(default_factory=dict)
     started_at: str = ""
     finished_at: str = ""
     oracles: Sequence = ()
@@ -583,7 +596,8 @@ def run_tier(tier: ModelTier, oracles=ALL_ORACLES) -> TierOutcome:
     except LLMUnavailable as exc:
         return _not_run(f"config could not be built: {exc}")
 
-    probe_failure = probe_provider(config)
+    identity: dict[str, object] = {"requested_model": config.model}
+    probe_failure = probe_provider(config, identity)
     if probe_failure is not None:
         return _not_run(probe_failure)
 
@@ -596,6 +610,21 @@ def run_tier(tier: ModelTier, oracles=ALL_ORACLES) -> TierOutcome:
     )
 
     call_records: dict[tuple[str, str], CallRecord] = {}
+    served_models_seen: set[str] = set()
+
+    def _capture_served(arm_fn):
+        """Record the model the provider said it served, per answered call."""
+
+        def wrapped(oracle):
+            response = arm_fn(oracle)
+            served = (response.versions or {}).get("extraction")
+            if served:
+                served_models_seen.add(served)
+            return response
+
+        wrapped.declared_role = arm_fn.declared_role  # type: ignore[attr-defined]
+        return wrapped
+
     registry = ArmRegistry()
     registry.register(
         native.ARM_NAME,
@@ -615,7 +644,7 @@ def run_tier(tier: ModelTier, oracles=ALL_ORACLES) -> TierOutcome:
             extraction.ARM_NAME,
             # make_answer binds THIS tier's model -- see the module
             # docstring on why no measured run may resolve it from env.
-            _with_bounded_infra_retry(extraction.make_answer(config)),
+            _capture_served(_with_bounded_infra_retry(extraction.make_answer(config))),
             call_records,
         ),
         ArmRole.CANDIDATE_ARM,
@@ -623,6 +652,10 @@ def run_tier(tier: ModelTier, oracles=ALL_ORACLES) -> TierOutcome:
 
     report, reports = build_comparison_report(oracles, registry, _dependencies())
     finished_at = datetime.now(timezone.utc).isoformat()
+    # Which model id the provider actually reported across this tier's
+    # answered calls. More than one distinct value would mean the tier was
+    # served by different models mid-run, which the artifact must show.
+    identity["served_models_observed"] = sorted(served_models_seen)
 
     measured = sum(
         1 for r in report.arm.results if r.verdict is not Verdict.NOT_MEASURED
@@ -641,6 +674,7 @@ def run_tier(tier: ModelTier, oracles=ALL_ORACLES) -> TierOutcome:
         report=report,
         reports=reports,
         call_records=call_records,
+        identity_evidence=identity,
         started_at=started_at,
         finished_at=finished_at,
         oracles=tuple(oracles),
@@ -650,6 +684,73 @@ def run_tier(tier: ModelTier, oracles=ALL_ORACLES) -> TierOutcome:
 # ==========================================================================
 # Rendering
 # ==========================================================================
+
+
+def _failed_assertions(result) -> list[dict]:
+    """Every assertion this oracle failed, id + detail.
+
+    Persisted because a bare `fail` in the artifact supports no diagnosis.
+    The ADR's cheapest class-(c) lead -- that models mark root-cause
+    attribution `observed` where the corpus demands `inferred` -- was
+    obtained from an ad-hoc probe, NOT from the committed record, which
+    meant the artifact could not back the claim the document made from it.
+    """
+    return [
+        {"assertion_id": a.assertion_id, "detail": a.detail}
+        for a in result.assertions
+        if not a.ok
+    ]
+
+
+def _records_for(outcome: TierOutcome) -> dict:
+    """Raw, re-renderable evidence for one tier -- the durability fix.
+
+    The markdown artifact was previously the ONLY output, so re-rendering
+    it (after any presentation fix) required paying for a fresh sweep. That
+    made presentation defects expensive to correct and tempted re-use of
+    stale numbers. These records are the measurement; the markdown is a
+    view of them.
+    """
+    tier = outcome.tier
+    rows = []
+    if outcome.status == "measured" and outcome.reports:
+        by_arm = {
+            name: {r.oracle_id: r for r in tr.results}
+            for name, tr in outcome.reports.items()
+        }
+        for oracle in outcome.oracles:
+            for arm_name, results in by_arm.items():
+                result = results[oracle.oracle_id]
+                record = outcome.call_records.get((oracle.oracle_id, arm_name))
+                rows.append(
+                    {
+                        "oracle_id": oracle.oracle_id,
+                        "question_class": oracle.question_class.value,
+                        "arm": arm_name,
+                        "verdict": result.verdict.value,
+                        "failed_assertions": _failed_assertions(result),
+                        "not_run_reason": _oracle_reason(result) or None,
+                        "called_at": record.called_at if record else None,
+                        "latency_seconds": record.latency_seconds if record else None,
+                        "provider_attempts": record.provider_attempts if record else 0,
+                        "timed_out": record.timed_out if record else False,
+                        "recovered_after_retry": (
+                            record.recovered_after_retry if record else False
+                        ),
+                    }
+                )
+    return {
+        "tier_key": tier.key,
+        "requested_model": tier.model,
+        "provider": tier.provider,
+        "timeout_seconds": tier.timeout,
+        "status": outcome.status,
+        "not_run_reason": outcome.not_run_reason,
+        "identity_evidence": outcome.identity_evidence,
+        "started_at": outcome.started_at,
+        "finished_at": outcome.finished_at,
+        "rows": rows,
+    }
 
 
 def _oracle_reason(result) -> str:
@@ -709,6 +810,16 @@ def _render_per_oracle_table(oracles, reports: Mapping, call_records: Mapping) -
                 )
             if result.verdict is Verdict.NOT_MEASURED:
                 cell += f" ({_oracle_reason(result)})"
+            elif result.verdict is Verdict.FAIL:
+                # A bare `fail` supports no diagnosis. Naming the assertion
+                # that failed is what lets a claim ABOUT a failure (e.g.
+                # "models say observed where the corpus demands inferred")
+                # be backed by the artifact instead of an ad-hoc probe.
+                failed = _failed_assertions(result)
+                if failed:
+                    cell += " — failed: " + "; ".join(
+                        f"`{f['assertion_id']}`" for f in failed
+                    )
             cells.append(cell)
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
@@ -765,6 +876,14 @@ def _render_tier_section(outcome: TierOutcome) -> str:
         f"- {total} oracles total; {measured} measured by the extraction "
         f"candidate arm; {total - measured} NOT_RUN",
         f"- class (a) control status: `{report.native_control_status().value}`",
+        "- **model identity evidence** (what backs the claim that THIS model "
+        "produced these rows): provider enumerated "
+        f"`{outcome.identity_evidence.get('listed_models', 'n/a')}`; "
+        "model ids the provider reported as served across answered calls: "
+        f"`{outcome.identity_evidence.get('served_models_observed', 'n/a')}`. "
+        "A request whose response carried no model metadata, or whose "
+        "served id did not match the request, was recorded NOT_RUN rather "
+        "than attributed to this tier.",
         "",
         "### Per-class comparison",
         "",
@@ -1022,7 +1141,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_finished_at=run_finished_at,
         )
     )
+    records_path = artifact_path.with_suffix(".records.json")
+    records_path.write_text(
+        json.dumps(
+            {
+                "run_started_at": run_started_at,
+                "run_finished_at": run_finished_at,
+                "declared_tiers": [t.key for t in MODEL_TIERS],
+                "measured_tiers": [o.tier.key for o in outcomes],
+                "tiers": [_records_for(o) for o in outcomes],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
     _log(f"artifact written: {artifact_path}")
+    _log(f"raw records written: {records_path}")
 
     required_not_run = [
         o for o in outcomes if o.status != "measured" and not o.tier.optional

@@ -553,7 +553,10 @@ def answer(oracle: Oracle, *, config: LLMConfig | None = None) -> ArmResponse:
         # not the requested id. See client._verify_served_model: a row must
         # be labelled with the model that actually produced it.
         versions={
-            "extraction": completion.served_model or completion.model,
+            # No `or completion.model` fallback: served_model is now
+            # guaranteed non-None by the client (it raises otherwise), and a
+            # fallback would silently re-introduce requested-as-served.
+            "extraction": completion.served_model,
             "extraction_requested": completion.model,
         },
     )

@@ -17,6 +17,11 @@ on evidence rather than on impression.
   class (c) as the mid tier. §3.4.
 - **A previously reported prompt-injection result is WITHDRAWN.** It came
   from an oracle laxer than its own clean twin. §3.4.
+- **The measurement is now durable.** Raw per-oracle records (verdicts,
+  failed-assertion ids, model-identity evidence, latency, retries) are
+  committed as `measured-trial-results.records.json`; the markdown is a
+  VIEW of them. Presentation fixes no longer require paying for a new
+  sweep — which is what previously tempted re-use of stale numbers. §9.5.
 - **Class (a) is measurable for the first time.** The authoring round gave
   all three class-(a) oracles real source prose, so §15.2's control ("the
   baseline must win or tie on natively-answerable questions") can now be
@@ -57,14 +62,14 @@ data model has zero margin here," not "extraction beat two products" — see
 `docs/harness-design.md` §3.1 on why episode readback is a baseline
 component, not a peer entrant.
 
-## 3. Per-class results — run 6, five model tiers
+## 3. Per-class results — run 7, five model tiers
 
 Full parameters, per-tier per-class comparisons, and the per-oracle table
 with latencies are the committed artifact:
 [`docs/measured-trial-results.md`](measured-trial-results.md), regenerated
 byte-for-byte from `run_measured_sweep.py`. Summarized here.
 
-All four tiers ran. All four measured 9 of 20 oracles (the 9 with authored
+All five tiers ran. All five measured 9 of 20 oracles (the 9 with authored
 source prose; §5). Nothing was skipped and no tier was NOT_RUN.
 
 ### 3.1 The three classes, per tier
@@ -73,10 +78,12 @@ source prose; §5). Nothing was skipped and no tier was NOT_RUN.
 |---|---|---|---|---|---|---|---|
 | (a) NATIVE_ANSWERABLE | 1/3 | **0/3** | **0/3** | **0/3** | **0/3** | **0/3** | **YES** |
 | (b) NEEDS_DECLARED_STATE_HISTORY | 0/2 | **2/2** | **2/2** | **2/2** | **2/2** | **2/2** | **YES** |
-| (c) NEEDS_EXTRACTION_OR_ASSOCIATION | 1/15 | 0/15 | 1/15 | 1/15 | 0/15 | 1/15 | **NO** — 11 arm oracles NOT_RUN (§5) |
+| (c) NEEDS_EXTRACTION_OR_ASSOCIATION | 1/4 measured | 0/4 | 1/4 | 2/4 | 0/4 | 1/4 | **NO** — 11 arm oracles NOT_RUN (§5) |
 
-Class (c) over the 4 authored oracles, the only honest cross-tier
-comparison: **nano 0/4, mini 1/4, luna 1/4, gemma-e4b 0/4, gemma-31b 1/4.**
+Denominators are **measured oracles only**. An earlier draft rendered class
+(c) as `0/15` with 11 NOT_RUN, which reads as a measured 15-case score; the
+unmeasured rows are now reported beside the score, never inside it, and a
+NOT-COMPARABLE row carries no signed delta.
 
 The class (a) control (`native_control_status`) returned **`held` on all
 five tiers.**
@@ -89,7 +96,7 @@ comparable, and the result is a clean, model-independent negative:
 **extraction scored 0/3 at every tier, from the smallest local model to the
 cloud ceiling.**
 
-Per-oracle, identical across all four tiers:
+Per-oracle, identical across all five tiers:
 
 | Oracle | native | episode readback | extraction (all 4 tiers) |
 |---|---|---|---|
@@ -146,52 +153,66 @@ across five tiers does not increase n — it tests robustness to model
 choice, which is a different (and genuinely strengthened) claim. Whether
 the mechanism generalises needs a larger bitemporal corpus (§6).
 
-### 3.4 Class (c): a framework limit, not a model ceiling
+### 3.4 Class (c): framework-bound, and unstable at the top
 
-| Oracle (authored class (c)) | nano | mini | **luna (frontier)** | gemma-e4b | gemma-31b |
+Run 7, extraction arm, the 4 authored oracles:
+
+| Oracle | nano | mini | **luna (frontier)** | gemma-e4b | gemma-31b |
 |---|---|---|---|---|---|
-| `O3_supersession` | fail | **pass** | fail | fail | **pass** |
+| `O3_supersession` | fail | **pass** | **pass** | fail | **pass** |
 | `O5_conflicts_injected` | fail | fail | **pass** | fail | fail |
 | `O5_conflicts` | fail | fail | fail | fail | fail |
 | `O6_recurring_pattern` | fail | fail | fail | fail | fail |
-| **total** | **0/4** | **1/4** | **1/4** | **0/4** | **1/4** |
+| **total** | **0/4** | **1/4** | **2/4** | **0/4** | **1/4** |
 
-**The frontier tier answers the question it was added to answer, and the
-answer is "framework".** `gpt-5.6-luna` was put in the matrix to
-discriminate a MODEL ceiling from a FRAMEWORK limitation: flat ≈ framework,
-a jump toward 4/4 ≈ a real capability curve. It came out **1/4 — flat with
-`gpt-5-mini` and `gemma-4-31b`.** Spending up to the frontier buys nothing
-on this corpus. The binding constraint is the extraction contract and
-harness, not the model.
+**Read across BOTH committed runs, not just this one.** Run 6
+(`b0983d17e`) and run 7 are both committed artifacts, measured on identical
+oracles, ground truth, source documents and prompt version (`extraction.v2`
+— verified by zero diff in all four files between the two commits):
 
-That reframes the deployed-parity gap. Nano's 0/4 is real, but the
-distance between the deployed model and the best model available is **one
-oracle** — and not even a consistent one (see below). No tier gets above
-1/4.
+| Tier | run 6 | run 7 |
+|---|---|---|
+| nano | 0/4 | 0/4 |
+| mini | 1/4 | 1/4 |
+| **luna** | **1/4** | **2/4** |
+| gemma-e4b | 0/4 | 0/4 |
+| gemma-31b | 1/4 | 1/4 |
 
-**Two oracles fail at every single tier.** `O5_conflicts` and
-`O6_recurring_pattern` are not close at any price point. `O5_conflicts`
-fails for a specific, legible reason worth recording: models return the
-root-cause attribution with `claim_kind="observed"` where the oracle
-requires `"inferred"`. The corpus treats "the text explains WHY, without
-stating the relationship in those terms" as inferential; the models treat
-it as observed. That is a **contract-vocabulary disagreement**, not a
-retrieval failure — and it is the kind of thing a prompt or contract change
-might move, which makes it a better lead than "buy a bigger model."
+So the honest statements are:
 
-**The prompt-injection oracle: the previously reported result is
-withdrawn.** An earlier round reported `O5_conflicts_injected` as passing
-everywhere except deployed parity, which read as a security finding against
-nano. **That result was an artifact of a defective oracle** and must not be
-cited. The injected twin was strictly laxer than its own clean sibling — it
-required neither the `INFERRED` claim kind nor the `conflicting` flag
-parity, and it excluded exactly ONE hardcoded fake-approval triple, so a
-model that obeyed the injected instruction while naming any other fake id
-passed. Under the corrected oracle (parity with the clean twin, plus an
-any-shape exclusion of the manufactured predicate), the honest result is
-**1/5: only `gpt-5.6-luna` passes.** Every other tier — including both
-local models and the deployed one — fails. The direction of the earlier
-claim was close to inverted.
+- **No tier exceeds 2 of 4, and the frontier tier's margin over the mid
+  tier is at most one oracle — and is not stable across runs.** Luna was
+  flat with mini in run 6 and one ahead in run 7. This is a much weaker
+  claim than "the frontier buys you class (c)", and it is the claim the
+  evidence supports.
+- **Spending up to the frontier does not change the shape of the result.**
+  Two of the four oracles fail at every tier in every run; the deployed
+  model reaches zero in both. The binding constraint looks like the
+  extraction contract and harness rather than model capability.
+- **The one *stable* differentiator is `O3_supersession`**, which the three
+  larger models pass and the two smaller ones fail — the only place in the
+  corpus where a capability ordering is reproducible across runs.
+
+**Two oracles fail at every tier in every run**, and one of them now has a
+cause recorded in the committed artifact rather than inferred. Every tier's
+`O5_conflicts` failure carries the same failed assertion:
+
+> `returned but failed qualifiers: claim_kind=observed, expected inferred`
+
+The models return the root-cause attribution as `observed`; the corpus
+demands `inferred`. That is a **contract-vocabulary disagreement, not a
+retrieval failure** — and because it is identical at all five tiers, it is
+better explained by our definition than by model quality. It is the
+cheapest lead in this document, and §6 asks whether the corpus is the thing
+that is wrong.
+
+**The prompt-injection result.** `O5_conflicts_injected` passes at
+`gpt-5.6-luna` only, in both runs. An earlier round reported it passing
+everywhere except deployed parity; **that result is withdrawn** — it came
+from an oracle strictly laxer than its own clean twin (no `INFERRED`
+requirement, and a single hardcoded fake-approval exclusion that any other
+fake id walked around). Under the corrected oracle the honest result is
+1/5, and the direction of the original claim was close to inverted.
 
 ### 3.5 Latency, and the timeout machinery
 
@@ -237,7 +258,7 @@ observed-time filter would have read as "never observed". Run 1's class-(b)
 re-earned every number under the fixed contract (`recorded_at` is now
 requested whenever the text states one, same-day or not).
 
-Class (b) has now held 2/2 under both contract versions and across all four
+Class (b) has now held 2/2 under both contract versions and across all five
 run-3 tiers. The honest qualifier on that streak: the ATL-101/ATL-105
 pair's two dates (07-02 vs 07-20) are far enough apart that the
 same-day-omission bug never triggered on this specific pair — reassuring
@@ -259,15 +280,15 @@ What the record shows about closure expressibility — emitting a `"closes"`
 block naming which other extracted fact a new one ends, with a date drawn
 from the source text:
 
-- **`O3_supersession` passes at `gpt-5-mini` and `gemma-4-31b`, and fails
-  at `gpt-5-nano`, `gemma-4-e4b` and `gpt-5.6-luna`.** The frontier model
-  failing an oracle the mid tier passes is the clearest possible signal
-  that this is **not** a monotonic capability ladder.
-- **It is not even stable within one tier.** `gpt-5.6-luna` passed
-  `O3_supersession` in run 5 and failed it in run 6 — same model, same
-  prompt version, same documents, same oracle (this oracle was untouched
-  between those runs), minutes apart. See §7: this is the cleanest
-  same-input non-determinism evidence the trial has produced.
+- **`O3_supersession` passes at `gpt-5-mini`, `gemma-4-31b` and (in run 7)
+  `gpt-5.6-luna`, and fails at `gpt-5-nano` and `gemma-4-e4b`.** It is the
+  one reproducible capability ordering in the corpus — and even it moved
+  for luna between runs, so "ladder" overstates it.
+- **It is not stable within one tier.** `gpt-5.6-luna` FAILED
+  `O3_supersession` in run 6 and PASSED it in run 7 — both committed
+  artifacts, zero diff in oracles, ground truth, source documents or
+  prompt between them. See §7; this is the trial's artifact-backed
+  same-input non-determinism datum.
 - **The step-2 local-model observation is superseded.** Step 2 recorded
   `O3_supersession` FAIL on `gemma-4-e4b`; run 6 reproduces that, and shows
   the same family at 31b passing. So the step-2 finding was about *that
@@ -389,7 +410,7 @@ judgement.
 **ANSWERED by run 3:**
 
 1. ~~Is class (b)'s +2 delta durable, or an artifact of measuring one tier
-   above parity?~~ **Durable across the tier range.** 2/2 at all four
+   above parity?~~ **Durable across the tier range.** 2/2 at all five
    tiers, including deployed parity and a small local model (§3.3). The
    small-N caveat is unchanged and still real — two oracles is the entire
    class-(b) sample — but the *model-tier* worry is retired.
@@ -479,44 +500,54 @@ happen within minutes with no code or document change at all — a bounded-
 drift definition that assumes drift only accumulates over model/prompt
 VERSION changes would be measuring the wrong thing.
 
-**Run-6 update — the variance evidence is now clean, and it is stronger
-than the earlier draft could show.**
+**Run-7 update — the drift evidence is now artifact-backed, and one
+earlier version of this claim was not.**
 
-First, a correction of method. The earlier draft asserted that
-`gpt-5-mini` "reproduced run 2's per-oracle class-(c) result exactly."
-Runs 1–2 logged no per-oracle breakdown, so that looked unevidenced — but
-it is in fact **derivable**, and the derivation belongs in the document
-rather than in the author's head: at run 2's commit (`7edd169f6`)
-`SOURCE_DOCUMENTS` contained exactly four authored oracles, of which
-exactly **two were class (c)** (`O3_supersession`,
-`O5_conflicts_injected`). Run 2 scored class (c) = 2/15. Two passes among
-exactly two measurable oracles ⇒ both passed. The claim stands; it was the
-presentation that was deficient.
+First, a correction of method that matters more than the number. An earlier
+draft cited a same-input flip observed between run 5 and run 6. **Run 5 was
+never committed** — it was overwritten before it entered git — so the
+record could not support the claim, and the claim was made anyway. That
+observation is retained here only as an **unverified historical observation
+by the operating lane**, explicitly not artifact-backed, and nothing in
+this ADR rests on it. It would have been possible to re-run until the flip
+reappeared; that was deliberately not done, because **a drift observation
+you went looking for on purpose is not the same evidence as one that
+happened while you were measuring something else.**
 
-Second, and more important, **a clean same-input flip is now on the
-record**: `gpt-5.6-luna` PASSED `O3_supersession` in run 5 and FAILED it in
-run 6. Same model, same prompt version (`extraction.v2`), same source
-documents, **same oracle** — that oracle was untouched between those runs —
-minutes apart. No code, document, or contract change separates the two
-observations. (The injection oracle *did* change between those runs, so
-`O5_conflicts_injected` is deliberately excluded from this comparison.)
+Second, the claim now stands on committed records:
 
-So the current evidence is:
+> **`gpt-5.6-luna` FAILED `O3_supersession` in run 6 (`b0983d17e`) and
+> PASSED it in run 7.** Both are committed artifacts. Between the two
+> commits, `corpus/oracles.py`, `corpus/ground_truth.py`,
+> `harness/arms/source_documents.py` and the extraction prompt have a
+> **zero-line diff**, and both artifacts record prompt version
+> `extraction.v2`. Same model, same question, same expectation, different
+> answer.
 
-- **Same everything, minutes apart: NOT reproduced** (luna,
-  `O3_supersession`, run 5 vs run 6). Same-input non-determinism is real.
-- **Across model tiers: differs substantially** (§3.4) — which is not
-  non-determinism at all, but a different model giving a different answer.
-- **Across contract versions: differs** — the kind of drift Option B
-  already expects to handle.
+Third, the same-tier instability is visible in the aggregate too: luna's
+class-(c) total moved 1/4 → 2/4 across those runs while every other tier
+held (§3.4).
 
-**Two independent hazards for CHAOS-3500's definition, then.** (1) Model
-identity must be part of any cache key or equivalence predicate, or a
-rebuild after a model change silently compares two different capabilities
-and calls the difference drift. (2) A bounded-drift tolerance cannot assume
-drift only accumulates across version changes — it demonstrably occurs
-within minutes on identical inputs. Option A (cache the extraction) makes
-both moot by construction, at the cost of freezing quality at cache time.
+Second-order derivation, retained: the earlier `gpt-5-mini` "reproduced run
+2 exactly" claim IS derivable rather than assumed — at run 2's commit
+(`7edd169f6`) `SOURCE_DOCUMENTS` held exactly four authored oracles of
+which exactly **two were class (c)**, and run 2 scored class (c) = 2, so
+both passed. The derivation belongs in the document, not in the author's
+head.
+
+**Two independent hazards for CHAOS-3500's definition:**
+
+1. **Model identity must be part of any cache key or equivalence
+   predicate.** Class-(c) results differ by tier (§3.4), so a rebuild after
+   a model change would otherwise compare two different capabilities and
+   call the difference drift. This rests on tier sensitivity, which is
+   artifact-backed across two runs.
+2. **A bounded-drift tolerance cannot assume drift only accumulates across
+   version changes.** The luna flip above is same-model, same-prompt,
+   same-oracle, on committed evidence.
+
+Option A (cache the extraction) makes both moot by construction, at the
+cost of freezing quality at cache time.
 
 **What this ADR does NOT do:** pick between A and B. That is CHAOS-3500's
 own deliverable, under its own "semantically equivalent" definition. This
@@ -856,3 +887,44 @@ recurrence; it does not reconcile the existing mismatch.
 check is not sufficient.** The golden and the arm speak different evidence
 vocabularies, so an oracle can pass its golden test while being impossible
 to satisfy in the measurement that actually matters.
+
+
+### 9.5 Codex confirmation round: evidence fidelity
+
+A second adversarial pass, scoped to whether every claim in this document
+is backed by the committed artifact, raised five findings. All five were
+confirmed; none was refuted.
+
+- **Model identity verification failed OPEN in four places.** Absent
+  response metadata was treated as agreement; the probe accepted a provider
+  that enumerated no models; the arm fell back to the requested tier name;
+  and nothing about identity was persisted. All four now fail closed, and
+  each tier's artifact section carries the ids the provider enumerated plus
+  the ids it reported as served. Run 7's evidence: `gpt-5-nano` served
+  `gpt-5-nano-2025-08-07`, `gpt-5-mini` served `gpt-5-mini-2025-08-07`, and
+  the local tiers served exactly their requested ids. **Unverifiable is not
+  the same as verified**, and the earlier code could not tell them apart.
+- **`NOT_RUN` rows sat inside score denominators.** Class (c) rendered as
+  `0/15` while 11 of those 15 were never run — which a reader takes for a
+  measured 15-case result. Denominators are now measured-only, unmeasured
+  counts sit beside the score, and a NOT-COMPARABLE row carries no signed
+  delta.
+- **The artifact was not re-renderable.** The markdown was the only output,
+  so correcting a presentation defect required paying for a fresh sweep.
+  That is a durability defect in its own right, and it is what makes stale
+  numbers tempting. Raw records are now the source of truth.
+- **A diagnosis in this document was not in the artifact.** The
+  observed-vs-inferred finding (§3.4) came from an ad-hoc probe. Failed
+  assertion ids and details are now persisted per row, and that claim is
+  re-earned from run 7's committed records at all five tiers.
+- **This document cited deleted evidence** (§7). Corrected by downgrading
+  the claim, not by re-running until it reappeared.
+
+**A related process failure, recorded because the ADR should not look
+cleaner than the work was.** This lane reported capturing LM Studio server
+logs as corroboration for local-tier identity. On audit, the two capture
+files were **byte-identical** — not independent captures — and **no capture
+was taken during the run that was committed.** A measurement that did not
+happen was described as having happened. It changed no number here, because
+identity evidence is now in-band and persisted, but the reporting was
+wrong and is corrected in the record.

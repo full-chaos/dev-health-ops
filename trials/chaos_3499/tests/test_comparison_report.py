@@ -310,3 +310,45 @@ def test_both_baseline_components_are_registerable_as_baseline() -> None:
     assert len(reports) == 2, "one comparison per candidate arm"
     assert {r.arm.arm for r in reports} == {"graphiti", "direct_store"}
     assert all(r.baseline.arm == "baseline" for r in reports)
+
+
+def test_class_score_denominator_excludes_unmeasured_oracles() -> None:
+    """[codex M1] `0/15` where 11 were never run reads as a measured
+    15-case score. The denominator must be what was actually measured, with
+    the unmeasured count reported beside it rather than folded in.
+    """
+    from ..harness.contracts import QuestionClass
+    from ..harness.runner import ClassScore
+
+    score = ClassScore(
+        question_class=QuestionClass.NEEDS_EXTRACTION_OR_ASSOCIATION,
+        passed=0,
+        failed=4,
+        not_measured=11,
+    )
+    assert score.measured == 4
+    rendered = score.render()
+    assert "0/4 measured" in rendered
+    assert "0/15" not in rendered, "the unmeasured rows are back in the denominator"
+    assert "11 NOT MEASURED" in rendered
+
+
+def test_not_comparable_rows_render_no_numeric_delta() -> None:
+    """[codex M1] A signed delta on a row the report is simultaneously
+    declaring NOT COMPARABLE invites the exact comparison being disclaimed;
+    readers quote the number and drop the caveat.
+    """
+    from ..harness.contracts import QuestionClass
+    from ..harness.runner import ClassComparison, ClassScore
+
+    klass = QuestionClass.NEEDS_EXTRACTION_OR_ASSOCIATION
+    comparison = ClassComparison(
+        question_class=klass,
+        baseline=ClassScore(klass, passed=1, failed=3, not_measured=11),
+        arm=ClassScore(klass, passed=0, failed=4, not_measured=11),
+        dependency=None,
+    )
+    assert not comparison.is_comparable
+    rendered = comparison.render()
+    assert "delta" not in rendered
+    assert "NOT COMPARABLE" in rendered

@@ -676,3 +676,88 @@ def test_a_timeout_and_its_recovery_are_persisted_for_the_artifact(
     assert record.timed_out, "the timeout must be persisted, not only logged"
     assert record.recovered_after_retry
     assert record.provider_attempts == 2
+
+
+def test_absent_served_model_metadata_is_not_run_not_an_assumed_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[codex confirmation H] Identity verification previously failed OPEN:
+    a provider returning no model metadata was treated as agreement, and
+    the row was labelled with the REQUESTED model -- the exact assumption
+    the check exists to stop. Unverifiable is not verified.
+    """
+
+    class _NoMetadata:
+        def __init__(self) -> None:
+            self.output_text = "[]"
+            self.output: list = []
+            # deliberately NO .model attribute
+
+    _install_fake_openai(monkeypatch, responses_response=_NoMetadata())
+    arm = extraction.make_answer(LLMConfig.for_cloud(model="gpt-5-mini", api_key="x"))
+    response = arm(ORACLES_BY_ID["O3_supersession"])
+    assert response.outcome is ArmOutcome.NOT_RUN
+    assert "NO model metadata" in response.degraded_reasons[0]
+    assert not response.infra_failure
+
+
+def test_probe_refuses_a_provider_that_enumerates_no_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[codex confirmation H] The probe accepted an empty listing, so a
+    server that answers but enumerates nothing counted as "the tier is
+    present". Presence must be positively confirmed.
+    """
+    from ..run_measured_sweep import probe_provider
+
+    class _EmptyModels:
+        def list(self):
+            return []
+
+    class _EmptyClient:
+        def __init__(self, **kwargs):
+            self.models = _EmptyModels()
+
+    monkeypatch.setattr(openai, "OpenAI", _EmptyClient)
+    reason = probe_provider(LLMConfig.for_local(model="google/gemma-4-e4b"))
+    assert reason is not None
+    assert "enumerated NO models" in reason
+
+
+def test_records_capture_failed_assertions_for_measured_failures() -> None:
+    """[codex confirmation M4] A bare `fail` in the artifact supports no
+    diagnosis, so a claim ABOUT a failure had to come from an ad-hoc probe
+    the committed record could not back. Failed assertion ids and details
+    are now persisted per row.
+    """
+    from ..run_measured_sweep import _failed_assertions
+
+    result = OracleResult(
+        oracle_id="O5_conflicts",
+        arm="extraction_llm",
+        question_class=ORACLES_BY_ID["O5_conflicts"].question_class,
+        assertions=(
+            AssertionResult("arm_outcome", Verdict.PASS, "ok"),
+            AssertionResult(
+                "must_include:conflict side A",
+                Verdict.FAIL,
+                "claim_kind=observed, expected inferred",
+            ),
+        ),
+    )
+    failed = _failed_assertions(result)
+    assert [f["assertion_id"] for f in failed] == ["must_include:conflict side A"]
+    assert "expected inferred" in failed[0]["detail"]
+
+
+def test_records_for_a_not_run_tier_carry_no_fabricated_rows() -> None:
+    """A tier that never ran must serialize with an empty row list, not
+    zero-valued rows that a consumer would average over.
+    """
+    from ..run_measured_sweep import _records_for
+
+    tier = next(t for t in MODEL_TIERS if t.key == "gemma-4-31b-local")
+    payload = _records_for(_not_run_outcome(tier, "LM Studio down"))
+    assert payload["status"] == "not_run"
+    assert payload["rows"] == []
+    assert payload["not_run_reason"] == "LM Studio down"

@@ -100,14 +100,24 @@ def test_extract_json_array_returns_original_text_when_nothing_parses() -> None:
 
 
 class _FakeChoicesResponse:
-    def __init__(self, choices: list) -> None:
+    """Real OpenAI-compatible providers always echo the served model, so
+    the double does too. A double that omitted it would be modelling a
+    provider that does not exist, and would exercise the fail-closed
+    identity path in every test rather than the behaviour under test.
+    """
+
+    def __init__(self, choices: list, model: str = "fake") -> None:
         self.choices = choices
+        self.model = model
 
 
 class _FakeResponsesResult:
-    def __init__(self, output_text: str) -> None:
+    """See _FakeChoicesResponse on why this echoes a model id."""
+
+    def __init__(self, output_text: str, model: str = "gpt-5-mini") -> None:
         self.output_text = output_text
         self.output: list = []
+        self.model = model
 
 
 class _RaisingOrReturning:
@@ -308,7 +318,8 @@ def test_o3_mini_chat_completions_call_omits_temperature(
     fake_message = type("Msg", (), {"content": "[]"})()
     fake_choice = type("Choice", (), {"message": fake_message})()
     _install_fake_openai(
-        monkeypatch, chat_response=_FakeChoicesResponse(choices=[fake_choice])
+        monkeypatch,
+        chat_response=_FakeChoicesResponse(choices=[fake_choice], model="o3-mini"),
     )
     cfg = LLMConfig(
         provider="cloud",

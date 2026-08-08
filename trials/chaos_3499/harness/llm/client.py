@@ -335,12 +335,23 @@ def _verify_served_model(cfg: LLMConfig, response: object) -> str | None:
     the requested one (``gpt-5-mini`` -> ``gpt-5-mini-2025-08-07``) and
     rejects anything else.
 
-    Returns the served id, or None when the provider reported none (which is
-    recorded honestly rather than treated as agreement).
+    Returns the served id. Raises when the provider reports none: absent
+    metadata is UNVERIFIABLE, not agreement, and the difference decides
+    whether a tier table's labels mean anything.
     """
     served = getattr(response, "model", None)
     if not isinstance(served, str) or not served:
-        return None
+        # FAIL CLOSED. Returning None here meant "no metadata" was treated
+        # as agreement, and the row was then labelled with the REQUESTED
+        # model -- which is the very assumption this function exists to
+        # stop making. A provider that will not say what it served cannot
+        # have its answer attributed to a named tier.
+        raise ModelIdentityMismatch(
+            f"{cfg.provider} provider at {cfg.base_url} returned NO model "
+            f"metadata for a request naming {cfg.model!r}. Refusing to "
+            "attribute this answer to that tier: unverifiable identity is "
+            "not the same as verified agreement."
+        )
     requested = (cfg.model or "").strip().lower()
     actual = served.strip().lower()
     if actual == requested or actual.startswith(requested):

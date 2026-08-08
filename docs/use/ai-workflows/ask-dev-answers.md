@@ -18,8 +18,25 @@ lifecycle: active
 Every Ask Dev answer carries its own outcome, its provenance, what it could not cover, and the evidence behind it. Read those before the prose. An answer that stopped short says so; it does not present a partial result as a complete one.
 {: .fc-page-lede }
 
-!!! note "Screenshot placeholder — WEB lane"
-    Representative current screenshot of a completed answer showing the outcome label, a finding with its provenance label, coverage, and the evidence list. Desktop and mobile, both themes. Owned by the Ask Dev web lane; not authored here.
+<figure class="fc-product-figure" markdown="1">
+![A completed Ask Dev answer showing the outcome badge, the scope-outcome and coverage lines, findings with citation and provenance labels, and the unfolded evidence list, desktop, dark theme.](../../assets/ask-dev/ask-dev-answers-completed-desktop-dark.png)
+<figcaption>Completed answer — outcome, a finding with its provenance label, coverage, and the evidence list — desktop, dark theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when answer rendering or the evidence accordion changes materially.</figcaption>
+</figure>
+
+<figure class="fc-product-figure" markdown="1">
+![The same completed Ask Dev answer, light theme.](../../assets/ask-dev/ask-dev-answers-completed-desktop-light.png)
+<figcaption>Completed answer — outcome, a finding with its provenance label, coverage, and the evidence list — desktop, light theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when answer rendering or the evidence accordion changes materially.</figcaption>
+</figure>
+
+<figure class="fc-product-figure" markdown="1">
+![The same completed answer in the Ask Dev window's mobile fullscreen layout, showing the outcome badge, a finding with its provenance label, and coverage, dark theme.](../../assets/ask-dev/ask-dev-answers-completed-mobile-dark.png)
+<figcaption>Completed answer — outcome, a finding with its provenance label, and coverage; the evidence list continues below the fold and is shown in full in the desktop capture above — mobile, dark theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when the mobile Ask Dev layout changes materially.</figcaption>
+</figure>
+
+<figure class="fc-product-figure" markdown="1">
+![The same completed answer in the Ask Dev window's mobile fullscreen layout, light theme.](../../assets/ask-dev/ask-dev-answers-completed-mobile-light.png)
+<figcaption>Completed answer — outcome, a finding with its provenance label, and coverage; the evidence list continues below the fold and is shown in full in the desktop capture above — mobile, light theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when the mobile Ask Dev layout changes materially.</figcaption>
+</figure>
 
 ## Read it in this order
 

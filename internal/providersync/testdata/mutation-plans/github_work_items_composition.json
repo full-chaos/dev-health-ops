@@ -55,7 +55,7 @@
           "test",
           "-count=1",
           "-run",
-          "^(TestGitHubWorkItemSinkMissingDestinationsIsClauseLevel|TestNewGitHubWorkItemClickHouseEffectsWiresThirteenAndNamesTheUnportedThree)$",
+          "^(TestGitHubWorkItemSinkMissingDestinationsIsClauseLevel|TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen)$",
           "./internal/providersync/"
         ]
       ]
@@ -72,7 +72,7 @@
           "test",
           "-count=1",
           "-run",
-          "^(TestGitHubWorkItemSinkMissingDestinationsIsClauseLevel|TestNewGitHubWorkItemClickHouseEffectsWiresThirteenAndNamesTheUnportedThree)$",
+          "^(TestGitHubWorkItemSinkMissingDestinationsIsClauseLevel|TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen)$",
           "./internal/providersync/"
         ]
       ],
@@ -113,18 +113,18 @@
       ]
     },
     {
-      "id": "D3-fabricate-empty-rows-for-unported-engines",
+      "id": "D3-fabricate-empty-rows-without-configured-engine",
       "file": "internal/providersync/github_work_items_composition.go",
       "find": "\tfor _, destination := range githubWorkItemDerivedOwnedDestinations {\n\t\tderived[destination] = []json.RawMessage{}\n\t}",
       "replace": "\tfor _, destination := range githubWorkItemDerivedDestinations {\n\t\tderived[destination] = []json.RawMessage{}\n\t}",
-      "rationale": "Opening the three unported destinations with empty slices makes the deriver claim it evaluated metrics whose engines do not exist. An empty slice is indistinguishable from 'evaluated, produced nothing', which is exactly the claim this port cannot honestly make.",
+      "rationale": "Opening the three engine destinations without a configured engine makes the deriver claim it evaluated capabilities that never ran. An empty slice is indistinguishable from 'evaluated, produced nothing'.",
       "proof": [
         [
           "go",
           "test",
           "-count=1",
           "-run",
-          "^(TestGitHubWorkItemDeriverFailsClosedWithoutTheUnportedEngines|TestGitHubWorkItemCompositionNeverFailsOpen)$",
+          "^(TestGitHubWorkItemDeriverFailsClosedWithoutConfiguredEngine|TestGitHubWorkItemCompositionNeverFailsOpen)$",
           "./internal/providersync/"
         ]
       ]
@@ -253,7 +253,7 @@
       "file": "internal/providersync/github_work_items_composition.go",
       "find": "\t\tderived[destination] = append(derived[destination], rows...)",
       "replace": "\t\tderived[destination] = rows",
-      "rationale": "Assign-not-append silently keeps only the LAST day's engine rows. Invisible while the stub returns empty, which is why the stub stamps the day it was handed.",
+      "rationale": "Assign-not-append silently keeps only the LAST day's engine rows. The hostile test double stamps the day it was handed so the loss remains observable independently of concrete engine computation.",
       "proof": [
         [
           "go",

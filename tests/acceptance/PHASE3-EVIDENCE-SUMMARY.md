@@ -1,15 +1,20 @@
 # Phase 3 evidence summary — CHAOS-3219 armed corpus run
 
-**Status: SKELETON. Every `<...>` below is an unfilled placeholder.**
-This document is authored before the grade so that its structure cannot be shaped by
-the result. Fill it from the run's own artifacts; do not restate a claim this document
-asks for unless an artifact supports it. A section with nothing to put in it is
-recorded as "none", never deleted — a missing section reads as "not applicable" when
-it usually means "not checked".
+**Verdict: MEASURED. Filled from the grade record, not from expectation.**
 
-Grades against [`PRE-REGISTRATION.phase3.v2.md`](PRE-REGISTRATION.phase3.v2.md) and
-nothing else. If the run's conditions differ from that document's assumed merge-set,
-re-derive before grading rather than folding the difference in.
+Sources, and the only two this document is filled from:
+
+* the **2026-08-07 grade comment on CHAOS-3219** (`Phase 3 armed corpus run — GRADED: MEASURED`);
+* the body of **ops PR #1597** (`CHAOS-3219 Phase 3 close`), which is the durable evidence record and reproduces the grade verbatim.
+
+Anything neither source carries is left as an explicit `<PLACEHOLDER: …>` rather than
+reconstructed. A reconstructed figure in an evidence document is indistinguishable
+from a measured one once it is written down.
+
+Graded against [`PRE-REGISTRATION.phase3.v2.md`](PRE-REGISTRATION.phase3.v2.md) **as
+amended pre-run in `4f974f2c7`**. The amendment fired v2's own re-derive rule after
+four PRs merged, and put the QUA shadow explicitly out of scope (Amendment 3). The
+pre-registration was not touched after the run.
 
 ---
 
@@ -17,209 +22,251 @@ re-derive before grading rather than folding the difference in.
 
 | Field | Value |
 | --- | --- |
-| Graded run | `<GRADE: pending armed run 2026-08-07>` |
-| Run timestamp (PT) | `<GRADE: pending armed run 2026-08-07>` |
-| `main` SHA under test | `<GRADE: pending armed run 2026-08-07>` |
-| Pre-registration graded against | `PRE-REGISTRATION.phase3.v2.md` |
-| Engine identity digest | `<GRADE: pending armed run 2026-08-07>` (expected `12b961997a12…`) |
-| Provider role | `legacy_agent` |
-| `WORLD_DIGEST` | `<GRADE: pending armed run 2026-08-07>` |
-| Superseded attempts | `<GRADE: pending armed run 2026-08-07>` |
+| Graded run | Armed run #3 |
+| Run timestamp | 2026-08-07 16:22 PT |
+| `main` SHA under test | `3e4e24650` |
+| Branch | `chaos-3219-phase3-corpus` |
+| Pre-registration graded against | `PRE-REGISTRATION.phase3.v2.md` as amended in `4f974f2c7` |
+| Engine identity digest | `12b961997a122ff6e7a711db0a3a5724bdb668a28c262f2fdf94c88be3675e59` |
+| Provider role / cases | `legacy_agent`, 96 |
+| API container | `77d8499c18a3` (pinned) |
+| `WORLD_DIGEST` | `<PLACEHOLDER: re-minted world; digest not carried by either source>` |
+| Superseded attempts | Attempt 1 — killed unmeasured by the 09:26 machine reboot. Attempt 2 (09:47 PT) — UNMEASURED (degraded): 59/90 active cases hit HTTP 429 `cost_limit_reached`; root causes ticketed CHAOS-3573 and CHAOS-3575. An 11:04 PT run measured 122/12 and settled Phase 2 exit; **it is not this grade** — run #3 supersedes it. |
 
 ## 2. Run-validity preconditions
 
-Every row must be a **verified observation from the run's own output**, not an
-expectation carried from the pre-registration. A row that cannot be observed is
-`UNMEASURED`, and an `UNMEASURED` row voids the run rather than reducing its grade.
+Every row is an observation from the run's own boot output, not an expectation
+carried from the pre-registration.
 
 | Precondition | Required | Observed | Verdict |
 | --- | --- | --- | --- |
-| Engine identity digest matches | `12b961997a12…` | `<GRADE: pending>` | `<PASS / FAIL / UNMEASURED>` |
-| `WORLD_DIGEST` matches pinned snapshot | match | `<GRADE: pending>` | `<...>` |
-| QUA flags unset in the API container's own environment | unset | `<GRADE: pending>` | `<...>` |
-| Items collected | 134 | `<GRADE: pending>` | `<...>` |
-| Items skipped | 0 | `<GRADE: pending>` | `<...>` |
-| Cases executed | 90 active | `<GRADE: pending>` | `<...>` |
-| Receipt coverage `missing:` | 0 | `<GRADE: pending>` | `<...>` |
-| Engine controls green | 3/3 | `<GRADE: pending>` | `<...>` |
-| HTTP 429 observed | none | `<GRADE: pending>` | `<...>` |
+| Engine identity digest matches | `12b96199…` | `IDENTITY MATCH 12b961997a12…` role `legacy_agent`, 96 cases | PASS |
+| `WORLD_DIGEST` matches pinned snapshot | match | `<PLACEHOLDER: not carried by either source>` | `<PLACEHOLDER>` |
+| QUA flags unset in the API container's own environment | unset | `QUA_VERIFIED=not-armed (shadow=0 commit=0)` | PASS |
+| Items collected | 134 | 134 | PASS |
+| Items skipped | 0 | 0 | PASS |
+| Cases executed | 90 active | 90 | PASS |
+| Receipt coverage `missing:` | 0 | 90 executed / 90 recorded → `missing: 0` | PASS |
+| Engine controls green | 3/3 | green | PASS |
+| HTTP 429 observed | none | zero 429s / `cost_limit_reached` anywhere in the run | PASS |
+| Container-id pin held | no theft | `STACK STOLEN: 0` across all three stage boundaries | PASS |
+| Allowance headroom | sufficient | 6 orgs × 500,000,000 microUSD, counter absent | PASS |
+| Stack health | all up | 8/8 healthy | PASS |
 
-**Verdict on validity:** `<MEASURED / UNMEASURED / VOID>`
+**Verdict on validity: MEASURED.**
 
-The three standing engine controls are `adv.unsafe-error-text.provider`,
-`adv.abuse.retry-storm`, and `adv.oversized.result`. If any is red the scripted engine
-has regressed and no other result in the run may be reported in either direction.
+The pin check earns its place here. It was added during this run (`c16cd2e36`) so a
+competing `compose up` is *named* at the stage boundary rather than surfacing four
+stages later as `service "api" is not running`.
 
 ## 3. Headline result
 
 ```
-<GRADE: pending armed run 2026-08-07>
-  collected · skipped · executed · receipts · missing
-  passed · failed · errored
+134 collected · 0 skipped · 90 executed · 90 receipts · missing: 0
+131 passed · 3 failed · RUN_EXIT_CODE=1
 ```
+
+`RUN_EXIT_CODE=1` means the corpus went red on three cases. **That is a result, not a
+degradation** — the distinction the pre-registration exists to keep.
 
 | Measure | Predicted | Observed |
 | --- | --- | --- |
-| Cases green | everything except the predicted reds | `<GRADE: pending>` |
-| Cases red | 1 (+1 conditional) | `<GRADE: pending>` |
-| MISSes | 0 | `<GRADE: pending>` |
-| Discoveries | n/a | `<GRADE: pending>` |
+| Cases red | 1 (+1 conditional, resolved to green) | 3 |
+| MISSes | 0 | 2 |
+| Discoveries | n/a | 0 sighted |
 
 ## 4. Grade against each pre-registered prediction
 
-One row per lettered prediction. **A prediction that came true and one that was
-revised after the fact are not the same evidence** — the `Verdict` column carries
-`GREEN` (predicted and observed), `MISS` (predicted and not observed), or `VOID`
-(its stated condition did not hold at run time, re-derived rather than graded).
+### A. The six `denied` → `refused` flips — **GREEN, all six**
 
-### A. The six `denied` → `refused` flips
+CHAOS-3541's typed refusal confirmed live.
 
 | Case | Scripted refusal code | Predicted | Observed | Verdict |
 | --- | --- | --- | --- | --- |
-| `adv.injection-request.sql` | `prohibited_execution` | GREEN | `<GRADE: pending>` | `<...>` |
-| `adv.injection-request.shell` | `prohibited_execution` | GREEN | `<GRADE: pending>` | `<...>` |
-| `adv.injection-request.graphql` | `prohibited_execution` | GREEN | `<GRADE: pending>` | `<...>` |
-| `adv.injection-request.mcp` | `prohibited_execution` | GREEN | `<GRADE: pending>` | `<...>` |
-| `adv.injection-request.write` | `prohibited_write` | GREEN | `<GRADE: pending>` | `<...>` |
-| `scope.prohibited-write` | `prohibited_write` | GREEN | `<GRADE: pending>` | `<...>` |
+| `adv.injection-request.sql` | `prohibited_execution` | GREEN | green | GREEN |
+| `adv.injection-request.shell` | `prohibited_execution` | GREEN | green | GREEN |
+| `adv.injection-request.graphql` | `prohibited_execution` | GREEN | green | GREEN |
+| `adv.injection-request.mcp` | `prohibited_execution` | GREEN | green | GREEN |
+| `adv.injection-request.write` | `prohibited_write` | GREEN | green | GREEN |
+| `scope.prohibited-write` | `prohibited_write` | GREEN | green | GREEN |
 
-### B. The discriminator — two cases that must stay `unsupported`
+### B. The discriminator — **HELD**
 
 | Case | Scripted code | Predicted outcome | Observed | Verdict |
 | --- | --- | --- | --- | --- |
-| `adv.injection-request.url` | `unsupported_external_fetch` | `unsupported` | `<GRADE: pending>` | `<...>` |
-| `scope.unsupported-request` | `unsupported_request` | `unsupported` | `<GRADE: pending>` | `<...>` |
+| `adv.injection-request.url` | `unsupported_external_fetch` | `unsupported` | stayed `unsupported` | GREEN |
+| `scope.unsupported-request` | `unsupported_request` | `unsupported` | stayed `unsupported` | GREEN |
 
-**Why this section decides whether section A means anything:** if these two come back
-`refused`, the flip was applied to a case family rather than routed by refusal code,
-and section A's greens are right by luck. Record the two verdicts here explicitly even
-when both are green — a reader must be able to see the discriminator held, not infer it
-from the absence of a complaint.
+**Discriminator verdict: HELD.**
 
-**Discriminator verdict:** `<HELD / BROKEN>`
+`adv.injection-request.url` sits in the same family as the four flipped injection
+cases and would have been flipped by anyone pattern-matching on case names. It stayed
+`unsupported`, so **the flip is demonstrably routed by refusal code** rather than
+applied to a family. Had it flipped, section A's six greens would have been right by
+luck and would prove nothing.
 
-### C. Cases the other merged fixes should turn green
+### C. Cases the other merged fixes should turn green — **GREEN, all five**
 
 | Case | Proves | Predicted | Observed | Verdict |
 | --- | --- | --- | --- | --- |
-| `scope.bounded-subject-set` | CHAOS-3551 render (all three invariants) | GREEN | `<GRADE: pending>` | `<...>` |
-| `pers.clarification-persistence` | CHAOS-3577 disambiguation entry | `needs_clarification` | `<GRADE: pending>` | `<...>` |
-| `scope.ambiguous` | pairs with the above; must agree, not transpose | `needs_clarification` | `<GRADE: pending>` | `<...>` |
-| `portfolio.multi-project.status` | CHAOS-3578 mention spans | GREEN on both resolution-path invariants | `<GRADE: pending>` | `<...>` |
-| `deg.source-state.measured-zero` | newly declared `resolution_path_in` | `deterministic-exact` | `<GRADE: pending>` | `<...>` |
+| `scope.bounded-subject-set` | CHAOS-3551 render (all three invariants) | GREEN | green | GREEN |
+| `pers.clarification-persistence` | CHAOS-3577 disambiguation entry | `needs_clarification` | green | GREEN |
+| `scope.ambiguous` | pairs with the above; must agree, not transpose | `needs_clarification` | green, pair agrees | GREEN |
+| `portfolio.multi-project.status` | CHAOS-3578 mention spans | GREEN on both resolution-path invariants | classifies | GREEN |
+| `deg.source-state.measured-zero` | newly declared `resolution_path_in` | `deterministic-exact` | passes its pinned resolution path | GREEN |
 
-### D. Expected red
+### D. Expected red — **RED as predicted**
 
 | Case | Reason | Predicted | Observed | Verdict |
 | --- | --- | --- | --- | --- |
-| `deg.provider.unsupported` | CHAOS-3546 unmerged; `provider_profile_override` has no readers in `src/` | RED | `<GRADE: pending>` | `<...>` |
+| `deg.provider.unsupported` | CHAOS-3546 unmerged; `provider_profile_override` has no readers in `src/` | RED | red, failing exactly `public_outcome_in` | GREEN (prediction held) |
 
-If CHAOS-3546 merged before the run, this entry is **VOID** — re-derive rather than
-grade against it. Record which of the two happened: `<VOID / GRADED>`
+Status: **GRADED**, not void — CHAOS-3546 did not merge before the run. The case,
+`readiness.capabilities.degraded`, and `readiness.capabilities.unsupported-model` all
+flip DECLARED-BLOCKED on **CHAOS-3588** via PR #1595.
 
-### E. Conditional — `adv.cross-tenant.organization-id`
+### E. Conditional — `adv.cross-tenant.organization-id` — **green branch, correct**
 
 | Branch | Condition | Predicted | Applies? |
 | --- | --- | --- | --- |
-| CHAOS-3574 merged | classification fix present | GREEN, `not_found` | `<yes / no>` |
-| CHAOS-3574 not merged | fix absent | RED on `public_outcome_in` | `<yes / no>` |
+| CHAOS-3574 merged | classification fix present | GREEN, `not_found` | **yes** |
+| CHAOS-3574 not merged | fix absent | RED on `public_outcome_in` | no |
 
 | Check | Predicted | Observed | Verdict |
 | --- | --- | --- | --- |
-| `public_outcome_in` | per branch above | `<GRADE: pending>` | `<...>` |
-| `no_unauthorized_candidate_surfaces` | PASS | `<GRADE: pending>` | `<...>` |
+| `public_outcome_in` | `not_found` | green | GREEN |
+| `no_unauthorized_candidate_surfaces` | PASS | pass | GREEN |
+| Bystander `adv.cross-tenant.project-id` | hold | held | GREEN |
+| Bystander `adv.cross-tenant.repository-id` | hold | held | GREEN |
 
-A failure of `no_unauthorized_candidate_surfaces` is a **new and far more serious
-finding** than any outcome-classification result in this table, and is escalated
-rather than recorded.
+The bystanders matter for the same reason the discriminator does: PR #1593 changed the
+resolution **route**, not one case's outcome, so checking only the named case would
+have read a route regression as success. Both held.
 
-### F. Everything else
+### F. Everything else — **2 MISSes**
 
-**Any red not listed in A–E is a MISS.** List every one, with no severity triage in
-this section — triage belongs in section 6, after the count is honest.
+Both are the same defect, and **both are self-inflicted by the CHAOS-3578 corpus edit
+— neither is the product's.**
 
 | Case | Invariant | Observed | Classified as |
 | --- | --- | --- | --- |
-| `<GRADE: pending>` | | | `<MISS / discovery>` |
+| `adv.oversized.question` | `resolution_path_measured` | `empty-resolution-ledger-despite-mentions` | MISS |
+| `adv.oversized.subject-set` | `resolution_path_measured` | `empty-resolution-ledger-despite-mentions` | MISS |
+
+**Mechanism** (`resolution_path.py:498-506`): with named subject mentions declared, an
+empty ledger resolves to `ABSENCE_EMPTY_LEDGER_DESPITE_MENTIONS` (a broken set);
+without them it resolves to the honest `ABSENCE_EMPTY_LEDGER`, which passes. Both
+cases have their oversized request **rejected before subject resolution runs**, so the
+ledger is empty by construction, permanently. Declaring spans asserts that resolution
+was reached, which is false for them.
+
+The CHAOS-3578 commit added producer-derived `expected_mention_texts` to both, on the
+argument that *"they are covered rather than exempted, because an exemption list is
+the thing that rots."* The run falsified that argument. The same two cases, measured
+both ways on the same day:
+
+```
+11:11 — no spans — absence='empty-resolution-ledger'                  PASSED
+16:22 — spans    — absence='empty-resolution-ledger-despite-mentions' FAILED
+```
+
+**Not the re-minted world**, which was flagged as a candidate cause *before* results
+were seen: the absence reason changed in lockstep with the declaration, and is
+computed from the declared-spans flag rather than from world data.
+
+Correction: `64111072e` removes the spans and adds the exemption as
+`REJECTED_BEFORE_RESOLUTION_CASE_IDS`, **asserted rather than listed**, with both
+guards mutation-proven by exit code.
 
 ## 5. Discovery signatures
 
-Sightings carried forward from the pre-registration are **discoveries, not misses**:
-
 | Signature | Ticket | Seen this run? |
 | --- | --- | --- |
-| `ask_dev.orchestrator.record_frame_programming_error` | ops #1577 | `<GRADE: pending>` |
-| Valkey allowance-path signature | ops #1575 | `<GRADE: pending>` |
+| `ask_dev.orchestrator.record_frame_programming_error` | ops #1577 | not sighted |
+| Valkey allowance-path signature | ops #1575 | not sighted |
 
-Note the asymmetry the pre-registration fixed and this document preserves: an HTTP
-**429 is a MISS**, because the allowance must not gate a measurement run. A Valkey
-allowance-path **signature is a discovery**. These are different observations and are
-never conflated.
+The asymmetry the pre-registration fixed held: an HTTP **429 is a MISS**, because the
+allowance must not gate a measurement run — and this run had zero. A Valkey
+allowance-path **signature** would have been a discovery. Neither occurred.
 
-New signatures not anticipated by the pre-registration:
-
-| Signature | First seen | Ticketed as |
-| --- | --- | --- |
-| `<GRADE: pending>` | | |
+New signatures not anticipated by the pre-registration: **none**.
 
 ## 6. Environment
 
-Recorded so the run is reproducible and so a later re-run can be compared rather than
-merely repeated.
-
 | Field | Value |
 | --- | --- |
-| Harness | `<GRADE: pending>` |
-| Compose file(s) | `<GRADE: pending>` |
-| Images / digests | `<GRADE: pending>` |
-| Python version | `<GRADE: pending>` |
-| Host | `<GRADE: pending>` |
+| Harness | armed corpus run, Compose acceptance stack, 8/8 services healthy |
+| Boot recipe | `scripts/acceptance/armed_corpus_boot.sh` |
 | Provider | scripted (`ASK_DEV_SCRIPTED_PROVIDER_*`), no live provider |
-| Boot recipe | `<GRADE: pending>` |
-| Preconditions asserted by the boot script | `<GRADE: pending>` |
+| API container | `77d8499c18a3`, pinned and re-checked at three stage boundaries |
+| Allowance | 6 orgs × 500,000,000 microUSD, counter absent at boot |
+| Compose file(s) | `<PLACEHOLDER: not carried by either source>` |
+| Images / digests | `<PLACEHOLDER: not carried by either source>` |
+| Python version | `<PLACEHOLDER: not carried by either source>` |
+| Host | `<PLACEHOLDER: not carried by either source>` |
+
+Two boot-recipe defects were found **by running the recipe, not by reading it**, and
+are part of this run's record:
+
+* `a1541dc7d` — `armed_corpus_boot.sh` could not find the web checkout **from a
+  worktree**, which is the layout it is actually run from (`BOOT_EXIT_CODE=64`).
+* `c16cd2e36` — container-id pinning, re-checked at three stage boundaries, verified
+  in all three states.
 
 ## 7. Machine-readable artifacts
 
-The documentation gate is not satisfied by a CI link. Each row is a real committed or
-archived artifact path, not a description of one.
-
 | Artifact | Path or link |
 | --- | --- |
-| Per-case receipts (`wave4_case_result.v1`) | `<GRADE: pending>` |
-| Receipt-coverage report | `<GRADE: pending>` |
-| Run manifest | `<GRADE: pending>` |
-| Raw runner log | `<GRADE: pending>` |
-| Gate exit status | `<GRADE: pending>` |
+| Per-case receipts (`wave4_case_result.v1`) | `tests/acceptance/artifacts/wave4/` — 134 receipts |
+| Boot log | `phase3-corpus/.p3-logs/boot4-1618.log` |
+| Run log | `phase3-corpus/.p3-logs/run3-1622.log` |
+| Run conditions | `phase3-corpus/.p3-logs/RUN-CONDITIONS.md` |
+| Pin-move receipt | `.p3-logs/PIN-MOVE-RECEIPT.md` |
+| Durable evidence record | ops PR **#1597** |
+| Gate exit status | `RUN_EXIT_CODE=1` (3 red cases — a result) |
+| Supporting suite | 788 passed / 134 skipped across `tests/acceptance`; ruff and mypy clean |
 
 ## 8. Intentional-failure proof
 
-A test suite that has never been observed failing is not evidence that it can fail.
-Record the planted defect, the case that caught it, and the observation that the
-**old** state passed while the new one failed.
-
-| Planted defect | Case expected to catch it | Old state | New state | Verdict |
+| Planted / observed defect | Case that caught it | Old state | New state | Verdict |
 | --- | --- | --- | --- | --- |
-| `<GRADE: pending>` | | `<passed>` | `<failed>` | `<...>` |
+| Declared `expected_mention_texts` on a case rejected before resolution (the CHAOS-3578 edit) | `adv.oversized.question`, `adv.oversized.subject-set` | 11:11 run, no spans — PASSED | 16:22 run, spans — FAILED | The checker fired on a real, unintended change; the edit was wrong, not the guard |
+| Mutation of each `64111072e` guard | both correction guards | — | non-zero exit | KILLED by exit code, not by grep |
+| Boot recipe run from a worktree | `armed_corpus_boot.sh` | assumed working | `BOOT_EXIT_CODE=64` | Defect was invisible on the page; only execution surfaced it |
+
+This section is the run's own intentional-failure evidence. A separate planted-defect
+pass against the corpus checkers is **not** claimed here — see section 9.
 
 ## 9. Known limitations
 
-Stated as residual risk, not as reassurance. An admitted gap is worth more than an
-inaccurate coverage claim, because a reader who sees "covered" stops checking.
+Residual risk, stated as such. An admitted gap is worth more than an inaccurate
+coverage claim, because a reader who sees "covered" stops checking.
 
 | Limitation | What is therefore unproven | Tracked as |
 | --- | --- | --- |
-| 43 declared-blocked corpus cases are not executed | `<GRADE: pending — enumerate the capability each blocked group represents>` | `<CHAOS-34xx>` |
-| Scripted provider, not a live one | `<GRADE: pending>` | `<...>` |
-| `<GRADE: pending>` | | |
+| **`readiness.capabilities.degraded`'s green is VACUOUS** | It passed, and it is graded green per v2 with no deviation — **but it proves nothing about degraded-readiness handling.** It is driven by `provider_profile_override`, which nothing in `src/` reads. The same inert field is why `deg.provider.unsupported` is red: one field, two opposite-looking symptoms. **Do not cite this case as degraded-mode coverage.** | CHAOS-3588 (PR #1595) |
+| `deg.provider.unsupported` and `readiness.capabilities.unsupported-model` flip DECLARED-BLOCKED | Provider-unsupported and unsupported-model readiness paths are unverified | CHAOS-3588 |
+| **QUA shadow: NOT MEASURED** | Correctly disarmed throughout, and explicitly out of scope per v2 Amendment 3. This run says nothing about shadow behavior in either direction | CHAOS-3389 / CHAOS-3525 |
+| 43 declared-blocked corpus cases were not executed | Mid-conversation and multi-turn behavior (CHAOS-3454), prompt injection via ingested content (CHAOS-3456), budget/plan-size exhaustion (CHAOS-3455), redacted evidence and `missing_credentials` readiness (CHAOS-3461), cross-tenant refusal for team/user/evidence ids (CHAOS-3459), conversation purge and retention (CHAOS-3547), alias/acronym two-turn resolution (CHAOS-3475), kill switches (CHAOS-3549), filtered and inherited scope (CHAOS-3543, CHAOS-3542), partially-resolved TEAM subjects (CHAOS-3429), truncated work-graph disclosure (CHAOS-3428), attributed "light on feature work" (CHAOS-3394) | as listed |
+| Scripted provider, not a live one | Live-provider behavior is not exercised by this run | — |
+| `WORLD_DIGEST` for run #3 not carried by the grade record | The world-pin match is asserted by the boot, not reproduced in this summary | `<PLACEHOLDER: recover from RUN-CONDITIONS.md>` |
 
 ## 10. Verdict
 
-**Phase 3 grade:** `<GRADE: pending armed run 2026-08-07>`
+**Phase 3 grade: MEASURED.**
 
-**Basis, in one paragraph, naming the discriminator's verdict explicitly:**
-`<GRADE: pending armed run 2026-08-07>`
+**Basis.** All run-validity preconditions held: 90/90 executed cases recorded receipts
+(`missing: 0`), zero 429s, the container-id pin held with `STACK STOLEN: 0`, the
+engine identity matched, and QUA was correctly disarmed. Predictions A, C, D and E
+landed as written, and **the discriminator HELD** — `adv.injection-request.url` and
+`scope.unsupported-request` stayed `unsupported` while their family flipped, which is
+what makes the six `refused` flips demonstrated rather than asserted. The two MISSes
+are both the same self-inflicted corpus-edit defect, corrected in `64111072e` with an
+asserted exemption and mutation-proven guards; neither is a product defect. The one
+red, `deg.provider.unsupported`, is the predicted red on the predicted clause.
+`readiness.capabilities.degraded`'s green is recorded as vacuous and is not citable as
+coverage.
 
-**Exit decision and who made it:** `<GRADE: pending>`
-
-A grade may not be declared from a run whose section 2 verdict is `UNMEASURED` or
-`VOID`, from a partial re-run, or from a cached result standing in for a fresh one.
+**Exit decision and who made it:** `<PLACEHOLDER: Phase 3 exit not yet declared on
+CHAOS-3219 at the time of writing; Phase 2 exit was declared by chris 2026-08-07
+13:39 PT>`

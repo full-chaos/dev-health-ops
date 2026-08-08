@@ -418,6 +418,32 @@ def test_current_slice_is_not_blocked_by_the_historical_gap() -> None:
     assert current.known_gap is None
 
 
+def test_architecture_doc_counts_match_the_registries() -> None:
+    """The doc states registry sizes in prose; prose rots silently.
+
+    Every count the architecture page asserts is re-derived here, so adding
+    a family or a fault mode without updating the page turns red instead of
+    leaving a confidently wrong number in the docs.
+    """
+
+    page = (
+        REPOSITORY_ROOT
+        / "docs"
+        / "contribute"
+        / "architecture"
+        / "ask-dev-investigation-packet.md"
+    ).read_text(encoding="utf-8")
+    claims = (
+        (f"**Question families** ({len(ALL_QUESTION_FAMILY_IDS)})", "families"),
+        (f"**Scoring dimensions** ({len(ALL_SCORING_DIMENSION_IDS)})", "dimensions"),
+        (f"**Fault modes** ({len(ALL_FAULT_MODE_IDS)})", "fault modes"),
+    )
+    for claim, what in claims:
+        assert claim in page, f"the architecture page's {what} count is stale"
+    assert len(ALL_RELATIONSHIP_TYPES) == 12
+    assert "twelve closed technical relationship types" in page
+
+
 def test_historical_slices_declare_the_open_gap() -> None:
     for slice_id in (AnalyticalSlice.HISTORICAL, AnalyticalSlice.CURRENT_VS_HISTORICAL):
         boundary = SLICE_BOUNDARIES[slice_id]

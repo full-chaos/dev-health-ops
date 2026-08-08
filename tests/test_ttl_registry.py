@@ -116,10 +116,12 @@ class TestParserHandlesBothTtlSyntaxForms:
         ttl_registry_module._MIGRATIONS_DIR = migrations_dir
         try:
             clickhouse_ttl_retentions.cache_clear()
+            ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
             return clickhouse_ttl_retentions()
         finally:
             ttl_registry_module._MIGRATIONS_DIR = original
             clickhouse_ttl_retentions.cache_clear()
+            ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
 
     def test_wrapped_column_form(self, tmp_path: Path) -> None:
         retentions = self._parse_text(
@@ -191,6 +193,7 @@ class TestRegistryTracksSourceChanges:
         finally:
             ttl_registry_module._MIGRATIONS_DIR = original
             clickhouse_ttl_retentions.cache_clear()
+            ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
 
 
 class TestVocabularyConsistency:
@@ -214,11 +217,13 @@ class TestVocabularyConsistency:
         original = ttl_registry_module._MIGRATIONS_DIR
         ttl_registry_module._MIGRATIONS_DIR = migrations_dir
         clickhouse_ttl_retentions.cache_clear()
+        ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
         return original
 
     def _restore_migrations_dir(self, original) -> None:
         ttl_registry_module._MIGRATIONS_DIR = original
         clickhouse_ttl_retentions.cache_clear()
+        ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
 
     def test_the_real_repo_is_internally_consistent(self) -> None:
         """Sanity: the actual migrations directory, as it stands today,
@@ -323,6 +328,7 @@ class TestVocabularyConsistency:
         original = ttl_registry_module._MIGRATIONS_DIR
         ttl_registry_module._MIGRATIONS_DIR = migrations_dir
         clickhouse_ttl_retentions.cache_clear()
+        ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
         try:
             precise = clickhouse_ttl_retentions()
             assert "py_sourced_ttl_table" in precise, (
@@ -342,6 +348,207 @@ class TestVocabularyConsistency:
         finally:
             ttl_registry_module._MIGRATIONS_DIR = original
             clickhouse_ttl_retentions.cache_clear()
+            ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
+
+
+class TestCoarseSweepDoesNotMatchProse:
+    """Codex round-4 finding (HIGH, confirmed LIVE against the real tree):
+    the original coarse table-name regex had no line anchor and no
+    trailing ``(``, so it matched prose mid-sentence -- exactly the class
+    PR #1602 review D already hardened the PRECISE parser against.
+    Reproduced directly: running the old regex against
+    055_work_item_daily_rollups_replacing_merge_tree.py's own docstring
+    yielded phantom tables ``'to'`` (from "SHOW CREATE TABLE to get the
+    live DDL") and ``'statement'`` (from "the table name in a CREATE TABLE
+    statement."). Both were silenced only because that specific chunk
+    happens to lack the substring "INTERVAL" -- one unrelated docstring
+    edit anywhere near either sentence would have made
+    ``assert_ttl_vocabulary_is_consistent`` abort ALL fixture generation
+    over a table that does not exist.
+    """
+
+    def test_the_055_docstring_produces_no_phantom_tables_today(self) -> None:
+        """Pins the CURRENT real-tree state: this exact phantom must not
+        appear, so a regression is caught immediately."""
+        coarse = ttl_registry_module._coarse_ttl_table_sweep()
+        assert "to" not in coarse
+        assert "statement" not in coarse
+
+    def test_the_055_docstring_stays_safe_even_if_interval_appears_nearby(
+        self, tmp_path: Path
+    ) -> None:
+        """The adversarial case the real tree currently avoids only by
+        accident (that docstring paragraph happens to lack "INTERVAL"):
+        inject the exact 055 prose PLUS the word "interval" into a
+        synthetic migration and confirm the coarse sweep still finds no
+        phantom table -- proving the fix is STRUCTURAL (the anchored,
+        shared ``_CREATE_TABLE_RE``), not merely "this file doesn't
+        currently trip it".
+        """
+        migrations_dir = tmp_path / "clickhouse"
+        migrations_dir.mkdir()
+        (migrations_dir / "999_synthetic.py").write_text(
+            '"""\n'
+            "    1. SHOW CREATE TABLE to get the live DDL (preserves columns,\n"
+            "       partitioning, the existing ORDER BY, settings, codecs, TTL,\n"
+            "       and the retention interval).\n"
+            '"""\n'
+            "def regex_for_table_name():\n"
+            '    """Regex for the table name in a CREATE TABLE statement."""\n'
+        )
+        original = ttl_registry_module._MIGRATIONS_DIR
+        ttl_registry_module._MIGRATIONS_DIR = migrations_dir
+        clickhouse_ttl_retentions.cache_clear()
+        ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
+        try:
+            coarse = ttl_registry_module._coarse_ttl_table_sweep()
+            assert coarse == frozenset(), (
+                f"expected no phantom tables, got {sorted(coarse)}"
+            )
+        finally:
+            ttl_registry_module._MIGRATIONS_DIR = original
+            clickhouse_ttl_retentions.cache_clear()
+            ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
+
+
+class TestCoarseTtlDetectionIsWordBoundaried:
+    """Codex round-4 finding (MED): naive substring checks ("TTL" in text,
+    "INTERVAL" in text) match INSIDE other identifiers. Confirmed a real
+    occurrence in this repo's migrations: ``toIntervalDay`` (used in
+    008_grafana_panel_views.sql's view definitions) contains "Interval" as
+    a substring. It does not currently misfire only because that specific
+    statement is a ``CREATE OR REPLACE VIEW`` (not a table) and lacks "TTL"
+    too -- the word-boundary fix must hold regardless of that coincidence.
+    """
+
+    def test_tointervaday_next_to_a_real_ttl_keyword_does_not_satisfy_the_pattern(
+        self,
+    ) -> None:
+        """A genuine "TTL" keyword co-occurring with `toIntervalDay` (which
+        contains "Interval" as a bare substring, not a keyword) must NOT be
+        treated as a TTL clause -- this is the scenario a naive substring
+        check gets wrong; matching this string is exactly the failure mode
+        being guarded against.
+        """
+        assert not ttl_registry_module._COARSE_TTL_RE.search(
+            "-- TTL note: see toIntervalDay(30) for the window function"
+        )
+
+    def test_a_hypothetical_throttled_table_next_to_a_real_interval_does_not_match(
+        self,
+    ) -> None:
+        """A table NAME containing "TTL" as a substring (not a keyword),
+        co-occurring with a genuine "INTERVAL" elsewhere, must NOT be
+        treated as a TTL clause.
+        """
+        assert not ttl_registry_module._COARSE_TTL_RE.search(
+            "CREATE TABLE throttled_requests (x String) ENGINE = MergeTree() "
+            "-- retry INTERVAL is configured elsewhere"
+        )
+
+    def test_a_genuine_ttl_clause_with_any_time_unit_still_matches(self) -> None:
+        for unit in ("DAY", "WEEK", "MONTH", "HOUR"):
+            assert ttl_registry_module._COARSE_TTL_RE.search(
+                f"TTL occurred_at + INTERVAL 4 {unit}"
+            ), f"failed to match a bare TTL clause using {unit}"
+
+
+class TestAlterTableModifyTtlCoverage:
+    """Codex round-4 finding (MED, confirmed dormant): ``ALTER TABLE x
+    MODIFY TTL ...`` -- the standard way to add or change retention on an
+    EXISTING table -- was invisible to all three sources (precise parser,
+    coarse sweep, KNOWN_TTL_TABLES): a CREATE-time-only blind spot shared
+    by all of them. No real migration uses this syntax today, so it cannot
+    be demonstrated against the real tree; proven synthetically instead.
+    """
+
+    def test_the_real_tree_has_no_alter_table_modify_ttl_today(self) -> None:
+        """Documents the premise this test class depends on: if this ever
+        becomes false, the synthetic tests below stop being the only
+        coverage and this repo's own migrations should be re-examined."""
+        for path in sorted(ttl_registry_module._MIGRATIONS_DIR.glob("*")):
+            if path.suffix not in {".sql", ".py"}:
+                continue
+            assert not ttl_registry_module._ALTER_TABLE_MODIFY_TTL_RE.search(
+                path.read_text(encoding="utf-8")
+            ), (
+                f"{path.name} has an ALTER TABLE MODIFY TTL -- update this test's premise"
+            )
+
+    def test_an_alter_table_modify_ttl_is_found_by_the_coarse_sweep(
+        self, tmp_path: Path
+    ) -> None:
+        migrations_dir = tmp_path / "clickhouse"
+        migrations_dir.mkdir()
+        (migrations_dir / "999_synthetic.sql").write_text(
+            "ALTER TABLE existing_table MODIFY TTL created_at + INTERVAL 60 DAY;"
+        )
+        original = ttl_registry_module._MIGRATIONS_DIR
+        ttl_registry_module._MIGRATIONS_DIR = migrations_dir
+        clickhouse_ttl_retentions.cache_clear()
+        ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
+        try:
+            coarse = ttl_registry_module._coarse_ttl_table_sweep()
+            assert "existing_table" in coarse, (
+                "the coarse sweep did not find a table whose TTL was added "
+                "via ALTER TABLE ... MODIFY TTL -- the CREATE-only blind "
+                "spot is still open"
+            )
+        finally:
+            ttl_registry_module._MIGRATIONS_DIR = original
+            clickhouse_ttl_retentions.cache_clear()
+            ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
+
+
+class TestMultiTableChunkAttribution:
+    """Codex round-4 finding (MED, confirmed dormant): the original
+    ``.search()``-based version always paired the FIRST CREATE TABLE with
+    the FIRST TTL clause in a ``;``-delimited chunk -- wrong if a LATER
+    CREATE TABLE in the SAME chunk (no semicolons at all, as several real
+    ``.py`` migrations have -- 027, 028, 067 each have zero, checked
+    directly) owns the TTL clause. No real ``.py`` migration currently
+    carries a TTL at all, so this is proven synthetically.
+    """
+
+    def test_a_ttl_in_the_second_table_of_a_no_semicolon_chunk_is_attributed_correctly(
+        self, tmp_path: Path
+    ) -> None:
+        migrations_dir = tmp_path / "clickhouse"
+        migrations_dir.mkdir()
+        (migrations_dir / "999_synthetic.py").write_text(
+            "SQL = '''\n"
+            "CREATE TABLE first_table (\n"
+            "    id String\n"
+            ") ENGINE = MergeTree() ORDER BY id\n"
+            "CREATE TABLE second_table (\n"
+            "    occurred_at DateTime64(3, 'UTC')\n"
+            ") ENGINE = MergeTree()\n"
+            "TTL toDateTime(occurred_at) + INTERVAL 20 DAY DELETE\n"
+            "'''\n"
+        )
+        original = ttl_registry_module._MIGRATIONS_DIR
+        ttl_registry_module._MIGRATIONS_DIR = migrations_dir
+        clickhouse_ttl_retentions.cache_clear()
+        ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
+        try:
+            retentions = clickhouse_ttl_retentions()
+            assert "second_table" in retentions, (
+                "the TTL clause belonging to the SECOND CREATE TABLE in a "
+                "semicolon-free chunk was not attributed to it"
+            )
+            assert "first_table" not in retentions, (
+                "the TTL was misattributed to the FIRST CREATE TABLE in "
+                "the chunk instead of the one it actually follows"
+            )
+            assert retentions["second_table"].retention_days == 20
+
+            coarse = ttl_registry_module._coarse_ttl_table_sweep()
+            assert "second_table" in coarse
+            assert "first_table" not in coarse
+        finally:
+            ttl_registry_module._MIGRATIONS_DIR = original
+            clickhouse_ttl_retentions.cache_clear()
+            ttl_registry_module._coarse_ttl_table_sweep.cache_clear()
 
 
 class TestComputeDriftDays:

@@ -45,7 +45,11 @@ _MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations" / "clickhou
 
 # Anchored the same way org_deletion.py's own CREATE TABLE scanner is (PR
 # #1602 review D): a real CREATE TABLE always starts its own line, so prose
-# referencing "CREATE TABLE" mid-sentence can never falsely match.
+# referencing "CREATE TABLE" mid-sentence can never falsely match. This is
+# the ONE table-locating regex in this module -- both the precise parser
+# and the coarse sweep below use it (see the round-4 review note on
+# `_attribute_ttl_matches`): the coarse sweep's independence lives entirely
+# in `_COARSE_TTL_RE`, never in a second, unaudited table-name pattern.
 _CREATE_TABLE_RE = re.compile(
     r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(?P<table>[A-Za-z_]\w*)`?\s*\(",
     re.IGNORECASE | re.MULTILINE,
@@ -57,6 +61,29 @@ _CREATE_TABLE_RE = re.compile(
 _TTL_RE = re.compile(
     r"TTL\s+(?:\w+\()?(?P<column>[\w.]+)\)?\s*\+\s*INTERVAL\s+(?P<days>\d+)\s+DAY",
     re.IGNORECASE,
+)
+# Codex round-4 finding (MED, confirmed via `toIntervalDay` in the real
+# tree -- the cited file/table was wrong, the mechanism was real): naive
+# substring checks (`"TTL" in text`, `"INTERVAL" in text`) match INSIDE
+# other identifiers -- `toIntervalDay` contains "Interval", a hypothetical
+# `THROTTLED` would contain "TTL". Word-boundaried so it still matches
+# "TTL ... INTERVAL" regardless of time unit (DAY/WEEK/MONTH/..., the
+# actual looseness this sweep exists for) without matching inside an
+# unrelated longer identifier.
+_COARSE_TTL_RE = re.compile(r"\bTTL\b.*?\bINTERVAL\b", re.IGNORECASE | re.DOTALL)
+# Codex round-4 finding (MED, confirmed dormant -- no real migration uses
+# this syntax today): `ALTER TABLE x MODIFY TTL ...` is the standard way to
+# add/change retention on an EXISTING table, and none of the three sources
+# (precise parser, the old coarse sweep, KNOWN_TTL_TABLES) could ever see
+# it -- a CREATE-time-only blind spot shared by all three. The coarse sweep
+# below also scans for this form directly; if a future migration ever adds
+# one, this makes it visible immediately (`coarse - precise` fires,
+# forcing `clickhouse_ttl_retentions`'s CREATE-only extraction to be
+# extended too, which is this guard working as designed, not a false
+# alarm).
+_ALTER_TABLE_MODIFY_TTL_RE = re.compile(
+    r"^\s*ALTER\s+TABLE\s+`?(?P<table>[A-Za-z_]\w*)`?\s+MODIFY\s+TTL\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -96,34 +123,77 @@ KNOWN_TTL_TABLES: frozenset[str] = frozenset(
     }
 )
 
-# Codex round-3 finding (HIGH, confirmed): a table matched here but NOT
-# extracted by `_CREATE_TABLE_RE`/`_TTL_RE` proves the precise parser missed
-# a real TTL clause. Deliberately loose -- no line anchor on the table name,
-# no specific time unit -- so it stays correct against TTL syntax the
-# precise, structured parser does not handle. Reproduced directly: a
-# synthetic `TTL occurred_at + INTERVAL 4 WEEK` (a real ClickHouse form;
-# `_TTL_RE` requires the literal word "DAY") is invisible to
-# `clickhouse_ttl_retentions` entirely -- the table enters neither the
-# registry nor (having never been seen) `KNOWN_TTL_TABLES`, so the previous
-# `KNOWN_TTL_TABLES - retentions.keys()` check passed vacuously and every
-# TTL-dependent guard treated the table as risk-free.
-_COARSE_CREATE_TABLE_RE = re.compile(
-    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(?P<table>[A-Za-z_]\w*)`?",
-    re.IGNORECASE,
-)
+
+def _attribute_ttl_matches(
+    statement: str, ttl_re: re.Pattern[str]
+) -> list[tuple[str, re.Match[str]]]:
+    """Associate every ``ttl_re`` match in ``statement`` with the CLOSEST
+    PRECEDING ``_CREATE_TABLE_RE`` match -- not just the first CREATE TABLE
+    in the whole chunk.
+
+    Codex round-4 finding (MED, confirmed dormant): the original
+    ``.search()``-based version always paired the FIRST CREATE TABLE with
+    the FIRST TTL clause in a ``;``-delimited chunk. This repo's ClickHouse
+    migrations split into ``.sql`` (semicolon-delimited, usually one
+    CREATE TABLE per statement) and ``.py`` (DDL embedded as a Python
+    string, frequently ZERO semicolons -- confirmed directly: 027, 028, 067
+    each have none). A ``.py`` migration with two CREATE TABLE blocks and a
+    TTL clause belonging to the SECOND would misattribute it to the first
+    -- currently dormant only because no existing ``.py`` migration happens
+    to carry a TTL at all (checked directly), not because the bug cannot
+    fire.
+    """
+
+    table_matches = list(_CREATE_TABLE_RE.finditer(statement))
+    if not table_matches:
+        return []
+
+    results: list[tuple[str, re.Match[str]]] = []
+    idx = 0
+    current_owner: re.Match[str] | None = None
+    for ttl_match in ttl_re.finditer(statement):
+        while (
+            idx < len(table_matches) and table_matches[idx].start() <= ttl_match.start()
+        ):
+            current_owner = table_matches[idx]
+            idx += 1
+        if current_owner is not None:
+            results.append((current_owner.group("table"), ttl_match))
+    return results
 
 
+@lru_cache(maxsize=1)
 def _coarse_ttl_table_sweep() -> frozenset[str]:
     """A second, INDEPENDENT, deliberately LOOSER pass over the same
     migration source used by :func:`clickhouse_ttl_retentions`.
 
-    Flags a statement as TTL-bearing on the bare substrings "TTL" and
-    "INTERVAL" alone -- no required time unit, no anchored table pattern --
-    so a real TTL clause the precise parser's stricter regex cannot match
-    still gets counted here. This function's whole job is to be WRONG in
-    the permissive direction (a superset of the precise registry); catching
-    it being wrong in the other direction is exactly what
-    :func:`assert_ttl_vocabulary_is_consistent` is for.
+    Codex round-4 finding (HIGH, confirmed live): the original version used
+    its OWN, unanchored, un-``MULTILINE`` table-name regex -- reproduced
+    directly against 055_work_item_daily_rollups_replacing_merge_tree.py's
+    own docstring, which yielded a phantom table ``'to'`` from "SHOW CREATE
+    TABLE to get the live DDL" and a second phantom ``'statement'`` from
+    "the table name in a CREATE TABLE statement." Both were silenced only
+    because that specific chunk happened to lack the substring "INTERVAL"
+    -- one unrelated docstring edit anywhere near either sentence would
+    have made this guard abort ALL fixture generation over a table that
+    does not exist.
+
+    NAMED DESIGN ASSUMPTION (round-4 review): this function now reuses the
+    EXACT SAME anchored :data:`_CREATE_TABLE_RE` the precise parser uses --
+    it does not have its own table-locating regex at all anymore. This
+    function's independence from :func:`clickhouse_ttl_retentions` lives
+    ENTIRELY on the TTL-DETECTION axis (:data:`_COARSE_TTL_RE`'s
+    word-boundaried, any-time-unit match, plus the
+    :data:`_ALTER_TABLE_MODIFY_TTL_RE` scan below), never on DDL location.
+    The tradeoff: a CREATE-statement shape ``_CREATE_TABLE_RE`` does not
+    match (e.g. some future ``CREATE TABLE ... AS SELECT`` form) now blinds
+    BOTH sources identically, rather than one catching what the other
+    misses. That is accepted deliberately -- location disagreement between
+    two DIFFERENT table-name regexes was pure parsing noise (this exact
+    finding, and the round-3 fifth-table gap before it, were both about TTL
+    DETECTION, never about which regex finds the table name), and sharing
+    one regex is what makes the "coarse is a strict superset of precise"
+    invariant a STRUCTURAL guarantee rather than a hope.
     """
 
     if not _MIGRATIONS_DIR.exists():
@@ -134,13 +204,11 @@ def _coarse_ttl_table_sweep() -> frozenset[str]:
         if path.suffix not in {".sql", ".py"}:
             continue
         text = path.read_text(encoding="utf-8")
+        for match in _ALTER_TABLE_MODIFY_TTL_RE.finditer(text):
+            tables.add(match.group("table"))
         for statement in text.split(";"):
-            upper = statement.upper()
-            if "TTL" not in upper or "INTERVAL" not in upper:
-                continue
-            match = _COARSE_CREATE_TABLE_RE.search(statement)
-            if match:
-                tables.add(match.group("table"))
+            for table, _ttl_match in _attribute_ttl_matches(statement, _COARSE_TTL_RE):
+                tables.add(table)
     return frozenset(tables)
 
 
@@ -159,9 +227,9 @@ def assert_ttl_vocabulary_is_consistent() -> None:
     every known table" trivially -- the vocabulary was checking itself
     against itself. The coarse sweep is the independent third source that
     breaks that circularity: precision (does the parser over-match?) is
-    checked by comparing against the coarse sweep's recall, and the coarse
-    sweep's own correctness is exactly why it is deliberately permissive
-    rather than structured.
+    checked by comparing against the coarse sweep's recall -- see
+    :func:`_coarse_ttl_table_sweep`'s own docstring for the round-4 note on
+    exactly which axis that independence lives on.
     """
 
     precise = set(clickhouse_ttl_retentions().keys())
@@ -206,6 +274,16 @@ def clickhouse_ttl_retentions() -> dict[str, TtlRetention]:
     Scans ``migrations/clickhouse/*.sql`` and ``*.py`` directly -- the same
     files ClickHouse itself is migrated from -- so this can never describe a
     TTL that isn't actually enforced, or fail to describe one that is.
+
+    Codex round-4 finding (MED, confirmed dormant): previously took only the
+    FIRST CREATE TABLE and FIRST TTL clause per ``;``-delimited chunk --
+    see :func:`_attribute_ttl_matches` for the multi-table misattribution
+    this fixes. Note this function does NOT catch a residual note also
+    raised in review: ``read_text`` failures (a non-UTF-8 migration file,
+    a permissions error) surface as a bare ``OSError``/``UnicodeDecodeError``,
+    not the framed ``RuntimeError`` this module's other fail-closed checks
+    use -- pre-existing, not fixed here (tracked as a residual, not a live
+    gap: every migration file in this repo is valid UTF-8 today).
     """
 
     retentions: dict[str, TtlRetention] = {}
@@ -217,16 +295,12 @@ def clickhouse_ttl_retentions() -> dict[str, TtlRetention]:
             continue
         text = path.read_text(encoding="utf-8")
         for statement in text.split(";"):
-            table_match = _CREATE_TABLE_RE.search(statement)
-            ttl_match = _TTL_RE.search(statement)
-            if not table_match or not ttl_match:
-                continue
-            table = table_match.group("table")
-            retentions[table] = TtlRetention(
-                table=table,
-                column=ttl_match.group("column"),
-                retention_days=int(ttl_match.group("days")),
-            )
+            for table, ttl_match in _attribute_ttl_matches(statement, _TTL_RE):
+                retentions[table] = TtlRetention(
+                    table=table,
+                    column=ttl_match.group("column"),
+                    retention_days=int(ttl_match.group("days")),
+                )
 
     return retentions
 

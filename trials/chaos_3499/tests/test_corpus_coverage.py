@@ -14,7 +14,7 @@ from ..corpus.cases import CORPUS_CASES, CORPUS_CASES_BY_ID
 from ..corpus.ground_truth import GROUND_TRUTH, GROUND_TRUTH_BY_KEY
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..corpus.questions import EVALUATION_QUESTIONS, QUESTIONS_BY_ID
-from ..harness.contracts import QueryMode, QuestionClass
+from ..harness.contracts import ALL_QUESTION_CLASSES, QueryMode
 
 
 def test_all_twenty_one_prd_cases_are_present() -> None:
@@ -93,7 +93,7 @@ def test_all_three_classes_are_populated() -> None:
     reader will misread as "clean".
     """
     populated = {q.question_class for q in EVALUATION_QUESTIONS}
-    missing = [k.value for k in QuestionClass if k not in populated]
+    missing = [k.value for k in ALL_QUESTION_CLASSES if k not in populated]
     assert not missing, f"evaluation-question classes with no questions: {missing}"
 
 

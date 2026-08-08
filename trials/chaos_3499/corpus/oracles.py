@@ -27,7 +27,13 @@ from ..harness.contracts import (
 from ..harness.oracle import CoverageExpectation, FactExpectation, Oracle
 from . import ground_truth as gt
 
-_PROJECTION = "temporal-projector.v1"
+# Note: the projection-version tag ("temporal-projector.v1") the shadow
+# graph projector stamps on facts lives in harness/contracts.py as
+# PROJECTION_VERSION, not here -- this module never consumed its own local
+# copy of that literal (a CodeQL py/unused-global-variable finding caught
+# the orphaned declaration), and the modules that DO need it
+# (tests/golden.py, harness/faults.py) sit below harness/contracts.py in
+# the dependency graph, not below corpus/oracles.py.
 
 
 def _q(

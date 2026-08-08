@@ -21,6 +21,7 @@ import pytest
 from ..corpus import ground_truth as gt
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..harness.contracts import (
+    PROJECTION_VERSION,
     ArmOutcome,
     ArmResponse,
     ClaimKind,
@@ -478,7 +479,7 @@ def test_unavailable_outcome_is_not_satisfiable_by_answering() -> None:
                 object_ref=oracle.query.subjects[0],
                 observed_at=oracle.query.as_of or _ANY_TIME,
                 claim_kind=ClaimKind.OBSERVED,
-                projection_version="temporal-projector.v1",
+                projection_version=PROJECTION_VERSION,
                 evidence_refs=("ev1_cached",),
                 flags=FactFlags(),
             ),
@@ -649,7 +650,7 @@ def test_arm_response_leaking_out_of_subject_fact_fails_the_oracle() -> None:
         object_ref=gt.REPO_WEB,
         observed_at=gt.TRIAL_NOW,
         claim_kind=ClaimKind.OBSERVED,
-        projection_version="temporal-projector.v1",
+        projection_version=PROJECTION_VERSION,
         evidence_refs=("ev1_ep_0005",),
     )
     leaked = dataclasses.replace(golden, facts=(*golden.facts, leak))

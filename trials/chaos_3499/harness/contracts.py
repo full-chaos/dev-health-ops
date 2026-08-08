@@ -67,6 +67,21 @@ class QuestionClass(str, Enum):
     NEEDS_EXTRACTION_OR_ASSOCIATION = "c"
 
 
+#: Every QuestionClass member, as a plain tuple literal rather than
+#: iteration over the Enum class itself (``for klass in QuestionClass:``).
+#: Semantically identical -- CodeQL's py/non-iterable-in-for-loop cannot
+#: prove a ``(str, Enum)`` mixin class supports ``__iter__`` through
+#: EnumMeta, and flags every ``for x in QuestionClass:`` site as iterating a
+#: class object rather than an instance. A literal tuple is provably
+#: iterable to any analyzer with no such ambiguity. Use this everywhere the
+#: code previously iterated ``QuestionClass`` directly.
+ALL_QUESTION_CLASSES: tuple[QuestionClass, ...] = (
+    QuestionClass.NATIVE_ANSWERABLE,
+    QuestionClass.NEEDS_DECLARED_STATE_HISTORY,
+    QuestionClass.NEEDS_EXTRACTION_OR_ASSOCIATION,
+)
+
+
 class ArmOutcome(str, Enum):
     """Why a response looks the way it does.
 
@@ -116,6 +131,17 @@ class Invalidation:
 
     refs: tuple[str, ...]
     invalidation_claim_kind: ClaimKind
+
+
+#: The projection-version tag the (not-yet-built) shadow graph projector
+#: stamps on every fact it emits. Canonical home for this literal: it is
+#: consumed by tests/golden.py's reference-response builder and by the
+#: fault-mode synthetic facts (harness/faults.py, tests/test_oracle_fault_
+#: modes.py), both of which simulate what a correctly-projected graph
+#: response looks like, so both need the SAME value rather than each
+#: independently redeclaring or hardcoding the literal -- a version bump
+#: must not be able to update some copies and silently leave others stale.
+PROJECTION_VERSION = "temporal-projector.v1"
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,7 @@ from datetime import timedelta
 from enum import Enum
 
 from .contracts import (
+    PROJECTION_VERSION,
     ArmOutcome,
     ArmResponse,
     ClaimKind,
@@ -325,7 +326,7 @@ def emit_forbidden_fact(oracle: Oracle, response: ArmResponse) -> MutationOutcom
             else response.indexed_through or _FALLBACK_TIME
         ),
         claim_kind=ClaimKind.OBSERVED,
-        projection_version="temporal-projector.v1",
+        projection_version=PROJECTION_VERSION,
         evidence_refs=("ev1_should_not_be_here",),
     )
     return _applied(dataclasses.replace(response, facts=(*response.facts, leaked)))
@@ -354,7 +355,7 @@ def leak_out_of_subject_fact(oracle: Oracle, response: ArmResponse) -> MutationO
             else response.indexed_through or _FALLBACK_TIME
         ),
         claim_kind=ClaimKind.OBSERVED,
-        projection_version="temporal-projector.v1",
+        projection_version=PROJECTION_VERSION,
         evidence_refs=("ev1_out_of_subject_leak",),
     )
     assert leaked.subject_ref not in subjects and leaked.object_ref not in subjects, (

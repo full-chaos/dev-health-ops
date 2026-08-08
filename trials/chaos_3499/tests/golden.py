@@ -21,6 +21,7 @@ from datetime import datetime
 
 from ..corpus import ground_truth as gt
 from ..harness.contracts import (
+    PROJECTION_VERSION,
     ArmOutcome,
     ArmResponse,
     ClaimKind,
@@ -45,8 +46,6 @@ _HISTORY_MODES = frozenset(
         QueryMode.CONFLICTS,
     }
 )
-
-_PROJECTION_VERSION = "temporal-projector.v1"
 
 
 @dataclass(frozen=True)
@@ -262,7 +261,7 @@ def _to_temporal_fact(
         object_ref=source.object,
         observed_at=source.observed_at,
         claim_kind=source.claim_kind,
-        projection_version=_PROJECTION_VERSION,
+        projection_version=PROJECTION_VERSION,
         valid_from=source.valid_from,
         valid_to=valid_to,
         reference_time=source.valid_from,
@@ -343,7 +342,7 @@ def golden_response(oracle: Oracle, arm: str) -> ArmResponse:
         source_coverage=dict(scenario.coverage),
         indexed_through=scenario.indexed_through,
         versions={
-            "projection": _PROJECTION_VERSION,
+            "projection": PROJECTION_VERSION,
             "query": query.schema_version,
         },
         truncated=truncated,

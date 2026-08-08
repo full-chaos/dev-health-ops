@@ -23,7 +23,7 @@ from __future__ import annotations
 from ..corpus import ground_truth as gt
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..harness.arms import episode_readback, native
-from ..harness.contracts import QuestionClass
+from ..harness.contracts import ALL_QUESTION_CLASSES, QuestionClass
 from ..harness.oracle import Verdict
 from ..harness.runner import ArmRegistry, ArmRole, compare, compose_baseline, run_trial
 
@@ -265,7 +265,7 @@ def test_trial_report_renders_per_class_for_each_component() -> None:
     )  # O4_prior_attempts
 
     rendered = native_report.render()
-    for klass in QuestionClass:
+    for klass in ALL_QUESTION_CLASSES:
         assert f"class {klass.value}:" in rendered
 
 
@@ -274,7 +274,7 @@ def test_comparison_report_renders_per_class_against_the_composed_baseline() -> 
     (report,) = compare(ALL_ORACLES, registry)
 
     rendered = report.render()
-    for klass in QuestionClass:
+    for klass in ALL_QUESTION_CLASSES:
         assert f"class {klass.value}:" in rendered
 
     by_class = {c.question_class: c for c in report.by_class()}
@@ -282,7 +282,7 @@ def test_comparison_report_renders_per_class_against_the_composed_baseline() -> 
     # render NOT COMPARABLE -- proving the harness's own honesty guard
     # fires for a real (not synthetic) unmeasured arm, not just the
     # hand-built fixtures test_comparison_report.py uses.
-    for klass in QuestionClass:
+    for klass in ALL_QUESTION_CLASSES:
         assert not by_class[klass].is_comparable
         assert "NOT COMPARABLE" in by_class[klass].render()
     assert not report.native_control_holds()

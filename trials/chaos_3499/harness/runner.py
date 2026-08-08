@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .contracts import ArmResponse, QuestionClass
+from .contracts import ALL_QUESTION_CLASSES, ArmResponse, QuestionClass
 from .oracle import AssertionResult, Oracle, OracleResult, Verdict
 
 ArmCallable = Callable[[Oracle], ArmResponse]
@@ -79,7 +79,7 @@ class TrialReport:
 
     def by_class(self) -> Mapping[QuestionClass, ClassScore]:
         buckets: dict[QuestionClass, list[OracleResult]] = {
-            klass: [] for klass in QuestionClass
+            klass: [] for klass in ALL_QUESTION_CLASSES
         }
         for result in self.results:
             buckets[result.question_class].append(result)
@@ -107,7 +107,7 @@ class TrialReport:
         """
         lines = [f"arm: {self.arm}"]
         scores = self.by_class()
-        for klass in QuestionClass:
+        for klass in ALL_QUESTION_CLASSES:
             lines.append("  " + scores[klass].render())
         total = len(self.results)
         passed = sum(1 for r in self.results if r.verdict is Verdict.PASS)
@@ -353,7 +353,7 @@ class ComparisonReport:
                 arm=arm_scores[klass],
                 dependency=self.dependencies.get(klass),
             )
-            for klass in QuestionClass
+            for klass in ALL_QUESTION_CLASSES
         )
 
     def native_control_holds(self) -> bool:

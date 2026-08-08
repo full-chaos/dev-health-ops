@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from ..corpus.oracles import ALL_ORACLES
-from ..harness.contracts import ArmResponse, QuestionClass
+from ..harness.contracts import ALL_QUESTION_CLASSES, ArmResponse, QuestionClass
 from ..harness.oracle import Oracle, Verdict
 from ..harness.runner import (
     UNRECORDED_DEPENDENCY,
@@ -249,7 +249,7 @@ def test_report_never_emits_a_single_headline_number() -> None:
     )
     (report,) = compare(ALL_ORACLES, registry)
     rendered = report.render()
-    for klass in QuestionClass:
+    for klass in ALL_QUESTION_CLASSES:
         assert f"class {klass.value}:" in rendered
 
 

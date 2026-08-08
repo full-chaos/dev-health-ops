@@ -40,7 +40,7 @@ import pytest
 from ..corpus.oracles import ALL_ORACLES, ORACLES_BY_ID
 from ..harness.arms import extraction, native
 from ..harness.arms.source_documents import SMOKE_SOURCE_DOCUMENTS
-from ..harness.contracts import ArmOutcome, QuestionClass
+from ..harness.contracts import ALL_QUESTION_CLASSES, ArmOutcome, QuestionClass
 from ..harness.llm import client as llm_client
 from ..harness.llm.client import (
     DEFAULT_LOCAL_BASE_URL,
@@ -371,7 +371,7 @@ def test_comparison_report_renders_with_the_extraction_candidate_present(
 
     assert report.arm.arm == "extraction_llm"
     rendered = report.render()
-    for klass in QuestionClass:
+    for klass in ALL_QUESTION_CLASSES:
         assert f"class {klass.value}:" in rendered
 
     by_class = {c.question_class: c for c in report.by_class()}

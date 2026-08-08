@@ -1727,6 +1727,69 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     # -- same category as HealthRuleFinding.subject_id above: names a real
     # project entity.
     "DevPortfolioProjectStatusV2.project_id": "provider entity key",
+    # CHAOS-3615 ask_dev_investigation_packet.v1
+    # (api.dev.investigation_contract) -- same situation as the CHAOS-3302
+    # and CHAOS-3305 blocks above, one step further out: these models
+    # subclass ContractModelV2 (deliberately, to inherit extra="forbid" +
+    # frozen=True and the shared scalar vocabulary) so this reflection sweep
+    # reaches them, but they are NOT part of the no-answer-projection model
+    # space at all. The packet is an internal trial artifact with its own
+    # registry (INVESTIGATION_CONTRACT_MODELS) and its own artifact root
+    # (contracts/ask-dev-investigation/v1); it is never registered in
+    # CONTRACT_MODELS_V2, never served to a client, and unreachable from a
+    # DevAnswerV2 in any outcome -- asserted by
+    # test_chaos_3615_investigation_contract.py::
+    # test_artifact_root_is_not_the_client_served_tree.
+    #
+    # Canonical entity keys: name real platform records (projects, teams,
+    # services, dependencies, repositories), the same category as
+    # DevEntityRefV2.entity_id above.
+    "AskDevInvestigationPacket.organization_id": "provider entity key",
+    "CohortExclusion.canonical_id": "provider entity key",
+    "CohortMember.canonical_id": "provider entity key",
+    "DriverCandidate.affected_subject_ids": "provider entity key",
+    "InvestigationEvidenceEntry.supports_entity_ids": "provider entity key",
+    "InvestigationEvidenceEntry.supports_subject_ids": "provider entity key",
+    "LineageHop.source_entity_id": "provider entity key",
+    "LineageHop.target_entity_id": "provider entity key",
+    "LineagePath.origin_entity_id": "provider entity key",
+    "LineagePath.terminal_entity_id": "provider entity key",
+    "RelatedContext.authorized_entity_ids": "provider entity key",
+    "RelatedEntity.entity_id": "provider entity key",
+    "SubjectCandidate.canonical_id": "provider entity key",
+    "SubjectDiscovery.committed_subject_ids": "provider entity key",
+    "SurfaceContextRef.entity_id": "provider entity key",
+    # Intra-document reference keys: scoped to one packet, meaningless
+    # outside it. Each is cross-checked against the packet's own declared
+    # material by AskDevInvestigationPacket.validate_evidence_closure /
+    # .validate_drivers_reference_declared_material, so a dangling one is a
+    # validation error rather than a free-text cell.
+    "AnalyticalJob.job_id": "intra-document key",
+    "ClarificationNeed.candidate_ids": "intra-document key",
+    "ComparisonCohort.cohort_id": "intra-document key",
+    "DriverAnalysis.principal_driver_ids": "intra-document key",
+    "DriverCandidate.driver_id": "intra-document key",
+    "DriverCandidate.supporting_path_ids": "intra-document key",
+    "InvestigationEvidenceEntry.supports_driver_ids": "intra-document key",
+    "InvestigationEvidenceEntry.supports_path_ids": "intra-document key",
+    "LineagePath.path_id": "intra-document key",
+    "RelatedEntity.supporting_path_ids": "intra-document key",
+    "SourceConflict.conflict_id": "intra-document key",
+    "SubjectCandidate.candidate_id": "intra-document key",
+    "UnresolvedMention.candidate_ids": "intra-document key",
+    "UnresolvedMention.mention_id": "intra-document key",
+    # Server-owned surface and conversation correlation keys, supplied by the
+    # Ask Dev request path rather than by the investigation.
+    "AnalyticalJob.conversation_reference_ids": "server-owned correlation key",
+    "SurfaceContextRef.surface_id": "server-owned correlation key",
+    # Evaluation-only. TrialMetadata is an optional field of
+    # InvestigationVersions and exists so arm identity is trial metadata
+    # rather than product truth; it is never populated on a product path.
+    "TrialMetadata.arm_id": "trial evaluation metadata",
+    # Registry entry, not a wire document: QuestionVariant instances live in
+    # the frozen question-family registry, whose ids are asserted globally
+    # unique by test_chaos_3615_registries.py.
+    "QuestionVariant.variant_id": "registry token",
 }
 
 

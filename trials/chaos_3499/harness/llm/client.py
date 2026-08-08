@@ -89,6 +89,17 @@ DEFAULT_CLOUD_MODEL = "gpt-5-mini"
 #: DEFAULT_CLOUD_MODEL above.
 _RESPONSES_API_MODEL_PREFIXES = ("gpt-5", "gpt-6", "openai/gpt-oss")
 
+#: Model prefixes that reject a caller-selected ``temperature``, matching
+#: production's ``openai_capabilities.supports_temperature`` (gpt-5/o1/o3).
+#: A SUPERSET of ``_RESPONSES_API_MODEL_PREFIXES`` -- every Responses-API
+#: model is also a no-temperature model, but o1/o3 are no-temperature
+#: while still going through Chat Completions in production (routing and
+#: temperature-support are two separate production policies; this trial
+#: keeps them as two separate, single-source predicates rather than
+#: conflating "which API" with "does it accept a caller-selected
+#: temperature").
+_NO_TEMPERATURE_MODEL_PREFIXES = _RESPONSES_API_MODEL_PREFIXES + ("o1", "o3")
+
 #: Hosts LLM_PROVIDER=local is permitted to reach. Anything else is a real
 #: (possibly billable) endpoint, which "local" must never silently become a
 #: pass-through name for.
@@ -168,6 +179,15 @@ def _is_responses_api_model(model: str) -> bool:
     return (model or "").strip().lower().startswith(_RESPONSES_API_MODEL_PREFIXES)
 
 
+def _supports_temperature(model: str) -> bool:
+    """Single source of truth for whether ``model`` accepts a
+    caller-selected ``temperature`` -- shared by both branches of
+    :func:`complete` rather than each branch hardcoding its own answer, so
+    the two cannot silently drift (see ``_NO_TEMPERATURE_MODEL_PREFIXES``).
+    """
+    return not (model or "").strip().lower().startswith(_NO_TEMPERATURE_MODEL_PREFIXES)
+
+
 def complete(
     system_prompt: str,
     user_prompt: str,
@@ -193,7 +213,13 @@ def complete(
     """
     cfg = config or LLMConfig.from_env()
     try:
-        from openai import APIConnectionError, APIError, OpenAI
+        from openai import (
+            APIConnectionError,
+            APIError,
+            APIStatusError,
+            OpenAI,
+            omit,
+        )
     except ImportError as exc:  # pragma: no cover - openai is a pinned dep
         raise LLMUnavailable(f"openai package not importable: {exc}") from exc
 
@@ -209,12 +235,35 @@ def complete(
                 input=user_prompt,
                 # gpt-5-family rejects a caller-selected temperature (see
                 # module docstring) -- deliberately no "temperature" kwarg.
+                # _supports_temperature(cfg.model) is always False for
+                # every model routed here (_NO_TEMPERATURE_MODEL_PREFIXES
+                # is a superset of _RESPONSES_API_MODEL_PREFIXES), so this
+                # omission is never conditional in this branch.
             )
-        except (APIConnectionError, APIError) as exc:
+        except APIConnectionError as exc:
+            # Genuine unreachability (network, DNS, timeout) -- the ONLY
+            # message shape the sweep's bounded-infra-retry policy matches
+            # on ("could not reach"). See run_measured_sweep.py.
             raise LLMUnavailable(
                 f"could not reach {cfg.provider} provider at {cfg.base_url} "
                 f"(model={cfg.model}, responses API): "
                 f"{type(exc).__name__}: {exc}"
+            ) from exc
+        except APIStatusError as exc:
+            # A real response the provider actively returned -- auth,
+            # rate-limit, bad-request, etc. Not a connectivity problem, so
+            # deliberately NOT phrased "could not reach": the sweep's
+            # infra-retry policy must never match this and retry a 401 or
+            # a 400 that will fail identically every time.
+            raise LLMUnavailable(
+                f"{cfg.provider} provider at {cfg.base_url} (model={cfg.model}, "
+                f"responses API) returned {exc.status_code} "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        except APIError as exc:  # pragma: no cover - catch-all, rare
+            raise LLMUnavailable(
+                f"{cfg.provider} provider at {cfg.base_url} (model={cfg.model}, "
+                f"responses API) raised {type(exc).__name__}: {exc}"
             ) from exc
         content = getattr(response, "output_text", "") or ""
         if not content.strip():
@@ -235,16 +284,21 @@ def complete(
             )
         return LLMResponse(content=content, model=cfg.model)
 
+    # temperature=omit (the SDK's own "omit this parameter" sentinel, not
+    # None/0) for a model that rejects a caller-selected value -- e.g. an
+    # o1/o3-family model reached via OPENAI_MODEL override, just like
+    # gpt-5-family (see _NO_TEMPERATURE_MODEL_PREFIXES) -- rather than
+    # sending one the API would reject with a 400.
     try:
         chat_response = client.chat.completions.create(
             model=cfg.model,
-            temperature=0,
+            temperature=0 if _supports_temperature(cfg.model) else omit,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         )
-    except (APIConnectionError, APIError) as exc:
+    except APIConnectionError as exc:
         raise LLMUnavailable(
             f"could not reach {cfg.provider} provider at {cfg.base_url} "
             f"(model={cfg.model}): {type(exc).__name__}: {exc}. If this is "
@@ -252,6 +306,16 @@ def complete(
             "-- host processes use localhost, containers use "
             "host.docker.internal, and swapping the two looks exactly like "
             "the provider being down."
+        ) from exc
+    except APIStatusError as exc:
+        raise LLMUnavailable(
+            f"{cfg.provider} provider at {cfg.base_url} (model={cfg.model}) "
+            f"returned {exc.status_code} {type(exc).__name__}: {exc}"
+        ) from exc
+    except APIError as exc:  # pragma: no cover - catch-all, rare
+        raise LLMUnavailable(
+            f"{cfg.provider} provider at {cfg.base_url} (model={cfg.model}) "
+            f"raised {type(exc).__name__}: {exc}"
         ) from exc
     if not chat_response.choices:
         raise LLMUnavailable(

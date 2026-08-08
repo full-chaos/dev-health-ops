@@ -477,6 +477,14 @@ class Oracle:
         Applied to *every* oracle rather than opted into per case, because a
         gate that only runs where someone remembered to request it is not a
         gate.
+
+        A closed validity window (``valid_to is not None``) must carry an
+        ``invalidated_by`` with NON-EMPTY ``refs`` -- checking only ``is
+        None`` lets an adapter satisfy this gate vacuously with a
+        fabricated ``Invalidation(refs=())``, which cites nothing at all.
+        Applied for every ``claim_kind``, matching ``open_facts`` above:
+        an uncited closure is exactly as much a provenance gap as an
+        uncited fact.
         """
         open_facts = [
             f.fact_id
@@ -488,7 +496,8 @@ class Oracle:
         dangling_endpoints = [
             f.fact_id
             for f in facts
-            if f.valid_to is not None and f.invalidated_by is None
+            if f.valid_to is not None
+            and (f.invalidated_by is None or not f.invalidated_by.refs)
         ]
         problems = []
         if open_facts:

@@ -50,6 +50,7 @@ from trials.chaos_3499.harness.arms import episode_readback, extraction, native
 from trials.chaos_3499.harness.arms.extraction import _PROJECTION_VERSION
 from trials.chaos_3499.harness.contracts import ArmOutcome, QuestionClass
 from trials.chaos_3499.harness.llm.client import DEFAULT_CLOUD_MODEL, LLMConfig
+from trials.chaos_3499.harness.oracle import Verdict
 from trials.chaos_3499.harness.runner import (
     ArmRegistry,
     ArmRole,
@@ -143,12 +144,14 @@ def main() -> int:
     )
 
     registry = ArmRegistry()
-    registry.register("native", native.answer, ArmRole.BASELINE_COMPONENT)
+    registry.register(native.ARM_NAME, native.answer, ArmRole.BASELINE_COMPONENT)
     registry.register(
-        "episode_readback", episode_readback.answer, ArmRole.BASELINE_COMPONENT
+        episode_readback.ARM_NAME,
+        episode_readback.answer,
+        ArmRole.BASELINE_COMPONENT,
     )
     registry.register(
-        "extraction_llm",
+        extraction.ARM_NAME,
         _with_bounded_infra_retry(extraction.answer),
         ArmRole.CANDIDATE_ARM,
     )
@@ -171,7 +174,9 @@ def main() -> int:
     # so a second sweep would double the spend AND could disagree with the
     # first run's own numbers.
     total = len(ALL_ORACLES)
-    measured = sum(1 for r in report.arm.results if r.verdict.value != "not_measured")
+    measured = sum(
+        1 for r in report.arm.results if r.verdict is not Verdict.NOT_MEASURED
+    )
     not_run = total - measured
     _log(
         f"headline honesty: {total} oracles total, {measured} measured by "
@@ -236,25 +241,29 @@ def _render_artifact(
         "",
         "## Interpretation notes",
         "",
+        "This section is generated boilerplate about how to READ the report",
+        "shape above, not a narrative about this specific run's numbers --",
+        "run-specific observations (variance across runs, cross-run",
+        "comparisons, etc.) belong in `docs/adr-draft.md`, which this file",
+        "is never hand-edited to match; regenerating this artifact must",
+        "always reproduce it byte-for-byte from this script (#1603 finding",
+        "7) -- if a claim needs updating, it is either the shape guidance",
+        "below, or it belongs in the ADR draft instead.",
+        "",
         '- **Class (a) "control did NOT hold" here means NOT MEASURED, not',
         "  LOST.** `native_control_holds()` requires the candidate arm to",
         "  have measured every class-(a) oracle before it can confirm the",
-        "  control; this round deliberately authored no class-(a) source",
-        "  material for the extraction arm (only class (b) was in scope,",
-        "  per instruction 1), so the arm reports NOT_RUN on all three, and",
-        "  `is_comparable` is correctly `False`. The per-class line already",
-        "  says `NOT MEASURED`, not `lost` -- the banner below it is the",
-        "  same boolean stated more alarmingly. Read the per-class line, not",
-        "  just the banner.",
-        "- **gpt-5-mini's extraction quality showed run-to-run variance in",
-        "  ad-hoc post-sweep spot checks** (O3/O5 did not pass identically",
-        "  on a second, separate run minutes later). The Responses API does",
-        "  not accept a caller-selected `temperature` for this model family",
-        "  (see Run parameters above), so some non-determinism is expected;",
-        "  whether/how to reduce it (reasoning effort, majority vote across",
-        "  repeated calls) is an open ADR question, not something this",
-        "  script papers over by re-running until a run looks better --",
-        "  the numbers above are the ONE sweep this artifact reports.",
+        "  control; a class where the candidate has zero authored source",
+        "  material reports NOT_RUN on every oracle in it, and",
+        "  `is_comparable` is correctly `False` as a result. The per-class",
+        "  line above already says `NOT MEASURED`, not `lost` -- the banner",
+        "  beneath it is the same boolean stated more alarmingly. Read the",
+        "  per-class line, not just the banner.",
+        "- **No headline number, by construction.** `ComparisonReport` has",
+        "  no method that aggregates across classes into one score --",
+        "  per §15.2, weighting (a)x1 (b)x1 (c)x5 into one number would",
+        "  flatter any extraction-capable candidate regardless of merit.",
+        "  Read each class row on its own terms.",
         "",
     ]
     return "\n".join(lines)

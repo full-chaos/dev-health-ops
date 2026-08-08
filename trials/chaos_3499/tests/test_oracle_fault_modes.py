@@ -527,6 +527,36 @@ def test_invalidation_provenance_cannot_be_laundered() -> None:
     assert result.verdict is Verdict.FAIL
 
 
+def test_dangling_endpoint_with_empty_refs_invalidation_still_fails() -> None:
+    """#1603 finding 2, oracle-side half: ``invalidated_by is not None`` is
+    not the same claim as ``invalidated_by`` actually citing anything.
+    Before this fix, ``_assert_provenance_closure`` only checked ``is
+    None``, so a fabricated ``Invalidation(refs=())`` -- which cites NO
+    evidence at all -- satisfied the gate vacuously (this is exactly what
+    ``harness/arms/extraction.py``'s self-evidencing closure path used to
+    build whenever a fact had ``valid_to`` but no ``evidence_ref`` -- see
+    the adapter-side half, ``test_extraction_smoke.py``'s
+    ``test_self_evidencing_closure_with_no_evidence_ref_stays_uncited``).
+    An uncited closure is exactly as much a provenance gap as an uncited
+    fact (``open_facts``, same assertion) and must fail the same way.
+    """
+    oracle = ORACLES_BY_ID["O3_supersession"]
+    golden = golden_response(oracle, ARM)
+    closed = [(i, f) for i, f in enumerate(golden.facts) if f.valid_to is not None]
+    assert closed, "O3's golden response must contain a closed validity window"
+    index, fact = closed[0]
+    facts = list(golden.facts)
+    facts[index] = dataclasses.replace(
+        fact,
+        invalidated_by=Invalidation(refs=(), invalidation_claim_kind=fact.claim_kind),
+    )
+    result = oracle.evaluate(dataclasses.replace(golden, facts=tuple(facts)))
+    assert "provenance_closure" in result.failed_assertion_ids(), (
+        "an Invalidation with empty refs cites nothing and must fail the "
+        "gate exactly like invalidated_by=None does"
+    )
+
+
 def test_source_coverage_type_is_used_not_bypassed() -> None:
     """Cheap guard that the golden builder produces real coverage objects."""
     oracle = ORACLES_BY_ID["O1_ci_prior_attempts_squash"]

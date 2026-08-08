@@ -121,13 +121,16 @@ on every fact you extract from that same document.
 Set "conflicting": true only when two documents assert incompatible things
 about the same subject and predicate.
 
-Some documents distinguish TWO dates for the same fact: the date it became
-TRUE (its own effective/valid start, and if stated, when it stopped being
-true), and the date it was RECORDED, LOGGED, or DISCOVERED -- these can
-differ, for example a fact backfilled into a system weeks after it took
-effect. When the text states these dates, extract them separately in the
-"temporal" block below. Never infer or guess a date that is not written in
-the text; omit the field (or use null) if the text does not state it.
+Many documents state a date the described fact was RECORDED, LOGGED, or
+ENTERED into a system, separately from the date the fact became TRUE (its
+own effective/valid start, and if stated, when it stopped being true).
+Sometimes these are the same day; sometimes they differ, for example a
+fact backfilled into a system weeks after it took effect. Whenever the
+text states a recording/logging date, extract it as "recorded_at" in the
+"temporal" block below -- EVEN IF it is the same day as "valid_from". Do
+not omit "recorded_at" just because it matches "valid_from"; only leave
+it null when the text genuinely states no recording/logging date at all.
+Never infer or guess a date that is not written in the text.
 
 Output ONLY a JSON array, nothing else -- no prose, no markdown fences.
 Each element has exactly this shape:
@@ -145,10 +148,9 @@ Each element has exactly this shape:
       STATED in the text, or null if it is still true or no end date is
       stated>",
     "recorded_at": "<ISO-8601 date this fact was RECORDED/LOGGED/entered
-      into the system, ONLY if the text explicitly gives a recording date
-      that differs from (or is otherwise distinct from) when it became
-      true -- e.g. a backfilled entry. Null if the text states no such
-      separate date.>"
+      into the system, WHENEVER the text states one -- even if it is the
+      SAME date as valid_from. Null ONLY if the text states no
+      recording/logging date at all.>"
   },
   "closes": null OR {
     "subject_kind": "<entity kind of the fact THIS ONE replaces>",
@@ -274,21 +276,35 @@ def _to_temporal_fact(raw: dict, *, indexed_at: datetime) -> TemporalFact | None
 
     ``valid_from``/``valid_to`` and ``observed_at`` come from the model's
     own ``"temporal"`` block when it states them (see ``_axis_context`` and
-    ``_apply_as_of_filter``); ``observed_at`` falls back to ``indexed_at``
-    (this run's own clock) only when the model gave no recording date --
-    the same "no signal -> the trial's own clock" default this field
-    already had before the temporal block existed, harmless for every
-    oracle that does not key off it.
+    ``_apply_as_of_filter``). **Contract, not an implementation detail:**
+    ``observed_at`` falls back to ``indexed_at`` (this run's own clock)
+    whenever the model gave no ``recorded_at`` -- meaning "no stated
+    recording date" is read as "not known before this run indexed it,"
+    which for any ``AS_OF`` query pinned earlier than this run reads as
+    "not yet observed." The prompt (``_SYSTEM_PROMPT``) is written to ask
+    for ``recorded_at`` whenever the text states ANY recording/logging
+    date, including one that matches ``valid_from`` -- a model that
+    silently omits it for a same-day fact (contrary to the prompt) will
+    have that fact fall back to this default and read as unobserved on
+    any historical ``AS_OF`` query, exactly like a fact truly missing a
+    recording date. This is deliberate, not a gap: a filter that treated
+    "same-day, so omitted" and "genuinely never recorded" differently
+    would need the adapter to guess which one an absent field means, and
+    guessing is exactly what this fallback exists to avoid.
 
     A ``valid_to`` stated here is SELF-EVIDENCING -- the same document that
     asserts the fact also states its own end, not a separate fact's
     ``"closes"`` block naming this one (that cross-fact case is
     ``_apply_model_emitted_closures``'s job). §16's provenance-closure gate
-    requires every closed validity window to carry ``invalidated_by``
-    regardless of which path closed it, so this mirrors ``native.py``'s own
-    self-evidencing precedent: the fact's own ``evidence_refs`` stand as the
-    invalidation provenance, because it genuinely is one document with both
-    endpoints -- not a fabricated reference.
+    requires every closed validity window to carry ``invalidated_by`` with
+    non-empty refs regardless of which path closed it, so this mirrors
+    ``native.py``'s own self-evidencing precedent: the fact's own
+    ``evidence_refs`` stand as the invalidation provenance, ONLY when that
+    fact actually has one -- a model that states ``valid_to`` without ever
+    citing an ``evidence_ref`` for the fact leaves its closure genuinely
+    uncited, and must fail the oracle's provenance-closure gate on that,
+    not be handed a fabricated empty-refs ``Invalidation`` that satisfies
+    the gate vacuously.
     """
     try:
         subject = EntityRef(
@@ -309,10 +325,15 @@ def _to_temporal_fact(raw: dict, *, indexed_at: datetime) -> TemporalFact | None
     valid_to = _parse_iso_date(temporal.get("valid_to"))
     recorded_at = _parse_iso_date(temporal.get("recorded_at"))
     invalidated_by = None
-    if valid_to is not None:
+    if valid_to is not None and evidence_refs:
         invalidated_by = Invalidation(
             refs=evidence_refs, invalidation_claim_kind=claim_kind
         )
+    # else: valid_to with no evidence_ref stays UNCITED -- invalidated_by
+    # stays None, and the oracle's provenance-closure gate fails this fact
+    # honestly (see _assert_provenance_closure's non-empty-refs check),
+    # rather than being handed a fabricated Invalidation(refs=()) that
+    # would satisfy an "is not None" check without citing anything real.
     return TemporalFact(
         fact_id=f"tf_extraction_{subject.id}_{predicate}_{obj.id}",
         subject_ref=subject,

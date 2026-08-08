@@ -248,6 +248,14 @@ O2_BLOCKING_OBSERVED = Oracle(
             predicate="blocks",
             object=gt.ISSUE_110,
             require_claim_kind=ClaimKind.OBSERVED,
+            # Same fact, same document, as its O2_blocking_valid twin's
+            # identical pin -- ground_truth's own evidence_refs for
+            # gt_blocks_101_110. Added under #1603 finding 5: without this,
+            # a single fact with ANY (including fabricated) evidence_ref
+            # satisfied this oracle's must_include, which made a
+            # provenance-integrity smoke test (fabricated-ref pass-through)
+            # unable to demonstrate anything for this oracle specifically.
+            require_evidence_refs=frozenset({"ev1_dep_101_110"}),
             label="ATL-101 blocker was known on 07-15",
         ),
     ),

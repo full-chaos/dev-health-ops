@@ -14,8 +14,8 @@ one; `ComparisonReport` cannot render one by construction.
   value -- see `harness/llm/client.py`'s module docstring and
   `src/dev_health_ops/llm/providers/openai_capabilities.py`'s
   `supports_temperature`)
-- run started: `2026-08-08T10:24:12.558200+00:00`
-- run finished: `2026-08-08T10:25:11.190430+00:00`
+- run started: `2026-08-08T11:14:21.663774+00:00`
+- run finished: `2026-08-08T11:15:19.350159+00:00`
 - dependency state for class (b): `CHAOS-3563 declared-state history MERGED as 33a7f85d0 (ops feature/chaos-3498-context-fabric, 2026-08-08): project_declared_state_history + durable floor table live via migrations 074/075, argMax read path with content-hash tie-break, three-outcome floor contract.`
 
 ## Headline honesty
@@ -32,33 +32,32 @@ one; `ComparisonReport` cannot render one by construction.
 baseline: baseline   vs   arm: extraction_llm
   class a: baseline 1/3, arm 0/3, delta -1  -- NOT COMPARABLE: 3 arm oracle(s) NOT MEASURED
   class b: baseline 0/2, arm 2/2, delta +2
-  class c: baseline 1/15, arm 1/15, delta +0  -- NOT COMPARABLE: 13 arm oracle(s) NOT MEASURED
+  class c: baseline 1/15, arm 2/15, delta +1  -- NOT COMPARABLE: 13 arm oracle(s) NOT MEASURED
   !! class (a) control did NOT hold: the baseline should win or tie on natively-answerable questions. Treat every other row in this report as unexplained until this is resolved.
 ```
 
 ## Interpretation notes
 
+This section is generated boilerplate about how to READ the report
+shape above, not a narrative about this specific run's numbers --
+run-specific observations (variance across runs, cross-run
+comparisons, etc.) belong in `docs/adr-draft.md`, which this file
+is never hand-edited to match; regenerating this artifact must
+always reproduce it byte-for-byte from this script (#1603 finding
+7) -- if a claim needs updating, it is either the shape guidance
+below, or it belongs in the ADR draft instead.
+
 - **Class (a) "control did NOT hold" here means NOT MEASURED, not
-  LOST.** `native_control_holds()` requires the candidate arm to have
-  measured every class-(a) oracle before it can confirm the control; this
-  round deliberately authored no class-(a) source material for the
-  extraction arm (only class (b) was in scope, per instruction 1), so the
-  arm reports NOT_RUN on all three, and `is_comparable` is correctly
-  `False`. The per-class line already says `NOT MEASURED`, not `lost` --
-  the banner below it is the same boolean stated more alarmingly. Read the
+  LOST.** `native_control_holds()` requires the candidate arm to
+  have measured every class-(a) oracle before it can confirm the
+  control; a class where the candidate has zero authored source
+  material reports NOT_RUN on every oracle in it, and
+  `is_comparable` is correctly `False` as a result. The per-class
+  line above already says `NOT MEASURED`, not `lost` -- the banner
+  beneath it is the same boolean stated more alarmingly. Read the
   per-class line, not just the banner.
-- **gpt-5-mini's extraction quality showed run-to-run variance in ad-hoc
-  post-sweep spot checks** (O3/O5 did not pass identically on a second,
-  separate run minutes later). The Responses API does not accept a
-  caller-selected `temperature` for this model family (see Run parameters
-  above), so some non-determinism is expected; whether/how to reduce it
-  (reasoning effort, majority vote across repeated calls) is an open ADR
-  question, not something this script papers over by re-running until a
-  run looks better -- the numbers above are the ONE sweep this artifact
-  reports.
-- **Class (c) baseline's 1/15** is `episode_readback` passing
-  `O4_prior_attempts` (structural episode data, no extraction needed);
-  **class (c) arm's 1/15** in THIS run is `extraction_llm` passing exactly
-  one of `O3_supersession`/`O5_conflicts_injected` (which one varied
-  between this run and the ad-hoc spot check above -- see the variance
-  note). Both are class-(c) oracles no class-(a)/(b) oracle overlaps with.
+- **No headline number, by construction.** `ComparisonReport` has
+  no method that aggregates across classes into one score --
+  per §15.2, weighting (a)x1 (b)x1 (c)x5 into one number would
+  flatter any extraction-capable candidate regardless of merit.
+  Read each class row on its own terms.

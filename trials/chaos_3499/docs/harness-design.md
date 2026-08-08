@@ -388,18 +388,31 @@ extract from -- required for class (b) to be structurally comparable at
 all, since `ClassComparison.is_comparable` needs zero candidate
 `NOT_MEASURED` in that class regardless of dependency state.
 
-One real measured sweep has been run (`run_measured_sweep.py`; full
+Two real measured sweeps have been run (`run_measured_sweep.py`; full
 parameters, per-class results, and interpretation notes:
-`docs/measured-trial-results.md`) with CHAOS-3563's declared-state history
-now merged, supplied through `DependencyState`. Class (b) is now
+`docs/measured-trial-results.md`, which holds the current, canonical run
+only) with CHAOS-3563's declared-state history now merged, supplied
+through `DependencyState`. The first sweep's prompt/filter contract had a
+defect (#1603 finding 1: the prompt told the model to omit `recorded_at`
+for a same-day fact, which the observed-time filter would read as "never
+observed"); the SECOND sweep re-earned every number under the fixed
+contract and is what the committed artifact holds -- see
+`docs/adr-draft.md` §3/§4 for the full run-1-vs-run-2 accounting, kept
+deliberately explicit rather than quietly overwritten. Class (b) is now
 COMPARABLE and shows the extraction candidate winning 2/2 against a
 baseline that scores 0/2 -- native's blocker code path has no valid-time
-concept at all. Classes (a)/(c) remain mostly NOT_RUN (source material was
-authored only where required by this round's scope; see the trial
-artifact and `docs/adr-draft.md` §5 for exactly what was and was not
-covered, with nothing silently dropped). `docs/adr-draft.md` is the first
-ADR skeleton: per-class results, open questions, deliberately no
-recommendation.
+concept at all -- and this result held under BOTH contracts. Classes
+(a)/(c) remain mostly NOT_RUN (source material was authored only where
+required by this round's scope; see the trial artifact and
+`docs/adr-draft.md` §5 for exactly what was and was not covered, with
+nothing silently dropped); class (c)'s pass count differed between the two
+sweeps (1/15 -> 2/15), feeding directly into `docs/adr-draft.md` §7's
+rebuild-equivalence evidence for CHAOS-3500 (same inputs, same model,
+non-reproducing results minutes apart -- not just version-to-version
+drift). `docs/adr-draft.md` is the first ADR skeleton: per-class results,
+§14 framing, closure-expressibility observations across four separate
+runs (two local, two cloud), a rebuild-equivalence evidence section, and
+open questions -- deliberately no recommendation.
 
 **Step 1 detail.** `harness/arms/native.py` and `harness/arms/episode_readback.py`
 run against the pinned corpus directly — `corpus/ground_truth.py` doubles as

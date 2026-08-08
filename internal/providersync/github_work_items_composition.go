@@ -15,7 +15,7 @@ import (
 )
 
 // ErrGitHubWorkItemSinkIncomplete reports a composite sink built while one or
-// more destination adapters are unported. It always wraps the destination names
+// more destination adapters are missing. It always wraps the destination names
 // so a caller learns WHICH surfaces are absent, never only that some are.
 var ErrGitHubWorkItemSinkIncomplete = errors.New(
 	"github work-item clickhouse sink is missing destination adapters",
@@ -88,12 +88,15 @@ func NewGitHubWorkItemClickHouseEffects(
 		WorkItemTeamAttributions: GitHubWorkItemTeamAttributionsClickHouseEffects{
 			Conn: conn, Lease: lease,
 		},
-
-		// investment_classifications_daily, investment_metrics_daily and
-		// issue_type_metrics_daily stay nil until their engines are ported.
-		// They are left unset rather than filled with a no-op adapter: a no-op
-		// would let complete() report a sink that silently writes nothing to
-		// three real tables.
+		InvestmentClassificationsDaily: GitHubInvestmentClassificationsClickHouseEffects{
+			Conn: conn, Lease: lease,
+		},
+		InvestmentMetricsDaily: GitHubInvestmentMetricsClickHouseEffects{
+			Conn: conn, Lease: lease,
+		},
+		IssueTypeMetricsDaily: GitHubIssueTypeMetricsClickHouseEffects{
+			Conn: conn, Lease: lease,
+		},
 	}
 	if missing := sink.MissingDestinations(); len(missing) > 0 {
 		return sink, fmt.Errorf(
@@ -103,8 +106,8 @@ func NewGitHubWorkItemClickHouseEffects(
 	return sink, nil
 }
 
-// githubWorkItemDerivedOwnedDestinations is what the ported builders speak for
-// today: the metric triplet plus the three derived landing surfaces. It is a
+// githubWorkItemDerivedOwnedDestinations is what the non-engine builders speak
+// for: the metric triplet plus the three derived landing surfaces. It is a
 // strict subset of githubWorkItemDerivedDestinations, which the route requires
 // in full.
 var githubWorkItemDerivedOwnedDestinations = func() []string {
@@ -116,8 +119,8 @@ var githubWorkItemDerivedOwnedDestinations = func() []string {
 	return owned
 }()
 
-// githubWorkItemDerivedEngineDestinations is what the unported engines owe: the
-// canonical derived set minus what the ported builders already speak for.
+// githubWorkItemDerivedEngineDestinations is the concrete engine's exact
+// ownership: the canonical derived set minus what the other builders speak for.
 // Derived rather than hand-listed, so it cannot disagree with either.
 var githubWorkItemDerivedEngineDestinations = func() []string {
 	owed := make([]string, 0, len(githubWorkItemDerivedDestinations))
@@ -129,11 +132,10 @@ var githubWorkItemDerivedEngineDestinations = func() []string {
 	return owed
 }()
 
-// githubWorkItemEngineDeriver is the PR-C seam for the three engine-dependent
-// destinations. It is deliberately UNEXPORTED and has no production setter: the
-// only thing that can install one is a test inside this package, which is what
-// lets the composition be proven end-to-end without fabricating the engines'
-// output in production. When the engines land they replace this seam.
+// githubWorkItemEngineDeriver is the per-day seam for the three
+// engine-dependent destinations. GitHubWorkItemEngineDeriver is its concrete
+// production implementation; narrow test doubles still use the interface to
+// prove composition failure modes without invoking either config engine.
 //
 // IT TAKES A DAY AND IS CALLED ONCE PER DAY. All three destinations it will
 // serve are per-day in Python and stamp `day=d` on every row: issue-type
@@ -141,13 +143,10 @@ var githubWorkItemDerivedEngineDestinations = func() []string {
 // investment metrics (:1433) are all built inside the :1238 day loop, from
 // state that resets each iteration. A seam invoked once for the whole window
 // could not express that shape -- and a merge that ASSIGNED rather than
-// appended would silently keep only the last day's rows the moment a real
-// per-day engine replaced the stub. Shaped correctly now, while the only
-// implementation is a test double and the change costs nothing.
-//
-// PR-C OBLIGATION: the ported engines emit rows for the day they are handed,
-// not for the window. The per-day merge accumulates across days exactly as it
-// does for the ported builders.
+// appended would silently keep only the last day's rows. The concrete engine
+// emits rows for the day it is handed, not for the window; this seam preserves
+// that contract while package tests inject hostile doubles for fail-closed
+// proofs.
 type githubWorkItemEngineDeriver interface {
 	Derive(
 		context.Context,
@@ -168,8 +167,49 @@ type GitHubWorkItemDeriver struct {
 	// omitting a row, which D17 ratifies as fail-closed.
 	Source githubWorkItemDerivationContextSource
 
-	// engine is nil in every production build; see githubWorkItemEngineDeriver.
+	// engine is deliberately private. Production callers can install it only
+	// through NewGitHubWorkItemDeriver, which loads both configs atomically.
+	// Package tests may still inject hostile doubles to prove fail-closed paths.
 	engine githubWorkItemEngineDeriver
+}
+
+// NewGitHubWorkItemDeriver is the only production construction path that can
+// install the config-driven engine. Both config paths are explicit: the worker
+// must not inherit a status-mapping environment fallback or silently turn a
+// blank investment path into the classifier's intentional missing-file
+// fallback. Once paths are present, each loader's Python-parity behavior is
+// preserved -- in particular, a named-but-missing investment file constructs
+// the legacy-default classifier exactly as Python does.
+func NewGitHubWorkItemDeriver(
+	conn driver.Conn,
+	lease providerfoundation.LeaseGuard,
+	statusMappingConfigPath string,
+	investmentConfigPath string,
+) (*GitHubWorkItemDeriver, error) {
+	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" ||
+		strings.TrimSpace(investmentConfigPath) == "" {
+		return nil, ErrInvalidConfiguration
+	}
+	statusMapping, err := LoadStatusMapping(statusMappingConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	investmentClassifier, err := NewInvestmentClassifier(investmentConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := NewGitHubWorkItemEngineDeriver(
+		statusMapping, investmentClassifier,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &GitHubWorkItemDeriver{
+		Source: githubWorkItemClickHouseDerivationContextSource{
+			Conn: conn, Lease: lease,
+		},
+		engine: engine,
+	}, nil
 }
 
 // githubWorkItemDerivedMaxBackfillDays bounds the day loop.
@@ -335,7 +375,7 @@ func (deriver GitHubWorkItemDeriver) Derive(
 		}
 	}
 	if missing := githubWorkItemMissingDerivedDestinations(derived); len(missing) > 0 {
-		// Fails closed rather than emitting empty slices for the unported
+		// Fails closed rather than emitting empty slices for unavailable
 		// destinations. An empty slice is indistinguishable from "evaluated,
 		// produced nothing", which is precisely the claim this port cannot
 		// honestly make about a metric whose engine does not exist yet.
@@ -370,11 +410,10 @@ func githubWorkItemMergeDerivedRows(
 // githubWorkItemMergeEngineRows accumulates the engine seam's per-day output.
 //
 // It deliberately does NOT pre-open the engine's destinations. A key is created
-// only by an engine that actually emitted for it, so a destination the engine
-// never produced stays ABSENT and the missing-destination check fails the run
-// closed. Pre-opening them would hand every unported destination an empty slice
-// -- indistinguishable from "evaluated, produced nothing", which is exactly the
-// fabrication this deriver exists to refuse.
+// only by the configured engine actually emitting it, so a missing or partial
+// engine leaves a destination ABSENT and the missing-destination check fails the
+// run closed. Pre-opening would fabricate "evaluated, produced nothing" for a
+// capability that never ran.
 //
 // Membership is checked against the ENGINE's destinations rather than against
 // presence in `derived`, so an engine restating a ported builder's destination

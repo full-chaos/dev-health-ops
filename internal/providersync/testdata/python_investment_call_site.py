@@ -2,8 +2,8 @@
 """Reflect the two premises the investment reachability tripwire stands on.
 
 The tripwire claims four of the real config's 44 rules cannot fire from the
-work-item call site. That claim rests entirely on two facts about PRODUCTION
-code, neither of which lives in the config file:
+work-item production-helper call site. That claim rests entirely on two facts
+about PRODUCTION code, neither of which lives in the config file:
 
   1. the call site builds its artifact as an inline dict literal whose keys are
      exactly ``labels``, ``component``, ``title`` and ``provider`` -- so

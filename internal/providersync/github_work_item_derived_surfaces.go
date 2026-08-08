@@ -10,12 +10,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// This file ports three of the nine Python-derived work-item destinations:
+// This file owns three of the nine Python-derived work-item destinations:
 // estimate_coverage_metrics_daily, work_item_team_attributions, and
-// work_item_state_durations_daily. The remaining three derived destinations
-// this lane owns (issue_type_metrics_daily and the two investment surfaces)
-// are computed inline inside job_work_items.py and depend on two config-driven
-// engines that have no Go port yet; they land separately.
+// work_item_state_durations_daily. The three config-engine surfaces live in
+// github_work_item_engine_destinations.go because they share a separate,
+// atomic construction contract.
 //
 // Per D16 these builders mirror Python bug-for-bug. Every divergence a reader
 // might mistake for a defect is called out at its site with the Python line it

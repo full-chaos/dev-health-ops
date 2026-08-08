@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +14,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// githubWorkItemUnportedDestinations is the engine-dependent set this lane
-// deliberately leaves nil. Stated once, asserted from several directions below,
-// so PR-C gets exactly one place to update and every dependent assertion moves
-// with it.
-var githubWorkItemUnportedDestinations = []string{
+// githubWorkItemEngineTestDestinations is the engine-dependent set exercised by
+// the composition doubles below.
+var githubWorkItemEngineTestDestinations = []string{
 	"investment_classifications_daily",
 	"investment_metrics_daily",
 	"issue_type_metrics_daily",
@@ -66,48 +63,31 @@ func TestNewGitHubWorkItemClickHouseEffectsRejectsMissingDependencies(t *testing
 	}
 }
 
-// TestNewGitHubWorkItemClickHouseEffectsWiresThirteenAndNamesTheUnportedThree is
-// the tripwire. It asserts the missing set is EXACTLY the three engine-dependent
-// destinations -- so when PR-C wires one, this test goes red and forces the
-// declaration to be updated rather than letting a stale "3 missing" claim ride.
-func TestNewGitHubWorkItemClickHouseEffectsWiresThirteenAndNamesTheUnportedThree(
-	t *testing.T,
-) {
+// TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen is the constructor
+// tripwire: every canonical destination must be concrete before the returned
+// sink may be used.
+func TestNewGitHubWorkItemClickHouseEffectsWiresAllSixteen(t *testing.T) {
 	t.Parallel()
 	sink, err := NewGitHubWorkItemClickHouseEffects(
 		stubWorkItemConn{}, githubWorkItemCompositionLease(),
 	)
-	if !errors.Is(err, ErrGitHubWorkItemSinkIncomplete) {
-		t.Fatalf("error=%v want ErrGitHubWorkItemSinkIncomplete", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	missing := sink.MissingDestinations()
-	if !reflect.DeepEqual(missing, githubWorkItemUnportedDestinations) {
-		t.Fatalf("missing=%v want=%v", missing, githubWorkItemUnportedDestinations)
+	if len(missing) != 0 {
+		t.Fatalf("missing=%v want none", missing)
 	}
-	// The names must reach the operator through the error, not only through a
-	// method nobody calls.
-	for _, destination := range githubWorkItemUnportedDestinations {
-		if !strings.Contains(err.Error(), destination) {
-			t.Errorf("error %q does not name %q", err.Error(), destination)
-		}
+	if !sink.complete() {
+		t.Fatal("fully constructed sink did not report itself complete")
 	}
-	if sink.complete() {
-		t.Fatal("a sink missing three destinations reported itself complete")
-	}
-	// Every destination NOT in the unported set must be wired. Without this the
-	// test above would still pass if the constructor forgot a fourth adapter
-	// and the unported list were widened to match.
 	for _, destination := range workItemRouteDestinations() {
 		adapter, known := sink.adapterForDestination(destination)
-		wantWired := !slices.Contains(githubWorkItemUnportedDestinations, destination)
 		if !known {
 			t.Fatalf("destination %q is not dispatchable", destination)
 		}
-		if wantWired && adapter == nil {
+		if adapter == nil {
 			t.Errorf("destination %q should be wired but is nil", destination)
-		}
-		if !wantWired && adapter != nil {
-			t.Errorf("destination %q should be unported but is wired", destination)
 		}
 	}
 	if sink.Lease == nil {
@@ -328,13 +308,11 @@ func TestGitHubWorkItemDerivedDaysFailsClosedOnUnusableWindows(t *testing.T) {
 	}
 }
 
-// TestGitHubWorkItemEngineSeamIsInvokedPerDay pins the shape PR-C has to fill.
-// All three engine destinations are per-day in Python and stamp `day=d`
-// (job_work_items.py:1346/:1387/:1433, inside the :1238 loop), so a seam called
-// once per window could not express them -- and a merge that assigned rather
-// than appended would keep only the last day once a real engine replaced the
-// stub. Both failures are invisible while the stub returns empty, which is why
-// this asserts the days reaching the seam and the accumulated row count.
+// TestGitHubWorkItemEngineSeamIsInvokedPerDay pins the concrete engine's outer
+// composition contract. All three engine destinations are per-day in Python
+// and stamp `day=d` (job_work_items.py:1346/:1387/:1433 inside the :1238 loop),
+// so a seam called once per window cannot express them and assignment would
+// keep only the last day. The hostile double makes both failures observable.
 func TestGitHubWorkItemEngineSeamIsInvokedPerDay(t *testing.T) {
 	t.Parallel()
 	claim := githubWorkItemOracleClaim()
@@ -362,7 +340,7 @@ func TestGitHubWorkItemEngineSeamIsInvokedPerDay(t *testing.T) {
 		t.Fatalf("engine saw days=%v want=%v", recorder.days, wantDays)
 	}
 	// Accumulated, not overwritten: one row per day per destination.
-	for _, destination := range githubWorkItemUnportedDestinations {
+	for _, destination := range githubWorkItemEngineTestDestinations {
 		rows := derived[destination]
 		if len(rows) != len(wantDays) {
 			t.Fatalf("%s has %d rows over %d days; the merge is not accumulating",
@@ -388,8 +366,8 @@ func (engine *githubWorkItemRecordingEngine) Derive(
 	_ githubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	engine.days = append(engine.days, day)
-	produced := make(map[string][]json.RawMessage, len(githubWorkItemUnportedDestinations))
-	for _, destination := range githubWorkItemUnportedDestinations {
+	produced := make(map[string][]json.RawMessage, len(githubWorkItemEngineTestDestinations))
+	for _, destination := range githubWorkItemEngineTestDestinations {
 		produced[destination] = []json.RawMessage{
 			json.RawMessage(`{"day":"` + day.Format("2006-01-02") + `"}`),
 		}
@@ -559,9 +537,8 @@ func (source *countingGitHubWorkItemDerivationContextSource) Load(
 	return githubWorkItemDerivationFacts{}, nil
 }
 
-// githubWorkItemStubEngine stands in for the unported engines so composition can
-// be proven today. It is test-only by construction: GitHubWorkItemDeriver.engine
-// is unexported and no production code path sets it.
+// githubWorkItemStubEngine isolates composition mechanics from the real config
+// engines so error, omission and multi-day accumulation paths stay focused.
 type githubWorkItemStubEngine struct{ err error }
 
 func (engine githubWorkItemStubEngine) Derive(
@@ -575,8 +552,8 @@ func (engine githubWorkItemStubEngine) Derive(
 	if engine.err != nil {
 		return nil, engine.err
 	}
-	produced := make(map[string][]json.RawMessage, len(githubWorkItemUnportedDestinations))
-	for _, destination := range githubWorkItemUnportedDestinations {
+	produced := make(map[string][]json.RawMessage, len(githubWorkItemEngineTestDestinations))
+	for _, destination := range githubWorkItemEngineTestDestinations {
 		// Stamped with the day it was handed: an engine call hoisted out of the
 		// loop, or a merge that assigned instead of appending, shows up as a
 		// missing or wrong-dated row rather than as an indistinguishable empty.
@@ -587,10 +564,9 @@ func (engine githubWorkItemStubEngine) Derive(
 	return produced, nil
 }
 
-// TestGitHubWorkItemDeriverFailsClosedWithoutTheUnportedEngines proves the
-// deriver refuses to fabricate the three destinations it cannot compute, and
-// names them.
-func TestGitHubWorkItemDeriverFailsClosedWithoutTheUnportedEngines(t *testing.T) {
+// TestGitHubWorkItemDeriverFailsClosedWithoutConfiguredEngine proves a caller
+// that bypasses the atomic constructor cannot fabricate engine-backed success.
+func TestGitHubWorkItemDeriverFailsClosedWithoutConfiguredEngine(t *testing.T) {
 	t.Parallel()
 	claim := githubWorkItemOracleClaim()
 	deriver := GitHubWorkItemDeriver{Source: &fakeGitHubWorkItemDerivationContextSource{}}
@@ -605,7 +581,7 @@ func TestGitHubWorkItemDeriverFailsClosedWithoutTheUnportedEngines(t *testing.T)
 	if derived != nil {
 		t.Fatalf("failed derivation returned rows: %v", derived)
 	}
-	for _, destination := range githubWorkItemUnportedDestinations {
+	for _, destination := range githubWorkItemEngineTestDestinations {
 		if !strings.Contains(err.Error(), destination) {
 			t.Errorf("error %q does not name %q", err.Error(), destination)
 		}
@@ -708,7 +684,7 @@ func (engine githubWorkItemOverreachingEngine) Derive(
 	produced := map[string][]json.RawMessage{
 		engine.destination: {},
 	}
-	for _, destination := range githubWorkItemUnportedDestinations {
+	for _, destination := range githubWorkItemEngineTestDestinations {
 		produced[destination] = []json.RawMessage{}
 	}
 	return produced, nil
@@ -822,7 +798,7 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 	t.Run("an engine covering only some destinations is refused", func(t *testing.T) {
 		t.Parallel()
 		partial := map[string][]json.RawMessage{
-			githubWorkItemUnportedDestinations[0]: {},
+			githubWorkItemEngineTestDestinations[0]: {},
 		}
 		deriver := GitHubWorkItemDeriver{
 			Source: &fakeGitHubWorkItemDerivationContextSource{},
@@ -833,28 +809,34 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 			t.Fatalf("error=%v want ErrGitHubWorkItemsDerivationsUnavailable", err)
 		}
 		// The still-missing two must be named; the one it did cover must not.
-		for _, destination := range githubWorkItemUnportedDestinations[1:] {
+		for _, destination := range githubWorkItemEngineTestDestinations[1:] {
 			if !strings.Contains(err.Error(), destination) {
 				t.Errorf("error %q does not name still-missing %q", err.Error(), destination)
 			}
 		}
-		if strings.Contains(err.Error(), githubWorkItemUnportedDestinations[0]) {
+		if strings.Contains(err.Error(), githubWorkItemEngineTestDestinations[0]) {
 			t.Errorf("error %q names %q, which the engine did cover",
-				err.Error(), githubWorkItemUnportedDestinations[0])
+				err.Error(), githubWorkItemEngineTestDestinations[0])
 		}
 	})
 
-	t.Run("a sink built from a rejected constructor call refuses every write", func(t *testing.T) {
+	t.Run("a deliberately corrupted sink refuses every write", func(t *testing.T) {
 		t.Parallel()
-		// The caller that drops the error. The constructor hands back a
-		// populated sink so MissingDestinations stays readable, so the
-		// guarantee has to come from the write path refusing -- not from the
-		// caller having checked.
+		// The complete constructor no longer has an expected-error path. Model
+		// partial construction by removing one concrete engine adapter after
+		// construction; the composite gate must still refuse EVERY destination,
+		// not merely the missing one.
 		sink, err := NewGitHubWorkItemClickHouseEffects(
 			stubWorkItemConn{}, githubWorkItemCompositionLease(),
 		)
-		if err == nil {
-			t.Fatal("constructor unexpectedly reported a complete sink")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.InvestmentMetricsDaily = nil
+		if !reflect.DeepEqual(
+			sink.MissingDestinations(), []string{githubInvestmentMetricsDestination},
+		) {
+			t.Fatalf("missing=%v want investment metrics", sink.MissingDestinations())
 		}
 		effects, buildErr := BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{})
 		if buildErr != nil {
@@ -873,8 +855,8 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 }
 
 // TestGitHubWorkItemDeriverComposesTheFullSixteenEffectManifest is the
-// composition proof: real builders for the six ported destinations, the stub
-// engine for the three unported ones, through the route's effect construction,
+// composition proof: real non-engine builders plus a focused engine stub,
+// through the route's effect construction,
 // into a complete sink that routes all sixteen.
 func TestGitHubWorkItemDeriverComposesTheFullSixteenEffectManifest(t *testing.T) {
 	t.Parallel()

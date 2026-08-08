@@ -280,8 +280,8 @@ func (sink GitHubWorkItemClickHouseEffects) adapterForDestination(
 }
 
 // MissingDestinations names every canonical destination this sink cannot serve,
-// in workItemRouteDestinations order. It is the typed form of "13 of 16": a
-// caller, a test, or an operator reading a constructor error learns WHICH
+// in workItemRouteDestinations order. A caller, a test, or an operator reading
+// a constructor error learns WHICH
 // surfaces are absent rather than only that something is.
 //
 // A destination the dispatch switch does not know is reported as missing rather
@@ -300,12 +300,11 @@ func (sink GitHubWorkItemClickHouseEffects) MissingDestinations() []string {
 	return missing
 }
 
-// complete gates every write and readback. It stays an ALL-SIXTEEN gate while
-// the three engine-dependent destinations are unported: a sink that served the
-// thirteen it has would land a generation whose derived surfaces are silently
-// absent, which is exactly the "evaluated and produced no rows" versus "the
-// composite forgot a destination" distinction GitHubWorkItemEffectRows exists
-// to preserve.
+// complete gates every write and readback. It remains an ALL-SIXTEEN gate: a
+// partially constructed sink would land a generation whose surfaces are
+// silently absent, which is exactly the "evaluated and produced no rows" versus
+// "the composite forgot a destination" distinction GitHubWorkItemEffectRows
+// exists to preserve.
 func (sink GitHubWorkItemClickHouseEffects) complete() bool {
 	return len(sink.MissingDestinations()) == 0
 }

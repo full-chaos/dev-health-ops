@@ -18,6 +18,8 @@ pretending otherwise would just be re-running the same list twice.
 
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from ..corpus import ground_truth as gt
@@ -92,15 +94,20 @@ def test_the_axis_pair_genuinely_diverges_in_ground_truth() -> None:
     If ground truth produced the same set on both axes, the pair would be two
     spellings of one question and an axis-blind arm would pass both.
     """
-    as_of = gt.AS_OF_JUL_15
-    common = {
-        "visibility": gt.ALPHA_FULL_VISIBILITY,
-        "predicates": frozenset({"blocks"}),
-    }
-    valid = {f.fact_key for f in gt.select(as_of=as_of, axis="valid_time", **common)}
-    observed = {
-        f.fact_key for f in gt.select(as_of=as_of, axis="observed_time", **common)
-    }
+    # partial, not a **kwargs dict: binding the shared arguments once still
+    # guarantees the two calls below differ in NOTHING but the axis (which
+    # is the whole point of the assertion), while keeping each argument's
+    # real type visible to a type checker. A plain dict literal of mixed
+    # value types erases to dict[str, object] and cannot be splatted into
+    # this signature.
+    select_blocks = partial(
+        gt.select,
+        as_of=gt.AS_OF_JUL_15,
+        visibility=gt.ALPHA_FULL_VISIBILITY,
+        predicates=frozenset({"blocks"}),
+    )
+    valid = {f.fact_key for f in select_blocks(axis="valid_time")}
+    observed = {f.fact_key for f in select_blocks(axis="observed_time")}
     assert valid != observed, (
         "valid-time and observed-time produce identical sets at the pinned "
         "instant; the axis-pair case is not testing anything"
@@ -154,11 +161,12 @@ def test_cross_tenant_material_is_never_derivable_for_the_alpha_org() -> None:
 
 
 def test_revocation_removes_exactly_the_revoked_repository() -> None:
-    common = {"as_of": gt.TRIAL_NOW, "axis": "valid_time"}
-    full = {
-        f.fact_key for f in gt.select(visibility=gt.ALPHA_FULL_VISIBILITY, **common)
-    }
-    revoked = {f.fact_key for f in gt.select(visibility=gt.ALPHA_WEB_REVOKED, **common)}
+    # partial for the same reason as the axis-pair test above: the two
+    # calls must differ ONLY in visibility, and a mixed-type dict literal
+    # cannot be splatted into select()'s typed signature.
+    select_at_now = partial(gt.select, as_of=gt.TRIAL_NOW, axis="valid_time")
+    full = {f.fact_key for f in select_at_now(visibility=gt.ALPHA_FULL_VISIBILITY)}
+    revoked = {f.fact_key for f in select_at_now(visibility=gt.ALPHA_WEB_REVOKED)}
     removed = full - revoked
     assert removed == {"gt_ep5_web_repo"}, (
         f"revoking repo_atlas_web removed {removed}; expected exactly the "

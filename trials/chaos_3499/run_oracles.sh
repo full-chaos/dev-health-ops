@@ -10,4 +10,11 @@
 # trustworthy and no trial result derived from them may be reported.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
-exec uv run pytest trials/chaos_3499/tests "$@"
+# --extra dev: the plain `uv run pytest` invocation this replaced depended on
+# whatever the ambient environment happened to have installed already. On a
+# freshly `git worktree add`-ed checkout with no prior sync there is no
+# guarantee pytest (or anything else this suite imports transitively) is
+# present, and the failure ("No module named pytest") gives no hint that the
+# fix is a sync flag. Naming the extra explicitly makes the dependency this
+# script actually has on it visible and self-sufficient.
+exec uv run --extra dev pytest trials/chaos_3499/tests "$@"

@@ -409,6 +409,62 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
         expect_failure="DID NOT RAISE",
     ),
+    # ---- CHAOS-3628: withdrawn evidence never reaches a packet ------------
+    Mutation(
+        mutation_id="withdrawn-evidence-presented-as-live-support",
+        defect=(
+            "revoked, redacted and deleted source records are returned by the "
+            "traversal and cited as live support. This was the arm's state "
+            "for its whole existence -- it had no evidence-state concept at "
+            "all -- and the CHAOS-3620 lane measured it on five corpus seeds"
+        ),
+        path=SRC / "readback.py",
+        anchor="        if not _is_citable(observation):",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3628_evidence_state.py::"
+            "TestWithdrawnEvidenceIsPresentInTheWorldAndAbsentFromThePacket",
+        ),
+        # The oracle's own words for the record, so the recorded RED line
+        # evidences the withdrawal rather than merely a red suite.
+        expect_failure="handles-withdrawn=",
+    ),
+    Mutation(
+        mutation_id="unreadable-evidence-state-reads-as-citable",
+        defect=(
+            "a state token the arm cannot read is ingested and then treated "
+            "as citable, so a record withdrawn under a vocabulary this "
+            "revision does not know is presented as live support -- the "
+            "stripped-attribute promotion, in the direction that "
+            "manufactures support"
+        ),
+        path=SRC / "projection.py",
+        anchor="    if state is not None and state not in _SOURCE_EVIDENCE_STATES:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3628_evidence_state.py::"
+            "TestAnUnreadableStateIsRefused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="issued-handle-accepted-with-no-evidence-state",
+        defect=(
+            "a source that issues handles loses its state attribute in "
+            "transit and the arm infers the record was never withdrawn. This "
+            "is the guard that makes readback's absent-state-is-citable "
+            "default safe; without it that default is the whole defect again, "
+            "reachable by data rather than by code"
+        ),
+        path=SRC / "projection.py",
+        anchor="    if handle is not None and state is None:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3628_evidence_state.py::"
+            "TestAnIssuedHandleMustDeclareItsState",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
     Mutation(
         mutation_id="observation-subjects-narrowed-instead-of-refused",
         defect=(

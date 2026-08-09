@@ -23,11 +23,18 @@ buries any real leak, and the withdrawn-evidence check
 (``authorization.py:278-279``) was unreachable dead code on arm packets
 because the handle lookup at ``:272`` missed first and ``continue``d.
 
-These tests use the oracle as the instrument. Two of them are the controls
-that keep the first one from being vacuous: a planted ``proj_quarry`` leak
-must flip the audit red, and a cited *revoked* world record must show up in
-``withdrawn_evidence_handles`` -- a field that could not be non-empty on an
-arm packet before this change.
+These tests use the oracle as the instrument, with a control that keeps the
+first one from being vacuous: a planted ``proj_quarry`` leak must flip the
+audit red and name it.
+
+A second control originally lived here — the shipped path citing a *revoked*
+record, to show ``withdrawn_evidence_handles`` becoming non-empty. CHAOS-3628
+removed that behaviour outright, so the control moved to
+``test_chaos_3628_evidence_state.py::TestTheOracleBackstopIsAlive``, which
+reaches the same check with a deliberately defective emitter instead. What
+remains here is the part CHAOS-3627 owns and CHAOS-3628 cannot supply: every
+cited handle resolves in ``EVIDENCE_BY_HANDLE``, which is the lookup whose
+missing made every check below it unreachable.
 """
 
 from __future__ import annotations
@@ -186,29 +193,35 @@ class TestTheAuthorizationOracleCanScoreAnArmPacket:
             sighting.entity_id for sighting in audit.unauthorized_disclosures
         }
 
-    def test_a_cited_revoked_world_record_is_reported_as_withdrawn(
-        self, helio, signer
-    ) -> None:
-        """The check at ``authorization.py:278-279`` comes alive.
+    def test_the_withdrawn_check_is_reachable_at_all(self, helio, signer) -> None:
+        """The check at ``authorization.py:278-279`` is no longer dead code.
 
-        It could not fire on an arm packet before: every cited handle missed
-        the ``EVIDENCE_BY_HANDLE`` lookup at ``:272`` and ``continue``d, so
-        the state test below it was unreachable. ``rv_vertex_revoked`` is a
-        REVOKED record the corpus plants on ``pr_vertex_401``; the arm
-        ingests it (the adapter deliberately does not filter withdrawn
-        material at the door) and cites it, so the oracle must now say so.
+        It could not fire on an arm packet before CHAOS-3627: every cited
+        handle missed the ``EVIDENCE_BY_HANDLE`` lookup at ``:272`` and
+        ``continue``d, so the state test below it was unreachable whatever the
+        packet contained.
+
+        This test originally proved that by letting the shipped path cite
+        ``rv_vertex_revoked`` and watching the oracle report it. **CHAOS-3628
+        removed that behaviour** — withdrawn evidence must never reach a
+        packet — so the proof moved rather than being deleted: see
+        ``test_chaos_3628_evidence_state.py::TestTheOracleBackstopIsAlive``,
+        which reaches the same check with a deliberately defective emitter.
+        What is asserted here is the narrower thing CHAOS-3627 is responsible
+        for and CHAOS-3628 cannot provide: every handle the packet cites
+        resolves in the world, which is the lookup that used to miss.
         """
 
         packet = _packet(_read(helio, "proj_vertex"), signer)
-        revoked = world.EVIDENCE_BY_SLUG["rv_vertex_revoked"]
-        assert revoked.state is world.EvidenceState.REVOKED
-
-        audit = audit_authorization(
-            packet, world.PRINCIPAL_ANALYST, case_id="chaos_3627_withdrawn"
+        cited = {
+            entry.evidence.evidence_ref_id
+            for entry in packet.evidence_coverage.evidence_index
+        }
+        assert cited, "no evidence was indexed; this would pass vacuously"
+        assert all(handle in world.EVIDENCE_BY_HANDLE for handle in cited), (
+            "a cited handle misses the world lookup, so every check below it "
+            "in audit_authorization is unreachable again"
         )
-
-        assert revoked.handle in audit.withdrawn_evidence_handles
-        assert not audit.is_clean
 
 
 class TestEvidenceCitesTheHandleItWasIssued:
@@ -424,9 +437,13 @@ class TestProvenanceIsRefusedRatherThanRepaired:
         )
 
     def test_a_handle_with_no_record_id_is_refused(self) -> None:
+        # The state is supplied so that CHAOS-3628's own requirement (a
+        # handle-issuing source must declare state) is satisfied and cannot be
+        # what raises. One guard per probe, or neither is observed.
         batch = self._observation(
             source_evidence_handle=world.evidence_handle("rev_probe"),
             source_evidence_entity_id="proj_probe",
+            source_evidence_state="active",
         )
         with pytest.raises(ProjectionError, match="one half of the source evidence"):
             build_projection(batch)
@@ -438,7 +455,9 @@ class TestProvenanceIsRefusedRatherThanRepaired:
         record looks, to a reader, like it carried provenance.
         """
 
-        batch = self._observation(source_evidence_id="rev_probe")
+        batch = self._observation(
+            source_evidence_id="rev_probe", source_evidence_state="active"
+        )
         with pytest.raises(ProjectionError, match="one half of the source evidence"):
             build_projection(batch)
 
@@ -453,6 +472,7 @@ class TestProvenanceIsRefusedRatherThanRepaired:
             source_evidence_handle="EV1_NOT-THE-GRAMMAR",
             source_evidence_id="rev_probe",
             source_evidence_entity_id="proj_probe",
+            source_evidence_state="active",
         )
         with pytest.raises(ProjectionError, match="EvidenceHandle grammar"):
             build_projection(batch)

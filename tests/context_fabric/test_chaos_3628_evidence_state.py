@@ -180,22 +180,163 @@ class TestWithdrawnEvidenceIsPresentInTheWorldAndAbsentFromThePacket:
         packet = _packet(_read(helio, seed, principal), signer)
         audit = audit_authorization(packet, principal, case_id="chaos_3628")
 
-        assert audit.withdrawn_evidence_handles == ()
+        # ``summary()`` as the message on purpose: it renders the oracle's own
+        # ``handles-withdrawn=[...]`` clause, so a failure here evidences the
+        # withdrawal rather than printing an empty-vs-non-empty tuple that
+        # says nothing about which check fired.
+        assert audit.withdrawn_evidence_handles == (), audit.summary()
 
-    def test_the_withdrawn_count_is_its_own_number(self, helio, signer) -> None:
+    def test_the_withdrawn_count_moves_independently_of_the_grant(
+        self, helio, signer
+    ) -> None:
         """Not folded into ``authorization_filtered_count``.
 
         A shared counter would say "the caller's grant removed this" about
         material the caller's grant had nothing to do with, and a reader
         checking why their answer is thin would be told the wrong thing.
+
+        Asserting the two numbers merely *differ* would be satisfied by an
+        accident of arithmetic — on ``proj_beacon`` under the analyst they are
+        both 1. Each is therefore moved on its own: a principal who can see
+        everything still has withdrawn evidence removed (grant 0, withdrawn
+        non-zero), and a restricted principal still has the grant remove
+        something (grant non-zero) — both ends of the pair, seeded.
         """
 
-        readout = _read(helio, "proj_beacon", world.PRINCIPAL_ANALYST)
+        unrestricted = _read(helio, "proj_beacon", world.PRINCIPAL_COMPLIANCE)
+        assert unrestricted.authorization_filtered_count == 0
+        assert unrestricted.withdrawn_evidence_filtered_count > 0
 
-        assert readout.withdrawn_evidence_filtered_count > 0
-        assert readout.withdrawn_evidence_filtered_count != (
-            readout.authorization_filtered_count
+        restricted = _read(helio, world.TEAM_CINDER, world.PRINCIPAL_ANALYST)
+        assert restricted.authorization_filtered_count > 0
+        assert restricted.withdrawn_evidence_filtered_count == 0
+
+
+def _probe_batch(**attributes):
+    """CHAOS-3627's fix round added a third member to the source-evidence
+    triple (the entity the RECORD is about), so a handle-bearing probe must
+    supply it or the pairing guard raises before the state guard is reached.
+    Defaulted here rather than at each call site: these probes exist to
+    exercise ONE guard each, and a probe that trips a sibling proves nothing
+    about the guard it names.
+    """
+
+    if "source_evidence_handle" in attributes:
+        attributes.setdefault("source_evidence_entity_id", "proj_state_probe")
+    """One entity and one observation about it, with the given attributes.
+
+    Built here rather than borrowed from the corpus so a state probe cannot
+    accidentally be answered by some other property of a real record.
+    """
+
+    from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+    from dev_health_ops.context_fabric.graph_arm.records import (
+        CanonicalRef,
+        EntityRecord,
+        IngestionBatch,
+        ObservationRecord,
+    )
+    from dev_health_ops.context_fabric.graph_arm.vocabulary import (
+        GraphEntityKind,
+        GraphObservationKind,
+    )
+
+    return IngestionBatch(
+        org_id=world.ORG_HELIO,
+        entities=(
+            EntityRecord(
+                org_id=world.ORG_HELIO,
+                kind=GraphEntityKind.PROJECT,
+                canonical_id="proj_state_probe",
+                display_label="State probe",
+                source_class=SourceClass.WORK_GRAPH,
+                observed_at=world.WINDOW_END,
+            ),
+        ),
+        observations=(
+            ObservationRecord(
+                org_id=world.ORG_HELIO,
+                kind=GraphObservationKind.REVIEW,
+                canonical_id="rev_state_probe",
+                title="probe review",
+                source_class=SourceClass.REVIEW,
+                observed_at=world.WINDOW_END,
+                subjects=(
+                    CanonicalRef(
+                        kind=GraphEntityKind.PROJECT,
+                        canonical_id="proj_state_probe",
+                    ),
+                ),
+                attributes=attributes,
+            ),
+        ),
+    )
+
+
+class TestAnUnreadableStateIsRefused:
+    """A state the arm cannot read must not become a citable record.
+
+    The only available default is "citable", so an unrecognised token would
+    make a record withdrawn under a newer vocabulary indistinguishable from a
+    live one. Refused at ingestion, where the record is still in scope.
+    """
+
+    def test_a_state_outside_the_arms_vocabulary_is_refused(self) -> None:
+        from dev_health_ops.context_fabric.graph_arm.projection import ProjectionError
+
+        batch = _probe_batch(
+            source_evidence_handle=world.evidence_handle("rev_state_probe"),
+            source_evidence_id="rev_state_probe",
+            source_evidence_state="quarantined",
         )
+        with pytest.raises(ProjectionError, match="source evidence state"):
+            build_projection(batch)
+
+    def test_the_states_the_corpus_uses_are_all_accepted(self) -> None:
+        """The other half: the refusal is narrow, not a blanket rejection.
+
+        Without this, deleting the whole vocabulary check would still look
+        correct — everything would be refused and the test above would pass.
+        """
+
+        for state in world.EvidenceState:
+            batch = _probe_batch(
+                source_evidence_handle=world.evidence_handle("rev_state_probe"),
+                source_evidence_id="rev_state_probe",
+                source_evidence_state=str(state),
+            )
+            assert build_projection(batch).observation_nodes()
+
+
+class TestAnIssuedHandleMustDeclareItsState:
+    """What makes readback's absent-state default safe.
+
+    ``_is_citable`` treats an absent state as citable, which is correct for a
+    source with no withdrawal concept and catastrophic for one whose state was
+    dropped in transit. The two are only distinguishable because a
+    handle-issuing source is required to declare state here.
+    """
+
+    def test_a_handle_without_a_state_is_refused(self) -> None:
+        from dev_health_ops.context_fabric.graph_arm.projection import ProjectionError
+
+        batch = _probe_batch(
+            source_evidence_handle=world.evidence_handle("rev_state_probe"),
+            source_evidence_id="rev_state_probe",
+        )
+        with pytest.raises(ProjectionError, match="no source_evidence_state"):
+            build_projection(batch)
+
+    def test_a_source_that_issues_no_handle_needs_no_state(self) -> None:
+        """The legitimate absent-state case, kept working.
+
+        A source with no withdrawal concept — the arm's own fixture world
+        before CHAOS-3627, and any provider that issues no handles — must
+        still be ingestible, or the requirement above would be a ban on
+        sources rather than a guard on provenance.
+        """
+
+        assert build_projection(_probe_batch()).observation_nodes()
 
 
 class TestTheOracleBackstopIsAlive:

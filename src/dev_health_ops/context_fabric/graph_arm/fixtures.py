@@ -40,9 +40,11 @@ from .vocabulary import (
     SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    SOURCE_EVIDENCE_STATE_ATTRIBUTE,
     AliasKind,
     GraphEntityKind,
     GraphObservationKind,
+    SourceEvidenceState,
 )
 
 __all__ = [
@@ -114,6 +116,14 @@ def _issued(
                 SOURCE_EVIDENCE_ENTITY_ATTRIBUTE: (
                     observation.subjects[0].canonical_id
                 ),
+                # CHAOS-3628. This world holds no withdrawn records, so every
+                # one of them is ACTIVE -- stated rather than omitted, because
+                # a source that issues handles is a source that models record
+                # state, and the projection refuses the pair without it. An
+                # omitted state would have to default, and the only available
+                # default is "citable", which is the direction that
+                # manufactures support.
+                SOURCE_EVIDENCE_STATE_ATTRIBUTE: str(SourceEvidenceState.ACTIVE),
             },
         )
         for observation in observations

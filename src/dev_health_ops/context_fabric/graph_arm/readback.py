@@ -64,7 +64,17 @@ from .backend import parse_triple_fact
 from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .identity import assert_partition_matches_org
 from .projection import READBACK_ATTRIBUTE_KEYS, GraphProjection
-from .vocabulary import GraphEntityKind, GraphObservationKind
+from .vocabulary import (
+    CITABLE_EVIDENCE_STATES,
+    SOURCE_EVIDENCE_STATE_ATTRIBUTE,
+    GraphEntityKind,
+    GraphObservationKind,
+)
+
+#: The stringified citable states, matched against the readback attribute.
+#: Derived from the vocabulary rather than typed out, so a new citable state
+#: cannot be added there and silently not honoured here.
+_CITABLE_STATE_VALUES = frozenset(str(state) for state in CITABLE_EVIDENCE_STATES)
 
 __all__ = [
     "AuthorizationDerivationNotImplementedError",
@@ -204,6 +214,15 @@ class InvestigationReadout:
     observations: tuple[DiscoveredObservation, ...] = ()
     authorized_entity_ids: tuple[str, ...] = ()
     authorization_filtered_count: int = 0
+    #: How many observations the SOURCE withdrew -- revoked, redacted or
+    #: deleted -- that this traversal reached and did not return.
+    #:
+    #: CHAOS-3628, and deliberately not folded into
+    #: ``authorization_filtered_count``. They answer different questions: one
+    #: is what the caller's own grant removed, the other is what the source
+    #: took back. A single number would tell a caller investigating a thin
+    #: answer that their permissions were the cause when they were not.
+    withdrawn_evidence_filtered_count: int = 0
     entities_truncated: bool = False
     paths_truncated: bool = False
     #: Evidence loss gets its OWN flag. Adversarial review found the evidence
@@ -597,6 +616,7 @@ def _traverse(
             queue.append((other, extended))
 
     visible_observations: list[DiscoveredObservation] = []
+    withdrawn: set[str] = set()
     for observation in adjacency.observations:
         subjects = tuple(
             subject
@@ -609,6 +629,20 @@ def _traverse(
             if subject not in reached and subject not in authorized
         )
         if not subjects:
+            continue
+        # CHAOS-3628. Withdrawn material stops here, at the same boundary the
+        # caller's grant stops at, and for the same reason: everything past
+        # this point -- driver discovery, cohort construction, the evidence
+        # index -- treats what it receives as presentable. Excluding it later
+        # would leave a driver resting on a revoked record and merely not
+        # showing it, and support that exists but is invisible is worse than
+        # support that does not exist.
+        #
+        # Counted separately from the authorization filter. A caller asking
+        # why their answer is thin must not be told their own grant removed
+        # something the SOURCE withdrew.
+        if not _is_citable(observation):
+            withdrawn.add(observation.canonical_id)
             continue
         # ``replace`` rather than a field-by-field rebuild. The rebuild
         # silently dropped ``attributes`` the moment the readout grew them,
@@ -652,6 +686,7 @@ def _traverse(
         ),
         authorized_entity_ids=tuple(sorted(authorized)),
         authorization_filtered_count=len(filtered),
+        withdrawn_evidence_filtered_count=len(withdrawn),
         entities_truncated=entities_truncated,
         paths_truncated=paths_truncated,
         evidence_truncated=evidence_truncated,
@@ -662,6 +697,25 @@ def _traverse(
         observation_attachment_available=observation_attachment_available,
         embedder_model_id=embedder_model_id,
     )
+
+
+def _is_citable(observation: DiscoveredObservation) -> bool:
+    """Whether this observation may be presented as live support.
+
+    CHAOS-3628. Absent state means the source declares none — the arm's own
+    fixture world before it started issuing handles, and any source with no
+    withdrawal concept. That is treated as citable, and it is safe to do so
+    ONLY because the projection refuses a source-issued handle that arrives
+    without a state (``_validate_source_evidence``): a source that models
+    record state cannot lose it in transit and land here looking like a source
+    that never had one. Without that refusal this default would be the classic
+    stripped-attribute promotion, in the direction that manufactures support.
+    """
+
+    state = observation.attributes.get(SOURCE_EVIDENCE_STATE_ATTRIBUTE)
+    if state is None:
+        return True
+    return state in _CITABLE_STATE_VALUES
 
 
 def _readback_attributes(attributes: Mapping[str, object]) -> dict[str, str]:
@@ -841,6 +895,7 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_attr_source_evidence_entity_id AS attr_source_evidence_entity_id,
        n.cf_attr_source_evidence_handle AS attr_source_evidence_handle,
        n.cf_attr_source_evidence_id AS attr_source_evidence_id,
+       n.cf_attr_source_evidence_state AS attr_source_evidence_state,
        n.cf_attr_superseded_by AS attr_superseded_by
 """
 
@@ -876,6 +931,7 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_attr_source_evidence_entity_id AS attr_source_evidence_entity_id,
        n.cf_attr_source_evidence_handle AS attr_source_evidence_handle,
        n.cf_attr_source_evidence_id AS attr_source_evidence_id,
+       n.cf_attr_source_evidence_state AS attr_source_evidence_state,
        n.cf_attr_superseded_by AS attr_superseded_by
 """
 

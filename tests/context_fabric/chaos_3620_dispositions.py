@@ -294,14 +294,26 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "test_the_production_expansion_path_is_gated_on_that_verification",
         notes=(
             "Upgraded after review: org-scoping alone is not substitution. "
-            "The within-organization attack is now executed in both "
-            "directions -- a record wearing another record's legitimately "
-            "minted handle, and a record relabelled to a different subject "
-            "under its own handle -- and both are refused, because the handle "
-            "is an HMAC over the record's own payload. The consumer-side gate "
-            "that consults it (evidence_service.py:517-528, collapsing to "
-            "UNAUTHORIZED/not_found) is asserted to still call it, so the "
-            "check being exercised is the one production uses.",
+            "The within-organization attack is executed in both directions -- "
+            "a record wearing another record's legitimately minted handle, "
+            "and a record relabelled to a different subject under its own "
+            "handle -- and both are refused, because the handle is an HMAC "
+            "over the record's own payload. That half is measured here.",
+            "WHAT THIS SUITE DOES NOT ESTABLISH, stated because the earlier "
+            "wording overclaimed it. The check that the production gate still "
+            "consults the signer (evidence_service.py:517-528, collapsing to "
+            "UNAUTHORIZED/not_found) is a SOURCE READ. It sees the call and "
+            "not its use, so it cannot catch a gate that computes verify() "
+            "and ignores the result. It is kept because it catches the "
+            "likelier regression -- the call deleted outright -- and it is "
+            "NOT evidence that the production path behaves correctly.",
+            "BEHAVIOURAL COVERAGE OF THE PRODUCTION PATH BELONGS TO "
+            "tests/api/dev/test_evidence_service.py, which exercises the "
+            "service rather than reading it. A5's claim here is scoped to "
+            "substitution being refused by the signer; the production "
+            "behaviour is credited to that owner, and "
+            "test_the_production_expansion_path_is_gated_on_that_verification "
+            "asserts the file exists so the credit cannot dangle.",
         ),
     ),
     _req(

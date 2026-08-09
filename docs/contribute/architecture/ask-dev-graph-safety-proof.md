@@ -87,13 +87,14 @@ Linear blocker.
 | `not_accepted` | 2 | Blocked on another issue; never scored as a pass. |
 | `unmeasured` | 10 | Not measured, with a stated reason rather than a proxy. |
 
-Three of those nine were `proven` before adversarial review and were
-downgraded rather than defended: `A1` (the cross-*repository* half is not
-constructible — the corpus plants no repository near-duplicate), `O3` (four
-of the six named counts reach telemetry; candidate and result counts do not)
-and `P7` (no corpus entity has partly-restricted multi-source evidence, so
-the case cannot be built here). Each downgrade names what *is* established,
-so the work is not lost — only the claim is corrected.
+Three of the ten `unmeasured` entries were `proven` before adversarial
+review and were downgraded rather than defended: `A1` (the
+cross-*repository* half is not constructible — the corpus plants no
+repository near-duplicate), `O3` (four of the six named counts reach
+telemetry; candidate and result counts do not) and `P7` (no corpus entity
+has partly-restricted multi-source evidence, so the case cannot be built
+here). Each downgrade names what *is* established, so the work is not lost —
+only the claim is corrected.
 
 `X5` went the other way. It was downgraded on the same pass, then **built**
 on the orchestrator's ruling that the ADR cannot leave a core bullet open:

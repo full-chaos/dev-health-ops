@@ -110,6 +110,7 @@ from .investigation_shadow import (
     InvestigationPacketProducer,
     InvestigationShadow,
     InvestigationShadowRecord,
+    run_window,
 )
 from .no_match_terminal import (
     attested_strings,
@@ -252,6 +253,46 @@ def _project_scope_from_ref(
         comparison_range=base_scope.comparison_range,
         surface_context=None,
     )
+
+
+def _committed_subject_ref(
+    preflight_result: SubjectPreflightResult | None,
+) -> DevEntityRefV2 | None:
+    """The one subject preflight committed, as a canonical v2 entity ref.
+
+    CHAOS-3618 PR 2 originally handed the shadow seam
+    ``preflight_result.committed_resolution`` here, which is a
+    ``DevScopeResolution``. ``FinishedRunContext.committed_subject`` is
+    typed ``Any`` -- the seam must not couple to any one arm's view of a
+    run -- so nothing caught it, and the native projection reads
+    ``.entity_id`` off this value: every run with a committed subject would
+    have died on ``AttributeError`` inside the arm and been filed as a
+    ``PROJECTION_FAULT``, i.e. as a defect in the baseline rather than in
+    its wiring. Pinned by ``test_the_committed_subject_is_a_canonical_
+    entity_ref``.
+
+    ``committed_resolution`` is still the gate, because it is non-``None``
+    exactly when one *distinct* subject was committed. The ref itself comes
+    from the ledger, which is where a committed ``DevEntityRefV2`` actually
+    lives (``DevResolutionEntry.committed_entity_ref``, non-``None`` only
+    for an ``EXACT_MATCH``). Anything other than exactly one distinct
+    committed ref returns ``None`` rather than picking one: an arm told the
+    wrong subject was committed would attribute the whole packet to it.
+    """
+
+    if preflight_result is None or preflight_result.committed_resolution is None:
+        return None
+    ledger = preflight_result.ledger
+    if ledger is None:
+        return None
+    committed = {
+        entry.committed_entity_ref.entity_id: entry.committed_entity_ref
+        for entry in ledger.latest_by_mention().values()
+        if entry.committed_entity_ref is not None
+    }
+    if len(committed) != 1:
+        return None
+    return next(iter(committed.values()))
 
 
 def _named_entity_phrases(text: str) -> frozenset[str]:
@@ -1151,6 +1192,23 @@ class DevOrchestrator:
             nonlocal terminal_written
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+
+            def terminal_resolution() -> DevScopeResolution | None:
+                """The scope decision THIS terminal reports, from one place.
+
+                Read lazily, so it sees ``answer`` after the disclosure
+                rewrites below rather than before. Two callers need it --
+                the ``OrchestratorResult`` this run publishes, and the
+                CHAOS-3618 shadow seam's bounded window -- and they must not
+                be able to disagree: an arm handed a window derived from a
+                different scope decision than the one the run published
+                would be projecting a run that never happened.
+                """
+
+                if answer is not None:
+                    return answer.resolved_scope
+                return published_resolution()
+
             # CHAOS-3497 part 2: disclose a widening in PROSE, not only in
             # `dev_scope_resolution.v1.fallbacks`.
             #
@@ -1724,6 +1782,13 @@ class DevOrchestrator:
                         frame=frame,
                         investigation_result=investigation_result,
                         preflight_result=preflight_result,
+                        # The run's OWN scope decision, and therefore its own
+                        # bounded window -- the same value this terminal
+                        # publishes on the wire below. Reading the window off
+                        # anything else (``request.scope``, a clock) would
+                        # hand an arm a time context the run's queries never
+                        # used.
+                        scope_resolution=terminal_resolution(),
                     )
             await self._recorder.terminal(
                 state=state,
@@ -1770,11 +1835,11 @@ class DevOrchestrator:
                 #
                 # On a no-answer terminal it is ``published_resolution()``
                 # below -- the resolution this run actually executed under.
-                scope_resolution=(
-                    answer.resolved_scope
-                    if answer is not None
-                    else published_resolution()
-                ),
+                #
+                # CHAOS-3618 PR 2 moved the expression itself into
+                # ``terminal_resolution()`` so the shadow seam's bounded
+                # window is derived from THIS value and cannot drift from it.
+                scope_resolution=terminal_resolution(),
             )
 
         def error(code: str, message: str, *, retryable: bool = False) -> DevError:
@@ -3706,6 +3771,7 @@ class DevOrchestrator:
         frame: DevAnswerFrame,
         investigation_result: DevInvestigationResult | None,
         preflight_result: SubjectPreflightResult | None,
+        scope_resolution: DevScopeResolution | None,
     ) -> None:
         """Build one arm's packet and hand it to the shared seam.
 
@@ -3720,6 +3786,13 @@ class DevOrchestrator:
         if shadow is None or producer is None or not shadow.enabled:
             return None
         try:
+            # ``None`` when the run ended before scope resolution completed.
+            # Passed through as ``None`` rather than substituted, because a
+            # window is the packet's bounded time context and an arm that
+            # accepted a manufactured one would date every claim in it to a
+            # query nothing ran. Refusing is the arm's job, not this
+            # method's -- see ``run_window``.
+            window = run_window(scope_resolution)
             context = FinishedRunContext(
                 run_id=run_id,
                 organization_id=org_id,
@@ -3730,11 +3803,9 @@ class DevOrchestrator:
                 ),
                 ledger=preflight_result.ledger if preflight_result else None,
                 subject_set=preflight_result.subject_set if preflight_result else None,
-                committed_subject=(
-                    preflight_result.committed_resolution if preflight_result else None
-                ),
-                window_start=None,
-                window_end=None,
+                committed_subject=_committed_subject_ref(preflight_result),
+                window_start=window[0] if window else None,
+                window_end=window[1] if window else None,
                 # THE load-bearing line of this method. Canonical evidence
                 # comes from the SERVER-OWNED FRAME, which the server built
                 # from what the evidence service returned -- never from the

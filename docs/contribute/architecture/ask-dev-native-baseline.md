@@ -9,7 +9,9 @@ source_of_truth:
   - src/dev_health_ops/api/dev/investigation_plans/relationship_matrix.py
   - tests/context_fabric/test_chaos_3618_capabilities.py
   - tests/context_fabric/test_chaos_3618_projection.py
+  - tests/context_fabric/test_chaos_3618_native_producer.py
   - tests/api/dev/test_chaos_3618_investigation_shadow.py
+  - tests/api/dev/test_chaos_3618_shadow_wiring.py
 applicability: current
 lifecycle: active
 ---
@@ -261,16 +263,81 @@ this module into it inflates that number with our own bugs. Independent
 fuzzing produced ~20 crashes that all reported as contract rejections
 before the split.
 
+## The arm connected to the seam
+
+The orchestrator calls the seam once, after the frame and any narrative have
+persisted, from inside `finish()`. It holds two **separate** injected
+values — an `InvestigationShadow` and an `InvestigationPacketProducer` — and
+never imports an arm: wiring the graph arm later changes the construction
+site and nothing in the run path. Both are `None` when off, so a flag-off
+process reaches the seam through no branch at all, only through a missing
+collaborator.
+
+`native_arm/producer.py` is the native side of that Protocol. It adapts one
+`FinishedRunContext` into a `NativeProjectionInput` and calls the
+projection. It performs no queries and holds no service handle: a producer
+that could fetch would no longer be measuring what the run assembled.
+
+Four values are load-bearing at that call site:
+
+- **`canonical_evidence` comes from the server-owned frame**, never from the
+  packet the producer is about to build. The seam digests every cited record
+  against this sequence, so sourcing it from the packet would compare a value
+  to itself — a check that cannot fail while wearing the appearance of one.
+- **The bounded window comes from the run's own scope decision**
+  (`investigation_shadow.run_window`), the same `DevScopeResolution` the
+  terminal publishes on the wire. `None` when the run ended before scope
+  resolution, and the arm then refuses to project rather than substituting
+  one: a packet dated to a window nothing queried makes every temporal claim
+  in it false. `NativeProjectionInput` previously defaulted the window to
+  1970-01-01, which is exactly that failure with a valid-looking interval.
+- **The committed subject is a `DevEntityRefV2`**, read off the resolution
+  ledger — not the `DevScopeResolution` the subject was committed as.
+- **`DevInvestigationResult.run_id` is a minted `ServerHandle`**, not the
+  orchestrator's correlation key. Anything comparing the two folds one
+  through `investigation_plans.executor.investigation_result_run_handle`.
+
+Two further gap reasons name the refusals: `no_bounded_window` and
+`no_interpreted_question`. They are kept distinct from
+`no_subject_material` because a trial counting reasons must be able to tell
+"the product understood the question and found nothing" from "the product
+never got that far".
+
+## Where a comparison record goes
+
+`PersistenceRunRecorder.record_investigation_shadow` **logs** the record.
+There is no `dev_investigation_shadow` table, and this is a declared gap
+rather than an oversight: adding a migration for a trial artefact before the
+trial has read a single row would freeze a shape nothing has used.
+
+CHAOS-3619 must therefore do one of two things — parse the logged shape, or
+land the table. Because the first is a real option, the shape is a contract:
+it carries `schema_version: investigation_shadow_record.v1`, its fields are
+derived from the record dataclass rather than hand-listed, and the whole
+payload is serialised **into the log message** as well as into `extra`.
+That last part matters: `configure_logging` renders extras only on its JSON
+path, and `LOG_JSON=false` installs a plain handler that discards them
+silently — a consumer would then read a healthy-looking stream with no
+records in it.
+
 ## Flags
 
-`CONTEXT_FABRIC_SHADOW_SYNTHESIS_ENABLED` gates the shadow seam. It is off
-unless explicitly set to `1`, matching the CHAOS-3617 convention, and it is
-listed in `tests/_env_isolation.py`'s scrub set so an ambient value on a
-developer machine cannot leak into a test run.
+`CONTEXT_FABRIC_SHADOW_SYNTHESIS_ENABLED` gates the shadow seam and
+`CONTEXT_FABRIC_NATIVE_PROJECTION_ENABLED` gates the native producer. Both
+are off unless explicitly set to `1`, matching the CHAOS-3617 convention,
+and both are listed in `tests/_env_isolation.py`'s scrub set so an ambient
+value on a developer machine cannot leak into a test run.
 
-There is deliberately **no** flag for the projection itself. It is a pure
-function that nothing calls yet; a flag gating nothing is dead configuration
-that reads as a control. One arrives with the orchestrator wiring.
+They are independent on purpose: the seam is machinery and the producer is
+one arm, so a trial can switch the seam on with the graph arm's producer
+without either flag implying the other.
+`native_arm.producer.native_shadow_wiring` reads both and returns the pair
+`BoundedDevRuntime` takes.
+
+**Not yet called from `production_runtime.py`** — stated plainly, because
+the flags therefore gate a tested constructor rather than a live path. No
+deployed process reads them today. CHAOS-3619 makes that call when it needs
+the trial to run.
 
 ## Historical slice
 

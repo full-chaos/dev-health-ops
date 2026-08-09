@@ -20,7 +20,10 @@ cannot fail, wearing the appearance of one.
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Mapping
+from dataclasses import fields
 from typing import Any
 
 import pytest
@@ -199,6 +202,7 @@ async def test_canonical_evidence_comes_from_the_run_not_the_packet() -> None:
         frame=frame,
         investigation_result=None,
         preflight_result=None,
+        scope_resolution=None,
     )
     [context] = producer.contexts
     assert frame.evidence, "fixture must carry evidence or this proves nothing"
@@ -230,6 +234,92 @@ async def test_the_context_is_scoped_to_the_run_it_describes() -> None:
     [context] = producer.contexts
     assert context.organization_id == ORG_ID
     assert context.run_id == output.result.run_id
+
+
+# --------------------------------------------------------------------------
+# The record shape, which is the trial's only artefact until 3619
+# --------------------------------------------------------------------------
+
+
+def _sample_record() -> seam.InvestigationShadowRecord:
+    return seam.InvestigationShadowRecord(
+        run_id="run-1",
+        status=seam.InvestigationShadowStatus.RECORDED,
+        arm_id="native",
+        packet_schema_version="ask_dev_investigation_packet.v1",
+        projection_version="native_investigation_projection.v1",
+        packet_id="packet-1",
+        outcome="supported",
+        evidence_handles=("ev1_a", "ev1_b"),
+        latency_ms=3,
+        detail=None,
+        frame_facts=("outcome:supported",),
+    )
+
+
+def test_the_record_payload_carries_every_recorded_field() -> None:
+    """No field may be dropped on the way out.
+
+    The field set is derived from the dataclass itself rather than listed
+    here, so this test cannot go stale: adding a field to the record makes
+    it fail until the payload carries it. A hand-listed expectation on both
+    sides would agree with a hand-listed implementation forever, including
+    when both were wrong.
+    """
+
+    record = _sample_record()
+    payload = seam.shadow_record_payload(record)
+    expected = {"schema_version"} | {entry.name for entry in fields(record)}
+    assert set(payload) == expected, "GUARD record_payload_covers_every_field"
+    assert (
+        payload["schema_version"] == seam.INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION
+    ), "GUARD record_payload_is_versioned"
+
+
+def test_the_record_payload_is_json_serialisable() -> None:
+    """A consumer parses it; an unserialisable value is an unread record."""
+
+    payload = seam.shadow_record_payload(_sample_record())
+    round_tripped = json.loads(json.dumps(payload))
+    assert round_tripped["status"] == "recorded"
+    assert round_tripped["evidence_handles"] == ["ev1_a", "ev1_b"]
+
+
+async def test_the_recorder_writes_the_record_into_the_log_message() -> None:
+    """The record must survive a formatter that drops ``extra``.
+
+    ``configure_logging`` renders extras only on the JSON path;
+    ``LOG_JSON=false`` installs a plain handler that discards them without
+    a word. A record that existed only in ``extra`` would then be missing
+    from the stream while the stream still looked healthy -- a measurement
+    layer failing toward "fine". So the payload is asserted to be IN the
+    formatted message, which no formatter configuration can remove.
+    """
+
+    from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
+
+    recorder = PersistenceRunRecorder.__new__(PersistenceRunRecorder)
+    record = _sample_record()
+    logger = logging.getLogger("dev_health_ops.api.dev.orchestrator_persistence")
+    emitted: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, log_record: logging.LogRecord) -> None:
+            emitted.append(log_record)
+
+    handler = _Capture()
+    logger.addHandler(handler)
+    try:
+        await recorder.record_investigation_shadow(record)
+    finally:
+        logger.removeHandler(handler)
+
+    [entry] = [item for item in emitted if "investigation_shadow.record" in item.msg]
+    message = entry.getMessage()
+    _, _, encoded = message.partition(" ")
+    assert json.loads(encoded) == seam.shadow_record_payload(record), (
+        "GUARD record_survives_a_formatter_that_drops_extra"
+    )
 
 
 def test_the_producer_protocol_takes_a_finished_run_and_nothing_else() -> None:

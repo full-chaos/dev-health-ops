@@ -29,7 +29,7 @@ import logging
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -95,6 +95,9 @@ from dev_health_ops.api.dev.investigation_contract import (
     UnresolvedMention,
     UnresolvedMentionReason,
 )
+from dev_health_ops.api.dev.investigation_plans.executor import (
+    investigation_result_run_handle,
+)
 from dev_health_ops.api.dev.question_interpreter import InterpretedQuestion
 
 from .capabilities import (
@@ -125,13 +128,6 @@ _NATIVE_QUERY_VERSION = "ask_dev_native_queries.v1"
 _NATIVE_RANKING_VERSION = "ask_dev_native_ranking.v1"
 
 _NAMESPACE = uuid.UUID("6f5f3c68-2f6f-4f4a-9b0e-3618a1c0de11")
-
-#: Sentinels only, so the dataclass can keep its keyword-defaulted shape.
-#: ``__post_init__`` rejects any window that is not a real interval, so
-#: leaving both at their defaults is a valid (if uninformative) 24-hour
-#: window rather than a silently degenerate one.
-_DEFAULT_WINDOW_START = datetime(1970, 1, 1, tzinfo=UTC)
-_DEFAULT_WINDOW_END = datetime(1970, 1, 2, tzinfo=UTC)
 
 #: ``SourceClass`` members that are not on the trial allowlist at all, so a
 #: native observation carrying one is dropped rather than smuggled onto a
@@ -216,6 +212,17 @@ class NativeProjectionGapReason(StrEnum):
     #: The run never reached the deterministic plan executor, so there is no
     #: investigation result to project.
     NO_PLAN_GOVERNED_RESULT = "no_plan_governed_result"
+    #: The run terminated before subject preflight interpreted the question,
+    #: so there is no server-owned analytical job to project. Distinct from
+    #: ``NO_SUBJECT_MATERIAL``: that run was interpreted and resolved
+    #: nothing, this one was never interpreted at all, and a trial that
+    #: folded them together could not tell "the product understood the
+    #: question and found nothing" from "the product never got that far".
+    NO_INTERPRETED_QUESTION = "no_interpreted_question"
+    #: The run has no bounded window, because it ended before scope
+    #: resolution completed. The arm refuses rather than substituting one:
+    #: see ``investigation_shadow.run_window``.
+    NO_BOUNDED_WINDOW = "no_bounded_window"
     #: The run terminated before any subject was resolved and carried no
     #: clarification material either, so there is nothing to report.
     NO_SUBJECT_MATERIAL = "no_subject_material"
@@ -268,6 +275,21 @@ class NativeProjectionInput:
     subject_set: DevSubjectSet | None
     committed_subject: DevEntityRefV2 | None
     investigation_result: DevInvestigationResult | None
+    #: The run's own bounded window. Required, and required to be a real
+    #: interval: a projection that invented one would be inventing the
+    #: packet's bounded time context, which every temporal claim rests on.
+    #:
+    #: These carried epoch sentinel defaults (1970-01-01..1970-01-02) until
+    #: CHAOS-3618 PR 2, and the comment defending them argued only that the
+    #: default was a *valid* interval. Validity was never the question: a
+    #: caller that forgot the window got a packet whose bounded time context
+    #: was a day in 1970, and every temporal claim in it was dated to a
+    #: query nothing ran. That is the corrective plan's own named fault
+    #: shape -- "an absent required field silently defaults to a privileged
+    #: value" -- so the fields are now genuinely required and sit ahead of
+    #: every defaulted one.
+    window_start: datetime
+    window_end: datetime
     #: The run's own resolved evidence refs, as the frame carries them.
     evidence: tuple[DevEvidenceRefV2 | DevEvidenceRef, ...] = ()
     #: Mentions preflight could not resolve, by mention id.
@@ -276,11 +298,6 @@ class NativeProjectionInput:
     #: them. Never inferred: an unknown count is zero here and the packet
     #: says so, rather than a guess that would read as a disclosure.
     authorization_filtered_count: int = 0
-    #: The run's own bounded window. Required, and required to be a real
-    #: interval: a projection that invented one would be inventing the
-    #: packet's bounded time context, which every temporal claim rests on.
-    window_start: datetime = _DEFAULT_WINDOW_START
-    window_end: datetime = _DEFAULT_WINDOW_END
     timezone_name: str = "UTC"
 
     def __post_init__(self) -> None:
@@ -294,14 +311,27 @@ class NativeProjectionInput:
         # come from ``investigation_result``; if those disagree, a stale
         # retry or a caller assembly mistake publishes one run's findings
         # under another run's identity, and nothing downstream could tell.
-        if (
-            self.investigation_result is not None
-            and self.investigation_result.run_id != self.run_id
+        #
+        # THE TWO IDS LIVE IN DIFFERENT SPACES, and comparing them directly
+        # -- as this check did until CHAOS-3618 PR 2 -- is a check that can
+        # only pass for hand-built fixtures. ``run_id`` is the
+        # orchestrator's correlation key; ``DevInvestigationResult.run_id``
+        # is a ``ServerHandle``, minted from that key by the plan executor
+        # because the correlation key has no wire grammar. Against a real
+        # orchestrated run the direct comparison raised every time, which
+        # the producer's containment then filed as a projection fault: a
+        # baseline that could never express any run, reported as a defect
+        # in the product. Folded through the executor's OWN public helper
+        # rather than a re-derived mint, so the two cannot drift apart.
+        if self.investigation_result is not None and (
+            self.investigation_result.run_id
+            != investigation_result_run_handle(self.run_id)
         ):
             raise ValueError(
                 "the investigation result belongs to run "
-                f"{self.investigation_result.run_id}, not {self.run_id}; a "
-                "projection input is one finished run, not an assembly of parts"
+                f"{self.investigation_result.run_id}, which is not the minted "
+                f"handle for {self.run_id}; a projection input is one finished "
+                "run, not an assembly of parts"
             )
 
 

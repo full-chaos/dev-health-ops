@@ -37,12 +37,14 @@ import hashlib
 import logging
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from .contracts import DevScopeResolution
 from .contracts_v2.embedded import DevEvidenceRefV2
 from .investigation_contract import (
     INVESTIGATION_CONTRACT_MODELS,
@@ -53,18 +55,29 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "INVESTIGATION_SHADOW_FLAG",
+    "INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION",
     "FinishedRunContext",
     "InvestigationPacketProducer",
     "InvestigationShadow",
     "InvestigationShadowRecord",
     "InvestigationShadowStatus",
     "canonical_bypass_offenders",
+    "run_window",
+    "shadow_record_payload",
     "shadow_enabled",
 ]
 
 #: Matches the CHAOS-3617 convention (``CONTEXT_FABRIC_*``, ``== "1"``), so
 #: "unset" is off and every other value is off too.
 INVESTIGATION_SHADOW_FLAG = "CONTEXT_FABRIC_SHADOW_SYNTHESIS_ENABLED"
+
+#: The version of the *record* shape, distinct from the packet's own schema
+#: version. CHAOS-3618 lands the seam without a durable table, so the
+#: comparison rows exist only as log lines until CHAOS-3619 either reads
+#: this shape or lands the table -- and a log shape a consumer parses is a
+#: contract whether or not anybody calls it one. Versioning it now means the
+#: trial can assert which shape it read instead of guessing.
+INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION = "investigation_shadow_record.v1"
 
 _PACKET_MODEL = INVESTIGATION_CONTRACT_MODELS["ask_dev_investigation_packet.v1"]
 
@@ -73,6 +86,33 @@ def shadow_enabled(environ: Mapping[str, str]) -> bool:
     """Whether the shadow seam is switched on for this process."""
 
     return environ.get(INVESTIGATION_SHADOW_FLAG) == "1"
+
+
+def run_window(
+    resolution: DevScopeResolution | None,
+) -> tuple[datetime, datetime] | None:
+    """The bounded window the run actually executed under, or ``None``.
+
+    Arm-neutral, like everything else in this module: it reads the run's own
+    server-owned scope decision and nothing else. ``ScopeResolutionService``
+    pins one ``ResolvedTimeRange`` per request and stamps it onto BOTH
+    ``requested_scope`` and ``resolved_scope``, so either carries the same
+    interval -- ``resolved_scope`` is preferred only because it is the scope
+    the plan executor genuinely ran against.
+
+    ``None`` when the run ended before scope resolution completed, and that
+    is the whole reason this returns an option rather than a default. An arm
+    handed a manufactured window would put a bounded time context on the
+    packet that no query ever used, and every temporal claim in the packet
+    rests on that context. A run with no window is a run no arm may project.
+    """
+
+    if resolution is None:
+        return None
+    scope = resolution.resolved_scope or resolution.requested_scope
+    # ``DevTimeRange.validate_order`` already rejects a degenerate interval,
+    # so a window that exists here is a real one by construction.
+    return (scope.time_range.start, scope.time_range.end)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +132,13 @@ class FinishedRunContext:
     would compare a value to itself: a check that cannot fail, wearing the
     appearance of one. See ``test_canonical_evidence_comes_from_the_run_not
     _the_packet``.
+
+    ``window_start``/``window_end`` are the run's own bounded window, from
+    :func:`run_window`, and they are ``datetime | None`` rather than
+    defaulted for the reason that function's docstring gives: an arm handed
+    a manufactured window would stamp the packet with a time context no
+    query used. ``None`` is a fact about the run, and an arm's only honest
+    response to it is to refuse to project.
     """
 
     run_id: str
@@ -102,8 +149,8 @@ class FinishedRunContext:
     ledger: Any
     subject_set: Any
     committed_subject: Any
-    window_start: Any
-    window_end: Any
+    window_start: datetime | None
+    window_end: datetime | None
     canonical_evidence: tuple[DevEvidenceRefV2, ...]
 
 
@@ -179,6 +226,36 @@ class InvestigationShadowRecord:
                 "a recorded shadow evaluation must carry the packet's schema "
                 "version, or a later differential cannot know what it compared"
             )
+
+
+def shadow_record_payload(record: InvestigationShadowRecord) -> dict[str, Any]:
+    """One comparison record as a versioned, machine-parseable mapping.
+
+    CHAOS-3618 lands no durable table (see ``PersistenceRunRecorder``), so
+    until CHAOS-3619 lands one this mapping IS the comparison artefact --
+    which makes it a contract, and an unversioned contract read by a later
+    consumer is a silent drift surface. Hence the schema version.
+
+    Every field is derived by iterating the dataclass's own ``fields()``
+    rather than listed by hand. A hand-written list would keep parsing
+    cleanly while quietly dropping any field added later, and a trial that
+    reads a record missing a field it needs cannot tell that from a record
+    whose field was empty. Adding a field to the record therefore adds it
+    here, and ``test_the_record_payload_carries_every_recorded_field``
+    fails if this stops being true.
+    """
+
+    payload: dict[str, Any] = {
+        "schema_version": INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION
+    }
+    for entry in fields(record):
+        value = getattr(record, entry.name)
+        if isinstance(value, StrEnum):
+            value = value.value
+        elif isinstance(value, tuple):
+            value = list(value)
+        payload[entry.name] = value
+    return payload
 
 
 def _evidence_digest(ref: DevEvidenceRefV2) -> str:

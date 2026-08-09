@@ -715,7 +715,14 @@ _real = DevOrchestrator._run_investigation_shadow
 
 
 async def _run_investigation_shadow(
-    self, *, run_id, org_id, frame, investigation_result, preflight_result
+    self,
+    *,
+    run_id,
+    org_id,
+    frame,
+    investigation_result,
+    preflight_result,
+    scope_resolution,
 ):
     shadow = self._investigation_shadow
     producer = self._investigation_packet_producer
@@ -771,7 +778,14 @@ from dev_health_ops.api.dev.orchestrator import DevOrchestrator
 
 
 async def _run_investigation_shadow(
-    self, *, run_id, org_id, frame, investigation_result, preflight_result
+    self,
+    *,
+    run_id,
+    org_id,
+    frame,
+    investigation_result,
+    preflight_result,
+    scope_resolution,
 ):
     # Containment removed: the producer's exception escapes into the run.
     shadow = self._investigation_shadow
@@ -805,6 +819,150 @@ def _post_init(self):
 
 
 seam.InvestigationShadowRecord.__post_init__ = _post_init
+""",
+    ),
+    # ----------------------------------------------------------------------
+    # CHAOS-3618 PR 2: the native arm connected to the seam.
+    # ----------------------------------------------------------------------
+    GuardCase(
+        case_id="window_taken_from_nowhere",
+        stake=(
+            "a packet whose bounded time context is not the window the run's "
+            "queries used -- every temporal claim in it dated to nothing"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_the_projected_window_is_the_runs_own_scope_window"
+        ),
+        expected_failure="GUARD window_is_the_runs_own",
+        # The producer contains its own faults, so a plant that merely broke
+        # would surface as "no packet" and read like the guard firing.
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev import orchestrator as orch
+
+# Patched on the ORCHESTRATOR's imported name only. The test computes its
+# expectation from `investigation_shadow.run_window`, which stays pristine
+# -- otherwise both sides of the comparison would move together and the
+# case would prove nothing.
+orch.run_window = lambda resolution: None
+""",
+    ),
+    GuardCase(
+        case_id="committed_subject_is_not_a_canonical_ref",
+        stake=(
+            "the arm handed the scope a subject was committed AS instead of the "
+            "subject -- every real run dies inside the projection and is "
+            "reported as a defect in the baseline"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_the_committed_subject_is_a_canonical_entity_ref"
+        ),
+        expected_failure="GUARD committed_subject_is_a_canonical_ref",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev import orchestrator as orch
+
+# Exactly the inherited wiring, restored: a DevScopeResolution where the
+# projection reads `.entity_id` off a DevEntityRefV2.
+orch._committed_subject_ref = (
+    lambda preflight_result: preflight_result.committed_resolution
+    if preflight_result is not None
+    else None
+)
+""",
+    ),
+    GuardCase(
+        case_id="run_ids_compared_across_spaces",
+        stake=(
+            "the finished-run envelope check comparing a correlation key to a "
+            "minted handle -- unsatisfiable for every real run"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_the_same_context_unmodified_does_project"
+        ),
+        # The projection's OWN assertion text, not a downstream rejection.
+        expected_failure="which is not the minted handle for",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+# Identity instead of the executor's mint: the two ids are compared
+# directly again, which is the pre-CHAOS-3618-PR-2 behaviour.
+proj.investigation_result_run_handle = lambda run_id: run_id
+""",
+    ),
+    GuardCase(
+        case_id="record_payload_drops_a_field",
+        stake=(
+            "a comparison record that parses cleanly while missing a field the "
+            "trial needs -- indistinguishable from a field that was empty"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_the_record_payload_carries_every_recorded_field"
+        ),
+        expected_failure="GUARD record_payload_covers_every_field",
+        forbidden_failure=("PLANT-FAILED",),
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+_HAND_LISTED = (
+    "run_id",
+    "status",
+    "arm_id",
+    "packet_schema_version",
+    "projection_version",
+    "packet_id",
+    "outcome",
+    "evidence_handles",
+    "latency_ms",
+    # `detail` and `frame_facts` quietly absent -- the exact shape a
+    # hand-maintained list drifts into.
+)
+
+
+def _payload(record):
+    payload = {"schema_version": seam.INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION}
+    for name in _HAND_LISTED:
+        value = getattr(record, name)
+        payload[name] = list(value) if isinstance(value, tuple) else value
+    return payload
+
+
+seam.shadow_record_payload = _payload
+""",
+    ),
+    GuardCase(
+        case_id="record_lives_only_in_log_extra",
+        stake=(
+            "the whole comparison artefact vanishing under LOG_JSON=false while "
+            "the log stream still looks healthy"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_the_recorder_writes_the_record_into_the_log_message"
+        ),
+        expected_failure="GUARD record_survives_a_formatter_that_drops_extra",
+        forbidden_failure=("PLANT-FAILED",),
+        plant="""
+from dev_health_ops.api.dev import orchestrator_persistence as persistence
+
+
+async def _record_investigation_shadow(self, record):
+    # The pre-PR-2 shape: structured fields only, which a plain formatter
+    # discards without a word.
+    persistence.logger.info(
+        "ask_dev.investigation_shadow.record",
+        extra=persistence.shadow_record_payload(record),
+    )
+
+
+persistence.PersistenceRunRecorder.record_investigation_shadow = (
+    _record_investigation_shadow
+)
 """,
     ),
 )

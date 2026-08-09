@@ -854,7 +854,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "merely co-occurred with"
         ),
         path=SRC / "drivers.py",
-        anchor="            if context.subject_id not in ends:",
+        anchor="            if parent_id != context.subject_id:",
         replacement="            if False:",
         tests=(
             f"{TESTS}/test_chaos_3617_drivers.py::TestChildCandidatesMustBeAdjacent",
@@ -1155,20 +1155,58 @@ def _first_failure(output: str) -> str:
     return "<no failure line captured>"
 
 
-def _failure_evidence(output: str) -> str:
-    """Every line pytest attributes to a failure, joined.
+def failure_region(output: str) -> str:
+    """Only the lines pytest attributes to an actual failure.
 
-    Includes the ``E   `` assertion/exception lines and the ``FAILED``
-    summary, because the category can appear in either: an assertion message
-    for a guard that raises a typed error, or the exception name for one that
-    refuses by construction.
+    Two shapes and nothing else: ``E ``-prefixed assertion/exception lines,
+    and the ``FAILED <nodeid> - <message>`` summary. The category can appear
+    in either — an assertion message for a guard that raises a typed error,
+    or the exception name for one that refuses by construction.
+
+    **Why the region matters more than the token.** pytest echoes the failing
+    test's SOURCE up to the failing line, and echoed source is indented, not
+    ``E ``-prefixed. So a phrase sitting in a docstring, a comment, or an
+    assertion that PASSED earlier in the same test cannot enter this region —
+    while a looser filter would credit it and report an unearned kill.
+
+    This function previously also admitted any line containing ``" - "``,
+    which let skipped/xfailed reason prose in. Those lines carry long
+    free-text explanations and are not failures at all; a token appearing in
+    one would have been credited exactly like a real assertion message.
+
+    A sibling lane demonstrated an unearned kill from this class of hole. The
+    fix is the region, not a cleverer phrase: the region is what makes any
+    phrase trustworthy.
     """
 
     return "\n".join(
         line
         for line in output.splitlines()
-        if line.startswith(("E ", "FAILED ", "E\t")) or " - " in line
+        if line.startswith(("E ", "E\t")) or _FAILED_SUMMARY.match(line)
     )
+
+
+#: ``FAILED <nodeid> - <message>``. Anchored, so a stray line that merely
+#: contains the word cannot pass for the summary.
+_FAILED_SUMMARY = re.compile(r"^FAILED \S+")
+
+
+def _reason_is_proven(region: str, expected: str) -> tuple[bool, str]:
+    """Whether the failure region actually evidences the expected reason.
+
+    Both emptiness checks are load-bearing. An empty ``expected`` would make
+    ``"" in region`` true and credit every mutation ever run; an empty region
+    means pytest attributed nothing to a failure, so there is no evidence to
+    read whatever the token says.
+    """
+
+    if not expected.strip():
+        return False, "the mutation declares an empty expected failure"
+    if not region.strip():
+        return False, "pytest attributed no lines to a failure"
+    if expected not in region:
+        return False, "the expected reason is absent from the failure region"
+    return True, ""
 
 
 def main() -> int:
@@ -1228,11 +1266,11 @@ def main() -> int:
             return 1
 
         died_at = _first_failure(output)
-        evidence = _failure_evidence(output)
-        if mutation.expect_failure not in evidence:
+        evidence = failure_region(output)
+        proven, why = _reason_is_proven(evidence, mutation.expect_failure)
+        if not proven:
             print(
-                f"WRONG-REASON {mutation.mutation_id}: the tests failed, but "
-                f"not for the reason this mutation claims to prove.\n"
+                f"WRONG-REASON {mutation.mutation_id}: {why}.\n"
                 f"      expected the failure to mention: "
                 f"{mutation.expect_failure!r}\n"
                 f"      actual: {died_at}\n"

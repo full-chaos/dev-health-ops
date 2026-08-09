@@ -649,18 +649,23 @@ def _open_child_candidates(
                 parent_id, child_id = source_id, target_id
             else:
                 child_id, parent_id = source_id, target_id
-            ends = (source_id, target_id)
-            if context.subject_id not in ends:
-                # The step has to touch the SUBJECT. Without this, any
-                # parent_of edge anywhere on any discovered path produced a
-                # candidate: ``pf_platform`` became an open child of
-                # ``proj_ledger_migration`` because both appeared somewhere
-                # on the same walk. Adjacency is what "child of" means.
-                continue
             if parent_id != context.subject_id:
-                # The subject has to be the PARENT for this to be its open
-                # child. Being the child of an open parent is not the same
-                # finding and must not borrow this one's rationale.
+                # The subject has to be the canonical PARENT. This does two
+                # jobs at once, and the second used to be a separate check:
+                #
+                #  * adjacency -- any ``parent_of`` step anywhere on any
+                #    discovered path used to produce a candidate, so
+                #    ``pf_platform`` became an open child of
+                #    ``proj_ledger_migration`` because both appeared on the
+                #    same walk;
+                #  * orientation -- being the CHILD of an open parent is a
+                #    different finding and must not borrow this rationale.
+                #
+                # The separate adjacency check that lived here became
+                # unreachable once orientation was resolved properly, and its
+                # mutation SURVIVED as a result. Deleting it rather than
+                # keeping an unkillable guard: a check no mutation can reach
+                # is dead code that reads as protection.
                 continue
             child = child_id
             if not _is_declared_open(context, child):

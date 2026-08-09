@@ -248,6 +248,57 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
         )
 
 
+class TestTheArchitecturePageAgreesWithTheLedger:
+    """A page that says "33 proven" is a claim, and claims drift.
+
+    The page is what a decision-owner reads. If the ledger's counts move and
+    the page does not, the page becomes the most confidently wrong artifact
+    in the changeset — so both directions are checked here rather than
+    reviewed by eye.
+    """
+
+    PAGE = (
+        _REPO_ROOT
+        / "docs"
+        / "contribute"
+        / "architecture"
+        / "ask-dev-graph-safety-proof.md"
+    )
+
+    def test_the_page_exists(self) -> None:
+        assert self.PAGE.is_file(), f"{self.PAGE} is missing"
+
+    def test_every_status_count_on_the_page_matches_the_ledger(self) -> None:
+        from collections import Counter
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        counts = Counter(requirement.status.value for requirement in REQUIREMENTS)
+        for status, count in counts.items():
+            assert f"`{status}` | {count} |" in page, (
+                f"the page does not record {count} `{status}` requirements; "
+                f"the ledger has {dict(counts)}"
+            )
+
+    def test_the_page_names_every_blocker_the_ledger_names(self) -> None:
+        page = self.PAGE.read_text(encoding="utf-8")
+        for requirement in REQUIREMENTS:
+            if not requirement.blocker:
+                continue
+            assert requirement.blocker in page, (
+                f"{requirement.requirement_id} is blocked on "
+                f"{requirement.blocker} and the page never mentions it"
+            )
+
+    def test_the_page_names_every_recorded_defect(self) -> None:
+        page = self.PAGE.read_text(encoding="utf-8")
+        for requirement in REQUIREMENTS:
+            if requirement.status is not Status.DEFECT:
+                continue
+            assert f"| {requirement.requirement_id} |" in page, (
+                f"the page's defect table omits {requirement.requirement_id}"
+            )
+
+
 class TestTheRenderedReportIsUsable:
     def test_it_names_every_requirement(self) -> None:
         report = render()

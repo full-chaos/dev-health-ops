@@ -107,8 +107,18 @@ from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .cohort import CohortCandidate, CohortProposal
 from .drivers import DriverFinding
 from .projection import PROJECTION_VERSION
-from .readback import QUERY_VERSION, DiscoveredPath, InvestigationReadout
-from .vocabulary import GraphEntityKind, entity_kind_to_subject_kind
+from .readback import (
+    QUERY_VERSION,
+    DiscoveredObservation,
+    DiscoveredPath,
+    InvestigationReadout,
+)
+from .vocabulary import (
+    SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+    SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    GraphEntityKind,
+    entity_kind_to_subject_kind,
+)
 from .watermark import DEFAULT_STALENESS_TOLERANCE, IndexWatermark
 
 __all__ = [
@@ -544,6 +554,92 @@ def _driver_candidate(
     )
 
 
+@dataclass(slots=True)
+class _EvidenceGroup:
+    """One source record, and everything this packet projected it as.
+
+    ``record`` is built from the observation the handle was issued FOR, so
+    ``record.entity_id`` is the entity the *source record* is about. An
+    observation that merely cites the record contributes its own subjects to
+    :attr:`supports` and nothing else: what a number is about does not change
+    what the record evidencing it is about, and the corpus oracle reads the
+    two through different fields (``authorization.py:190`` against
+    ``:276-277``).
+    """
+
+    observation_id: str
+    record: EvidenceRecord
+    source_class: SourceClass
+    supports: list[str]
+
+    def also_supports(self, subjects: Sequence[str]) -> None:
+        """Union in another projection's subjects, order preserved.
+
+        Append-if-unseen rather than ``sorted(set(...))``: the source record's
+        own subjects stay first, so the entry still reads as "this record,
+        which these other things also rest on".
+        """
+
+        for subject in subjects:
+            if subject not in self.supports:
+                self.supports.append(subject)
+
+
+def _describes_its_own_evidence(observation: DiscoveredObservation) -> bool:
+    """Whether this observation IS the record its handle was issued for.
+
+    True for a source record, and for anything with no source-issued handle
+    at all -- an observation the platform's signer will mint for describes
+    itself by definition. False only for an observation that names a
+    *different* record as the source of its evidence, which is how a
+    canonical measurement points at the record the world says evidences it.
+    """
+
+    handle = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
+    if handle is None:
+        return True
+    return (
+        observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE)
+        == observation.canonical_id
+    )
+
+
+def _evidence_record(
+    observation: DiscoveredObservation,
+    supports: Sequence[str],
+    source_state: SourceRequirementState,
+) -> EvidenceRecord:
+    """The evidence ref for one observation.
+
+    ``entity_id`` is **the entity the evidence is about**, never the
+    observation's own identifier. That field is entity vocabulary: the frozen
+    contract checks it against the declared authorized set
+    (``packet.py:1431``) and the CHAOS-3616 oracle reads it as an entity
+    sighting (``authorization.py:190``), so an observation slug there is a
+    fabricated entity and forces the declared set to be widened to hide it.
+
+    Where a source names several subjects the first in the source's own
+    declared order is the subject of record, and ``supports_entity_ids``
+    continues to carry the full set. The world's own ``WorldEvidence`` is the
+    model for that rule: it names exactly one ``entity_id`` and lists nothing
+    else, so for every corpus record this reproduces the world's answer
+    exactly rather than approximating it.
+    """
+
+    return EvidenceRecord(
+        source_system="context_fabric_graph_arm",
+        source_version=_SOURCE_CONTRACT_VERSION,
+        entity_type=observation.kind.value,
+        entity_id=supports[0],
+        display_label=observation.title,
+        observed_at=observation.observed_at,
+        freshness=_freshness(source_state),
+        provenance="structured record projected into the trial graph",
+        confidence=1.0,
+        repository_ids=observation.repository_ids,
+    )
+
+
 def _packet_id(run_id: str, job_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cf-graph-arm/{run_id}/{job_id}"))
 
@@ -802,16 +898,84 @@ def build_packet(
         if commit:
             committed_ids.append(entity.canonical_id)
 
+    # ---- authorization envelope ---------------------------------------
+    #
+    # ``related_context.authorized_entity_ids`` is ENTITY vocabulary. The
+    # frozen contract types it so (``packet.py:789``, ``:852``) and the
+    # CHAOS-3616 oracle compares it against the principal's entity grant
+    # (``authorization.py:254-255``), which makes an observation id in that
+    # field a false authorization claim rather than a harmless superset --
+    # and because ``validate_every_entity_is_authorized`` reads the SAME
+    # field, every id added to it is one more thing the contract's own leak
+    # check stops catching.
+    #
+    # This builder used to declare entity ids plus observation ids plus
+    # measurement keys, to get the observation slug it was putting in
+    # ``evidence.entity_id`` past that validator. CHAOS-3627 fixed the
+    # vocabulary at the source, so the widening is gone and the two
+    # invariants it was carrying are enforced here instead, as the arm's own
+    # checks: every hop endpoint is an authorized entity, and every
+    # observation that reaches the evidence index is about authorized
+    # entities only.
+    authorized_entity_ids = tuple(sorted(readout.authorized_entity_ids))
+    authorized_lookup = set(authorized_entity_ids)
+    for path in readout.paths:
+        for step in path.steps:
+            for endpoint in (step.from_canonical_id, step.to_canonical_id):
+                if endpoint not in authorized_entity_ids:
+                    raise PermissionError(
+                        f"path {path.path_id} traverses {endpoint!r}, which is "
+                        "not in the authorized entity set"
+                    )
+    declared_authorized = authorized_entity_ids
+
     # ---- evidence ------------------------------------------------------
-    evidence_entries: list[InvestigationEvidenceEntry] = []
-    authorized_observation_ids: list[str] = []
-    #: canonical observation id -> the handle this run minted for it.
+    #
+    # One entry per SOURCE RECORD, not one per observation.
+    #
+    # Where a source issued a handle the arm cites the handle it was issued
+    # (:data:`~.vocabulary.SOURCE_EVIDENCE_HANDLE_ATTRIBUTE`); re-minting one
+    # changes the identity of the evidence being presented, so a consumer --
+    # and the corpus oracle -- can no longer join it to the record it came
+    # from. The signer stays for sources that issue no handle of their own.
+    #
+    # Two observations may therefore carry the same handle: a canonical
+    # measurement and the record the source says evidences it are one piece
+    # of evidence projected twice. They become one entry, described by
+    # whichever of them the handle was issued FOR, with the other's subjects
+    # unioned into its support. The frozen contract also refuses a repeated
+    # handle in the index (``packet.py:1241-1243``), but that is not why the
+    # merge is right: the source's own identity is.
+    evidence_groups: dict[str, _EvidenceGroup] = {}
+    #: canonical observation id -> the handle this packet cites for it.
     #: Drivers cite handles, never raw ids: the frozen contract checks
     #: that every cited handle is in the evidence index, and an id that
     #: never became a handle is evidence the packet does not actually
     #: carry.
     handle_by_observation: dict[str, str] = {}
+    candidate_ids = {item.canonical_id for item in candidates}
+
+    indexable: list[tuple[DiscoveredObservation, tuple[str, ...]]] = []
     for observation in readout.observations:
+        # Named distinctly from the cohort guard's ``outside``: the
+        # guard-injection harness anchors on source lines, and a second
+        # ``if outside:`` in this module makes that anchor ambiguous, which
+        # the harness reports as INVALID rather than silently mutating both.
+        unauthorized_subjects = sorted(
+            subject
+            for subject in observation.subject_canonical_ids
+            if subject not in authorized_lookup
+        )
+        if unauthorized_subjects:
+            # Refuse, do not narrow. The intersection below would simply drop
+            # these subjects, so a reader bug -- or a second reader -- could
+            # hand this builder unauthorized material and get back a packet
+            # that looked clean. This is the evidence twin of the hop check.
+            raise PermissionError(
+                f"observation {observation.canonical_id!r} is about "
+                f"{unauthorized_subjects}, which is not in the authorized "
+                "entity set"
+            )
         supports = tuple(
             subject
             for subject in observation.subject_canonical_ids
@@ -821,75 +985,91 @@ def build_packet(
             # Unattached evidence displaces lineage. The contract refuses to
             # index it and so does this builder.
             continue
-        record = EvidenceRecord(
-            source_system="context_fabric_graph_arm",
-            source_version=_SOURCE_CONTRACT_VERSION,
-            entity_type=observation.kind.value,
-            entity_id=observation.canonical_id,
-            display_label=observation.title,
-            observed_at=observation.observed_at,
-            freshness=_freshness(source_state),
-            provenance="structured record projected into the trial graph",
-            confidence=1.0,
-            repository_ids=observation.repository_ids,
+        indexable.append((observation, supports))
+
+    # Two passes, because an observation is sorted by its own canonical id
+    # and may be read before the record it cites. The first pass builds the
+    # entries the source issued handles FOR; the second attaches everything
+    # that merely cites one of them.
+    for observation, supports in indexable:
+        if not _describes_its_own_evidence(observation):
+            continue
+        record = _evidence_record(observation, supports, source_state)
+        handle = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
+        if handle is None:
+            handle = signer.issue(readout.org_id, record)
+        if handle in evidence_groups:
+            raise ValueError(
+                f"observation {observation.canonical_id!r} carries a source "
+                f"evidence handle already issued for "
+                f"{evidence_groups[handle].observation_id!r}. One handle names "
+                "one record; merging two records under it would present them "
+                "to a consumer as the same evidence"
+            )
+        evidence_groups[handle] = _EvidenceGroup(
+            observation_id=observation.canonical_id,
+            record=record,
+            source_class=observation.source_class,
+            supports=list(supports),
         )
-        handle = signer.issue(readout.org_id, record)
-        authorized_observation_ids.append(observation.canonical_id)
         handle_by_observation[observation.canonical_id] = handle
+
+    for observation, supports in indexable:
+        if _describes_its_own_evidence(observation):
+            continue
+        handle = observation.attributes[SOURCE_EVIDENCE_HANDLE_ATTRIBUTE]
+        group = evidence_groups.get(handle)
+        if group is None:
+            # The record this observation cites was not reached by this
+            # traversal -- it can be about an entity no path arrived at. The
+            # handle is still the one the source issued for the number being
+            # cited, so it is still what this packet must present; what falls
+            # back is only which entity the entry is about, to the subject the
+            # citing observation does name. Seeding both ends of that link is
+            # what ``test_chaos_3627_arm_vocabulary`` calls input symmetry.
+            evidence_groups[handle] = _EvidenceGroup(
+                observation_id=observation.canonical_id,
+                record=_evidence_record(observation, supports, source_state),
+                source_class=observation.source_class,
+                supports=list(supports),
+            )
+        else:
+            group.also_supports(supports)
+        handle_by_observation[observation.canonical_id] = handle
+
+    evidence_entries: list[InvestigationEvidenceEntry] = []
+    for handle, group in evidence_groups.items():
+        entry_supports = tuple(group.supports)
         evidence_entries.append(
             InvestigationEvidenceEntry(
                 evidence={
                     "schema_version": "dev_evidence_ref.v1",
                     "evidence_ref_id": handle,
-                    "source_system": record.source_system,
-                    "source_version": record.source_version,
-                    "entity_type": record.entity_type,
-                    "entity_id": record.entity_id,
-                    "display_label": record.display_label,
+                    "source_system": group.record.source_system,
+                    "source_version": group.record.source_version,
+                    "entity_type": group.record.entity_type,
+                    "entity_id": group.record.entity_id,
+                    "display_label": group.record.display_label,
                     "link": None,
-                    "observed_at": record.observed_at,
-                    "freshness": record.freshness.value,
-                    "provenance": record.provenance,
-                    "confidence": record.confidence,
+                    "observed_at": group.record.observed_at,
+                    "freshness": group.record.freshness.value,
+                    "provenance": group.record.provenance,
+                    "confidence": group.record.confidence,
                     "citation_text": None,
-                    "repository_ids": list(record.repository_ids),
-                    "valid_entity_ids": list(supports),
+                    "repository_ids": list(group.record.repository_ids),
+                    "valid_entity_ids": list(entry_supports),
                     "flags": {},
                 },
-                source_class=observation.source_class,
+                source_class=group.source_class,
                 supports_path_ids=(),
-                supports_entity_ids=supports,
+                supports_entity_ids=entry_supports,
                 supports_driver_ids=(),
                 supports_subject_ids=tuple(
-                    subject
-                    for subject in supports
-                    if subject in {item.canonical_id for item in candidates}
+                    subject for subject in entry_supports if subject in candidate_ids
                 ),
                 relevance=RelevanceState.CURRENT,
             )
         )
-
-    # ---- authorization envelope ---------------------------------------
-    #
-    # The declared set is entity ids plus the observation ids the packet
-    # cites as evidence: an observation identifier reaching a consumer is an
-    # identifier the caller must be authorized for, and the packet-level
-    # validator checks exactly that. Widening the set would weaken the hop
-    # check, so the narrower invariant -- every hop endpoint is an
-    # *authorized entity*, not merely an authorized id -- is enforced here
-    # and pinned by test_chaos_3617_authorization.py.
-    authorized_entity_ids = tuple(sorted(readout.authorized_entity_ids))
-    for path in readout.paths:
-        for step in path.steps:
-            for endpoint in (step.from_canonical_id, step.to_canonical_id):
-                if endpoint not in authorized_entity_ids:
-                    raise PermissionError(
-                        f"path {path.path_id} traverses {endpoint!r}, which is "
-                        "not in the authorized entity set"
-                    )
-    declared_authorized = tuple(
-        sorted(set(authorized_entity_ids) | set(authorized_observation_ids))
-    )
 
     # ---- source coverage ----------------------------------------------
     observed_classes = sorted(

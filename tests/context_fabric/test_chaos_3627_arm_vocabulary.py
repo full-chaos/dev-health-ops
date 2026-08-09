@@ -35,9 +35,11 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from datetime import UTC, datetime
+from unittest import mock
 
 import pytest
 
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
 from dev_health_ops.api.dev.investigation_contract import (
     ComparisonShape,
     QuestionFamilyID,
@@ -53,7 +55,18 @@ from dev_health_ops.context_fabric.graph_arm.packet_builder import (
     TrialContext,
     build_packet,
 )
+from dev_health_ops.context_fabric.graph_arm.projection import ProjectionError
 from dev_health_ops.context_fabric.graph_arm.readback import ProjectionGraphReader
+from dev_health_ops.context_fabric.graph_arm.records import (
+    CanonicalRef,
+    EntityRecord,
+    IngestionBatch,
+    ObservationRecord,
+)
+from dev_health_ops.context_fabric.graph_arm.vocabulary import (
+    GraphEntityKind,
+    GraphObservationKind,
+)
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 
 _PRODUCED_AT = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
@@ -217,7 +230,9 @@ class TestEvidenceCitesTheHandleItWasIssued:
             for entry in packet.evidence_coverage.evidence_index
         }
         assert cited, "no evidence was indexed; this would pass vacuously"
-        assert cited <= minted
+        assert not cited - minted, (
+            f"handles the world never minted: {sorted(cited - minted)}"
+        )
 
     def test_no_entry_names_an_observation_as_the_entity_it_is_about(
         self, helio, signer
@@ -237,7 +252,9 @@ class TestEvidenceCitesTheHandleItWasIssued:
 
         assert packet.evidence_coverage.evidence_index
         for entry in packet.evidence_coverage.evidence_index:
-            assert entry.evidence.entity_id not in observation_ids
+            assert entry.evidence.entity_id not in observation_ids, (
+                f"evidence entity is an observation: {entry.evidence.entity_id}"
+            )
             assert entry.evidence.entity_id in entity_ids
 
     def test_a_reached_source_record_names_the_entity_the_record_is_about(
@@ -338,7 +355,128 @@ class TestTheDeclaredSetIsEntityVocabulary:
         declared = set(packet.related_context.authorized_entity_ids)
 
         assert declared
-        assert not declared & {item.canonical_id for item in readout.observations}
+        leaked = sorted(declared & {item.canonical_id for item in readout.observations})
+        assert not leaked, f"observation ids declared authorized: {leaked}"
+
+
+class TestProvenanceIsRefusedRatherThanRepaired:
+    """Carrying a handle is only safe if a broken one cannot be carried.
+
+    Each of these is a way the pair could arrive wrong, and each is refused
+    at the door -- at ingestion, where the record that carried it is still in
+    scope and the error can name it.
+    """
+
+    def _observation(self, **attributes) -> IngestionBatch:
+        return IngestionBatch(
+            org_id=world.ORG_HELIO,
+            entities=(
+                EntityRecord(
+                    org_id=world.ORG_HELIO,
+                    kind=GraphEntityKind.PROJECT,
+                    canonical_id="proj_probe",
+                    display_label="Probe",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=world.WINDOW_END,
+                ),
+            ),
+            observations=(
+                ObservationRecord(
+                    org_id=world.ORG_HELIO,
+                    kind=GraphObservationKind.REVIEW,
+                    canonical_id="rev_probe",
+                    title="probe review",
+                    source_class=SourceClass.REVIEW,
+                    observed_at=world.WINDOW_END,
+                    subjects=(
+                        CanonicalRef(
+                            kind=GraphEntityKind.PROJECT, canonical_id="proj_probe"
+                        ),
+                    ),
+                    attributes=attributes,
+                ),
+            ),
+        )
+
+    def test_a_handle_with_no_record_id_is_refused(self) -> None:
+        batch = self._observation(
+            source_evidence_handle=world.evidence_handle("rev_probe")
+        )
+        with pytest.raises(ProjectionError, match="one half of the source evidence"):
+            build_projection(batch)
+
+    def test_a_record_id_with_no_handle_is_refused(self) -> None:
+        """The half that silently restores re-minting.
+
+        An id with no handle leaves the builder minting its own while the
+        record looks, to a reader, like it carried provenance.
+        """
+
+        batch = self._observation(source_evidence_id="rev_probe")
+        with pytest.raises(ProjectionError, match="one half of the source evidence"):
+            build_projection(batch)
+
+    def test_a_handle_outside_the_contracts_grammar_is_refused(self) -> None:
+        """Refused, not repaired: a handle is an identity.
+
+        Trimming or re-deriving a malformed handle would attribute the record
+        to whatever the repaired string happened to name.
+        """
+
+        batch = self._observation(
+            source_evidence_handle="EV1_NOT-THE-GRAMMAR",
+            source_evidence_id="rev_probe",
+        )
+        with pytest.raises(ProjectionError, match="EvidenceHandle grammar"):
+            build_projection(batch)
+
+    def test_two_records_under_one_handle_are_refused(self, helio, signer) -> None:
+        """One handle names one record.
+
+        This is reachable through the arm's OWN mint, not only through a
+        malformed source: ``EvidenceReferenceSigner._payload`` identifies a
+        record by ``(org, source_system, source_version, entity_type,
+        entity_id, repositories)``, and ``entity_id`` is now -- correctly --
+        the entity the evidence is about, so two records of the same kind
+        about one entity mint the same handle. Presenting them as one piece
+        of evidence would lose one of them silently; the arm refuses instead.
+        """
+
+        readout = _read(helio, world.TEAM_CINDER)
+        first, second = readout.observations[0], readout.observations[1]
+        collided = dataclasses.replace(
+            second,
+            attributes={
+                **second.attributes,
+                "source_evidence_handle": first.attributes["source_evidence_handle"],
+                "source_evidence_id": second.canonical_id,
+            },
+            subject_canonical_ids=first.subject_canonical_ids,
+        )
+        tampered = dataclasses.replace(
+            readout, observations=(first, collided, *readout.observations[2:])
+        )
+        with pytest.raises(ValueError, match="already issued for"):
+            _packet(tampered, signer)
+
+    def test_a_measurement_naming_evidence_the_world_never_minted_is_refused(
+        self,
+    ) -> None:
+        """The adapter refuses at ingestion rather than at citation.
+
+        A canonical number whose named record does not exist has no citable
+        source, and minting a handle for it here would be the arm asserting a
+        provenance the corpus never issued.
+        """
+
+        measurement = dataclasses.replace(
+            world.WORLD_MEASUREMENTS[0], evidence_slug="ev_the_world_never_minted"
+        )
+        with (
+            mock.patch.object(world, "WORLD_MEASUREMENTS", (measurement,)),
+            pytest.raises(ValueError, match="which the world never minted"),
+        ):
+            adapter.corpus_batch(world.ORG_HELIO)
 
 
 class TestTheInternalInvariantsSurviveTheNarrowing:

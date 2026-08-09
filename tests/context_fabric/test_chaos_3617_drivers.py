@@ -1653,11 +1653,19 @@ class TestAssertedSupportMustBeTheDriversOwn:
 
         findings = _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
         honest = findings[0]
-        base = _packet(helio, "proj_identity_rewrite", signer)
+        # CHAOS-3627: the unrelated evidence is chosen from the READOUT's
+        # observation ids now. It used to be read out of
+        # ``entry.evidence.entity_id``, which worked only while that field
+        # carried the observation's own slug -- the vocabulary violation this
+        # issue fixed. A driver cites observation ids, so that is what the
+        # swap has to supply; the field it used to be scavenged from now
+        # names the entity the evidence is about.
+        readout = _readout(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
         elsewhere = sorted(
-            entry.evidence.entity_id
-            for entry in base.evidence_coverage.evidence_index
-            if entry.evidence.entity_id not in honest.evidence_ids
+            observation.canonical_id
+            for observation in readout.observations
+            if observation.canonical_id not in honest.evidence_ids
+            and "proj_identity_rewrite" not in observation.subject_canonical_ids
         )
         assert elsewhere, "no unrelated indexed evidence exists; vacuous"
         swapped = replace(

@@ -27,6 +27,24 @@ guarantee that is for the import to be absent —
 the arm's own signer: ``world.evidence_handle(slug)`` is the corpus's sole
 mint, and a handle this adapter constructed itself would be a handle no
 oracle could match.
+
+CHAOS-3627 made that sentence true. It was written when this adapter was
+authored and it described an intention, not the code: the handle was read
+nowhere, so the packet builder re-signed one of its own for every
+observation and the frozen oracle reported all 31 as fabricated. Each
+corpus-originated observation now carries the source-issued handle in
+:data:`SOURCE_EVIDENCE_HANDLE_ATTRIBUTE`, alongside
+:data:`SOURCE_EVIDENCE_ID_ATTRIBUTE` -- the canonical id the source issued
+that handle **for**. The pair travels through the projection and both
+readers as declared readback attributes, and the builder cites what it was
+issued.
+
+The second half of the pair is what makes a *measurement* citable. A
+canonical measurement is not itself an evidence record; the world names the
+record that evidences it (``WorldMeasurement.evidence_slug``), so the
+measurement carries that record's handle and that record's id. Two
+observations may therefore carry the same handle -- which is the truth about
+them: one source record, projected twice.
 """
 
 from __future__ import annotations
@@ -42,7 +60,13 @@ from .records import (
     RelationshipRecord,
     UnstructuredDocumentRecord,
 )
-from .vocabulary import AliasKind, GraphEntityKind, GraphObservationKind
+from .vocabulary import (
+    SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+    SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    AliasKind,
+    GraphEntityKind,
+    GraphObservationKind,
+)
 
 __all__ = [
     "CORPUS_VERSION",
@@ -219,6 +243,11 @@ def corpus_batch(tenant_id: str) -> IngestionBatch:
                 attributes={
                     "corpus_trust": str(evidence.trust),
                     "corpus_is_adversarial": evidence.is_adversarial,
+                    # The world's own mint, carried verbatim. This record IS
+                    # the thing the handle was issued for, so the id half of
+                    # the pair is its own slug.
+                    SOURCE_EVIDENCE_HANDLE_ATTRIBUTE: evidence.handle,
+                    SOURCE_EVIDENCE_ID_ATTRIBUTE: slug,
                 },
             )
         )
@@ -240,12 +269,33 @@ def corpus_batch(tenant_id: str) -> IngestionBatch:
         if measurement.tenant_id != tenant_id or measurement.entity_id not in known:
             continue
         subject = world.ENTITIES_BY_ID[measurement.entity_id]
+        # A measurement is not itself an evidence record; the world names the
+        # record that evidences the number. Refuse rather than default: a
+        # measurement whose named record does not exist is a number with no
+        # citable source, and minting a handle for it here would be the arm
+        # asserting a provenance the corpus never issued.
+        backing = world.EVIDENCE_BY_SLUG.get(measurement.evidence_slug)
+        if backing is None:
+            raise ValueError(
+                f"corpus measurement {measurement.measurement_key} names "
+                f"evidence {measurement.evidence_slug!r}, which the world "
+                "never minted. A canonical number the arm cannot attribute "
+                "to a source record must not be ingested as citable evidence"
+            )
         measured: dict[str, str | int | float | bool | None] = {
             "measurement_metric": measurement.metric,
             "measurement_value": measurement.value,
             "measurement_unit": measurement.unit,
             "measurement_basis": str(measurement.basis),
             "measurement_evidence_slug": measurement.evidence_slug,
+            # The handle belongs to the record, not to the number. Carrying
+            # the id alongside it is what lets the builder tell "this
+            # observation is the record" from "this observation cites it" --
+            # and the world's record may be about a DIFFERENT entity than the
+            # measurement (an incident on a service backing a team's incident
+            # load), which is exactly the distinction the oracle reads.
+            SOURCE_EVIDENCE_HANDLE_ATTRIBUTE: backing.handle,
+            SOURCE_EVIDENCE_ID_ATTRIBUTE: measurement.evidence_slug,
         }
         if measurement.cohort_median is not None:
             measured["measurement_cohort_median"] = measurement.cohort_median

@@ -53,11 +53,39 @@ __all__ = [
     "ALL_GRAPH_ENTITY_KINDS",
     "ALL_GRAPH_OBSERVATION_KINDS",
     "EMITTABLE_ENTITY_KINDS",
+    "EVIDENCE_HANDLE_PATTERN",
+    "SOURCE_EVIDENCE_HANDLE_ATTRIBUTE",
+    "SOURCE_EVIDENCE_ID_ATTRIBUTE",
     "AliasKind",
     "GraphEntityKind",
     "GraphObservationKind",
     "entity_kind_to_subject_kind",
 ]
+
+#: The attribute an ingested observation carries the **source-issued**
+#: evidence handle in, and the canonical id that handle was issued for.
+#:
+#: CHAOS-3627. Provenance is not a formatting question: a handle identifies
+#: one source record, so an arm that re-mints one has changed the identity of
+#: the evidence it is presenting and no consumer can join it back to the
+#: system that issued it. The pair is carried rather than the handle alone
+#: because an observation may cite a record it is not itself — a canonical
+#: measurement names the record that evidences the number — and "which record
+#: is this handle about" is then a question the packet can answer without
+#: re-deriving anything.
+#:
+#: Absent on any source that issues no handle of its own. That is a real
+#: case, not a fallback for convenience: the arm's own fixtures have no
+#: issuing source, and for them the platform's ``EvidenceReferenceSigner``
+#: mints the handle exactly as it always did.
+SOURCE_EVIDENCE_HANDLE_ATTRIBUTE = "source_evidence_handle"
+SOURCE_EVIDENCE_ID_ATTRIBUTE = "source_evidence_id"
+
+#: The frozen contract's ``EvidenceHandle`` grammar: ``ev1_`` and 40 lowercase
+#: hex characters. Repeated here so an ingested handle can be refused at the
+#: door rather than at packet validation, where the record that carried it is
+#: no longer in scope and the error names only the packet.
+EVIDENCE_HANDLE_PATTERN = r"ev1_[0-9a-f]{40}"
 
 
 class GraphEntityKind(StrEnum):

@@ -77,6 +77,9 @@ from .records import (
     validate_batch_org,
 )
 from .vocabulary import (
+    EVIDENCE_HANDLE_PATTERN,
+    SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+    SOURCE_EVIDENCE_ID_ATTRIBUTE,
     AliasKind,
     GraphEntityKind,
     GraphObservationKind,
@@ -134,10 +137,23 @@ READBACK_ATTRIBUTE_KEYS: tuple[str, ...] = (
     "measurement_metric",
     "measurement_unit",
     "measurement_value",
+    # CHAOS-3627. The source-issued evidence handle and the canonical id it
+    # was issued for. Read back because provenance that does not survive the
+    # round trip is provenance the packet cannot cite: the builder mints its
+    # own handle only where the source issued none, so a key that failed to
+    # read back would silently restore the re-minting this fixed.
+    SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+    SOURCE_EVIDENCE_ID_ATTRIBUTE,
     "superseded_by",
 )
 
 _ATTRIBUTE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+#: A source-issued handle must satisfy the frozen contract's grammar before it
+#: is stored. Refused at ingestion rather than repaired: a handle is an
+#: identity, and an arm that trimmed, lowercased or re-derived a malformed one
+#: would be inventing a different record's identity out of a broken one.
+_EVIDENCE_HANDLE = re.compile(f"^{EVIDENCE_HANDLE_PATTERN}$")
 
 #: Bytes the storage encoding uses to join multiple values into one attribute
 #: string: US (0x1f) for alias lists, "," for repository ids, supersession
@@ -355,6 +371,45 @@ def _validate_attributes(
             )
 
 
+def _validate_source_evidence(
+    where: str, attributes: Mapping[str, str | int | float | bool | None]
+) -> None:
+    """Refuse a source-issued handle the arm could not honestly cite.
+
+    Both halves or neither. A handle with no id is a citation the builder
+    cannot attribute to a record, and an id with no handle is a record the
+    builder would then mint its own handle for while believing it had one --
+    the re-minting CHAOS-3627 exists to stop, restored by a half-populated
+    pair rather than by a code change anyone would notice.
+    """
+
+    handle = attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
+    source_id = attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE)
+    if handle is None and source_id is None:
+        return
+    if handle is None or source_id is None:
+        raise ProjectionError(
+            f"{where} declares one half of the source evidence pair "
+            f"({SOURCE_EVIDENCE_HANDLE_ATTRIBUTE}="
+            f"{handle!r}, {SOURCE_EVIDENCE_ID_ATTRIBUTE}={source_id!r}). A "
+            "handle the packet cannot attribute to a record, or a record "
+            "whose handle went missing, is provenance the arm would have to "
+            "invent the other half of"
+        )
+    if not isinstance(handle, str) or not _EVIDENCE_HANDLE.fullmatch(handle):
+        raise ProjectionError(
+            f"{where} declares source evidence handle {handle!r}, which is "
+            "not the frozen contract's EvidenceHandle grammar. A handle is an "
+            "identity: repairing one here would attribute this record to "
+            "whatever the repaired string happened to name"
+        )
+    if not isinstance(source_id, str) or not source_id:
+        raise ProjectionError(
+            f"{where} declares source evidence id {source_id!r}; the handle "
+            "must name the canonical record it was issued for"
+        )
+
+
 def _validate_label(where: str, label: str) -> None:
     _reject_control_characters(where, "label", label)
     if not label.strip():
@@ -452,6 +507,7 @@ def _observation_node(record: ObservationRecord, partition: str) -> GraphNode:
     if record.prior_attempt_ids:
         attributes["prior_attempt_ids"] = ",".join(sorted(record.prior_attempt_ids))
     _validate_attributes(where, attributes)
+    _validate_source_evidence(where, attributes)
     return GraphNode(
         uuid=identity.observation_uuid(record.org_id, record.kind, record.canonical_id),
         org_id=record.org_id,

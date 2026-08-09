@@ -267,7 +267,15 @@ MUTATIONS: tuple[Mutation, ...] = (
             "naming the endpoint, not that the endpoint would otherwise "
             "reach a consumer. Two independent refusals is the actual state, "
             "and claiming more would be the over-claim this harness exists "
-            "to catch"
+            "to catch. CHAOS-3627 added a THIRD, inside the arm: an "
+            "observation about an entity outside the grant is refused rather "
+            "than narrowed away. Because it raises the same exception type "
+            "with the same closing clause, it made this mutation SURVIVE -- "
+            "the test's old match string was satisfied by the evidence twin's "
+            "message. The test now matches the PATH-shaped message, which "
+            "only the hop check produces, and the expected reason below is "
+            "the evidence twin's message: seeing it is the proof that the hop "
+            "check, and not something else, is what stopped firing"
         ),
         path=SRC / "packet_builder.py",
         anchor="                if endpoint not in authorized_entity_ids:",
@@ -276,7 +284,119 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_authorization.py::TestAuthorizationFiltering::"
             "test_the_builder_refuses_a_readout_whose_paths_escape_the_set",
         ),
-        expect_failure="ValidationError",
+        expect_failure="observation 'ci_4412_88' is about",
+    ),
+    # ---- CHAOS-3627: the arm speaks the frozen corpus's vocabulary --------
+    #
+    # These four guard the conformance fix. They live in this harness rather
+    # than a new one because they defend the same modules, and a second
+    # harness is a second thing to remember to run.
+    Mutation(
+        mutation_id="evidence-handles-re-minted-instead-of-carried",
+        defect=(
+            "the arm re-signs its own handle over a record a source already "
+            "issued one for, so evidence identity is replaced and no consumer "
+            "-- and no oracle -- can join the citation back to the record it "
+            "names. This is the CHAOS-3627 defect in its original form: the "
+            "CHAOS-3616 authorization oracle reported all 31 cited handles on "
+            "the analyst/team_cinder path as fabricated. NOTE where the "
+            "mutation dies, because it says something extra: re-minting is "
+            "not even self-consistent. The platform mint identifies a record "
+            "by (org, source_system, source_version, entity_type, entity_id, "
+            "repositories), and entity_id is the ENTITY the evidence is "
+            "about, so two corpus records of one kind about one entity mint "
+            "the same handle and the arm refuses rather than merging them"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        handle = observation.attributes.get("
+            "SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)\n"
+            "        if handle is None:\n"
+            "            handle = signer.issue(readout.org_id, record)\n"
+        ),
+        replacement="        handle = signer.issue(readout.org_id, record)\n",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestEvidenceCitesTheHandleItWasIssued::"
+            "test_every_corpus_originated_entry_carries_the_worlds_handle",
+        ),
+        expect_failure="carries a source evidence handle already issued for",
+    ),
+    Mutation(
+        mutation_id="evidence-entity-is-the-observations-own-slug",
+        defect=(
+            "``evidence.entity_id`` carries the observation's own identifier "
+            "instead of the entity the evidence is about, so the corpus "
+            "oracle reads every indexed item as a fabricated entity "
+            "(authorization.py:190) -- 31 of them on the reproduction path. "
+            "The recorded failure is the frozen contract's own refusal, and "
+            "that is the honest scope: with the declared set no longer "
+            "widened to hide them, an observation slug in this field cannot "
+            "reach a consumer at all. Widening it back is the sibling "
+            "mutation below"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        entity_id=supports[0],",
+        replacement="        entity_id=observation.canonical_id,",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestEvidenceCitesTheHandleItWasIssued::"
+            "test_no_entry_names_an_observation_as_the_entity_it_is_about",
+        ),
+        expect_failure=(
+            "not in related_context.authorized_entity_ids -- "
+            "evidence_coverage.evidence_index"
+        ),
+    ),
+    Mutation(
+        mutation_id="declared-authorized-set-widened-with-observation-ids",
+        defect=(
+            "the declared authorized set is widened past entity vocabulary, "
+            "which the CHAOS-3616 oracle scores as a false authorization "
+            "claim per id -- and, worse, blunts the frozen contract's own "
+            "leak check, because validate_every_entity_is_authorized reads "
+            "the same field. Nothing in the pre-CHAOS-3627 suite caught this: "
+            "with only this guard reverted, the whole of tests/context_fabric "
+            "outside test_chaos_3627_arm_vocabulary.py still passes"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    declared_authorized = authorized_entity_ids",
+        replacement=(
+            "    declared_authorized = tuple(\n"
+            "        sorted(\n"
+            "            set(authorized_entity_ids)\n"
+            "            | {item.canonical_id for item in readout.observations}\n"
+            "        )\n"
+            "    )"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheDeclaredSetIsEntityVocabulary::"
+            "test_no_observation_id_is_declared_authorized",
+        ),
+        expect_failure="observation ids declared authorized:",
+    ),
+    Mutation(
+        mutation_id="half-populated-source-evidence-pair-accepted",
+        defect=(
+            "a record arrives naming the evidence it rests on but with no "
+            "handle, and is ingested anyway -- so the builder mints its own "
+            "while the record looks, to a reader, like it carried provenance. "
+            "This is re-minting restored by data rather than by a code change "
+            "anyone would review"
+        ),
+        path=SRC / "projection.py",
+        anchor=(
+            "    if handle is None or source_id is None:\n"
+            "        raise ProjectionError("
+        ),
+        replacement="    if handle is None or source_id is None:\n        return\n    if False:\n        raise ProjectionError(",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestProvenanceIsRefusedRatherThanRepaired::"
+            "test_a_record_id_with_no_handle_is_refused",
+        ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="graphiti-telemetry-left-on",

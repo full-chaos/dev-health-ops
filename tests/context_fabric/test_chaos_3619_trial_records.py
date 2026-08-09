@@ -702,6 +702,52 @@ class TestTheBindingNamesTheEmitterAndTheExecutionDifference:
             f"feature tip is an error marker: {binding.feature_tip_commit!r}"  # type: ignore[attr-defined]
         )
 
+    def test_the_feature_tip_comes_from_the_remote_ref_not_a_stale_local_one(
+        self,
+    ) -> None:
+        """The correction, pinned. Non-empty was never the property that mattered.
+
+        ``merge-base HEAD feature/...`` resolves the BARE name, which git
+        reads as the local branch -- and a lane worktree's local copy of an
+        integration branch is whatever it last checked out. On the sweep that
+        caught this it was 40+ commits stale, so the artifact named an
+        emitter predating the CHAOS-3627 vocabulary fix while its own packets
+        had been produced by an arm containing that fix. Both assertions
+        above passed on that wrong value, which is why neither of them was
+        the guard.
+
+        Asserted against git's own answer rather than a pinned sha, so it
+        keeps holding as the integration branch advances.
+        """
+
+        import subprocess
+
+        from trials.chaos_3619.binding import _REPOSITORY_ROOT, FEATURE_BRANCH
+
+        def rev(*args: str) -> str:
+            done = subprocess.run(
+                ["git", *args],
+                cwd=_REPOSITORY_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return done.stdout.strip() if done.returncode == 0 else ""
+
+        remote = f"origin/{FEATURE_BRANCH}"
+        if not rev("rev-parse", "--verify", "--quiet", f"{remote}^{{commit}}"):
+            pytest.skip(f"no {remote} in this clone; nothing to prefer")
+        expected = rev("merge-base", "HEAD", remote)
+        assert expected, "git could not merge-base HEAD against the remote ref"
+        binding = _binding(RunClass.MEASURED)
+        assert binding.feature_tip_commit == expected, (  # type: ignore[attr-defined]
+            f"the binding recorded {binding.feature_tip_commit!r} but this "  # type: ignore[attr-defined]
+            f"run's arms come from {expected!r} (merge-base with {remote}). "
+            "A stale local ref makes the artifact name the wrong emitter, "
+            "which invites a reader to attribute these results to arm code "
+            "the run never contained"
+        )
+
     def test_the_execution_mode_discloses_the_orchestrator_bypass(self) -> None:
         """A named, intentional difference from a production-shaped run.
 

@@ -121,6 +121,37 @@ def _git(*args: str) -> str:
     return completed.stdout.strip()
 
 
+def _feature_tip() -> str:
+    """The feature-branch commit this run's ARMS actually came from.
+
+    The merge base, not a tip: it is the integration-branch commit the lane
+    is built on, and that is what decides which emitter produced the packets.
+
+    **Resolved against the remote-tracking ref first, and this is a measured
+    correction rather than caution.** The first version merge-based against
+    the bare branch name, which git resolves to the LOCAL branch -- and a
+    lane worktree's local ``feature/...`` is whatever it last checked out.
+    On the run that caught this the local ref was 40+ commits stale, so the
+    artifact named an emitter that predated the CHAOS-3627 vocabulary fix
+    while the packets in the same file had been produced by an arm that
+    contained it. A provenance field that can be wrong in that direction is
+    worse than absent: it invites a reader to conclude the fix had no effect.
+
+    Falls back to the local ref only when no remote-tracking ref exists, and
+    says which one it used, so a reader is never left guessing.
+    """
+
+    remote = f"origin/{FEATURE_BRANCH}"
+    for ref in (remote, FEATURE_BRANCH):
+        resolved = _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        if resolved.startswith("<") or not resolved:
+            continue
+        base = _git("merge-base", "HEAD", ref)
+        if not base.startswith("<") and base:
+            return base
+    return f"<git failed: neither origin/{FEATURE_BRANCH} nor {FEATURE_BRANCH} resolves>"
+
+
 def _sha256_of(path: Path) -> str:
     """A file's digest, or a marker naming the file that was missing.
 
@@ -220,11 +251,7 @@ def collect_binding(
     )
 
     status = _git("status", "--porcelain")
-    # The merge base rather than the branch tip: it is the feature-branch
-    # commit this lane is actually built on, which is what decides which
-    # emitter produced the packets. Reading the remote tip instead would
-    # record a commit the run never contained.
-    feature_tip = _git("merge-base", "HEAD", FEATURE_BRANCH)
+    feature_tip = _feature_tip()
     return TrialBinding(
         schema_version=TRIAL_ARTIFACT_SCHEMA_VERSION,
         run_class=run_class.value,

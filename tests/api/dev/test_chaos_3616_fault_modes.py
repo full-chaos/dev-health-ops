@@ -35,7 +35,13 @@ from typing import Any
 
 import pytest
 
-from dev_health_ops.api.dev.investigation_contract import ScoringDimensionID
+from dev_health_ops.api.dev.investigation_contract import (
+    AskDevInvestigationPacket,
+    ScoringDimensionID,
+)
+from dev_health_ops.api.dev.investigation_corpus.authorization import (
+    audit_authorization,
+)
 from dev_health_ops.api.dev.investigation_corpus.evaluate import (
     Verdict,
     evaluate_payload,
@@ -43,6 +49,8 @@ from dev_health_ops.api.dev.investigation_corpus.evaluate import (
 from dev_health_ops.api.dev.investigation_corpus.reference import reference_packet
 from dev_health_ops.api.dev.investigation_corpus.world import (
     LUMEN_PROJ_ACR,
+    PRINCIPAL_ANALYST,
+    PRINCIPAL_LUMEN,
     PROJ_MERIDIAN,
     PROJ_QUARRY,
     evidence_handle,
@@ -1181,3 +1189,49 @@ def test_a_packet_attributed_to_the_wrong_tenant_is_caught() -> None:
         _D.ZERO_UNAUTHORIZED_RESULTS,
         "tenant-mismatch",
     )
+
+
+def test_the_tenant_audit_compares_the_right_pair() -> None:
+    """The symmetric half of F5: correct organization, wrong caller.
+
+    The first tenant test changes the packet's organization and holds the
+    principal fixed. On its own that is satisfiable by an audit comparing the
+    wrong pair -- packet organization against packet contents, say -- so this
+    holds the packet fixed and changes the caller instead. A Helio packet
+    audited as a Lumen analyst must report both a tenant mismatch and the
+    Helio entities as unauthorized.
+    """
+
+    packet = AskDevInvestigationPacket.model_validate(
+        reference_packet("T01_clearly_struggling_team")
+    )
+
+    same_tenant = audit_authorization(packet, PRINCIPAL_ANALYST)
+    assert same_tenant.is_clean, (
+        "positive control failed: the witness is not clean for its own "
+        f"principal ({same_tenant.summary()})"
+    )
+
+    cross_tenant = audit_authorization(packet, PRINCIPAL_LUMEN)
+    assert cross_tenant.tenant_mismatch, (
+        "a Helio packet audited as a Lumen caller reported no tenant mismatch"
+    )
+    assert "org_helio" in cross_tenant.tenant_mismatch
+    assert "org_lumen" in cross_tenant.tenant_mismatch
+    assert cross_tenant.unauthorized_disclosures, (
+        "the Lumen caller was shown Helio entities and the audit called it clean"
+    )
+    assert not cross_tenant.is_clean
+
+
+def test_no_corpus_case_is_asked_as_the_cross_tenant_principal() -> None:
+    """The Lumen principal is a test instrument, not a corpus subject.
+
+    If a case were ever asked as it, every expectation in that case would be
+    unsatisfiable and the failure would read as arm quality.
+    """
+
+    from dev_health_ops.api.dev.investigation_corpus.cases import CASE_REGISTRY
+
+    asked_as = {case.principal_id for case in CASE_REGISTRY.values()}
+    assert PRINCIPAL_LUMEN not in asked_as

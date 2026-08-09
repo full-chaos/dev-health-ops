@@ -2855,6 +2855,7 @@ _LUMEN_ENTITY_IDS = frozenset(
 
 PRINCIPAL_ANALYST = "principal_helio_analyst"
 PRINCIPAL_COMPLIANCE = "principal_helio_compliance"
+PRINCIPAL_LUMEN = "principal_lumen_analyst"
 
 PRINCIPALS: Mapping[str, Principal] = {
     PRINCIPAL_ANALYST: Principal(
@@ -2877,6 +2878,19 @@ PRINCIPALS: Mapping[str, Principal] = {
             "Sees Quarry. Present so the restricted project is provably "
             "visible to someone -- an entity nobody can see would make the "
             "authorization oracle unfalsifiable in the other direction."
+        ),
+    ),
+    PRINCIPAL_LUMEN: Principal(
+        principal_id=PRINCIPAL_LUMEN,
+        tenant_id=ORG_LUMEN,
+        display_label="Lumen delivery analyst",
+        visible_entity_ids=_LUMEN_ENTITY_IDS,
+        note=(
+            "No corpus case is asked as this principal. It exists so the "
+            "authorization audit can be tested in the SYMMETRIC direction: a "
+            "Helio packet audited as a Lumen caller must report a tenant "
+            "mismatch. Without a second tenant's principal the audit could "
+            "pass by comparing the wrong pair and nothing would notice."
         ),
     ),
 }

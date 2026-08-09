@@ -25,7 +25,7 @@
     "evidence_records": 68,
     "measurements": 39,
     "oracles": 38,
-    "principals": 2,
+    "principals": 3,
     "relationships": 73,
     "required_topics": 40,
     "source_feeds": 16
@@ -85,7 +85,7 @@
     },
     {
       "path": "world/principals.json",
-      "sha256": "98fd98b882f02e39de15975d33fdace3f631b2ff834c78aec47944783e12c915"
+      "sha256": "902e29c4fe918d2618c108658857ef75d1e9f6fee4e75af3ea5275ff6729704d"
     },
     {
       "path": "world/relationships.json",

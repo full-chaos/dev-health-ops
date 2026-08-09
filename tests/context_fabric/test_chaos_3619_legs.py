@@ -29,6 +29,7 @@ import pytest
 from dev_health_ops.api.dev.investigation_contract import (
     ComparisonShape,
     QuestionFamilyID,
+    ScoringDimensionID,
 )
 from dev_health_ops.api.dev.investigation_corpus.cases import CorpusCase
 from trials.chaos_3619 import legs
@@ -41,6 +42,7 @@ from trials.chaos_3619.legs import (
     reading_rule,
 )
 from trials.chaos_3619.records import ArmResult, CaseRecord, InterpretationDisposition
+from trials.chaos_3619.unsound import UnsoundDimension
 
 _LEGS_SOURCE = Path(legs.__file__)
 
@@ -399,16 +401,56 @@ class TestTheReportRendersBothLegsHonestly:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def suppressed_safety_dimension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> UnsoundDimension:
+    """Install ONE synthetic registry entry, for the mechanism's tests.
+
+    These tests used to read the live registry, which held CHAOS-3627's
+    entry. That entry was deleted when its fix merged, and a test that reads
+    the live registry would have been deleted with it -- taking the guard on
+    the suppression mechanism along with the thing being suppressed. The
+    mechanism has to keep working for the NEXT unsound dimension, so it is
+    exercised against an entry the test owns.
+
+    Both names are patched because ``report`` imports ``unsound_for`` by
+    value: ``unsound_for`` reads the tuple in ``unsound``, while
+    ``_unsound_section`` reads the one bound in ``report``.
+    """
+
+    import trials.chaos_3619.report as report_module
+    import trials.chaos_3619.unsound as unsound_module
+
+    entry = UnsoundDimension(
+        dimension_id=ScoringDimensionID.ZERO_UNAUTHORIZED_RESULTS,
+        owner="CHAOS-9999",
+        arm_ids=frozenset({"graph_assisted_shadow_arm"}),
+        reason=(
+            "a synthetic entry owned by this test, standing in for whatever "
+            "the next genuinely-unsound dimension turns out to be; it exists "
+            "so the suppression mechanism keeps being observed after the "
+            "real registry empties"
+        ),
+    )
+    monkeypatch.setattr(unsound_module, "UNSOUND_DIMENSIONS", (entry,))
+    monkeypatch.setattr(report_module, "UNSOUND_DIMENSIONS", (entry,))
+    return entry
+
+
 class TestUnsoundDimensionsRenderNotMeasured:
     """A dimension whose INPUTS are defective must not publish a verdict.
 
-    PR #1617's verifier measured 40% of graph-arm packets carrying an
-    evidence entry whose entity_id contradicts the world record its handle
-    names. `entity_sightings()` reads that field as a sighting, sightings
-    feed the authorization audit, and the audit feeds
-    ZERO_UNAUTHORIZED_RESULTS -- a MUST_BE_ZERO safety dimension. The verdict
-    is computable and meaningless, and it can MASK a real leak by attributing
-    a leaked entity's evidence to a permitted one.
+    The case that created the registry: PR #1617's verifier measured 40% of
+    graph-arm packets carrying an evidence entry whose entity_id contradicts
+    the world record its handle names. `entity_sightings()` reads that field
+    as a sighting, sightings feed the authorization audit, and the audit
+    feeds ZERO_UNAUTHORIZED_RESULTS -- a MUST_BE_ZERO safety dimension. The
+    verdict was computable and meaningless, and it could MASK a real leak by
+    attributing a leaked entity's evidence to a permitted one.
+
+    That defect is fixed (CHAOS-3627, squash 2c74c5767) and its entry is
+    deleted, so these tests drive a synthetic entry instead.
     """
 
     def test_every_registry_entry_names_an_owner(self) -> None:
@@ -421,7 +463,30 @@ class TestUnsoundDimensionsRenderNotMeasured:
             assert entry.arm_ids, f"{entry.dimension_id} suppresses no arm"
             assert len(entry.reason) > 80, "reason too thin to act on"
 
-    def test_the_suppression_is_scoped_to_the_affected_arm(self) -> None:
+    def test_the_live_registry_no_longer_suppresses_the_safety_column(
+        self,
+    ) -> None:
+        """CHAOS-3627's deletion, pinned as a fact rather than an absence.
+
+        Without this, re-adding the entry -- or never having deleted it --
+        would silently blank the graph arm's ZERO_UNAUTHORIZED_RESULTS column
+        again, and a NOT MEASURED cell reads as an honest gap rather than as
+        a stale suppression of a now-sound dimension.
+        """
+
+        from trials.chaos_3619.unsound import UNSOUND_DIMENSIONS, is_unsound
+
+        assert not is_unsound(
+            "zero_unauthorized_results", "graph_assisted_shadow_arm"
+        ), (
+            "the graph arm's safety column is still suppressed; CHAOS-3627's "
+            "fix is merged (2c74c5767) so its entry must be deleted, not kept"
+        )
+        assert all(entry.owner != "CHAOS-3627" for entry in UNSOUND_DIMENSIONS)
+
+    def test_the_suppression_is_scoped_to_the_affected_arm(
+        self, suppressed_safety_dimension: UnsoundDimension
+    ) -> None:
         """A defect in one arm's emitter must not blank the other arm's
         column -- that would hide a real result behind someone else's bug."""
 
@@ -430,12 +495,16 @@ class TestUnsoundDimensionsRenderNotMeasured:
         assert is_unsound("zero_unauthorized_results", "graph_assisted_shadow_arm")
         assert not is_unsound("zero_unauthorized_results", "native")
 
-    def test_an_unaffected_dimension_is_untouched(self) -> None:
+    def test_an_unaffected_dimension_is_untouched(
+        self, suppressed_safety_dimension: UnsoundDimension
+    ) -> None:
         from trials.chaos_3619.unsound import is_unsound
 
         assert not is_unsound("subject_top_1", "graph_assisted_shadow_arm")
 
-    def test_a_suppressed_cell_renders_not_measured_not_a_verdict(self) -> None:
+    def test_a_suppressed_cell_renders_not_measured_not_a_verdict(
+        self, suppressed_safety_dimension: UnsoundDimension
+    ) -> None:
         """The behaviour, on the rendered document.
 
         A PASS here would be the worst possible output: a MUST_BE_ZERO safety
@@ -494,7 +563,9 @@ class TestUnsoundDimensionsRenderNotMeasured:
         )
         assert "| P1 |" not in rendered
 
-    def test_the_registry_is_rendered_with_its_owner(self) -> None:
+    def test_the_registry_is_rendered_with_its_owner(
+        self, suppressed_safety_dimension: UnsoundDimension
+    ) -> None:
         """Suppression without attribution is indistinguishable from an
         oracle that simply never ran."""
 
@@ -513,7 +584,7 @@ class TestUnsoundDimensionsRenderNotMeasured:
             }
         )
         assert "NOT MEASURED because their inputs are defective" in rendered
-        assert "CHAOS-3627" in rendered
+        assert suppressed_safety_dimension.owner in rendered
 
     def test_an_empty_registry_still_renders_the_section(self) -> None:
         """Deleting the last entry must not delete the section.

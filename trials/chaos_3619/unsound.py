@@ -69,23 +69,14 @@ class UnsoundDimension:
 #:
 #: Delete an entry the moment its owning ticket's fix merges — and re-measure
 #: rather than assuming the verdicts that then appear are correct.
-UNSOUND_DIMENSIONS: tuple[UnsoundDimension, ...] = (
-    UnsoundDimension(
-        dimension_id=ScoringDimensionID.ZERO_UNAUTHORIZED_RESULTS,
-        owner="CHAOS-3627",
-        arm_ids=frozenset({"graph_assisted_shadow_arm"}),
-        reason=(
-            "115 of 291 graph-arm packets (measured by PR #1617's "
-            "verifier) carry an evidence entry whose entity_id contradicts "
-            "the world record its handle names. entity_sightings() reads that "
-            "field as a sighting of the entity, and sightings feed "
-            "unauthorized_disclosures and fabricated_entities. The verdict is "
-            "therefore a function of the mis-attribution rather than of the "
-            "arm's disclosure behaviour, and it can mask a real leak by "
-            "attributing a leaked entity's evidence to a permitted one"
-        ),
-    ),
-)
+#:
+#: CHAOS-3627's entry was deleted here when its fix merged (squash
+#: ``2c74c5767``, PR #1617). Its dimension —
+#: ``ZERO_UNAUTHORIZED_RESULTS`` for the graph arm — was NOT carried
+#: forward from the pre-fix run; it was re-derived from scratch, because a
+#: mis-attribution that can mask a leak makes the old column unsound rather
+#: than merely stale.
+UNSOUND_DIMENSIONS: tuple[UnsoundDimension, ...] = ()
 
 
 def unsound_for(dimension_id: str, arm_id: str) -> UnsoundDimension | None:

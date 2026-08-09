@@ -98,14 +98,14 @@
    "ranked_canonical_ids": [
     "proj_identity_rewrite",
     "init_identity_modernization",
-    "pr_identity_882",
     "proj_payments_rewrite",
-    "pf_platform",
+    "pr_identity_882",
     "svc_auth_gateway",
-    "repo_identity",
     "proj_auth_gateway_hardening",
+    "pf_platform",
     "dep_authcore",
     "wu_authcore_release",
+    "repo_identity",
     "pr_pulse_212",
     "proj_ledger_migration",
     "proj_acr",
@@ -128,7 +128,7 @@
  ],
  "binding": {
   "branch": "chaos-3647-semantic-leg",
-  "commit": "b4584fb033b4e41981883e0ec4cb64da59b39b99",
+  "commit": "f9ab5c0e2b3738665c1765bdb04a2bf2f1804887",
   "contract_manifest_sha256": "b14307dbbbf5b5dd84d0b9b79648c7c6bdbf35bda7f56511dfcfc63f02a3cd38",
   "corpus_manifest_sha256": "f12a7dcef216c8fedc19538fba1d284bfdf6968461e718bbfcee2a4fea1bd0c4",
   "corpus_version": "ask_dev_investigation_corpus.v1",
@@ -156,7 +156,7 @@
   "run_class": "measured",
   "schema_version": "chaos_3619_trial_results.v1",
   "shadow_record_schema_version": "investigation_shadow_record.v1",
-  "tree_clean": false,
+  "tree_clean": true,
   "trial_store_backend": "falkordb (127.0.0.1:6389)"
  },
  "cases": [
@@ -252,9 +252,7 @@
     },
     {
      "authorization_filtered_count": 0,
-     "bm25_order": [
-      "sc_acr_still_open"
-     ],
+     "bm25_order": [],
      "cosine_order": [
       "sc_acr_still_open",
       "borealis_wip",
@@ -269,8 +267,8 @@
       "ci_identity_blocked",
       "tr_pulse_suite",
       "wg_ratelimitd_removed",
-      "borealis_load",
       "frost_load",
+      "borealis_load",
       "atlas_load",
       "pr_ledger_990_merged",
       "pr_pulse_212",
@@ -283,8 +281,8 @@
       "cinder_incidents",
       "atlas_incident_load",
       "wg_payments_rewrite_superseded",
-      "issue_acr_span_decl",
       "wi_acr_span_open",
+      "issue_acr_span_decl",
       "dp_pulse_prod",
       "sc_pulse_declared_complete",
       "tr_ledger_suite",
@@ -303,8 +301,8 @@
       "oc_ledger_present",
       "dp_identity_none",
       "pulse_deployments",
-      "acr_target_slips",
       "ia_beacon_allocation",
+      "acr_target_slips",
       "ia_atlas_mix"
      ],
      "leg": "semantic_hybrid",
@@ -321,8 +319,8 @@
       "ci_identity_blocked",
       "tr_pulse_suite",
       "wg_ratelimitd_removed",
-      "borealis_load",
       "frost_load",
+      "borealis_load",
       "atlas_load",
       "pr_ledger_990_merged",
       "rv_vertex_revoked",
@@ -349,8 +347,8 @@
       "oc_ledger_present",
       "dp_identity_none",
       "pulse_deployments",
-      "acr_target_slips",
       "ia_beacon_allocation",
+      "acr_target_slips",
       "ia_atlas_mix"
      ],
      "prose_disclosures": [],
@@ -425,7 +423,7 @@
         "cosine_similarity"
        ],
        "rank": 3,
-       "rrf_score": 0.03571428571428571,
+       "rrf_score": 0.034482758620689655,
        "signal": "fuzzy_label"
       },
       {
@@ -493,9 +491,9 @@
     "baseline_correct": true,
     "baseline_ranked": 1,
     "classification": "deterministic_only_correct",
-    "detail": "baseline: rank-1 was proj_identity_rewrite, as expected | semantic: rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
+    "detail": "baseline: rank-1 was proj_identity_rewrite, as expected | semantic: rank-1 was team_borealis; expected proj_identity_rewrite",
     "semantic_correct": false,
-    "semantic_ranked": 18
+    "semantic_ranked": 17
    },
    "expected_answer": "direct",
    "forbidden_subject_ids": [],
@@ -578,14 +576,11 @@
     },
     {
      "authorization_filtered_count": 0,
-     "bm25_order": [
-      "wu_pulse_runbook",
-      "wi_pulse_runbook_open"
-     ],
+     "bm25_order": [],
      "cosine_order": [
       "wi_borealis_wip",
-      "team_borealis",
       "rv_borealis_normal",
+      "team_borealis",
       "pr_pulse_212",
       "pr_pulse_212_merged",
       "repo_beacon",
@@ -604,8 +599,8 @@
       "pr_vertex_401_cycles",
       "cinder_new_value",
       "pr_ledger_990_merged",
-      "wu_authcore_release",
       "wi_authcore_release_open",
+      "wu_authcore_release",
       "repo_identity",
       "wi_meridian_demand",
       "sc_acr_still_open",
@@ -637,7 +632,6 @@
      "mentions": [],
      "observation_hits": [
       "wi_borealis_wip",
-      "wi_pulse_runbook_open",
       "rv_borealis_normal",
       "pr_pulse_212_merged",
       "rv_vertex_revoked",
@@ -680,9 +674,9 @@
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
       "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_pulse_212', 'team_borealis', 'wu_pulse_runbook']",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_pulse_212', 'repo_beacon', 'team_borealis']",
       "precision_over_all": "fail",
-      "precision_over_all_detail": "18 stray candidates across 18 ranked",
+      "precision_over_all_detail": "17 stray candidates across 17 ranked",
       "resolved": true,
       "stray_candidates": [
        "dep_authcore",
@@ -701,28 +695,16 @@
        "team_atlas",
        "team_borealis",
        "wu_authcore_release",
-       "wu_beacon_ingest",
-       "wu_pulse_runbook"
+       "wu_beacon_ingest"
       ],
       "subject_resolution_correct": false,
-      "subject_resolution_detail": "rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
+      "subject_resolution_detail": "rank-1 was team_borealis; expected proj_identity_rewrite",
       "subject_top_1": "fail",
-      "subject_top_1_detail": "rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
+      "subject_top_1_detail": "rank-1 was team_borealis; expected proj_identity_rewrite",
       "subject_top_3": "fail",
-      "subject_top_3_detail": "top-3 ['wu_pulse_runbook', 'team_borealis', 'pr_pulse_212']; expected proj_identity_rewrite"
+      "subject_top_3_detail": "top-3 ['team_borealis', 'pr_pulse_212', 'repo_beacon']; expected proj_identity_rewrite"
      },
      "subjects": [
-      {
-       "canonical_id": "wu_pulse_runbook",
-       "display_label": "Pulse on-call runbook and alerts",
-       "mechanism": "lexical_fuzzy",
-       "methods": [
-        "bm25"
-       ],
-       "rank": 0,
-       "rrf_score": 1.0,
-       "signal": "fuzzy_label"
-      },
       {
        "canonical_id": "team_borealis",
        "display_label": "Borealis",
@@ -730,8 +712,8 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 1,
-       "rrf_score": 0.5,
+       "rank": 0,
+       "rrf_score": 0.3333333333333333,
        "signal": "fuzzy_label"
       },
       {
@@ -741,7 +723,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 2,
+       "rank": 1,
        "rrf_score": 0.25,
        "signal": "fuzzy_label"
       },
@@ -752,7 +734,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 3,
+       "rank": 2,
        "rrf_score": 0.16666666666666666,
        "signal": "fuzzy_label"
       },
@@ -763,7 +745,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 4,
+       "rank": 3,
        "rrf_score": 0.08333333333333333,
        "signal": "fuzzy_label"
       },
@@ -774,7 +756,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 5,
+       "rank": 4,
        "rrf_score": 0.05555555555555555,
        "signal": "fuzzy_label"
       },
@@ -785,8 +767,8 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 6,
-       "rrf_score": 0.045454545454545456,
+       "rank": 5,
+       "rrf_score": 0.043478260869565216,
        "signal": "fuzzy_label"
       },
       {
@@ -796,7 +778,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 7,
+       "rank": 6,
        "rrf_score": 0.041666666666666664,
        "signal": "fuzzy_label"
       },
@@ -807,7 +789,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 8,
+       "rank": 7,
        "rrf_score": 0.037037037037037035,
        "signal": "fuzzy_label"
       },
@@ -818,7 +800,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 9,
+       "rank": 8,
        "rrf_score": 0.034482758620689655,
        "signal": "fuzzy_label"
       },
@@ -829,7 +811,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 10,
+       "rank": 9,
        "rrf_score": 0.03125,
        "signal": "fuzzy_label"
       },
@@ -840,7 +822,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 11,
+       "rank": 10,
        "rrf_score": 0.02702702702702703,
        "signal": "fuzzy_label"
       },
@@ -851,7 +833,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 12,
+       "rank": 11,
        "rrf_score": 0.025,
        "signal": "fuzzy_label"
       },
@@ -862,7 +844,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 13,
+       "rank": 12,
        "rrf_score": 0.023809523809523808,
        "signal": "fuzzy_label"
       },
@@ -873,7 +855,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 14,
+       "rank": 13,
        "rrf_score": 0.023255813953488372,
        "signal": "fuzzy_label"
       },
@@ -884,7 +866,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 15,
+       "rank": 14,
        "rrf_score": 0.022727272727272728,
        "signal": "fuzzy_label"
       },
@@ -895,7 +877,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 16,
+       "rank": 15,
        "rrf_score": 0.022222222222222223,
        "signal": "fuzzy_label"
       },
@@ -906,7 +888,7 @@
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 17,
+       "rank": 16,
        "rrf_score": 0.02040816326530612,
        "signal": "fuzzy_label"
       }
@@ -1003,23 +985,12 @@
     },
     {
      "authorization_filtered_count": 0,
-     "bm25_order": [
-      "wg_auth_hardening",
-      "dp_identity_none",
-      "proj_auth_gateway_hardening",
-      "inc_atlas_gateway",
-      "svc_auth_gateway",
-      "wi_beacon_deleted",
-      "wi_borealis_wip",
-      "wi_ember_partial",
-      "wi_atlas_wip",
-      "wi_quarry_redacted"
-     ],
+     "bm25_order": [],
      "cosine_order": [
       "dep_authcore",
       "pr_identity_882",
-      "wi_authcore_release_open",
       "wu_authcore_release",
+      "wi_authcore_release_open",
       "wg_authcore_shared",
       "svc_auth_gateway",
       "proj_auth_gateway_hardening",
@@ -1070,32 +1041,32 @@
      "leg": "semantic_hybrid",
      "mentions": [],
      "observation_hits": [
-      "wg_auth_hardening",
-      "dp_identity_none",
-      "inc_atlas_gateway",
       "wi_authcore_release_open",
-      "wi_beacon_deleted",
-      "wi_ember_partial",
       "wg_authcore_shared",
-      "wi_borealis_wip",
-      "wi_atlas_wip",
-      "wi_quarry_redacted",
+      "wg_auth_hardening",
       "lattice_touching_contributors",
+      "inc_atlas_gateway",
+      "wi_ember_partial",
+      "wi_beacon_deleted",
       "rv_vertex_revoked",
       "borealis_wip",
       "atlas_wip",
+      "dp_identity_none",
       "pr_ledger_990_merged",
       "rv_vertex_cycles",
       "lattice_active_contributors",
       "wg_acr",
+      "wi_atlas_wip",
       "pr_vertex_401_cycles",
       "wg_identity_rewrite",
       "oc_ledger_present",
+      "wi_quarry_redacted",
       "pr_identity_882_open",
       "rv_atlas_queue",
       "ci_identity_blocked",
       "sh_ember_stalled",
       "dp_ledger_prod",
+      "wi_borealis_wip",
       "dorado_outbound_reviews",
       "wg_lattice_contributors",
       "hp_atlas",
@@ -1113,7 +1084,7 @@
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
       "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['dep_authcore', 'pr_identity_882']",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['dep_authcore', 'pr_identity_882', 'wu_authcore_release']",
       "precision_over_all": "fail",
       "precision_over_all_detail": "16 stray candidates across 18 ranked",
       "resolved": true,
@@ -1140,7 +1111,7 @@
       "subject_top_1": "fail",
       "subject_top_1_detail": "rank-1 was dep_authcore; expected proj_identity_rewrite",
       "subject_top_3": "fail",
-      "subject_top_3_detail": "top-3 ['dep_authcore', 'pr_identity_882', 'proj_auth_gateway_hardening']; expected proj_identity_rewrite"
+      "subject_top_3_detail": "top-3 ['dep_authcore', 'pr_identity_882', 'wu_authcore_release']; expected proj_identity_rewrite"
      },
      "subjects": [
       {
@@ -1166,15 +1137,14 @@
        "signal": "fuzzy_label"
       },
       {
-       "canonical_id": "proj_auth_gateway_hardening",
-       "display_label": "Auth Gateway Hardening",
+       "canonical_id": "wu_authcore_release",
+       "display_label": "authcore 2.0 release",
        "mechanism": "embedding_similarity",
        "methods": [
-        "bm25",
         "cosine_similarity"
        ],
        "rank": 2,
-       "rrf_score": 0.47619047619047616,
+       "rrf_score": 0.3333333333333333,
        "signal": "fuzzy_label"
       },
       {
@@ -1182,22 +1152,21 @@
        "display_label": "Auth Gateway",
        "mechanism": "embedding_similarity",
        "methods": [
-        "bm25",
         "cosine_similarity"
        ],
        "rank": 3,
-       "rrf_score": 0.3666666666666667,
+       "rrf_score": 0.16666666666666666,
        "signal": "fuzzy_label"
       },
       {
-       "canonical_id": "wu_authcore_release",
-       "display_label": "authcore 2.0 release",
+       "canonical_id": "proj_auth_gateway_hardening",
+       "display_label": "Auth Gateway Hardening",
        "mechanism": "embedding_similarity",
        "methods": [
         "cosine_similarity"
        ],
        "rank": 4,
-       "rrf_score": 0.25,
+       "rrf_score": 0.14285714285714285,
        "signal": "fuzzy_label"
       },
       {
@@ -1760,18 +1729,18 @@
       "wi_atlas_wip",
       "rv_vertex_cycles",
       "rv_atlas_queue",
-      "atlas_wip",
       "borealis_wip",
+      "atlas_wip",
       "wi_ember_partial",
       "pf_platform",
       "wi_quarry_redacted",
+      "beacon_completions",
       "solstice_completions",
       "meridian_completions",
-      "atlas_completed",
-      "lattice_completions",
-      "beacon_completions",
       "ember_completed",
       "borealis_completed",
+      "lattice_completions",
+      "atlas_completed",
       "sh_ember_stalled",
       "lattice_touching_contributors",
       "pr_ledger_990_merged",
@@ -1781,8 +1750,8 @@
       "ia_beacon_allocation",
       "doc_false_dependency_claim",
       "sc_ledger_declared_complete",
-      "wg_identity_rewrite",
       "proj_identity_rewrite",
+      "wg_identity_rewrite",
       "ia_atlas_mix",
       "pr_pulse_212",
       "proj_beacon",
@@ -1798,8 +1767,8 @@
       "proj_acr",
       "wg_acr",
       "pr_ledger_990",
-      "cc_lattice_active",
       "wu_ledger_dual_write",
+      "cc_lattice_active",
       "tr_ledger_suite",
       "ep_keyword_stuffed",
       "dorado_outbound_reviews",
@@ -1814,17 +1783,17 @@
       "wi_atlas_wip",
       "rv_vertex_cycles",
       "rv_atlas_queue",
-      "atlas_wip",
       "borealis_wip",
+      "atlas_wip",
       "wi_ember_partial",
       "wi_quarry_redacted",
+      "beacon_completions",
       "solstice_completions",
       "meridian_completions",
-      "atlas_completed",
-      "lattice_completions",
-      "beacon_completions",
       "ember_completed",
       "borealis_completed",
+      "lattice_completions",
+      "atlas_completed",
       "sh_ember_stalled",
       "lattice_touching_contributors",
       "pr_ledger_990_merged",
@@ -1901,7 +1870,7 @@
         "cosine_similarity"
        ],
        "rank": 1,
-       "rrf_score": 0.034482758620689655,
+       "rrf_score": 0.03571428571428571,
        "signal": "fuzzy_label"
       },
       {
@@ -1989,7 +1958,7 @@
         "cosine_similarity"
        ],
        "rank": 9,
-       "rrf_score": 0.021739130434782608,
+       "rrf_score": 0.022222222222222223,
        "signal": "fuzzy_label"
       }
      ],
@@ -2086,14 +2055,7 @@
     },
     {
      "authorization_filtered_count": 0,
-     "bm25_order": [
-      "rv_vertex_cycles",
-      "wi_frost_outlier",
-      "rv_atlas_queue",
-      "rv_borealis_normal",
-      "rv_dorado_outbound",
-      "rv_vertex_revoked"
-     ],
+     "bm25_order": [],
      "cosine_order": [
       "rv_vertex_cycles",
       "rv_vertex_revoked",
@@ -2104,9 +2066,9 @@
       "vertex_review_cycles",
       "sc_ledger_declared_complete",
       "wi_beacon_deleted",
-      "dorado_review_wait",
-      "borealis_review_wait",
       "atlas_review_wait",
+      "borealis_review_wait",
+      "dorado_review_wait",
       "tr_ledger_suite",
       "wu_ledger_cutover",
       "atlas_wip",
@@ -2116,28 +2078,28 @@
       "pr_ledger_990_merged",
       "sc_acr_still_open",
       "proj_ledger_migration",
-      "wg_identity_rewrite",
       "proj_identity_rewrite",
+      "wg_identity_rewrite",
       "sc_pulse_declared_complete",
       "wu_ledger_backfill",
       "wi_ledger_backfill_open",
+      "ember_completed",
+      "beacon_completions",
+      "borealis_completed",
       "lattice_completions",
       "meridian_completions",
       "solstice_completions",
       "atlas_completed",
-      "ember_completed",
-      "beacon_completions",
-      "borealis_completed",
       "dp_ledger_prod",
       "wg_payments_rewrite_superseded",
       "repo_checkout",
       "wi_ledger_children",
       "proj_payments_rewrite",
       "wu_ledger_dual_write",
+      "dp_identity_none",
       "pr_ledger_990",
       "oc_ledger_present",
       "wu_ledger_schema",
-      "dp_identity_none",
       "cc_quarry_activity",
       "rv_dorado_outbound",
       "frost_cycle_p90",
@@ -2150,19 +2112,17 @@
      "mentions": [],
      "observation_hits": [
       "rv_vertex_cycles",
-      "rv_atlas_queue",
       "rv_vertex_revoked",
-      "wi_frost_outlier",
+      "rv_atlas_queue",
       "rv_borealis_normal",
-      "rv_dorado_outbound",
       "dorado_outbound_reviews",
       "sc_payments_rewrite_cancelled",
       "vertex_review_cycles",
       "sc_ledger_declared_complete",
       "wi_beacon_deleted",
-      "dorado_review_wait",
-      "borealis_review_wait",
       "atlas_review_wait",
+      "borealis_review_wait",
+      "dorado_review_wait",
       "tr_ledger_suite",
       "atlas_wip",
       "borealis_wip",
@@ -2172,19 +2132,20 @@
       "wg_identity_rewrite",
       "sc_pulse_declared_complete",
       "wi_ledger_backfill_open",
+      "ember_completed",
+      "beacon_completions",
+      "borealis_completed",
       "lattice_completions",
       "meridian_completions",
       "solstice_completions",
       "atlas_completed",
-      "ember_completed",
-      "beacon_completions",
-      "borealis_completed",
       "dp_ledger_prod",
       "wg_payments_rewrite_superseded",
       "wi_ledger_children",
-      "oc_ledger_present",
       "dp_identity_none",
+      "oc_ledger_present",
       "cc_quarry_activity",
+      "rv_dorado_outbound",
       "frost_cycle_p90",
       "doc_injected_runbook",
       "inc_atlas_gateway",
@@ -2266,7 +2227,7 @@
         "cosine_similarity"
        ],
        "rank": 3,
-       "rrf_score": 0.043478260869565216,
+       "rrf_score": 0.045454545454545456,
        "signal": "fuzzy_label"
       },
       {
@@ -2321,7 +2282,7 @@
         "cosine_similarity"
        ],
        "rank": 8,
-       "rrf_score": 0.025,
+       "rrf_score": 0.024390243902439025,
        "signal": "fuzzy_label"
       },
       {
@@ -2332,7 +2293,7 @@
         "cosine_similarity"
        ],
        "rank": 9,
-       "rrf_score": 0.023809523809523808,
+       "rrf_score": 0.023255813953488372,
        "signal": "fuzzy_label"
       }
      ],
@@ -2431,21 +2392,10 @@
     },
     {
      "authorization_filtered_count": 0,
-     "bm25_order": [
-      "wg_payments_rewrite_superseded",
-      "sc_payments_rewrite_cancelled",
-      "proj_payments_rewrite",
-      "proj_zenith",
-      "wg_zenith",
-      "wi_beacon_deleted",
-      "wi_borealis_wip",
-      "wi_ember_partial",
-      "wi_atlas_wip",
-      "wi_quarry_redacted"
-     ],
+     "bm25_order": [],
      "cosine_order": [
-      "proj_zenith",
       "wg_zenith",
+      "proj_zenith",
       "proj_payments_rewrite",
       "sc_payments_rewrite_cancelled",
       "wg_payments_rewrite_superseded",
@@ -2460,13 +2410,13 @@
       "svc_pulse_api",
       "repo_checkout",
       "dp_pulse_prod",
+      "atlas_completed",
       "beacon_completions",
       "borealis_completed",
-      "ember_completed",
-      "atlas_completed",
       "solstice_completions",
       "lattice_completions",
       "meridian_completions",
+      "ember_completed",
       "wu_ledger_cutover",
       "ia_cinder_displaced",
       "proj_ledger_migration",
@@ -2498,30 +2448,26 @@
      "leg": "semantic_hybrid",
      "mentions": [],
      "observation_hits": [
-      "wg_payments_rewrite_superseded",
-      "sc_payments_rewrite_cancelled",
       "wg_zenith",
-      "wi_beacon_deleted",
-      "wi_ember_partial",
-      "wi_borealis_wip",
+      "sc_payments_rewrite_cancelled",
+      "wg_payments_rewrite_superseded",
       "rv_vertex_cycles",
-      "wi_atlas_wip",
       "atlas_wip",
-      "wi_quarry_redacted",
       "borealis_wip",
       "pr_vertex_401_cycles",
       "dp_pulse_prod",
+      "atlas_completed",
       "beacon_completions",
       "borealis_completed",
-      "ember_completed",
-      "atlas_completed",
       "solstice_completions",
       "lattice_completions",
       "meridian_completions",
+      "ember_completed",
       "ia_cinder_displaced",
       "rv_vertex_revoked",
       "wi_beacon_demand",
       "sh_solstice_no_allocation",
+      "wi_ember_partial",
       "dp_ledger_prod",
       "sc_ledger_declared_complete",
       "wi_ledger_children",
@@ -2580,11 +2526,10 @@
        "display_label": "Zenith Payments",
        "mechanism": "embedding_similarity",
        "methods": [
-        "bm25",
         "cosine_similarity"
        ],
        "rank": 0,
-       "rrf_score": 1.25,
+       "rrf_score": 0.5,
        "signal": "fuzzy_label"
       },
       {
@@ -2592,11 +2537,10 @@
        "display_label": "Payments Rewrite",
        "mechanism": "embedding_similarity",
        "methods": [
-        "bm25",
         "cosine_similarity"
        ],
        "rank": 1,
-       "rrf_score": 0.6666666666666666,
+       "rrf_score": 0.3333333333333333,
        "signal": "fuzzy_label"
       },
       {
@@ -2913,8 +2857,8 @@
       "cl_borealis",
       "rv_vertex_revoked",
       "oc_ledger_present",
-      "sc_ledger_declared_complete",
       "rv_vertex_cycles",
+      "sc_ledger_declared_complete",
       "team_borealis",
       "pr_vertex_401_cycles",
       "sh_tidal_thin",
@@ -2952,8 +2896,8 @@
       "cl_borealis",
       "rv_vertex_revoked",
       "oc_ledger_present",
-      "sc_ledger_declared_complete",
       "rv_vertex_cycles",
+      "sc_ledger_declared_complete",
       "pr_vertex_401_cycles",
       "sh_tidal_thin",
       "dp_ledger_prod",

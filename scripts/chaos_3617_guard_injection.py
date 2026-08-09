@@ -506,6 +506,76 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="DID NOT RAISE",
     ),
     Mutation(
+        mutation_id="candidate-search-ranks-a-withheld-entity",
+        defect=(
+            "a restricted entity that matches the query is filtered AFTER "
+            "ranking, so its position leaks even though its record is never "
+            "returned -- and the corpus's restricted project is same-tenant, "
+            "so no tenant check catches it"
+        ),
+        path=SRC / "discovery.py",
+        anchor="        if node.canonical_id not in authorized:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_candidate_search.py::"
+            "TestAuthorizationBoundsTheSearch",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="candidate-ranking-depends-on-node-order",
+        defect=(
+            "the ranking falls back on iteration order, so the same world and "
+            "the same query rank differently between runs and a recorded "
+            "trial result cannot be reproduced"
+        ),
+        path=SRC / "discovery.py",
+        anchor="    ranked = sorted(matches.values(), key=lambda item: item.rank_key)",
+        replacement="    ranked = list(matches.values())",
+        tests=(
+            f"{TESTS}/test_chaos_3617_candidate_search.py::"
+            "TestRankingIsTotalAndContentDerived::"
+            "test_shuffling_the_node_order_does_not_change_the_ranking",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="fuzzy-match-accepts-an-infix",
+        defect=(
+            "fuzzy matching becomes substring containment, so 'acr' matches "
+            "'sacred' and a wrong-but-confident subject reaches rank"
+        ),
+        path=SRC / "discovery.py",
+        anchor="    return any(query_tokens <= set(text.split()) for text in haystacks)",
+        replacement="    return any(normalized_query in text for text in haystacks)",
+        tests=(
+            f"{TESTS}/test_chaos_3617_candidate_search.py::"
+            "TestFuzzyMatchingIsConservative::"
+            "test_a_query_appearing_only_as_an_infix_matches_nothing",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="corpus-authorization-falls-back-to-tenancy",
+        defect=(
+            "the arm authorizes by tenant instead of by grant, so the "
+            "same-tenant restricted project is returned to a principal who "
+            "cannot see it -- invisible to every tenant-level check"
+        ),
+        path=SRC / "corpus_adapter.py",
+        anchor="    return world.authorized_entity_ids(principal_id)",
+        replacement=(
+            "    return frozenset(\n"
+            "        seed_ids_for_tenant(world.PRINCIPALS[principal_id].tenant_id)\n"
+            "    )"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_corpus_adapter.py::"
+            "TestAuthorizationIsByGrantNotTenancy",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

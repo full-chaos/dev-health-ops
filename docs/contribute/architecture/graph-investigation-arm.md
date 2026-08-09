@@ -38,6 +38,7 @@ product feature, and nothing about it is on a user-visible path.
 | Related entities, lineage paths, evidence index | Yes |
 | Packet emission through the canonical validator | Yes |
 | Alias / acronym / renamed-entity candidate search | Not yet |
+| Semantic retrieval | Seam + guard in place; search not yet |
 | Cohort construction | Not yet — refused loudly, never faked |
 | Driver synthesis | Not yet — the packet's outcome says so |
 | Approved-unstructured extraction | Boundary in place, extraction not yet |
@@ -151,14 +152,50 @@ Unstructured documents travel a separate path
 body, and are dropped before extraction can see them unless `approved` is
 true.
 
-### The honest limitation of the deterministic embedder
+### Embedders, and the guard that keeps claims honest
 
-`DeterministicEmbedder` derives vectors from BLAKE2b. It is reproducible and
-needs no API key, and it carries **no semantic similarity whatsoever** —
-nearest-neighbour search over it is meaningless. `semantic` is `False` on the
-protocol so a future candidate-search path must consult it before claiming a
-semantic match signal. Exact, alias, acronym, previous-name and
-provider-identifier matching are all exact lookups and are unaffected.
+Two embedders sit behind the `EmbeddingBackend` protocol.
+
+`DeterministicEmbedder` derives vectors from BLAKE2b. It is reproducible,
+offline and free, and it carries **no semantic similarity whatsoever** —
+nearest-neighbour search over it returns a confident, arbitrary ordering.
+`CloudEmbedder` wraps Graphiti's OpenAI embedder and is the one a retrieval
+trial must use, or the trial measures a bare graph store rather than
+Graphiti's actual value-add. It reads the repo's existing credential
+convention (`LLM_API_KEY`, then `OPENAI_API_KEY`) and **refuses to fall back**
+when no key is present: a run that silently used hash vectors would look
+semantic in every artifact and score like noise, which is strictly worse
+than failing.
+
+The danger with the hash embedder is not that it fails — it is that it
+*succeeds convincingly*. So the rule is a guard, not a doc note. The arm
+tracks a `MatchMechanism` alongside each subject match (`EXACT_LOOKUP`,
+`ALIAS_LOOKUP`, `LEXICAL_FUZZY`, `EMBEDDING_SIMILARITY`, `MODEL_INFERENCE`),
+and `build_packet` **refuses** to emit a match whose mechanism needs
+semantics — or whose signal is inherently semantic, like
+`CONVERSATIONAL_REFERENCE` — while the active embedder reports
+`semantic=False`. The mechanism never reaches the wire: the frozen contract
+has no field for it and forbids extras, and it is an integrity concern about
+how the arm produced a claim rather than something a consumer should branch
+on.
+
+The guard deliberately does *not* ban `FUZZY_LABEL` outright. Levenshtein
+over stored labels is honest lexical work that needs no model; banning it
+would push a future implementation toward mislabelling its own mechanism to
+get past the check.
+
+**The embedder is part of the projection's identity.** A store embedded with
+one model is not the same projection as a store embedded with another, so the
+embedder's `model_id` is folded into the emitted `projection_version` — the
+frozen contract has no separate field for it, and that is where it belongs
+anyway: a version that called those two runs the same would make
+incomparable results look comparable.
+
+**Embedding cost is bounded pre-flight.** `max_embedding_calls` is checked
+before the first call, against the node+edge count the writer already knows,
+so an over-budget run costs nothing rather than paying for most of the budget
+and then stopping half-written. A non-semantic embedder makes no calls and is
+not charged.
 
 ## Identity, partitioning and authorization
 
@@ -373,7 +410,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **21** guards the arm relies on, the harness disables
+For each of the **28** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it

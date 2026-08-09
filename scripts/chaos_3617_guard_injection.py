@@ -439,6 +439,69 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="semantic-claim-allowed-under-a-hash-embedder",
+        defect=(
+            "a match produced by similarity over non-semantic hash vectors is "
+            "emitted as a real subject match, and scores as a retrieval "
+            "capability the arm does not have"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if embedder.semantic:\n        return",
+        replacement="    if True:\n        return",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestSemanticClaimsAreRefusedUnderANonSemanticEmbedder",
+        ),
+    ),
+    Mutation(
+        mutation_id="embedding-budget-not-checked-before-spending",
+        defect=(
+            "a projection spends unbounded embedding calls, and an "
+            "over-budget run pays for most of them before stopping"
+        ),
+        path=SRC / "store.py",
+        anchor="            if not outcome.within_budget:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::TestEmbeddingBudget::"
+            "test_a_projection_over_the_embedding_budget_is_refused_before_any_call",
+        ),
+    ),
+    Mutation(
+        mutation_id="projection-version-omits-the-embedder",
+        defect=(
+            "two runs embedded with different models report the same "
+            "projection version, making incomparable results look comparable"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        projection_version=(\n"
+            "            f\"{PROJECTION_VERSION.removesuffix('.v1')}.\"\n"
+            '            f"{embedder_projection_suffix(active_embedder)}.v1"\n'
+            "        ),"
+        ),
+        replacement="        projection_version=PROJECTION_VERSION,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_packet_contract.py::"
+            "TestReproducibilityMetadata::"
+            "test_the_projection_version_names_the_embedder_that_produced_it",
+        ),
+    ),
+    Mutation(
+        mutation_id="cloud-embedder-degrades-silently-without-a-key",
+        defect=(
+            "a run with no API key silently uses hash vectors while every "
+            "artifact says it was semantic"
+        ),
+        path=SRC / "backend.py",
+        anchor="        if not key:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::TestEmbedderContracts::"
+            "test_the_cloud_embedder_refuses_to_degrade_silently",
+        ),
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

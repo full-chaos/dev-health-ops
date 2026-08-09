@@ -42,6 +42,7 @@ from .backend import (
     to_graphiti_edges,
     to_graphiti_nodes,
 )
+from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .flags import (
     TRIAL_STORE_URI_VAR,
     TrialStoreConfig,
@@ -56,6 +57,7 @@ from .watermark import IndexWatermark
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "EmbeddingBudgetExceededError",
     "GraphArmStore",
     "ProjectionDisabledError",
     "partition_exists_for",
@@ -74,6 +76,10 @@ class StoreUnavailableError(RuntimeError):
 
 class ProjectionDisabledError(RuntimeError):
     """A write was attempted with the projection flag off."""
+
+
+class EmbeddingBudgetExceededError(RuntimeError):
+    """The projection would need more embedding calls than the run allows."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +160,9 @@ class GraphArmStore:
     async def close(self) -> None:
         await self._driver.close()
 
-    async def write_projection(self, projection: GraphProjection) -> WriteResult:
+    async def write_projection(
+        self, projection: GraphProjection, *, budgets: TrialBudgets = DEFAULT_BUDGETS
+    ) -> WriteResult:
         """Write one projection. Structured only, no model call, no waiting.
 
         Three refusals before anything is written:
@@ -179,6 +187,21 @@ class GraphArmStore:
                 f"this store is open for {self._org_id!r}"
             )
         assert_partition_matches_org(projection.partition, self._org_id)
+
+        if self._embedder.semantic:
+            # Every node and every edge needs one vector, and the count is
+            # known before the first call -- so an over-budget run costs
+            # nothing, rather than costing most of the budget and then
+            # stopping half-written. A non-semantic embedder makes no calls
+            # and is deliberately not charged.
+            needed = len(projection.nodes) + len(projection.edges)
+            outcome = budgets.check_embedding_calls(needed)
+            if not outcome.within_budget:
+                raise EmbeddingBudgetExceededError(
+                    f"{outcome.detail}; this projection would spend more "
+                    "embedding calls than the run allows. Narrow the batch or "
+                    "raise max_embedding_calls deliberately"
+                )
 
         nodes = to_graphiti_nodes(projection, self._embedder)
         edges = to_graphiti_edges(projection, self._embedder)

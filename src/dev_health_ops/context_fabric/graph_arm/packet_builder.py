@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -87,6 +87,13 @@ from dev_health_ops.api.dev.investigation_contract import (
 )
 from dev_health_ops.api.dev.investigation_contract.vocabulary import EdgeValidityBasis
 
+from .backend import (
+    SEMANTIC_MECHANISMS,
+    DeterministicEmbedder,
+    EmbeddingBackend,
+    MatchMechanism,
+    embedder_projection_suffix,
+)
 from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .projection import PROJECTION_VERSION
 from .readback import QUERY_VERSION, DiscoveredPath, InvestigationReadout
@@ -99,6 +106,8 @@ __all__ = [
     "RANKING_VERSION",
     "JobContext",
     "PacketTooLargeError",
+    "SubjectMatchFinding",
+    "UnsupportedMatchMechanismError",
     "TrialContext",
     "UnsupportedComparisonShapeError",
     "build_packet",
@@ -121,6 +130,44 @@ _SOURCE_CONTRACT_VERSION = "graph_arm_source_read.v1"
 #: Mirrored here rather than caught as a pydantic error, so exceeding it is a
 #: disclosed cap instead of a crash at emission time.
 _MAX_PATH_CITATIONS = 10
+
+
+#: Signals that cannot be produced without semantics, whatever mechanism a
+#: producer claims. ``CONVERSATIONAL_REFERENCE`` resolves "the other project
+#: we discussed", which no exact or lexical lookup can do; asserting it from
+#: a non-semantic run would be a capability claim with nothing behind it.
+_INHERENTLY_SEMANTIC_SIGNALS: frozenset[SubjectMatchSignal] = frozenset(
+    {SubjectMatchSignal.CONVERSATIONAL_REFERENCE}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SubjectMatchFinding:
+    """One reason a candidate subject matched, plus *how* it was produced.
+
+    ``mechanism`` never reaches the wire — the frozen contract has no field
+    for it and forbids extras. It exists so :func:`build_packet` can refuse
+    to emit a semantic claim that the active embedder cannot support.
+    """
+
+    canonical_id: str
+    signal: SubjectMatchSignal
+    matched_text: str
+    source_class: SourceClass
+    mechanism: MatchMechanism
+
+
+class UnsupportedMatchMechanismError(RuntimeError):
+    """A semantic match was offered while the embedder carries no semantics.
+
+    The failure this prevents is silent and would corrupt the trial rather
+    than break it: nearest-neighbour search over
+    :class:`~.backend.DeterministicEmbedder`'s hash vectors returns a
+    confident, arbitrary ordering, and a packet that presented it as an
+    alias or fuzzy-label match would score as a retrieval capability the arm
+    does not have. Raising is the only outcome that cannot be mistaken for a
+    result.
+    """
 
 
 class PacketTooLargeError(RuntimeError):
@@ -193,6 +240,35 @@ def signer_from_environment() -> EvidenceReferenceSigner:
     return EvidenceReferenceSigner(secret)
 
 
+def _check_match_mechanisms(
+    matches: Sequence[SubjectMatchFinding], embedder: EmbeddingBackend
+) -> None:
+    """Refuse semantic claims the active embedder cannot support.
+
+    Both directions are checked, because a producer can get this wrong from
+    either end: a mechanism that needs semantics under a non-semantic
+    embedder, and a signal that is *inherently* semantic however it claims to
+    have been produced.
+    """
+
+    if embedder.semantic:
+        return
+    offending = [
+        (match.canonical_id, match.signal.value, match.mechanism.value)
+        for match in matches
+        if match.mechanism in SEMANTIC_MECHANISMS
+        or match.signal in _INHERENTLY_SEMANTIC_SIGNALS
+    ]
+    if offending:
+        raise UnsupportedMatchMechanismError(
+            f"these subject matches claim semantics the active embedder "
+            f"({embedder.model_id}) does not have: {offending}. Similarity "
+            "over non-semantic vectors is a confident arbitrary ordering, and "
+            "a packet presenting it as a match would score as a retrieval "
+            "capability this arm does not have"
+        )
+
+
 def _packet_id(run_id: str, job_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cf-graph-arm/{run_id}/{job_id}"))
 
@@ -254,10 +330,28 @@ def build_packet(
     signer: EvidenceReferenceSigner,
     trial: TrialContext,
     produced_at: datetime,
+    embedder: EmbeddingBackend | None = None,
+    subject_matches: Sequence[SubjectMatchFinding] | None = None,
     budgets: TrialBudgets = DEFAULT_BUDGETS,
     staleness_tolerance: timedelta = DEFAULT_STALENESS_TOLERANCE,
 ) -> AskDevInvestigationPacket:
-    """Turn one bounded traversal into the frozen investigation packet."""
+    """Turn one bounded traversal into the frozen investigation packet.
+
+    ``embedder`` is the embedder the run actually used. It decides two
+    things: whether a semantic match may be emitted at all
+    (:func:`_check_match_mechanisms`), and what the emitted
+    ``projection_version`` says — because a store embedded with one model is
+    not the same projection as a store embedded with another, and a version
+    that called them the same would make two incomparable runs look
+    comparable.
+
+    ``subject_matches`` carries how each candidate was found. Defaulting to
+    ``None`` reproduces this revision's only mechanism — exact canonical-id
+    lookup — rather than inventing matches the arm did not make.
+    """
+
+    active_embedder = embedder or DeterministicEmbedder()
+    _check_match_mechanisms(subject_matches or (), active_embedder)
 
     if job.comparison_shape is not ComparisonShape.SINGULAR_SUBJECT:
         raise UnsupportedComparisonShapeError(
@@ -646,7 +740,10 @@ def build_packet(
         packet_schema_version="ask_dev_investigation_packet.v1",
         query_version=QUERY_VERSION,
         ranking_version=RANKING_VERSION,
-        projection_version=PROJECTION_VERSION,
+        projection_version=(
+            f"{PROJECTION_VERSION.removesuffix('.v1')}."
+            f"{embedder_projection_suffix(active_embedder)}.v1"
+        ),
         source_contract_versions=tuple(
             SourceContractVersion(
                 source_class=source_class, contract_version=_SOURCE_CONTRACT_VERSION

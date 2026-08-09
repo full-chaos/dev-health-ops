@@ -245,6 +245,7 @@ nav:
           - Ask Dev subject preflight: contribute/architecture/ask-dev-subject-preflight.md
           - Ask Dev role readiness: contribute/architecture/ask-dev-role-readiness.md
           - Ask Dev investigation packet: contribute/architecture/ask-dev-investigation-packet.md
+          - Ask Dev investigation corpus: contribute/architecture/ask-dev-investigation-corpus.md
       - Develop and test:
           - contribute/development/index.md
           - Commands: contribute/development/commands.md

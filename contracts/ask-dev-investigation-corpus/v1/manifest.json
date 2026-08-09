@@ -1,0 +1,111 @@
+{
+  "artifact_root_note": "A sibling of contracts/ask-dev-investigation/v1 rather than a member of it. That tree is the frozen CHAOS-3615 contract and its drift gate rejects any unexpected file, so corpus output there would couple every corpus iteration to the contract's freeze.",
+  "authorization_policy": {
+    "note": "ZERO_UNAUTHORIZED_RESULTS is scored against world/principals.json, not against the packet's own authorized_entity_ids. The contract proves internal consistency with that declaration; only the world can prove the declaration is true.",
+    "producer_declaration_is_not_evidence": true
+  },
+  "collection_artifacts": {
+    "documents": "world/documents.json",
+    "entities": "world/entities.json",
+    "episodes": "world/episodes.json",
+    "evidence_records": "world/evidence.json",
+    "measurements": "world/measurements.json",
+    "principals": "world/principals.json",
+    "relationships": "world/relationships.json",
+    "source_feeds": "world/source_manifest.json"
+  },
+  "compatibility": "internal-trial-artifact-not-client-served",
+  "corpus_version": "ask_dev_investigation_corpus.v1",
+  "counts": {
+    "cases_authored": 39,
+    "cases_total": 41,
+    "documents": 3,
+    "entities": 50,
+    "episodes": 3,
+    "evidence_records": 68,
+    "measurements": 39,
+    "oracles": 39,
+    "principals": 3,
+    "relationships": 73,
+    "required_topics": 40,
+    "source_feeds": 16
+  },
+  "files": [
+    {
+      "path": "examples/reference/H05_the_other_project_we_discussed.json",
+      "sha256": "3aa850390c4e270bce892aa0cb13568cbea46f254e49e7d2342128aea80fc3cc"
+    },
+    {
+      "path": "examples/reference/S03_shared_dependency_portfolio_risk.json",
+      "sha256": "49ca8a5bf1c2d657f45593508d26a6b7ba9522d8d9a07923111b751fc3892ba3"
+    },
+    {
+      "path": "examples/reference/S04_symptom_versus_driver.json",
+      "sha256": "7c09e406a550475b65f4a8d67d317b4b2a99223f8ecb1ca3816c16b59a0a1493"
+    },
+    {
+      "path": "examples/reference_digests.json",
+      "sha256": "f4b6ee3defa5396f5d823629d0a487e6f7c9c1b356fed7a532be65d166eb416f"
+    },
+    {
+      "path": "registries/cases.json",
+      "sha256": "6b0a3f80157bacc10e0ef051b78ecf7f9f2308cba73772465fa43054daaff7ec"
+    },
+    {
+      "path": "registries/coverage_matrix.json",
+      "sha256": "e2aec491ff29e57ec11e325b62fff4f315a7b4b2fe55987e56786455e8250e1f"
+    },
+    {
+      "path": "registries/dispositions.json",
+      "sha256": "5bd174c74f92827672484828e29a4b0363452933648c5ba163f4586ae82778bb"
+    },
+    {
+      "path": "registries/oracles.json",
+      "sha256": "5e178aeb1c42612d8006616259f16768f00f807f4aa57d6a1b54014b7318cd72"
+    },
+    {
+      "path": "world/documents.json",
+      "sha256": "b3f47acd5a8749227caa57c9952685a3e92d22d622a45ee992682c4035d9f7c4"
+    },
+    {
+      "path": "world/entities.json",
+      "sha256": "6623a4a366e740f555297f618e5ac2d83e98a0004d24b1bc3ceec90f85e733a1"
+    },
+    {
+      "path": "world/episodes.json",
+      "sha256": "a921e9b8b5228a5ab2b153c7ebf08f3a8cab16df3b6cca9a481eff6fa6122dfb"
+    },
+    {
+      "path": "world/evidence.json",
+      "sha256": "ad8076570d8494cd490e2f60d7ec6f1739aca72dec752874055825dee1fbe315"
+    },
+    {
+      "path": "world/measurements.json",
+      "sha256": "c30246d5425f1c705cb27fccc8cd8d3dff752a53b2c1ad4cd668f18186f5a8ec"
+    },
+    {
+      "path": "world/principals.json",
+      "sha256": "902e29c4fe918d2618c108658857ef75d1e9f6fee4e75af3ea5275ff6729704d"
+    },
+    {
+      "path": "world/relationships.json",
+      "sha256": "84520124abcbf74a73b98b978a8fd22e0e387cb4ac2694725e867dfd21bbaa40"
+    },
+    {
+      "path": "world/source_manifest.json",
+      "sha256": "b6824ffe15044cf67a326fe948167d50edfa94fbf8c3cf2bac65311b8c9d5657"
+    }
+  ],
+  "pinned_clock": {
+    "trial_now": "2026-08-08 12:00:00Z",
+    "window_end": "2026-08-08 00:00:00Z",
+    "window_start": "2026-07-09 00:00:00Z",
+    "world_epoch": "2026-04-01 00:00:00Z"
+  },
+  "schema_version": "ask_dev_investigation_corpus_manifest.v1",
+  "validation_policy": {
+    "canonical_validator": "dev_health_ops.api.dev.investigation_contract.packet.AskDevInvestigationPacket",
+    "note": "The evaluation layer runs the canonical Pydantic validator on every packet before scoring it, per the contract manifest's own validation_policy. A consumer that schema-validates and stops has checked none of the cross-field rules.",
+    "schema_only_validation_is_sufficient": false
+  }
+}

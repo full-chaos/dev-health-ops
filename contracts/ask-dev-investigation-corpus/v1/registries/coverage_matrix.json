@@ -1,0 +1,2501 @@
+{
+  "aggregate_score_prohibited": true,
+  "cells": [
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H02_old_and_current_name",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H01_acronym_resolution",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_precision",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_recall",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "comparative_judgment_support",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cross_source_association",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H02_old_and_current_name"
+      ],
+      "dimension": "current_relevance",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H02_old_and_current_name",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_path_precision",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_precision",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project"
+      ],
+      "dimension": "relevant_entity_recall",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H02_old_and_current_name",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "subject_top_1",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H03_the_auth_work"
+      ],
+      "dimension": "subject_top_3",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H02_old_and_current_name",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H02_old_and_current_name",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H02_old_and_current_name",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S07_renamed_and_superseded_project",
+        "H01_acronym_resolution",
+        "H02_old_and_current_name",
+        "H03_the_auth_work",
+        "A01_cross_tenant_near_duplicate"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "ambiguous_identity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question"
+      ],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question",
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen",
+        "A05_person_level_bait",
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question"
+      ],
+      "dimension": "cohort_precision",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_recall",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "comparative_judgment_support",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cross_source_association",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "current_relevance",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question",
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen",
+        "A05_person_level_bait",
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_path_precision",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question",
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen",
+        "A05_person_level_bait",
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_precision",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_entity_recall",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_1",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen"
+      ],
+      "dimension": "subject_top_3",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question",
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen",
+        "A05_person_level_bait",
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question",
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen",
+        "A05_person_level_bait",
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question",
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen",
+        "A05_person_level_bait",
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T07_going_sideways_open_question",
+        "H07_unresolved_needs_candidates",
+        "H08_no_match_must_not_widen",
+        "A05_person_level_bait",
+        "A09_unauthorized_same_tenant_entity"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "clarification_and_no_match",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H05_the_other_project_we_discussed"
+      ],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_precision",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_recall",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "comparative_judgment_support",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H05_the_other_project_we_discussed",
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "cross_source_association",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "current_relevance",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H05_the_other_project_we_discussed",
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_path_precision",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H05_the_other_project_we_discussed"
+      ],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up"
+      ],
+      "dimension": "principal_driver_precision",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "relevant_entity_recall",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "subject_top_1",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "H05_the_other_project_we_discussed"
+      ],
+      "dimension": "subject_top_3",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H05_the_other_project_we_discussed",
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H05_the_other_project_we_discussed",
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H05_the_other_project_we_discussed",
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "H04_pronoun_follow_up",
+        "H05_the_other_project_we_discussed",
+        "H06_prior_attempt_reference"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "colloquial_follow_up",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion"
+      ],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "cohort_precision",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "cohort_recall",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "comparative_judgment_support",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness",
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "cross_source_association",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S02_implementation_versus_release_readiness"
+      ],
+      "dimension": "current_relevance",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness",
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion"
+      ],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness"
+      ],
+      "dimension": "lineage_path_precision",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness",
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "principal_driver_precision",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_entity_recall",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness"
+      ],
+      "dimension": "subject_top_1",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_3",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S02_implementation_versus_release_readiness"
+      ],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness",
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness",
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness",
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S01_declared_versus_child_completion",
+        "S02_implementation_versus_release_readiness",
+        "S06_declared_complete_without_delivery_evidence"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "declared_versus_actual",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "cohort_precision",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk"
+      ],
+      "dimension": "cohort_recall",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "comparative_judgment_support",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "cross_source_association",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "current_relevance",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "skipped_only"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk"
+      ],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "lineage_path_precision",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_precision",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk"
+      ],
+      "dimension": "relevant_entity_recall",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_1",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_3",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S03_shared_dependency_portfolio_risk",
+        "A03_false_relationship_on_real_entity"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [
+        "X01_historical_cohort_membership_delta"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "portfolio_dependency_risk",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature"
+      ],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "cohort_precision",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "cohort_recall",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "comparative_judgment_support",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature"
+      ],
+      "dimension": "cross_source_association",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "current_relevance",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature",
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "lineage_path_precision",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature",
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "principal_driver_precision",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "relevant_entity_recall",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature",
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_1",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_3",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature"
+      ],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature",
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature",
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature",
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T03_operational_displaces_feature",
+        "T04_review_pressure_across_projects"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "pressure_signals",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "cohort_precision",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "cohort_recall",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "comparative_judgment_support",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P02_critical_path_few_contributors"
+      ],
+      "dimension": "cross_source_association",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "current_relevance",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_path_precision",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity"
+      ],
+      "dimension": "principal_driver_precision",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_entity_recall",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_1",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_3",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P02_critical_path_few_contributors"
+      ],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors",
+        "P03_lightly_loaded_project"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P01_demand_exceeds_capacity",
+        "P02_critical_path_few_contributors"
+      ],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "project_capacity",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S05_multiple_interacting_drivers"
+      ],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_precision",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_recall",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "comparative_judgment_support",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S08_split_evidence_symptom"
+      ],
+      "dimension": "cross_source_association",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "current_relevance",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A02_keyword_stuffed_evidence",
+        "A04_prompt_injection_in_document",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver"
+      ],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A02_keyword_stuffed_evidence"
+      ],
+      "dimension": "lineage_path_precision",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A02_keyword_stuffed_evidence",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "principal_driver_precision",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A04_prompt_injection_in_document"
+      ],
+      "dimension": "principal_driver_recall",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "A02_keyword_stuffed_evidence"
+      ],
+      "dimension": "relevant_entity_recall",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A04_prompt_injection_in_document",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "subject_top_1",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver"
+      ],
+      "dimension": "subject_top_3",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S08_split_evidence_symptom"
+      ],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "A02_keyword_stuffed_evidence",
+        "A04_prompt_injection_in_document"
+      ],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A02_keyword_stuffed_evidence",
+        "A04_prompt_injection_in_document",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A02_keyword_stuffed_evidence",
+        "A04_prompt_injection_in_document",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A02_keyword_stuffed_evidence",
+        "A04_prompt_injection_in_document",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "S04_symptom_versus_driver",
+        "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
+        "A02_keyword_stuffed_evidence",
+        "A04_prompt_injection_in_document",
+        "A07_revoked_and_redacted_evidence"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "project_status_drivers",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P07_overstaffed_language"
+      ],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_precision",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cohort_recall",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "comparative_judgment_support",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "cross_source_association",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "current_relevance",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "P07_overstaffed_language",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [
+        "X02_person_free_capacity_denominator"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_path_precision",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_precision",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "principal_driver_recall",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_entity_recall",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "P07_overstaffed_language",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "subject_top_1",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_3",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "P07_overstaffed_language",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [
+        "X02_person_free_capacity_denominator"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "P07_overstaffed_language",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [
+        "X02_person_free_capacity_denominator"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "P07_overstaffed_language",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [
+        "X02_person_free_capacity_denominator"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "P07_overstaffed_language",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [
+        "X02_person_free_capacity_denominator"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "P04_misleading_contributor_count",
+        "P05_allocation_absent_still_supportable",
+        "P06_no_evidence_for_staffing_conclusion",
+        "P07_overstaffed_language",
+        "A06_unsupported_staffing_certainty"
+      ],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "staffing_language",
+      "skipped_case_ids": [
+        "X02_person_free_capacity_denominator"
+      ],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "alias_acronym_rename_resolution",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team"
+      ],
+      "dimension": "answer_usefulness_beyond_dashboard",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "clarification_candidate_precision",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T02_high_wip_without_struggle",
+        "T05_stale_source_data",
+        "T06_healthy_despite_noisy_metric",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "cohort_exclusion_explainability",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team"
+      ],
+      "dimension": "cohort_inclusion_explainability",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "T02_high_wip_without_struggle",
+        "T06_healthy_despite_noisy_metric"
+      ],
+      "dimension": "cohort_precision",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "cohort_recall",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T02_high_wip_without_struggle"
+      ],
+      "dimension": "comparative_judgment_support",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "conversational_reference_resolution",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "T02_high_wip_without_struggle",
+        "T05_stale_source_data",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "cross_source_association",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T05_stale_source_data",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "current_relevance",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "T02_high_wip_without_struggle",
+        "T05_stale_source_data",
+        "T06_healthy_despite_noisy_metric",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "evidence_closure",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_direction_correctness",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "lineage_path_precision",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "no_unsafe_organization_widening",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team"
+      ],
+      "dimension": "principal_driver_precision",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team"
+      ],
+      "dimension": "principal_driver_recall",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_entity_recall",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "relevant_relationship_recall",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_1",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "subject_top_3",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    },
+    {
+      "authored_case_ids": [
+        "T02_high_wip_without_struggle",
+        "T06_healthy_despite_noisy_metric"
+      ],
+      "dimension": "symptom_versus_driver_distinction",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T05_stale_source_data",
+        "T06_healthy_despite_noisy_metric"
+      ],
+      "dimension": "unsupported_attribution_rate",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "T02_high_wip_without_struggle",
+        "T05_stale_source_data",
+        "T06_healthy_despite_noisy_metric",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "useful_uncertainty_behaviour",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "T02_high_wip_without_struggle",
+        "T05_stale_source_data",
+        "T06_healthy_despite_noisy_metric",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "zero_graph_native_surface_leakage",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "T02_high_wip_without_struggle",
+        "T05_stale_source_data",
+        "T06_healthy_despite_noisy_metric",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "zero_person_level_ranking",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [
+        "T01_clearly_struggling_team",
+        "T02_high_wip_without_struggle",
+        "T05_stale_source_data",
+        "T06_healthy_despite_noisy_metric",
+        "A08_stale_and_truncated_state"
+      ],
+      "dimension": "zero_unauthorized_results",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "covered"
+    },
+    {
+      "authored_case_ids": [],
+      "dimension": "zero_unsupported_staffing_certainty",
+      "question_family": "struggling_teams",
+      "skipped_case_ids": [],
+      "status": "unmapped"
+    }
+  ],
+  "reporting_shape": "per_question_family_x_per_dimension",
+  "schema_version": "ask_dev_corpus_coverage_matrix.v1"
+}

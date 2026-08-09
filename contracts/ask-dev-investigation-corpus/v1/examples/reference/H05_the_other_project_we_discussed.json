@@ -1,0 +1,244 @@
+{
+  "analytical_job": {
+    "comparison_shape": "singular_subject",
+    "conversation_reference_ids": [
+      "conv_H03_the_auth_work"
+    ],
+    "interpretation_limitations": [
+      {
+        "detail": "The question names no single subject, so the analytical job was interpreted broadly and the chosen reading is stated rather than assumed.",
+        "kind": "interpretation_uncertainty"
+      }
+    ],
+    "job_id": "job_H05_the_other_project_we_discussed",
+    "job_statement": "A reference to a prior turn with two candidates in play",
+    "job_uncertainty": "broad_with_uncertainty",
+    "question_family": "colloquial_follow_up",
+    "schema_version": "ask_dev_analytical_job.v1",
+    "surface_context_refs": [],
+    "time_context": {
+      "analytical_slice": "current",
+      "as_of": null,
+      "edge_validity_basis": "not_required",
+      "end": "2026-08-08 00:00:00Z",
+      "historical_comparability": "not_applicable",
+      "start": "2026-07-09 00:00:00Z",
+      "timezone": "UTC"
+    }
+  },
+  "comparison_cohort": {
+    "authorization_filtered_count": 0,
+    "cohort_id": "cohort_H05_the_other_project_we_discussed",
+    "cohort_uncertainty": null,
+    "comparison_shape": "singular_subject",
+    "completeness": "complete",
+    "exclusions": [],
+    "members": [],
+    "schema_version": "ask_dev_comparison_cohort.v1",
+    "supported_comparison_dimensions": [],
+    "truncation_reason": null
+  },
+  "driver_analysis": {
+    "candidates": [],
+    "candidates_truncated": false,
+    "principal_driver_ids": [],
+    "schema_version": "ask_dev_driver_analysis.v1",
+    "truncation_reason": null
+  },
+  "evidence_coverage": {
+    "authorization_filtered_count": 0,
+    "clarification_needs": [
+      {
+        "candidate_ids": [
+          "cand_1",
+          "cand_2"
+        ],
+        "kind": "ambiguous_subject",
+        "prompt": "Which of these did you mean?"
+      }
+    ],
+    "conflicts": [],
+    "evidence_index": [
+      {
+        "evidence": {
+          "citation_text": "Registered aliases: 'the auth work', 'IPR', previous name 'Northstar'.",
+          "confidence": 1.0,
+          "display_label": "Alias registry entry",
+          "entity_id": "proj_identity_rewrite",
+          "entity_type": "project",
+          "evidence_ref_id": "ev1_57a7304807cc2556bb6d6cf2996069e9030410b9",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/project/proj_identity_rewrite",
+            "source_url": null
+          },
+          "observed_at": "2026-05-20 00:00:00Z",
+          "provenance": "Corpus source record wg_identity_alias_registry",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_graph",
+        "supports_driver_ids": [],
+        "supports_entity_ids": [],
+        "supports_path_ids": [],
+        "supports_subject_ids": [
+          "proj_identity_rewrite"
+        ]
+      },
+      {
+        "evidence": {
+          "citation_text": "Canonical project record; no registered alias containing 'the auth work'.",
+          "confidence": 1.0,
+          "display_label": "Auth Gateway Hardening",
+          "entity_id": "proj_auth_gateway_hardening",
+          "entity_type": "project",
+          "evidence_ref_id": "ev1_6ee33205f747978fdda52511d02d4da95106c9aa",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/project/proj_auth_gateway_hardening",
+            "source_url": null
+          },
+          "observed_at": "2026-04-01 00:00:00Z",
+          "provenance": "Corpus source record wg_auth_hardening",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_graph",
+        "supports_driver_ids": [],
+        "supports_entity_ids": [],
+        "supports_path_ids": [],
+        "supports_subject_ids": [
+          "proj_auth_gateway_hardening"
+        ]
+      }
+    ],
+    "evidence_truncated": false,
+    "limitations": [],
+    "missing_sources": [],
+    "schema_version": "ask_dev_evidence_coverage.v1",
+    "source_health": [
+      {
+        "detail": "Read and found to carry nothing bearing on this question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "source_class": "review",
+        "state": "available_current"
+      },
+      {
+        "detail": "Read and found to carry nothing bearing on this question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "source_class": "work_item",
+        "state": "available_current"
+      }
+    ],
+    "truncation_reason": null
+  },
+  "organization_id": "org_helio",
+  "outcome": "needs_clarification",
+  "packet_id": "b140788f-38bc-f0cc-4f2c-706918b23f07",
+  "produced_at": "2026-08-08 12:00:00Z",
+  "related_context": {
+    "authorization_filtered_count": 0,
+    "authorized_entity_ids": [
+      "proj_auth_gateway_hardening",
+      "proj_identity_rewrite"
+    ],
+    "entities": [],
+    "entities_truncated": false,
+    "paths": [],
+    "paths_truncated": false,
+    "schema_version": "ask_dev_related_context.v1",
+    "truncation_reason": null
+  },
+  "schema_version": "ask_dev_investigation_packet.v1",
+  "subject_discovery": {
+    "authorization_filtered_count": 0,
+    "candidates": [
+      {
+        "candidate_id": "cand_1",
+        "canonical_id": "proj_identity_rewrite",
+        "commitment_state": "ambiguous",
+        "display_label": "Identity Platform Rewrite",
+        "match_confidence": 0.4,
+        "match_rationale": "Matched Identity Platform Rewrite on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Identity Platform Rewrite",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 1,
+        "relevance": "current",
+        "subject_kind": "project"
+      },
+      {
+        "candidate_id": "cand_2",
+        "canonical_id": "proj_auth_gateway_hardening",
+        "commitment_state": "ambiguous",
+        "display_label": "Auth Gateway Hardening",
+        "match_confidence": 0.4,
+        "match_rationale": "Matched Auth Gateway Hardening on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Auth Gateway Hardening",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 2,
+        "relevance": "current",
+        "subject_kind": "project"
+      }
+    ],
+    "candidates_truncated": false,
+    "committed_subject_ids": [],
+    "schema_version": "ask_dev_subject_discovery.v1",
+    "truncation_reason": null,
+    "unresolved_mentions": [
+      {
+        "candidate_ids": [
+          "cand_1",
+          "cand_2"
+        ],
+        "mention_id": "mention_1",
+        "mention_text": "What about the other project we discussed?",
+        "reason": "multiple_candidates"
+      }
+    ]
+  },
+  "versions": {
+    "corpus_version": "ask_dev_investigation_corpus.v1",
+    "packet_schema_version": "ask_dev_investigation_packet.v1",
+    "projection_version": "corpus_reference_projection.v1",
+    "query_version": "corpus_reference_query.v1",
+    "ranking_version": "corpus_reference_ranking.v1",
+    "schema_version": "ask_dev_investigation_versions.v1",
+    "source_contract_versions": [
+      {
+        "contract_version": "review.v1",
+        "source_class": "review"
+      },
+      {
+        "contract_version": "work_graph.v1",
+        "source_class": "work_graph"
+      },
+      {
+        "contract_version": "work_item.v1",
+        "source_class": "work_item"
+      }
+    ],
+    "trial": null
+  }
+}

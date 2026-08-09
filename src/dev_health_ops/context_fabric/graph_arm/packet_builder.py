@@ -36,6 +36,7 @@ import os
 import uuid
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta
 
 from dev_health_ops.api.dev.contracts import FreshnessState
@@ -107,8 +108,19 @@ from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .cohort import CohortCandidate, CohortProposal
 from .drivers import DriverFinding
 from .projection import PROJECTION_VERSION
-from .readback import QUERY_VERSION, DiscoveredPath, InvestigationReadout
-from .vocabulary import GraphEntityKind, entity_kind_to_subject_kind
+from .readback import (
+    QUERY_VERSION,
+    DiscoveredObservation,
+    DiscoveredPath,
+    InvestigationReadout,
+)
+from .vocabulary import (
+    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
+    SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+    SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    GraphEntityKind,
+    entity_kind_to_subject_kind,
+)
 from .watermark import DEFAULT_STALENESS_TOLERANCE, IndexWatermark
 
 __all__ = [
@@ -120,6 +132,7 @@ __all__ = [
     "JobContext",
     "PacketTooLargeError",
     "SubjectMatchFinding",
+    "AuthorizationWithheldEvidenceError",
     "UnsupportedMatchMechanismError",
     "TrialContext",
     "UnsupportedComparisonShapeError",
@@ -181,6 +194,22 @@ class SubjectMatchFinding:
     matched_text: str
     source_class: SourceClass
     mechanism: MatchMechanism
+
+
+class AuthorizationWithheldEvidenceError(PermissionError):
+    """A driver rests on evidence this caller may not be shown.
+
+    Distinct from the inconsistency raise beside it, and the distinction is
+    the whole point (fix round 2, verifier N1). Evidence removed because the
+    record it names is about an entity outside the caller's grant is the
+    authorization filter working; evidence nothing observed is discovery and
+    emission disagreeing. Collapsing the two turned a narrower grant into a
+    dead packet, and a caller reading the old message would have gone looking
+    for a bug that was not there.
+
+    A ``PermissionError`` rather than a ``ValueError`` so a caller can route
+    it the way it routes every other authorization refusal in this arm.
+    """
 
 
 class UnsupportedMatchMechanismError(RuntimeError):
@@ -490,6 +519,7 @@ def _driver_candidate(
     finding: DriverFinding,
     handle_by_observation: Mapping[str, str],
     known_subject_ids: Container[str],
+    filtered_ids: Container[str],
 ) -> DriverCandidate:
     """One structural finding, as the frozen contract's driver candidate.
 
@@ -509,10 +539,34 @@ def _driver_candidate(
     def handles(ids: Sequence[str], role: str) -> tuple[str, ...]:
         missing = sorted(set(ids) - set(handle_by_observation))
         if missing:
-            raise ValueError(
-                f"driver {finding.driver_id} cites {role} evidence this "
-                f"packet never indexed: {missing}. Discovery and emission "
-                "disagree about what the run observed"
+            # CHAOS-3627 fix round 2, verifier N1. Two very different things
+            # were reaching this one raise, and only one of them is an
+            # internal inconsistency.
+            #
+            # An id the AUTHORIZATION FILTER removed -- because the record it
+            # names is about an entity outside this caller's grant -- is the
+            # arm working correctly on a partial grant. Raising there turned a
+            # narrower grant into a dead packet: discovery legitimately saw a
+            # record that emission legitimately may not present.
+            #
+            # An id NOTHING observed is still the inconsistency this guard
+            # exists for, and still raises. The distinction is drawn from the
+            # drop set the evidence pass already recorded; nothing new is
+            # reconciled and no discovery-side change is implied.
+            withheld = sorted(item for item in missing if item in filtered_ids)
+            unobserved = sorted(item for item in missing if item not in filtered_ids)
+            if unobserved:
+                raise ValueError(
+                    f"driver {finding.driver_id} cites {role} evidence this "
+                    f"packet never indexed: {unobserved}. Discovery and "
+                    "emission disagree about what the run observed"
+                )
+            raise AuthorizationWithheldEvidenceError(
+                f"driver {finding.driver_id} rests on {role} evidence this "
+                f"caller may not be shown: {withheld}. The records are about "
+                "entities outside the grant, so the driver cannot be asserted "
+                "to this caller -- which is the authorization filter working, "
+                "not an inconsistency"
             )
         return tuple(handle_by_observation[item] for item in ids)
 
@@ -541,6 +595,147 @@ def _driver_candidate(
         conflict_note=finding.conflict_detail if conflicting else None,
         relevance=RelevanceState.CURRENT,
         exclusion_reason=finding.exclusion_reason,
+    )
+
+
+@dataclass(slots=True)
+class _EvidenceGroup:
+    """One source record, and everything this packet projected it as.
+
+    ``record`` is built from the observation the handle was issued FOR, so
+    ``record.entity_id`` is the entity the *source record* is about. An
+    observation that merely cites the record contributes its own subjects to
+    :attr:`supports` and nothing else: what a number is about does not change
+    what the record evidencing it is about, and the corpus oracle reads the
+    two through different fields (``authorization.py:190`` against
+    ``:276-277``).
+    """
+
+    observation_id: str
+    #: The canonical id of the RECORD this group's handle was issued for.
+    #: What the join compares against, so a citation that names a different
+    #: record cannot union its subjects in (fix round 2).
+    source_id: str
+    record: EvidenceRecord
+    source_class: SourceClass
+    supports: list[str]
+
+    def also_supports(self, subjects: Sequence[str]) -> None:
+        """Union in another projection's subjects, order preserved.
+
+        Append-if-unseen rather than ``sorted(set(...))``: the source record's
+        own subjects stay first, so the entry still reads as "this record,
+        which these other things also rest on".
+        """
+
+        for subject in subjects:
+            if subject not in self.supports:
+                self.supports.append(subject)
+
+
+def _describes_its_own_evidence(observation: DiscoveredObservation) -> bool:
+    """Whether this observation IS the record its handle was issued for.
+
+    True for a source record, and for anything with no source-issued handle
+    at all -- an observation the platform's signer will mint for describes
+    itself by definition. False only for an observation that names a
+    *different* record as the source of its evidence, which is how a
+    canonical measurement points at the record the world says evidences it.
+    """
+
+    handle = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
+    if handle is None:
+        return True
+    return (
+        observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE)
+        == observation.canonical_id
+    )
+
+
+def _evidence_record(
+    observation: DiscoveredObservation,
+    supports: Sequence[str],
+    source_state: SourceRequirementState,
+) -> EvidenceRecord:
+    """The evidence ref for one observation.
+
+    ``entity_id`` is **the entity the evidence is about**, never the
+    observation's own identifier. That field is entity vocabulary: the frozen
+    contract checks it against the declared authorized set
+    (``packet.py:1431``) and the CHAOS-3616 oracle reads it as an entity
+    sighting (``authorization.py:190``), so an observation slug there is a
+    fabricated entity and forces the declared set to be widened to hide it.
+
+    Where the source declares what its record is about
+    (:data:`~.vocabulary.SOURCE_EVIDENCE_ENTITY_ATTRIBUTE`) that is the
+    answer, full stop. CHAOS-3627's fix round: the previous rule -- the first
+    subject of whichever observation the traversal happened to reach -- was
+    right whenever the record itself was reached and wrong whenever only a
+    citing observation was, which both reviewers measured at roughly a third
+    of packets. A citing observation's subject is what the CITATION is about;
+    it does not change what the RECORD is about.
+
+    Only where no source declares it does the arm fall back to the first
+    subject in the source's own declared order, with the full set carried in
+    ``supports_entity_ids``. That fallback exists for sources with no record
+    model at all, and the world's own ``WorldEvidence`` is the shape it
+    approximates: exactly one ``entity_id`` and nothing else.
+    """
+
+    declared = observation.attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
+    return EvidenceRecord(
+        source_system="context_fabric_graph_arm",
+        source_version=_SOURCE_CONTRACT_VERSION,
+        entity_type=observation.kind.value,
+        entity_id=declared if declared is not None else supports[0],
+        display_label=observation.title,
+        observed_at=observation.observed_at,
+        freshness=_freshness(source_state),
+        provenance="structured record projected into the trial graph",
+        confidence=1.0,
+        repository_ids=observation.repository_ids,
+    )
+
+
+def _mint_handle(
+    signer: EvidenceReferenceSigner,
+    org_id: str,
+    observation: DiscoveredObservation,
+    record: EvidenceRecord,
+) -> str:
+    """A handle for a record whose source issued none.
+
+    Minted through the platform's own ``EvidenceReferenceSigner`` -- not a
+    parallel scheme -- but over a record identified by its **canonical id**
+    rather than by the entity it is about.
+
+    That substitution is the arm-side fix for CHAOS-3633 and it is deliberate.
+    ``EvidenceReferenceSigner._payload`` identifies a record by ``(org,
+    source_system, source_version, entity_type, entity_id, repositories)``,
+    and ``entity_id`` on the wire is the entity the evidence is *about*. Two
+    distinct records of one kind about one entity therefore mint the SAME
+    handle, and since the frozen contract refuses a repeated handle in the
+    index, the second one killed the entire packet -- measured on a
+    legitimate handle-less world (the arm's own fixtures hold exactly such a
+    pair: ``dec_auth_1`` superseded by ``dec_auth_2``). A denial of service on
+    valid input, manufactured by the arm's own mint.
+
+    The platform fix belongs in ``evidence_service`` and is tracked as
+    CHAOS-3633; this arm must not reach into it. So the arm signs over the
+    record's identity, which is what the payload needed all along.
+
+    **The consequence, stated rather than buried**: the emitted evidence ref
+    no longer round-trips through ``signer.verify``, because the emitted
+    ``entity_id`` is the entity while the signed one is the record. Verifying
+    a minted handle means re-deriving it through this function -- which is
+    what ``test_chaos_3617_packet_contract`` now does. The property that
+    matters is unchanged: the handle comes from the evidence service's own
+    signing function, over this organization's key, and no scheme this arm
+    invented.
+    """
+
+    return signer.issue(
+        org_id, dataclasses_replace(record, entity_id=observation.canonical_id)
     )
 
 
@@ -802,16 +997,104 @@ def build_packet(
         if commit:
             committed_ids.append(entity.canonical_id)
 
+    # ---- authorization envelope ---------------------------------------
+    #
+    # ``related_context.authorized_entity_ids`` is ENTITY vocabulary. The
+    # frozen contract types it so (``packet.py:789``, ``:852``) and the
+    # CHAOS-3616 oracle compares it against the principal's entity grant
+    # (``authorization.py:254-255``), which makes an observation id in that
+    # field a false authorization claim rather than a harmless superset --
+    # and because ``validate_every_entity_is_authorized`` reads the SAME
+    # field, every id added to it is one more thing the contract's own leak
+    # check stops catching.
+    #
+    # This builder used to declare entity ids plus observation ids plus
+    # measurement keys, to get the observation slug it was putting in
+    # ``evidence.entity_id`` past that validator. CHAOS-3627 fixed the
+    # vocabulary at the source, so the widening is gone and the two
+    # invariants it was carrying are enforced here instead, as the arm's own
+    # checks: every hop endpoint is an authorized entity, and every
+    # observation that reaches the evidence index is about authorized
+    # entities only.
+    authorized_entity_ids = tuple(sorted(readout.authorized_entity_ids))
+    authorized_lookup = set(authorized_entity_ids)
+    for path in readout.paths:
+        for step in path.steps:
+            for endpoint in (step.from_canonical_id, step.to_canonical_id):
+                if endpoint not in authorized_entity_ids:
+                    raise PermissionError(
+                        f"path {path.path_id} traverses {endpoint!r}, which is "
+                        "not in the authorized entity set"
+                    )
+    declared_authorized = authorized_entity_ids
+
     # ---- evidence ------------------------------------------------------
-    evidence_entries: list[InvestigationEvidenceEntry] = []
-    authorized_observation_ids: list[str] = []
-    #: canonical observation id -> the handle this run minted for it.
+    #
+    # One entry per SOURCE RECORD, not one per observation.
+    #
+    # Where a source issued a handle the arm cites the handle it was issued
+    # (:data:`~.vocabulary.SOURCE_EVIDENCE_HANDLE_ATTRIBUTE`); re-minting one
+    # changes the identity of the evidence being presented, so a consumer --
+    # and the corpus oracle -- can no longer join it to the record it came
+    # from. The signer stays for sources that issue no handle of their own.
+    #
+    # Two observations may therefore carry the same handle: a canonical
+    # measurement and the record the source says evidences it are one piece
+    # of evidence projected twice. They become one entry, described by
+    # whichever of them the handle was issued FOR, with the other's subjects
+    # unioned into its support. The frozen contract also refuses a repeated
+    # handle in the index (``packet.py:1241-1243``), but that is not why the
+    # merge is right: the source's own identity is.
+    evidence_groups: dict[str, _EvidenceGroup] = {}
+    #: canonical observation id -> the handle this packet cites for it.
     #: Drivers cite handles, never raw ids: the frozen contract checks
     #: that every cited handle is in the evidence index, and an id that
     #: never became a handle is evidence the packet does not actually
     #: carry.
     handle_by_observation: dict[str, str] = {}
+    candidate_ids = {item.canonical_id for item in candidates}
+
+    indexable: list[tuple[DiscoveredObservation, tuple[str, ...]]] = []
+    #: The source RECORDS whose entity is outside the caller's authorized
+    #: set, by record id -- not the observations that cite them.
+    #:
+    #: A set, and the unit is the point (fix round 2, codex medium 2). An
+    #: evidence entry represents a record, so counting per dropped
+    #: OBSERVATION reported 2 for two citations of one unauthorized record
+    #: while exactly one entry went missing. A disclosure whose unit differs
+    #: from the thing it is disclosing about is a number a reader cannot use.
+    unattributable: set[str] = set()
+    #: The same drops, keyed by OBSERVATION id rather than by record id.
+    #:
+    #: Two sets because the two consumers ask different questions, and round 2
+    #: shipped one set answering both -- which is the defect both reviewers
+    #: blocked on. The COUNT discloses records, because an evidence entry
+    #: represents a record. The DRIVER check resolves observation ids, because
+    #: a driver cites observations. A single set silently answered the driver
+    #: check in the wrong unit, so every CITING observation (source_evidence_id
+    #: != canonical_id) fell through to "nothing observed this" and raised the
+    #: inconsistency error where the authorization refusal was due.
+    withheld_observation_ids: set[str] = set()
     for observation in readout.observations:
+        # Named distinctly from the cohort guard's ``outside``: the
+        # guard-injection harness anchors on source lines, and a second
+        # ``if outside:`` in this module makes that anchor ambiguous, which
+        # the harness reports as INVALID rather than silently mutating both.
+        unauthorized_subjects = sorted(
+            subject
+            for subject in observation.subject_canonical_ids
+            if subject not in authorized_lookup
+        )
+        if unauthorized_subjects:
+            # Refuse, do not narrow. The intersection below would simply drop
+            # these subjects, so a reader bug -- or a second reader -- could
+            # hand this builder unauthorized material and get back a packet
+            # that looked clean. This is the evidence twin of the hop check.
+            raise PermissionError(
+                f"observation {observation.canonical_id!r} is about "
+                f"{unauthorized_subjects}, which is not in the authorized "
+                "entity set"
+            )
         supports = tuple(
             subject
             for subject in observation.subject_canonical_ids
@@ -821,75 +1104,148 @@ def build_packet(
             # Unattached evidence displaces lineage. The contract refuses to
             # index it and so does this builder.
             continue
-        record = EvidenceRecord(
-            source_system="context_fabric_graph_arm",
-            source_version=_SOURCE_CONTRACT_VERSION,
-            entity_type=observation.kind.value,
-            entity_id=observation.canonical_id,
-            display_label=observation.title,
-            observed_at=observation.observed_at,
-            freshness=_freshness(source_state),
-            provenance="structured record projected into the trial graph",
-            confidence=1.0,
-            repository_ids=observation.repository_ids,
+        # The entry will be described by the entity the SOURCE RECORD is
+        # about, so that entity has to be one this caller may be told about.
+        # Naming it otherwise would put an unauthorized id in a field the
+        # contract checks against the declared set and the corpus oracle
+        # reads as an entity sighting. Dropping the entry is the only honest
+        # option left: the alternatives are naming the wrong entity, which is
+        # the defect this fix round exists to remove, or naming a right one
+        # the caller may not see.
+        declared_entity = observation.attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
+        if declared_entity is not None and declared_entity not in authorized_lookup:
+            unattributable.add(
+                observation.attributes.get(
+                    SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
+                )
+            )
+            withheld_observation_ids.add(observation.canonical_id)
+            continue
+        indexable.append((observation, supports))
+
+    # Two passes, because an observation is sorted by its own canonical id
+    # and may be read before the record it cites. The first pass builds the
+    # entries the source issued handles FOR; the second attaches everything
+    # that merely cites one of them.
+    for observation, supports in indexable:
+        if not _describes_its_own_evidence(observation):
+            continue
+        record = _evidence_record(observation, supports, source_state)
+        handle = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
+        if handle is None:
+            handle = _mint_handle(signer, readout.org_id, observation, record)
+        if handle in evidence_groups:
+            # Only reachable for a genuinely repeated SOURCE-issued handle
+            # now: the arm's own mint discriminates by record identity (see
+            # ``_mint_handle``). Refusing beats merging here because two
+            # records the SOURCE gave one identity cannot be told apart by
+            # anything downstream, and presenting them as one piece of
+            # evidence would lose a record silently.
+            raise ValueError(
+                f"observation {observation.canonical_id!r} carries a source "
+                f"evidence handle already issued for "
+                f"{evidence_groups[handle].observation_id!r}. One handle names "
+                "one record; merging two records under it would present them "
+                "to a consumer as the same evidence. The platform mint cannot "
+                "separate two same-kind records about one entity either -- "
+                "that is CHAOS-3633, and this arm works around it rather than "
+                "reproducing it"
+            )
+        evidence_groups[handle] = _EvidenceGroup(
+            observation_id=observation.canonical_id,
+            source_id=observation.attributes.get(
+                SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
+            ),
+            record=record,
+            source_class=observation.source_class,
+            supports=list(supports),
         )
-        handle = signer.issue(readout.org_id, record)
-        authorized_observation_ids.append(observation.canonical_id)
         handle_by_observation[observation.canonical_id] = handle
+
+    for observation, supports in indexable:
+        if _describes_its_own_evidence(observation):
+            continue
+        handle = observation.attributes[SOURCE_EVIDENCE_HANDLE_ATTRIBUTE]
+        group = evidence_groups.get(handle)
+        if group is not None and (
+            observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE) != group.source_id
+        ):
+            # CHAOS-3627 fix round 2, codex BLOCKING = verifier N2. The join
+            # was keyed on the HANDLE alone, so any observation carrying an
+            # existing handle joined that record's group and unioned its
+            # subjects in -- whatever record it actually named. The bound
+            # "extra subjects arrive only from observations naming THIS
+            # record" was therefore pinned by what the fixtures happen to do,
+            # not enforced where the union happens.
+            #
+            # Refused rather than dropped, matching the pairing posture
+            # everywhere else in this file: a source that issued one handle
+            # for two different records is telling the arm something
+            # contradictory, and quietly believing half of it is how the
+            # contradiction reaches a consumer.
+            raise ValueError(
+                f"observation {observation.canonical_id!r} cites handle "
+                f"{handle} but names record "
+                f"{observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE)!r}; "
+                f"that handle was issued for {group.source_id!r}. One handle "
+                "names one record, and merging a citation of a different "
+                "record into it would widen that record's support with "
+                "subjects it has nothing to do with"
+            )
+        if group is None:
+            # The record this observation cites was not reached by this
+            # traversal -- it can be about an entity no path arrived at. The
+            # handle is still the one the source issued for the number being
+            # cited, so it is still what this packet must present; what falls
+            # back is only which entity the entry is about, to the subject the
+            # citing observation does name. Seeding both ends of that link is
+            # what ``test_chaos_3627_arm_vocabulary`` calls input symmetry.
+            evidence_groups[handle] = _EvidenceGroup(
+                observation_id=observation.canonical_id,
+                source_id=observation.attributes.get(
+                    SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
+                ),
+                record=_evidence_record(observation, supports, source_state),
+                source_class=observation.source_class,
+                supports=list(supports),
+            )
+        else:
+            group.also_supports(supports)
+        handle_by_observation[observation.canonical_id] = handle
+
+    evidence_entries: list[InvestigationEvidenceEntry] = []
+    for handle, group in evidence_groups.items():
+        entry_supports = tuple(group.supports)
         evidence_entries.append(
             InvestigationEvidenceEntry(
                 evidence={
                     "schema_version": "dev_evidence_ref.v1",
                     "evidence_ref_id": handle,
-                    "source_system": record.source_system,
-                    "source_version": record.source_version,
-                    "entity_type": record.entity_type,
-                    "entity_id": record.entity_id,
-                    "display_label": record.display_label,
+                    "source_system": group.record.source_system,
+                    "source_version": group.record.source_version,
+                    "entity_type": group.record.entity_type,
+                    "entity_id": group.record.entity_id,
+                    "display_label": group.record.display_label,
                     "link": None,
-                    "observed_at": record.observed_at,
-                    "freshness": record.freshness.value,
-                    "provenance": record.provenance,
-                    "confidence": record.confidence,
+                    "observed_at": group.record.observed_at,
+                    "freshness": group.record.freshness.value,
+                    "provenance": group.record.provenance,
+                    "confidence": group.record.confidence,
                     "citation_text": None,
-                    "repository_ids": list(record.repository_ids),
-                    "valid_entity_ids": list(supports),
+                    "repository_ids": list(group.record.repository_ids),
+                    "valid_entity_ids": list(entry_supports),
                     "flags": {},
                 },
-                source_class=observation.source_class,
+                source_class=group.source_class,
                 supports_path_ids=(),
-                supports_entity_ids=supports,
+                supports_entity_ids=entry_supports,
                 supports_driver_ids=(),
                 supports_subject_ids=tuple(
-                    subject
-                    for subject in supports
-                    if subject in {item.canonical_id for item in candidates}
+                    subject for subject in entry_supports if subject in candidate_ids
                 ),
                 relevance=RelevanceState.CURRENT,
             )
         )
-
-    # ---- authorization envelope ---------------------------------------
-    #
-    # The declared set is entity ids plus the observation ids the packet
-    # cites as evidence: an observation identifier reaching a consumer is an
-    # identifier the caller must be authorized for, and the packet-level
-    # validator checks exactly that. Widening the set would weaken the hop
-    # check, so the narrower invariant -- every hop endpoint is an
-    # *authorized entity*, not merely an authorized id -- is enforced here
-    # and pinned by test_chaos_3617_authorization.py.
-    authorized_entity_ids = tuple(sorted(readout.authorized_entity_ids))
-    for path in readout.paths:
-        for step in path.steps:
-            for endpoint in (step.from_canonical_id, step.to_canonical_id):
-                if endpoint not in authorized_entity_ids:
-                    raise PermissionError(
-                        f"path {path.path_id} traverses {endpoint!r}, which is "
-                        "not in the authorized entity set"
-                    )
-    declared_authorized = tuple(
-        sorted(set(authorized_entity_ids) | set(authorized_observation_ids))
-    )
 
     # ---- source coverage ----------------------------------------------
     observed_classes = sorted(
@@ -1041,7 +1397,9 @@ def build_packet(
             )
         )
     filtered_total = (
-        readout.authorization_filtered_count + cohort_authorization_filtered
+        readout.authorization_filtered_count
+        + cohort_authorization_filtered
+        + len(unattributable)
     )
     if filtered_total:
         limitations.append(
@@ -1162,7 +1520,9 @@ def build_packet(
         | known_entity_ids
     )
     driver_candidates = tuple(
-        _driver_candidate(finding, handle_by_observation, known_subject_ids)
+        _driver_candidate(
+            finding, handle_by_observation, known_subject_ids, withheld_observation_ids
+        )
         for finding in drivers or ()
     )
     # Evidence entries now name the drivers that cite them. Without this the
@@ -1221,7 +1581,7 @@ def build_packet(
         conflicts=(),
         limitations=tuple(limitations),
         clarification_needs=(),
-        authorization_filtered_count=0,
+        authorization_filtered_count=len(unattributable),
         evidence_truncated=readout.evidence_truncated,
         truncation_reason=readout.evidence_truncation_reason,
     )

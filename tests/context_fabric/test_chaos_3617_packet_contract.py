@@ -16,11 +16,14 @@ and is refused when it violates the same rules".
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from dev_health_ops.api.dev.contracts import FreshnessState
+from dev_health_ops.api.dev.evidence_service import EvidenceRecord
 from dev_health_ops.api.dev.investigation_contract import (
     INVESTIGATION_CONTRACT_MODELS,
     TRIAL_SOURCE_ALLOWLIST,
@@ -113,6 +116,60 @@ def _packet(readout, signer, **overrides):
 @pytest.fixture
 def packet(alpha_projection, signer):
     return _packet(_readout(alpha_projection), signer)
+
+
+#: A fixture observation whose ``(kind, subject)`` pair is unique in the alpha
+#: world, so the arm's own mint can issue a handle for it that collides with
+#: nothing. That constraint is not incidental -- see ``fixtures.issued_handle``
+#: for why the platform's mint cannot separate two same-kind records about one
+#: entity, and why this world issues its own handles because of it.
+_UNISSUED = "rev_4412_1"
+
+
+def _unissued(projection, canonical_id: str):
+    """The alpha readout with one observation's source handle removed.
+
+    Stripping rather than adding: the fallback has to be reached by a source
+    that issues nothing, which is the condition the arm branches on.
+    """
+
+    readout = _readout(projection)
+    observations = tuple(
+        dataclasses.replace(
+            observation,
+            attributes={
+                key: value
+                for key, value in observation.attributes.items()
+                if not key.startswith("source_evidence_")
+            },
+        )
+        if observation.canonical_id == canonical_id
+        else observation
+        for observation in readout.observations
+    )
+    assert any(
+        observation.canonical_id == canonical_id for observation in observations
+    ), f"{canonical_id} is not in this readout; the strip did nothing"
+    return dataclasses.replace(readout, observations=observations)
+
+
+def _entry_for(packet, canonical_id: str):
+    """The entry the arm minted for ``canonical_id``.
+
+    Found by elimination against the source's own mint rather than by index
+    position, so it cannot silently become a different entry.
+    """
+
+    issued = {
+        fixtures.issued_handle(observation.canonical_id)
+        for observation in fixtures.alpha_batch().observations
+        if observation.canonical_id != canonical_id
+    }
+    return next(
+        entry
+        for entry in packet.evidence_coverage.evidence_index
+        if entry.evidence.evidence_ref_id not in issued
+    )
 
 
 class TestCanonicalValidatorParity:
@@ -274,28 +331,119 @@ class TestReproducibilityMetadata:
 
 
 class TestEvidenceIdentity:
-    def test_every_evidence_handle_verifies_against_the_platform_signer(
-        self, packet, signer
-    ) -> None:
-        """The handles are the evidence service's, not a parallel scheme.
+    """CHAOS-3627 split this class in two, and the split is the point.
 
-        Re-signing through the same ``EvidenceReferenceSigner`` the service
-        uses is the only check that means anything here: a handle that merely
-        matches the ``ev1_`` grammar would pass a shape assertion and fail
-        the moment anyone dereferenced it.
+    This used to assert that EVERY handle re-signs through the platform's
+    ``EvidenceReferenceSigner``. That was the right assertion while the arm
+    minted every handle it emitted, and it is the wrong one now: a handle is
+    the identity of a *source record*, so the arm cites the handle the source
+    issued and mints only where a source issued none. The corpus says so in
+    ``world.evidence_handle``'s own docstring -- the corpus cannot key the
+    platform HMAC, so a corpus handle never verifies and never could.
+
+    Both branches are asserted below rather than the union being weakened to
+    something both satisfy: a carried handle is exactly what the source
+    issued, and a minted one still re-signs through the platform's function.
+    """
+
+    def test_a_carried_handle_is_exactly_what_the_source_issued(self, packet) -> None:
+        """Byte-equality with the source's mint, not merely the grammar.
+
+        A handle that only matched ``ev1_[0-9a-f]{40}`` would pass a shape
+        assertion and be un-joinable to the record it names -- which is the
+        defect CHAOS-3627 fixed, in the form it took.
         """
 
+        issued = {
+            fixtures.issued_handle(observation.canonical_id)
+            for observation in fixtures.alpha_batch().observations
+        }
         assert packet.evidence_coverage.evidence_index
         for entry in packet.evidence_coverage.evidence_index:
-            assert signer.verify(packet.organization_id, entry.evidence)
+            assert entry.evidence.evidence_ref_id in issued
 
-    def test_a_handle_minted_for_another_organization_does_not_verify(
-        self, packet, signer
+    def test_the_arm_mints_a_platform_handle_when_the_source_issues_none(
+        self, alpha_projection, signer
     ) -> None:
-        """The negative control for the assertion above."""
+        r"""The fallback branch, observed rather than assumed.
 
-        entry = packet.evidence_coverage.evidence_index[0]
-        assert not signer.verify("org_someone_else", entry.evidence)
+        Re-deriving through the same ``EvidenceReferenceSigner`` the evidence
+        service uses is the only check that means anything for a handle the
+        arm mints: it proves the arm did not invent a parallel scheme.
+
+        Re-derived rather than ``signer.verify``\ ed, and the difference is
+        CHAOS-3627's fix round. The arm signs a minted handle over the
+        RECORD's canonical id while the emitted ``entity_id`` is the entity
+        the evidence is about, because the platform payload uses one field for
+        both and two same-kind records about one entity otherwise collide --
+        which killed whole packets on legitimate handle-less worlds
+        (CHAOS-3633). ``verify`` recomputes from the emitted fields and so
+        cannot see the substitution; this asserts the stronger thing, that the
+        handle is byte-identical to what the service's own signing function
+        produces for that record.
+        """
+
+        readout = _unissued(alpha_projection, _UNISSUED)
+        packet = _packet(readout, signer)
+        entry = _entry_for(packet, _UNISSUED)
+        observation = next(
+            item for item in readout.observations if item.canonical_id == _UNISSUED
+        )
+
+        expected = signer.issue(
+            packet.organization_id,
+            EvidenceRecord(
+                source_system=entry.evidence.source_system,
+                source_version=entry.evidence.source_version,
+                entity_type=entry.evidence.entity_type,
+                entity_id=observation.canonical_id,
+                display_label=entry.evidence.display_label,
+                observed_at=entry.evidence.observed_at,
+                freshness=FreshnessState(entry.evidence.freshness),
+                provenance=entry.evidence.provenance,
+                confidence=entry.evidence.confidence,
+                repository_ids=tuple(entry.evidence.repository_ids),
+            ),
+        )
+        assert entry.evidence.evidence_ref_id == expected
+
+    def test_a_minted_handle_for_another_organization_does_not_verify(
+        self, alpha_projection, signer
+    ) -> None:
+        """The negative control for the assertion above.
+
+        Pointed at a minted handle deliberately. Run against a *carried* one
+        it would pass for the wrong reason -- a source-issued handle verifies
+        for no organization at all -- and a control that cannot fail is not
+        one.
+        """
+
+        readout = _unissued(alpha_projection, _UNISSUED)
+        packet = _packet(readout, signer)
+        entry = _entry_for(packet, _UNISSUED)
+        observation = next(
+            item for item in readout.observations if item.canonical_id == _UNISSUED
+        )
+
+        def mint(org_id: str) -> str:
+            return signer.issue(
+                org_id,
+                EvidenceRecord(
+                    source_system=entry.evidence.source_system,
+                    source_version=entry.evidence.source_version,
+                    entity_type=entry.evidence.entity_type,
+                    entity_id=observation.canonical_id,
+                    display_label=entry.evidence.display_label,
+                    observed_at=entry.evidence.observed_at,
+                    freshness=FreshnessState(entry.evidence.freshness),
+                    provenance=entry.evidence.provenance,
+                    confidence=entry.evidence.confidence,
+                    repository_ids=tuple(entry.evidence.repository_ids),
+                ),
+            )
+
+        assert entry.evidence.evidence_ref_id == mint(packet.organization_id)
+        assert entry.evidence.evidence_ref_id != mint("org_someone_else")
 
     def test_every_indexed_item_supports_something_in_the_packet(self, packet) -> None:
         known = {entity.entity_id for entity in packet.related_context.entities}

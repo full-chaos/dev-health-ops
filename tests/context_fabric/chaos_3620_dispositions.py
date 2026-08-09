@@ -348,36 +348,27 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "A9",
-        Status.NOT_ACCEPTED,
+        Status.PROVEN,
         f"{_AUTHZ}::TestTheRestrictedProjectNeverReachesAConsumer::"
         "test_no_packet_the_analyst_can_produce_discloses_anything_restricted",
-        f"{_AUTHZ}::TestTheIndependentOracleCannotYetScoreThisArm::"
-        "test_the_audit_can_therefore_never_be_clean_for_this_arm",
-        blocker="CHAOS-3627",
-        reason=(
-            "Zero leakage is MEASURED and HOLDS -- **at base SHA 1ab76d955, "
-            "pre-CHAOS-3627 vocabulary, and it must be re-derived after the "
-            "rebase onto that fix**: entity_sightings reads an evidence "
-            "entry's entity_id as a sighting, and pre-fix that field is an "
-            "observation slug or measurement key on every slug-bearing "
-            "entry, so the attributions the measurement runs over are "
-            "known-unsound (the masking direction -- leaked evidence "
-            "attributed to a permitted entity -- is the dangerous one). "
-            "Within that scope: across every entity the analyst may see, no "
-            "packet the arm can produce "
-            "discloses any entity outside the true grant, and the same code "
-            "path under a tenant-derived grant does leak, so the result is "
-            "earned. The hard gate still cannot be signed off, because the "
-            "oracle that owns this dimension -- audit_authorization -- "
-            "cannot return clean for ANY graph-arm packet: the arm mints "
-            "evidence handles with the platform signer (packet_builder.py:836) "
-            "where the world mints its own (world.py:158), and the declared "
-            "authorized set is widened with observation ids "
-            "(packet_builder.py:890-892) that the oracle reads as entity "
-            "claims. A gate whose oracle cannot pass is not a green gate."
+        f"{_AUTHZ}::TestTheIndependentOracleNowScoresThisArm::"
+        "test_the_audit_is_clean_for_this_arm",
+        notes=(
+            "FLIPPED by CHAOS-3627 (PR #1617). This row was NOT_ACCEPTED with "
+            "CHAOS-3627 as its blocker, because the oracle that owns this "
+            "dimension could not return clean for ANY graph-arm packet and the "
+            "attributions the leakage measurement ran over were known-unsound.",
+            "Both are closed: the arm cites the handle the source issued, the "
+            "declared set is entity ids only, and evidence.entity_id names the "
+            "entity the RECORD is about -- so entity_sightings reads real "
+            "entities and audit_authorization returns is_clean on the "
+            "analyst/team_cinder reproduction.",
+            "The zero-leakage result is now measured over sound attributions "
+            "rather than in spite of unsound ones, and a tenant-derived grant "
+            "still leaks on the same code path, so the negative control that "
+            "makes the result earned is intact.",
         ),
     ),
-    # ---- provenance ----------------------------------------------------
     _req(
         "P1",
         Status.DEFECT,

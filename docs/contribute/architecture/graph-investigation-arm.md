@@ -454,7 +454,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **76** guards the arm relies on, the harness disables
+For each of the **87** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -675,7 +675,7 @@ Three corpus cases pin the behaviour:
 
 | Case | Result |
 | --- | --- |
-| `team_atlas` | five metrics cited with a `MEASURED` basis, each with its own handle |
+| `team_atlas` | five metrics cited with a `MEASURED` basis, each through the handle the world issued for the record that evidences it (CHAOS-3627 — two metrics evidenced by one record cite one handle, because they are one piece of evidence) |
 | `proj_solstice` | demand measurable, no cohort comparison → `INSUFFICIENT_MEASUREMENT`, disclosed rather than dropped |
 | `proj_tidal` | no measurement at all → nothing asserted in either direction |
 
@@ -803,7 +803,47 @@ differential while changing the packet.
 ## Cross-repository ownership
 
 This arm lives entirely in `dev-health-ops`. It reads the CHAOS-3615 contract
-from `api/dev/investigation_contract/` and mints evidence handles with the
-platform's own `EvidenceReferenceSigner`, so a packet handle verifies against
-the service that issues it rather than against a parallel scheme. Nothing in
-`dev-health-acr` or `dev-health-web` changes, and no contract is duplicated.
+from `api/dev/investigation_contract/`. Evidence handles are **carried, not
+re-minted**: a record's handle is its identity, so where a source issues one
+the arm cites exactly that (CHAOS-3627 — re-signing it made every citation
+un-joinable to the record it names, and the CHAOS-3616 oracle reported all 31
+on the reproduction path as fabricated). An entry is described by the entity
+the **record** is about, carried from the source, never by whichever
+observation the traversal happened to reach that cites it.
+
+Where a source issues none, the platform's own `EvidenceReferenceSigner`
+mints one — over the **record's** canonical id, not over the entity it is
+about. The platform payload uses one field for both, so two same-kind records
+about one entity otherwise mint the same handle and the contract's
+duplicate-handle refusal kills the whole packet on a legitimate handle-less
+world. The platform fix is CHAOS-3633; this is the arm-side containment, and
+its cost is that a minted handle is verified by re-deriving it through the
+same function rather than by `signer.verify` on the emitted ref.
+
+**The two indexes behave differently, and only one of them refuses.** The
+projection builds an entity index keyed by `(kind, canonical_id)` and an
+observation index keyed by `canonical_id`.
+
+The **observation** index refuses a repeat. It used to *keep the first record
+and silently discard the second*, and that became load-bearing when the
+fallback mint started discriminating records by canonical id — the discard
+loses one of two distinct records before the mint can see the collision,
+leaving the duplicate-handle refusal unable to protect the case it exists for.
+Refuse-don't-sanitize applies to identifiers exactly as it does to values.
+
+The **entity** index still `continue`s past a duplicate rather than refusing.
+That is stated rather than left to be discovered: an earlier revision of this
+note claimed both indexes refuse, which was an overclaim a reviewer caught.
+Whether the entity index should refuse too is recorded on CHAOS-3627 and is
+not changed here.
+
+**Residual, stated because a reader would otherwise assume otherwise.**
+Ingestion checks a carried handle's *grammar* and the *completeness* of the
+handle/record-id/record-entity triple. It does **not** verify that the handle
+is genuinely the one that source issued for that record — the arm has no way
+to; the source asserts it and the arm carries the assertion. A source that
+supplied a well-formed handle belonging to a different record of its own
+would be believed.
+
+Nothing in `dev-health-acr` or `dev-health-web` changes, and no contract is
+duplicated.

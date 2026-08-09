@@ -158,9 +158,11 @@ class TestTheArmPerformsNoArithmetic:
         ),
         (
             "packet_builder.py",
-            "readout.authorization_filtered_count + cohort_authorization_filtered",
+            "readout.authorization_filtered_count + cohort_authorization_filtered "
+            "+ len(unattributable)",
             "counts how many results the caller's own grant removed, from the "
-            "traversal and the cohort; bookkeeping about this run, and the "
+            "traversal, the cohort and the evidence records whose subject the "
+            "grant does not cover; bookkeeping about this run, and the "
             "packet cannot disclose what it withheld without it",
         ),
         (

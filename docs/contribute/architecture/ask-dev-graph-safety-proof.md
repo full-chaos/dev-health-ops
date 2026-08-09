@@ -25,7 +25,7 @@ observable. This page records what was proved, on what, and what could not
 be proved. Its headline is not a pass.
 {: .fc-page-lede }
 
-**The hard gate is not green.** 16 of 44 CHAOS-3620 requirements are not proven (4 defect, 2 not_accepted, 10 unmeasured).
+**The hard gate is not green.** 15 of 44 CHAOS-3620 requirements are not proven (4 defect, 1 not_accepted, 10 unmeasured).
 
 That sentence is **generated from the ledger**, not written beside it — the
 one place gate status is stated, so a correct table under a wrong headline is
@@ -82,9 +82,9 @@ Linear blocker.
 
 | Status | Count | Meaning |
 | --- | --- | --- |
-| `proven` | 28 | Holds, and the named tests are what establish it. |
+| `proven` | 29 | Holds, and the named tests are what establish it. |
 | `defect` | 4 | Violated by merged code; the named tests pin current behaviour. |
-| `not_accepted` | 2 | Blocked on another issue; never scored as a pass. |
+| `not_accepted` | 1 | Blocked on another issue; never scored as a pass. |
 | `unmeasured` | 10 | Not measured, with a stated reason rather than a proxy. |
 
 Three of the ten `unmeasured` entries were `proven` before adversarial

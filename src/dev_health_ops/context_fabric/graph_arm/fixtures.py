@@ -19,6 +19,9 @@ ever wrong, those are the two records that surface it.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from dev_health_ops.api.dev.contracts_v2.base import SourceClass
@@ -33,7 +36,14 @@ from .records import (
     RelationshipRecord,
     UnstructuredDocumentRecord,
 )
-from .vocabulary import AliasKind, GraphEntityKind, GraphObservationKind
+from .vocabulary import (
+    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
+    SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+    SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    AliasKind,
+    GraphEntityKind,
+    GraphObservationKind,
+)
 
 __all__ = [
     "ALPHA_ORG",
@@ -44,7 +54,71 @@ __all__ = [
     "alpha_authorized_ids",
     "alpha_batch",
     "beta_batch",
+    "issued_handle",
 ]
+
+#: Namespace for the fixture world's own evidence mint. Distinct from the
+#: corpus's so a handle can never be mistaken for a corpus record's.
+_FIXTURE_MINT = "graph_arm_fixture_world.v1"
+
+
+def issued_handle(canonical_id: str) -> str:
+    """The handle this fixture world issues for one of its own records.
+
+    CHAOS-3627. The fixture world is a *source*, and a source issues the
+    handles for its own records — the corpus does exactly this
+    (``world.evidence_handle``) and for the same reason: a handle is the
+    identity of a record, so whoever holds the record mints it and everyone
+    downstream cites what they were issued.
+
+    Deriving it from the canonical id rather than hand-typing 40 hex
+    characters is the corpus's argument repeated: a handle nobody can read is
+    a handle nobody notices is wrong.
+
+    The arm's own ``EvidenceReferenceSigner`` mint is **not** used here, and
+    the reason is worth stating because it is a property of the platform, not
+    a preference. ``EvidenceReferenceSigner._payload`` identifies a record by
+    ``(org, source_system, source_version, entity_type, entity_id,
+    repositories)`` — and ``entity_id`` on the wire is the entity the evidence
+    is *about*, not the record's own id. Two records of the same type about
+    the same entity therefore mint the **same** handle. This world holds
+    exactly such a pair on purpose (``dec_auth_1`` is superseded by
+    ``dec_auth_2``, both decisions about ``proj_nightfall_migration``), so a
+    source-issued handle is the only way it can present them as the two
+    distinct records they are.
+    """
+
+    digest = hashlib.sha256(f"{_FIXTURE_MINT}:{canonical_id}".encode()).hexdigest()
+    return f"ev1_{digest[:40]}"
+
+
+def _issued(
+    observations: Sequence[ObservationRecord],
+) -> tuple[ObservationRecord, ...]:
+    """Stamp every observation with the handle this world issued for it.
+
+    Applied in one place rather than typed onto each record so a new fixture
+    record cannot arrive unissued and quietly fall back to the arm's mint.
+    """
+
+    return tuple(
+        replace(
+            observation,
+            attributes={
+                **observation.attributes,
+                SOURCE_EVIDENCE_HANDLE_ATTRIBUTE: issued_handle(
+                    observation.canonical_id
+                ),
+                SOURCE_EVIDENCE_ID_ATTRIBUTE: observation.canonical_id,
+                # This world's records are about their own first subject.
+                SOURCE_EVIDENCE_ENTITY_ATTRIBUTE: (
+                    observation.subjects[0].canonical_id
+                ),
+            },
+        )
+        for observation in observations
+    )
+
 
 #: Values that sit right up against the storage encoding's join bytes without
 #: containing them. The arm refuses a value that *contains* US (0x1f) or a
@@ -468,7 +542,7 @@ def alpha_batch() -> IngestionBatch:
         org_id=ALPHA_ORG,
         entities=entities,
         relationships=relationships,
-        observations=observations,
+        observations=_issued(observations),
         documents=documents,
     )
 

@@ -838,6 +838,9 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_attr_measurement_metric AS attr_measurement_metric,
        n.cf_attr_measurement_unit AS attr_measurement_unit,
        n.cf_attr_measurement_value AS attr_measurement_value,
+       n.cf_attr_source_evidence_entity_id AS attr_source_evidence_entity_id,
+       n.cf_attr_source_evidence_handle AS attr_source_evidence_handle,
+       n.cf_attr_source_evidence_id AS attr_source_evidence_id,
        n.cf_attr_superseded_by AS attr_superseded_by
 """
 
@@ -870,6 +873,9 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_attr_measurement_metric AS attr_measurement_metric,
        n.cf_attr_measurement_unit AS attr_measurement_unit,
        n.cf_attr_measurement_value AS attr_measurement_value,
+       n.cf_attr_source_evidence_entity_id AS attr_source_evidence_entity_id,
+       n.cf_attr_source_evidence_handle AS attr_source_evidence_handle,
+       n.cf_attr_source_evidence_id AS attr_source_evidence_id,
        n.cf_attr_superseded_by AS attr_superseded_by
 """
 

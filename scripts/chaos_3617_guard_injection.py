@@ -267,7 +267,15 @@ MUTATIONS: tuple[Mutation, ...] = (
             "naming the endpoint, not that the endpoint would otherwise "
             "reach a consumer. Two independent refusals is the actual state, "
             "and claiming more would be the over-claim this harness exists "
-            "to catch"
+            "to catch. CHAOS-3627 added a THIRD, inside the arm: an "
+            "observation about an entity outside the grant is refused rather "
+            "than narrowed away. Because it raises the same exception type "
+            "with the same closing clause, it made this mutation SURVIVE -- "
+            "the test's old match string was satisfied by the evidence twin's "
+            "message. The test now matches the PATH-shaped message, which "
+            "only the hop check produces, and the expected reason below is "
+            "the evidence twin's message: seeing it is the proof that the hop "
+            "check, and not something else, is what stopped firing"
         ),
         path=SRC / "packet_builder.py",
         anchor="                if endpoint not in authorized_entity_ids:",
@@ -276,7 +284,292 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_authorization.py::TestAuthorizationFiltering::"
             "test_the_builder_refuses_a_readout_whose_paths_escape_the_set",
         ),
-        expect_failure="ValidationError",
+        expect_failure="observation 'ci_4412_88' is about",
+    ),
+    # ---- CHAOS-3627: the arm speaks the frozen corpus's vocabulary --------
+    #
+    # These four guard the conformance fix. They live in this harness rather
+    # than a new one because they defend the same modules, and a second
+    # harness is a second thing to remember to run.
+    Mutation(
+        mutation_id="evidence-handles-re-minted-instead-of-carried",
+        defect=(
+            "the arm re-signs its own handle over a record a source already "
+            "issued one for, so evidence identity is replaced and no consumer "
+            "-- and no oracle -- can join the citation back to the record it "
+            "names. This is the CHAOS-3627 defect in its original form: the "
+            "CHAOS-3616 authorization oracle reported all 31 cited handles on "
+            "the analyst/team_cinder path as fabricated.\n"
+            "\n"
+            "DOUBLE DISABLE, and the reason is the point (fix round, verifier "
+            "F6). Disabling only the carry branch used to die in the SIBLING "
+            "collision guard, because two corpus records of one kind about "
+            "one entity re-mint to the same handle -- so the recorded RED "
+            "evidenced the sibling's message and said nothing about whether "
+            "the carry branch itself was covered. Both are disabled together "
+            "here, deliberately widening the mutation, so the expected reason "
+            "below is the OWNING guard's own message. This is the one place "
+            "in this harness where a mutation disables more than the guard "
+            "under test, and it is because a narrower one proved less."
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        handle = observation.attributes.get("
+            "SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)\n"
+            "        if handle is None:\n"
+            "            handle = _mint_handle(signer, readout.org_id, "
+            "observation, record)\n"
+            "        if handle in evidence_groups:"
+        ),
+        replacement=(
+            "        handle = _mint_handle(signer, readout.org_id, "
+            "observation, record)\n"
+            "        if False:"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestEvidenceCitesTheHandleItWasIssued::"
+            "test_every_corpus_originated_entry_carries_the_worlds_handle",
+        ),
+        expect_failure="handles the world never minted",
+    ),
+    Mutation(
+        mutation_id="evidence-entity-is-the-observations-own-slug",
+        defect=(
+            "``evidence.entity_id`` carries the observation's own identifier "
+            "instead of the entity the evidence is about, so the corpus "
+            "oracle reads every indexed item as a fabricated entity "
+            "(authorization.py:190) -- 31 of them on the reproduction path. "
+            "The recorded failure is the frozen contract's own refusal, and "
+            "that is the honest scope: with the declared set no longer "
+            "widened to hide them, an observation slug in this field cannot "
+            "reach a consumer at all. Widening it back is the sibling "
+            "mutation below"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=("        entity_id=declared if declared is not None else supports[0],"),
+        replacement="        entity_id=observation.canonical_id,",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestEvidenceCitesTheHandleItWasIssued::"
+            "test_no_entry_names_an_observation_as_the_entity_it_is_about",
+        ),
+        expect_failure=(
+            "not in related_context.authorized_entity_ids -- "
+            "evidence_coverage.evidence_index"
+        ),
+    ),
+    Mutation(
+        mutation_id="declared-authorized-set-widened-with-observation-ids",
+        defect=(
+            "the declared authorized set is widened past entity vocabulary, "
+            "which the CHAOS-3616 oracle scores as a false authorization "
+            "claim per id -- and, worse, blunts the frozen contract's own "
+            "leak check, because validate_every_entity_is_authorized reads "
+            "the same field. Nothing in the pre-CHAOS-3627 suite caught this: "
+            "with only this guard reverted, the whole of tests/context_fabric "
+            "outside test_chaos_3627_arm_vocabulary.py still passes"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    declared_authorized = authorized_entity_ids",
+        replacement=(
+            "    declared_authorized = tuple(\n"
+            "        sorted(\n"
+            "            set(authorized_entity_ids)\n"
+            "            | {item.canonical_id for item in readout.observations}\n"
+            "        )\n"
+            "    )"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheDeclaredSetIsEntityVocabulary::"
+            "test_no_observation_id_is_declared_authorized",
+        ),
+        expect_failure="observation ids declared authorized:",
+    ),
+    Mutation(
+        mutation_id="half-populated-source-evidence-pair-accepted",
+        defect=(
+            "a record arrives naming the evidence it rests on but with no "
+            "handle, and is ingested anyway -- so the builder mints its own "
+            "while the record looks, to a reader, like it carried provenance. "
+            "This is re-minting restored by data rather than by a code change "
+            "anyone would review"
+        ),
+        path=SRC / "projection.py",
+        anchor=(
+            "    if handle is None or source_id is None:\n"
+            "        raise ProjectionError("
+        ),
+        replacement="    if handle is None or source_id is None:\n        return\n    if False:\n        raise ProjectionError(",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestProvenanceIsRefusedRatherThanRepaired::"
+            "test_a_record_id_with_no_handle_is_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="observation-subjects-narrowed-instead-of-refused",
+        defect=(
+            "an observation about an entity outside the caller's grant is "
+            "quietly intersected away instead of refused, so a reader bug -- "
+            "or a second reader -- can hand the builder unauthorized material "
+            "and get back a packet that looks clean. Codex #4 on PR #1617: "
+            "this invariant moved INTO the arm when the declared set was "
+            "narrowed, and no mutation covered it, so the 80/80 result did "
+            "not establish that the newly internalised guard was killed"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if unauthorized_subjects:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheInternalInvariantsSurviveTheNarrowing::"
+            "test_an_observation_about_an_unauthorized_entity_is_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="evidence-entry-describes-the-citation-not-the-record",
+        defect=(
+            "an evidence entry is described by whichever observation the "
+            "traversal happened to reach rather than by the record its handle "
+            "names, so the packet contradicts the world record it cites. "
+            "Measured at 33/96 packets by this lane and 115/291 by the "
+            "independent verifier, and invisible to the corpus oracle, which "
+            "compares the handle's record against the grant and the packet's "
+            "entity against the world but never the two against each other"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        entity_id=declared if declared is not None else supports[0],",
+        replacement="        entity_id=supports[0],",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestEvidenceCitesTheHandleItWasIssued::"
+            "test_a_citing_observation_alone_still_names_the_records_own_entity",
+        ),
+        expect_failure="contradicts the world record its handle names",
+    ),
+    Mutation(
+        mutation_id="fallback-mint-loses-record-identity",
+        defect=(
+            "the arm's own mint identifies a record by the entity it is about "
+            "rather than by the record, so two same-kind records about one "
+            "entity collide and the refusal kills the whole packet on a "
+            "legitimate handle-less world. The arm-side face of CHAOS-3633, "
+            "and a denial of service on valid input manufactured by the arm"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "    return signer.issue(\n"
+            "        org_id, dataclasses_replace(record, "
+            "entity_id=observation.canonical_id)\n"
+            "    )"
+        ),
+        replacement="    return signer.issue(org_id, record)",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheFallbackMintDiscriminatesRecords",
+        ),
+        expect_failure="already issued for",
+    ),
+    Mutation(
+        mutation_id="merge-join-keyed-on-the-handle-alone",
+        defect=(
+            "an observation carrying an existing handle joins that record's "
+            "group whatever record it actually names, so its subjects widen "
+            "a record's support with entities it has nothing to do with. "
+            "Codex round 2 graded this BLOCKING and the verifier reproduced "
+            "it at runtime: round 1's bound was pinned by what the fixtures "
+            "happen to do, and the JOIN never checked"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        if group is not None and (\n"
+            "            observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE) "
+            "!= group.source_id\n"
+            "        ):"
+        ),
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheMergeBoundIsEnforcedAtTheJoin::"
+            "test_a_citation_naming_a_different_record_is_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="withheld-evidence-reads-as-an-inconsistency",
+        defect=(
+            "evidence the authorization filter removed and evidence nothing "
+            "ever observed raise the same error, so a narrower grant produces "
+            "a dead packet and the message sends a reader looking for a bug "
+            "that is not there. Verifier round 2, N1 -- the cheap form: the "
+            "distinction is drawn from the drop set the evidence pass already "
+            "recorded, with no reconciliation inside discover_drivers"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "            withheld = sorted(item for item in missing "
+            "if item in filtered_ids)\n"
+            "            unobserved = sorted(item for item in missing "
+            "if item not in filtered_ids)"
+        ),
+        replacement=(
+            "            withheld = []\n            unobserved = list(missing)"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheWithheldEvidenceRefusalIsDistinguishable",
+        ),
+        expect_failure="never indexed",
+    ),
+    Mutation(
+        mutation_id="withheld-record-count-is-per-observation",
+        defect=(
+            "the authorization-filtered evidence count is incremented per "
+            "dropped OBSERVATION while an evidence entry represents a RECORD, "
+            "so two citations of one withheld record report 2 for one missing "
+            "entry -- a disclosure whose unit differs from the thing it "
+            "discloses about. Codex round 2, medium 2"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "            unattributable.add(\n"
+            "                observation.attributes.get(\n"
+            "                    SOURCE_EVIDENCE_ID_ATTRIBUTE, "
+            "observation.canonical_id\n"
+            "                )\n"
+            "            )"
+        ),
+        replacement="            unattributable.add(observation.canonical_id)",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheFilteredCountIsPerRecord::"
+            "test_two_citations_of_one_withheld_record_count_once",
+        ),
+        expect_failure="the count is per observation, not per record",
+    ),
+    Mutation(
+        mutation_id="duplicate-observation-id-silently-discarded",
+        defect=(
+            "a batch declaring two different records under one canonical id "
+            "keeps the first and drops the second without a word. Refuse-"
+            "don't-sanitize applies to identifiers too, and this became "
+            "load-bearing when the fallback mint started discriminating "
+            "records BY canonical id: the silent discard loses one record "
+            "before the mint sees it, so the duplicate-handle refusal cannot "
+            "protect the case it exists for. Codex round 2, medium 3"
+        ),
+        path=SRC / "projection.py",
+        anchor="        if observation.canonical_id in observation_index:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestADuplicateObservationIdIsRefused",
+        ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="graphiti-telemetry-left-on",

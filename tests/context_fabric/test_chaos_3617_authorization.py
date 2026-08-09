@@ -236,7 +236,15 @@ class TestAuthorizationFiltering:
         tampered = dataclasses.replace(
             readout, authorized_entity_ids=("proj_nightfall_migration",)
         )
-        with pytest.raises(PermissionError, match="not in the authorized entity set"):
+        # CHAOS-3627 narrowed the match. The builder now holds a SECOND
+        # authorization refusal -- an observation about an entity outside the
+        # grant is refused rather than quietly narrowed -- and a tampered
+        # readout trips both. Matching on "not in the authorized entity set"
+        # alone was satisfied by either, so disabling the hop check left this
+        # test green on the evidence twin's message: the guard-injection
+        # harness reported it SURVIVED. The path-shaped message is what only
+        # the hop check produces.
+        with pytest.raises(PermissionError, match=r"path p\d+ traverses"):
             _packet(tampered, signer)
 
 
@@ -254,6 +262,20 @@ class TestRepositoryScoping:
     def test_evidence_carries_repository_scope_through_to_the_packet(
         self, alpha_projection, signer
     ) -> None:
+        """CHAOS-3627 changed how this entry is *found*, not what it proves.
+
+        The lookup used to be ``entry.evidence.entity_id == "rev_4412_1"``,
+        which pinned the contract violation this issue fixed:
+        ``evidence.entity_id`` is entity vocabulary (``packet.py:789``,
+        ``:852``; read as an entity sighting at
+        ``investigation_corpus/authorization.py:190``), and an observation
+        slug in it is what forced the arm to widen its declared authorized
+        set to keep the packet valid. The entry is now found by the handle
+        the source issued for that observation -- which is the identity it
+        always should have been keyed on -- and the assertion about
+        repository scope is unchanged.
+        """
+
         readout = _read(
             alpha_projection,
             ["proj_nightfall_migration"],
@@ -263,9 +285,12 @@ class TestRepositoryScoping:
         review = next(
             entry
             for entry in packet.evidence_coverage.evidence_index
-            if entry.evidence.entity_id == "rev_4412_1"
+            if entry.evidence.evidence_ref_id == fixtures.issued_handle("rev_4412_1")
         )
         assert tuple(review.evidence.repository_ids) == ("repo_auth_gateway",)
+        # The field this test used to key on, asserted directly: it names the
+        # ENTITY the review is about, never the review's own slug.
+        assert review.evidence.entity_id == "pr_4412"
 
 
 class TestTheCallerDeclaredResidualIsExplicit:

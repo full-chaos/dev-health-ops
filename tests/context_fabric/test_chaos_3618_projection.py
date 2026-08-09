@@ -831,3 +831,48 @@ def test_driver_analysis_drops_evidence_handles_the_packet_never_indexed() -> No
         candidate.standing is not DriverStanding.CONTRIBUTING_DRIVER
         for candidate in drivers.candidates
     ), "GUARD unindexed_handle_never_earns_contributing"
+
+
+def test_a_dimension_needs_content_that_actually_measured_it() -> None:
+    """A source class label is not a measurement.
+
+    The original map was keyed on ``SourceClass`` and credited any
+    ``PULL_REQUEST`` observation with ``review_load`` — even an empty one,
+    and even though ``PULL_REQUEST`` has no approved content slot at all
+    (``pull_requests`` is minted under ``STATUS_CHANGE``). A cohort claiming
+    a dimension no query produced supports a comparison it cannot make.
+    """
+
+    empty = DevSourceContent(schema_version="dev_source_content.v1")
+    observation = DevSourceObservation(
+        schema_version="dev_source_observation.v1",
+        observation_id=_handle("obs-empty"),
+        source_class=SourceClass.PULL_REQUEST,
+        adapter_id="status_snapshot.v1",
+        requirement_level="optional",
+        observed_state=SourceRequirementState.AVAILABLE_CURRENT,
+        data_semantics="measured_zero",
+        subject_coverage=1.0,
+        usable_fact_count=0,
+        observed_at=_NOW,
+        query_version="status.entity.v2",
+        content=empty,
+    )
+    result = DevInvestigationResult(
+        schema_version="dev_investigation_result.v1",
+        result_id=_handle("result-empty"),
+        plan_id="status.entity.v2",
+        plan_version="status.entity.v2.0",
+        run_id=_handle("run"),
+        subject_entity_id="proj-1",
+        observations=(observation,),
+        completed_steps=("status_snapshot",),
+        skipped_steps=(),
+        failed_steps=(),
+        relationship_closure_verified=True,
+        completed_at=_NOW,
+    )
+    dimensions = proj._supported_dimensions(
+        _payload(investigation_result=result, evidence=())
+    )
+    assert dimensions == (), "GUARD dimension_needs_measured_content"

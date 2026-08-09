@@ -48,6 +48,10 @@ from typing import NamedTuple
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
+#: Distinct exit code meaning "the plant itself could not run". Anything
+#: else would be indistinguishable from the guard failing.
+_PLANT_FAILED_EXIT = 97
+
 
 class GuardCase(NamedTuple):
     """One honesty guard, and the single plant claimed to defeat it."""
@@ -87,14 +91,21 @@ CASES: tuple[GuardCase, ...] = (
         expected_failure="GUARD available_needs_expressible_endpoints",
         plant="""
 import dataclasses
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
 from dev_health_ops.api.dev.investigation_contract import RelationshipType
 from dev_health_ops.context_fabric.native_arm import capabilities as caps
 
 table = dict(caps.NATIVE_RELATIONSHIP_CAPABILITY)
+# Every OTHER field is legal -- STATUS_CHANGE really does mint the
+# `deployments` slot under the `linked_deployment` token -- so the ONLY
+# thing wrong with this row is that `deploys` terminates on a `service`
+# the native path cannot name. That isolates the endpoint-pair guard.
 table[RelationshipType.DEPLOYS] = dataclasses.replace(
     table[RelationshipType.DEPLOYS],
     state=caps.NativeRelationshipState.AVAILABLE,
     content_slot="deployments",
+    source_class=SourceClass.STATUS_CHANGE,
+    native_token="linked_deployment",
     gap_mechanism=None,
 )
 caps.NATIVE_RELATIONSHIP_CAPABILITY = table
@@ -122,6 +133,77 @@ table[RelationshipType.DEPENDS_ON] = dataclasses.replace(
     gap_mechanism=caps.NativeGapMechanism.SUBJECT_KIND_ABSENT,
 )
 caps.NATIVE_RELATIONSHIP_CAPABILITY = table
+""",
+    ),
+    GuardCase(
+        case_id="capability_drift_from_the_matrix",
+        stake=(
+            "a relationship marked available from a source class no adapter "
+            "mints -- the single judgment table drifting from the vocabulary "
+            "it claims to follow"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_capabilities.py::"
+            "test_every_available_row_is_backed_by_the_landed_matrix"
+        ),
+        expected_failure="assert 'not_applicable' != 'not_applicable'",
+        plant="""
+import dataclasses
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+from dev_health_ops.api.dev.investigation_contract import RelationshipType
+from dev_health_ops.context_fabric.native_arm import capabilities as caps
+
+table = dict(caps.NATIVE_RELATIONSHIP_CAPABILITY)
+table[RelationshipType.REVIEWS] = dataclasses.replace(
+    table[RelationshipType.REVIEWS],
+    state=caps.NativeRelationshipState.AVAILABLE,
+    content_slot="pull_requests",
+    source_class=SourceClass.REVIEW,
+    native_token="reviews",
+    gap_mechanism=None,
+)
+caps.NATIVE_RELATIONSHIP_CAPABILITY = table
+""",
+    ),
+    GuardCase(
+        case_id="dimension_without_measured_content",
+        stake=(
+            "a cohort claiming a comparison dimension no query produced -- "
+            "review comparability from an observation carrying nothing"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_projection.py::"
+            "test_a_dimension_needs_content_that_actually_measured_it"
+        ),
+        expected_failure="GUARD dimension_needs_measured_content",
+        plant="""
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+from dev_health_ops.api.dev.investigation_contract import ComparisonDimension
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+_BY_CLASS = {
+    SourceClass.DEFICIENCY_INVENTORY: ComparisonDimension.OPEN_DEFICIENCY_COUNT,
+    SourceClass.STATUS_CHANGE: ComparisonDimension.STATUS_DECLARATION_GAP,
+    SourceClass.SOURCE_HEALTH: ComparisonDimension.DATA_COVERAGE,
+    SourceClass.INCIDENT: ComparisonDimension.INCIDENT_LOAD,
+    SourceClass.DEPLOYMENT: ComparisonDimension.DEPLOYMENT_FREQUENCY,
+    SourceClass.PULL_REQUEST: ComparisonDimension.REVIEW_LOAD,
+}
+
+
+def _supported_dimensions(payload):
+    # The pre-fix logic: keyed on the source-class label, blind to content.
+    if payload.investigation_result is None:
+        return ()
+    found = {
+        _BY_CLASS[o.source_class]
+        for o in payload.investigation_result.observations
+        if o.source_class in _BY_CLASS
+    }
+    return tuple(sorted(found, key=lambda item: item.value))
+
+
+proj._supported_dimensions = _supported_dimensions
 """,
     ),
     GuardCase(
@@ -425,12 +507,32 @@ def _verify(case: GuardCase, *, verbose: bool) -> str | None:
         # is exactly what this script promises not to do -- so the plant is
         # installed as a sitecustomize on PYTHONPATH instead, which Python
         # imports during interpreter startup, before pytest collects anything.
-        (workspace / "sitecustomize.py").write_text(case.plant)
+        # sitecustomize swallows exceptions by design, so a plant with a
+        # bad import silently becomes a no-op and the case reports "not
+        # load-bearing" -- blaming the guard for the harness's mistake.
+        # This session hit exactly that. Wrap it so a broken plant exits
+        # with a distinct code instead.
+        (workspace / "sitecustomize.py").write_text(
+            "try:\n"
+            + "".join(f"    {line}\n" for line in case.plant.splitlines())
+            + "except BaseException as _plant_exc:\n"
+            "    import os, sys\n"
+            "    sys.stderr.write(\n"
+            "        f'PLANT-FAILED: {type(_plant_exc).__name__}: {_plant_exc}\\n'\n"
+            "    )\n"
+            f"    os._exit({_PLANT_FAILED_EXIT})\n"
+        )
         planted = _run_pytest(case.test, plant_dir=workspace)
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
     output = planted.stdout + planted.stderr
+    if planted.returncode == _PLANT_FAILED_EXIT or "PLANT-FAILED" in output:
+        return (
+            f"{case.case_id}: the PLANT could not run, so this case proved "
+            "nothing about the guard.\n"
+            f"  {[line for line in output.splitlines() if 'PLANT-FAILED' in line]}"
+        )
     if planted.returncode == 0:
         return (
             f"{case.case_id}: removing the guard changed nothing -- the test "

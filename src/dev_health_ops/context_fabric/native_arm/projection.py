@@ -30,6 +30,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -157,20 +158,38 @@ _TRIAL_ALLOWLIST = frozenset(
 )
 
 
-#: The comparison dimension a trial source class genuinely measures. Only
-#: the unambiguous ones appear: ``work_item`` could in principle back
-#: throughput or cycle time, but only when the run asked the metric service
-#: for that metric, and a cohort claiming a dimension no query produced
-#: would support a comparison it cannot make. A source class absent from
-#: this map contributes no dimension rather than a plausible one.
-_DIMENSION_BY_SOURCE_CLASS: Mapping[SourceClass, ComparisonDimension] = {
-    SourceClass.DEFICIENCY_INVENTORY: ComparisonDimension.OPEN_DEFICIENCY_COUNT,
-    SourceClass.STATUS_CHANGE: ComparisonDimension.STATUS_DECLARATION_GAP,
-    SourceClass.SOURCE_HEALTH: ComparisonDimension.DATA_COVERAGE,
-    SourceClass.INCIDENT: ComparisonDimension.INCIDENT_LOAD,
-    SourceClass.DEPLOYMENT: ComparisonDimension.DEPLOYMENT_FREQUENCY,
-    SourceClass.PULL_REQUEST: ComparisonDimension.REVIEW_LOAD,
+#: The comparison dimension a POPULATED ``DevSourceContent`` slot measures.
+#:
+#: Keyed on the content slot, not the source class, because the source class
+#: does not tell you what was measured. The first version of this table was
+#: keyed on ``SourceClass`` and was wrong twice over for ``PULL_REQUEST``: a
+#: PULL_REQUEST observation credited a cohort with ``review_load`` even when
+#: it carried nothing at all, and in fact ``PULL_REQUEST`` has no approved
+#: content slot in the landed relationship matrix — the ``pull_requests``
+#: slot is minted under ``STATUS_CHANGE``. A cohort claiming a dimension no
+#: query produced supports a comparison it cannot make.
+#:
+#: ``work_item``/``metric_refs`` is deliberately absent: which dimension a
+#: metric ref measures depends on WHICH metric the run asked for, and this
+#: table cannot know that. Adding a blanket entry would re-create exactly
+#: the defect above.
+_DIMENSION_BY_CONTENT_SLOT: Mapping[str, ComparisonDimension] = {
+    "deficiency_findings": ComparisonDimension.OPEN_DEFICIENCY_COUNT,
+    "status_facts": ComparisonDimension.STATUS_DECLARATION_GAP,
+    "incidents": ComparisonDimension.INCIDENT_LOAD,
+    "deployments": ComparisonDimension.DEPLOYMENT_FREQUENCY,
+    "pull_requests": ComparisonDimension.REVIEW_LOAD,
 }
+
+#: Slots whose mere presence is not enough: the facts inside must carry the
+#: signal the dimension names. A merged PR with no review state measures
+#: delivery, not review load.
+_SLOT_SIGNAL_REQUIRED = frozenset({"pull_requests"})
+
+#: ``data_coverage`` has no content slot -- source health describes a
+#: SOURCE, not a subject fact -- so it is derived from the observation's own
+#: measurement state instead, and only when something was actually measured.
+_UNMEASURED_SEMANTICS = frozenset({"not_measured"})
 
 
 class NativeProjectionGapReason(StrEnum):
@@ -560,16 +579,49 @@ def _mention_text(payload: NativeProjectionInput, mention_id: str) -> str:
 def _supported_dimensions(
     payload: NativeProjectionInput,
 ) -> tuple[ComparisonDimension, ...]:
-    """Dimensions the run's own observations genuinely support."""
+    """Dimensions the run's own observations genuinely measured.
+
+    Reads populated content, never the source-class label. An observation
+    that ran and found nothing measures nothing comparable, and saying
+    otherwise would let a cohort claim a comparison the run cannot make.
+    """
 
     if payload.investigation_result is None:
         return ()
-    found = {
-        _DIMENSION_BY_SOURCE_CLASS[observation.source_class]
-        for observation in payload.investigation_result.observations
-        if observation.source_class in _DIMENSION_BY_SOURCE_CLASS
-    }
+    found: set[ComparisonDimension] = set()
+    for observation in payload.investigation_result.observations:
+        if observation.source_class not in _TRIAL_ALLOWLIST:
+            continue
+        if (
+            observation.source_class is SourceClass.SOURCE_HEALTH
+            and observation.data_semantics not in _UNMEASURED_SEMANTICS
+        ):
+            found.add(ComparisonDimension.DATA_COVERAGE)
+        content = observation.content
+        if content is None:
+            continue
+        for slot, dimension in _DIMENSION_BY_CONTENT_SLOT.items():
+            facts = getattr(content, slot, ())
+            if not facts:
+                continue
+            if slot in _SLOT_SIGNAL_REQUIRED and not _carries_slot_signal(slot, facts):
+                continue
+            found.add(dimension)
     return tuple(sorted(found, key=lambda item: item.value))
+
+
+def _carries_slot_signal(slot: str, facts: Sequence[Any]) -> bool:
+    """Whether the facts in a slot carry the signal its dimension names."""
+
+    if slot == "pull_requests":
+        # review_load is about REVIEW, so a PR with no review state and no
+        # requested changes is delivery evidence, not review evidence.
+        return any(
+            getattr(fact, "review_state", None) is not None
+            or getattr(fact, "changes_requested", 0) > 0
+            for fact in facts
+        )
+    return True
 
 
 def _cohort_refs(

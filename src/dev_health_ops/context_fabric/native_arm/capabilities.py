@@ -61,6 +61,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     RelationshipType,
 )
 from dev_health_ops.api.dev.investigation_plans.relationship_matrix import (
+    APPROVED_CONTENT_SLOTS,
     RELATIONSHIP_MATRIX,
 )
 
@@ -177,9 +178,18 @@ class NativeRelationshipCapability:
 
     relationship: RelationshipType
     state: NativeRelationshipState
-    #: The ``DevSourceContent`` slot the projection reads, for the two
-    #: available states; empty for ``UNREACHABLE``.
+    #: The ``DevSourceContent`` slot the projection reads; ``None`` for
+    #: ``UNREACHABLE``.
     content_slot: str | None
+    #: The source class that mints that slot, and the native relationship
+    #: token the fact carries. Both are checked at import against the LANDED
+    #: relationship matrix, which is the vocabulary that actually describes
+    #: what adapters produce. Without them a row could claim ``reviews`` is
+    #: available from the ``pull_requests`` slot and pass every test, because
+    #: ``team -> pull_request`` is an expressible endpoint pair -- the
+    #: adversarial review demonstrated exactly that.
+    source_class: SourceClass | None
+    native_token: str | None
     #: The mechanism blocking it, for ``UNREACHABLE``; ``None`` otherwise.
     gap_mechanism: NativeGapMechanism | None
     #: Prose for the packet's own limitation/impact fields and for the
@@ -188,6 +198,16 @@ class NativeRelationshipCapability:
 
     def __post_init__(self) -> None:
         reachable = self.state is not NativeRelationshipState.UNREACHABLE
+        if reachable and (self.source_class is None or self.native_token is None):
+            raise ValueError(
+                f"{self.relationship} is {self.state} but does not say which "
+                "source class and native token it reads; an unattributed "
+                "availability claim cannot be checked against the matrix"
+            )
+        if not reachable and (
+            self.source_class is not None or self.native_token is not None
+        ):
+            raise ValueError(f"{self.relationship} is unreachable but names a source")
         if reachable and self.content_slot is None:
             raise ValueError(
                 f"{self.relationship} is {self.state} but names no content slot; "
@@ -216,6 +236,8 @@ def _capability(
     state: NativeRelationshipState,
     *,
     content_slot: str | None = None,
+    source_class: SourceClass | None = None,
+    native_token: str | None = None,
     gap_mechanism: NativeGapMechanism | None = None,
     detail: str,
 ) -> NativeRelationshipCapability:
@@ -223,6 +245,8 @@ def _capability(
         relationship=relationship,
         state=state,
         content_slot=content_slot,
+        source_class=source_class,
+        native_token=native_token,
         gap_mechanism=gap_mechanism,
         detail=detail,
     )
@@ -244,6 +268,8 @@ NATIVE_RELATIONSHIP_CAPABILITY: Mapping[
             RelationshipType.IMPLEMENTED_BY,
             _AVAILABLE,
             content_slot="pull_requests",
+            source_class=SourceClass.STATUS_CHANGE,
+            native_token="linked_pull_request",
             detail=(
                 "status_snapshot mints DevPullRequestFactV2 rows whose type pins the "
                 "target kind as pull_request; the subject kind comes from the "
@@ -254,6 +280,8 @@ NATIVE_RELATIONSHIP_CAPABILITY: Mapping[
             RelationshipType.PARENT_OF,
             _AVAILABLE,
             content_slot="required_children",
+            source_class=SourceClass.STATUS_CHANGE,
+            native_token="required_child",
             detail=(
                 "required_children keeps its own typed slot end to end, and each "
                 "fact_id carries an entity-type prefix, so both endpoint kinds are "
@@ -264,6 +292,8 @@ NATIVE_RELATIONSHIP_CAPABILITY: Mapping[
             RelationshipType.CONTRIBUTES_TO,
             _AVAILABLE,
             content_slot="required_children",
+            source_class=SourceClass.STATUS_CHANGE,
+            native_token="required_child",
             detail=(
                 "the same typed required_children slot read in reverse when the "
                 "subject is a project: a required child work_unit/issue/pull_request "
@@ -533,3 +563,33 @@ if _unknown_families:
     raise RuntimeError(
         f"native family mapping names unknown families: {_unknown_families}"
     )
+
+
+# Every AVAILABLE row must be backed by the LANDED relationship matrix, not
+# only by the contract's endpoint allowlist. The adversarial review showed
+# the gap: `reviews` could be marked available with a `pull_requests` slot
+# and pass all 29 capability tests, because `team -> pull_request` is an
+# expressible pair. The matrix is the vocabulary that says what adapters
+# actually mint, so it is the one that has to agree.
+for _relationship, _entry in NATIVE_RELATIONSHIP_CAPABILITY.items():
+    if _entry.state is not NativeRelationshipState.AVAILABLE:
+        continue
+    _source = _entry.source_class
+    if _source is None:  # unreachable: __post_init__ forbids it
+        raise RuntimeError(f"{_relationship.value} is available with no source")
+    _matrix = RELATIONSHIP_MATRIX[_source]
+    if _matrix.requirement == "not_applicable":
+        raise RuntimeError(
+            f"{_relationship.value} is available from "
+            f"{_source}, which no registered plan step mints"
+        )
+    if _entry.native_token not in _matrix.approved_relationship_types:
+        raise RuntimeError(
+            f"{_relationship.value} claims native token {_entry.native_token!r}, "
+            f"which {_source} does not approve"
+        )
+    if _entry.content_slot not in APPROVED_CONTENT_SLOTS[_source]:
+        raise RuntimeError(
+            f"{_relationship.value} reads slot {_entry.content_slot!r}, which "
+            f"{_source} may not populate"
+        )

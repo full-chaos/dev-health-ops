@@ -44,6 +44,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     RelationshipType,
 )
 from dev_health_ops.api.dev.investigation_plans.relationship_matrix import (
+    APPROVED_CONTENT_SLOTS,
     RELATIONSHIP_MATRIX,
 )
 from dev_health_ops.context_fabric.native_arm import capabilities as caps
@@ -179,6 +180,8 @@ def test_the_dataclass_rejects_an_unexplained_gap() -> None:
             relationship=RelationshipType.REVIEWS,
             state=caps.NativeRelationshipState.UNREACHABLE,
             content_slot=None,
+            source_class=None,
+            native_token=None,
             gap_mechanism=None,
             detail="silently unavailable",
         )
@@ -190,8 +193,47 @@ def test_the_dataclass_rejects_an_available_row_with_no_slot() -> None:
             relationship=RelationshipType.REVIEWS,
             state=caps.NativeRelationshipState.AVAILABLE,
             content_slot=None,
+            source_class=SourceClass.STATUS_CHANGE,
+            native_token="linked_pull_request",
             gap_mechanism=None,
             detail="available from nowhere in particular",
+        )
+
+
+def test_the_dataclass_rejects_an_availability_claim_with_no_source() -> None:
+    """An unattributed availability claim cannot be checked against the matrix."""
+
+    with pytest.raises(ValueError, match="which source class and native token"):
+        caps.NativeRelationshipCapability(
+            relationship=RelationshipType.REVIEWS,
+            state=caps.NativeRelationshipState.AVAILABLE,
+            content_slot="pull_requests",
+            source_class=None,
+            native_token=None,
+            gap_mechanism=None,
+            detail="available from an unnamed source",
+        )
+
+
+def test_every_available_row_is_backed_by_the_landed_matrix() -> None:
+    """The check the adversarial review proved was missing.
+
+    ``reviews`` could be marked AVAILABLE with a ``pull_requests`` slot and
+    pass every endpoint test, because ``team -> pull_request`` is an
+    expressible pair. The contract's allowlist says what a relationship MAY
+    look like; the relationship matrix says what adapters actually mint, and
+    an availability claim has to satisfy both.
+    """
+
+    for relationship, entry in caps.NATIVE_RELATIONSHIP_CAPABILITY.items():
+        if entry.state is not caps.NativeRelationshipState.AVAILABLE:
+            continue
+        assert entry.source_class is not None
+        matrix = RELATIONSHIP_MATRIX[entry.source_class]
+        assert matrix.requirement != "not_applicable", relationship
+        assert entry.native_token in matrix.approved_relationship_types, relationship
+        assert entry.content_slot in APPROVED_CONTENT_SLOTS[entry.source_class], (
+            relationship
         )
 
 

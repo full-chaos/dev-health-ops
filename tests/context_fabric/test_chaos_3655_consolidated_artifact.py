@@ -43,6 +43,7 @@ _ADMISSION_MERGED = (
     / "results"
     / "admission-records.json"
 )
+_NEWTIP = _RESULTS / "consolidated-post-wave-newtip-verification.records.json"
 _NOTE = _RESULTS / "consolidated-post-wave-note.md"
 
 _GRAPH = "graph_assisted_shadow_arm"
@@ -53,6 +54,11 @@ _LEG_B = "leg_b_job_held_constant"
 #: The commit the whole artifact set is bound to. Written down once here so a
 #: regenerated artifact that forgot to update the note fails loudly.
 _TIP = "eee3d1571b2b27b577f394f5bca0c6302ca8cd63"
+
+#: The feature tip AFTER #1626 and #1619 merged. The pin above excludes both,
+#: and the verification run at this commit is what turns that exclusion from a
+#: disclosure into a measurement.
+_NEWER_TIP = "b7ed26d551b93bfdc55d563a2790f04277980351"
 
 _POST_3648 = next(entry for entry in DIVERGENCE_LEDGER if entry.ticket == "CHAOS-3648")
 
@@ -448,6 +454,78 @@ class TestTheAdmissionLegReproducesAtTheTip:
         assert len(moved) == 17
 
 
+class TestTheExcludedPullRequestsChangedNothing:
+    """#1626 and #1619 merged after the pin. That must be measured, not assumed.
+
+    #1619 is a real change to the arm under measurement -- it taught
+    `graph_arm/projection.py` to refuse instruction-shaped observation titles --
+    so "it changes no corpus case" is exactly the kind of claim that needs an
+    execution behind it. The verification sweep at the later tip is that
+    execution.
+    """
+
+    def test_the_verification_run_is_from_the_later_tip_and_a_clean_tree(
+        self,
+    ) -> None:
+        binding = _load(_NEWTIP)["binding"]
+        assert binding["commit"] == _NEWER_TIP
+        assert binding["feature_tip_commit"] == _NEWER_TIP
+        assert binding["tree_clean"] is True
+        assert binding["run_class"] == "measured"
+        assert _NEWER_TIP != _TIP, (
+            "the verification run must come from a DIFFERENT commit than the "
+            "pin, or it verifies nothing at all"
+        )
+
+    def test_the_later_tip_reproduces_the_pinned_artifact_exactly(
+        self, consolidated
+    ) -> None:
+        """0 of 156 rows differ. This is what licenses quoting the pin today."""
+
+        newer = _rows(_NEWTIP)
+        assert set(newer) == set(consolidated)
+        assert len(newer) == 156
+        differing = [
+            key
+            for key in consolidated
+            if _signature(consolidated[key]) != _signature(newer[key])
+        ]
+        assert differing == [], (
+            "a merged change moved a row after the pin; the note's "
+            "'proven immaterial' paragraph is false and the ADR must quote a "
+            "re-measured artifact instead of this one"
+        )
+
+    def test_the_corpus_did_not_move_between_the_two_tips(self) -> None:
+        """Otherwise the zero-difference above compares two different worlds."""
+
+        assert (
+            _load(_NEWTIP)["binding"]["corpus_manifest_sha256"]
+            == _load(_CONSOLIDATED)["binding"]["corpus_manifest_sha256"]
+        )
+
+    def test_the_admission_artifact_matches_the_one_1626_itself_committed(
+        self,
+    ) -> None:
+        """#1626 rewrote the trial's signer AND its own records file.
+
+        If our admission rows and the ones #1626 published disagree, the signer
+        change was not measurement-neutral and this lane's admission column is
+        describing a signer nobody ships.
+        """
+
+        mine = {case["case_id"]: case for case in _load(_ADMISSION_TIP)["cases"]}
+        theirs = {case["case_id"]: case for case in _load(_ADMISSION_MERGED)["cases"]}
+        assert set(mine) == set(theirs)
+        differing = [
+            case_id
+            for case_id in mine
+            if json.dumps(mine[case_id], sort_keys=True)
+            != json.dumps(theirs[case_id], sort_keys=True)
+        ]
+        assert differing == []
+
+
 class TestTheMustBeZeroColumn:
     def test_the_three_clean_gates_are_clean_on_every_scored_row(
         self, consolidated
@@ -570,13 +648,16 @@ class TestTheNoteDoesNotOutrunItsArtifacts:
 
     def test_it_names_every_artifact_it_commits(self) -> None:
         note = _NOTE.read_text()
-        for path in (_CONSOLIDATED, _SLICE, _ADMISSION_TIP):
+        for path in (_CONSOLIDATED, _SLICE, _ADMISSION_TIP, _NEWTIP):
             assert path.name in note
 
-    def test_it_discloses_the_pull_request_excluded_from_the_tip(self) -> None:
-        """#1619 was open when this was measured. Absence must be stated."""
+    def test_it_discloses_both_pull_requests_excluded_from_the_pin(self) -> None:
+        """Absence must be stated, and both exclusions named with their commits."""
 
-        assert "#1619" in _NOTE.read_text()
+        note = _NOTE.read_text()
+        assert "#1619" in note
+        assert "#1626" in note
+        assert _NEWER_TIP[:9] in note
 
     def test_it_names_the_tickets_the_attribution_table_credits(self) -> None:
         note = _NOTE.read_text()

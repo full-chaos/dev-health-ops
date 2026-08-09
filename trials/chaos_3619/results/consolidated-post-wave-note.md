@@ -12,7 +12,7 @@ number CHAOS-3621 should quote.
 | Produced by | `python -m trials.chaos_3619.sweep` at `chaos-3655-consolidated` **`eee3d1571`**, `tree_clean: true` |
 | Feature tip | **`eee3d1571`** — the branch was cut from `origin/feature/chaos-3498-context-fabric` and never moved off it, so lane commit and feature tip are the same commit |
 | Merged changes in this tip | #1620 (CHAOS-3619 trial), #1623 (CHAOS-3645 cohort mode), #1624 (CHAOS-3646 admission), #1622 (CHAOS-3648 extraction), #1625 (CHAOS-3647 semantic leg) |
-| **Excluded** | **PR #1619 (CHAOS-3637) was still OPEN when this was measured** and is not in the tip. It changes no corpus case, so a later merge does not invalidate these rows — but it was not measured here and this artifact does not speak for it |
+| **Excluded** | **PR #1619 (CHAOS-3637) and PR #1626 (CHAOS-3646 follow-up) are not in this pin.** Both merged after the measurement started. Their exclusion is not merely disclosed — it is **proven immaterial by execution**; see below |
 | Store | live FalkorDB — `CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389`, `CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1`, `CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED=1` |
 | Corpus / oracles | FROZEN and unread-from. `corpus_manifest_sha256` and `contract_manifest_sha256` are byte-identical to the frozen run's. Nothing was re-tuned and no oracle or corpus file was edited |
 
@@ -23,6 +23,27 @@ Three artifacts are committed beside this note, all additive:
 | `consolidated-post-wave.records.json` | the full 39-case sweep, both legs, both arms | the load-bearing one |
 | `consolidated-post-wave-cohort-slice.records.json` | the 14 `discovered_cohort` cases re-run through the CHAOS-3645 subjectless mode (`--only-comparison-shape discovered_cohort`) | the claim "the cohort artifact reproduces at the tip" is only checkable if the rows are present |
 | `consolidated-post-wave-admission.records.json` | the CHAOS-3646 admission-on / admission-off sweep re-run at this tip | same reason |
+| `consolidated-post-wave-newtip-verification.records.json` | the same full sweep re-run at `b7ed26d55`, the tip after #1626 and #1619 merged | it is what makes "the two excluded PRs changed nothing" a measurement rather than a claim |
+
+## The two excluded pull requests, and why the pin still stands
+
+Two PRs merged onto the feature branch after this measurement began:
+
+| PR | what it changed | in this pin? |
+| --- | --- | --- |
+| **#1626** (CHAOS-3646 follow-up, `f1ba4cdd8`) | `trials/chaos_3646/canonical.py` — made the trial's `CorpusEvidenceSigner` stateless so a refused candidate leaves no minted residue | no |
+| **#1619** (CHAOS-3637, `b7ed26d55`) | `src/.../graph_arm/projection.py` and `vocabulary.py` — the arm now refuses instruction-shaped observation titles | no |
+
+**#1619 is a real change to the arm under measurement**, not a test-only or docs change, so "it changes no corpus case" is a claim that needed testing rather than accepting. It was tested the only way that settles it: the whole sweep was re-run on a clean tree at `b7ed26d55`, which contains **both** PRs, and diffed against this artifact on the full scored signature.
+
+| check | result |
+| --- | --- |
+| full sweep at `b7ed26d55` vs this artifact, 156 arm rows, full signature | **0 rows differ** |
+| corpus manifest hash at `b7ed26d55` vs this pin | identical |
+| CHAOS-3646 admission sweep at `b7ed26d55` vs this artifact, 41 case records | **0 differ** |
+| this artifact vs the `admission-records.json` committed **by** #1626 | **0 case records differ** — only `provenance.lane_commit` moves |
+
+So the pin is not a stale measurement that happens to be tolerated: `eee3d1571` and `b7ed26d55` produce the same 156 rows, and every number in this note is equally true of the current tip. The verification run is committed rather than summarised for the usual reason — a zero-difference claim is only checkable by a reader who has both files.
 
 `consolidated-post-wave-report.md` is rendered from the records by `trials/chaos_3619/report.py`
 and is not hand-edited.

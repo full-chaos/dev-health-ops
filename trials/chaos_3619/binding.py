@@ -149,7 +149,9 @@ def _feature_tip() -> str:
         base = _git("merge-base", "HEAD", ref)
         if not base.startswith("<") and base:
             return base
-    return f"<git failed: neither origin/{FEATURE_BRANCH} nor {FEATURE_BRANCH} resolves>"
+    return (
+        f"<git failed: neither origin/{FEATURE_BRANCH} nor {FEATURE_BRANCH} resolves>"
+    )
 
 
 def _sha256_of(path: Path) -> str:

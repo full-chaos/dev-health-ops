@@ -1384,14 +1384,26 @@ class TestTheIndependentOracleCannotYetScoreThisArm:
         which for corpus-originated evidence is an evidence *slug* — never
         the entity the world says that evidence is *about*.
 
-        The #1617 verifier measured this at 40% of graph-arm entries. On this
-        suite's packets it is **100% of slug-bearing entries** (785 of 785
-        across the analyst's whole grant; the remaining 532 carry measurement
-        keys, which are not corpus slugs at all). The difference matters and
-        is recorded rather than smoothed over: this is not "some attributions
-        are wrong", it is "the field means something different from what the
-        oracle reads it as, every time". Same root cause as CHAOS-3627's third
-        vocabulary mismatch, measured from the sighting side.
+        **WHICH CODE STATE THIS MEASURES, because two figures are in
+        circulation and they must not be averaged.** This branch is cut from
+        ``1ab76d955`` and contains **no** ``src/`` changes — in particular not
+        the #1617 vocabulary fix. Pre-fix, ``entity_id`` is an observation
+        slug or a measurement key on *every* slug-bearing entry, so **785 of
+        785 is the defect's definition, not a rate**: CHAOS-3627's third
+        vocabulary mismatch, seen from the sighting side.
+
+        The #1617 verifier's 115/291 (~40%) was measured **on the fixed
+        branch**, where ``entity_id`` is supposed to be an entity and the 40%
+        is the *residual* mis-attribution of un-reached records. One defect
+        family at two stages of repair, not two numbers for one defect.
+        Averaging them would describe a state that has never existed.
+
+        The 532 entries carrying measurement keys are a third vocabulary
+        again, consistent with CHAOS-3627's second mismatch and covered by
+        its declared-set fix.
+
+        **Re-derive after the rebase onto the fix**, which is what the
+        assertions below force rather than request.
 
         **Why this scopes the headline.** The dangerous direction is masking:
         evidence genuinely about a restricted entity is attributed to its own

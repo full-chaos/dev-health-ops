@@ -292,13 +292,36 @@ class TestEmbeddingBudget:
                 calls.append(input_data)
                 return [0.0]
 
-        class _RefusingDriver:
-            async def close(self) -> None:  # pragma: no cover - not reached
+        # The driver has to be complete enough that the write would REALLY
+        # proceed when the guard is off -- otherwise the mutation "kills" this
+        # test by crashing on a missing attribute and proves nothing about the
+        # budget. (That is exactly what happened: the first version had only
+        # `close`, so disabling the guard failed with
+        # `'_RefusingDriver' object has no attribute 'session'` and the
+        # harness's failure-category check caught it.)
+        class _FakeSession:
+            async def execute_write(self, func, *args: object, **kwargs: object):
+                return await func(self, *args, **kwargs)
+
+            async def run(self, query: object, **kwargs: object) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        class _RecordingDriver:
+            provider = "fake"
+            graph_operations_interface = None
+
+            def session(self) -> _FakeSession:
+                return _FakeSession()
+
+            async def close(self) -> None:
                 return None
 
         store = GraphArmStore(
             org_id=fixtures.ALPHA_ORG,
-            driver=_RefusingDriver(),
+            driver=_RecordingDriver(),
             embedder=_CountingEmbedder(),
         )
         with pytest.raises(EmbeddingBudgetExceededError, match="embedding calls"):
@@ -310,6 +333,66 @@ class TestEmbeddingBudget:
                 )
             )
         assert calls == [], "the budget must bite before the first call is made"
+
+    def test_the_embedder_is_really_exercised_under_a_generous_budget(
+        self, alpha_projection, monkeypatch
+    ) -> None:
+        """Anti-vacuity for ``calls == []`` in the test above.
+
+        That assertion only means "the bound bit before spending" if the
+        embedder would otherwise have been called at all. If the stub driver
+        or the write path silently skipped embedding, ``calls == []`` would
+        hold for a reason that has nothing to do with the budget — and the
+        pre-flight claim would be unproven while looking proven.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.budgets import TrialBudgets
+        from dev_health_ops.context_fabric.graph_arm.store import GraphArmStore
+
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED", "1")
+        calls: list[object] = []
+
+        class _CountingEmbedder(_StubSemanticEmbedder):
+            async def create(self, input_data: Any) -> list[float]:
+                calls.append(input_data)
+                return [0.0]
+
+        class _FakeSession:
+            async def execute_write(self, func, *args: object, **kwargs: object):
+                return await func(self, *args, **kwargs)
+
+            async def run(self, query: object, **kwargs: object) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        class _RecordingDriver:
+            provider = "fake"
+            graph_operations_interface = None
+
+            def session(self) -> _FakeSession:
+                return _FakeSession()
+
+            async def close(self) -> None:
+                return None
+
+        store = GraphArmStore(
+            org_id=fixtures.ALPHA_ORG,
+            driver=_RecordingDriver(),
+            embedder=_CountingEmbedder(),
+        )
+        import asyncio
+
+        asyncio.run(
+            store.write_projection(
+                alpha_projection, budgets=TrialBudgets(max_embedding_calls=5_000)
+            )
+        )
+        assert calls, (
+            "the embedder was never called even with a generous budget, so "
+            "`calls == []` in the budget test proves nothing about pre-flight"
+        )
 
     def test_a_non_semantic_embedder_is_not_charged(self, alpha_projection) -> None:
         """DeterministicEmbedder makes no calls, so it spends no budget."""

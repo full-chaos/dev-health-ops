@@ -193,3 +193,35 @@ def test_the_harness_summary_pattern_cannot_backtrack_exponentially() -> None:
     assert _SUMMARY.search("13724 passed, 268 skipped, 1 xfailed in 154.82s")
     assert _SUMMARY.search("1 failed, 42 warnings in 1.24s")
     assert _SUMMARY.search("208 passed in 5.40s")
+
+
+def test_the_documented_guard_count_matches_the_harness() -> None:
+    """A hand-maintained number in prose is a claim guaranteed to drift.
+
+    And it did: PR1 shipped with the architecture note claiming 21 guards
+    while the harness held 24, because a later round added three mutations
+    and updated the code but not the sentence. Nobody noticed, because
+    nothing could.
+
+    The number is worth keeping — a reader wants the scale — so it is pinned
+    instead of removed. This reads both and compares.
+    """
+
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    harness = (root / "scripts" / "chaos_3617_guard_injection.py").read_text()
+    note = (
+        root / "docs" / "contribute" / "architecture" / "graph-investigation-arm.md"
+    ).read_text()
+
+    actual = harness.count("mutation_id=")
+    assert actual > 20, f"suspiciously few mutations found: {actual}"
+
+    claimed = re.search(r"For each of the \*\*(\d+)\*\* guards", note)
+    assert claimed is not None, "the note no longer states a guard count"
+    assert int(claimed.group(1)) == actual, (
+        f"the architecture note claims {claimed.group(1)} guards; the harness "
+        f"defines {actual}"
+    )

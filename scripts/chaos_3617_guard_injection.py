@@ -452,6 +452,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_semantic_claims.py::"
             "TestSemanticClaimsAreRefusedUnderANonSemanticEmbedder",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="embedding-budget-not-checked-before-spending",
@@ -466,6 +467,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_semantic_claims.py::TestEmbeddingBudget::"
             "test_a_projection_over_the_embedding_budget_is_refused_before_any_call",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="projection-version-omits-the-embedder",
@@ -486,6 +488,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "TestReproducibilityMetadata::"
             "test_the_projection_version_names_the_embedder_that_produced_it",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="cloud-embedder-degrades-silently-without-a-key",
@@ -500,6 +503,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_semantic_claims.py::TestEmbedderContracts::"
             "test_the_cloud_embedder_refuses_to_degrade_silently",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",

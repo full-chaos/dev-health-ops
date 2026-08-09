@@ -46,15 +46,32 @@ semantic match signal under it.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from dev_health_ops.api.dev.investigation_corpus import world
 from dev_health_ops.context_fabric.graph_arm import corpus_adapter
+from dev_health_ops.context_fabric.graph_arm.corpus_adapter import CORPUS_VERSION
 from dev_health_ops.context_fabric.graph_arm.discovery import (
     CandidateMatch,
     search_candidates,
 )
 from dev_health_ops.context_fabric.graph_arm.projection import GraphProjection
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from datetime import datetime
+
+    from dev_health_ops.api.dev.evidence_service import EvidenceReferenceSigner
+    from dev_health_ops.api.dev.investigation_contract import (
+        ComparisonShape,
+        QuestionFamilyID,
+    )
+    from dev_health_ops.context_fabric.graph_arm.readback import (
+        InvestigationReadout,
+    )
+    from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
+    from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 
 #: Mention ids are correlation handles the trial never reads; a fixed
 #: namespace keeps a sweep reproducible rather than seeding uuid4 per run.
@@ -68,7 +85,9 @@ def _mint() -> str:
 
 __all__ = [
     "MAX_SEEDS",
+    "GraphPacketOutcome",
     "SubjectDiscovery",
+    "assemble_packet",
     "authorized_ids_for",
     "discover_subjects",
     "seeds_from",
@@ -237,3 +256,182 @@ def tenant_of(principal_id: str) -> str:
     """
 
     return world.PRINCIPALS[principal_id].tenant_id
+
+
+# ---------------------------------------------------------------------------
+# Packet assembly
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class GraphPacketOutcome:
+    """One graph-arm attempt: a packet, a named refusal, or a fault.
+
+    Three outcomes rather than "packet or None", because the trial's
+    dispositions distinguish them and the arm genuinely does too. A refusal
+    is a capability boundary the arm KNOWS it has and names
+    (``UnsupportedComparisonShapeError``, ``IncomparableCohortError``); a
+    fault is something it does not model. Reporting a fault as a boundary
+    would publish a defect as an honest limitation.
+    """
+
+    payload: Mapping[str, object] | None
+    refusal: str = ""
+    fault: str = ""
+    seeds: tuple[str, ...] = ()
+    authorization_filtered_count: int = 0
+
+    @property
+    def emitted(self) -> bool:
+        return self.payload is not None
+
+
+#: The graph arm's own named capability boundaries. Anything raised that is
+#: NOT in here is a fault, not a limit -- see :class:`GraphPacketOutcome`.
+_NAMED_REFUSALS: tuple[str, ...] = (
+    "UnsupportedComparisonShapeError",
+    "IncomparableCohortError",
+    "UnsupportedMatchMechanismError",
+    "EmbedderProvenanceMismatchError",
+    "PacketTooLargeError",
+)
+
+
+def _entity_labels(
+    projection: GraphProjection,
+) -> dict[str, tuple[GraphEntityKind, str]]:
+    """The ``canonical_id -> (kind, label)`` map ``build_cohort`` takes.
+
+    Excludes the organization partition root: it is an entity node with no
+    emittable subject kind, and a cohort that could contain it would be a
+    cohort containing the tenant.
+    """
+
+    from dev_health_ops.context_fabric.graph_arm.vocabulary import (
+        GraphEntityKind as _Kind,
+    )
+
+    return {
+        node.canonical_id: (kind, node.display_label)
+        for node in projection.nodes
+        if node.is_entity
+        and (kind := node.entity_kind) is not None
+        and kind is not _Kind.ORGANIZATION
+    }
+
+
+def assemble_packet(
+    *,
+    readout: InvestigationReadout,
+    projection: GraphProjection,
+    discovery: SubjectDiscovery,
+    question_family: QuestionFamilyID,
+    comparison_shape: ComparisonShape,
+    job_statement: str,
+    window_start: datetime,
+    window_end: datetime,
+    run_id: str,
+    watermark: IndexWatermark,
+    signer: EvidenceReferenceSigner,
+    produced_at: datetime,
+    as_of: datetime,
+    authorized_entity_ids: frozenset[str],
+) -> GraphPacketOutcome:
+    """Turn one authorized traversal into a packet, or a named refusal.
+
+    ``question_family`` and ``comparison_shape`` are ARGUMENTS rather than
+    anything this module derives, and that is what lets the same code serve
+    both legs: Leg A passes what the production interpreter produced, Leg B
+    passes the corpus's declared values through the two-field channel. The
+    arm cannot tell the legs apart, which is the point -- a leg-aware arm
+    would be an arm tuned to the trial.
+
+    Cohort and drivers are derived from the readout the arm produced, never
+    supplied. Drivers are attempted only when the readout declares it can say
+    what a record is about; on a readout that cannot, ``discover_drivers``
+    refuses to attribute and the packet says so rather than silently
+    attributing nothing.
+    """
+
+    from dev_health_ops.api.dev.investigation_contract import ComparisonShape
+    from dev_health_ops.context_fabric.graph_arm.cohort import build_cohort
+    from dev_health_ops.context_fabric.graph_arm.drivers import (
+        DriverFinding,
+        discover_drivers,
+    )
+    from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+        JobContext,
+        TrialContext,
+        build_packet,
+    )
+
+    seeds = tuple(seeds_from(discovery))
+    if not seeds:
+        # No subject resolved. NOT a refusal and not a fault: the corpus's
+        # no-match and clarification cases are supposed to land here, and
+        # the arm declining to investigate an unresolved reference is the
+        # correct, scoreable behaviour.
+        return GraphPacketOutcome(
+            payload=None,
+            refusal="no authorized subject resolved from the question",
+            seeds=(),
+            authorization_filtered_count=discovery.authorization_filtered_count,
+        )
+
+    subject_id = seeds[0]
+    cohort = None
+    if comparison_shape is not ComparisonShape.SINGULAR_SUBJECT:
+        cohort = build_cohort(
+            subject_id,
+            projection.edges,
+            _entity_labels(projection),
+            authorized_entity_ids,
+        )
+
+    drivers: tuple[DriverFinding, ...] = ()
+    truncated = False
+    if readout.observation_attachment_available:
+        drivers, truncated = discover_drivers(readout, subject_id, as_of=as_of)
+
+    try:
+        packet = build_packet(
+            readout=readout,
+            job=JobContext(
+                job_id=f"job_{subject_id}",
+                question_family=question_family,
+                job_statement=job_statement,
+                comparison_shape=comparison_shape,
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            watermark=watermark,
+            signer=signer,
+            trial=TrialContext(run_id=run_id, corpus_version=CORPUS_VERSION),
+            produced_at=produced_at,
+            cohort=cohort,
+            drivers=drivers,
+            drivers_truncated=truncated,
+        )
+    except Exception as raised:  # noqa: BLE001 - classified, not swallowed
+        name = type(raised).__name__
+        if name in _NAMED_REFUSALS:
+            return GraphPacketOutcome(
+                payload=None,
+                refusal=f"{name}: {raised}",
+                seeds=seeds,
+                authorization_filtered_count=discovery.authorization_filtered_count,
+            )
+        return GraphPacketOutcome(
+            payload=None,
+            fault=f"{name}: {raised}",
+            seeds=seeds,
+            authorization_filtered_count=discovery.authorization_filtered_count,
+        )
+
+    import json
+
+    return GraphPacketOutcome(
+        payload=json.loads(packet.model_dump_json()),
+        seeds=seeds,
+        authorization_filtered_count=discovery.authorization_filtered_count,
+    )

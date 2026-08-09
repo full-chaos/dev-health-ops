@@ -293,3 +293,48 @@ class TestTheTypedMentionPathIsExercised:
             "a typed mention naming an authorized project did not reach the "
             "seeds; the typed path is wired but not working"
         )
+
+
+class TestRefusalAndFaultAreNotTheSameOutcome:
+    """A capability boundary the arm NAMES is not a defect it does not model.
+
+    ``build_packet`` raises five named errors for boundaries it knows it has
+    (an unsupported comparison shape, an incomparable cohort, an unsupported
+    match mechanism, an embedder provenance mismatch, an oversized packet).
+    Anything else escaping is a defect. Collapsing the two would publish a
+    defect as an honest limitation of the technique -- which is the single
+    most misleading thing this trial could do, because the ADR reads
+    limitations as evidence about graph assistance itself.
+    """
+
+    def test_the_named_refusals_are_the_arms_own_error_types(self) -> None:
+        """Derived from the arm, not typed twice.
+
+        A hand-kept list would drift the moment the arm added or renamed a
+        boundary, and the drift is silent in the direction that matters: a
+        renamed refusal would start being recorded as a fault.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm import packet_builder
+
+        for name in graph_leg._NAMED_REFUSALS:
+            attribute = getattr(packet_builder, name, None)
+            assert attribute is not None, (
+                f"{name!r} is listed as a named refusal but no longer exists "
+                "on packet_builder; a renamed boundary would now be recorded "
+                "as an arm fault"
+            )
+            assert issubclass(attribute, Exception)
+
+    def test_an_unresolved_subject_is_a_refusal_and_never_a_fault(self) -> None:
+        """The corpus's no-match cases must not read as arm defects."""
+
+        outcome = graph_leg.GraphPacketOutcome(
+            payload=None, refusal="no authorized subject resolved from the question"
+        )
+        assert outcome.emitted is False
+        assert outcome.fault == ""
+
+    def test_an_emitted_outcome_carries_a_payload(self) -> None:
+        outcome = graph_leg.GraphPacketOutcome(payload={"schema_version": "x"})
+        assert outcome.emitted is True

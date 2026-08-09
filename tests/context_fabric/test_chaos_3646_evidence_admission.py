@@ -9,9 +9,11 @@ proving nothing about it.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,6 +46,7 @@ from trials.chaos_3646.canonical import (
     CorpusCandidateResolver,
     CorpusScopeAuthorizer,
     corpus_evidence_service,
+    record_for,
 )
 
 SECRET = "chaos-3646-test-signing-secret-not-a-real-key-at-all"
@@ -629,3 +632,141 @@ def test_the_rendered_result_agrees_with_the_records() -> None:
                 f"{case_id}/{column}: the table says {cell!r}, the records "
                 f"say {recorded_verdict!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Mint-then-authorize depends on the mint leaving no residue
+# ---------------------------------------------------------------------------
+
+
+def test_the_production_signer_mints_without_persisting_anything() -> None:
+    """``admit`` mints BEFORE it authorizes, so a refused candidate is minted
+    and thrown away. The whole ordering is only safe because the mint creates
+    nothing that outlives the call.
+
+    ``EvidenceReferenceSigner.issue`` is a pure HMAC over ``_payload``: no
+    registry, no store, no counter. Asserted on the object's own state rather
+    than read off the source, so a later edit that adds a cache fails here.
+    """
+
+    from dev_health_ops.api.dev.evidence_service import EvidenceReferenceSigner
+
+    signer = EvidenceReferenceSigner(SECRET)
+    # deepcopy, NOT dict(vars(...)): a shallow snapshot shares every nested
+    # container with the live object, so a mint that appends to a cache
+    # mutates the 'before' picture too and the comparison cannot fail.
+    # The planted caching mint below found exactly that hole in the first
+    # version of this assertion.
+    before = copy.deepcopy(vars(signer))
+    record = EvidenceRecord(
+        source_system="s",
+        source_version="v",
+        entity_type="work_item",
+        entity_id="proj_identity_rewrite",
+        display_label="l",
+        observed_at=datetime(2026, 7, 1, tzinfo=UTC),
+        freshness=FreshnessState.FRESH,
+        provenance="p",
+        confidence=1.0,
+    )
+    first = signer.issue(ORG, record)
+    second = signer.issue(ORG, record)
+    assert first == second, "the mint must be a pure function of its inputs"
+    assert vars(signer) == before, (
+        "issue() mutated the signer. admit() mints before it authorizes, so "
+        "state added here is residue a REFUSED candidate leaves behind"
+    )
+
+
+def test_a_refused_candidate_leaves_no_verifiable_residue() -> None:
+    """The property stated end to end, over a candidate refused AFTER minting.
+
+    The lying resolver returns a record about an entity outside the grant, so
+    admission mints the ref and then refuses it. Nothing about that mint may
+    survive: the handle must not become verifiable, and the service must
+    behave identically afterwards.
+    """
+
+    class Lying:
+        source_system = ARM_SOURCE_SYSTEM
+
+        async def resolve(self, *, org_id, scope, candidate):
+            return EvidenceRecord(
+                source_system=ARM_SOURCE_SYSTEM,
+                source_version="test",
+                entity_type="work_item",
+                entity_id="proj_quarry",
+                display_label="smuggled",
+                observed_at=datetime(2026, 7, 1, tzinfo=UTC),
+                freshness=FreshnessState.FRESH,
+                provenance="test",
+                confidence=1.0,
+                internal_path="wg_identity_rewrite",
+            )
+
+    signer = _signer()
+    # deepcopy, NOT dict(vars(...)): a shallow snapshot shares every nested
+    # container with the live object, so a mint that appends to a cache
+    # mutates the 'before' picture too and the comparison cannot fail.
+    # The planted caching mint below found exactly that hole in the first
+    # version of this assertion.
+    before = copy.deepcopy(vars(signer))
+    service = EvidenceService(
+        entitlement=_AlwaysEntitled(),
+        authorizer=CorpusScopeAuthorizer(principal_id=PRINCIPAL),
+        signer=signer,
+        native_adapters=(),
+        candidate_resolvers=(Lying(),),
+    )
+    (refused,) = _admit(service, _candidate("wg_identity_rewrite")).admissions
+    assert refused.evidence is None
+
+    assert vars(signer) == before, "the refused candidate left state on the signer"
+    # And the handle it would have carried does not verify against the
+    # identity the resolver claimed, because nothing recorded that claim.
+    forged = SimpleNamespace(
+        evidence_ref_id=world.evidence_handle("wg_identity_rewrite"),
+        source_system=ARM_SOURCE_SYSTEM,
+        source_version="test",
+        entity_type="work_item",
+        entity_id="proj_quarry",
+        repository_ids=(),
+    )
+    assert signer.verify(ORG, forged) is False
+
+
+def test_the_residue_check_is_observed_failing_on_a_caching_mint() -> None:
+    """The guard, watched failing on the implementation it replaced.
+
+    ``CorpusEvidenceSigner`` used to cache every issued payload so ``verify``
+    could compare against it. That made a refused candidate leave a verifiable
+    handle behind in the harness -- the exact residue mint-then-authorize
+    forbids. Re-planted here so the two tests above are known to be capable of
+    catching it, rather than merely passing beside it.
+    """
+
+    from trials.chaos_3646.canonical import CorpusEvidenceSigner
+
+    class CachingSigner(CorpusEvidenceSigner):
+        def __init__(self, secret: str) -> None:
+            super().__init__(secret)
+            self._issued: dict[str, bytes] = {}
+
+        def issue(self, org_id: str, record: EvidenceRecord) -> str:
+            handle = super().issue(org_id, record)
+            self._issued[handle] = self._payload(org_id, record)
+            return handle
+
+    signer = CachingSigner(SECRET)
+    # deepcopy, NOT dict(vars(...)): a shallow snapshot shares every nested
+    # container with the live object, so a mint that appends to a cache
+    # mutates the 'before' picture too and the comparison cannot fail.
+    # The planted caching mint below found exactly that hole in the first
+    # version of this assertion.
+    before = copy.deepcopy(vars(signer))
+    record = world.EVIDENCE_BY_SLUG["wg_identity_rewrite"]
+    signer.issue(ORG, record_for(record))
+    assert vars(signer) != before, (
+        "the planted caching mint did NOT leave residue, so the residue "
+        "assertions above cannot be trusted to catch one"
+    )

@@ -65,8 +65,8 @@ graph traversal ──emits──▶ EvidenceCandidate      (a POINTER: no handl
                        1. entitlement
                        2. scope resolution, re-resolved PER CANDIDATE
                        3. resolve  → the SOURCE's own record
-                       4. authorize→ the existing _authorize_expansion
-                       5. mint     → the existing _to_ref / signer.issue
+                       4. mint     → the existing _to_ref / signer.issue
+                       5. authorize→ the existing _authorize_expansion
                                   │
                     ┌─────────────┴─────────────┐
                     ▼                           ▼
@@ -141,10 +141,19 @@ Per candidate, in order:
 3. **Resolve** through the resolver for `candidate.source_system`. No
    resolver → refuse. `None` → refuse.
 4. **Mint** the ref with the existing `self._to_ref(...)`, over the **record
-   the source returned**, with `valid_entity_ids` from *this* resolution.
-   Because the mint is over the returned record, a candidate that pointed at
-   one record and got another back still yields a truthful handle: the handle
-   describes what the source actually had.
+   the source returned**. Because the mint is over the returned record, a
+   candidate that pointed at one record and got another back still yields a
+   truthful handle: the handle describes what the source actually had.
+
+   `valid_entity_ids` is minted as **the record's own entity**, and that one
+   choice is what makes the next step real. `search` mints with the whole
+   authorized set, which makes step 5's containment check compare a set to
+   itself — harmless there, because an adapter is handed the scope and returns
+   records within it. On the admission path the same tautology would leave the
+   record's own entity unchecked, and a resolver bug would admit a record about
+   an entity the principal cannot see. Narrowing the minted set turns the
+   existing, unmodified check into the admission path's entity authorization,
+   with no second authorization surface written anywhere.
 5. **Authorize** with the existing `self._authorize_expansion(...)`,
    unmodified and uncopied. It runs the signature check, the
    `valid_entity_ids ⊆ allowed` check, and the separate repository-scope
@@ -153,9 +162,34 @@ Per candidate, in order:
 
 Order matters and is deliberate: **mint then authorize**, so authorization
 runs against the same object the caller would receive, through the same code
-path expansion uses. Authorizing a candidate and then minting would be a
-second, parallel authorization surface — which is exactly the class of defect
-the trial keeps finding.
+path expansion uses. Authorizing a candidate and then minting would authorize
+a *pre-mint representation* and then hope the mint preserved it — a second,
+parallel authorization surface, which is exactly the class of defect the
+trial keeps finding.
+
+### The property mint-then-authorize depends on
+
+**The mint must leave no residue.** A refused candidate is minted and then
+thrown away, so the ordering is only safe if minting creates nothing that
+outlives the call — no registry entry, no store write, no counter, nothing a
+later caller could present. Were that false, a refusal would still have
+*created* something.
+
+The production signer has the property: `EvidenceReferenceSigner.issue` is a
+pure HMAC over `_payload` with no persistence of any kind, and `_to_ref`
+around it only constructs a model. This is asserted on the object's own state
+rather than read off the source
+(`test_the_production_signer_mints_without_persisting_anything`), so a later
+edit that adds a cache fails.
+
+Recorded because the trial's own signer got it wrong first: an earlier
+`CorpusEvidenceSigner` cached every issued payload so `verify` could compare
+against it, which left a verifiable handle behind for every *refused*
+candidate. It is now stateless, verifying as a pure function of the world.
+The planted caching mint is kept as a test, and it immediately earned its
+place — it exposed that the first version of the residue assertion used a
+*shallow* state snapshot, which shares nested containers with the live object
+and therefore could not fail.
 
 ### 4. Refusal uses the vocabulary that already exists
 
@@ -226,9 +260,26 @@ still bites, and a planted single-field mutation is the test that proves it.
   own path rather than through the graph's copy of it. Nothing here is
   evidence about how a `native_evidence` adapter would resolve a locator, and
   the records artifact says so.
-* **The mint substitution the corpus forces.** `world.evidence_handle(slug)`
-  is the corpus's sole mint and the frozen authorization oracle audits against
-  it, so the trial's canonical service signs with the world's mint rather than
-  the platform HMAC — exactly as `world.py:158` already documents for the
-  corpus. That is a property of the corpus, not of the admission path, and it
-  is recorded rather than glossed.
+* **The mint substitution the corpus forces — and its CHAOS-3633 lineage.**
+  `world.evidence_handle(slug)` is the corpus's sole mint and the frozen
+  authorization oracle audits cited handles against it, so the trial's
+  canonical service signs with the world's mint rather than the platform
+  HMAC. `world.py:158` already documents the substitution and why the corpus
+  cannot key the platform HMAC.
+
+  These are **one story, not two**. CHAOS-3633 is the platform-side defect:
+  `EvidenceReferenceSigner._payload` identifies a record by `(org,
+  source_system, source_version, entity_type, entity_id, repositories)`, and
+  `entity_id` on the wire is the entity the evidence is *about* — so two
+  distinct records of one kind about one entity mint the SAME handle. The
+  graph arm already works around it on its own side
+  (`packet_builder._mint_handle` signs over the record's canonical id, and
+  says so), and the corpus works around it on the other side by deriving a
+  handle from the slug. This lane's `EvidenceCandidate.locator` is the third
+  appearance of the same distinction: the source's record identity is not the
+  entity the record is about.
+
+  A future reader should see that the corpus mint stops being a substitution
+  when CHAOS-3633 lands — the ticket carries the removal steps, and this
+  design needs no change when they are taken, because it never depends on
+  *which* mint the service holds, only that the service holds it.

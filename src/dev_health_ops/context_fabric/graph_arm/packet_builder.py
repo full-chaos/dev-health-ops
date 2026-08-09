@@ -105,7 +105,7 @@ from .backend import (
     embedder_projection_suffix,
 )
 from .budgets import DEFAULT_BUDGETS, TrialBudgets
-from .cohort import CohortCandidate, CohortProposal
+from .cohort import CohortCandidate, CohortEntryMode, CohortProposal
 from .drivers import DriverFinding
 from .projection import PROJECTION_VERSION
 from .readback import (
@@ -795,6 +795,13 @@ def _inclusion_rationale(subject_id: str, member: CohortCandidate) -> str:
     owning team ``team_atlas``" is. Where the edge asserted peerhood directly
     there is no anchor to name, and the rationale says so rather than
     rendering an empty list.
+
+    ``subject_id`` is empty under
+    :attr:`~.cohort.CohortEntryMode.SCOPE_ENUMERATED`, where there IS no
+    subject and the sharing is mutual. The rationale then names the other
+    members as the counterparty rather than naming nothing, because "shares
+    same_portfolio through pf_platform" with no stated partner is a sentence
+    that reads as complete and answers "with what?" nowhere.
     """
 
     parts = [
@@ -803,7 +810,22 @@ def _inclusion_rationale(subject_id: str, member: CohortCandidate) -> str:
         else f"{basis.value} recorded directly"
         for basis, anchors in member.basis_anchors
     ]
-    return f"shares {'; '.join(parts)} with {subject_id}"
+    counterparty = subject_id or "the other members of this cohort"
+    return f"shares {'; '.join(parts)} with {counterparty}"
+
+
+def _cohort_provenance(cohort: CohortProposal) -> str:
+    """How to name this cohort in a refusal a human has to act on.
+
+    A subject-anchored cohort is identified by the subject it was walked out
+    from; a scope-enumerated one has no subject, and "the cohort around ''" is
+    the kind of message that sends a reader looking for a bug in the wrong
+    place.
+    """
+
+    if cohort.entry_mode is CohortEntryMode.SCOPE_ENUMERATED:
+        return "enumerated from the authorized scope"
+    return f"around {cohort.subject_id}"
 
 
 def _cohort_subject_kind(
@@ -1031,6 +1053,23 @@ def build_packet(
             "comparison into the trial's scoring table"
         )
 
+    # CHAOS-3645. A scope-enumerated cohort answers a question that named no
+    # subject, so this packet commits to none and declares no subject
+    # candidate. That is not a degraded packet: ``SubjectDiscovery`` permits
+    # zero committed subjects, and the alternative -- promoting one member to
+    # "the subject" -- would have to state a ``SubjectMatchSignal``, every one
+    # of which describes matching a reference the question supplied. There was
+    # no reference. A fabricated ``exact_canonical_id`` in a scored packet is
+    # a worse outcome than a packet with no subject.
+    scope_enumerated = (
+        cohort is not None and cohort.entry_mode is CohortEntryMode.SCOPE_ENUMERATED
+    )
+    cohort_member_ids = (
+        {member.canonical_id for member in cohort.members}
+        if cohort is not None
+        else set()
+    )
+
     family = QUESTION_FAMILY_REGISTRY[job.question_family]
     if job.comparison_shape not in family.permitted_comparison_shapes:
         raise ValueError(
@@ -1091,7 +1130,13 @@ def build_packet(
                 entity_kind=subject_kind,
                 display_label=entity.display_label,
                 inclusion_reason=(
-                    "connected to the committed subject by at least one "
+                    # A scope-enumerated packet commits to no subject, so the
+                    # subject-anchored wording would be a false statement
+                    # about a packet whose subject_discovery is empty.
+                    "connected to a cohort member by at least one authorized "
+                    "relationship path"
+                    if scope_enumerated
+                    else "connected to the committed subject by at least one "
                     "authorized relationship path"
                 ),
                 supporting_path_ids=tuple(ordered),
@@ -1107,9 +1152,11 @@ def build_packet(
     known_entity_ids = {entity.entity_id for entity in related_entities}
 
     # ---- subjects ------------------------------------------------------
-    resolved_seeds = [
-        seed for seed in readout.seed_canonical_ids if seed in entity_by_id
-    ]
+    resolved_seeds = (
+        []
+        if scope_enumerated
+        else [seed for seed in readout.seed_canonical_ids if seed in entity_by_id]
+    )
     candidates: list[SubjectCandidate] = []
     committed_ids: list[str] = []
     for rank, seed in enumerate(resolved_seeds, start=1):
@@ -1213,7 +1260,14 @@ def build_packet(
     #: never became a handle is evidence the packet does not actually
     #: carry.
     handle_by_observation: dict[str, str] = {}
-    candidate_ids = {item.canonical_id for item in candidates}
+    # What this packet may say a piece of evidence is ABOUT, subject-wise.
+    # Under a scope-enumerated cohort there are no subject candidates and the
+    # cohort members ARE the subjects, so leaving this as the candidate set
+    # would silently empty ``supports_subject_ids`` on every evidence entry --
+    # evidence that supports the answer, filed as supporting nobody.
+    candidate_ids = {item.canonical_id for item in candidates} | (
+        cohort_member_ids if scope_enumerated else set()
+    )
 
     indexable: list[tuple[DiscoveredObservation, tuple[str, ...]]] = []
     #: The source RECORDS whose entity is outside the caller's authorized
@@ -1509,7 +1563,22 @@ def build_packet(
             raise PermissionError(
                 f"the cohort names entities outside the authorized set: {outside}"
             )
-        if cohort.subject_id not in committed_ids:
+        if scope_enumerated:
+            # The mirror of the check below, and reachable in the same way:
+            # both are about a proposal whose ``subject_id`` disagrees with
+            # what this packet is about. A scope-enumerated proposal that
+            # names a subject is a caller holding two contradictory beliefs --
+            # that the question named nobody, and that it named this one --
+            # and the member rationales, which read "shares X with the other
+            # members", are written for only one of them.
+            if cohort.subject_id:
+                raise ValueError(
+                    f"a scope-enumerated cohort names subject "
+                    f"{cohort.subject_id!r}; this cohort was enumerated from "
+                    "authorized scope precisely because the question named no "
+                    "subject, so the mode and the subject cannot both be right"
+                )
+        elif cohort.subject_id not in committed_ids:
             raise ValueError(
                 f"the cohort was built around {cohort.subject_id!r}, which "
                 "this packet did not commit to as a subject; a cohort of "
@@ -1558,7 +1627,7 @@ def build_packet(
         cohort_authorization_filtered = cohort.authorization_filtered_count
         if len(cohort_members) < 2 or not cohort_dimensions:
             raise IncomparableCohortError(
-                f"the cohort around {cohort.subject_id} holds "
+                f"the cohort {_cohort_provenance(cohort)} holds "
                 f"{len(cohort_members)} member(s) and "
                 f"{len(cohort_dimensions)} comparison dimension(s); a "
                 "comparison needs two subjects and something to compare them "

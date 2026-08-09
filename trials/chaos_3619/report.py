@@ -229,8 +229,17 @@ def _disposition_table(payload: dict[str, Any], arms: list[str]) -> list[str]:
     return lines
 
 
-def render_report(payload: dict[str, Any]) -> str:
-    """The whole document, derived from one loaded record set."""
+def render_report(
+    payload: dict[str, Any], *, source_name: str = "trial-results.records.json"
+) -> str:
+    """The whole document, derived from one loaded record set.
+
+    ``source_name`` names the artifact this document was rendered FROM. It was
+    a hardcoded string until a second records file existed, at which point the
+    partial re-run's report opened by citing the full sweep's filename -- a
+    document misattributing its own source, which is the one error a reader
+    has no way to catch from the inside.
+    """
 
     binding = payload["binding"]
     arms = _arm_ids(payload)
@@ -239,7 +248,7 @@ def render_report(payload: dict[str, Any]) -> str:
     lines.append("# CHAOS-3619 — graph-assisted Ask Dev product-value trial")
     lines.append("")
     lines.append(
-        "Generated from `trial-results.records.json` by `trials/chaos_3619/"
+        f"Generated from `{source_name}` by `trials/chaos_3619/"
         "report.py`. Do not edit: every figure below is re-derived from the "
         "raw records, and a committed test fails if this document and those "
         "records disagree."
@@ -253,6 +262,16 @@ def render_report(payload: dict[str, Any]) -> str:
             "exercise. Its arm packets may carry known-defective output and "
             "no figure in it may be cited as a measurement of either arm."
         )
+        lines.append("")
+
+    # The binding's notes carry the disclosures that are true of the RUN
+    # rather than of any one case -- CHAOS-3645's partial re-run is the first
+    # of them. Rendered at the top and unconditionally, because a records file
+    # holding a slice of the corpus is indistinguishable by inspection from a
+    # full sweep that lost the rest, and a disclosure the report drops is a
+    # disclosure that does not exist for anyone reading the report.
+    for note in binding.get("notes", ()) or ():
+        lines.append(f"> **{note}**")
         lines.append("")
 
     lines.append("## What produced this")
@@ -482,3 +501,33 @@ def _unsound_section() -> list[str]:
         )
     lines.append("")
     return lines
+
+
+def main() -> None:
+    """Render a records file to markdown.
+
+    A CLI, because the merged report was produced ad hoc and the next person
+    had to reconstruct the incantation from a commit message. ``--records``
+    rather than a hardcoded path so a partial re-run renders its own
+    addendum instead of overwriting the full sweep's document.
+    """
+
+    import argparse
+    from pathlib import Path
+
+    from .records import load_records
+
+    parser = argparse.ArgumentParser(
+        description="Render a CHAOS-3619 trial report from raw records"
+    )
+    parser.add_argument("--records", required=True, type=Path)
+    parser.add_argument("--out", required=True, type=Path)
+    args = parser.parse_args()
+    rendered = render_report(load_records(args.records), source_name=args.records.name)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(rendered)
+    print(f"rendered {len(rendered.splitlines())} lines to {args.out}")
+
+
+if __name__ == "__main__":
+    main()

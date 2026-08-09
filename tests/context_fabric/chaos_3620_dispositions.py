@@ -1,11 +1,29 @@
 """CHAOS-3620: what this lane proved, what it did not, and why — machine-checked.
 
 A proof suite's most dangerous output is a green run, because green is read
-as "all of it holds". This lane's green run does not mean that: four of the
-issue's requirements are violated by merged code, one is blocked on
-CHAOS-3612, one is blocked on CHAOS-3627 and several are honestly unmeasured.
-A reader who has to reconstruct that from test names will not, so it is
-written down here in a form that cannot rot.
+as "all of it holds". This lane's green run does not mean that: some of the
+issue's requirements are violated by merged code, some are accepted only
+once another issue lands, and several are honestly unmeasured. Exactly how
+many of each, right now, is a property of :data:`REQUIREMENTS` — call
+:func:`gate_status_block` for the derived headline or :func:`render` for the
+full report. A reader who has to reconstruct any of that from test names
+will not, so it is written down here in a form that cannot rot.
+
+Counts are deliberately absent from the paragraph above. They used to be
+here, spelled out — a violation count and a named blocker — and PR #1618
+and PR #1617 respectively landed and made both wrong while the prose sat
+still, unchanged by either merge. A hand-written count in a module
+docstring cannot be kept honest by review alone —
+:mod:`test_chaos_3620_dispositions` now scans this docstring for a count
+word sitting next to a status claim and fails if one reappears.
+
+CHAOS-3620 itself is completed discovery-era verification, not a release
+gate: it proved and disproved specific, itemised claims about the
+graph-assisted arm against a frozen corpus, and it does not authorize
+shipping the arm. The production beta gate is CHAOS-3503 (delivered under
+Wave 3.2); every requirement recorded here as ``defect`` or ``not_accepted``
+carries a Linear blocker, and closing that blocker — not upgrading this
+ledger — is what the beta gate requires before release.
 
 Three properties make this a ledger rather than a README:
 
@@ -545,6 +563,12 @@ REQUIREMENTS: tuple[Requirement, ...] = (
             "back a share of the channel the withholding exists to close. "
             "The title dimension is proven for the executed payload; the "
             "bullet as written covers both carriers and is not.",
+            "The ID-carrier residual is not this ledger's to close: "
+            "CHAOS-3637's closure comment hands it to CHAOS-3671 (Phase 3B), "
+            "which gates the production beta on rejecting "
+            "instruction-shaped identifiers before graph ingestion. This "
+            "row stays DEFECT until CHAOS-3671 lands; it is not re-scored "
+            "here.",
         ),
     ),
     _req(
@@ -1136,6 +1160,51 @@ def gate_status_block() -> str:
 #: One whole-token scan over the whole page — comments included — rather
 #: than a growing list of forbidden phrasings.
 GATE_STATUS_TOKENS = ("gate", "gates")
+
+
+_NUMBER_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+)
+
+
+def _spell(count: int) -> str:
+    return _NUMBER_WORDS[count] if 0 <= count < len(_NUMBER_WORDS) else str(count)
+
+
+#: The one authorised heading for the defects section, DERIVED from status —
+#: the same idea as :func:`gate_status_block`, applied to the second place a
+#: count went stale in prose: a "## Four defects" heading that outlived PR
+#: #1618 fixing three of the four it once named.
+def defects_section_heading() -> str:
+    """The rendered page's defect-section heading, generated from status."""
+
+    count = sum(1 for item in REQUIREMENTS if item.status is Status.DEFECT)
+    noun = "defect" if count == 1 else "defects"
+    return f"## {_spell(count).capitalize()} {noun} in merged code"
+
+
+#: The one authorised heading for the not-accepted section, DERIVED the same
+#: way — the third place a count went stale: a "## The two requirements..."
+#: heading that outlived CHAOS-3627 resolving one of the two.
+def blocked_requirements_heading() -> str:
+    """The rendered page's not-accepted-section heading, generated from status."""
+
+    count = sum(1 for item in REQUIREMENTS if item.status is Status.NOT_ACCEPTED)
+    if count == 0:
+        return "## No requirement is withheld from acceptance"
+    if count == 1:
+        return "## The requirement that cannot be accepted"
+    return f"## The {_spell(count)} requirements that cannot be accepted"
 
 
 def render() -> str:

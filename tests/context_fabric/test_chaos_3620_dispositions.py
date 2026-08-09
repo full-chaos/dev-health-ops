@@ -9,10 +9,18 @@ because a reader who sees "proven" stops checking.
 Everything below exists to make that impossible. The tests named by every
 entry must resolve. Every non-proven status must state a reason and, where
 someone else owns the fix, name a Linear blocker. The ledger must be total
-over the issue's own bullets and must not invent any. And the two entries
-that carry the lane's hardest news — the conflict requirement blocked on
-CHAOS-3612, and the zero-leakage gate blocked on CHAOS-3627 — are asserted by
-id, so neither can be quietly upgraded to a pass.
+over the issue's own bullets and must not invent any. Requirements that
+carry the lane's hardest news are asserted by requirement id and blocker id
+rather than by prose, so none of them can be quietly upgraded to a pass by
+editing a status field — ``P4``'s CHAOS-3612 pin is an example, checked
+below by id rather than restated here by count. A prose count in this
+paragraph is what went stale last time: this docstring used to name
+``A9`` as a second pinned entry, blocked on CHAOS-3627, until that issue
+landed and the row it pinned flipped to ``PROVEN``.
+
+CHAOS-3620 is completed discovery-era verification, not the release gate —
+that is CHAOS-3503 (Wave 3.2). This suite exists to keep the record of what
+was proved honest, not to decide whether the arm may ship.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.context_fabric import chaos_3620_dispositions
 from tests.context_fabric.chaos_3620_dispositions import (
     _BLOCKER_PATTERN,
     GATE_STATUS_TOKENS,
@@ -34,12 +43,116 @@ from tests.context_fabric.chaos_3620_dispositions import (
     REQUIREMENTS,
     Status,
     Transfer,
+    blocked_requirements_heading,
+    defects_section_heading,
     gate_status_block,
     render,
 )
 from tests.context_fabric.chaos_3620_spine import _contains_token as _whole_token
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: Captured at true module scope. Referencing bare ``__doc__`` from inside a
+#: class body would resolve to *that class's own* docstring instead — Python
+#: sets a local ``__doc__`` while executing a class body with a docstring —
+#: which is exactly the wrong thing for a check whose point is scanning this
+#: file's top-level module docstring.
+_THIS_MODULE_DOCSTRING = __doc__ or ""
+
+#: Words a human-readable ledger summary must never spell out — a count
+#: belongs to :func:`~tests.context_fabric.chaos_3620_dispositions.gate_status_block`
+#: or one of its siblings, generated from :data:`REQUIREMENTS`, never to prose.
+_COUNT_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+)
+
+#: What immediately precedes a run of digits that makes it an identifier
+#: rather than a count — a Linear issue id, a delivery-wave label, a PR
+#: number, or a ``chaos_####_*`` module/file name. Matched by prefix, not by
+#: an allowlist of specific numbers, so CHAOS-9999 tomorrow needs no update
+#: here.
+_IDENTIFIER_DIGIT_PREFIXES = ("CHAOS-", "Wave ", "PR #", "PR#", "chaos_")
+_DIGIT_RUN = re.compile(r"\d[\d.]*")
+
+
+#: A requirement id is a single area letter directly touching its digits —
+#: ``A9``, ``P4``, ``X1`` — with no separator to anchor a prefix check on,
+#: unlike ``CHAOS-####``. :data:`ISSUE_BULLETS` names the closed set of area
+#: letters, so this is exhaustive rather than a guess.
+_REQUIREMENT_AREA_LETTERS = frozenset(
+    requirement_id[0] for requirement_id, _ in ISSUE_BULLETS
+)
+
+
+def _bare_counts(text: str) -> list[str]:
+    """Digit runs in ``text`` that are not part of an id: a CHAOS-####,
+    Wave #.#, PR ##### or requirement id (``A9``, ``P4``, ...)."""
+
+    offenders = []
+    for match in _DIGIT_RUN.finditer(text):
+        prefix = text[max(0, match.start() - 8) : match.start()]
+        if any(prefix.endswith(marker) for marker in _IDENTIFIER_DIGIT_PREFIXES):
+            continue
+        if prefix and prefix[-1] in _REQUIREMENT_AREA_LETTERS:
+            continue
+        offenders.append(match.group(0))
+    return offenders
+
+
+#: Status-shaped words that make a count on the same LINE a live claim about
+#: :data:`REQUIREMENTS`, rather than an incidental number elsewhere in the
+#: same docstring — e.g. "Three properties make this a ledger rather than a
+#: README" a few paragraphs down, which is a fixed structural description,
+#: not a status summary that can drift when a requirement's status moves.
+_STATUS_CLAIM_WORDS = (
+    "defect",
+    "defects",
+    "violated",
+    "violate",
+    "blocked",
+    "blocker",
+    "unmeasured",
+    "accepted",
+)
+
+
+def _sentences(text: str) -> list[str]:
+    """Split hand-wrapped prose into sentences rather than lines.
+
+    A docstring hard-wraps at ~79 columns, so a count word and the status
+    word it modifies routinely land on different LINES of the same
+    sentence — exactly the shape this file's own stale docstring had:
+    "two entries" on one line, "blocked on CHAOS-3612" on the next.
+    Collapsing whitespace and splitting on sentence punctuation reassembles
+    what the wrap tore apart.
+    """
+
+    collapsed = re.sub(r"\s+", " ", text)
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", collapsed) if s.strip()]
+
+
+def _count_status_claims(text: str) -> list[str]:
+    """Sentences pairing a count word with a status-claim word."""
+
+    offenders = []
+    for sentence in _sentences(text):
+        folded = sentence.casefold()
+        counts = [word for word in _COUNT_WORDS if _whole_token(folded, word)]
+        statuses = [word for word in _STATUS_CLAIM_WORDS if _whole_token(folded, word)]
+        if counts and statuses:
+            offenders.append(sentence)
+    return offenders
+
 
 #: Checksum of the transcribed CHAOS-3620 requirement text. Pins BOTH sides
 #: of the totality check so a bullet and its entry cannot be deleted
@@ -104,11 +217,15 @@ class TestTheLedgerIsTotalOverTheIssue:
         ids = [requirement.requirement_id for requirement in REQUIREMENTS]
         assert len(set(ids)) == len(ids), sorted(ids)
 
-    def test_all_four_requirement_areas_are_represented(self) -> None:
+    def test_all_requirement_area_prefixes_are_represented(self) -> None:
         """Anti-vacuity for the totality check.
 
         If the bullet list were ever truncated to one area, the check above
-        would still pass against a ledger truncated the same way.
+        would still pass against a ledger truncated the same way. The set of
+        prefixes below is asserted in full rather than counted, so adding or
+        removing an area cannot leave a stale count behind — this test's own
+        former name did exactly that (it said "four" areas years after a
+        fifth and sixth, ``D`` and ``O``, were added).
         """
 
         prefixes = {
@@ -311,12 +428,15 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
             f"the accepted zero-leakage gate still names blocker {gate.blocker!r}"
         )
 
-    def test_the_four_known_defects_are_still_recorded_as_defects(self) -> None:
+    def test_the_known_defect_set_is_still_recorded_as_defects(self) -> None:
         """If a fix lands, this test is the reminder to update the ledger.
 
         The pinning tests in the suites go red when the behaviour changes;
         this goes red when someone updates the behaviour and forgets the
-        record, which is the more likely order.
+        record, which is the more likely order. The set is asserted in full
+        rather than counted in the test's own name, on purpose: this test
+        used to be named for a count ("the four known defects") that PR
+        #1618 made false by fixing three of them, while the name sat still.
         """
 
         defects = {
@@ -337,6 +457,79 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
             f"the recorded defect set changed to {sorted(defects)}; update "
             "the CHAOS-3620 findings record and the lane report together"
         )
+
+
+class TestTheLedgerProseNamesNoCountThatCanDrift:
+    """The ledger's own module docstrings are a "human-readable summary" too.
+
+    This is what actually went stale, and it is why this class exists:
+    ``chaos_3620_dispositions.py``'s own docstring said "four... violated by
+    merged code" until PR #1618 fixed three of the four, and "one is blocked
+    on CHAOS-3627" until PR #1617 landed. This file's docstring made the
+    identical claim about "the two entries". Neither count was derived from
+    :data:`REQUIREMENTS`; both were typed once and left to rot.
+
+    Banning counts from the two module docstrings entirely — route them
+    through :func:`gate_status_block`, :func:`defects_section_heading` or
+    :func:`blocked_requirements_heading` instead — makes that drift
+    structurally impossible rather than relying on someone remembering to
+    edit prose the next time a requirement's status moves.
+    """
+
+    _SOURCES = (
+        (
+            "chaos_3620_dispositions.py module docstring",
+            chaos_3620_dispositions.__doc__ or "",
+        ),
+        (
+            "test_chaos_3620_dispositions.py module docstring",
+            _THIS_MODULE_DOCSTRING,
+        ),
+    )
+
+    def test_no_module_docstring_line_pairs_a_count_with_a_status_claim(
+        self,
+    ) -> None:
+        for label, doc in self._SOURCES:
+            offenders = _count_status_claims(doc)
+            assert not offenders, (
+                f"{label} pairs a count word with a status claim on one "
+                f"line ({offenders}); that is exactly the restated summary "
+                "that drifted before — derive it from REQUIREMENTS via "
+                "gate_status_block(), defects_section_heading() or "
+                "blocked_requirements_heading() instead"
+            )
+
+    def test_no_module_docstring_names_a_bare_digit(self) -> None:
+        for label, doc in self._SOURCES:
+            offenders = _bare_counts(doc)
+            assert not offenders, (
+                f"{label} states digits in prose ({offenders}); a "
+                "CHAOS-####/Wave #.#/PR ##### identifier is fine, a bare "
+                "count is not"
+            )
+
+    def test_the_scanners_can_actually_fail(self) -> None:
+        """Without this, a scanner that never matched would make both checks
+        above vacuous."""
+
+        wrapped = (
+            "This lane's green run does not mean that: four of the\n"
+            "issue's requirements are violated by merged code."
+        )
+        assert _count_status_claims(wrapped) == [
+            "This lane's green run does not mean that: four of the "
+            "issue's requirements are violated by merged code."
+        ]
+        assert (
+            _count_status_claims("Three properties make this a ledger, not a README.")
+            == []
+        )
+        assert _bare_counts("four of the issue's requirements") == []
+        assert _bare_counts("12 of 44 requirements, see CHAOS-3612") == [
+            "12",
+            "44",
+        ]
 
 
 class TestInheritedInvariantsCarryATransferDisposition:
@@ -526,6 +719,36 @@ class TestTheArchitecturePageAgreesWithTheLedger:
                 f"the page's defect table omits {requirement.requirement_id}"
             )
 
+    def test_the_page_defect_heading_is_DERIVED_from_the_ledger(self) -> None:
+        """The heading, not just the table under it.
+
+        The status-count table above and the defect table's row set were
+        already checked and already agreed with the ledger — the drift this
+        catches lived one level up, in the section heading itself: a literal
+        ``## Four defects in merged code`` that outlived three of the four
+        being fixed under PR #1618.
+        """
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        expected = defects_section_heading()
+        assert expected in page, (
+            "the page's defect-section heading does not match the ledger's "
+            f"defect count. Expected {expected!r}; regenerate with "
+            "defects_section_heading() rather than editing the page's wording"
+        )
+
+    def test_the_page_blocked_heading_is_DERIVED_from_the_ledger(self) -> None:
+        """Same drift, the not-accepted section's heading."""
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        expected = blocked_requirements_heading()
+        assert expected in page, (
+            "the page's not-accepted-section heading does not match the "
+            f"ledger's not_accepted count. Expected {expected!r}; regenerate "
+            "with blocked_requirements_heading() rather than editing the "
+            "page's wording"
+        )
+
     # ---- page -> ledger: the leg that was missing -----------------------
 
     def _page_defect_rows(self) -> set[str]:
@@ -537,7 +760,12 @@ class TestTheArchitecturePageAgreesWithTheLedger:
         """
 
         page = self.PAGE.read_text(encoding="utf-8")
-        marker = "defects in merged code"
+        # Hardcoding "defects" (plural) here was itself the same drift this
+        # whole ticket is about: it silently assumed the count could never
+        # fall to one. Anchored on the same derived heading the
+        # count-agreement test above requires, so it tracks whatever the
+        # ledger's actual defect count singularises or pluralises to.
+        marker = defects_section_heading().removeprefix("## ")
         assert marker in page, (
             "the page no longer has a defect-table heading, so the "
             "page-to-ledger comparison would compare against nothing"

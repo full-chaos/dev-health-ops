@@ -1,6 +1,6 @@
 ---
 page_id: con-ask-dev-graph-safety-proof
-summary: The CHAOS-3620 release-blocking safety proof for the graph-assisted investigation arm — what was proved on the composed arm, the four defects it found in merged code, and the two requirements that cannot be accepted yet.
+summary: The CHAOS-3620 discovery-era safety proof for the graph-assisted investigation arm — what was proved on the composed arm and what was not. Completed verification, not release approval; residual blockers transfer to the production beta gate, CHAOS-3503 (Wave 3.2).
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -24,6 +24,14 @@ is *safe* — authorized, evidence-closed, semantically bounded, and
 observable. This page records what was proved, on what, and what could not
 be proved. Its headline is not a pass.
 {: .fc-page-lede }
+
+**CHAOS-3620 is completed discovery-era verification, not a release gate.**
+It proved and disproved specific, itemised claims about the graph-assisted
+arm against a frozen corpus; it does not authorize shipping the arm. The
+production beta gate is **CHAOS-3503** (delivered under Wave 3.2): every
+requirement below recorded as `defect` or `not_accepted` carries a Linear
+blocker, and closing that blocker — not revisiting this page — is what the
+beta gate requires before release.
 
 **The hard gate is not green.** 12 of 44 CHAOS-3620 requirements are not proven (1 defect, 1 not_accepted, 10 unmeasured).
 
@@ -107,40 +115,13 @@ The ledger is machine-checked by
 resolved by import, totality is enforced against the issue's own bullet list
 in both directions, each entry must quote its requirement rather than
 paraphrase it, every non-proven status must state a substantive reason, every
-defect must cite file and line, and the two blocked entries are asserted by
-id. `render()` produces the authorization/adversarial and
+defect must cite file and line, and every blocked entry is asserted by
+requirement id and blocker id rather than by prose. `render()` produces the
+authorization/adversarial and
 provenance/deletion/revocation reports the issue requires, from the same data
 the tests check.
 
-## The two requirements that cannot be accepted
-
-### A9 — zero unauthorized result leakage (blocked by CHAOS-3627)
-
-The measurement holds **at base SHA `1ab76d955`, pre-CHAOS-3627 vocabulary,
-and must be re-derived after the rebase onto that fix.** `entity_sightings`
-reads an evidence entry's `entity_id` as a sighting, and pre-fix that field
-is an observation slug or measurement key on every slug-bearing entry — so
-the attributions the measurement runs over are known-unsound, and the masking
-direction (leaked evidence attributed to a permitted entity) is the dangerous
-one. A source pin forces the re-derivation at rebase.
-
-Within that scope: across every entity the analyst may see, no packet the arm
-can produce discloses any entity outside the true grant, and the same code
-path under a widened grant does leak.
-
-The gate still cannot be signed off. `audit_authorization` — the independent
-oracle that owns this dimension — cannot return clean for **any** graph-arm
-packet, because three id vocabularies do not overlap:
-
-1. the arm mints evidence handles with the platform signer
-   (`packet_builder.py:836`) where the world mints its own (`world.py:158`);
-2. the declared authorized set is widened with observation ids
-   (`packet_builder.py:890-892`) that the oracle reads as entity claims;
-3. evidence entries carry an evidence slug in `entity_id`.
-
-This is the CHAOS-3612 defect shape — two id vocabularies that never overlap,
-making an expectation unsatisfiable by every possible arm — recurring in the
-authorization dimension. A release check whose oracle cannot return a clean verdict cannot be signed off.
+## The requirement that cannot be accepted
 
 ### P4 — conflicts retain both source assertions (blocked by CHAOS-3612)
 
@@ -149,12 +130,29 @@ The packet's `conflicts` tuple is an empty literal
 either. Acceptance is blocked on CHAOS-3612. The frozen contract *does* carry
 the field, so CHAOS-3612 is the only blocker — asserted rather than assumed.
 
-## Four defects in merged code
+## A9 — resolved, previously blocked
 
-None were fixed in this lane; all are pinned so they cannot close silently.
-**A9 is deliberately not in this table** — it is `not_accepted`, not a
-defect, and listing it here contradicted the ledger until adversarial review
-caught it.
+A9 (zero unauthorized result leakage) carried this same shape once:
+`not_accepted`, blocked on CHAOS-3627, because `audit_authorization` — the
+independent oracle that owns this dimension — could not return clean for
+**any** graph-arm packet: three id vocabularies did not overlap (the arm's
+platform-signed evidence handles vs. the world's own; observation ids
+widening the declared authorized set that the oracle read as entity claims;
+an evidence slug sitting in `entity_id`). That was the CHAOS-3612 defect
+shape recurring in the authorization dimension.
+
+CHAOS-3627 landed (PR #1617) and closed the vocabulary mismatch: the arm now
+cites source-issued world handles, the declared set is entity ids only, and
+`entity_id` names the entity the record is about. The row is now `proven`
+with **no blocker** — see `REQUIREMENTS["A9"]` in `chaos_3620_dispositions.py`
+for the measured detail and the negative control (a tenant-derived grant
+still leaks on the same code path). Recorded here, separately from the
+requirement that is still blocked, so a reader who remembers "A9 was
+blocked" finds the resolution rather than a stale heading.
+
+## One defect in merged code
+
+It was not fixed in this lane; it is pinned so it cannot close silently.
 
 | ID | Requirement | What is wrong |
 | --- | --- | --- |

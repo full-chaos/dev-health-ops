@@ -784,6 +784,126 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="driver-support-scoped-to-the-entity-not-the-edge",
+        defect=(
+            "a canonical record attached to a DIFFERENT edge vouches for a "
+            "fabricated one, promoting the corpus's planted false dependency "
+            "to principal driver"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "            if step.relationship is not relationship:\n"
+            "                continue\n"
+            "            if {step.from_canonical_id, step.to_canonical_id} "
+            "!= {near, far}:\n"
+            "                continue"
+        ),
+        replacement=(
+            "            if far not in {step.from_canonical_id, "
+            "step.to_canonical_id}:\n"
+            "                continue"
+        ),
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestPoisonedLinkageIsRefused",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="untrusted-record-defaults-to-canonical",
+        defect=(
+            "a record with no trust level reads as canonical, so a stripped "
+            "attribute silently turns every untrusted note into a "
+            "trustworthy one -- in the direction that manufactures claims"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return trust is not None and trust in TRUSTED_ATTRIBUTION_LEVELS",
+        replacement=("    return (trust or 'canonical') in TRUSTED_ATTRIBUTION_LEVELS"),
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestTrustHasNoDefault",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="symptom-promoted-to-driver",
+        defect=(
+            "an effect observed on the subject is classified as a cause, "
+            "which is unsupported attribution in its most recognisable form"
+        ),
+        path=SRC / "drivers.py",
+        anchor="                role=DriverRole.SYMPTOM,",
+        replacement="                role=DriverRole.DRIVER,",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestSymptomsAreNeverDrivers",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="absent-status-read-as-unfinished",
+        defect=(
+            "an entity with no completion concept reads as unfinished, so "
+            "every dependency becomes a blocker of whatever depends on it"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return declared is not None and declared not in COMPLETE_DECLARED_STATUSES",
+        replacement="    return declared not in COMPLETE_DECLARED_STATUSES",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestAbsentStatusIsNotEvidenceOfIncompleteness",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="child-candidate-taken-from-a-non-adjacent-step",
+        defect=(
+            "any parent_of step anywhere on a path yields an open-child "
+            "candidate, so a portfolio becomes a child of a project it "
+            "merely co-occurred with"
+        ),
+        path=SRC / "drivers.py",
+        anchor="            if context.subject_id not in ends:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestChildCandidatesMustBeAdjacent",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="historical-edge-silently-dropped-instead-of-excluded",
+        defect=(
+            "a dependency that closed before the window disappears instead "
+            "of being reported as considered-and-rejected, so the currency "
+            "guard is never exercised and the reader cannot see it was asked"
+        ),
+        path=SRC / "drivers.py",
+        anchor="            if not step.is_current_at(context.as_of):",
+        replacement="            if not step.is_current_at(context.as_of):\n                continue\n            if False:",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestCurrency",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="withheld-evidence-reported-as-unsupported",
+        defect=(
+            "evidence the caller may not see is reported as absent, which "
+            "tells a reader 'nothing supports this' when the truth is 'you "
+            "may not see what does'"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    if not trusted and withheld:",
+        replacement="    if False:",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestAuthorization",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="principal-standing-awarded-on-a-tie",
+        defect=(
+            "two equally-supported blockers make 'the principal driver' a "
+            "coin toss, and a coin toss presented as a judgment is worse "
+            "than reporting both as contributing"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    if len(ordered) > 1 and rank(ordered[0])[0] == rank(ordered[1])[0]:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestPrincipalStandingIsEarned::"
+            "test_principal_standing_is_withheld_when_two_candidates_tie",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

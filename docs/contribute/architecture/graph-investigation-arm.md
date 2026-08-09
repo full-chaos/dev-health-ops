@@ -40,7 +40,7 @@ product feature, and nothing about it is on a user-visible path.
 | Alias / acronym / renamed-entity candidate search | Yes — by lookup, never retrieval |
 | Semantic retrieval | Seam + guard in place; search not yet |
 | Cohort construction | Peer shapes yes; exhaustive shapes still refused |
-| Driver synthesis | Not yet — the packet's outcome says so |
+| Driver synthesis | Structural yes; measurement-shaped not yet |
 | Approved-unstructured extraction | Boundary in place, extraction not yet |
 
 Because it synthesizes no drivers, `build_packet` **never** emits a supported
@@ -410,7 +410,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **44** guards the arm relies on, the harness disables
+For each of the **52** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -463,6 +463,88 @@ duplication drifting in either direction, and
 `test_the_adapter_writes_no_attribute_the_readers_cannot_return` makes a
 stored-but-unreadable attribute a build failure rather than a capability that
 quietly returns nothing.
+
+## Structural drivers, and what the graph is entitled to assert
+
+The capability the correction hinges on. The native arm cannot assert a
+driver at all; whether this one earns **principal standing** under the frozen
+rules — a real cause, on a real path, with real evidence, currently relevant
+— is the trial's live question. It does, structurally:
+
+| Subject | Principal driver | Why it is one |
+| --- | --- | --- |
+| `proj_identity_rewrite` | `wu_authcore_release` | declared blocker, open, canonical CI + work-item records |
+| `proj_ledger_migration` | `wu_ledger_backfill` | open child under a parent declared complete |
+| `proj_pulse` | `wu_pulse_runbook` | release-incomplete, not implementation-incomplete |
+
+None of that is a number. The governing rule is "the graph determines what is
+relevant; canonical services determine what is measurable", so
+`MEASUREMENT_ONLY_CATEGORIES` (cycle time, review load, capacity, investment
+mix) are refused by name rather than approximated from graph shape — a test
+asserts no structural rule ever emits one, which is a claim that can fail
+today rather than a promise.
+
+**`blocked_by` and `depends_on` are treated asymmetrically on purpose.**
+`blocked_by` *is* the provider asserting that something blocks, so the far end
+needs no status of its own. `depends_on` needs the far end declared open,
+because what makes a dependency a *pressure* is that it is unfinished.
+Collapsing the two either loses real blockers or makes every dependency a
+driver, and the corpus has a case for each.
+
+**Symptom versus driver is decided before standing.** An incident or a status
+change observed on the subject is an effect, and a symptom can never hold
+asserted standing — pinned by a whole-tenant sweep, because a per-subject
+test passes happily while some other subject promotes one. A symptom whose
+cause is also a candidate is excluded `SYMPTOM_OF_ANOTHER_CANDIDATE`; a
+symptom with nothing explaining it stays a candidate, because deleting the
+one observation a reader had would not be honesty.
+
+### Exclusion reachability, stated exactly
+
+Three of the frozen contract's six exclusion reasons are earned by real
+corpus shapes: `EVIDENCE_CONFLICT_UNRESOLVED` (the planted false dependency),
+`NOT_CURRENTLY_RELEVANT` (a dependency closed before the window), and
+`SYMPTOM_OF_ANOTHER_CANDIDATE`. `UNAUTHORIZED_EVIDENCE` is reachable and
+earned by a **constructed** world in the arm's own tests — the corpus belongs
+to CHAOS-3616 and was not touched for it.
+
+`NO_SUPPORTING_PATH` **cannot be produced by the structural rules at all, and
+that is a positive property rather than a coverage gap.** Every candidate is
+derived from a step on a discovered path, so a driver without lineage is
+unconstructable — which is precisely what an arm without a graph cannot say
+about its own output. It is asserted, not described: a sweep checks that
+every attribution candidate in the tenant carries a path.
+`INSUFFICIENT_MEASUREMENT` belongs to the measurement commit.
+
+### Four defects, and why none of them were visible to a tool
+
+Every defect found building this module passed the type checker, the linter
+and the existing suite. All four showed up only when real corpus output was
+printed:
+
+1. **support scoped to the cause entity rather than the asserting edge** —
+   `dep_authcore` is a genuine dependency of four real projects, so a
+   canonical record on one of those *true* edges vouched for the *fabricated*
+   one. This promoted the corpus's planted false claim to **principal
+   driver**;
+2. **child candidates taken from any `parent_of` step on any path** — a
+   portfolio became an "open child" of a project it merely co-occurred with;
+3. **`not _is_complete(...)`** — a service has no completion concept, so
+   reading that silence as "unfinished" made every dependency a blocker;
+4. **a trust lookup defaulting to `canonical`** — which is what kept (1)
+   invisible.
+
+Two of the fixes then **passed for the wrong reason** before being chased
+down: the false claim and the historical dependency both vanished via the
+status rule rather than via the trust and currency guards that own them. Both
+now reach the guard that is supposed to reject them, and each has a test
+asserting the candidate is *present and excluded* rather than absent.
+
+The mutation harness caught two more of the same kind: a test naming the
+wrong leaked identifier passed while its guard was disabled, and the
+adjacency guard turned out to be redundant with the status rule on every
+corpus shape — so its case is now constructed, isolating adjacency as the
+only thing rejecting the candidate.
 
 ## Comparison cohorts, and the refusal that did not open
 

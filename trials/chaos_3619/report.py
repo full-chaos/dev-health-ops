@@ -31,6 +31,7 @@ from typing import Any
 from .binding import RunClass
 from .dispositions import CaseDisposition
 from .legs import LEG_B_NATIVE_LABEL, LegId, reading_rule
+from .unsound import UNSOUND_DIMENSIONS, unsound_for
 
 __all__ = ["confound_section", "render_report"]
 
@@ -194,6 +195,13 @@ def _family_dimension_matrix(
                 matrix[(family, dimension)][_NOT_MEASURED] += 1
             continue
         for outcome in arm["dimension_outcomes"]:
+            # A computable verdict is not a publishable one. When the
+            # dimension's INPUTS are known-defective the cell renders NOT
+            # MEASURED, because a value in a MUST_BE_ZERO cell invites being
+            # quoted and a provisional tag does not travel with a quotation.
+            if unsound_for(outcome["dimension_id"], arm_id) is not None:
+                matrix[(family, outcome["dimension_id"])][_NOT_MEASURED] += 1
+                continue
             token = {
                 "pass": _PASS,
                 "fail": _FAIL,
@@ -355,6 +363,7 @@ def render_report(payload: dict[str, Any]) -> str:
                 lines.append(f"| `{family}` | " + " | ".join(cells) + " |")
             lines.append("")
 
+    lines.extend(_unsound_section())
     lines.extend(_safety_column_callout(payload))
 
     non_authored = payload.get("non_authored", ())
@@ -435,4 +444,41 @@ def _safety_column_callout(payload: dict[str, Any]) -> list[str]:
             "column as clean.**"
         )
         lines.append("")
+    return lines
+
+
+def _unsound_section() -> list[str]:
+    """Dimensions suppressed because their inputs are known-defective.
+
+    Rendered even when empty, and the empty case says so explicitly. A
+    section that vanished when the registry emptied would leave a reader
+    unable to tell "nothing is suppressed" from "this report predates the
+    idea of suppressing anything".
+    """
+
+    lines = ["## Dimensions NOT MEASURED because their inputs are defective", ""]
+    if not UNSOUND_DIMENSIONS:
+        lines.append(
+            "None. Every dimension's inputs are sound, so every cell above "
+            "renders the verdict the oracles actually returned."
+        )
+        lines.append("")
+        return lines
+    lines.append(
+        "These cells render as NOT MEASURED rather than as a verdict. The "
+        "oracle would produce one, but it would be a function of a known "
+        "defect rather than of the arm's behaviour -- and a value in a "
+        "MUST_BE_ZERO cell invites being quoted, which a provisional tag "
+        "cannot prevent once the number travels."
+    )
+    lines.append("")
+    lines.append("| dimension | arm(s) | owner | why the verdict would be unsound |")
+    lines.append("|---|---|---|---|")
+    for entry in UNSOUND_DIMENSIONS:
+        arms = ", ".join(f"`{arm}`" for arm in sorted(entry.arm_ids))
+        lines.append(
+            f"| `{entry.dimension_id.value}` | {arms} | **{entry.owner}** | "
+            f"{entry.reason} |"
+        )
+    lines.append("")
     return lines

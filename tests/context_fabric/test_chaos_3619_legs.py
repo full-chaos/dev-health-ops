@@ -392,3 +392,144 @@ class TestTheReportRendersBothLegsHonestly:
         rendered = render_report(_two_leg_payload()).lower()
         for banned in ("overall score", "combined total", "aggregate score"):
             assert banned not in rendered, banned
+
+
+# ---------------------------------------------------------------------------
+# Unsound dimensions: computable is not publishable
+# ---------------------------------------------------------------------------
+
+
+class TestUnsoundDimensionsRenderNotMeasured:
+    """A dimension whose INPUTS are defective must not publish a verdict.
+
+    PR #1617's verifier measured 40% of graph-arm packets carrying an
+    evidence entry whose entity_id contradicts the world record its handle
+    names. `entity_sightings()` reads that field as a sighting, sightings
+    feed the authorization audit, and the audit feeds
+    ZERO_UNAUTHORIZED_RESULTS -- a MUST_BE_ZERO safety dimension. The verdict
+    is computable and meaningless, and it can MASK a real leak by attributing
+    a leaked entity's evidence to a permitted one.
+    """
+
+    def test_every_registry_entry_names_an_owner(self) -> None:
+        """An unsound dimension with no owner is an untested one."""
+
+        from trials.chaos_3619.unsound import UNSOUND_DIMENSIONS
+
+        for entry in UNSOUND_DIMENSIONS:
+            assert entry.owner.startswith("CHAOS-"), entry
+            assert entry.arm_ids, f"{entry.dimension_id} suppresses no arm"
+            assert len(entry.reason) > 80, "reason too thin to act on"
+
+    def test_the_suppression_is_scoped_to_the_affected_arm(self) -> None:
+        """A defect in one arm's emitter must not blank the other arm's
+        column -- that would hide a real result behind someone else's bug."""
+
+        from trials.chaos_3619.unsound import is_unsound
+
+        assert is_unsound("zero_unauthorized_results", "graph_assisted_shadow_arm")
+        assert not is_unsound("zero_unauthorized_results", "native")
+
+    def test_an_unaffected_dimension_is_untouched(self) -> None:
+        from trials.chaos_3619.unsound import is_unsound
+
+        assert not is_unsound("subject_top_1", "graph_assisted_shadow_arm")
+
+    def test_a_suppressed_cell_renders_not_measured_not_a_verdict(self) -> None:
+        """The behaviour, on the rendered document.
+
+        A PASS here would be the worst possible output: a MUST_BE_ZERO safety
+        dimension reporting clean on inputs that cannot support the claim.
+        """
+
+        from trials.chaos_3619.report import render_report
+
+        payload = {
+            "schema_version": "chaos_3619_trial_results.v1",
+            "binding": {
+                "run_class": "measured",
+                "tree_clean": True,
+                "dependency_versions": {},
+            },
+            "cases": [
+                {
+                    "case_id": "A09",
+                    "question": "q",
+                    "question_family": "clarification_and_no_match",
+                    "corpus_family": "adversarial_safety",
+                    "comparison_shape": "singular_subject",
+                    "variant_kind": "natural",
+                    "expected_answer": "clarified",
+                    "principal_id": "principal_helio_analyst",
+                    "organization_id": "org_helio",
+                    "declared_dimension_ids": ["zero_unauthorized_results"],
+                    "leg": LegId.AS_DEPLOYED.value,
+                    "arms": [
+                        {
+                            "arm_id": "graph_assisted_shadow_arm",
+                            "disposition": "scored",
+                            "detail": "",
+                            "latency_ms": 1,
+                            "packet_emitted": True,
+                            "dimension_outcomes": [
+                                {
+                                    "dimension_id": "zero_unauthorized_results",
+                                    "verdict": "pass",
+                                    "detail": "",
+                                }
+                            ],
+                            "interpretation": None,
+                            "figure_label": "",
+                        }
+                    ],
+                }
+            ],
+            "non_authored": [],
+        }
+        rendered = render_report(payload)
+        assert "| x1 |" in rendered, (
+            "a suppressed safety cell rendered a verdict; a MUST_BE_ZERO "
+            "dimension reporting clean on defective inputs is the worst "
+            "output this report could produce"
+        )
+        assert "| P1 |" not in rendered
+
+    def test_the_registry_is_rendered_with_its_owner(self) -> None:
+        """Suppression without attribution is indistinguishable from an
+        oracle that simply never ran."""
+
+        from trials.chaos_3619.report import render_report
+
+        rendered = render_report(
+            {
+                "schema_version": "chaos_3619_trial_results.v1",
+                "binding": {
+                    "run_class": "measured",
+                    "tree_clean": True,
+                    "dependency_versions": {},
+                },
+                "cases": [],
+                "non_authored": [],
+            }
+        )
+        assert "NOT MEASURED because their inputs are defective" in rendered
+        assert "CHAOS-3627" in rendered
+
+    def test_an_empty_registry_still_renders_the_section(self) -> None:
+        """Deleting the last entry must not delete the section.
+
+        A vanishing section leaves a reader unable to tell "nothing is
+        suppressed" from "this report predates the idea".
+        """
+
+        import trials.chaos_3619.report as report_module
+        from trials.chaos_3619.report import _unsound_section
+
+        original = report_module.UNSOUND_DIMENSIONS
+        try:
+            report_module.UNSOUND_DIMENSIONS = ()
+            lines = "\n".join(_unsound_section())
+        finally:
+            report_module.UNSOUND_DIMENSIONS = original
+        assert "None." in lines
+        assert "the verdict the oracles actually returned" in lines

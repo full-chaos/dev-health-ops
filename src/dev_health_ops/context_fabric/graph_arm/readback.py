@@ -9,7 +9,7 @@ two implementations of the same traversal, which is exactly the situation
 that needs a **differential oracle** rather than a type checker: nothing but
 running both over the same world and comparing can tell you whether the
 Cypher agrees with the reference.
-``tests/context_fabric/test_chaos_3617_reader_differential.py`` does that,
+``tests/context_fabric/test_chaos_3617_live_store.py`` does that,
 and it is the reason the in-memory reader exists at all — it is not a mock,
 it is the oracle the live reader is measured against.
 
@@ -62,7 +62,9 @@ __all__ = [
     "LiveGraphReader",
     "PathStep",
     "ProjectionGraphReader",
+    "NODE_COUNT_QUERY",
     "QUERY_VERSION",
+    "READ_ONLY_QUERIES",
 ]
 
 #: Emitted on the packet as ``versions.query_version``. Bump when the
@@ -183,6 +185,18 @@ class GraphReader(Protocol):
 # --------------------------------------------------------------------------
 
 
+#: One adjacency entry: ``(relationship, other canonical id, direction,
+#: source class, observed_at, observation ids)``.
+_EdgeTuple = tuple[
+    RelationshipType,
+    str,
+    RelationshipDirection,
+    SourceClass,
+    datetime,
+    tuple[str, ...],
+]
+
+
 @dataclass(frozen=True, slots=True)
 class _Adjacency:
     """The minimum a traversal needs, independent of where it came from.
@@ -195,23 +209,34 @@ class _Adjacency:
     """
 
     entities: Mapping[str, DiscoveredEntity]
-    #: canonical id -> (relationship, other id, direction, source_class,
-    #: observed_at, observation_ids)
-    edges: Mapping[
-        str,
-        tuple[
-            tuple[
-                RelationshipType,
-                str,
-                RelationshipDirection,
-                SourceClass,
-                datetime,
-                tuple[str, ...],
-            ],
-            ...,
-        ],
-    ]
+    #: canonical id -> every edge touching it, in either direction.
+    edges: Mapping[str, tuple[_EdgeTuple, ...]]
     observations: tuple[DiscoveredObservation, ...]
+
+
+def _ordered_edges(adjacency: _Adjacency, canonical_id: str) -> tuple[_EdgeTuple, ...]:
+    """One entity's edges in a total, backend-independent order.
+
+    Found by the differential oracle, not by review: the in-memory reader
+    walked edges in projection order and the Cypher reader in whatever order
+    FalkorDB returned rows, so when more edges reached an entity than
+    ``max_paths_per_entity`` allows, the two kept *different* paths. Same
+    entities, same counts, different explanations — the kind of divergence
+    that makes a recorded trial run irreproducible and that no type checker
+    or code index could have surfaced.
+
+    Sorting on ``(relationship, other id, direction)`` makes the retained
+    set a function of the graph alone. It is deliberately not sorted on
+    ``observed_at``: a timestamp tie would put the order back at the mercy
+    of row order.
+    """
+
+    return tuple(
+        sorted(
+            adjacency.edges.get(canonical_id, ()),
+            key=lambda edge: (edge[0].value, edge[1], edge[2].value),
+        )
+    )
 
 
 def _traverse(
@@ -269,7 +294,7 @@ def _traverse(
             source_class,
             observed_at,
             observation_ids,
-        ) in adjacency.edges.get(current, ()):
+        ) in _ordered_edges(adjacency, current):
             if other not in adjacency.entities:
                 continue
             if other not in authorized:
@@ -542,6 +567,25 @@ RETURN e.fact AS fact,
        e.created_at AS observed_at,
        e.cf_observation_ids AS observation_ids
 """
+
+
+#: Every Cypher statement the arm can issue, in one place.
+#:
+#: There is deliberately no "run this query" helper: a generic executor is
+#: the shape in which arbitrary traversal, ontology mutation or maintenance
+#: reaches a caller. These three constants are the entire graph-query
+#: surface, they are read-only, and
+#: ``tests/context_fabric/test_chaos_3617_containment.py`` asserts both --
+#: that this tuple is exhaustive over the module's Cypher, and that none of
+#: its members contains a write or maintenance clause.
+NODE_COUNT_QUERY = "MATCH (n) RETURN count(n) AS total"
+
+READ_ONLY_QUERIES: tuple[str, ...] = (
+    _ENTITY_QUERY,
+    _OBSERVATION_QUERY,
+    _EDGE_QUERY,
+    NODE_COUNT_QUERY,
+)
 
 
 class LiveGraphReader:

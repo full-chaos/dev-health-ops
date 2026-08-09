@@ -62,6 +62,7 @@ __all__ = [
     "EmbeddingBackend",
     "GraphitiUnavailableError",
     "entity_node_label",
+    "graphiti_module",
     "graphiti_version",
     "parse_triple_fact",
     "require_graphiti",
@@ -109,17 +110,37 @@ def require_graphiti() -> Any:
     ``test_chaos_3617_backend.py::test_telemetry_is_forced_off``.
     """
 
+    return graphiti_module()
+
+
+def graphiti_module(dotted: str = "") -> Any:
+    """Import ``graphiti_core`` or one of its submodules, on demand.
+
+    Submodules are imported by name rather than reached as attributes:
+    ``graphiti_core`` does not import ``graphiti_core.driver.falkordb_driver``
+    for you, so ``require_graphiti().driver.falkordb_driver`` raises
+    ``AttributeError`` -- an error that reads like a version incompatibility
+    and is nothing of the sort.
+
+    Telemetry is forced off here, before any import: see
+    :func:`require_graphiti`.
+    """
+
+    import importlib
+
     os.environ[TELEMETRY_ENV_VAR] = "false"
+    name = f"graphiti_core.{dotted}" if dotted else "graphiti_core"
     try:
-        import graphiti_core
+        return importlib.import_module(name)
     except ModuleNotFoundError as exc:  # pragma: no cover - env dependent
+        if exc.name is not None and not exc.name.startswith("graphiti_core"):
+            raise
         raise GraphitiUnavailableError(
             "graphiti-core is not installed. It is a reference implementation "
             "under evaluation, not an approved dependency, so it lives in the "
             f"optional extra '{GRAPHITI_EXTRA}': install with "
             f"`uv sync --extra {GRAPHITI_EXTRA}`."
         ) from exc
-    return graphiti_core
 
 
 def graphiti_version() -> str:
@@ -285,8 +306,7 @@ def to_graphiti_nodes(
     is ``""``.
     """
 
-    graphiti = require_graphiti()
-    entity_node_cls = graphiti.nodes.EntityNode
+    entity_node_cls = graphiti_module("nodes").EntityNode
     nodes: list[EntityNode] = []
     for node in projection.nodes:
         attributes: dict[str, Any] = {
@@ -335,8 +355,7 @@ def to_graphiti_edges(
 ) -> list[EntityEdge]:
     """Projected edges as Graphiti ``EntityEdge``s with triple facts."""
 
-    graphiti = require_graphiti()
-    entity_edge_cls = graphiti.edges.EntityEdge
+    entity_edge_cls = graphiti_module("edges").EntityEdge
     edges: list[EntityEdge] = []
     for edge in projection.edges:
         fact = triple_fact(edge)

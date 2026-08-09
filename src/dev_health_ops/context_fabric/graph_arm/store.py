@@ -38,13 +38,14 @@ from .backend import (
     DeterministicEmbedder,
     EmbeddingBackend,
     GraphitiUnavailableError,
-    require_graphiti,
+    graphiti_module,
     to_graphiti_edges,
     to_graphiti_nodes,
 )
 from .flags import TrialStoreConfig, graph_projection_enabled, trial_store_config
 from .identity import assert_partition_matches_org, partition_for_org
 from .projection import GraphProjection
+from .readback import NODE_COUNT_QUERY
 from .watermark import IndexWatermark
 
 logger = logging.getLogger(__name__)
@@ -127,9 +128,8 @@ class GraphArmStore:
                 "CONTEXT_FABRIC_GRAPH_STORE_URI (there is deliberately no "
                 "default host/port)"
             )
-        graphiti = require_graphiti()
         partition = partition_for_org(org_id)
-        driver = graphiti.driver.falkordb_driver.FalkorDriver(
+        driver = graphiti_module("driver.falkordb_driver").FalkorDriver(
             host=resolved.host,
             port=resolved.port,
             password=resolved.password,
@@ -174,10 +174,9 @@ class GraphArmStore:
             )
         assert_partition_matches_org(projection.partition, self._org_id)
 
-        graphiti = require_graphiti()
         nodes = to_graphiti_nodes(projection, self._embedder)
         edges = to_graphiti_edges(projection, self._embedder)
-        await graphiti.utils.bulk_utils.add_nodes_and_edges_bulk(
+        await graphiti_module("utils.bulk_utils").add_nodes_and_edges_bulk(
             self._driver, [], [], nodes, edges, self._embedder
         )
         indexed_through = max(
@@ -204,7 +203,7 @@ class GraphArmStore:
         )
 
     async def count_nodes(self) -> int:
-        result = await self._driver.execute_query("MATCH (n) RETURN count(n) AS total")
+        result = await self._driver.execute_query(NODE_COUNT_QUERY)
         if not result:
             return 0
         records, _, _ = result

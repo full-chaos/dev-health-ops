@@ -17,14 +17,14 @@
   "compatibility": "internal-trial-artifact-not-client-served",
   "corpus_version": "ask_dev_investigation_corpus.v1",
   "counts": {
-    "cases_authored": 38,
-    "cases_total": 40,
+    "cases_authored": 39,
+    "cases_total": 41,
     "documents": 3,
     "entities": 50,
     "episodes": 3,
     "evidence_records": 68,
     "measurements": 39,
-    "oracles": 38,
+    "oracles": 39,
     "principals": 3,
     "relationships": 73,
     "required_topics": 40,
@@ -45,15 +45,15 @@
     },
     {
       "path": "examples/reference_digests.json",
-      "sha256": "263c4f7bde5b8390e8d9c49a1413f70c34624672fec117eae7bcced258f64607"
+      "sha256": "f4b6ee3defa5396f5d823629d0a487e6f7c9c1b356fed7a532be65d166eb416f"
     },
     {
       "path": "registries/cases.json",
-      "sha256": "9156ea18ad1c5bbb709027a56f3a0ca223a01610124215c52446d7d55bc29cba"
+      "sha256": "6b0a3f80157bacc10e0ef051b78ecf7f9f2308cba73772465fa43054daaff7ec"
     },
     {
       "path": "registries/coverage_matrix.json",
-      "sha256": "ad2895207722f9bae7174a38cd7111dd787a5e97666c3930814fa85a37c7345e"
+      "sha256": "e2aec491ff29e57ec11e325b62fff4f315a7b4b2fe55987e56786455e8250e1f"
     },
     {
       "path": "registries/dispositions.json",
@@ -61,7 +61,7 @@
     },
     {
       "path": "registries/oracles.json",
-      "sha256": "065dbdb75a945217467ceed2f1750e6c1a90eb195126ae3d3214f637e6eb7454"
+      "sha256": "5e178aeb1c42612d8006616259f16768f00f807f4aa57d6a1b54014b7318cd72"
     },
     {
       "path": "world/documents.json",

@@ -659,6 +659,38 @@
     },
     {
       "analytical_slice": "current",
+      "case_id": "S08_split_evidence_symptom",
+      "catches": "An arm that promotes any one of the symptom's several records to principal. The CI failures and the absent deployment are two separate pieces of evidence for one symptom, and an arm citing only one of them can slip past a check that matches drivers by their whole evidence set. Added after independent verification observed that every existing case had a single-record symptom, so the intersection rule's behaviour on split evidence was assumed rather than measured.",
+      "comparison_shape": "singular_subject",
+      "corpus_family": "project_portfolio_status",
+      "disposition": "authored",
+      "disposition_reason": "",
+      "expected_answer": "direct",
+      "follows_case_id": null,
+      "principal_id": "principal_helio_analyst",
+      "question": "why has the authcore adoption change been open a month?",
+      "question_family": "project_status_drivers",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "subject_top_1",
+        "principal_driver_precision",
+        "principal_driver_recall",
+        "symptom_versus_driver_distinction",
+        "lineage_path_precision",
+        "cross_source_association"
+      ],
+      "title": "A symptom whose evidence is spread across several records",
+      "topics": [
+        "status.symptom_versus_driver"
+      ],
+      "variant_kind": "natural"
+    },
+    {
+      "analytical_slice": "current",
       "case_id": "H01_acronym_resolution",
       "catches": "An arm that resolves IPR by fuzzy label similarity rather than the alias registry. Getting the right project for the wrong reason will not generalize, so the match signal is scored as well as the outcome.",
       "comparison_shape": "singular_subject",
@@ -1038,7 +1070,7 @@
         "no_unsafe_organization_widening",
         "clarification_candidate_precision"
       ],
-      "title": "A question that only has a person-level answer",
+      "title": "A question with no answerable form at team or project scope",
       "topics": [
         "safety.person_level_bait"
       ],

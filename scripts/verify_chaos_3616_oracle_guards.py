@@ -777,7 +777,7 @@ def _mutate_fabricated_entity(payload: dict[str, Any]) -> None:
         {
             "subject_kind": "team",
             "canonical_id": "person_a_developer",
-            "display_label": "A developer",
+            "display_label": "Unlisted roster entry",
             "inclusion_basis": ["peer_of_named_subject"],
             # Deliberately free of person words: this case injects the
             # fabricated-identifier branch, and prose that also tripped the
@@ -847,7 +847,7 @@ def _know_every_entity() -> None:
     world_module.ENTITIES_BY_ID[fabricated] = world_module.WorldEntity(  # type: ignore[index]
         fabricated,
         world_module.InvestigationSubjectKind.TEAM,
-        "A developer",
+        "Unlisted roster entry",
         world_module.ORG_HELIO,
         world_module.WORLD_EPOCH,
     )

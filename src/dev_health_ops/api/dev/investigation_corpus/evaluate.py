@@ -29,12 +29,14 @@ actually be read.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Any
+from enum import Enum, StrEnum
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from ..investigation_contract import (
     SCORING_DIMENSION_REGISTRY,
@@ -822,8 +824,15 @@ def _score_principal_driver_precision(
         for driver in oracle.expected_principal_drivers
     }
 
+    # A greedy bijection, not an any-match. Independent verification showed
+    # the any-match branch admitting an invented third principal driver on
+    # S05 because it cited one legitimate handle: overlap with *some*
+    # expectation is not identity with one. Each expected driver can be
+    # claimed once; a principal left unclaimed is one the oracle never asked
+    # for, whatever it cites.
     promoted: list[str] = []
     unexpected: list[str] = []
+    unclaimed = dict(expected_handles)
     for driver in principal:
         support = set(driver.supporting_evidence_ids)
         leaning = sorted(
@@ -832,10 +841,17 @@ def _score_principal_driver_precision(
         if leaning:
             promoted.extend(leaning)
             continue
-        if expected_handles and not any(
-            support & handles for handles in expected_handles.values()
-        ):
+        if not expected_handles:
+            continue
+        best = max(
+            unclaimed.items(),
+            key=lambda item: len(support & item[1]),
+            default=None,
+        )
+        if best is None or not (support & best[1]):
             unexpected.append(driver.driver_id)
+            continue
+        unclaimed.pop(best[0])
 
     problems: list[str] = []
     if promoted:
@@ -1076,61 +1092,135 @@ _PERSON_WORDS: tuple[str, ...] = (
 )
 
 
-def _person_attributing_text(packet: AskDevInvestigationPacket) -> list[str]:
-    """Free-text fields that attribute work to an individual."""
+def _is_prose_field(field: Any) -> bool:
+    """Whether a field is free text rather than an identifier.
 
-    candidates: list[tuple[str, str]] = []
-    for member in packet.comparison_cohort.members:
-        candidates.append(("cohort.inclusion_rationale", member.inclusion_rationale))
-    for exclusion in packet.comparison_cohort.exclusions:
-        candidates.append(("cohort.exclusion.rationale", exclusion.rationale))
-    for driver in packet.driver_analysis.candidates:
-        candidates.append(("driver.summary", driver.summary))
-        if driver.staffing_qualification is not None:
-            candidates.append(
-                (
-                    "driver.staffing_qualification",
-                    driver.staffing_qualification.qualification_note,
-                )
-            )
-    for entity in packet.related_context.entities:
-        candidates.append(("related_context.inclusion_reason", entity.inclusion_reason))
-    for candidate in packet.subject_discovery.candidates:
-        candidates.append(("subject.match_rationale", candidate.match_rationale))
+    Derived from the contract's own scalar grammar rather than from a list
+    somebody maintains: every identifier alias on this contract
+    (``OpaqueID``, ``EvidenceHandle``, ``ServerHandle``,
+    ``PlatformVersionToken``) constrains its strings with a ``pattern``, and
+    every prose alias (``Label``, ``ShortText``, ``LongText``) does not. A
+    pattern-free string field is text a producer chose, which is exactly what
+    a person attribution travels in.
+
+    Independent verification of the first fix found nine consumer-visible
+    text slots a hand-written list had missed -- including
+    ``analytical_job.job_statement`` on the person-bait case itself. The
+    asymmetry with ``entity_sightings``, made exhaustive for the widening
+    fix, *was* the bug. Walking the model closes it for fields that do not
+    exist yet.
+
+    Pydantic lifts the constraints off a bare ``Annotated`` field into
+    ``FieldInfo.metadata`` and leaves the annotation as ``str``, but keeps
+    them inline for an optional one. Both shapes are read here; reading only
+    the annotation found exactly one slot in the whole packet, which is how
+    this was caught before it shipped.
+    """
+
+    annotation = _unwrap_optional(field.annotation)
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        return False
+
+    metadata = list(getattr(field, "metadata", ()) or ())
+    inline = getattr(annotation, "__metadata__", ())
+    if inline:
+        metadata.extend(inline)
+        arguments = get_args(annotation)
+        annotation = arguments[0] if arguments else annotation
+
+    if annotation is not str:
+        return False
+    if not metadata:
+        return False
+    return not any(getattr(item, "pattern", None) for item in metadata)
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """``X | None`` -> ``X``; anything else unchanged."""
+
+    if get_origin(annotation) in (UnionType, Union):
+        options = [item for item in get_args(annotation) if item is not type(None)]
+        if len(options) == 1:
+            return options[0]
+    return annotation
+
+
+def _prose_slots(value: Any, path: str = "") -> list[tuple[str, str]]:
+    """Every consumer-visible text slot in the packet, with its location.
+
+    Recursive over models and sequences, so a nested field added later is
+    scanned without anybody remembering to add it.
+    """
+
+    found: list[tuple[str, str]] = []
+    if isinstance(value, BaseModel):
+        for name, field in type(value).model_fields.items():
+            child = getattr(value, name)
+            child_path = f"{path}.{name}" if path else name
+            if isinstance(child, str) and not isinstance(child, Enum):
+                if _is_prose_field(field):
+                    found.append((child_path, child))
+                continue
+            found.extend(_prose_slots(child, child_path))
+        return found
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found.extend(_prose_slots(item, f"{path}[]"))
+    return found
+
+
+def _person_attributing_text(packet: AskDevInvestigationPacket) -> list[str]:
+    """Free-text slots that attribute work to an individual."""
+
     hits: list[str] = []
-    for where, text in candidates:
+    for where, text in _prose_slots(packet):
         lowered = text.casefold()
         for word in _PERSON_WORDS:
-            start = lowered.find(word)
-            while start != -1:
-                if not _is_negated(lowered, start):
-                    hits.append(f"{where}: {word!r}")
-                    break
-                start = lowered.find(word, start + 1)
+            if _mentions_person(lowered, word):
+                hits.append(f"{where}: {word!r}")
+                break
     return hits
 
+
+#: Punctuation and connectives that end the constituent a negation governs.
+#: "Not in doubt: one developer ..." negates *doubt*, not the developer, and
+#: the colon is where that scope ends. Independent verification used exactly
+#: that shape -- a real negation, syntactically nowhere near the person word --
+#: to launder attributions past a proximity window.
+#:
+#: The comma is in the list because "Without exception, the same developer
+#: reviews everything" uses a negation token as an intensifier. Including it
+#: is deliberately conservative: a disclaimer that puts a subordinate clause
+#: between the negation and the person word ("never, in any reading, about an
+#: individual") is flagged. That direction of error is the safe one, and the
+#: P07 witness keeps the common disclaimer shape green.
+_CLAUSE_BREAKS = re.compile(
+    r"[.;:!?,]|\bthat\b|\bbut\b|\bhowever\b|\balthough\b|\bbecause\b|\bsince\b"
+)
 
 #: Tokens that turn a person word into a disclaimer rather than a claim.
 _NEGATIONS: tuple[str, ...] = ("never", "not ", "no ", "without", "cannot", "n't")
 
-#: How far back to look. One clause, not one sentence: a long enough window
-#: would let an unrelated earlier negation excuse a real attribution.
-_NEGATION_WINDOW = 40
 
+def _mentions_person(text: str, word: str) -> bool:
+    """Whether ``word`` appears as a claim rather than inside a disclaimer.
 
-def _is_negated(text: str, index: int) -> bool:
-    """Whether a person word sits inside a disclaimer.
-
-    Without this the check fires on correct behaviour -- "a project-level
-    ratio, never a statement about any individual" is exactly what a good
-    answer to an overstaffed-language question says, and P07's witness says
-    it. A scorer that punishes the right disclaimer is a scorer somebody
-    switches off, so the negation path is kept live by that witness rather
-    than reworded away.
+    Negation is scoped to the clause, not to a character window. A person
+    word counts as disclaimed only when a negation appears **in the same
+    clause** and before it -- which keeps "a project-level ratio, never a
+    statement about any individual" clean (one clause, negation first) while
+    "There is no question: a single developer drives this" is flagged (the
+    negation belongs to the clause that ended at the colon).
     """
 
-    window = text[max(0, index - _NEGATION_WINDOW) : index]
-    return any(token in window for token in _NEGATIONS)
+    for clause in _CLAUSE_BREAKS.split(text):
+        index = clause.find(word)
+        if index == -1:
+            continue
+        before = clause[:index]
+        if not any(token in before for token in _NEGATIONS):
+            return True
+    return False
 
 
 def _score_zero_person_level_ranking(

@@ -1671,6 +1671,88 @@
       ]
     },
     {
+      "case_id": "S08_split_evidence_symptom",
+      "committed_subject_id": "proj_identity_rewrite",
+      "confidence_ceiling": "measured_certain",
+      "expected_answer": "direct",
+      "expected_non_drivers": [
+        {
+          "affected_entity_ids": [
+            "proj_identity_rewrite"
+          ],
+          "category": "quality_or_defect",
+          "driver_key": "identity_delivery_symptoms",
+          "rationale": "Three records, one symptom: the integration stage failing, no deployment carrying the change, and the pull request sitting open. An arm citing any one of them has cited the symptom, which is what makes this the case that measures the intersection rule rather than assuming it.",
+          "relevance": "current",
+          "role": "symptom",
+          "standing": "candidate_only",
+          "supporting_evidence_slugs": [
+            "ci_identity_blocked",
+            "dp_identity_none",
+            "pr_identity_882_open"
+          ]
+        }
+      ],
+      "expected_principal_drivers": [
+        {
+          "affected_entity_ids": [
+            "proj_identity_rewrite"
+          ],
+          "category": "dependency_pressure",
+          "driver_key": "authcore_release_stall",
+          "rationale": "The unreleased tag the change is waiting on.",
+          "relevance": "current",
+          "role": "driver",
+          "standing": "principal_driver",
+          "supporting_evidence_slugs": [
+            "wi_authcore_release_open"
+          ],
+          "supporting_paths": [
+            "proj_identity_rewrite-[blocked_by]->wu_authcore_release"
+          ]
+        }
+      ],
+      "forbidden_cohort_ids": [],
+      "forbidden_entity_ids": [],
+      "forbidden_evidence": [],
+      "forbidden_paths": [],
+      "forbidden_subject_ids": [],
+      "permitted_candidate_ids": [
+        "proj_identity_rewrite"
+      ],
+      "permitted_outcomes": [
+        "supported",
+        "supported_with_gaps"
+      ],
+      "rationale": "Every other case pairs its symptom with a single record, so a scorer matching drivers by evidence overlap was never tested against a symptom an arm could cite only part of. This case measures that: promoting the symptom on one of its three records must fail exactly as promoting it on all three does.",
+      "required_cohort_ids": [],
+      "required_entity_ids": [
+        "proj_identity_rewrite",
+        "wu_authcore_release"
+      ],
+      "required_evidence_slugs": [
+        "wi_authcore_release_open",
+        "ci_identity_blocked",
+        "dp_identity_none",
+        "pr_identity_882_open"
+      ],
+      "required_exclusion_ids": [],
+      "required_limitation_kinds": [],
+      "required_match_signals": [
+        "exact_display_name"
+      ],
+      "required_paths": [
+        "proj_identity_rewrite-[blocked_by]->wu_authcore_release"
+      ],
+      "required_relevance": {},
+      "required_source_classes": [
+        "work_item",
+        "ci_run",
+        "deployment",
+        "pull_request"
+      ]
+    },
+    {
       "case_id": "H01_acronym_resolution",
       "committed_subject_id": "proj_identity_rewrite",
       "confidence_ceiling": "measured_certain",

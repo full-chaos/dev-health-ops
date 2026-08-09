@@ -1767,11 +1767,13 @@
       "status": "unmapped"
     },
     {
-      "authored_case_ids": [],
+      "authored_case_ids": [
+        "S08_split_evidence_symptom"
+      ],
       "dimension": "cross_source_association",
       "question_family": "project_status_drivers",
       "skipped_case_ids": [],
-      "status": "unmapped"
+      "status": "covered"
     },
     {
       "authored_case_ids": [
@@ -1788,6 +1790,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A02_keyword_stuffed_evidence",
         "A04_prompt_injection_in_document",
         "A07_revoked_and_redacted_evidence"
@@ -1810,6 +1813,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A02_keyword_stuffed_evidence"
       ],
       "dimension": "lineage_path_precision",
@@ -1828,6 +1832,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A02_keyword_stuffed_evidence",
         "A07_revoked_and_redacted_evidence"
       ],
@@ -1840,6 +1845,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A04_prompt_injection_in_document"
       ],
       "dimension": "principal_driver_recall",
@@ -1867,6 +1873,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A04_prompt_injection_in_document",
         "A07_revoked_and_redacted_evidence"
       ],
@@ -1886,7 +1893,8 @@
     },
     {
       "authored_case_ids": [
-        "S04_symptom_versus_driver"
+        "S04_symptom_versus_driver",
+        "S08_split_evidence_symptom"
       ],
       "dimension": "symptom_versus_driver_distinction",
       "question_family": "project_status_drivers",
@@ -1907,6 +1915,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A02_keyword_stuffed_evidence",
         "A04_prompt_injection_in_document",
         "A07_revoked_and_redacted_evidence"
@@ -1920,6 +1929,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A02_keyword_stuffed_evidence",
         "A04_prompt_injection_in_document",
         "A07_revoked_and_redacted_evidence"
@@ -1933,6 +1943,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A02_keyword_stuffed_evidence",
         "A04_prompt_injection_in_document",
         "A07_revoked_and_redacted_evidence"
@@ -1946,6 +1957,7 @@
       "authored_case_ids": [
         "S04_symptom_versus_driver",
         "S05_multiple_interacting_drivers",
+        "S08_split_evidence_symptom",
         "A02_keyword_stuffed_evidence",
         "A04_prompt_injection_in_document",
         "A07_revoked_and_redacted_evidence"

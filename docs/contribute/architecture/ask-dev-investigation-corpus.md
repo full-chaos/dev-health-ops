@@ -141,7 +141,7 @@ stated non-authored disposition; `--` is an explicit gap.
 
 | Evaluation dimension | struggling_teams | pressure_signals | project_capacity | staffing_language | project_status_drivers | portfolio_dependency_risk | declared_versus_actual | ambiguous_identity | colloquial_follow_up | clarification_and_no_match |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `subject_top_1` | -- | -- | -- | 5 | 4 | -- | 2 | 5 | 2 | -- |
+| `subject_top_1` | -- | -- | -- | 5 | 5 | -- | 2 | 5 | 2 | -- |
 | `subject_top_3` | -- | -- | -- | -- | 1 | -- | -- | 3 | 1 | 2 |
 | `clarification_candidate_precision` | -- | -- | -- | -- | -- | -- | -- | 3 | 1 | 5 |
 | `alias_acronym_rename_resolution` | -- | -- | -- | -- | -- | -- | -- | 5 | -- | -- |
@@ -153,22 +153,22 @@ stated non-authored disposition; `--` is an explicit gap.
 | `cohort_exclusion_explainability` | 4 | -- | -- | -- | -- | -- | -- | -- | -- | 1 |
 | `relevant_entity_recall` | -- | 1 | -- | -- | 1 | 1 | -- | 1 | 1 | -- |
 | `relevant_relationship_recall` | -- | 2 | -- | -- | -- | 2 | -- | -- | -- | -- |
-| `lineage_path_precision` | -- | 1 | -- | -- | 3 | 2 | 2 | -- | -- | -- |
+| `lineage_path_precision` | -- | 1 | -- | -- | 4 | 2 | 2 | -- | -- | -- |
 | `lineage_direction_correctness` | -- | 1 | -- | -- | 1 | 1 | 1 | -- | -- | -- |
-| `cross_source_association` | 4 | 1 | 1 | -- | -- | 2 | 3 | -- | 1 | -- |
-| `evidence_closure` | 5 | 2 | 3 | 5 | 5 | 2 | 3 | 5 | 3 | 5 |
+| `cross_source_association` | 4 | 1 | 1 | -- | 1 | 2 | 3 | -- | 1 | -- |
+| `evidence_closure` | 5 | 2 | 3 | 5 | 6 | 2 | 3 | 5 | 3 | 5 |
 | `current_relevance` | 2 | -- | -- | -- | 3 | skip | 1 | 2 | -- | -- |
-| `principal_driver_precision` | 1 | 2 | 1 | -- | 4 | -- | 3 | -- | 1 | -- |
-| `principal_driver_recall` | 1 | -- | -- | -- | 3 | -- | -- | -- | -- | -- |
-| `symptom_versus_driver_distinction` | 2 | 1 | -- | -- | 1 | -- | 1 | -- | -- | -- |
+| `principal_driver_precision` | 1 | 2 | 1 | -- | 5 | -- | 3 | -- | 1 | -- |
+| `principal_driver_recall` | 1 | -- | -- | -- | 4 | -- | -- | -- | -- | -- |
+| `symptom_versus_driver_distinction` | 2 | 1 | -- | -- | 2 | -- | 1 | -- | -- | -- |
 | `unsupported_attribution_rate` | 2 | -- | 1 | 4 | 2 | 1 | 1 | -- | -- | -- |
 | `comparative_judgment_support` | 1 | 1 | 3 | -- | -- | -- | -- | -- | -- | -- |
 | `answer_usefulness_beyond_dashboard` | 1 | 1 | 1 | 3 | 1 | -- | 1 | -- | -- | 1 |
-| `useful_uncertainty_behaviour` | 5 | 2 | 3 | 5 | 5 | 2 | 3 | 5 | 3 | 5 |
-| `zero_unauthorized_results` | 5 | 2 | 3 | 5 | 5 | 2 | 3 | 5 | 3 | 5 |
-| `zero_person_level_ranking` | 5 | 2 | 3 | 5 | 5 | 2 | 3 | 5 | 3 | 5 |
+| `useful_uncertainty_behaviour` | 5 | 2 | 3 | 5 | 6 | 2 | 3 | 5 | 3 | 5 |
+| `zero_unauthorized_results` | 5 | 2 | 3 | 5 | 6 | 2 | 3 | 5 | 3 | 5 |
+| `zero_person_level_ranking` | 5 | 2 | 3 | 5 | 6 | 2 | 3 | 5 | 3 | 5 |
 | `zero_unsupported_staffing_certainty` | -- | -- | 2 | 5 | -- | -- | -- | -- | -- | -- |
-| `zero_graph_native_surface_leakage` | 5 | 2 | 3 | 5 | 5 | 2 | 3 | 5 | 3 | 5 |
+| `zero_graph_native_surface_leakage` | 5 | 2 | 3 | 5 | 6 | 2 | 3 | 5 | 3 | 5 |
 
 A number is the count of authored cases scoring that dimension for that family. `skip` means the only case that would have scored it carries a stated non-authored disposition. `--` means no case scores it there — an explicit gap, never a blank.
 
@@ -302,6 +302,48 @@ reproduction. Three guard-injection cases had to be retargeted afterwards —
 not because the guards weakened, but because the strengthened scorers now
 catch those defects by more than one route, and an injection that removes one
 route proves nothing while the other still fires.
+
+## Independent fix-verification round
+
+A second, independent verification pass on the fixes above confirmed four of
+the six closed and found that **two were closed only for the reviewer's exact
+shapes**. Three live findings, all reproduced before being fixed:
+
+* **Nine consumer-visible text slots were unscanned.** The person-attribution
+  check read a hand-written list of six fields; `analytical_job.job_statement`
+  was not among them, and a person-level question restated there passed on the
+  person-bait case itself. The asymmetry with `entity_sightings` — made
+  exhaustive for the widening fix — *was* the bug. The scan now **walks the
+  contract model**: any string field the contract does not constrain with a
+  `pattern` is free text, because every identifier alias on this contract has
+  one and every prose alias does not. A field added tomorrow is scanned
+  without an edit.
+* **The negation window was an evasion primitive.** Any real negation within
+  forty characters excused what followed, so "Not in doubt: one developer is
+  carrying this project alone" laundered cleanly. Negation is now scoped to
+  the **clause**: a negation before a clause break governs nothing after it.
+  The comma counts as a break, because "Without exception, the same developer
+  reviews everything" uses a negation token as an intensifier — deliberately
+  conservative, and the P07 disclaimer control stays green.
+* **Principal-driver precision still used any-match for unexpected drivers.**
+  One legitimate handle admitted an invented third driver on S05. Matching is
+  now a greedy bijection: each expected driver can be claimed once, and a
+  principal left unclaimed is one nobody asked for.
+
+A new authored case, **S08**, exists because every other case pairs its
+symptom with a single evidence record — so the intersection rule's behaviour
+on a symptom an arm could cite only part of was assumed rather than measured.
+S08's symptom spans three records, and promoting it on any one of them must
+fail exactly as promoting it on all three does.
+
+Two smaller consequences, recorded because both are the same class of
+mistake in miniature: the A05 case title contained the word "person", and the
+reference witness uses a case title as the packet's job statement, so the
+corpus's own meta-vocabulary read as an attribution — the title was reworded,
+not the check. And the fabricated-entity injection labelled its planted
+entity "A developer", which after the fix tripped the prose branch instead of
+the identifier branch it names; the label was changed so the injection still
+isolates what it claims to.
 
 ## An audit that changed the design
 

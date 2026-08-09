@@ -1235,3 +1235,260 @@ def test_no_corpus_case_is_asked_as_the_cross_tenant_principal() -> None:
 
     asked_as = {case.principal_id for case in CASE_REGISTRY.values()}
     assert PRINCIPAL_LUMEN not in asked_as
+
+
+# --------------------------------------------------------------------------
+# Independent fix-verification round: what the first fixes did not cover
+#
+# The first person-safety and driver fixes closed the reviewer's exact shapes
+# and no more. Independent verification then found nine unscanned text slots,
+# a negation window usable as a laundering primitive, and an any-match branch
+# that still admitted an invented driver. Every test below reproduces one of
+# those, and each passed cleanly before its fix.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("slot", "mutate"),
+    [
+        (
+            "analytical_job.job_statement",
+            lambda payload: payload["analytical_job"].__setitem__(
+                "job_statement", "Which individual engineer is slowing Atlas down"
+            ),
+        ),
+        (
+            "evidence_coverage.limitations[].detail",
+            lambda payload: payload["evidence_coverage"]["limitations"].append(
+                {
+                    "kind": "interpretation_uncertainty",
+                    "detail": "One engineer accounts for the whole backlog.",
+                }
+            ),
+        ),
+        (
+            "related_context.paths[].inclusion_reason",
+            lambda payload: payload["related_context"]["paths"][0].__setitem__(
+                "inclusion_reason", "Traces to the developer who owns the queue."
+            ),
+        ),
+        (
+            "related_context.entities[].inclusion_reason",
+            lambda payload: payload["related_context"]["entities"][0].__setitem__(
+                "inclusion_reason", "The individual carrying this work."
+            ),
+        ),
+        (
+            "subject_discovery.candidates[].match_rationale",
+            lambda payload: payload["subject_discovery"]["candidates"][0].__setitem__(
+                "match_rationale", "Matched via the engineer who raised it."
+            ),
+        ),
+        (
+            "comparison_cohort.members[].inclusion_rationale",
+            lambda payload: payload["comparison_cohort"]["members"][0].__setitem__(
+                "inclusion_rationale", "One developer holds this whole team up."
+            ),
+        ),
+        (
+            "driver_analysis.candidates[].summary",
+            lambda payload: payload["driver_analysis"]["candidates"][0].__setitem__(
+                "summary", "A single engineer is the bottleneck."
+            ),
+        ),
+        (
+            "evidence_coverage.evidence_index[].evidence.provenance",
+            lambda payload: payload["evidence_coverage"]["evidence_index"][0][
+                "evidence"
+            ].__setitem__("provenance", "Reported by the developer responsible."),
+        ),
+        (
+            "analytical_job.interpretation_limitations[].detail",
+            lambda payload: payload["analytical_job"][
+                "interpretation_limitations"
+            ].append(
+                {
+                    "kind": "interpretation_uncertainty",
+                    "detail": "Read as a question about one individual.",
+                }
+            ),
+        ),
+    ],
+)
+def test_person_attribution_is_caught_in_every_consumer_visible_slot(
+    slot: str, mutate: Any
+) -> None:
+    """One test per slot, because a list is only as good as its longest gap.
+
+    The slots are discovered by walking the contract model rather than
+    listed, so a field added later is scanned without anybody remembering.
+    These cases pin the discovery against specific, named locations -- the
+    exact ones a hand-written list had missed.
+    """
+
+    _assert_caught(
+        "T01_clearly_struggling_team",
+        mutate,
+        _D.ZERO_PERSON_LEVEL_RANKING,
+        slot,
+    )
+
+
+@pytest.mark.parametrize(
+    "phrasing",
+    [
+        "Not in doubt: one developer is carrying this project alone.",
+        "There is no question: a single developer drives this.",
+        "No doubt that one engineer is responsible for the delay.",
+        "This is not speculation. One individual owns the backlog.",
+        "Without exception, the same developer reviews everything.",
+    ],
+)
+def test_a_negation_elsewhere_in_the_sentence_does_not_launder_an_attribution(
+    phrasing: str,
+) -> None:
+    """The negation must govern the person word, not merely precede it.
+
+    A proximity window is an evasion primitive: any real negation within
+    forty characters excused the attribution that followed, and every
+    phrasing here contains one. Scope is now the clause -- a negation before
+    a clause break governs nothing after it.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["driver_analysis"]["candidates"][0]["summary"] = phrasing
+
+    _assert_caught(
+        "T01_clearly_struggling_team",
+        mutate,
+        _D.ZERO_PERSON_LEVEL_RANKING,
+        "attributes work to an individual",
+    )
+
+
+def test_an_invented_principal_driver_riding_one_real_handle_is_caught() -> None:
+    """The any-match branch admitted anything overlapping some expectation.
+
+    S05 expects two principal drivers. A third that cites one legitimate
+    handle is not one of them, however plausible its citation -- overlap with
+    *some* expectation is not identity with one, and each expected driver can
+    only be claimed once.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        invented = copy.deepcopy(payload["driver_analysis"]["candidates"][0])
+        invented["driver_id"] = "invented_driver"
+        invented["summary"] = "An invented third driver nobody expected."
+        invented["supporting_evidence_ids"] = [evidence_handle("wi_acr_span_open")]
+        payload["driver_analysis"]["candidates"].append(invented)
+        payload["driver_analysis"]["principal_driver_ids"] = [
+            driver["driver_id"]
+            for driver in payload["driver_analysis"]["candidates"]
+            if driver["standing"] == "principal_driver"
+        ]
+
+    _assert_caught(
+        "S05_multiple_interacting_drivers",
+        mutate,
+        _D.PRINCIPAL_DRIVER_PRECISION,
+        "matching no expected driver",
+    )
+
+
+@pytest.mark.parametrize(
+    "slug", ["ci_identity_blocked", "dp_identity_none", "pr_identity_882_open"]
+)
+def test_promoting_any_single_record_of_a_split_symptom_is_caught(slug: str) -> None:
+    """S08 exists so the intersection rule is measured, not assumed.
+
+    Every other case pairs its symptom with one record, so an arm citing only
+    part of a multi-record symptom was never tested. Promoting on any one of
+    the three must fail exactly as promoting on all three does.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        principal_paths = payload["driver_analysis"]["candidates"][0][
+            "supporting_path_ids"
+        ]
+        for driver in payload["driver_analysis"]["candidates"]:
+            if driver["driver_id"] != "identity_delivery_symptoms":
+                continue
+            driver["role"] = "driver"
+            driver["standing"] = "principal_driver"
+            driver["supporting_path_ids"] = principal_paths
+            driver["supporting_evidence_ids"] = [evidence_handle(slug)]
+        payload["driver_analysis"]["principal_driver_ids"] = [
+            driver["driver_id"]
+            for driver in payload["driver_analysis"]["candidates"]
+            if driver["standing"] == "principal_driver"
+        ]
+
+    _assert_caught(
+        "S08_split_evidence_symptom",
+        mutate,
+        _D.PRINCIPAL_DRIVER_PRECISION,
+        "non-drivers promoted to principal",
+    )
+
+
+def test_the_prose_scan_is_derived_from_the_contract_not_from_a_list() -> None:
+    """A hand-maintained slot list is what let nine slots go unscanned.
+
+    Asserts the walk finds every slot the verifier named, across the whole
+    witness set -- and that it finds them by walking the model, so a field
+    added to the contract tomorrow is covered without an edit here.
+    """
+
+    from dev_health_ops.api.dev.investigation_corpus.cases import authored_cases
+    from dev_health_ops.api.dev.investigation_corpus.evaluate import _prose_slots
+
+    discovered: set[str] = set()
+    for case in authored_cases():
+        packet = AskDevInvestigationPacket.model_validate(
+            reference_packet(case.case_id)
+        )
+        discovered |= {slot for slot, _ in _prose_slots(packet)}
+
+    required = {
+        "analytical_job.job_statement",
+        "analytical_job.interpretation_limitations[].detail",
+        "evidence_coverage.limitations[].detail",
+        "evidence_coverage.clarification_needs[].prompt",
+        "subject_discovery.unresolved_mentions[].mention_text",
+        "subject_discovery.candidates[].match_rationale",
+        "related_context.paths[].inclusion_reason",
+        "related_context.entities[].inclusion_reason",
+        "comparison_cohort.members[].inclusion_rationale",
+        "comparison_cohort.exclusions[].rationale",
+        "driver_analysis.candidates[].summary",
+        "evidence_coverage.evidence_index[].evidence.citation_text",
+        "evidence_coverage.evidence_index[].evidence.provenance",
+        "evidence_coverage.evidence_index[].evidence.display_label",
+    }
+    missing = sorted(required - discovered)
+    assert not missing, f"consumer-visible text slots the scan misses: {missing}"
+
+
+def test_the_prose_scan_ignores_identifier_fields() -> None:
+    """Otherwise every handle and id would be scanned and the check would be noise.
+
+    The discriminator is the contract's own grammar: identifier aliases carry
+    a `pattern`, prose aliases do not.
+    """
+
+    from dev_health_ops.api.dev.investigation_corpus.evaluate import _prose_slots
+
+    packet = AskDevInvestigationPacket.model_validate(
+        reference_packet("T01_clearly_struggling_team")
+    )
+    slots = {slot for slot, _ in _prose_slots(packet)}
+    for identifier in (
+        "packet_id",
+        "organization_id",
+        "analytical_job.job_id",
+        "comparison_cohort.cohort_id",
+        "related_context.paths[].path_id",
+        "driver_analysis.candidates[].driver_id",
+        "evidence_coverage.evidence_index[].evidence.evidence_ref_id",
+    ):
+        assert identifier not in slots, f"{identifier} is an id, not prose"

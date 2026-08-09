@@ -1276,6 +1276,64 @@ _ORACLES: tuple[CaseOracle, ...] = (
             "silently substituting it — are opposite, and both are wrong."
         ),
     ),
+    CaseOracle(
+        case_id="S08_split_evidence_symptom",
+        permitted_candidate_ids=(world.PROJ_IDENTITY_REWRITE,),
+        committed_subject_id=world.PROJ_IDENTITY_REWRITE,
+        required_match_signals=(_SIG.EXACT_DISPLAY_NAME,),
+        required_entity_ids=(
+            world.PROJ_IDENTITY_REWRITE,
+            world.WU_AUTHCORE_RELEASE,
+        ),
+        required_paths=(_PATH_IPR_BLOCKED,),
+        expected_principal_drivers=(
+            _driver(
+                "authcore_release_stall",
+                _C.DEPENDENCY_PRESSURE,
+                _ROLE.DRIVER,
+                _STAND.PRINCIPAL_DRIVER,
+                (world.PROJ_IDENTITY_REWRITE,),
+                ("wi_authcore_release_open",),
+                (_PATH_IPR_BLOCKED,),
+                "The unreleased tag the change is waiting on.",
+            ),
+        ),
+        expected_non_drivers=(
+            _driver(
+                "identity_delivery_symptoms",
+                _C.QUALITY_OR_DEFECT,
+                _ROLE.SYMPTOM,
+                _STAND.CANDIDATE_ONLY,
+                (world.PROJ_IDENTITY_REWRITE,),
+                ("ci_identity_blocked", "dp_identity_none", "pr_identity_882_open"),
+                (),
+                "Three records, one symptom: the integration stage failing, "
+                "no deployment carrying the change, and the pull request "
+                "sitting open. An arm citing any one of them has cited the "
+                "symptom, which is what makes this the case that measures "
+                "the intersection rule rather than assuming it.",
+            ),
+        ),
+        required_evidence_slugs=(
+            "wi_authcore_release_open",
+            "ci_identity_blocked",
+            "dp_identity_none",
+            "pr_identity_882_open",
+        ),
+        required_source_classes=(
+            _SC.WORK_ITEM,
+            _SC.CI_RUN,
+            _SC.DEPLOYMENT,
+            _SC.PULL_REQUEST,
+        ),
+        rationale=(
+            "Every other case pairs its symptom with a single record, so a "
+            "scorer matching drivers by evidence overlap was never tested "
+            "against a symptom an arm could cite only part of. This case "
+            "measures that: promoting the symptom on one of its three "
+            "records must fail exactly as promoting it on all three does."
+        ),
+    ),
     # ======================================================================
     # Human ambiguity and conversational context
     # ======================================================================

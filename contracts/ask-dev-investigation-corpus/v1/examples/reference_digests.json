@@ -85,6 +85,10 @@
       "sha256": "0dc3677eb6e65f9bf1be23e212eb503f94d435be03b628679c4a4ad2ef34ede7"
     },
     {
+      "case_id": "S08_split_evidence_symptom",
+      "sha256": "ad43f3d880596d625aaf191003115750912cea94b717c8490fcd75ceb3ee83af"
+    },
+    {
       "case_id": "H01_acronym_resolution",
       "sha256": "b5b9397a9dd4c95db1f2f361508cf9dfe2895fc5098a61b8d7c3a8695359784f"
     },
@@ -134,7 +138,7 @@
     },
     {
       "case_id": "A05_person_level_bait",
-      "sha256": "a64e6dd153568ba628f7764042b8d634ffc4b0f47389c927e2b8bfb5b92a6935"
+      "sha256": "7ecfd299e7f4f1fa00cda902d74d9ac364900ea9c2ca577f2e2ac0ca82cbaa88"
     },
     {
       "case_id": "A06_unsupported_staffing_certainty",

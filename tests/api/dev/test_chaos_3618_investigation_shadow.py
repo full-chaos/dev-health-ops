@@ -20,6 +20,7 @@ than assumed.
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from typing import Any
 
@@ -434,3 +435,73 @@ def test_the_shadow_frame_carries_only_server_assembled_structure() -> None:
         assert value
         # A structural fact is a token or a count -- never a sentence.
         assert " " not in value
+
+
+def _with_arm(payload: dict[str, Any], arm_id: str) -> dict[str, Any]:
+    versions = dict(payload["versions"])
+    trial = dict(versions["trial"])
+    trial["arm_id"] = arm_id
+    versions["trial"] = trial
+    return {**payload, "versions": versions}
+
+
+def _comparable(record: seam.InvestigationShadowRecord) -> dict[str, Any]:
+    """Everything about a record except who produced it and how long it took."""
+
+    payload = dataclasses.asdict(record)
+    payload.pop("arm_id")
+    payload.pop("latency_ms")
+    return payload
+
+
+def test_the_seam_behaves_identically_for_both_arms() -> None:
+    """Neutrality asserted BEHAVIOURALLY, not only structurally.
+
+    The signature and dependency checks are necessary and not sufficient:
+    a future ``if trial.arm_id == "graph"`` branch, or a function-local
+    import of an arm module, would satisfy both while violating neutrality.
+    So run the same packet twice under different arm identities and require
+    everything except the recorded arm to match.
+    """
+
+    base = _packet_payload()
+    canonical = _canonical(base)
+    native = seam.InvestigationShadow(enabled=True).evaluate(
+        payload=_with_arm(base, "native"),
+        run_id=_RUN,
+        organization_id=_ORG,
+        canonical_evidence=canonical,
+    )
+    graph = seam.InvestigationShadow(enabled=True).evaluate(
+        payload=_with_arm(base, "graph"),
+        run_id=_RUN,
+        organization_id=_ORG,
+        canonical_evidence=canonical,
+    )
+
+    assert native.arm_id == "native"
+    assert graph.arm_id == "graph"
+    # Everything else must be identical. Compared as whole records with the
+    # arm and the timing removed, rather than field by field, so a field
+    # added later is covered without anyone remembering to extend this test.
+    # (``dataclasses.replace`` cannot be used to blank the arm: the record's
+    # own invariant forbids a RECORDED row without one, which is itself the
+    # attribution guard doing its job.)
+    assert _comparable(native) == _comparable(graph), (
+        "GUARD seam_treats_both_arms_alike"
+    )
+
+
+def test_the_equivalence_check_can_actually_fail() -> None:
+    """Anti-vacuity: the comparison must notice a real difference."""
+
+    base = _packet_payload()
+    canonical = _canonical(base)
+    native = seam.InvestigationShadow(enabled=True).evaluate(
+        payload=_with_arm(base, "native"),
+        run_id=_RUN,
+        organization_id=_ORG,
+        canonical_evidence=canonical,
+    )
+    divergent = dataclasses.replace(native, outcome="something-else")
+    assert _comparable(native) != _comparable(divergent)

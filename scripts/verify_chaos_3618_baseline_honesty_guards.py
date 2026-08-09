@@ -429,6 +429,61 @@ seam.canonical_bypass_offenders = canonical_bypass_offenders
 """,
     ),
     GuardCase(
+        case_id="missing_result_still_projected",
+        stake=(
+            "a run that never reached the plan executor emitting a scorable "
+            "packet instead of being counted as a projection gap"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_projection.py::"
+            "test_a_run_that_never_reached_the_plan_executor_is_a_gap_not_a_thin_packet"
+        ),
+        expected_failure="GUARD missing_result_is_a_gap",
+        plant="""
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+from dev_health_ops.api.dev.investigation_contract import (
+    InvestigationVersions,
+    SourceContractVersion,
+    TrialMetadata,
+)
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+
+def _missing_result_gap(payload):
+    # The guard removed: a run with no governed result proceeds.
+    return None
+
+
+proj._missing_result_gap = _missing_result_gap
+
+
+def _versions(payload):
+    # ...and the fabricated fallback provenance restored, which is how a
+    # never-executed run used to acquire plausible-looking source versions.
+    return InvestigationVersions(
+        schema_version="ask_dev_investigation_versions.v1",
+        packet_schema_version="ask_dev_investigation_packet.v1",
+        query_version="ask_dev_native_queries.v1",
+        ranking_version="ask_dev_native_ranking.v1",
+        projection_version=proj.NATIVE_PROJECTION_VERSION,
+        source_contract_versions=(
+            SourceContractVersion(
+                source_class=SourceClass.WORK_GRAPH,
+                contract_version="ask_dev_native_queries.v1",
+            ),
+        ),
+        trial=TrialMetadata(
+            arm_id=proj.NATIVE_ARM_ID,
+            producer_id=proj.NATIVE_PROJECTION_VERSION,
+            run_id=payload.run_id,
+        ),
+    )
+
+
+proj._versions = _versions
+""",
+    ),
+    GuardCase(
         case_id="forged_evidence_payload_accepted",
         stake=(
             "a cited evidence record whose payload differs from what a "
@@ -483,6 +538,43 @@ def __init__(self, *, enabled):
 
 
 seam.InvestigationShadow.__init__ = __init__
+""",
+    ),
+    GuardCase(
+        case_id="seam_branches_by_arm",
+        stake=(
+            "a seam that treats one arm differently from the other -- the "
+            "comparison stops measuring the arms and starts measuring the seam"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_investigation_shadow.py::"
+            "test_the_seam_behaves_identically_for_both_arms"
+        ),
+        expected_failure="GUARD seam_treats_both_arms_alike",
+        plant="""
+import dataclasses
+
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+_real = seam.InvestigationShadow.evaluate
+
+
+def evaluate(self, *, payload, run_id, organization_id, canonical_evidence):
+    record = _real(
+        self,
+        payload=payload,
+        run_id=run_id,
+        organization_id=organization_id,
+        canonical_evidence=canonical_evidence,
+    )
+    # The exact violation the structural checks cannot see: a branch on the
+    # recorded arm identity, with no arm module imported anywhere.
+    if record.arm_id == "graph":
+        return dataclasses.replace(record, frame_facts=())
+    return record
+
+
+seam.InvestigationShadow.evaluate = evaluate
 """,
     ),
     GuardCase(

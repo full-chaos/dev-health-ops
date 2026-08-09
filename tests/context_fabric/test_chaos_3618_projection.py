@@ -876,3 +876,38 @@ def test_a_dimension_needs_content_that_actually_measured_it() -> None:
         _payload(investigation_result=result, evidence=())
     )
     assert dimensions == (), "GUARD dimension_needs_measured_content"
+
+
+def test_a_run_that_never_reached_the_plan_executor_is_a_gap_not_a_thin_packet() -> (
+    None
+):
+    """The gap reason existed from the start and nothing ever returned it.
+
+    A run with no ``dev_investigation_result.v1`` used to emit an
+    ``unsupported`` packet anyway — a comparable artefact, carrying
+    independently supplied evidence and a fabricated fallback
+    source-contract version. That turns a run that never executed into
+    something the trial would score, instead of a measured projection gap.
+    """
+
+    outcome = proj.project_native_investigation(_payload(investigation_result=None))
+    assert outcome.packet is None, "GUARD missing_result_is_a_gap"
+    assert [gap.reason for gap in outcome.gaps] == [
+        proj.NativeProjectionGapReason.NO_PLAN_GOVERNED_RESULT
+    ]
+
+
+def test_a_result_from_another_run_is_refused() -> None:
+    """A projection input is one finished run, not an assembly of parts.
+
+    The packet's identity comes from ``run_id`` and its observations from
+    ``investigation_result``. When those disagreed nothing noticed, so a
+    stale retry could publish one run's findings under another run's
+    identity.
+    """
+
+    foreign = _investigation_result().model_copy(
+        update={"run_id": _handle("some-other-run")}
+    )
+    with pytest.raises(ValueError, match="belongs to run"):
+        _payload(investigation_result=foreign)

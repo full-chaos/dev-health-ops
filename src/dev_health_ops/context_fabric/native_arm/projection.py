@@ -272,6 +272,20 @@ class NativeProjectionInput:
                 "the projected window must be a real interval; a degenerate one "
                 "cannot carry a bounded time context"
             )
+        # A finished-run envelope, not three independently supplied parts.
+        # The packet's identity comes from ``run_id`` while the observations
+        # come from ``investigation_result``; if those disagree, a stale
+        # retry or a caller assembly mistake publishes one run's findings
+        # under another run's identity, and nothing downstream could tell.
+        if (
+            self.investigation_result is not None
+            and self.investigation_result.run_id != self.run_id
+        ):
+            raise ValueError(
+                "the investigation result belongs to run "
+                f"{self.investigation_result.run_id}, not {self.run_id}; a "
+                "projection input is one finished run, not an assembly of parts"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -894,11 +908,14 @@ def _versions(payload: NativeProjectionInput) -> InvestigationVersions:
                 )
             )
     if not contract_versions:
-        contract_versions.append(
-            SourceContractVersion(
-                source_class=SourceClass.WORK_GRAPH,
-                contract_version=_NATIVE_QUERY_VERSION,
-            )
+        # Reachable only when every observation carried an off-allowlist
+        # source class. It is NOT the "no investigation result" case any
+        # more -- that returns a gap before reaching here -- and inventing a
+        # WORK_GRAPH version for a run that observed nothing was how a
+        # never-executed run acquired plausible-looking provenance.
+        raise ValueError(
+            "no observation carried a trial-allowlisted source class, so the "
+            "packet would have to invent its own source provenance"
         )
 
     return InvestigationVersions(
@@ -912,6 +929,39 @@ def _versions(payload: NativeProjectionInput) -> InvestigationVersions:
             arm_id=NATIVE_ARM_ID,
             producer_id=NATIVE_PROJECTION_VERSION,
             run_id=payload.run_id,
+        ),
+    )
+
+
+def _missing_result_gap(
+    payload: NativeProjectionInput,
+) -> NativeProjectionOutcome | None:
+    """The gap for a run that never reached the deterministic plan executor.
+
+    A named function rather than an inline branch so a guard-injection plant
+    can actually remove it. The first version was inline, which meant the
+    plant could not express the defect at all and the case reported "not
+    load-bearing" -- the harness correctly refusing to credit a guard it had
+    not exercised.
+
+    The enum declared this gap from the start and nothing ever returned it,
+    so a run with no ``dev_investigation_result.v1`` still emitted an
+    ``unsupported`` packet: a comparable artefact, carrying independently
+    supplied evidence and a fabricated fallback source-contract version.
+    """
+
+    if payload.investigation_result is not None:
+        return None
+    return NativeProjectionOutcome(
+        packet=None,
+        gaps=(
+            NativeProjectionGap(
+                reason=NativeProjectionGapReason.NO_PLAN_GOVERNED_RESULT,
+                detail=(
+                    "the run produced no dev_investigation_result.v1, so there "
+                    "is no governed observation set to project"
+                ),
+            ),
         ),
     )
 
@@ -1154,6 +1204,10 @@ def _project(
                 ),
             ),
         )
+
+    missing_result = _missing_result_gap(payload)
+    if missing_result is not None:
+        return missing_result
 
     limitations = _Limitations()
     job = _analytical_job(payload, family=family, shape=shape, limitations=limitations)

@@ -1,0 +1,127 @@
+{
+  "corpus_version": "ask_dev_investigation_corpus.v1",
+  "feeds": [
+    {
+      "degraded_entity_ids": [],
+      "note": "Pipeline outcomes; readiness evidence for declared-complete claims.",
+      "source_class": "ci_run",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Commit-level activity; the active-contributor denominator.",
+      "source_class": "code_change",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Team-level rollups only. No per-person series is exposed to the trial.",
+      "source_class": "cognitive_load",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Open operational-readiness findings per project and team.",
+      "source_class": "deficiency_inventory",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Production deployments; release evidence.",
+      "source_class": "deployment",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Code-owned health-rule findings; derived, never primary.",
+      "source_class": "health_profile",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Operational incidents per team and service.",
+      "source_class": "incident",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [
+        "proj_solstice",
+        "proj_tidal"
+      ],
+      "note": "Investment mix and assigned FTE. Unconfigured for Solstice and Tidal, which is the missing-denominator case.",
+      "source_class": "investment_allocation",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Rotation, alerting and runbook registration per service.",
+      "source_class": "operational_control",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Implementing changes across all six repositories.",
+      "source_class": "pull_request",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [
+        "team_ember"
+      ],
+      "note": "Review rounds and wait times. Ember's slice stalled in June.",
+      "source_class": "review",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Feed freshness and coverage. The source that distinguishes 'no signal' from 'no data'.",
+      "source_class": "source_health",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Declared status and transitions for every project and work unit.",
+      "source_class": "status_change",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Suite results per repository.",
+      "source_class": "test_report",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [],
+      "note": "Canonical entity identity, aliases and membership.",
+      "source_class": "work_graph",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    },
+    {
+      "degraded_entity_ids": [
+        "team_ember",
+        "proj_lattice",
+        "proj_tidal"
+      ],
+      "note": "Canonical work items. Ember's slice stalled in June.",
+      "source_class": "work_item",
+      "state": "available_current",
+      "watermark": "2026-08-07 06:00:00Z"
+    }
+  ],
+  "schema_version": "ask_dev_corpus_source_manifest.v1"
+}

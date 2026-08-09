@@ -1,0 +1,538 @@
+{
+  "analytical_job": {
+    "comparison_shape": "singular_subject",
+    "conversation_reference_ids": [],
+    "interpretation_limitations": [],
+    "job_id": "job_S04_symptom_versus_driver",
+    "job_statement": "CI failures and review latency as symptoms of one dependency stall",
+    "job_uncertainty": "precise",
+    "question_family": "project_status_drivers",
+    "schema_version": "ask_dev_analytical_job.v1",
+    "surface_context_refs": [],
+    "time_context": {
+      "analytical_slice": "current",
+      "as_of": null,
+      "edge_validity_basis": "not_required",
+      "end": "2026-08-08 00:00:00Z",
+      "historical_comparability": "not_applicable",
+      "start": "2026-07-09 00:00:00Z",
+      "timezone": "UTC"
+    }
+  },
+  "comparison_cohort": {
+    "authorization_filtered_count": 0,
+    "cohort_id": "cohort_S04_symptom_versus_driver",
+    "cohort_uncertainty": null,
+    "comparison_shape": "singular_subject",
+    "completeness": "complete",
+    "exclusions": [
+      {
+        "canonical_id": "proj_auth_gateway_hardening",
+        "rationale": "Considered and dropped: the corroborating evidence a member needs is absent or contradicted.",
+        "reason": "insufficient_evidence",
+        "subject_kind": "project"
+      }
+    ],
+    "members": [
+      {
+        "canonical_id": "proj_identity_rewrite",
+        "display_label": "Identity Platform Rewrite",
+        "inclusion_basis": [
+          "explicitly_named"
+        ],
+        "inclusion_evidence_classification": "explicitly_named_by_question",
+        "inclusion_evidence_ids": [],
+        "inclusion_rationale": "Included because the world's canonical registry places it in the comparison set this question asks about.",
+        "relevance": "current",
+        "subject_kind": "project"
+      }
+    ],
+    "schema_version": "ask_dev_comparison_cohort.v1",
+    "supported_comparison_dimensions": [],
+    "truncation_reason": null
+  },
+  "driver_analysis": {
+    "candidates": [
+      {
+        "affected_subject_ids": [
+          "proj_identity_rewrite"
+        ],
+        "assertion_basis": "measured",
+        "category": "dependency_pressure",
+        "confidence_qualifier": "measured_certain",
+        "conflict_note": null,
+        "conflicting_evidence_ids": [],
+        "driver_id": "authcore_release_stall",
+        "exclusion_reason": null,
+        "relevance": "current",
+        "role": "driver",
+        "staffing_qualification": null,
+        "standing": "principal_driver",
+        "summary": "The unreleased authcore 2.0 tag the integration stage cannot resolve. Acting on this unblocks the project; acting on the CI failures does not.",
+        "supporting_evidence_ids": [
+          "ev1_ef4e54754e6e11ec27398c33fb4707a6cf780962",
+          "ev1_b5199a01e32bffe419c7037fe24e9d504b9a9895"
+        ],
+        "supporting_path_ids": [
+          "path_1"
+        ]
+      },
+      {
+        "affected_subject_ids": [
+          "proj_identity_rewrite"
+        ],
+        "assertion_basis": "measured",
+        "category": "quality_or_defect",
+        "confidence_qualifier": "measured_certain",
+        "conflict_note": null,
+        "conflicting_evidence_ids": [],
+        "driver_id": "identity_ci_failures",
+        "exclusion_reason": null,
+        "relevance": "current",
+        "role": "symptom",
+        "staffing_qualification": null,
+        "standing": "candidate_only",
+        "summary": "22 consecutive integration failures, all caused by the unresolvable tag. Real, current, and not the driver.",
+        "supporting_evidence_ids": [
+          "ev1_3b1cd4fca9cf3e76b41287bcadc5f6de85e3bd54"
+        ],
+        "supporting_path_ids": []
+      },
+      {
+        "affected_subject_ids": [
+          "proj_identity_rewrite",
+          "team_atlas"
+        ],
+        "assertion_basis": "measured",
+        "category": "review_pressure",
+        "confidence_qualifier": "measured_certain",
+        "conflict_note": null,
+        "conflicting_evidence_ids": [],
+        "driver_id": "atlas_review_wait",
+        "exclusion_reason": null,
+        "relevance": "current",
+        "role": "driver",
+        "staffing_qualification": null,
+        "standing": "contributing_driver",
+        "summary": "A genuine second-order contributor: it lengthens the tail once the dependency clears, but it is not what is holding the project now.",
+        "supporting_evidence_ids": [
+          "ev1_3e7a0971fcaea9b18ec5d088ef7cae7e7a2f57ca"
+        ],
+        "supporting_path_ids": [
+          "path_3"
+        ]
+      }
+    ],
+    "candidates_truncated": false,
+    "principal_driver_ids": [
+      "authcore_release_stall"
+    ],
+    "schema_version": "ask_dev_driver_analysis.v1",
+    "truncation_reason": null
+  },
+  "evidence_coverage": {
+    "authorization_filtered_count": 0,
+    "clarification_needs": [],
+    "conflicts": [],
+    "evidence_index": [
+      {
+        "evidence": {
+          "citation_text": "Release work unit open; blocks three dependent projects.",
+          "confidence": 1.0,
+          "display_label": "authcore 2.0 release",
+          "entity_id": "wu_authcore_release",
+          "entity_type": "work_unit",
+          "evidence_ref_id": "ev1_ef4e54754e6e11ec27398c33fb4707a6cf780962",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/work_unit/wu_authcore_release",
+            "source_url": null
+          },
+          "observed_at": "2026-08-07 00:00:00Z",
+          "provenance": "Corpus source record wi_authcore_release_open",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_item",
+        "supports_driver_ids": [
+          "authcore_release_stall"
+        ],
+        "supports_entity_ids": [
+          "wu_authcore_release"
+        ],
+        "supports_path_ids": [],
+        "supports_subject_ids": []
+      },
+      {
+        "evidence": {
+          "citation_text": "Integration stage fails resolving authcore 2.0; 22 consecutive failures.",
+          "confidence": 1.0,
+          "display_label": "Identity CI",
+          "entity_id": "repo_identity",
+          "entity_type": "repository",
+          "evidence_ref_id": "ev1_3b1cd4fca9cf3e76b41287bcadc5f6de85e3bd54",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/repository/repo_identity",
+            "source_url": null
+          },
+          "observed_at": "2026-08-07 00:00:00Z",
+          "provenance": "Corpus source record ci_identity_blocked",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "ci_run",
+        "supports_driver_ids": [
+          "identity_ci_failures"
+        ],
+        "supports_entity_ids": [],
+        "supports_path_ids": [],
+        "supports_subject_ids": []
+      },
+      {
+        "evidence": {
+          "citation_text": "Open 25 days awaiting the authcore 2.0 tag.",
+          "confidence": 1.0,
+          "display_label": "identity#882",
+          "entity_id": "pr_identity_882",
+          "entity_type": "pull_request",
+          "evidence_ref_id": "ev1_b5199a01e32bffe419c7037fe24e9d504b9a9895",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/pull_request/pr_identity_882",
+            "source_url": null
+          },
+          "observed_at": "2026-08-07 00:00:00Z",
+          "provenance": "Corpus source record pr_identity_882_open",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "pull_request",
+        "supports_driver_ids": [
+          "authcore_release_stall"
+        ],
+        "supports_entity_ids": [],
+        "supports_path_ids": [],
+        "supports_subject_ids": []
+      },
+      {
+        "evidence": {
+          "citation_text": "No deployment carrying identity#882 exists; the change is unmerged.",
+          "confidence": 1.0,
+          "display_label": "Auth Gateway deployment history",
+          "entity_id": "svc_auth_gateway",
+          "entity_type": "service",
+          "evidence_ref_id": "ev1_c79701497703f88c56e6b16de9816c601bc78972",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/service/svc_auth_gateway",
+            "source_url": null
+          },
+          "observed_at": "2026-08-07 00:00:00Z",
+          "provenance": "Corpus source record dp_identity_none",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "deployment",
+        "supports_driver_ids": [],
+        "supports_entity_ids": [],
+        "supports_path_ids": [
+          "path_1"
+        ],
+        "supports_subject_ids": []
+      },
+      {
+        "evidence": {
+          "citation_text": "Median review wait 9.4 days against a cohort median of 1.8.",
+          "confidence": 1.0,
+          "display_label": "Atlas review queue",
+          "entity_id": "team_atlas",
+          "entity_type": "team",
+          "evidence_ref_id": "ev1_3e7a0971fcaea9b18ec5d088ef7cae7e7a2f57ca",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/team/team_atlas",
+            "source_url": null
+          },
+          "observed_at": "2026-08-07 00:00:00Z",
+          "provenance": "Corpus source record rv_atlas_queue",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "review",
+        "supports_driver_ids": [
+          "atlas_review_wait"
+        ],
+        "supports_entity_ids": [
+          "team_atlas"
+        ],
+        "supports_path_ids": [],
+        "supports_subject_ids": []
+      }
+    ],
+    "evidence_truncated": false,
+    "limitations": [],
+    "missing_sources": [],
+    "schema_version": "ask_dev_evidence_coverage.v1",
+    "source_health": [
+      {
+        "detail": "Read and found to carry nothing bearing on this question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "source_class": "status_change",
+        "state": "available_current"
+      }
+    ],
+    "truncation_reason": null
+  },
+  "organization_id": "org_helio",
+  "outcome": "supported",
+  "packet_id": "224bb219-673a-cd04-b0fb-1a7c0bed55ba",
+  "produced_at": "2026-08-08 12:00:00Z",
+  "related_context": {
+    "authorization_filtered_count": 0,
+    "authorized_entity_ids": [
+      "dep_authcore",
+      "pr_identity_882",
+      "proj_auth_gateway_hardening",
+      "proj_identity_rewrite",
+      "repo_identity",
+      "svc_auth_gateway",
+      "team_atlas",
+      "wu_authcore_release"
+    ],
+    "entities": [
+      {
+        "display_label": "Identity Platform Rewrite",
+        "entity_id": "proj_identity_rewrite",
+        "entity_kind": "project",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_1",
+          "path_2",
+          "path_3"
+        ]
+      },
+      {
+        "display_label": "authcore",
+        "entity_id": "dep_authcore",
+        "entity_kind": "dependency",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_2"
+        ]
+      },
+      {
+        "display_label": "authcore 2.0 release",
+        "entity_id": "wu_authcore_release",
+        "entity_kind": "work_unit",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_1"
+        ]
+      },
+      {
+        "display_label": "Atlas",
+        "entity_id": "team_atlas",
+        "entity_kind": "team",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_3"
+        ]
+      }
+    ],
+    "entities_truncated": false,
+    "paths": [
+      {
+        "evidence_ref_ids": [],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08 00:00:00Z",
+            "relationship": "blocked_by",
+            "relevance": "current",
+            "source_entity_id": "proj_identity_rewrite",
+            "source_entity_kind": "project",
+            "target_entity_id": "wu_authcore_release",
+            "target_entity_kind": "work_unit"
+          }
+        ],
+        "inclusion_reason": "Traversed because it is part of the mechanism this question asks about.",
+        "origin_entity_id": "proj_identity_rewrite",
+        "path_id": "path_1",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "wu_authcore_release",
+        "truncated": false,
+        "truncation_reason": null
+      },
+      {
+        "evidence_ref_ids": [],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08 00:00:00Z",
+            "relationship": "depends_on",
+            "relevance": "current",
+            "source_entity_id": "proj_identity_rewrite",
+            "source_entity_kind": "project",
+            "target_entity_id": "dep_authcore",
+            "target_entity_kind": "dependency"
+          }
+        ],
+        "inclusion_reason": "Traversed because it is part of the mechanism this question asks about.",
+        "origin_entity_id": "proj_identity_rewrite",
+        "path_id": "path_2",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "dep_authcore",
+        "truncated": false,
+        "truncation_reason": null
+      },
+      {
+        "evidence_ref_ids": [],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08 00:00:00Z",
+            "relationship": "owned_by_team",
+            "relevance": "current",
+            "source_entity_id": "proj_identity_rewrite",
+            "source_entity_kind": "project",
+            "target_entity_id": "team_atlas",
+            "target_entity_kind": "team"
+          }
+        ],
+        "inclusion_reason": "Traversed because it is part of the mechanism this question asks about.",
+        "origin_entity_id": "proj_identity_rewrite",
+        "path_id": "path_3",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "team_atlas",
+        "truncated": false,
+        "truncation_reason": null
+      }
+    ],
+    "paths_truncated": false,
+    "schema_version": "ask_dev_related_context.v1",
+    "truncation_reason": null
+  },
+  "schema_version": "ask_dev_investigation_packet.v1",
+  "subject_discovery": {
+    "authorization_filtered_count": 0,
+    "candidates": [
+      {
+        "candidate_id": "cand_1",
+        "canonical_id": "proj_identity_rewrite",
+        "commitment_state": "committed",
+        "display_label": "Identity Platform Rewrite",
+        "match_confidence": 0.95,
+        "match_rationale": "Matched Identity Platform Rewrite on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Identity Platform Rewrite",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 1,
+        "relevance": "current",
+        "subject_kind": "project"
+      },
+      {
+        "candidate_id": "cand_2",
+        "canonical_id": "proj_auth_gateway_hardening",
+        "commitment_state": "proposed",
+        "display_label": "Auth Gateway Hardening",
+        "match_confidence": 0.4,
+        "match_rationale": "Matched Auth Gateway Hardening on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Auth Gateway Hardening",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 2,
+        "relevance": "current",
+        "subject_kind": "project"
+      }
+    ],
+    "candidates_truncated": false,
+    "committed_subject_ids": [
+      "proj_identity_rewrite"
+    ],
+    "schema_version": "ask_dev_subject_discovery.v1",
+    "truncation_reason": null,
+    "unresolved_mentions": []
+  },
+  "versions": {
+    "corpus_version": "ask_dev_investigation_corpus.v1",
+    "packet_schema_version": "ask_dev_investigation_packet.v1",
+    "projection_version": "corpus_reference_projection.v1",
+    "query_version": "corpus_reference_query.v1",
+    "ranking_version": "corpus_reference_ranking.v1",
+    "schema_version": "ask_dev_investigation_versions.v1",
+    "source_contract_versions": [
+      {
+        "contract_version": "ci_run.v1",
+        "source_class": "ci_run"
+      },
+      {
+        "contract_version": "deployment.v1",
+        "source_class": "deployment"
+      },
+      {
+        "contract_version": "pull_request.v1",
+        "source_class": "pull_request"
+      },
+      {
+        "contract_version": "review.v1",
+        "source_class": "review"
+      },
+      {
+        "contract_version": "status_change.v1",
+        "source_class": "status_change"
+      },
+      {
+        "contract_version": "work_item.v1",
+        "source_class": "work_item"
+      }
+    ],
+    "trial": null
+  }
+}

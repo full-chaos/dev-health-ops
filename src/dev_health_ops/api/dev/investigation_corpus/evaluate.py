@@ -21,8 +21,12 @@ same rule the case registry applies to skipped cases, at the level of cells
 rather than rows.
 
 **One named residual, in the person-attribution check.** Negation is scoped
-to the clause, which closes every separator-based evasion. It does not close
-an *intensifier* with no separator at all -- "Without doubt one developer
+to the clause. That closes the separators :data:`_CLAUSE_BREAKS` enumerates,
+and **not** the class: verification found eleven further characters that work
+(slash, pipe, tab, middot, and more), and each blacklisting round would find
+more. Character enumeration does not converge, so the set here is a floor
+rather than a boundary. Nor does it close an *intensifier* with no separator
+at all -- "Without doubt one developer
 carries this", "This cannot be overstated: one engineer drives everything"
 without the colon. Punctuation modelling cannot reach that class.
 
@@ -824,6 +828,16 @@ class _DriverMatch:
     promoted: tuple[str, ...]
     #: packet driver ids that claim no expectation, with the reason.
     unexpected: Mapping[str, str]
+    #: expected driver key -> how the claiming driver misstates it.
+    #:
+    #: A driver can bind the right expectation and still describe it wrongly,
+    #: and until verification round 3 nothing noticed: ``category`` and
+    #: ``affected_entity_ids`` were authored on every expectation and read by
+    #: no scorer. Re-labelling the authcore stall an external blocker, or
+    #: attributing it to the owning team instead of the project, both scored
+    #: clean. A field a reader of ``oracles.py`` assumes is checked, and is
+    #: not, is worse than an absent one.
+    misstated: Mapping[str, str]
 
 
 def _match_principal_drivers(
@@ -858,9 +872,11 @@ def _match_principal_drivers(
         for driver in oracle.expected_principal_drivers
     }
 
+    by_key = {driver.driver_key: driver for driver in oracle.expected_principal_drivers}
     claims: dict[str, str] = {}
     promoted: list[str] = []
     unexpected: dict[str, str] = {}
+    misstated: dict[str, str] = {}
 
     for driver in packet.driver_analysis.candidates:
         if driver.standing is not DriverStanding.PRINCIPAL_DRIVER:
@@ -894,7 +910,30 @@ def _match_principal_drivers(
             continue
         claims[key] = driver.driver_id
 
-    return _DriverMatch(claims=claims, promoted=tuple(promoted), unexpected=unexpected)
+        expectation = by_key[key]
+        problems: list[str] = []
+        if driver.category is not expectation.category:
+            problems.append(
+                f"category {driver.category}, expected {expectation.category}"
+            )
+        # Containment, not equality: an arm naming an ADDITIONAL affected
+        # subject has said something extra, which is a judgment call. An arm
+        # that drops an expected one has attributed the driver to the wrong
+        # thing, which is not.
+        missing_subjects = sorted(
+            set(expectation.affected_entity_ids) - set(driver.affected_subject_ids)
+        )
+        if missing_subjects:
+            problems.append(f"does not affect {missing_subjects}")
+        if problems:
+            misstated[key] = f"{driver.driver_id}: " + "; ".join(problems)
+
+    return _DriverMatch(
+        claims=claims,
+        promoted=tuple(promoted),
+        unexpected=unexpected,
+        misstated=misstated,
+    )
 
 
 def _score_principal_driver_precision(
@@ -930,6 +969,11 @@ def _score_principal_driver_precision(
             for driver_id, reason in sorted(match.unexpected.items())
         )
         problems.append(f"principal drivers matching no expected driver: {detail}")
+    if match.misstated:
+        detail = "; ".join(
+            f"{key} -> {reason}" for key, reason in sorted(match.misstated.items())
+        )
+        problems.append(f"expected drivers misstated by their claimant: {detail}")
     return _result(
         _D.PRINCIPAL_DRIVER_PRECISION,
         Verdict.PASS if not problems else Verdict.FAIL,
@@ -1266,10 +1310,15 @@ def _person_attributing_text(packet: AskDevInvestigationPacket) -> list[str]:
 #: P07 witness keeps the common disclaimer shape green.
 #:
 #: Em dash, en dash, hyphen, newline and brackets joined the set after round 2
-#: demonstrated each as a separator a negation could hide behind. Note what
-#: this does NOT fix: an intensifier with no separator at all ("Without doubt
-#: one developer carries this") is a residual, named in the module docstring
-#: and pinned by strict-xfail tests rather than papered over.
+#: demonstrated each as a separator a negation could hide behind.
+#:
+#: This set is a FLOOR, not a boundary. Verification round 3 found eleven more
+#: characters that work -- slash, pipe, tab, middot among them -- and there
+#: will always be more, because the characters a human can put between two
+#: words are not usefully enumerable. Adding them one round at a time buys
+#: nothing but the appearance of closure, so the limit is stated instead of
+#: chased. What actually bounds this check is elsewhere: the structural person
+#: guards, which no amount of punctuation reaches.
 _CLAUSE_BREAKS = re.compile(
     r"[.;:!?,\n\r()\[\]—–-]"
     r"|\bthat\b|\bbut\b|\bhowever\b|\balthough\b|\bbecause\b|\bsince\b"

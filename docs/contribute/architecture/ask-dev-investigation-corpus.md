@@ -371,8 +371,9 @@ claimed twice; and recall credits an expectation only to the principal that
 claims it. Two scorers reading the same binding cannot disagree the way those
 two did.
 
-Also closed: four more separators a negation could hide behind (em dash, en
-dash, hyphen, newline, brackets); a test for the driver-evidence disjointness
+Also closed: five more separators a negation could hide behind (em dash, en
+dash, hyphen, newline, brackets) — a widening of the enumerated set, not a
+closure of the class; a test for the driver-evidence disjointness
 guard, which had none and is *coupled* to the matcher — with it off, an
 overlapping oracle makes a correct witness fail; and an alias-level invariant
 behind the prose scan.
@@ -395,11 +396,36 @@ are simply scanned, which is the safe direction. Writing it over the alias set
 means a *new* alias fails this test, rather than a new field failing something
 subtler later.
 
+### Two authored fields that nothing read
+
+`DriverExpectation.category` and `.affected_entity_ids` were authored on every
+expectation in `oracles.py` and reached by no scorer. Re-labelling the
+authcore dependency stall an `external_blocker`, or attributing it to the
+owning team instead of the project it blocks, both scored **clean** — wrong
+answers passing in the layer whose entire job is scoring, and worse than an
+absent field because a reader of `oracles.py` assumes they are checked.
+
+Both are now scored on the claimed expectation. Affected subjects use
+**containment, not equality**: naming an additional affected subject is a
+judgment call an arm may reasonably make, while dropping an expected one is a
+different claim about the world. A positive control pins that choice, so
+tightening to equality later reads as the behaviour change it would be.
+
 ### The accepted residual: intensifier phrasings
 
-Clause scoping closes every separator-based evasion. It cannot close an
-intensifier with no separator at all — "Without doubt one developer carries
-this". Punctuation modelling does not reach that class.
+Clause scoping closes the separators enumerated in `_CLAUSE_BREAKS` —
+sentence punctuation, comma, colon, semicolon, em dash, en dash, hyphen,
+newline, brackets, and the connectives *that / but / however / although /
+because / since*. **It does not close "every separator": that enumeration is
+inherently open.** Verification found eleven more characters that work
+(slash, pipe, tab, middot, and others), and each round of blacklisting would
+find more, because the space of characters a human can put between two words
+is not finite in any useful sense. Character blacklisting does not converge,
+and we are not going to pretend otherwise by adding another eleven.
+
+The same limit reaches further: an intensifier with no separator at all —
+"Without doubt one developer carries this" — is untouched by any amount of
+punctuation modelling.
 
 The alternative was a disclaimer grammar: exempt a person word only when a
 negation governs it and no attributive verb follows. That closes the

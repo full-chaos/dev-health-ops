@@ -1647,3 +1647,124 @@ def test_intensifier_phrasings_are_a_known_unclosed_evasion(phrasing: str) -> No
         for word in ("developer", "engineer", "individual")
     ), "the residual has been closed -- retire it from the module docstring"
     assert packet is not None
+
+
+# --------------------------------------------------------------------------
+# Independent fix-verification, round 3
+# --------------------------------------------------------------------------
+
+
+def test_a_single_driver_spanning_two_expectations_is_caught() -> None:
+    """The merged-driver rule, isolated.
+
+    Round 3 observed the rule had no coverage of its own: neutering
+    ``len(overlapping) > 1`` failed nothing, because the existing fixture had
+    a second principal and the duplicate-claim branch caught it instead. This
+    shape has exactly ONE principal, so only the merged rule can reject it,
+    and the assertion is on precision specifically.
+    """
+
+    case_id = "S05_multiple_interacting_drivers"
+    assert evaluate_payload(case_id, reference_packet(case_id)).is_clean
+
+    payload = reference_packet(case_id)
+    merged = [
+        driver
+        for driver in payload["driver_analysis"]["candidates"]
+        if driver["driver_id"] == "acr_open_span_correction"
+    ]
+    merged[0]["supporting_evidence_ids"] = [
+        evidence_handle("wi_acr_span_open"),
+        evidence_handle("sc_acr_still_open"),
+    ]
+    payload["driver_analysis"]["candidates"] = merged
+    payload["driver_analysis"]["principal_driver_ids"] = ["acr_open_span_correction"]
+    for entry in payload["evidence_coverage"]["evidence_index"]:
+        entry["supports_driver_ids"] = [
+            item
+            for item in entry["supports_driver_ids"]
+            if item == "acr_open_span_correction"
+        ]
+        if not any(
+            (
+                entry["supports_driver_ids"],
+                entry["supports_entity_ids"],
+                entry["supports_subject_ids"],
+                entry["supports_path_ids"],
+            )
+        ):
+            entry["supports_driver_ids"] = ["acr_open_span_correction"]
+
+    evaluation = evaluate_payload(case_id, payload)
+    assert evaluation.contract_valid, evaluation.contract_error
+    precision = evaluation.by_dimension()[_D.PRINCIPAL_DRIVER_PRECISION]
+    assert precision.verdict is Verdict.FAIL, (
+        "one driver citing two expectations' evidence bound cleanly; only the "
+        "merged-driver rule can reject this shape and it did not"
+    )
+    assert "spans several expected drivers" in precision.detail
+
+
+def test_a_driver_bound_to_the_right_expectation_but_miscategorised_is_caught() -> None:
+    """`DriverExpectation.category` was authored everywhere and read nowhere.
+
+    Re-labelling the authcore dependency stall an external blocker is a wrong
+    answer about what kind of problem this is, and it scored clean until
+    round 3 -- in the layer whose entire job is scoring.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        for driver in payload["driver_analysis"]["candidates"]:
+            if driver["standing"] == "principal_driver":
+                driver["category"] = "external_blocker"
+
+    _assert_caught(
+        "S04_symptom_versus_driver",
+        mutate,
+        _D.PRINCIPAL_DRIVER_PRECISION,
+        "category external_blocker",
+    )
+
+
+def test_a_driver_attributed_to_the_wrong_subject_is_caught() -> None:
+    """`DriverExpectation.affected_entity_ids` was likewise unread.
+
+    Attributing the authcore stall to the owning team instead of the project
+    it blocks is a different claim about the world, and one an arm could
+    plausibly make. Containment, not equality: naming an *extra* affected
+    subject is a judgment call, dropping an expected one is not.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        for driver in payload["driver_analysis"]["candidates"]:
+            if driver["standing"] == "principal_driver":
+                driver["affected_subject_ids"] = ["team_atlas"]
+
+    _assert_caught(
+        "S04_symptom_versus_driver",
+        mutate,
+        _D.PRINCIPAL_DRIVER_PRECISION,
+        "does not affect",
+    )
+
+
+def test_naming_an_extra_affected_subject_is_not_a_failure() -> None:
+    """The containment choice, pinned as a positive control.
+
+    Without this, tightening to equality later would look like a free
+    strengthening rather than the behaviour change it is.
+    """
+
+    payload = reference_packet("S04_symptom_versus_driver")
+    for driver in payload["driver_analysis"]["candidates"]:
+        if driver["standing"] == "principal_driver":
+            driver["affected_subject_ids"] = [
+                *driver["affected_subject_ids"],
+                "team_atlas",
+            ]
+    evaluation = evaluate_payload("S04_symptom_versus_driver", payload)
+    assert evaluation.contract_valid, evaluation.contract_error
+    assert evaluation.is_clean, (
+        "naming an additional affected subject was scored a failure; the rule "
+        f"is containment, not equality ({[f.detail for f in evaluation.failures()]})"
+    )

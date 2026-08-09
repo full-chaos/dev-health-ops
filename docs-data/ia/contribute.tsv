@@ -11,6 +11,7 @@ con-ask-dev-v2	con-arch	/contribute/architecture/ask-dev-contracts-v2/	Ask Dev v
 con-ask-dev-preflight	con-arch	/contribute/architecture/ask-dev-subject-preflight/	Ask Dev subject preflight	architecture	true	public	planned	false	
 con-ask-dev-role-readiness	con-arch	/contribute/architecture/ask-dev-role-readiness/	Ask Dev role readiness	architecture	true	public	planned	false	
 con-ask-dev-investigation-packet	con-arch	/contribute/architecture/ask-dev-investigation-packet/	Ask Dev investigation packet	architecture	true	public	planned	false	
+con-ask-dev-investigation-corpus	con-arch	/contribute/architecture/ask-dev-investigation-corpus/	Ask Dev investigation corpus	architecture	true	public	planned	false	
 con-ask-dev-native-baseline	con-arch	/contribute/architecture/ask-dev-native-baseline/	Ask Dev native baseline	architecture	true	public	planned	false	
 con-dev	contribute	/contribute/development/	Develop and test	landing	true	public	planned	false	
 con-commands	con-dev	/contribute/development/commands/	Common development commands	task-guide	true	public	planned	false	

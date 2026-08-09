@@ -1,0 +1,18 @@
+{
+  "dispositions": [
+    {
+      "case_id": "X01_historical_cohort_membership_delta",
+      "disposition": "unmeasurable",
+      "note": "Deliberately kept in the registry rather than deleted. A case removed for being unmeasurable leaves no trace that the trial cannot answer change questions.",
+      "reason": "CHAOS-3569 (native historical edge validity) is open. SLICE_BOUNDARIES[current_vs_historical].requires_edge_validity is True and the only basis that can back COMPARABLE is OBSERVED_INTERVALS, which no arm can supply today. Scoring this case would measure the absence of CHAOS-3569 and report it as arm quality. It is authored and carried NOT COMPARABLE so the gap stays visible; it is not scored, and it is not a failure."
+    },
+    {
+      "case_id": "X02_person_free_capacity_denominator",
+      "disposition": "not_authorable",
+      "note": "",
+      "reason": "Constructing it requires a per-person availability roster. Person-level productivity, health, workload and staffing data is prohibited, and InvestigationSubjectKind has no person member, so the ground truth this case would need cannot exist in the world and no packet could express its answer. Recorded so the boundary is visible: the trial's capacity questions are answered from assigned-FTE and delivery ratios, never from headcount."
+    }
+  ],
+  "note": "A skipped case is not a failure and is not coverage. Every entry here states why it is not authored, and none of them claims a required corpus topic.",
+  "schema_version": "ask_dev_corpus_dispositions.v1"
+}

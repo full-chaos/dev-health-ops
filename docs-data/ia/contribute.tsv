@@ -13,6 +13,7 @@ con-ask-dev-role-readiness	con-arch	/contribute/architecture/ask-dev-role-readin
 con-ask-dev-investigation-packet	con-arch	/contribute/architecture/ask-dev-investigation-packet/	Ask Dev investigation packet	architecture	true	public	planned	false	
 con-ask-dev-investigation-corpus	con-arch	/contribute/architecture/ask-dev-investigation-corpus/	Ask Dev investigation corpus	architecture	true	public	planned	false	
 con-graph-investigation-arm	con-arch	/contribute/architecture/graph-investigation-arm/	Graph-assisted investigation arm	architecture	true	public	planned	false	
+con-ask-dev-native-baseline	con-arch	/contribute/architecture/ask-dev-native-baseline/	Ask Dev native baseline	architecture	true	public	planned	false	
 con-dev	contribute	/contribute/development/	Develop and test	landing	true	public	planned	false	
 con-commands	con-dev	/contribute/development/commands/	Common development commands	task-guide	true	public	planned	false	
 con-tests	con-dev	/contribute/development/testing/	Testing layers and local validation	task-guide	true	public	planned	false	

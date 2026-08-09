@@ -302,11 +302,11 @@ NATIVE_RELATIONSHIP_CAPABILITY: Mapping[
         _capability(
             RelationshipType.DEPENDS_ON,
             _UNREACHABLE,
-            gap_mechanism=_M.SUBJECT_KIND_ABSENT,
+            gap_mechanism=_M.NO_REGISTERED_ADAPTER,
             detail=(
-                "every allowlisted pair needs a service or dependency endpoint except "
-                "project->project and initiative->project, and the native path has no "
-                "project-level dependency edge at all."
+                "project->project is representable in kind terms, so this is not a "
+                "missing subject kind: no native service emits a project-level "
+                "dependency edge at all, and the work graph is work-item scoped."
             ),
         ),
         _capability(

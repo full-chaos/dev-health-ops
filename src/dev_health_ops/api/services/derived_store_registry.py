@@ -13,13 +13,13 @@ registry entry -- an unmeasured deletion path must fail, not pass silently.
 
 External (non-ClickHouse) derived stores have no migrations-directory
 footprint at all, so the regex scan can never see them regardless of how
-faithful it is. `EXTERNAL_DERIVED_STORES` is the extension point for those --
-e.g. the CHAOS-3499/3500 discovery-lane temporal-graph / extraction-cache
-shadow store. It is empty today: no such store exists yet in this codebase.
+faithful it is. `EXTERNAL_DERIVED_STORES` is the extension point for those.
 `OrganizationDeletionService._purge_external_stores` (org_deletion.py) already
-iterates it on every `delete()` call, so wiring a real store in later is a
-pure registry edit -- add a `DerivedStore(kind=EXTERNAL, visit=...)` entry;
-nothing in the deletion service itself needs to change.
+iterates it on every `delete()` call, so wiring a real store in is a pure
+registry edit -- add a `DerivedStore(kind=EXTERNAL, visit=...)` entry;
+nothing in the deletion service itself needs to change. CHAOS-3617 is the
+first entry: the Context Fabric trial graph store, whose visit is a
+per-organization FalkorDB keyspace drop.
 
 Residual note (recorded per CHAOS-3566 scope): `RetentionService.execute_policy`
 (api/services/retention.py) is a SEPARATE, schedule-driven cleanup path, not
@@ -198,11 +198,46 @@ CLICKHOUSE_DERIVED_STORES: tuple[str, ...] = (
     "worklogs",
 )
 
-#: Non-ClickHouse derived stores org deletion must also visit. Empty today --
-#: no external derived store exists in this codebase yet. CHAOS-3499/3500's
-#: discovery-lane shadow store registers itself here (with a real `visit`
-#: callable) once it lands; nothing else needs to change.
-EXTERNAL_DERIVED_STORES: tuple[DerivedStore, ...] = ()
+async def _visit_context_fabric_graph_trial(org_id: str, dry_run: bool) -> int:
+    """CHAOS-3617: purge the org's partition of the trial graph store.
+
+    Imported lazily, inside the call, on purpose. The trial arm lives under
+    `dev_health_ops.context_fabric` and its Graphiti dependency is an
+    optional extra; importing it at module scope would put a trial-only
+    package (and, transitively, the investigation contract) on the import
+    path of every process that touches org deletion. The lazy import also
+    keeps the arm removable: deleting `context_fabric/` breaks exactly this
+    function and the registry entry below, and nothing else.
+
+    `graph_arm.store.org_deletion_visit` returns 0 and logs when no trial
+    store is configured -- which is the case in production today -- so a
+    deployment without the trial store sees no behavior change at all.
+    """
+
+    from dev_health_ops.context_fabric.graph_arm.store import org_deletion_visit
+
+    return await org_deletion_visit(org_id, dry_run)
+
+
+#: Non-ClickHouse derived stores org deletion must also visit.
+#:
+#: CHAOS-3617 registers the Context Fabric trial graph store here -- the
+#: first entry, and exactly the extension this module was built for. Its
+#: partition is one FalkorDB keyspace per organization, so the visit is a
+#: keyspace drop rather than a traversal that could miss a node.
+EXTERNAL_DERIVED_STORES: tuple[DerivedStore, ...] = (
+    DerivedStore(
+        name="context_fabric_graph_trial",
+        kind=DerivedStoreKind.EXTERNAL,
+        note=(
+            "CHAOS-3617 Context Fabric graph trial store (FalkorDB, one "
+            "keyspace per org, flag-off and shadow-only). Returns the node "
+            "count visited/deleted. Returns 0 when the trial store is not "
+            "configured, which is the production default."
+        ),
+        visit=_visit_context_fabric_graph_trial,
+    ),
+)
 
 
 def registered_clickhouse_tables() -> frozenset[str]:

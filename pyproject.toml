@@ -120,6 +120,22 @@ dev = [
   "types-jsonschema>=4.20.0",
 ]
 enterprise-sso = ["signxml>=3.0.0"]
+# CHAOS-3617: the Context Fabric graph trial arm.
+#
+# Graphiti is a reference implementation **under evaluation, not an approved
+# dependency**, so it is confined to this extra and must never move into the
+# default `dependencies` list. `dev_health_ops.context_fabric.graph_arm`
+# imports it lazily, so an environment without this extra installed runs the
+# whole test suite and the whole production import graph unchanged --
+# `tests/context_fabric/test_chaos_3617_removability.py` pins that.
+#
+# Pinned to an exact version: the trial records dependency versions in its
+# artifacts, and a floating range would make two runs of "the same" arm
+# incomparable. The `falkordb` extra is the trial datastore driver; `kuzu`
+# is deliberately absent because it has no wheel for this repository's
+# Python and its sdist build fails (see the backend-choice note in
+# docs/contribute/architecture/context-fabric-graph-arm.md).
+context-graph-trial = ["graphiti-core[falkordb]==0.29.3"]
 
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"
@@ -267,6 +283,15 @@ module = [
   "riverqueue.*",
   "motor",
   "motor.*",
+  # CHAOS-3617: graphiti-core is a reference implementation under
+  # evaluation, not an approved dependency. It lives in the optional
+  # `context-graph-trial` extra, so it is absent from most environments --
+  # including whichever one runs the typecheck gate. The trial arm imports
+  # it lazily and only under `TYPE_CHECKING` at module scope.
+  "graphiti_core",
+  "graphiti_core.*",
+  "falkordb",
+  "falkordb.*",
 ]
 ignore_missing_imports = true
 

@@ -50,9 +50,10 @@ _ARM_ROOT = (
     / "graph_arm"
 )
 
-#: Parameter names through which a caller could name a graph partition. Every
-#: spelling the backends use, not just Graphiti's: the rule is about the
-#: capability, and renaming the field must not be a way around it.
+#: Parameter names through which a caller could name a graph PARTITION —
+#: a storage location. Every spelling the backends use, not just Graphiti's:
+#: the rule is about the capability, and renaming the field must not be a way
+#: around it.
 _PARTITION_PARAMETERS = frozenset(
     {
         "group_id",
@@ -66,9 +67,27 @@ _PARTITION_PARAMETERS = frozenset(
         "graph_name",
         "keyspace",
         "namespace",
-        "tenant",
-        "tenant_id",
     }
+)
+
+#: Names for the ORGANIZATION, which is a different thing and is *supposed*
+#: to be a parameter.
+#:
+#: This list started out inside ``_PARTITION_PARAMETERS`` — I put ``tenant``
+#: and ``tenant_id`` there — and the guard duly fired on the corpus adapter's
+#: ``corpus_batch(tenant_id)``. That was the guard being wrong, not the code:
+#: ``org_id`` was never in the list, because the arm's entire design is that
+#: the server supplies the organization and the arm *derives* the partition
+#: from it. ``tenant_id`` is the corpus's word for ``org_id``, so treating
+#: them differently was an inconsistency, not a safeguard.
+#:
+#: Relaxing a guard to make new code pass is exactly the move that deserves
+#: suspicion, so the compensating assertion is below: every one of these
+#: identifiers must still reach ``partition_for_org``, i.e. the derivation is
+#: not bypassed. What must never exist is a parameter naming the storage
+#: location directly.
+_ORGANIZATION_PARAMETERS = frozenset(
+    {"org_id", "organization_id", "tenant", "tenant_id"}
 )
 
 #: ``module.qualname`` -> why this one is allowed to take a partition.
@@ -171,6 +190,44 @@ class TestNoPartitionParameterExists:
     def test_every_exemption_states_a_reason(self) -> None:
         for name, reason in _EXEMPT.items():
             assert reason.strip(), name
+
+    def test_the_two_parameter_families_are_disjoint(self) -> None:
+        """An organization is not a partition, and neither list may absorb
+        the other."""
+
+        assert not (_PARTITION_PARAMETERS & _ORGANIZATION_PARAMETERS)
+
+    def test_an_organization_identifier_still_reaches_partition_derivation(
+        self,
+    ) -> None:
+        """The compensating assertion for relaxing the list above.
+
+        Accepting ``tenant_id``/``org_id`` is only safe while the partition
+        is *derived* from it. If some path ever took an organization and
+        reached the store without going through ``partition_for_org``, the
+        relaxation would have opened the hole it was argued not to.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm import corpus_adapter, identity
+
+        batch = corpus_adapter.corpus_batch("org_helio")
+        projection = build_projection(batch)
+        assert projection.partition == identity.partition_for_org("org_helio")
+        assert projection.org_id == "org_helio"
+
+    def test_no_public_callable_names_a_storage_location(self) -> None:
+        """Restated positively: the ban is on partitions, not organizations."""
+
+        offenders: dict[str, list[str]] = {}
+        for qualname, args in _public_callables():
+            hits = sorted(_parameter_names(args) & _PARTITION_PARAMETERS)
+            if not hits:
+                continue
+            key = qualname.rsplit(".", 2)
+            if f"{key[0]}.{key[-1]}" in _EXEMPT:
+                continue
+            offenders[qualname] = hits
+        assert not offenders, offenders
 
 
 class TestPublicEntryPointsRejectTheKeyword:

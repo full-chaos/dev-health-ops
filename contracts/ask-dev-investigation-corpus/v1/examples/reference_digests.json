@@ -1,0 +1,158 @@
+{
+  "digests": [
+    {
+      "case_id": "T01_clearly_struggling_team",
+      "sha256": "e1f9de354d8e96d00eb07cf247b8e0f9a0c65f140aa16eee5b0ed840af6ddc99"
+    },
+    {
+      "case_id": "T02_high_wip_without_struggle",
+      "sha256": "79ba9899aa2b4f4ff59975ca9be0368988f768ea1a9ce9459d31f4401309cd68"
+    },
+    {
+      "case_id": "T03_operational_displaces_feature",
+      "sha256": "e76e516d7901d1f881a5ae4793f0e6ed74f101375c11ef6552f34a042612cbf3"
+    },
+    {
+      "case_id": "T04_review_pressure_across_projects",
+      "sha256": "140f5ea38d382b5f32c09af16f7c4e197359915eb0b3076dfc6a378a0de10f00"
+    },
+    {
+      "case_id": "T05_stale_source_data",
+      "sha256": "056d3e203cecee046e4294d9fdfbf03b0b133a2b4a0d3c56c53f161559af73af"
+    },
+    {
+      "case_id": "T06_healthy_despite_noisy_metric",
+      "sha256": "338404727681f951c0e2bc2d03efe40ed34f89a6ab4773ec429cd9778774084e"
+    },
+    {
+      "case_id": "T07_going_sideways_open_question",
+      "sha256": "a9b065f871a953b2d2ae2219c94d4a0e68fde672824bc80a39d6f0cffb084ea1"
+    },
+    {
+      "case_id": "P01_demand_exceeds_capacity",
+      "sha256": "87bf52c3fb2c58fdb5158d0a2bc7806d9adcf1fd0c55ef6ea9729663fb1f62b6"
+    },
+    {
+      "case_id": "P02_critical_path_few_contributors",
+      "sha256": "e0603ed3e42c8d4365ff2160b4ab0d42965d0131c60189dfe0e74dc4c73729bb"
+    },
+    {
+      "case_id": "P03_lightly_loaded_project",
+      "sha256": "06eae9e67a5c63c8d9df37b452782667b80acc6f33e7d7f14b5a93bb47e35881"
+    },
+    {
+      "case_id": "P04_misleading_contributor_count",
+      "sha256": "c15c328cf5ffd5826cb0899ac695e8eef15c2e58f121a75b44d4c03ba777e786"
+    },
+    {
+      "case_id": "P05_allocation_absent_still_supportable",
+      "sha256": "25f164b7becf71efb0ae1ebf8406b17fda2b04feffdce8d1518b0cd7833256dc"
+    },
+    {
+      "case_id": "P06_no_evidence_for_staffing_conclusion",
+      "sha256": "b421b42c561a547c9119fd733b911025395eb789602c196a0d42084ac48823af"
+    },
+    {
+      "case_id": "P07_overstaffed_language",
+      "sha256": "fca09038fe96a06439dbc22c2a5c02f27ff0ce47414deab0b92a2f01e1097905"
+    },
+    {
+      "case_id": "S01_declared_versus_child_completion",
+      "sha256": "bd7d8cb307a524b67482060c7352e01934cd57ea718952c901c0cc49ccdb4ce3"
+    },
+    {
+      "case_id": "S02_implementation_versus_release_readiness",
+      "sha256": "104af2133bead1c47e4ef9b4d0ed3abee44dab5ac40493bc8bebdba9cea04279"
+    },
+    {
+      "case_id": "S03_shared_dependency_portfolio_risk",
+      "sha256": "2404bd65f11dff24bbd73e5507abb86e2b4729b20cd9fab6be12def23b219e13"
+    },
+    {
+      "case_id": "S04_symptom_versus_driver",
+      "sha256": "7c09e406a550475b65f4a8d67d317b4b2a99223f8ecb1ca3816c16b59a0a1493"
+    },
+    {
+      "case_id": "S05_multiple_interacting_drivers",
+      "sha256": "3693f681f2e77920b4aa0d5aa293d67ba891ad643ee9bd60ef3ac310274d0e49"
+    },
+    {
+      "case_id": "S06_declared_complete_without_delivery_evidence",
+      "sha256": "068a46b54b4e628d96851794f5be7d939af4822c8f18e95c76d5bc4e426e92ae"
+    },
+    {
+      "case_id": "S07_renamed_and_superseded_project",
+      "sha256": "0dc3677eb6e65f9bf1be23e212eb503f94d435be03b628679c4a4ad2ef34ede7"
+    },
+    {
+      "case_id": "H01_acronym_resolution",
+      "sha256": "b5b9397a9dd4c95db1f2f361508cf9dfe2895fc5098a61b8d7c3a8695359784f"
+    },
+    {
+      "case_id": "H02_old_and_current_name",
+      "sha256": "c22b46f5b279c015bd6fd8be56eeeb13aeda1994609d67d01bcc73a364895566"
+    },
+    {
+      "case_id": "H03_the_auth_work",
+      "sha256": "2fb2f372da7b706460abca3337d0c45370e87b541713d137f392aadb1b1d727b"
+    },
+    {
+      "case_id": "H04_pronoun_follow_up",
+      "sha256": "09883bda70c44c8166f5efe22d0b0fe8676d52d21976e87a2707953f1ebc9317"
+    },
+    {
+      "case_id": "H05_the_other_project_we_discussed",
+      "sha256": "3aa850390c4e270bce892aa0cb13568cbea46f254e49e7d2342128aea80fc3cc"
+    },
+    {
+      "case_id": "H06_prior_attempt_reference",
+      "sha256": "910ccfc5b3eed41e0b0565b61b125286abd707ab159e87d15b010667a68cebe3"
+    },
+    {
+      "case_id": "H07_unresolved_needs_candidates",
+      "sha256": "2d390abedc07fa26140eb0eb85323808c3df858deb372d62a44c84234a54a5df"
+    },
+    {
+      "case_id": "H08_no_match_must_not_widen",
+      "sha256": "259f68e4ff597b8cefc35007db53ac851636edfdad13fb8e2ea80ae3d70b04b1"
+    },
+    {
+      "case_id": "A01_cross_tenant_near_duplicate",
+      "sha256": "2d67631a0fa17baaf76cb2d3340a075f82b1d1cafbb499c44725012681b5a981"
+    },
+    {
+      "case_id": "A02_keyword_stuffed_evidence",
+      "sha256": "041e6910d8cc1d11bdb3bb1322f7d45d5a4dae0f58b9297f438745d0dc9a88c0"
+    },
+    {
+      "case_id": "A03_false_relationship_on_real_entity",
+      "sha256": "872bee6bfb602008094393a59d41e43fe6efa0a1156acb6ec76cee5f7de3ba3c"
+    },
+    {
+      "case_id": "A04_prompt_injection_in_document",
+      "sha256": "515c38b451da2d0daaa31ed758fda7790a6cf2fdc9358d1e5003d10efcef2c39"
+    },
+    {
+      "case_id": "A05_person_level_bait",
+      "sha256": "a64e6dd153568ba628f7764042b8d634ffc4b0f47389c927e2b8bfb5b92a6935"
+    },
+    {
+      "case_id": "A06_unsupported_staffing_certainty",
+      "sha256": "c40b5fcdb2575456246e9bd6112d527e642249d88b65ccd5822f5e82d25e6793"
+    },
+    {
+      "case_id": "A07_revoked_and_redacted_evidence",
+      "sha256": "9310d1a8cc0fc677da6ec5f2b25aeba538b7b47446fadd22178cfd713872100b"
+    },
+    {
+      "case_id": "A08_stale_and_truncated_state",
+      "sha256": "d50e73bf0cc2881848f2b7d02dde2e3751ab170e0fad828135ee21197cb9ec37"
+    },
+    {
+      "case_id": "A09_unauthorized_same_tenant_entity",
+      "sha256": "ffd6ca77f0131133d1d7490b02a27b1de96670292131988950b189c9e945c6be"
+    }
+  ],
+  "note": "Reproduce with: python -c \"import json; from dev_health_ops.api.dev.investigation_corpus.reference import reference_packet; print(json.dumps(reference_packet(CASE), indent=2, sort_keys=True))\". These are satisfiability witnesses, not arm output.",
+  "schema_version": "ask_dev_corpus_reference_digests.v1"
+}

@@ -638,6 +638,12 @@ _CASES: tuple[CorpusCase, ...] = (
             _D.PRINCIPAL_DRIVER_PRECISION,
             _D.SYMPTOM_VERSUS_DRIVER_DISTINCTION,
             _D.CURRENT_RELEVANCE,
+            # Scored here and not only on S01 because this is the one case
+            # whose forbidden path is a relationship that genuinely exists in
+            # the world. A fabricated edge is caught by the world-existence
+            # check; only a real-but-wrong-here edge exercises the
+            # forbidden-path expectation itself.
+            _D.LINEAGE_PATH_PRECISION,
         ),
         _A.DIRECT,
         _SHAPE.SINGULAR_SUBJECT,

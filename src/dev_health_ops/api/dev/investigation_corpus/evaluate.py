@@ -507,9 +507,12 @@ def _score_relevant_entity_recall(
 ) -> DimensionResult:
     if not oracle.required_entity_ids:
         return _na(_D.RELEVANT_ENTITY_RECALL, "the case requires no related entity")
+    # Scoped to ``related_context.entities`` because that is the field the
+    # frozen registry names for this dimension. Counting cohort members and
+    # committed subjects as well made the dimension unfailable on every
+    # cohort-bearing case: the entity was always "present" somewhere, so a
+    # packet that found none of the related context still scored full recall.
     present = {entity.entity_id for entity in packet.related_context.entities}
-    present |= {member.canonical_id for member in packet.comparison_cohort.members}
-    present |= _committed_ids(packet)
     missing = sorted(set(oracle.required_entity_ids) - present)
     return _result(
         _D.RELEVANT_ENTITY_RECALL,

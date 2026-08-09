@@ -1,0 +1,87 @@
+{
+  "artifact_root_note": "A sibling of contracts/ask-dev-investigation/v1 rather than a member of it. That tree is the frozen CHAOS-3615 contract and its drift gate rejects any unexpected file, so corpus output there would couple every corpus iteration to the contract's freeze.",
+  "authorization_policy": {
+    "note": "ZERO_UNAUTHORIZED_RESULTS is scored against world/principals.json, not against the packet's own authorized_entity_ids. The contract proves internal consistency with that declaration; only the world can prove the declaration is true.",
+    "producer_declaration_is_not_evidence": true
+  },
+  "compatibility": "internal-trial-artifact-not-client-served",
+  "corpus_version": "ask_dev_investigation_corpus.v1",
+  "counts": {
+    "cases_authored": 38,
+    "cases_total": 40,
+    "entities": 50,
+    "episodes": 3,
+    "evidence_records": 67,
+    "measurements": 35,
+    "oracles": 38,
+    "relationships": 71,
+    "required_topics": 40,
+    "source_feeds": 16
+  },
+  "files": [
+    {
+      "path": "examples/reference/H05_the_other_project_we_discussed.json",
+      "sha256": "3aa850390c4e270bce892aa0cb13568cbea46f254e49e7d2342128aea80fc3cc"
+    },
+    {
+      "path": "examples/reference/S03_shared_dependency_portfolio_risk.json",
+      "sha256": "2404bd65f11dff24bbd73e5507abb86e2b4729b20cd9fab6be12def23b219e13"
+    },
+    {
+      "path": "examples/reference/S04_symptom_versus_driver.json",
+      "sha256": "7c09e406a550475b65f4a8d67d317b4b2a99223f8ecb1ca3816c16b59a0a1493"
+    },
+    {
+      "path": "examples/reference_digests.json",
+      "sha256": "98d69244f3237036309dc0b1be27b26a37bd028533b3052ca0a4e02ff7e5df86"
+    },
+    {
+      "path": "registries/cases.json",
+      "sha256": "9156ea18ad1c5bbb709027a56f3a0ca223a01610124215c52446d7d55bc29cba"
+    },
+    {
+      "path": "registries/coverage_matrix.json",
+      "sha256": "ad2895207722f9bae7174a38cd7111dd787a5e97666c3930814fa85a37c7345e"
+    },
+    {
+      "path": "registries/dispositions.json",
+      "sha256": "5bd174c74f92827672484828e29a4b0363452933648c5ba163f4586ae82778bb"
+    },
+    {
+      "path": "registries/oracles.json",
+      "sha256": "4e4aa15302a233deb0f46bbbf8f4a1fe95864bd4c425f58162110a1ebc5dd198"
+    },
+    {
+      "path": "world/entities.json",
+      "sha256": "807f508dad9f51ffaf1fbd0a6c3b8203d22e44228cca445c02a04d4457879ace"
+    },
+    {
+      "path": "world/evidence.json",
+      "sha256": "6fb59cd603f39b18e411f266fd4a585ce59cc0c6a15010fff48d7124e5500951"
+    },
+    {
+      "path": "world/principals.json",
+      "sha256": "98fd98b882f02e39de15975d33fdace3f631b2ff834c78aec47944783e12c915"
+    },
+    {
+      "path": "world/relationships.json",
+      "sha256": "d9111172c04e0b2e167e66d364143609657c311554c83735b21ea2a89adef03c"
+    },
+    {
+      "path": "world/source_manifest.json",
+      "sha256": "b6824ffe15044cf67a326fe948167d50edfa94fbf8c3cf2bac65311b8c9d5657"
+    }
+  ],
+  "pinned_clock": {
+    "trial_now": "2026-08-08 12:00:00Z",
+    "window_end": "2026-08-08 00:00:00Z",
+    "window_start": "2026-07-09 00:00:00Z",
+    "world_epoch": "2026-04-01 00:00:00Z"
+  },
+  "schema_version": "ask_dev_investigation_corpus_manifest.v1",
+  "validation_policy": {
+    "canonical_validator": "dev_health_ops.api.dev.investigation_contract.packet.AskDevInvestigationPacket",
+    "note": "The evaluation layer runs the canonical Pydantic validator on every packet before scoring it, per the contract manifest's own validation_policy. A consumer that schema-validates and stops has checked none of the cross-field rules.",
+    "schema_only_validation_is_sufficient": false
+  }
+}

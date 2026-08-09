@@ -1,0 +1,460 @@
+{
+  "analytical_job": {
+    "comparison_shape": "discovered_cohort",
+    "conversation_reference_ids": [],
+    "interpretation_limitations": [
+      {
+        "detail": "The question names no single subject, so the analytical job was interpreted broadly and the chosen reading is stated rather than assumed.",
+        "kind": "interpretation_uncertainty"
+      }
+    ],
+    "job_id": "job_S03_shared_dependency_portfolio_risk",
+    "job_statement": "One dependency, three exposed projects",
+    "job_uncertainty": "broad_with_uncertainty",
+    "question_family": "portfolio_dependency_risk",
+    "schema_version": "ask_dev_analytical_job.v1",
+    "surface_context_refs": [],
+    "time_context": {
+      "analytical_slice": "current",
+      "as_of": null,
+      "edge_validity_basis": "not_required",
+      "end": "2026-08-08 00:00:00Z",
+      "historical_comparability": "not_applicable",
+      "start": "2026-07-09 00:00:00Z",
+      "timezone": "UTC"
+    }
+  },
+  "comparison_cohort": {
+    "authorization_filtered_count": 0,
+    "cohort_id": "cohort_S03_shared_dependency_portfolio_risk",
+    "cohort_uncertainty": null,
+    "comparison_shape": "discovered_cohort",
+    "completeness": "complete",
+    "exclusions": [],
+    "members": [
+      {
+        "canonical_id": "proj_identity_rewrite",
+        "display_label": "Identity Platform Rewrite",
+        "inclusion_basis": [
+          "comparable_delivery_profile"
+        ],
+        "inclusion_evidence_classification": "canonical_registry_membership",
+        "inclusion_evidence_ids": [],
+        "inclusion_rationale": "Included because the world's canonical registry places it in the comparison set this question asks about.",
+        "relevance": "current",
+        "subject_kind": "project"
+      },
+      {
+        "canonical_id": "proj_pulse",
+        "display_label": "Pulse Analytics",
+        "inclusion_basis": [
+          "comparable_delivery_profile"
+        ],
+        "inclusion_evidence_classification": "canonical_registry_membership",
+        "inclusion_evidence_ids": [],
+        "inclusion_rationale": "Included because the world's canonical registry places it in the comparison set this question asks about.",
+        "relevance": "current",
+        "subject_kind": "project"
+      },
+      {
+        "canonical_id": "proj_beacon",
+        "display_label": "Beacon Ingest",
+        "inclusion_basis": [
+          "comparable_delivery_profile"
+        ],
+        "inclusion_evidence_classification": "canonical_registry_membership",
+        "inclusion_evidence_ids": [],
+        "inclusion_rationale": "Included because the world's canonical registry places it in the comparison set this question asks about.",
+        "relevance": "current",
+        "subject_kind": "project"
+      }
+    ],
+    "schema_version": "ask_dev_comparison_cohort.v1",
+    "supported_comparison_dimensions": [
+      "delivery_throughput",
+      "review_load"
+    ],
+    "truncation_reason": null
+  },
+  "driver_analysis": {
+    "candidates": [
+      {
+        "affected_subject_ids": [
+          "proj_identity_rewrite",
+          "proj_pulse",
+          "proj_beacon"
+        ],
+        "assertion_basis": "measured",
+        "category": "dependency_pressure",
+        "confidence_qualifier": "measured_certain",
+        "conflict_note": null,
+        "conflicting_evidence_ids": [],
+        "driver_id": "authcore_release_stall",
+        "exclusion_reason": null,
+        "relevance": "current",
+        "role": "driver",
+        "staffing_qualification": null,
+        "standing": "principal_driver",
+        "summary": "One unreleased dependency, three exposed projects. No per-project chart contains this.",
+        "supporting_evidence_ids": [
+          "ev1_a252f51bd4881be4206087fe708a7d7120cb19a4",
+          "ev1_ef4e54754e6e11ec27398c33fb4707a6cf780962"
+        ],
+        "supporting_path_ids": [
+          "path_1",
+          "path_2",
+          "path_3"
+        ]
+      }
+    ],
+    "candidates_truncated": false,
+    "principal_driver_ids": [
+      "authcore_release_stall"
+    ],
+    "schema_version": "ask_dev_driver_analysis.v1",
+    "truncation_reason": null
+  },
+  "evidence_coverage": {
+    "authorization_filtered_count": 0,
+    "clarification_needs": [],
+    "conflicts": [],
+    "evidence_index": [
+      {
+        "evidence": {
+          "citation_text": "Three projects declare a dependency on authcore.",
+          "confidence": 1.0,
+          "display_label": "authcore dependents",
+          "entity_id": "dep_authcore",
+          "entity_type": "dependency",
+          "evidence_ref_id": "ev1_a252f51bd4881be4206087fe708a7d7120cb19a4",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/dependency/dep_authcore",
+            "source_url": null
+          },
+          "observed_at": "2026-07-10 00:00:00Z",
+          "provenance": "Corpus source record wg_authcore_shared",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_graph",
+        "supports_driver_ids": [
+          "authcore_release_stall"
+        ],
+        "supports_entity_ids": [
+          "dep_authcore"
+        ],
+        "supports_path_ids": [],
+        "supports_subject_ids": [
+          "dep_authcore"
+        ]
+      },
+      {
+        "evidence": {
+          "citation_text": "Release work unit open; blocks three dependent projects.",
+          "confidence": 1.0,
+          "display_label": "authcore 2.0 release",
+          "entity_id": "wu_authcore_release",
+          "entity_type": "work_unit",
+          "evidence_ref_id": "ev1_ef4e54754e6e11ec27398c33fb4707a6cf780962",
+          "flags": {},
+          "freshness": "fresh",
+          "link": {
+            "internal_path": "/work/work_unit/wu_authcore_release",
+            "source_url": null
+          },
+          "observed_at": "2026-08-07 00:00:00Z",
+          "provenance": "Corpus source record wi_authcore_release_open",
+          "repository_ids": [],
+          "schema_version": "dev_evidence_ref.v1",
+          "source_system": "dev_health_corpus",
+          "source_version": "ask_dev_investigation_corpus.v1",
+          "valid_entity_ids": []
+        },
+        "relevance": "current",
+        "source_class": "work_item",
+        "supports_driver_ids": [
+          "authcore_release_stall"
+        ],
+        "supports_entity_ids": [],
+        "supports_path_ids": [],
+        "supports_subject_ids": []
+      }
+    ],
+    "evidence_truncated": false,
+    "limitations": [],
+    "missing_sources": [],
+    "schema_version": "ask_dev_evidence_coverage.v1",
+    "source_health": [
+      {
+        "detail": "Read and found to carry nothing bearing on this question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "source_class": "deployment",
+        "state": "available_current"
+      },
+      {
+        "detail": "Read and found to carry nothing bearing on this question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "source_class": "incident",
+        "state": "available_current"
+      }
+    ],
+    "truncation_reason": null
+  },
+  "organization_id": "org_helio",
+  "outcome": "supported",
+  "packet_id": "50ff064c-f77f-2b36-6270-68d9d5d8643e",
+  "produced_at": "2026-08-08 12:00:00Z",
+  "related_context": {
+    "authorization_filtered_count": 0,
+    "authorized_entity_ids": [
+      "dep_authcore",
+      "proj_beacon",
+      "proj_identity_rewrite",
+      "proj_pulse",
+      "wu_authcore_release"
+    ],
+    "entities": [
+      {
+        "display_label": "authcore",
+        "entity_id": "dep_authcore",
+        "entity_kind": "dependency",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_1",
+          "path_2",
+          "path_3"
+        ]
+      },
+      {
+        "display_label": "Identity Platform Rewrite",
+        "entity_id": "proj_identity_rewrite",
+        "entity_kind": "project",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_1"
+        ]
+      },
+      {
+        "display_label": "Pulse Analytics",
+        "entity_id": "proj_pulse",
+        "entity_kind": "project",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_2"
+        ]
+      },
+      {
+        "display_label": "Beacon Ingest",
+        "entity_id": "proj_beacon",
+        "entity_kind": "project",
+        "inclusion_reason": "Reached by a traversed relationship that bears on the question.",
+        "observed_at": "2026-08-08 00:00:00Z",
+        "relevance": "current",
+        "supporting_path_ids": [
+          "path_3"
+        ]
+      }
+    ],
+    "entities_truncated": false,
+    "paths": [
+      {
+        "evidence_ref_ids": [],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08 00:00:00Z",
+            "relationship": "depends_on",
+            "relevance": "current",
+            "source_entity_id": "proj_identity_rewrite",
+            "source_entity_kind": "project",
+            "target_entity_id": "dep_authcore",
+            "target_entity_kind": "dependency"
+          }
+        ],
+        "inclusion_reason": "Traversed because it is part of the mechanism this question asks about.",
+        "origin_entity_id": "proj_identity_rewrite",
+        "path_id": "path_1",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "dep_authcore",
+        "truncated": false,
+        "truncation_reason": null
+      },
+      {
+        "evidence_ref_ids": [],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08 00:00:00Z",
+            "relationship": "depends_on",
+            "relevance": "current",
+            "source_entity_id": "proj_pulse",
+            "source_entity_kind": "project",
+            "target_entity_id": "dep_authcore",
+            "target_entity_kind": "dependency"
+          }
+        ],
+        "inclusion_reason": "Traversed because it is part of the mechanism this question asks about.",
+        "origin_entity_id": "proj_pulse",
+        "path_id": "path_2",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "dep_authcore",
+        "truncated": false,
+        "truncation_reason": null
+      },
+      {
+        "evidence_ref_ids": [],
+        "hops": [
+          {
+            "direction": "forward",
+            "observed_at": "2026-08-08 00:00:00Z",
+            "relationship": "depends_on",
+            "relevance": "current",
+            "source_entity_id": "proj_beacon",
+            "source_entity_kind": "project",
+            "target_entity_id": "dep_authcore",
+            "target_entity_kind": "dependency"
+          }
+        ],
+        "inclusion_reason": "Traversed because it is part of the mechanism this question asks about.",
+        "origin_entity_id": "proj_beacon",
+        "path_id": "path_3",
+        "relevance": "current",
+        "source_health": "available_current",
+        "terminal_entity_id": "dep_authcore",
+        "truncated": false,
+        "truncation_reason": null
+      }
+    ],
+    "paths_truncated": false,
+    "schema_version": "ask_dev_related_context.v1",
+    "truncation_reason": null
+  },
+  "schema_version": "ask_dev_investigation_packet.v1",
+  "subject_discovery": {
+    "authorization_filtered_count": 0,
+    "candidates": [
+      {
+        "candidate_id": "cand_1",
+        "canonical_id": "dep_authcore",
+        "commitment_state": "proposed",
+        "display_label": "authcore",
+        "match_confidence": 0.4,
+        "match_rationale": "Matched authcore on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "authcore",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 1,
+        "relevance": "current",
+        "subject_kind": "dependency"
+      },
+      {
+        "candidate_id": "cand_2",
+        "canonical_id": "proj_identity_rewrite",
+        "commitment_state": "proposed",
+        "display_label": "Identity Platform Rewrite",
+        "match_confidence": 0.4,
+        "match_rationale": "Matched Identity Platform Rewrite on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Identity Platform Rewrite",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 2,
+        "relevance": "current",
+        "subject_kind": "project"
+      },
+      {
+        "candidate_id": "cand_3",
+        "canonical_id": "proj_pulse",
+        "commitment_state": "proposed",
+        "display_label": "Pulse Analytics",
+        "match_confidence": 0.4,
+        "match_rationale": "Matched Pulse Analytics on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Pulse Analytics",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 3,
+        "relevance": "current",
+        "subject_kind": "project"
+      },
+      {
+        "candidate_id": "cand_4",
+        "canonical_id": "proj_beacon",
+        "commitment_state": "proposed",
+        "display_label": "Beacon Ingest",
+        "match_confidence": 0.4,
+        "match_rationale": "Matched Beacon Ingest on exact_display_name.",
+        "match_signals": [
+          {
+            "evidence_ref_ids": [],
+            "matched_text": "Beacon Ingest",
+            "signal": "exact_display_name",
+            "source_class": "work_graph"
+          }
+        ],
+        "rank": 4,
+        "relevance": "current",
+        "subject_kind": "project"
+      }
+    ],
+    "candidates_truncated": false,
+    "committed_subject_ids": [],
+    "schema_version": "ask_dev_subject_discovery.v1",
+    "truncation_reason": null,
+    "unresolved_mentions": []
+  },
+  "versions": {
+    "corpus_version": "ask_dev_investigation_corpus.v1",
+    "packet_schema_version": "ask_dev_investigation_packet.v1",
+    "projection_version": "corpus_reference_projection.v1",
+    "query_version": "corpus_reference_query.v1",
+    "ranking_version": "corpus_reference_ranking.v1",
+    "schema_version": "ask_dev_investigation_versions.v1",
+    "source_contract_versions": [
+      {
+        "contract_version": "deployment.v1",
+        "source_class": "deployment"
+      },
+      {
+        "contract_version": "incident.v1",
+        "source_class": "incident"
+      },
+      {
+        "contract_version": "work_graph.v1",
+        "source_class": "work_graph"
+      },
+      {
+        "contract_version": "work_item.v1",
+        "source_class": "work_item"
+      }
+    ],
+    "trial": null
+  }
+}

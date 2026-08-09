@@ -64,6 +64,7 @@ from .evaluate import (
     evaluate_case,
     evaluate_payload,
 )
+from .export import ARTIFACT_ROOT, check_artifacts, expected_artifacts, write_artifacts
 from .oracles import (
     CASE_ORACLES,
     CaseOracle,
@@ -119,6 +120,10 @@ from .world import (
 
 __all__ = [
     "ALL_CASE_IDS",
+    "ARTIFACT_ROOT",
+    "check_artifacts",
+    "expected_artifacts",
+    "write_artifacts",
     "CASE_ORACLES",
     "AuthorizationAudit",
     "CaseEvaluation",

@@ -24,6 +24,7 @@ innocuous-looking simplification reintroduces which false claim:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -203,9 +204,28 @@ class TestOrientationIsReadFromDirectionNotTraversalOrder:
     its own blocker.
 
     ``PathStep`` separates traversal order from canonical orientation
-    precisely so this is detectable. The rules now read ``direction``; these
-    tests seed BOTH ends of every directed family so a regression cannot
-    hide on the side nobody looks at.
+    precisely so this is detectable. The rules read ``direction`` now, and
+    these tests seed BOTH ends of each family that has a direction to get
+    wrong.
+
+    **The exact scope, because the earlier wording over-claimed.** This class
+    said it swept "every directed family". It does not, and cannot: of the
+    contract's **twelve** relationship types, only **four** reach a
+    role-deciding site — ``blocked_by`` and ``depends_on`` through
+    :func:`~.drivers._blocking_candidates`, ``parent_of`` and
+    ``contributes_to`` through :func:`~.drivers._open_child_candidates`. The
+    other eight never reach :func:`~.drivers._canonical_endpoints` at all, so
+    there is no orientation decision to get backwards for them. Those four are
+    swept from both ends; that is the honest claim, and it is a stronger one
+    than a vaguer sweep of twelve would have been.
+
+    ``parent_of`` was the last of the four to get its own coverage.
+    Adversarial verification found the ``PARENT_OF`` arm of the child rule
+    mutation-survivable: collapsing both branches onto the ``contributes_to``
+    reading passed the whole suite, because the corpus reaches the child rule
+    only through ``contributes_to`` and the corpus-wide sweep below filtered
+    to ``drv_block_*``. Both halves of that gap are closed here — probes for
+    the family, and the sweep widened to the child rule's findings.
     """
 
     @pytest.mark.parametrize(
@@ -272,15 +292,77 @@ class TestOrientationIsReadFromDirectionNotTraversalOrder:
         leaked = sorted(name for name in from_child if name.startswith("drv_open_"))
         assert not leaked, leaked
 
+    @staticmethod
+    def _parent_of_world(*, statuses):
+        """``wu_one parent_of wu_two``, built through the real projection.
+
+        ``WORK_UNIT -> WORK_UNIT`` is one of the orientations the frozen
+        allowlist permits for ``parent_of``, so this edge is one the arm can
+        genuinely hold rather than a fixture shape it could never store. The
+        cited record is about ``wu_two``, an endpoint, so it vouches under the
+        support rule and the finding turns on orientation and nothing else.
+        """
+
+        return _probe_world(
+            relationships=(
+                ("wu_one", RelationshipType.PARENT_OF, "wu_two", ("obs_p",)),
+            ),
+            observations=(("obs_p", "wu_two"),),
+            statuses=statuses,
+        )
+
+    def test_a_parent_of_edge_yields_the_open_child_from_the_parent_end(
+        self,
+    ) -> None:
+        """The capability half, on the family the corpus never exercises.
+
+        ``wu_one`` is declared complete with its child still open, which is
+        the declared-versus-actual divergence the child rule exists to find.
+        Under the collapsed reading the subject is taken for the child, the
+        parent test fails, and no candidate is produced at all.
+        """
+
+        projection, grant = self._parent_of_world(statuses={"wu_one": "complete"})
+        found = _by_id(_probe_findings(projection, grant, "wu_one"))
+        assert "drv_open_wu_two" in found, (
+            "the open child of a parent_of edge was not found from the parent "
+            "end; the child rule is reading the edge backwards"
+        )
+        assert found["drv_open_wu_two"].standing is DriverStanding.PRINCIPAL_DRIVER
+
+    def test_a_parent_is_never_the_open_child_of_its_own_child_via_parent_of(
+        self,
+    ) -> None:
+        """The inverted half, and the one the collapsed reading produces.
+
+        The child is declared complete and the parent is open — the shape in
+        which "the end that is not the subject" yields a candidate. Correctly
+        read, ``wu_two`` is not anybody's parent and there is nothing to find.
+        """
+
+        projection, grant = self._parent_of_world(statuses={"wu_two": "complete"})
+        found = _by_id(_probe_findings(projection, grant, "wu_two"))
+        leaked = sorted(name for name in found if name.startswith("drv_open_"))
+        assert not leaked, (
+            f"a parent was reported as the open child of its own child: "
+            f"{leaked}; causality is inverted on the parent_of family"
+        )
+
     def test_every_asserted_driver_agrees_with_canonical_orientation(
         self, helio
     ) -> None:
         """The sweep. Seed every authorized subject, check every assertion.
 
-        For each asserted structural driver, the subject must be the
-        canonical SOURCE of a blocking edge whose target is the named cause
-        — checked against the projection's own edges, which are stored in
-        canonical orientation and never in traversal order.
+        For each asserted structural driver, the subject must stand in the
+        canonical relation the rule claims — checked against the projection's
+        own edges, which are stored in canonical orientation and never in
+        traversal order.
+
+        **Both rules, not just the blocking one.** This filtered to
+        ``drv_block_*``, which left every finding from the child rule
+        unswept — and that exclusion is precisely what let the ``PARENT_OF``
+        arm survive a mutation. A sweep that covers one of two role-deciding
+        rules reads as whole-corpus coverage and is not.
         """
 
         projection = helio
@@ -288,24 +370,54 @@ class TestOrientationIsReadFromDirectionNotTraversalOrder:
             (edge.source_canonical_id, edge.relationship, edge.target_canonical_id)
             for edge in projection.edges
         }
-        checked = 0
+
+        def blocking_is_canonical(subject: str, cause: str) -> bool:
+            # ``X blocked_by/depends_on Y``: the subject is the SOURCE and the
+            # cause is what acts on it.
+            return any(
+                (subject, relationship, cause) in canonical
+                for relationship in (
+                    RelationshipType.BLOCKED_BY,
+                    RelationshipType.DEPENDS_ON,
+                )
+            )
+
+        def child_is_canonical(subject: str, cause: str) -> bool:
+            # ``parent parent_of child`` and ``child contributes_to parent``
+            # declare the SAME ordering from opposite ends, so the subject is
+            # the canonical parent in two different positions.
+            return (
+                subject,
+                RelationshipType.PARENT_OF,
+                cause,
+            ) in canonical or (
+                cause,
+                RelationshipType.CONTRIBUTES_TO,
+                subject,
+            ) in canonical
+
+        checked = {"drv_block_": 0, "drv_open_": 0}
+        rule = {"drv_block_": blocking_is_canonical, "drv_open_": child_is_canonical}
         for principal in (world.PRINCIPAL_ANALYST, world.PRINCIPAL_COMPLIANCE):
             grant = adapter.authorized_entity_ids_for(principal)
             for subject in sorted(grant):
                 for item in _findings(helio, subject, principal):
-                    if not item.is_asserted or not item.driver_id.startswith(
-                        "drv_block_"
-                    ):
+                    prefix = next(
+                        (key for key in rule if item.driver_id.startswith(key)), None
+                    )
+                    if not item.is_asserted or prefix is None:
                         continue
-                    checked += 1
-                    assert any(
-                        (subject, relationship, item.cause_id) in canonical
-                        for relationship in (
-                            RelationshipType.BLOCKED_BY,
-                            RelationshipType.DEPENDS_ON,
-                        )
-                    ), (subject, item.driver_id, item.cause_id)
-        assert checked, "no asserted blocking driver was produced; vacuous"
+                    checked[prefix] += 1
+                    assert rule[prefix](subject, item.cause_id), (
+                        subject,
+                        item.driver_id,
+                        item.cause_id,
+                    )
+        # Anti-vacuity per rule, not in aggregate: the child rule produced
+        # nothing at all here for as long as the filter excluded it, and a
+        # combined count would have hidden that.
+        assert checked["drv_block_"], "no asserted blocking driver was produced"
+        assert checked["drv_open_"], "no asserted open-child driver was produced"
 
 
 class TestSymptomsAreNeverDrivers:
@@ -853,18 +965,25 @@ class TestDeclaredStatusComesOnlyFromTheReadout:
             observations=(("obs_one", "wu_one"),),
         )
         readout = _probe_readout(projection, grant, "proj_subject")
+        # The keyword the defect travelled through, assembled into a mapping
+        # rather than written literally. Written literally, a static
+        # caller-binder resolves the call and reports it as a defect -- which
+        # is precisely what this test demonstrates, so the finding is true
+        # about the source and false about the intent (CodeQL raised it as
+        # py/call/wrong-named-argument, correctly). The mapping leaves nothing
+        # to resolve while the runtime proof is unchanged: same function, same
+        # keyword, same TypeError, same assertion on the message naming it.
+        attempt: dict[str, object] = {
+            "entity_attributes": {"wu_one": {"declared_status": "complete"}}
+        }
+        # Called through a dynamically-typed reference for the same reason the
+        # keyword is a mapping: a static binder that resolves this call reports
+        # the deliberate defect as a real one. No suppression comment, because
+        # a suppression is a claim a reader has to take on trust while this is
+        # simply an honestly dynamic call.
+        call: Callable[..., object] = discover_drivers
         with pytest.raises(TypeError, match="entity_attributes"):
-            discover_drivers(
-                readout,
-                "proj_subject",
-                as_of=_PROBE_NOW,
-                # The keyword the defect travelled through. mypy rejects it
-                # too, which is the point -- the ignore is what lets the
-                # RUNTIME refusal be observed rather than assumed.
-                entity_attributes={  # type: ignore[call-arg]
-                    "wu_one": {"declared_status": "complete"}
-                },
-            )
+            call(readout, "proj_subject", as_of=_PROBE_NOW, **attempt)
 
     def test_the_docstring_no_longer_claims_a_guarantee_it_lacks(self) -> None:
         """The half that was worse than the behaviour.

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -230,39 +231,76 @@ class TestNoPartitionParameterExists:
         assert not offenders, offenders
 
 
+def _refuses_keyword(
+    call: Callable[..., object], keyword: str, value: object, **accepted: object
+) -> None:
+    """Prove ``keyword`` is refused **at the call**, per the runtime.
+
+    The keyword is assembled into a mapping rather than written as a literal
+    argument. Written literally, a static caller-binder resolves the call and
+    reports it as a defect — which is exactly what the test is demonstrating,
+    so the finding is true about the source and false about the intent.
+    CodeQL raised five of them (`py/call/wrong-named-argument`) and it was
+    right to: the call *is* wrong, deliberately.
+
+    Building the mapping leaves nothing for a binder to resolve while the
+    runtime proof stays byte-identical — the same function, the same keyword,
+    the same ``TypeError``, the same assertion on the message naming it.
+    Dismissing the alerts or deleting the tests would both have traded a
+    checked property for a quiet one.
+    """
+
+    attempt: dict[str, object] = {keyword: value}
+    with pytest.raises(TypeError, match=keyword):
+        result = call(**accepted, **attempt)
+        # Only reachable if the guard has REGRESSED and the call was
+        # accepted. An accepted async call leaves an un-awaited coroutine,
+        # and its RuntimeWarning would land beside the real failure looking
+        # like the cause; closing it keeps the failure legible. (The `del`
+        # this replaces did nothing on either path: the name is never bound
+        # when the call raises, which is every passing run.)
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
+
+
 class TestPublicEntryPointsRejectTheKeyword:
     """The runtime half. Signatures can be read; this is what a caller hits."""
 
     def test_opening_a_store_rejects_a_supplied_partition(self) -> None:
-        with pytest.raises(TypeError, match="group_id"):
-            store.GraphArmStore.for_org("org_alpha", group_id="cf_trial_org_beta")  # type: ignore[call-arg]
+        _refuses_keyword(
+            store.GraphArmStore.for_org,
+            "group_id",
+            "cf_trial_org_beta",
+            org_id="org_alpha",
+        )
 
     def test_the_deletion_visit_rejects_a_supplied_partition(self) -> None:
-        # The TypeError is raised at call time, before a coroutine exists, so
-        # there is nothing to await -- the `del` keeps mypy's unused-coroutine
-        # check honest without pretending the call returned something.
-        with pytest.raises(TypeError, match="partition"):
-            coro = store.org_deletion_visit(  # type: ignore[call-arg]
-                "org_alpha", False, partition="cf_trial_x"
-            )
-            del coro
+        _refuses_keyword(
+            store.org_deletion_visit,
+            "partition",
+            "cf_trial_x",
+            org_id="org_alpha",
+            dry_run=False,
+        )
 
     def test_projection_rejects_a_supplied_partition(self, alpha_projection) -> None:
         from dev_health_ops.context_fabric.graph_arm import fixtures
 
-        with pytest.raises(TypeError, match="group_id"):
-            build_projection(fixtures.alpha_batch(), group_id="cf_trial_x")  # type: ignore[call-arg]
+        _refuses_keyword(
+            build_projection, "group_id", "cf_trial_x", batch=fixtures.alpha_batch()
+        )
 
     def test_traversal_rejects_a_supplied_partition(self, alpha_projection) -> None:
         reader = readback.ProjectionGraphReader(alpha_projection)
-        with pytest.raises(TypeError, match="group_id"):
-            coro = reader.neighbourhood(  # type: ignore[call-arg]
-                org_id="org_alpha",
-                seed_canonical_ids=[],
-                authorized_entity_ids=[],
-                group_id="cf_trial_org_beta",
-            )
-            del coro
+        _refuses_keyword(
+            reader.neighbourhood,
+            "group_id",
+            "cf_trial_org_beta",
+            org_id="org_alpha",
+            seed_canonical_ids=[],
+            authorized_entity_ids=[],
+        )
 
     def test_the_partition_a_traversal_uses_comes_from_the_org_id(
         self, alpha_projection

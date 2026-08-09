@@ -21,6 +21,13 @@ not have:
    failure is the one the guard exists to prevent rather than an unrelated
    collapse somewhere in setup.
 
+One residual shape in the region check, found by adversarial verification and
+**unexploited**: the ``FAILED <nodeid>`` line is inside the region, so a token
+that happened to be a substring of a mutation's own test node id would be
+credited without any assertion carrying it — audited across all mutations,
+zero do, and ``test_no_expected_reason_hides_inside_its_own_node_id`` keeps it
+that way.
+
 Usage::
 
     uv run python scripts/chaos_3617_guard_injection.py            # all
@@ -853,6 +860,31 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="parent-of-read-as-contributes-to",
+        defect=(
+            "the two child relationships are read with ONE ordering, so "
+            "``parent parent_of child`` is taken for ``child contributes_to "
+            "parent`` -- a parent reported as the open child of its own "
+            "child, and the child rule's real finding lost. Survived the "
+            "whole suite before this: the corpus reaches the child rule only "
+            "through contributes_to, and the corpus-wide orientation sweep "
+            "filtered to drv_block_*"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "            if step.relationship is RelationshipType.PARENT_OF:\n"
+            "                parent_id, child_id = source_id, target_id\n"
+            "            else:\n"
+            "                child_id, parent_id = source_id, target_id"
+        ),
+        replacement="            child_id, parent_id = source_id, target_id",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestOrientationIsReadFromDirectionNotTraversalOrder",
+        ),
+        expect_failure="the child rule is reading the edge backwards",
+    ),
+    Mutation(
         mutation_id="child-candidate-taken-from-a-non-adjacent-step",
         defect=(
             "any parent_of step anywhere on a path yields an open-child "
@@ -1327,11 +1359,53 @@ MUTATIONS: tuple[Mutation, ...] = (
             "in a recorded reproduction"
         ),
         path=REPO_ROOT / TESTS / "live_gate.py",
-        anchor="    if live_store_required():",
-        replacement="    if False:",
+        # Anchored on the guard PLUS the message that identifies it. The bare
+        # `if live_store_required():` stopped being unique the moment a second
+        # gate was added for the graphiti extra, and the harness refused the
+        # run as INVALID rather than disabling both -- which is the anchor
+        # rule working, not a nuisance: a mutation that turns off two guards
+        # proves nothing about either.
+        anchor=(
+            "    if live_store_required():\n"
+            "        pytest.fail(\n"
+            '            f"{REQUIRE_LIVE_FLAG}=1 was set, so a live-store '
+            'measurement was "'
+        ),
+        replacement=(
+            "    if False:\n"
+            "        pytest.fail(\n"
+            '            f"{REQUIRE_LIVE_FLAG}=1 was set, so a live-store '
+            'measurement was "'
+        ),
         tests=(
             f"{TESTS}/test_chaos_3617_live_gate.py::"
             "test_the_gate_fails_rather_than_skips_when_a_live_run_is_required",
+        ),
+        expect_failure="Failed",
+    ),
+    Mutation(
+        mutation_id="graphiti-extra-gate-skips-when-a-run-was-required",
+        defect=(
+            "a measurement that needs the optional extra is skipped in a run "
+            "that required it, so an unmeasured half of the suite reads as "
+            "coverage in a recorded reproduction"
+        ),
+        path=REPO_ROOT / TESTS / "live_gate.py",
+        anchor=(
+            "        if live_store_required():\n"
+            "            pytest.fail(\n"
+            '                f"{REQUIRE_LIVE_FLAG}=1 was set, so a measurement '
+            'needing "'
+        ),
+        replacement=(
+            "        if False:\n"
+            "            pytest.fail(\n"
+            '                f"{REQUIRE_LIVE_FLAG}=1 was set, so a measurement '
+            'needing "'
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_gate.py::"
+            "test_the_extra_gate_fails_rather_than_skips_when_a_run_is_required",
         ),
         expect_failure="Failed",
     ),

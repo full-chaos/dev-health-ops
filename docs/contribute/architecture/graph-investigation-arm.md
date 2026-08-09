@@ -454,7 +454,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **74** guards the arm relies on, the harness disables
+For each of the **76** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -620,6 +620,19 @@ down: the false claim and the historical dependency both vanished via the
 status rule rather than via the trust and currency guards that own them. Both
 now reach the guard that is supposed to reject them, and each has a test
 asserting the candidate is *present and excluded* rather than absent.
+
+**Orientation coverage, stated exactly rather than as "every family".** Of
+the contract's twelve relationship types, four reach a role-deciding site:
+`blocked_by` and `depends_on` through the blocking rule, `parent_of` and
+`contributes_to` through the child rule. The other eight never reach
+`_canonical_endpoints`, so they have no orientation to get backwards. Those
+four are seeded from **both ends**. `parent_of` was the last to get that:
+adversarial verification found its arm of the child rule mutation-survivable
+— collapsing both branches onto the `contributes_to` reading passed the whole
+suite, because the corpus reaches the child rule only through
+`contributes_to` and the corpus-wide orientation sweep filtered to blocking
+findings. Probes for the family and a sweep widened to the child rule close
+it, and the collapse is now a mutation that dies from either seeding end.
 
 The mutation harness caught two more of the same kind: a test naming the
 wrong leaked identifier passed while its guard was disabled, and the

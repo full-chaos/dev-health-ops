@@ -184,6 +184,34 @@ class TestEveryMutationDeclaresACheckableReason:
         for mutation in harness.MUTATIONS:
             assert mutation.expect_failure.strip(), mutation.mutation_id
 
+    def test_no_expected_reason_hides_inside_its_own_node_id(self, harness) -> None:
+        """The last way a token could be credited without an assertion.
+
+        ``FAILED <nodeid> - <message>`` is inside the failure region, and it
+        has to be — a guard that refuses by raising a typed error carries its
+        category there and nowhere else. The consequence is that a token which
+        is a substring of the mutation's *own test node id* would be credited
+        by the mere existence of a failure, whatever failed and for whatever
+        reason.
+
+        Adversarial verification raised this as unexploited, and it is: no
+        mutation does it today. Recorded as a check rather than as a note,
+        because "nobody has done this yet" stops being true silently.
+        """
+
+        offenders = [
+            (mutation.mutation_id, mutation.expect_failure, node_id)
+            for mutation in harness.MUTATIONS
+            for node_id in mutation.tests
+            if mutation.expect_failure in node_id
+        ]
+        assert not offenders, offenders
+        # Anti-vacuity: the comparison really can fire.
+        assert any(
+            mutation.expect_failure in f"x{mutation.expect_failure}y"
+            for mutation in harness.MUTATIONS
+        )
+
     def test_mutation_ids_are_unique(self, harness) -> None:
         ids = [mutation.mutation_id for mutation in harness.MUTATIONS]
         assert len(set(ids)) == len(ids)

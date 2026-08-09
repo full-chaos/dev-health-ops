@@ -461,8 +461,6 @@ class TestObservationTrustSurvivesTheTraversal:
         looked canonical.
         """
 
-        import asyncio
-
         from dev_health_ops.context_fabric.graph_arm import build_projection
         from dev_health_ops.context_fabric.graph_arm.readback import (
             ProjectionGraphReader,

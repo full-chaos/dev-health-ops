@@ -49,6 +49,7 @@ from dev_health_ops.context_fabric.graph_arm.packet_builder import (
 )
 from dev_health_ops.context_fabric.graph_arm.readback import ProjectionGraphReader
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
+from tests.context_fabric import live_gate
 
 _RUN_ID = "4f9a2c1e-1111-4222-8333-444455556666"
 _SUBJECT = "proj_nightfall_migration"
@@ -537,7 +538,18 @@ class TestEmbeddingBudget:
         or the write path silently skipped embedding, ``calls == []`` would
         hold for a reason that has nothing to do with the budget — and the
         pre-flight claim would be unproven while looking proven.
+
+        Unlike its sibling, this one lets the write **proceed**, and the write
+        path builds Graphiti node and edge objects — so it needs the optional
+        extra even though it needs no server. It was failing in CI for exactly
+        that reason (``ModuleNotFoundError: graphiti_core``, reported as an
+        arm error) rather than skipping like the rest of the suite's
+        Graphiti-dependent half. Routed through the gate so the outcome is the
+        declared two: a failure when a run was required, a named skip
+        otherwise. Never a silent error that reads like a defect in the arm.
         """
+
+        live_gate.require_graphiti_extra()
 
         from dev_health_ops.context_fabric.graph_arm.budgets import TrialBudgets
         from dev_health_ops.context_fabric.graph_arm.store import GraphArmStore

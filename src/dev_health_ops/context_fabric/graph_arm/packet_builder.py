@@ -522,7 +522,12 @@ def build_packet(
                 ),
             )
         )
-    if readout.entities_truncated or readout.paths_truncated or citations_capped:
+    if (
+        readout.entities_truncated
+        or readout.paths_truncated
+        or readout.evidence_truncated
+        or citations_capped
+    ):
         limitations.append(
             PacketLimitation(
                 kind=PacketLimitationKind.TRUNCATED_TRAVERSAL,
@@ -626,8 +631,10 @@ def build_packet(
         limitations=tuple(limitations),
         clarification_needs=(),
         authorization_filtered_count=0,
-        evidence_truncated=False,
-        truncation_reason=None,
+        evidence_truncated=readout.evidence_truncated,
+        truncation_reason=(
+            readout.truncation_reason if readout.evidence_truncated else None
+        ),
     )
     versions = InvestigationVersions(
         schema_version="ask_dev_investigation_versions.v1",

@@ -21,7 +21,19 @@ disclosed rather than silently applied:
 2. **authorization** — the caller supplies the set of canonical entity ids
    the user may see, and every reached entity, every traversed endpoint and
    every observation subject is filtered against it. Filtering is *counted*,
-   and the count reaches the packet;
+   and the count reaches the packet.
+
+   **This set is caller-declared and the arm does not verify it.** Stated
+   here at the boundary, not buried in a residual note, because adversarial
+   review was right that it is the security boundary: a caller that includes
+   a restricted entity receives it, and every downstream check --
+   ``RelatedContext``'s own guard, the packet builder's re-check -- only
+   proves the packet is internally consistent with a claim nobody validated.
+   :func:`derive_authorized_entity_ids` is where the real derivation belongs
+   and it deliberately raises today rather than existing as a stub that
+   looks implemented. Until it lands, correctness of the supplied set is
+   scored externally by CHAOS-3616's authorization oracle, which knows the
+   true per-principal grants;
 3. **budget** — hop depth, node count and path count, each with the
    ``TruncationReason`` the contract requires alongside the flag.
 
@@ -55,6 +67,7 @@ from .projection import GraphProjection
 from .vocabulary import GraphEntityKind, GraphObservationKind
 
 __all__ = [
+    "AuthorizationDerivationNotImplementedError",
     "DiscoveredEntity",
     "DiscoveredObservation",
     "DiscoveredPath",
@@ -66,6 +79,7 @@ __all__ = [
     "NODE_COUNT_QUERY",
     "QUERY_VERSION",
     "READ_ONLY_QUERIES",
+    "derive_authorized_entity_ids",
 ]
 
 #: Emitted on the packet as ``versions.query_version``. Bump when the
@@ -160,11 +174,49 @@ class InvestigationReadout:
     authorization_filtered_count: int = 0
     entities_truncated: bool = False
     paths_truncated: bool = False
+    #: Evidence loss gets its OWN flag. Adversarial review found the evidence
+    #: budget setting ``paths_truncated`` instead, which the packet then
+    #: disclosed as path truncation while hardcoding evidence coverage as
+    #: complete -- a consumer reading the evidence section saw nothing wrong.
+    evidence_truncated: bool = False
     truncation_reason: TruncationReason | None = None
     observed_source_classes: frozenset[SourceClass] = field(default_factory=frozenset)
 
     def entity_by_id(self) -> Mapping[str, DiscoveredEntity]:
         return {entity.canonical_id: entity for entity in self.entities}
+
+
+class AuthorizationDerivationNotImplementedError(NotImplementedError):
+    """The arm cannot yet derive an authorized set; a caller must supply one.
+
+    A named error rather than a silent absence. The alternative -- no
+    function at all -- leaves the reader of ``neighbourhood`` to infer from
+    a docstring that ``authorized_entity_ids`` is unverified; the alternative
+    to *that* -- a stub returning something plausible -- would be worse
+    still, because a permissive default is exactly how an unverified scope
+    becomes an invisible one.
+    """
+
+
+def derive_authorized_entity_ids(org_id: str, principal_id: str) -> frozenset[str]:
+    """Derive the authorized entity set from the server's own grants.
+
+    **Not implemented in this revision, deliberately and loudly.** The
+    principal-grant adapter lands with the capability work; until then every
+    caller supplies the set and the arm cannot tell a correct one from a
+    widened one.
+
+    Kept as a raising function rather than omitted so the gap has a name a
+    reviewer can grep for, a place for the real implementation to arrive, and
+    a call site that fails rather than degrades if anyone wires it early.
+    """
+
+    raise AuthorizationDerivationNotImplementedError(
+        f"the graph arm cannot derive the authorized entity set for principal "
+        f"{principal_id!r} in org {org_id!r}. Callers supply it today, and the "
+        "arm does not verify it -- see the module docstring. The "
+        "principal-grant adapter is the capability-revision fix"
+    )
 
 
 class GraphReader(Protocol):
@@ -251,7 +303,11 @@ def _traverse(
     budgets: TrialBudgets,
     clock: Callable[[], float] = time.monotonic,
 ) -> InvestigationReadout:
+    # A budget that silences a caller's requested depth is a budget that
+    # removed work, so it discloses. Adversarial review found this shortening
+    # the walk (7 entities -> 5, 15 paths -> 4) with every flag False.
     hops_allowed = min(max_hops, budgets.max_path_hops)
+    hop_cap_bit = hops_allowed < max_hops
     started = clock()
     # Distinct entities refused, not refusal *events*: the same restricted
     # neighbour is reached once per path that touches its neighbour, and
@@ -272,6 +328,10 @@ def _traverse(
     truncation_reason: TruncationReason | None = None
     entities_truncated = False
     paths_truncated = False
+    evidence_truncated = False
+    if hop_cap_bit:
+        paths_truncated = True
+        truncation_reason = TruncationReason.PATH_BUDGET
 
     for seed in reachable_seeds:
         reached[seed] = adjacency.entities[seed]
@@ -355,7 +415,12 @@ def _traverse(
                 # ``other`` is already reached and already has its quota of
                 # shortest paths; continuations from those kept paths cover
                 # everything beyond it, so dropping this redundant prefix
-                # loses no reachable entity.
+                # loses no reachable *entity* -- but it does drop an
+                # explanation, and adversarial review was right that dropping
+                # an explanation silently is the same fault as dropping a
+                # result silently. It discloses.
+                paths_truncated = True
+                truncation_reason = TruncationReason.PATH_BUDGET
                 continue
 
             node_outcome = budgets.check_entities(len(reached) + 1)
@@ -413,8 +478,7 @@ def _traverse(
     if not evidence_outcome.within_budget:
         visible_observations = visible_observations[: budgets.max_evidence_entries]
         truncation_reason = evidence_outcome.truncation_reason
-        entities_truncated = entities_truncated or False
-        paths_truncated = paths_truncated or True
+        evidence_truncated = True
 
     observed_classes = (
         {entity.source_class for entity in reached.values()}
@@ -435,6 +499,7 @@ def _traverse(
         authorization_filtered_count=len(filtered),
         entities_truncated=entities_truncated,
         paths_truncated=paths_truncated,
+        evidence_truncated=evidence_truncated,
         truncation_reason=truncation_reason,
         observed_source_classes=frozenset(observed_classes),
     )
@@ -559,6 +624,13 @@ class ProjectionGraphReader:
         )
 
 
+#: Aliases are stored one attribute per kind (``cf_alias_alias``,
+#: ``cf_alias_acronym``, ...), values joined by US (0x1f). They are read back
+#: here because the differential oracle -- once it compared the WHOLE readout
+#: rather than a hand-picked subset -- showed the live reader returning no
+#: aliases at all while the reference returned them. That gap would have
+#: surfaced later as PR2's alias/acronym search finding nothing in the live
+#: store and everything in the reference.
 _ENTITY_QUERY = """
 MATCH (n:Entity)
 WHERE n.group_id = $partition AND n.cf_is_entity = true
@@ -566,8 +638,21 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_entity_kind AS entity_kind,
        n.name AS display_label,
        n.cf_source_class AS source_class,
-       n.cf_observed_at AS observed_at
+       n.cf_observed_at AS observed_at,
+       n.cf_alias_alias AS alias_alias,
+       n.cf_alias_acronym AS alias_acronym,
+       n.cf_alias_previous_name AS alias_previous_name,
+       n.cf_alias_provider_identifier AS alias_provider_identifier
 """
+
+#: The separator :func:`~.backend.to_graphiti_nodes` joins alias values with.
+_ALIAS_SEPARATOR = "\x1f"
+_ALIAS_COLUMNS = (
+    "alias_alias",
+    "alias_acronym",
+    "alias_previous_name",
+    "alias_provider_identifier",
+)
 
 _OBSERVATION_QUERY = """
 MATCH (n:Entity)
@@ -647,12 +732,20 @@ class LiveGraphReader:
 
         entities: dict[str, DiscoveredEntity] = {}
         for record in await _rows(driver, _ENTITY_QUERY, partition=partition):
+            aliases: list[str] = []
+            for column in _ALIAS_COLUMNS:
+                raw = record.get(column)
+                if raw:
+                    aliases.extend(
+                        item for item in str(raw).split(_ALIAS_SEPARATOR) if item
+                    )
             entities[record["canonical_id"]] = DiscoveredEntity(
                 canonical_id=record["canonical_id"],
                 kind=GraphEntityKind(record["entity_kind"]),
                 display_label=record["display_label"],
                 source_class=SourceClass(record["source_class"]),
                 observed_at=datetime.fromisoformat(record["observed_at"]),
+                alias_values=tuple(sorted(aliases)),
             )
 
         edges: dict[

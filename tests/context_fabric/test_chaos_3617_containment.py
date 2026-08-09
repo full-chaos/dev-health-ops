@@ -319,44 +319,25 @@ class TestOrgDeletionRegistration:
         )
 
     @pytest.mark.asyncio
-    async def test_deletion_is_a_no_op_when_no_trial_store_is_configured(
-        self, monkeypatch
-    ) -> None:
-        """Production today. Org deletion must not be blocked by an optional
-        trial store that does not exist in the environment doing the delete."""
+    async def test_an_unconfigured_store_is_unknown_not_zero(self, monkeypatch) -> None:
+        """Zero means "checked, nothing there" -- never "could not check".
 
-        monkeypatch.delenv("CONTEXT_FABRIC_GRAPH_STORE_URI", raising=False)
-        entry = next(
-            item
-            for item in EXTERNAL_DERIVED_STORES
-            if item.name == store_module.TRIAL_DERIVED_STORE_NAME
-        )
-        assert entry.visit is not None
-        assert await entry.visit("org_alpha", False) == 0
-
-    @pytest.mark.asyncio
-    async def test_an_unreachable_configured_store_fails_visibly(
-        self, monkeypatch
-    ) -> None:
-        """A store that cannot be reached is an *unknown*, not a zero.
-
-        Reporting 0 would record a complete deletion of data nobody looked
-        at. Propagating does not block the deletion:
-        ``_purge_external_stores`` catches, records the failure in
-        ``result.warnings``, and carries on -- so the choice is between a
-        visible incomplete deletion and an invisible one.
+        Adversarial review found this returning 0 whenever the store URI was
+        absent. But a partition written while the store WAS configured
+        survives the variable being removed, so 0 would have recorded it as
+        purged. Raising surfaces the unknown; the deletion service catches it
+        into ``result.warnings`` and continues, so nothing is blocked.
         """
 
-        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
-        with pytest.raises(Exception) as excinfo:  # noqa: B017, PT011
+        monkeypatch.delenv("CONTEXT_FABRIC_GRAPH_STORE_URI", raising=False)
+        with pytest.raises(store_module.DeletionCompletenessUnknownError):
             await store_module.org_deletion_visit("org_alpha", False)
-        assert not isinstance(excinfo.value, pytest.skip.Exception)
 
     @pytest.mark.asyncio
-    async def test_a_configured_store_without_graphiti_installed_is_a_no_op(
+    async def test_a_missing_graphiti_extra_is_unknown_not_zero(
         self, monkeypatch
     ) -> None:
-        """Nothing could have been projected without the optional extra."""
+        """The data does not disappear because the library did."""
 
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
 
@@ -364,4 +345,38 @@ class TestOrgDeletionRegistration:
             raise store_module.GraphitiUnavailableError("not installed")
 
         monkeypatch.setattr(store_module, "partition_exists_for", _unavailable)
+        with pytest.raises(store_module.DeletionCompletenessUnknownError):
+            await store_module.org_deletion_visit("org_alpha", False)
+
+    @pytest.mark.asyncio
+    async def test_zero_is_returned_only_after_a_positive_absence_check(
+        self, monkeypatch
+    ) -> None:
+        """The one path that may report zero, and the negative control.
+
+        Without this the assertions above could pass because
+        ``org_deletion_visit`` raises unconditionally, which would block
+        every deletion rather than fix anything.
+        """
+
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
+        checked: list[str] = []
+
+        async def _absent(org_id: str, _config: object) -> bool:
+            checked.append(org_id)
+            return False
+
+        monkeypatch.setattr(store_module, "partition_exists_for", _absent)
         assert await store_module.org_deletion_visit("org_alpha", False) == 0
+        assert checked == ["org_alpha"], "zero was reported without checking"
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_configured_store_fails_visibly(
+        self, monkeypatch
+    ) -> None:
+        """A store that cannot be reached is an *unknown*, not a zero."""
+
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
+        with pytest.raises(Exception) as excinfo:  # noqa: B017, PT011
+            await store_module.org_deletion_visit("org_alpha", False)
+        assert not isinstance(excinfo.value, pytest.skip.Exception)

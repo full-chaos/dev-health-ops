@@ -89,7 +89,19 @@ def test_the_environments_actual_live_store_state_is_reported(record_property) -
         "chaos_3617_live_store",
         "available" if status.available else f"unavailable: {status.missing}",
     )
-    assert status.available or status.missing
+    # NOT `assert status.available or status.missing` -- `available` is
+    # DEFINED as `missing is None`, so that disjunction is a tautology for
+    # every well-formed status and could not detect anything. Adversarial
+    # review caught it. What is actually worth asserting is the invariant the
+    # two fields are supposed to satisfy together: exactly one of them is
+    # informative, and an unavailable status must carry a reason a reader can
+    # act on rather than an empty string.
+    assert status.available == (status.missing is None)
+    if not status.available:
+        assert status.missing and status.missing.strip(), (
+            "an unavailable status must say what is missing; a blank reason "
+            "is the skip nobody can act on"
+        )
 
 
 def test_the_store_uri_is_a_conditional_keep_gated_on_the_require_flag() -> None:

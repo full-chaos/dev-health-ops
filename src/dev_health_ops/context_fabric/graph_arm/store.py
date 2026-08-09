@@ -42,7 +42,12 @@ from .backend import (
     to_graphiti_edges,
     to_graphiti_nodes,
 )
-from .flags import TrialStoreConfig, graph_projection_enabled, trial_store_config
+from .flags import (
+    TRIAL_STORE_URI_VAR,
+    TrialStoreConfig,
+    graph_projection_enabled,
+    trial_store_config,
+)
 from .identity import assert_partition_matches_org, partition_for_org
 from .projection import GraphProjection
 from .readback import NODE_COUNT_QUERY
@@ -188,8 +193,11 @@ class GraphArmStore:
             indexed_through=indexed_through,
             projected_at=datetime.now(UTC),
             records_indexed=len(projection.nodes) + len(projection.edges),
-            partial=projection.truncated,
-            failure_detail=projection.truncation_detail or None,
+            # A projection is all-or-nothing (over budget raises in
+            # build_projection), and this write either completed or raised.
+            # So a watermark produced here is never partial; the flag stays
+            # for a caller that stops a multi-batch run early.
+            partial=False,
         )
         logger.info(
             "context-fabric graph projection wrote %d nodes and %d edges to "
@@ -282,50 +290,70 @@ async def partition_exists_for(org_id: str, config: TrialStoreConfig) -> bool:
             await aclose()
 
 
+class DeletionCompletenessUnknownError(RuntimeError):
+    """Deletion could not prove the organization's partition is absent.
+
+    Raised instead of returning ``0``. ``0`` means "checked, and there was
+    nothing"; it must never mean "could not check". Adversarial review found
+    the previous behaviour returning ``0`` whenever the store was
+    unconfigured or graphiti-core was missing — but a partition written by an
+    earlier deployment, or before the URI was removed from the environment,
+    survives both of those conditions. Org deletion would then have recorded
+    a successful zero-row visit over data nobody looked at.
+
+    ``OrganizationDeletionService._purge_external_stores`` catches this,
+    records ``"Derived store '…' deletion failed: …"`` in
+    ``result.warnings`` and carries on, so raising surfaces the unknown
+    without blocking the deletion.
+    """
+
+
 async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
     """The ``DerivedStore.visit`` callable for org deletion (CHAOS-3566).
 
     Registered in ``EXTERNAL_DERIVED_STORES``. Returns the number of graph
     nodes visited/deleted for the organization.
 
-    Two "nothing to do" cases return ``0`` and log, because in both of them
-    the organization provably has no graph data: the trial store is not
-    configured (the production default), or graphiti-core is not installed,
-    without which nothing could ever have been projected.
+    **Zero is a measurement, not a fallback.** Every path that cannot reach
+    the store raises :class:`DeletionCompletenessUnknownError`; ``0`` is
+    returned only after a positive existence check proved the partition is
+    absent. That includes the two cases that look like safe no-ops and are
+    not: an unconfigured store URI (the partition may still exist from when
+    it *was* configured) and a missing graphiti-core (the data does not
+    disappear because the library did).
 
-    Everything else **propagates**, including an unreachable store. That is
-    deliberate and is the opposite of the obvious choice. A configured store
-    the deletion cannot reach is an organization whose derived data may
-    still exist; reporting ``0`` would record a complete deletion of data
-    nobody looked at. Propagating does not block the deletion either --
-    ``OrganizationDeletionService._purge_external_stores`` catches, records
-    ``"Derived store '…' deletion failed: …"`` in ``result.warnings``, and
-    carries on -- so the choice is purely between a visible incomplete
-    deletion and an invisible one.
+    Raising does not block deletion —
+    ``OrganizationDeletionService._purge_external_stores`` catches, records a
+    warning and continues — so the only thing this decides is whether an
+    unverified deletion is visible.
     """
 
     config = trial_store_config()
     if config is None:
-        logger.info(
-            "context-fabric graph trial store is not configured; org %s has "
-            "no graph partition to purge",
-            org_id,
+        raise DeletionCompletenessUnknownError(
+            f"no trial graph store is configured, so org {org_id}'s graph "
+            "partition could not be checked. A partition written while the "
+            "store WAS configured would survive this deletion; reporting 0 "
+            f"would record it as purged. Set {TRIAL_STORE_URI_VAR} for the "
+            "deletion run, or confirm out of band that this deployment never "
+            "projected"
         )
-        return 0
     try:
         exists = await partition_exists_for(org_id, config)
     except GraphitiUnavailableError as exc:
-        logger.warning(
-            "context-fabric graph trial store is configured but graphiti-core "
-            "is not installed, so org %s can have no projected graph data: %s",
-            org_id,
-            exc,
-        )
-        return 0
+        raise DeletionCompletenessUnknownError(
+            f"the trial graph store is configured but graphiti-core is not "
+            f"installed, so org {org_id}'s partition could not be checked: "
+            f"{exc}. Data written by a deployment that DID have the extra "
+            "installed is unaffected by its absence here"
+        ) from exc
     if not exists:
-        # Nothing was ever projected for this organization. Returning here --
-        # rather than constructing a store and finding it empty -- is what
-        # keeps the preview read-only: see partition_exists_for.
+        # Positively checked, and absent. This is the only path that may
+        # report zero -- and it constructs no store, which is what keeps the
+        # preview read-only (see partition_exists_for).
+        logger.info(
+            "context-fabric graph trial store holds no partition for org %s", org_id
+        )
         return 0
     store = GraphArmStore.for_org(org_id, config=config)
     try:

@@ -10,13 +10,32 @@ and the no-prose rule are all decided here.
 
 Three rules are enforced rather than documented.
 
-**No prose.** :func:`build_projection` rejects any attribute value that is a
-string longer than :data:`MAX_ATTRIBUTE_CHARS`, and rejects attribute keys
-outside ``[a-z][a-z0-9_]*``. There is nowhere in a structured record for a
-sentence to live, so "structured records must not be converted to
-hand-authored prose" cannot be violated by an adapter that means well and
-writes a nice summary. Unstructured documents are carried through untouched
-in a separate collection that the structured writer never reads.
+**No ARM-AUTHORED prose.** This is the corrected, and narrower, statement of
+the rule; the earlier one ("there is nowhere for a sentence to live") was
+false and adversarial review demonstrated it.
+
+What is true: the arm never *composes* text. Every textual value it stores is
+a verbatim copy of a field the source record supplied — ``display_label``,
+``title``, ``outcome``, alias values — or a rejection. Nothing here formats,
+concatenates, templates or summarises, and ``EntityEdge.fact`` is a
+three-token rendering of canonical identifiers
+(:func:`~.backend.triple_fact`). That is the property the issue's rule
+actually needs: no adapter can "help" by writing a nice summary of a
+structured record.
+
+What is NOT true, and must not be claimed: that prose cannot *transit*.
+``display_label`` and ``title`` are source-supplied free text bounded only at
+:data:`MAX_ATTRIBUTE_CHARS` characters, so a source system whose project name
+is a sentence — or contains a person's name — will have that stored and
+carried into the packet. Those values are **untrusted evidence**, exactly
+like any other retrieved content, and narrowing them to an identifier
+grammar would reject legitimate provider labels (``fullchaos/auth-gateway``,
+``Nightfall Migration``).
+
+Attribute *values* are bounded and attribute *keys* must match
+``[a-z][a-z0-9_]*``, which keeps the structured attribute map from becoming a
+second free-text channel. Unstructured documents travel a separate
+collection that the structured writer never reads.
 
 **No reversed relationships.** Every relationship record is checked against
 the frozen ``RELATIONSHIP_ALLOWLIST``'s declared canonical orientation
@@ -193,8 +212,13 @@ class GraphProjection:
     #: could see them, by canonical id. Recorded rather than silently
     #: discarded so a reproduction can prove the drop happened.
     rejected_document_ids: tuple[str, ...] = ()
-    truncated: bool = False
-    truncation_detail: str = ""
+
+    # There is deliberately no ``truncated`` flag. There used to be, and it
+    # was the whole defect: an over-budget batch set it and then projected
+    # everything anyway, so the flag described a truncation that never
+    # happened. A projection is now all-or-nothing -- over budget raises --
+    # and a field that could only ever hold its default would be one more
+    # thing a reader has to check and can never learn anything from.
 
     def entity_nodes(self) -> tuple[GraphNode, ...]:
         return tuple(node for node in self.nodes if node.is_entity)
@@ -229,8 +253,10 @@ def _validate_label(where: str, label: str) -> None:
     if len(label) > MAX_ATTRIBUTE_CHARS:
         raise ProjectionError(
             f"{where} label is {len(label)} characters, over the "
-            f"{MAX_ATTRIBUTE_CHARS}-character bound; a label that long is a "
-            "sentence, and a structured record does not author sentences"
+            f"{MAX_ATTRIBUTE_CHARS}-character bound. This bounds SIZE, not "
+            "content: a source-supplied label is copied verbatim and may be "
+            "a sentence. What the arm guarantees is that it never composes "
+            "one -- see the module docstring"
         )
 
 
@@ -344,12 +370,26 @@ def build_projection(
 
     validate_batch_org(batch)
 
-    truncated = False
-    truncation_detail = ""
     outcome = budgets.check_ingest_records(batch.record_count())
     if not outcome.within_budget:
-        truncated = True
-        truncation_detail = outcome.detail
+        # REFUSE, do not annotate. Adversarial review found this setting
+        # ``truncated=True`` and then projecting the whole batch anyway: a
+        # one-record budget still wrote all 19 nodes and 10 edges, so the
+        # advertised work bound bounded nothing and the flag described a
+        # truncation that never happened.
+        #
+        # Refusing rather than slicing is deliberate. A batch is a connected
+        # world -- relationships reference entities, observations reference
+        # subjects -- so any slice this function chose would drop endpoints
+        # its own validators then reject, or worse, silently change which
+        # entities exist. The caller knows how to narrow a batch; this
+        # function does not.
+        raise ProjectionError(
+            f"{outcome.detail}; refusing to project. A batch is a connected "
+            "world, so there is no slice this function could take without "
+            "changing which entities exist -- narrow the batch at the reader, "
+            "or raise max_ingest_records deliberately"
+        )
 
     partition = identity.partition_for_org(batch.org_id)
 
@@ -482,8 +522,6 @@ def build_projection(
         observation_attachments=attachments,
         approved_documents=approved,
         rejected_document_ids=rejected,
-        truncated=truncated,
-        truncation_detail=truncation_detail,
     )
 
 

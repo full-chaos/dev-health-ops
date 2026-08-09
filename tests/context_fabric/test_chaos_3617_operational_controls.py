@@ -233,28 +233,115 @@ class TestBudgets:
         assert readout.entities_truncated is True
         assert readout.truncation_reason is TruncationReason.TIME_BUDGET
 
-    def test_a_traversal_inside_both_budgets_is_not_marked_truncated(self) -> None:
-        """The negative control for the two assertions above."""
-
-        readout = asyncio.run(
+    def _read(self, **kwargs):
+        return asyncio.run(
             ProjectionGraphReader(
                 build_projection(fixtures.alpha_batch())
             ).neighbourhood(
                 org_id=fixtures.ALPHA_ORG,
                 seed_canonical_ids=["proj_nightfall_migration"],
                 authorized_entity_ids=fixtures.alpha_authorized_ids(),
-                max_hops=3,
+                **kwargs,
             )
         )
+
+    def test_a_traversal_inside_every_budget_is_not_marked_truncated(self) -> None:
+        """The negative control for every disclosure assertion below.
+
+        Each bound is set wide enough not to bite, so a flag that is still
+        set here is a bug rather than a disclosure -- which is what makes the
+        positive assertions mean something.
+        """
+
+        readout = self._read(
+            max_hops=TrialBudgets().max_path_hops,
+            budgets=TrialBudgets(max_paths_per_entity=100),
+        )
         assert readout.entities_truncated is False
+        assert readout.paths_truncated is False
+        assert readout.evidence_truncated is False
         assert readout.truncation_reason is None
 
-    def test_an_oversized_ingest_batch_truncates_and_says_so(self) -> None:
-        projection = build_projection(
-            fixtures.alpha_batch(), budgets=TrialBudgets(max_ingest_records=1)
+    def test_the_default_per_entity_path_quota_discloses_when_it_bites(self) -> None:
+        """Under the shipped defaults this flag is commonly set, and honestly.
+
+        The arm prefers a few explanatory paths per entity over every
+        near-identical chain, so on a well-connected neighbourhood the quota
+        removes alternative explanations. Adversarial review was right that
+        removing them silently is the same fault as dropping a result
+        silently, so it discloses -- and this pins that the shipped default
+        actually reaches that code, rather than the disclosure being
+        theoretical.
+        """
+
+        readout = self._read(max_hops=3)
+        assert readout.paths_truncated is True
+        assert readout.truncation_reason is TruncationReason.PATH_BUDGET
+
+    def test_a_hop_cap_below_the_requested_depth_discloses(self) -> None:
+        """A budget that silences the caller's requested depth removed work.
+
+        Reproduced by adversarial review shortening the walk from 7
+        entities/15 paths to 5/4 with every flag False and no reason.
+        """
+
+        readout = self._read(
+            max_hops=3, budgets=TrialBudgets(max_path_hops=1, max_paths_per_entity=100)
         )
-        assert projection.truncated is True
-        assert "exceeds the budget" in projection.truncation_detail
+        assert readout.paths_truncated is True
+        assert readout.truncation_reason is TruncationReason.PATH_BUDGET
+
+    def test_the_evidence_budget_sets_the_evidence_flag_not_the_path_flag(
+        self,
+    ) -> None:
+        """Evidence loss must not be disclosed as path truncation.
+
+        The defect: the evidence budget set ``paths_truncated`` while the
+        packet hardcoded ``evidence_truncated=False``, so a consumer reading
+        the evidence section saw complete coverage.
+        """
+
+        readout = self._read(
+            max_hops=3,
+            budgets=TrialBudgets(max_evidence_entries=1, max_paths_per_entity=100),
+        )
+        assert readout.evidence_truncated is True
+        assert readout.paths_truncated is False, (
+            "evidence loss was disclosed as path truncation"
+        )
+        assert readout.truncation_reason is TruncationReason.EVIDENCE_BUDGET
+
+    def test_an_oversized_ingest_batch_is_refused_not_annotated(self) -> None:
+        """The bound must bound. It used to only describe.
+
+        Adversarial review found the previous behaviour: an over-budget batch
+        set ``truncated=True`` and then projected every record anyway, so a
+        one-record budget still wrote all 19 nodes and 10 edges. The flag
+        named a truncation that had not happened.
+
+        Refusing rather than slicing is deliberate: a batch is a connected
+        world -- relationships reference entities, observations reference
+        subjects -- so any slice this function chose would either drop
+        endpoints its own validators then reject, or silently change which
+        entities exist.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.projection import ProjectionError
+
+        with pytest.raises(ProjectionError, match="refusing to project"):
+            build_projection(
+                fixtures.alpha_batch(), budgets=TrialBudgets(max_ingest_records=1)
+            )
+
+    def test_a_batch_inside_the_ingest_budget_projects_completely(self) -> None:
+        """The negative control, and the anti-vacuity check on the bound."""
+
+        batch = fixtures.alpha_batch()
+        projection = build_projection(
+            batch, budgets=TrialBudgets(max_ingest_records=batch.record_count())
+        )
+        assert len(projection.nodes) == 19
+        assert len(projection.edges) == 10
 
 
 class TestPacketByteBudget:

@@ -97,8 +97,31 @@ source and a real install probe, not from memory:
 ## Structured records stay structured
 
 The issue and the corrective plan both forbid converting structured provider
-or ACR records into hand-authored prose. Three mechanisms enforce it rather
-than describing it.
+or ACR records into hand-authored prose. The claim below is the **corrected,
+narrower** one: an earlier draft of this note said "there is nowhere for a
+sentence to live", and adversarial review demonstrated that false in four
+places at once.
+
+**What is true: the arm authors nothing.** Every textual value it stores is a
+verbatim copy of a field the source record supplied, or a rejection. Nothing
+formats, concatenates, templates or summarises. That is the property the
+issue's rule actually needs — no adapter can "help" by writing a nice summary
+of a structured record — and it is enforced by a compose guard that scans the
+arm's own AST (`test_chaos_3617_no_authored_text.py`), splitting fields into
+*source copies* (`display_label`, `title`, `outcome`, `name`, `matched_text`)
+which may never be composed, and *arm disclosures* (`detail`, `impact`,
+`inclusion_reason`, …) which the frozen contract requires the arm to write
+and which may never interpolate source text.
+
+**What is NOT true: prose cannot transit.** `display_label` and observation
+`title` are source-supplied free text bounded only at 256 characters, so a
+project whose real name is a sentence — or a review title containing a
+person's name — is stored and carried into the packet as **untrusted
+evidence**. Narrowing those to an identifier grammar would reject legitimate
+provider labels like `fullchaos/auth-gateway` and `Nightfall Migration`, so
+the claim is narrowed instead of the data.
+
+Three mechanisms enforce the *authoring* half rather than describing it.
 
 **The write path makes no model call.** `add_episode` runs extraction (even
 for `EpisodeType.json`) and `add_triplet` calls the LLM for edge resolution.
@@ -144,12 +167,29 @@ graph-native identifier; and two organizations holding the same canonical id
 get different addresses *arithmetically*, not by a filter that could be
 forgotten.
 
-**The partition is server-derived.** `identity.partition_for_org` is the only
-source of partition strings, it takes the server-known organization id, and
-every read re-derives and asserts it rather than trusting the one travelling
-with the results. A caller never supplies a `group_id` and could not use one
-if they did. The partition bounds *what was searched*; the authorized-entity
-filter bounds *what may be returned*. Graph membership never grants access.
+**The partition is server-derived, and derivation is injective.**
+`identity.partition_for_org` is the only source of partition strings, it takes
+the server-known organization id, and every read re-derives and asserts it
+rather than trusting the one travelling with the results. A caller never
+supplies a `group_id` and could not use one if they did.
+
+Injective is load-bearing and was not free: the validator originally accepted
+mixed case while derivation lowercased, so `Org_A` and `org_a` — both
+accepted — derived the *same* partition and therefore shared one keyspace.
+One organization's purge would have dropped the other's data. The fix narrows
+what is accepted (lowercase only) rather than normalising it, because
+normalising is precisely what collides them.
+
+**The authorized-entity set is caller-declared and the arm does not verify
+it.** Stated plainly because it is the security boundary: a caller that
+includes a restricted entity receives it, and every downstream check only
+proves the packet is internally consistent with a claim nobody validated.
+`readback.derive_authorized_entity_ids` marks where the real derivation
+belongs and raises rather than existing as a permissive stub. Until the
+principal-grant adapter lands, correctness of the supplied set is scored
+externally by CHAOS-3616's authorization oracle, which knows the true
+per-principal grants. The partition bounds *what was searched*; this set
+bounds *what may be returned*. Graph membership never grants access.
 
 **Authorization applies to intermediate hops.** A path that merely routes
 through a restricted entity still discloses that the entity exists and that
@@ -159,11 +199,14 @@ the packet. The packet builder then re-checks that every emitted hop endpoint
 is an authorized *entity* — defence in depth against a readback bug or a
 future second reader.
 
-**There is no person entity kind, and adding one is a contract change.**
-Contribution and membership are ingested as team-level association with an
-aggregate `contributor_count`. That makes "no person-level ranking" a
-property of what the graph *contains* rather than of what a ranking function
-happens to do.
+**There are no person entities, and no person-derived rankings.** Also
+narrowed after review. No graph kind names an individual, so a person can
+never be a node, a traversal endpoint, a cohort member or a ranked subject;
+contribution and membership are team-level association with an aggregate
+`contributor_count`. What is *not* claimed is that a person's name cannot
+appear — it transits inside source-supplied titles and labels, as untrusted
+evidence, and the corpus's `zero_person_level_ranking` oracle scores the
+downstream behaviour this vocabulary alone cannot guarantee.
 
 ## Entities versus observations
 
@@ -190,7 +233,7 @@ heuristics over timestamps.
 | Control | Where |
 | --- | --- |
 | Independent projection/read flags, default off | `flags.py` |
-| Bounded rows, nodes, paths, bytes, time | `budgets.py`, applied in `projection.py`, `readback.py`, `packet_builder.py` |
+| Bounded rows, nodes, paths, bytes, time | `budgets.py`, applied in `projection.py`, `readback.py`, `packet_builder.py`. Every bound that removes work sets a flag and a reason; the ingest bound **refuses** rather than annotating |
 | Every bound paired with the contract's `TruncationReason` | `budgets.py` |
 | Indexed-through watermark, stale / partial / never-projected | `watermark.py` |
 | Canonical writes never wait on graph indexing | `projection.py` is pure and synchronous; the store write happens strictly after |
@@ -302,6 +345,15 @@ follows:
    once) is **INVALID**, not KILLED, and aborts the run — an anchor that
    silently stopped matching after a refactor would otherwise become a
    permanently green "the guard is proven" line;
+1. every mutation declares the failure it must produce, and a run that goes
+   red for a *different* reason is **WRONG-REASON**, not KILLED. This was
+   itself a review finding: disabling the prose-fact guard used to let `None`
+   reach `match.group(...)`, so the test failed with `AttributeError` from a
+   downstream dereference rather than because prose was accepted — and the
+   harness said KILLED. Making the rule executable then caught a second
+   over-claim of my own, where the packet builder's authorization re-check
+   turned out to be backed by the frozen contract's own validator, so that
+   mutation now claims only what it proves;
 2. the restore is verified by **re-running the tests**, never by a git check
    — a disabled guard still compiles and `git diff` calls a restored file
    clean whatever it contains;
@@ -334,10 +386,20 @@ where a tie would put the order back at the mercy of row order.
 store: it shuffles the ingestion order and requires an identical traversal,
 including with the per-entity cap set to 1 so the cap is actually exercised.
 
-The differential's scope is stated honestly in the test itself: both readers
+The comparator now derives its field set from `InvestigationReadout` itself,
+so a new field is compared by default and every exclusion carries a written
+reason — the standing differential-oracle rule. Broadening it that way
+immediately found a **second** real defect: the live reader was not reading
+aliases back at all, which would have surfaced later as the capability
+revision's alias/acronym search finding everything in the reference and
+nothing in the live store.
+
+The scope that remains is stated honestly rather than implied: both readers
 share `_traverse`, so the comparison measures two **fetch** strategies rather
-than two search algorithms, and observation-to-entity attachment is excluded
-because `add_nodes_and_edges_bulk` writes entity edges only.
+than two search algorithms, and observation-to-entity attachment is a *known
+gap* (not a permitted difference) because `add_nodes_and_edges_bulk` writes
+entity edges only — a Graphiti evidence/readback defect can still pass this
+differential while changing the packet.
 
 ## Cross-repository ownership
 

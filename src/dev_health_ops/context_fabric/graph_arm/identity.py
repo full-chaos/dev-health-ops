@@ -62,7 +62,15 @@ GRAPH_ARM_NAMESPACE = uuid.UUID("6f0f1d4e-9f2a-5c6b-8d13-2c7a4b5e9f01")
 #: would need escaping is rejected rather than mangled.
 PARTITION_PATTERN = re.compile(r"^cf_trial_[a-z0-9][a-z0-9_-]{0,96}$")
 
-_ORG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,96}$")
+#: Lowercase only, and that is load-bearing rather than stylistic. The
+#: pattern used to accept mixed case while derivation lowercased, so
+#: ``Org_A`` and ``org_a`` -- both accepted -- derived the SAME partition
+#: and therefore shared one FalkorDB keyspace: one organization's purge
+#: would drop the other's data and a read would see both. Derivation must
+#: be injective over accepted ids, so the normalisation is removed and the
+#: accepted set is narrowed instead. Found by adversarial review; pinned by
+#: ``test_chaos_3617_identity.py::TestServerDerivedPartition``.
+_ORG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,96}$")
 _PARTITION_PREFIX = "cf_trial_"
 
 
@@ -77,18 +85,20 @@ def partition_for_org(org_id: str) -> str:
 
     if not _ORG_PATTERN.fullmatch(org_id):
         raise ValueError(
-            f"organization id {org_id!r} is not a plain identifier; refusing "
-            "to derive a graph partition from it, because normalising it "
-            "could collide two organizations into one partition"
+            f"organization id {org_id!r} is not a lowercase plain identifier; "
+            "refusing to derive a graph partition from it. Normalising (rather "
+            "than refusing) is what would collide two organizations into one "
+            "partition, so this function never normalises: the mapping from "
+            "accepted id to partition is injective by construction"
         )
-    partition = f"{_PARTITION_PREFIX}{org_id.lower()}"
+    partition = f"{_PARTITION_PREFIX}{org_id}"
     if not PARTITION_PATTERN.fullmatch(partition):
         raise ValueError(f"derived partition {partition!r} is not well formed")
     return partition
 
 
 def org_from_partition(partition: str) -> str:
-    """The organization id a partition was derived from, lowercased.
+    """The organization id a partition was derived from.
 
     Used only for diagnostics and for
     :func:`assert_partition_matches_org`. It is *not* an authorization

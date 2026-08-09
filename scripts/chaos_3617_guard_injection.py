@@ -54,6 +54,17 @@ class Mutation:
     anchor: str
     replacement: str
     tests: tuple[str, ...]
+    #: The failure the disabled guard must produce, as a substring of pytest's
+    #: FAILED/error line. Required, and it is the whole point: a mutation that
+    #: merely makes the suite red has proved nothing about the guard it names.
+    #:
+    #: Adversarial review caught exactly that here. Disabling the prose-fact
+    #: guard with ``if False and match is None`` let ``None`` reach
+    #: ``match.group(...)``, so the test failed with ``AttributeError`` from a
+    #: downstream dereference rather than because prose was accepted -- and
+    #: the harness reported KILLED. Recording *where* a mutation died was
+    #: never enough; the category has to be checked against the claim.
+    expect_failure: str
 
 
 MUTATIONS: tuple[Mutation, ...] = (
@@ -71,6 +82,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "TestDirectionSurvivesTheRoundTrip::"
             "test_a_reversed_relationship_record_is_refused_at_ingestion",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="cross-tenant-records-accepted",
@@ -85,6 +97,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_structured_ingestion.py::"
             "TestIngestionRefusals::test_a_foreign_record_never_reaches_the_store",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="org-dropped-from-node-identity",
@@ -96,6 +109,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         anchor='    name = "\\0".join((org_id, discriminator, kind, canonical_id))',
         replacement='    name = "\\0".join((discriminator, kind, canonical_id))',
         tests=(f"{TESTS}/test_chaos_3617_identity.py::TestTenantScopedAddressing",),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="unauthorized-entity-traversed",
@@ -109,6 +123,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         tests=(
             f"{TESTS}/test_chaos_3617_authorization.py::TestAuthorizationFiltering",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="partition-trusted-not-rederived",
@@ -122,6 +137,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_identity.py::TestServerDerivedPartition::"
             "test_a_partition_from_another_org_is_rejected",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="prose-allowed-in-structured-attributes",
@@ -137,17 +153,33 @@ MUTATIONS: tuple[Mutation, ...] = (
             "TestStructuredRecordsAreNotProse::"
             "test_an_attribute_cannot_hold_a_sentence",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="prose-fact-accepted-on-read",
         defect="a stored prose fact is presented to a consumer as evidence",
         path=SRC / "backend.py",
-        anchor="    if match is None:",
-        replacement="    if False and match is None:",
+        # The disabled guard must PARSE the prose, not crash on it. The
+        # earlier version of this mutation only skipped the raise, so `None`
+        # reached `match.group(...)` and the test failed with AttributeError
+        # -- red for a reason that had nothing to do with prose being
+        # accepted. Adversarial review caught it; `expect_failure` below now
+        # makes that class of miss impossible.
+        anchor=(
+            "    match = TRIPLE_FACT_PATTERN.fullmatch(fact)\n    if match is None:"
+        ),
+        replacement=(
+            "    match = TRIPLE_FACT_PATTERN.fullmatch(fact)\n"
+            "    if match is None:\n"
+            "        parts = fact.split()\n"
+            "        return (parts[0], RelationshipType.REFERENCES, parts[-1])\n"
+            "    if False:"
+        ),
         tests=(
             f"{TESTS}/test_chaos_3617_structured_ingestion.py::"
             "TestStructuredRecordsAreNotProse::test_a_prose_fact_is_rejected_on_read",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="unapproved-document-reaches-extraction",
@@ -160,6 +192,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "TestStructuredRecordsAreNotProse::"
             "test_unapproved_documents_never_reach_extraction",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="projection-flag-ignored",
@@ -171,6 +204,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_live_store.py::TestIndexingFailureAndFallback::"
             "test_a_write_with_the_projection_flag_off_is_refused",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="never-projected-store-reports-fresh",
@@ -188,6 +222,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "TestSourceHealthAndFreshness::"
             "test_a_never_projected_store_reports_unavailable_not_empty",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="traversal-order-dependent",
@@ -207,12 +242,21 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
         replacement="    return tuple(adjacency.edges.get(canonical_id, ()))",
         tests=(f"{TESTS}/test_chaos_3617_determinism.py::TestOrderIndependence",),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="builder-trusts-the-readouts-authorization-claim",
         defect=(
-            "a readback bug (or a future second reader) smuggles an "
-            "unauthorized hop endpoint past the emission step"
+            "the arm stops refusing an unauthorized hop endpoint itself and "
+            "leaves it to the frozen contract. NOTE the honest scope, found "
+            "by the failure-category check: with this guard disabled the "
+            "packet is still refused -- by RelatedContext's own "
+            "validate_paths_stay_inside_authorized_set. So this mutation "
+            "proves the arm refuses EARLIER and with a typed PermissionError "
+            "naming the endpoint, not that the endpoint would otherwise "
+            "reach a consumer. Two independent refusals is the actual state, "
+            "and claiming more would be the over-claim this harness exists "
+            "to catch"
         ),
         path=SRC / "packet_builder.py",
         anchor="                if endpoint not in authorized_entity_ids:",
@@ -221,6 +265,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_authorization.py::TestAuthorizationFiltering::"
             "test_the_builder_refuses_a_readout_whose_paths_escape_the_set",
         ),
+        expect_failure="ValidationError",
     ),
     Mutation(
         mutation_id="graphiti-telemetry-left-on",
@@ -235,6 +280,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_containment.py::TestTelemetryContainment::"
             "test_telemetry_is_forced_off",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="traversal-work-is-unbounded",
@@ -249,6 +295,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
             "test_the_node_visit_budget_bounds_work_not_only_results",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="traversal-has-no-wall-clock-backstop",
@@ -263,6 +310,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
             "test_the_wall_clock_budget_bounds_the_traversal",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="packet-byte-budget-not-applied",
@@ -275,6 +323,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "TestPacketByteBudget::"
             "test_a_packet_over_the_byte_budget_is_refused_not_trimmed",
         ),
+        expect_failure="DID NOT RAISE",
     ),
     Mutation(
         mutation_id="preview-creates-the-keyspace-it-previewed",
@@ -289,6 +338,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_live_store.py::TestDeterministicCleanup::"
             "test_previewing_an_absent_organization_constructs_no_store",
         ),
+        expect_failure="assert",
     ),
     Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
@@ -303,6 +353,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             f"{TESTS}/test_chaos_3617_live_gate.py::"
             "test_the_gate_fails_rather_than_skips_when_a_live_run_is_required",
         ),
+        expect_failure="Failed",
     ),
 )
 
@@ -350,6 +401,22 @@ def _first_failure(output: str) -> str:
         if line.startswith("E   ") and line.strip() != "E":
             return line.strip()
     return "<no failure line captured>"
+
+
+def _failure_evidence(output: str) -> str:
+    """Every line pytest attributes to a failure, joined.
+
+    Includes the ``E   `` assertion/exception lines and the ``FAILED``
+    summary, because the category can appear in either: an assertion message
+    for a guard that raises a typed error, or the exception name for one that
+    refuses by construction.
+    """
+
+    return "\n".join(
+        line
+        for line in output.splitlines()
+        if line.startswith(("E ", "FAILED ", "E\t")) or " - " in line
+    )
 
 
 def main() -> int:
@@ -409,6 +476,19 @@ def main() -> int:
             return 1
 
         died_at = _first_failure(output)
+        evidence = _failure_evidence(output)
+        if mutation.expect_failure not in evidence:
+            print(
+                f"WRONG-REASON {mutation.mutation_id}: the tests failed, but "
+                f"not for the reason this mutation claims to prove.\n"
+                f"      expected the failure to mention: "
+                f"{mutation.expect_failure!r}\n"
+                f"      actual: {died_at}\n"
+                "      A mutation that merely turns the suite red is not "
+                "evidence that the guard catches the defect it names.",
+                file=sys.stderr,
+            )
+            return 1
         verdicts.append((mutation.mutation_id, _summary_line(output), died_at))
         print(f"RED   {mutation.mutation_id}")
         print(f"      defect: {mutation.defect}")

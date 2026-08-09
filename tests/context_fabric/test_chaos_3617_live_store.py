@@ -22,6 +22,7 @@ Skips route through ``live_gate.require_live_store`` so that
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -69,6 +70,25 @@ def _unique_org(prefix: str) -> str:
     """
 
     return f"{prefix}{uuid.uuid4().hex[:12]}"
+
+
+def _stable(value: object) -> object:
+    """A comparison-stable rendering of any readout field.
+
+    Dataclasses become sorted tuples of their fields so two readers'
+    instances compare by value; everything else passes through.
+    """
+
+    if isinstance(value, tuple | list):
+        return tuple(sorted((_stable(item) for item in value), key=repr))
+    if isinstance(value, frozenset | set):
+        return tuple(sorted(repr(item) for item in value))
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return tuple(
+            (field.name, _stable(getattr(value, field.name)))
+            for field in dataclasses.fields(value)
+        )
+    return value
 
 
 def _reorg(batch, org_id: str):
@@ -211,43 +231,65 @@ class TestLiveWriteAndReadBack:
 class TestReaderDifferential:
     """The differential oracle. Two implementations, one comparison."""
 
-    @staticmethod
-    def _comparable(readout: InvestigationReadout) -> dict[str, object]:
-        """The fields both readers are expected to agree on.
+    #: Every field of ``InvestigationReadout`` the comparison deliberately
+    #: does NOT check, each with the reason. Derived-from-the-type below, so
+    #: a field added to the readout is compared by default and an exclusion
+    #: has to be argued for in writing -- adversarial review found the old
+    #: hand-written comparator quietly omitting most of the readout.
+    EXCLUDED: dict[str, str] = {
+        "org_id": "an input to both readers, not a result",
+        "partition": "an input to both readers, not a result",
+        "seed_canonical_ids": "an input to both readers, not a result",
+        "observations": (
+            "KNOWN GAP, not a permitted difference: add_nodes_and_edges_bulk "
+            "writes entity edges only, so the live reader cannot yet recover "
+            "which entities an observation was about and reports empty "
+            "subject lists. A Graphiti evidence/readback defect can therefore "
+            "pass this differential while changing the packet. Closing it "
+            "needs observation-attachment readback (PR2)"
+        ),
+        "observed_source_classes": (
+            "derived entirely from entities/paths/observations; excluded only "
+            "because observations are, and it would report that gap twice"
+        ),
+    }
 
-        Scope stated plainly: observation *attachment* is excluded, because
-        ``add_nodes_and_edges_bulk`` writes entity edges only, so the live
-        reader cannot yet recover which entities an observation was about.
-        That is a known gap in this revision, not a difference the readers
-        are permitted to have -- the entity and path fields below are
-        compared exactly.
+    @classmethod
+    def _comparable(cls, readout: InvestigationReadout) -> dict[str, object]:
+        """Every readout field except the explicitly excluded ones.
+
+        Built by walking ``InvestigationReadout``'s own fields rather than
+        listing what to compare. That inversion is the point: a new field is
+        compared automatically, and leaving it out requires adding a reason
+        to :data:`EXCLUDED`.
         """
 
-        return {
-            "entities": [
-                (entity.canonical_id, entity.kind.value, entity.display_label)
-                for entity in readout.entities
-            ],
-            "paths": sorted(
-                (
-                    path.origin_canonical_id,
-                    path.terminal_canonical_id,
-                    tuple(
-                        (
-                            step.from_canonical_id,
-                            step.relationship.value,
-                            step.direction.value,
-                            step.to_canonical_id,
-                        )
-                        for step in path.steps
-                    ),
-                )
-                for path in readout.paths
-            ),
-            "authorization_filtered_count": readout.authorization_filtered_count,
-            "entities_truncated": readout.entities_truncated,
-            "paths_truncated": readout.paths_truncated,
-        }
+        compared: dict[str, object] = {}
+        for field in dataclasses.fields(InvestigationReadout):
+            if field.name in cls.EXCLUDED:
+                continue
+            value = getattr(readout, field.name)
+            compared[field.name] = _stable(value)
+        return compared
+
+    def test_the_exclusion_list_covers_only_real_readout_fields(self) -> None:
+        """A stale exclusion would silently stop comparing a live field."""
+
+        names = {field.name for field in dataclasses.fields(InvestigationReadout)}
+        assert set(self.EXCLUDED) <= names, set(self.EXCLUDED) - names
+
+    def test_the_comparison_covers_most_of_the_readout(self) -> None:
+        """Anti-vacuity: the comparator must actually compare something.
+
+        If ``EXCLUDED`` ever grew to cover the interesting fields, every
+        differential below would pass while measuring nothing.
+        """
+
+        names = {field.name for field in dataclasses.fields(InvestigationReadout)}
+        compared = names - set(self.EXCLUDED)
+        assert {"entities", "paths", "authorization_filtered_count"} <= compared
+        assert len(compared) >= len(names) - len(self.EXCLUDED)
+        assert all(reason.strip() for reason in self.EXCLUDED.values())
 
     @pytest.mark.parametrize(
         ("seeds", "max_hops"),

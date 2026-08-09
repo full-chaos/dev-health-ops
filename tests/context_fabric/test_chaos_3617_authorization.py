@@ -266,3 +266,38 @@ class TestRepositoryScoping:
             if entry.evidence.entity_id == "rev_4412_1"
         )
         assert tuple(review.evidence.repository_ids) == ("repo_auth_gateway",)
+
+
+class TestTheCallerDeclaredResidualIsExplicit:
+    """The boundary is named, not implied.
+
+    Adversarial review's point was not that this design is wrong -- the
+    frozen contract states the same residual -- but that nothing in the arm
+    said so at the place a caller reads. These pin that it does.
+    """
+
+    def test_derivation_raises_rather_than_returning_a_plausible_default(
+        self,
+    ) -> None:
+        """A permissive default is how an unverified scope becomes invisible."""
+
+        from dev_health_ops.context_fabric.graph_arm.readback import (
+            AuthorizationDerivationNotImplementedError,
+            derive_authorized_entity_ids,
+        )
+
+        with pytest.raises(
+            AuthorizationDerivationNotImplementedError, match="does not verify"
+        ):
+            derive_authorized_entity_ids("org_alpha", "principal_analyst")
+
+    def test_the_readback_docstring_states_the_residual_at_the_boundary(self) -> None:
+        """Grep-able, and at the module a caller actually reads."""
+
+        from dev_health_ops.context_fabric.graph_arm import readback
+
+        doc = readback.__doc__ or ""
+        assert "caller-declared and the arm does not verify it" in doc
+        assert "CHAOS-3616" in doc, (
+            "the residual must name what does check it, or it reads as an unowned gap"
+        )

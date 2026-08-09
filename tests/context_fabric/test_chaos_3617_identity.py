@@ -134,7 +134,8 @@ class TestServerDerivedPartition:
         assert identity.org_from_partition("cf_trial_org_alpha") == "org_alpha"
 
     @pytest.mark.parametrize(
-        "org_id", ["org/alpha", "org alpha", "", "org:alpha", "-leading"]
+        "org_id",
+        ["org/alpha", "org alpha", "", "org:alpha", "-leading", "Org_A", "ORG_A"],
     )
     def test_an_org_id_that_would_need_escaping_is_refused_not_sanitised(
         self, org_id: str
@@ -145,8 +146,57 @@ class TestServerDerivedPartition:
         refusal rather than best effort.
         """
 
-        with pytest.raises(ValueError, match="not a plain identifier"):
+        with pytest.raises(ValueError, match="not a lowercase plain identifier"):
             identity.partition_for_org(org_id)
+
+    def test_partition_derivation_is_injective_over_accepted_ids(self) -> None:
+        """Two accepted org ids can never share a partition.
+
+        The defect this pins, found by adversarial review: the validator used
+        to accept mixed case while derivation lowercased, so ``Org_A`` and
+        ``org_a`` were BOTH accepted and BOTH derived ``cf_trial_org_a``.
+        Partition is keyspace, so those two organizations shared one store --
+        one org's purge would drop the other's data and a read would see
+        both. The fix narrows what is accepted rather than normalising it,
+        because normalising is precisely what collides them.
+        """
+
+        accepted = [
+            "org_alpha",
+            "org_beta",
+            "orga",
+            "org-a",
+            "org1",
+            "a",
+            "org_alpha_2",
+        ]
+        partitions = [identity.partition_for_org(org) for org in accepted]
+        assert len(set(partitions)) == len(accepted), (
+            f"partition derivation is not injective: {sorted(partitions)}"
+        )
+
+    @pytest.mark.parametrize("org_id", ["Org_A", "ORG_A", "orgAlpha"])
+    def test_a_mixed_case_org_id_is_refused_rather_than_normalised(
+        self, org_id: str
+    ) -> None:
+        """The specific regression. Refusal, not lowercasing.
+
+        A test asserting only that ``Org_A`` derives *something* would have
+        passed while the collision was live, so this asserts the refusal.
+        """
+
+        with pytest.raises(ValueError, match="lowercase plain identifier"):
+            identity.partition_for_org(org_id)
+
+    def test_a_case_variant_cannot_reach_another_orgs_keyspace(self) -> None:
+        """The isolation statement of the same property.
+
+        If ``Org_A`` were accepted, it would derive ``org_a``'s partition and
+        pass ``assert_partition_matches_org`` for a tenant it is not.
+        """
+
+        with pytest.raises(ValueError):
+            identity.assert_partition_matches_org("cf_trial_org_a", "Org_A")
 
     def test_a_partition_from_another_org_is_rejected(self) -> None:
         """A supplied partition is never an authorization claim.

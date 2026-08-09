@@ -20,16 +20,26 @@ is not a limitation being worked around; it is the frozen contract's own
 shape. "Incident context association" means *a path between entities whose
 evidence is an incident*, not *a hop that lands on an incident*.
 
-**There is no person kind, and adding one is a contract change.** No
-``GraphEntityKind`` and no ``GraphObservationKind`` names an individual.
-Contribution and membership are ingested as team-level association with a
-contributor *count* (see ``records.RelationshipRecord.contributor_count``),
-never as person nodes. ``allowlists.TRIAL_SOURCE_RATIONALE`` already records
-that ``COGNITIVE_LOAD`` is admitted "team-level only: ... the packet cannot
-express [per-developer rollups] because no person subject kind exists"; this
-module is the ingestion-side half of that same statement, and it makes
-``ZERO_PERSON_LEVEL_RANKING`` a property of what the graph *contains* rather
-than of what a ranking function happens to do.
+**There are no person ENTITIES, and no person-derived rankings.** That is
+the precise claim, narrowed after adversarial review showed the looser one
+("a person identity cannot reach the graph") to be false.
+
+What is true: no ``GraphEntityKind`` and no ``GraphObservationKind`` names an
+individual, so a person can never be a node, a traversal endpoint, a cohort
+member or a ranked subject. Contribution and membership are ingested as
+team-level association with a contributor *count* (see
+``records.RelationshipRecord.contributor_count``), never as person nodes.
+``allowlists.TRIAL_SOURCE_RATIONALE`` records the matching read-side rule for
+``COGNITIVE_LOAD``: "team-level only ... because no person subject kind
+exists".
+
+What is NOT true: that a person's *name* cannot appear. Source-supplied
+labels, titles and outcomes are copied verbatim, so a review titled "Ada
+Lovelace requested changes" is stored and carried into the packet as
+untrusted evidence. Nothing ranks it, nothing aggregates it per person, and
+no structure in this arm can express a person as a subject — and the
+corpus's ``zero_person_level_ranking`` oracle scores the downstream behaviour
+that this vocabulary alone cannot guarantee.
 """
 
 from __future__ import annotations

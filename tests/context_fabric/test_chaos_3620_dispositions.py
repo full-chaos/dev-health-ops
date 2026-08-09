@@ -199,8 +199,9 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
     def test_the_conflict_requirement_stays_NOT_ACCEPTED_on_CHAOS_3612(self) -> None:
         """The instruction is explicit: never silently passed.
 
-        Asserted by requirement id and blocker id rather than by prose, so a
-        future edit that marks it proven has to delete this test to do it.
+        Asserted by requirement id and blocker id rather than by prose, so
+        upgrading it requires visibly editing the pin -- a reviewer sees the
+        change in the diff rather than inferring it from a status field.
         """
 
         conflict = next(
@@ -245,7 +246,7 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
             for requirement in REQUIREMENTS
             if requirement.status is Status.DEFECT
         }
-        assert defects == {"P1", "P6", "S5"}, (
+        assert defects == {"P1", "P6", "S5", "X1"}, (
             f"the recorded defect set changed to {sorted(defects)}; update "
             "the CHAOS-3620 findings record and the lane report together"
         )
@@ -450,6 +451,82 @@ class TestTheArchitecturePageAgreesWithTheLedger:
             f"{sorted(page_defects - ledger_defects)} extra, missing "
             f"{sorted(ledger_defects - page_defects)}"
         )
+
+    #: The page must say this, verbatim, for as long as the ledger holds any
+    #: requirement that is not proven. It is the sentence a reader takes away,
+    #: and the tables below it are what they check only if it makes them
+    #: curious.
+    NOT_GREEN_STATEMENT = "**The hard gate is not green.**"
+
+    #: Phrasings that assert a clean result. Forbidden while the ledger
+    #: disagrees. A list of phrases is not a complete defence on its own —
+    #: which is why the required-statement check above carries the weight —
+    #: but it closes the specific rewrite an author reaches for first.
+    GREEN_CLAIMS = (
+        "hard gate is green",
+        "every requirement passed",
+        "all requirements passed",
+        "all hard safety gates are green",
+        "no defects were found",
+    )
+
+    def test_the_page_cannot_claim_a_clean_result_while_the_ledger_disagrees(
+        self,
+    ) -> None:
+        """The attack the first version of this class did not stop.
+
+        The independent verifier flipped the page's headline to "the gate is
+        green", left a fabricated row behind, and the suite stayed green: the
+        checks compared TABLES and never the sentence a reader actually takes
+        away. A page whose tables are correct and whose headline is a lie is
+        worse than no page, because the headline is what gets quoted.
+
+        Keyed on the ledger's own state, so it cannot go stale: the required
+        statement is demanded exactly while something is unproven, and is
+        released automatically if everything ever becomes proven.
+        """
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        unproven = [
+            requirement
+            for requirement in REQUIREMENTS
+            if requirement.status is not Status.PROVEN
+        ]
+
+        if unproven:
+            assert self.NOT_GREEN_STATEMENT in page, (
+                f"the ledger holds {len(unproven)} unproven requirements and "
+                f"the page does not carry {self.NOT_GREEN_STATEMENT!r}. The "
+                "headline is what a reader quotes; it may not be softer than "
+                "the ledger"
+            )
+            folded = page.casefold()
+            claimed = [claim for claim in self.GREEN_CLAIMS if claim in folded]
+            assert not claimed, (
+                f"the page asserts a clean result ({claimed}) while the "
+                f"ledger records {len(unproven)} unproven requirements"
+            )
+        else:
+            assert self.NOT_GREEN_STATEMENT not in page, (
+                "every requirement is proven but the page still says the gate "
+                "is not green — the page is now understating the result"
+            )
+
+    def test_the_page_names_every_blocked_requirement_and_its_blocker(self) -> None:
+        """A ``not_accepted`` requirement that the page never mentions is a
+        gate a reader does not know is closed."""
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        for requirement in REQUIREMENTS:
+            if requirement.status is not Status.NOT_ACCEPTED:
+                continue
+            assert requirement.requirement_id in page, (
+                f"{requirement.requirement_id} is blocked and the page never names it"
+            )
+            assert requirement.blocker in page, (
+                f"{requirement.requirement_id} is blocked on "
+                f"{requirement.blocker} and the page never names the blocker"
+            )
 
     def test_the_page_claims_no_status_count_the_ledger_does_not_produce(
         self,

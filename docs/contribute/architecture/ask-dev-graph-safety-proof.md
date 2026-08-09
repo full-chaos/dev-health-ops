@@ -78,8 +78,8 @@ Linear blocker.
 
 | Status | Count | Meaning |
 | --- | --- | --- |
-| `proven` | 29 | Holds, and the named tests are what establish it. |
-| `defect` | 3 | Violated by merged code; the named tests pin current behaviour. |
+| `proven` | 28 | Holds, and the named tests are what establish it. |
+| `defect` | 4 | Violated by merged code; the named tests pin current behaviour. |
 | `not_accepted` | 2 | Blocked on another issue; never scored as a pass. |
 | `unmeasured` | 10 | Not measured, with a stated reason rather than a proxy. |
 
@@ -132,7 +132,7 @@ The packet's `conflicts` tuple is an empty literal
 either. Acceptance is blocked on CHAOS-3612. The frozen contract *does* carry
 the field, so CHAOS-3612 is the only blocker — asserted rather than assumed.
 
-## Three defects in merged code
+## Four defects in merged code
 
 None were fixed in this lane; all are pinned so they cannot close silently.
 **A9 is deliberately not in this table** — it is `not_accepted`, not a
@@ -141,6 +141,7 @@ caught it.
 
 | ID | Requirement | What is wrong |
 | --- | --- | --- |
+| X1 | prompt injection must not reach a consumer | Source-controlled **titles** arrive verbatim. The adapter copies an evidence record's `display_label` onto the observation (`corpus_adapter.py:210`), the emitter copies the title onto the packet's evidence entry (`packet_builder.py:829`), and nothing inspects title text. Document *bodies* are contained; titles are not, and the packet feeds Ask Dev synthesis. |
 | P6 | withdrawn sources disappear from packets | REVOKED and DELETED evidence reaches the emitted packet. Nothing in `context_fabric` reads evidence state; the adapter carries it as a display attribute (`corpus_adapter.py:218`) and no branch reads it back. |
 | P1 | every driver **or relationship** closes to evidence | Drivers close, and the check is shown rejecting an arm-shaped bad response. Relationships never close: `_lineage_path` emits `evidence_ref_ids=()` as a literal (`packet_builder.py:632`). |
 | S5 | current versus historical stays explicit | A relationship that ended two months before the trial instant is emitted with `relevance = current`. `relevance` is a literal at eight sites in `packet_builder.py` (542, 618, 630, 751, 799, 868, 935, 982) and nothing computes it. |

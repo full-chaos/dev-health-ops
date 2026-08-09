@@ -31,6 +31,8 @@ run on it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from dev_health_ops.api.dev.investigation_contract import (
@@ -954,6 +956,79 @@ class TestEvidenceScopeConfusion:
                 f"restricted project: {leaked}"
             )
 
+    def test_a_substituted_handle_is_rejected_by_the_consumer_side_check(
+        self,
+    ) -> None:
+        """The substitution attack the requirement actually names.
+
+        Review was right that org-scoping alone is not "evidence-id
+        substitution": the interesting attack is *within* an organization —
+        swap one cited handle for another legitimately-minted one and see
+        whether anything downstream notices.
+
+        Something does. The handle is an HMAC over the record's own payload,
+        and ``EvidenceExpansionService._authorize_expansion``
+        (``evidence_service.py:517-528``) refuses to expand anything whose
+        signature does not verify — collapsing it to ``UNAUTHORIZED`` /
+        ``not_found``. Both directions of the swap are exercised, because an
+        attacker can move the handle to the record or the record to the
+        handle.
+        """
+
+        packet = spine.investigate("team_cinder").packet
+        first, second = (
+            packet.evidence_coverage.evidence_index[0].evidence,
+            packet.evidence_coverage.evidence_index[1].evidence,
+        )
+        signer = spine.signer()
+
+        assert signer.verify(world.ORG_HELIO, first), (
+            "a handle this run minted does not verify, so every rejection "
+            "below would be indistinguishable from a broken signer"
+        )
+        assert signer.verify(world.ORG_HELIO, second)
+
+        wearing_another_handle = first.model_copy(
+            update={"evidence_ref_id": second.evidence_ref_id}
+        )
+        assert not signer.verify(world.ORG_HELIO, wearing_another_handle), (
+            "an evidence record wearing a DIFFERENT record's legitimately "
+            "minted handle passed verification: handles are interchangeable "
+            "within an organization"
+        )
+
+        relabelled_under_its_own_handle = first.model_copy(
+            update={"entity_id": second.entity_id}
+        )
+        assert not signer.verify(world.ORG_HELIO, relabelled_under_its_own_handle), (
+            "an evidence record relabelled to point at a different entity "
+            "still verified under its original handle: the signature does not "
+            "cover the subject"
+        )
+
+    def test_the_production_expansion_path_is_gated_on_that_verification(
+        self,
+    ) -> None:
+        """The check above must be the one production actually consults.
+
+        Otherwise this class proves a signer works while the consumer never
+        asks it. Asserted against the authorization gate's source so the
+        coupling is visible rather than assumed.
+        """
+
+        from dev_health_ops.api.dev import evidence_service
+
+        source = Path(evidence_service.__file__).read_text(encoding="utf-8")
+        gate = source[source.index("async def _authorize_expansion") :]
+        gate = gate.split("\n    async def ", 1)[0].split("\n    def ", 1)[0]
+        assert "self._signer.verify(" in gate, (
+            "the evidence-expansion authorization gate no longer verifies the "
+            "handle signature, so a substituted handle would be expanded"
+        )
+        assert "UNAUTHORIZED" in gate, (
+            "the gate no longer collapses a failed verification to UNAUTHORIZED"
+        )
+
     def test_a_handle_minted_for_another_organization_does_not_verify(self) -> None:
         """Substitution across the org boundary, at the signer.
 
@@ -1286,9 +1361,14 @@ class TestTheIndependentOracleCannotYetScoreThisArm:
             "the declared authorized set now contains entity ids only -- the "
             "CHAOS-3620 authorized-set-widening record must be updated"
         )
-        assert non_entities & set(world.EVIDENCE_BY_SLUG), (
-            "the declared set contains non-entity ids that are not corpus "
-            f"evidence slugs either: {sorted(non_entities)[:5]}"
+        assert non_entities <= set(world.EVIDENCE_BY_SLUG) | {
+            item.measurement_key for item in world.WORLD_MEASUREMENTS
+        }, (
+            "the declared set contains non-entity ids that are neither corpus "
+            "evidence slugs nor measurement keys. Set containment, not "
+            "intersection-nonempty: an intersection test passes while an "
+            "UNKNOWN id rides alongside a known one, which is exactly the "
+            f"shape a leak takes: {sorted(non_entities - set(world.EVIDENCE_BY_SLUG))[:5]}"
         )
 
     def test_the_audit_can_therefore_never_be_clean_for_this_arm(self) -> None:

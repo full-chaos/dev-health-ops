@@ -512,10 +512,8 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
         path=SRC / "packet_builder.py",
         anchor=(
-            "        elif all(\n"
-            "            item in evidence_free_paths for item in "
-            "driver.supporting_path_ids\n"
-            "        ):"
+            "        elif all(item in evidence_free_paths for item in "
+            "driver.supporting_path_ids):"
         ),
         replacement="        elif False:",
         tests=(

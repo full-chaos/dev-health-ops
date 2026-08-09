@@ -87,6 +87,7 @@ from dev_health_ops.api.dev.investigation_contract import (
 )
 from dev_health_ops.api.dev.investigation_contract.vocabulary import EdgeValidityBasis
 
+from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .projection import PROJECTION_VERSION
 from .readback import QUERY_VERSION, DiscoveredPath, InvestigationReadout
 from .vocabulary import entity_kind_to_subject_kind
@@ -97,6 +98,7 @@ __all__ = [
     "PRODUCER_ID",
     "RANKING_VERSION",
     "JobContext",
+    "PacketTooLargeError",
     "TrialContext",
     "UnsupportedComparisonShapeError",
     "build_packet",
@@ -119,6 +121,20 @@ _SOURCE_CONTRACT_VERSION = "graph_arm_source_read.v1"
 #: Mirrored here rather than caught as a pydantic error, so exceeding it is a
 #: disclosed cap instead of a crash at emission time.
 _MAX_PATH_CITATIONS = 10
+
+
+class PacketTooLargeError(RuntimeError):
+    """The emitted packet exceeded the run's byte budget.
+
+    Raised rather than trimmed. A packet is a web of internal references --
+    evidence cites entities, entities cite paths, drivers cite both -- and
+    every one of those is checked by the frozen contract, so there is no
+    field this builder could drop without either breaking closure or
+    silently changing what the arm claims to have found. The honest response
+    is to fail and let the caller re-run with tighter traversal budgets,
+    which produces a smaller *investigation* rather than a truncated report
+    of a larger one.
+    """
 
 
 class UnsupportedComparisonShapeError(NotImplementedError):
@@ -238,6 +254,7 @@ def build_packet(
     signer: EvidenceReferenceSigner,
     trial: TrialContext,
     produced_at: datetime,
+    budgets: TrialBudgets = DEFAULT_BUDGETS,
     staleness_tolerance: timedelta = DEFAULT_STALENESS_TOLERANCE,
 ) -> AskDevInvestigationPacket:
     """Turn one bounded traversal into the frozen investigation packet."""
@@ -633,7 +650,7 @@ def build_packet(
         ),
     )
 
-    return AskDevInvestigationPacket(
+    packet = AskDevInvestigationPacket(
         schema_version="ask_dev_investigation_packet.v1",
         packet_id=_packet_id(trial.run_id, job.job_id),
         organization_id=readout.org_id,
@@ -650,3 +667,14 @@ def build_packet(
         evidence_coverage=evidence_coverage,
         versions=versions,
     )
+
+    # The byte bound is measured on the *serialized* packet, which is the
+    # only size a consumer ever sees.
+    size = len(packet.model_dump_json())
+    outcome = budgets.check_bytes(size)
+    if not outcome.within_budget:
+        raise PacketTooLargeError(
+            f"{outcome.detail}; re-run with tighter traversal budgets rather "
+            "than emitting a packet nobody bounded"
+        )
+    return packet

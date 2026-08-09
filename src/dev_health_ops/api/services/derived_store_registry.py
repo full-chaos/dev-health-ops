@@ -198,6 +198,7 @@ CLICKHOUSE_DERIVED_STORES: tuple[str, ...] = (
     "worklogs",
 )
 
+
 async def _visit_context_fabric_graph_trial(org_id: str, dry_run: bool) -> int:
     """CHAOS-3617: purge the org's partition of the trial graph store.
 

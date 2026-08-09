@@ -190,7 +190,7 @@ heuristics over timestamps.
 | Control | Where |
 | --- | --- |
 | Independent projection/read flags, default off | `flags.py` |
-| Bounded rows, nodes, paths, bytes, time, output tokens | `budgets.py` |
+| Bounded rows, nodes, paths, bytes, time | `budgets.py`, applied in `projection.py`, `readback.py`, `packet_builder.py` |
 | Every bound paired with the contract's `TruncationReason` | `budgets.py` |
 | Indexed-through watermark, stale / partial / never-projected | `watermark.py` |
 | Canonical writes never wait on graph indexing | `projection.py` is pure and synchronous; the store write happens strictly after |
@@ -198,6 +198,22 @@ heuristics over timestamps.
 | Org-deletion registration | `EXTERNAL_DERIVED_STORES` (CHAOS-3566) |
 | Content-safe logs | `IndexWatermark.detail_for` — timestamps and counts only |
 | Exact dependency/projection/query versions | `versions.*` on every packet; `backend.graphiti_version()` reads installed metadata |
+
+`max_nodes_visited` counts *dequeued path prefixes*, not reached entities:
+the traversal enumerates simple paths, so a dense neighbourhood can expand
+for a long time while reaching nothing new. `max_wall_seconds` backstops it
+for shapes a count cannot predict, and is tested through an injected clock
+rather than a real sleep. A packet over `max_result_bytes` is **refused, not
+trimmed** — the packet is a web of internal references the frozen contract
+checks, so there is no field the builder could drop without either breaking
+closure or silently changing what the arm claims to have found.
+
+`max_output_tokens` is declared and **not enforced by anything in this
+revision**, because the structured path makes no model call and there is no
+model output to bound yet. That gap is pinned by a test rather than left to
+be discovered: `TestOutputTokenBudget` asserts both that the checker works
+and that no module in the arm references a model-calling entry point, so the
+control cannot start reading as enforced without the test failing first.
 
 A never-projected store reports `unavailable`, checked **before** staleness,
 so an empty store can never read as "current with nothing in it".
@@ -243,7 +259,8 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each guard the arm relies on, the harness disables **that guard alone** by
+For each of the **17** guards the arm relies on, the harness disables
+**that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
 follows:

@@ -34,8 +34,9 @@ see; dropping the whole path is the only correct response, and
 
 from __future__ import annotations
 
+import time
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
@@ -248,8 +249,10 @@ def _traverse(
     authorized: frozenset[str],
     max_hops: int,
     budgets: TrialBudgets,
+    clock: Callable[[], float] = time.monotonic,
 ) -> InvestigationReadout:
     hops_allowed = min(max_hops, budgets.max_path_hops)
+    started = clock()
     # Distinct entities refused, not refusal *events*: the same restricted
     # neighbour is reached once per path that touches its neighbour, and
     # counting attempts would make the disclosed number depend on graph
@@ -283,8 +286,27 @@ def _traverse(
     # chains that bury the explanatory ones.
     paths_per_terminal: dict[str, int] = {}
 
+    # Every dequeued prefix is a unit of work. Bounding *entities* is not
+    # enough: this traversal enumerates simple paths, so a dense
+    # neighbourhood can expand for a very long time while reaching no new
+    # entity at all. ``max_nodes_visited`` is therefore counted here, on the
+    # work actually done, and ``max_wall_seconds`` backstops it for the
+    # shapes a count cannot predict.
+    visited = 0
+
     while queue:
         current, steps = queue.popleft()
+        visited += 1
+        work_outcome = budgets.check_nodes(visited)
+        if not work_outcome.within_budget:
+            entities_truncated = True
+            truncation_reason = work_outcome.truncation_reason
+            break
+        elapsed_outcome = budgets.check_elapsed(clock() - started)
+        if not elapsed_outcome.within_budget:
+            entities_truncated = True
+            truncation_reason = elapsed_outcome.truncation_reason
+            break
         if len(steps) >= hops_allowed:
             continue
         for (

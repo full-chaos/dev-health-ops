@@ -237,6 +237,46 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
     ),
     Mutation(
+        mutation_id="traversal-work-is-unbounded",
+        defect=(
+            "path enumeration expands without limit in a dense neighbourhood, "
+            "reaching no new entity while doing unbounded work"
+        ),
+        path=SRC / "readback.py",
+        anchor="        if not work_outcome.within_budget:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
+            "test_the_node_visit_budget_bounds_work_not_only_results",
+        ),
+    ),
+    Mutation(
+        mutation_id="traversal-has-no-wall-clock-backstop",
+        defect=(
+            "a traversal shape a work count cannot predict runs past its time "
+            "budget with nothing to stop it"
+        ),
+        path=SRC / "readback.py",
+        anchor="        if not elapsed_outcome.within_budget:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
+            "test_the_wall_clock_budget_bounds_the_traversal",
+        ),
+    ),
+    Mutation(
+        mutation_id="packet-byte-budget-not-applied",
+        defect="a packet larger than any declared bound reaches a consumer",
+        path=SRC / "packet_builder.py",
+        anchor="    if not outcome.within_budget:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_operational_controls.py::"
+            "TestPacketByteBudget::"
+            "test_a_packet_over_the_byte_budget_is_refused_not_trimmed",
+        ),
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

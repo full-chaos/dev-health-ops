@@ -78,6 +78,16 @@ class TrialBudgets:
     max_cohort_members: int = 50
     max_result_bytes: int = 2_000_000
     max_wall_seconds: float = 60.0
+    #: Bounds model *output* on the approved-unstructured extraction path.
+    #: **Not enforced by anything in this revision, and deliberately so:**
+    #: the structured path makes no model call at all, so there is no output
+    #: to bound yet. Declared now because the issue lists it among the
+    #: required operational controls and a control invented later tends to
+    #: be invented to fit whatever the implementation already does.
+    #: ``test_chaos_3617_operational_controls.py`` asserts both halves --
+    #: that ``check_output_tokens`` works, and that no code path currently
+    #: consumes model output -- so nothing here claims enforcement it does
+    #: not have.
     max_output_tokens: int = 8_000
 
     def __post_init__(self) -> None:

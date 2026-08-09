@@ -206,12 +206,49 @@ because that posture is already proven in production.
   shadow, because a shadow-mode bug must never fail the run it shadows.
 - **No live model call.** No provider is a parameter of any function here.
 - **Canonical services keep their authority.** `canonical_bypass_offenders`
-  rejects any packet citing an evidence handle no canonical service minted
-  for that run. A fabricated measurement cannot arrive as a wrong number —
-  the packet contract has nowhere to put one — so it arrives as a citation to
-  a handle that never existed, and that is what is checked.
+  digests each cited evidence record and compares it to what canonical
+  services actually minted. A fabricated measurement cannot arrive as a
+  wrong number — the packet contract has nowhere to put one — so it arrives
+  as a citation. An earlier version compared **handles only**, and the
+  adversarial review broke it in one line: keep a genuine handle, rewrite
+  the record's display label, and the forgery was accepted. A handle is a
+  pointer; the claim lives in the record, and there is no cosmetic field on
+  an evidence record. The seam is also tenant-scoped: a packet declaring a
+  different organization is rejected rather than compared against another
+  tenant's canonical material.
+- **Off means off.** A disabled seam records `skipped_disabled` rather than
+  evaluating. Recorded, not silent — "the seam ran and chose to do nothing"
+  and "the seam never ran" are different facts, and a trial that cannot tell
+  them apart cannot audit its own coverage.
 - **Comparable.** Every record carries arm identity, packet schema version,
   projection version and the full evidence-handle lineage.
+
+## Comparison dimensions
+
+A cohort may only claim a dimension the run actually measured, so dimensions
+are derived from **populated `DevSourceContent` slots**, never from a source
+class label. `review_load` additionally requires a pull-request fact
+carrying review signal: a merged PR with no review state measures delivery,
+not review load. `work_item`/`metric_refs` contributes nothing, because
+which dimension a metric ref measures depends on which metric the run asked
+for, and a blanket entry would re-create the defect this rule exists to
+prevent.
+
+Every `available` relationship row declares the source class and native
+token it reads, checked at import against the landed relationship matrix —
+the vocabulary that describes what adapters actually mint. The contract's
+endpoint allowlist says what a relationship *may* look like; the matrix says
+what exists. An availability claim has to satisfy both.
+
+## Projection totality
+
+`project_native_investigation` returns a packet or a gap and **never
+raises**. That is a hard contract, not a nicety: the consumer is a shadow
+seam whose job is to contain faults, so an escaping exception would be
+recorded as a *seam* fault — attributing the arm's inability to express its
+own run to the harness measuring it. A run with no governed result, a cohort
+too small to compare, and a packet the contract rejects are all measured
+outcomes with their own gap reasons.
 
 ## Flags
 

@@ -335,25 +335,36 @@ Two further gap reasons name the refusals: `no_bounded_window` and
 "the product understood the question and found nothing" from "the product
 never got that far".
 
-## Every finished run leaves exactly one record
+## What a finished run leaves behind
 
-The seam's outcomes are a partition, and that is what makes the trial's
-denominator readable:
+**With both flags off — which is every deployed process today — a run
+leaves no record at all.** There is no "the seam ran and declined" row: the
+orchestrator holds `None` for both collaborators and never reaches the seam.
+That is the inertness property, and it is worth stating plainly because the
+outcome table below is easy to misread as a per-run partition of all runs.
+
+With **both** flags on, every run whose frame persisted leaves exactly one
+record, and these are the outcomes:
 
 | Outcome | Meaning |
 | --- | --- |
 | `recorded` | the arm produced a packet and it survived validation |
 | `producer_gap` | the arm ran and reported the run as unprojectable |
-| `skipped_disabled` | the seam is switched off for this process |
 | `packet_invalid` / `canonical_bypass_rejected` | the packet was refused, and why |
 | `seam_fault` | the seam itself faulted; the live run is unaffected |
 
-`producer_gap` was added during review. A producer returning `None` used to
-produce **no record at all**, while a disabled seam produced
-`skipped_disabled` — so the trial could distinguish "the seam chose to do
-nothing" from "the seam never ran", but could distinguish neither from "the
-arm could not express this run". Those are the runs the trial most needs to
-count.
+`skipped_disabled` also exists on the enum but is **unreachable from the
+production wiring**: the orchestrator returns before evaluating when the
+seam is disabled, and `native_shadow_wiring` only ever constructs an enabled
+one. It is reachable by calling `evaluate` directly on a disabled seam,
+which the seam's own tests do.
+
+`producer_gap` was added during review, and the reason it was added does not
+depend on that unreachable state. A producer returning `None` used to
+produce **no record at all**, so a run the arm could not express was
+indistinguishable from a run the seam never saw — and "how often can the
+baseline express its own run" is one of the numbers the whole comparison
+turns on.
 
 The seam stays arm-neutral about *why*: the reason is the arm's own
 vocabulary, and it lives in the arm's own log line
@@ -406,6 +417,39 @@ without either flag implying the other.
 the flags therefore gate a tested constructor rather than a live path. No
 deployed process reads them today. CHAOS-3619 makes that call when it needs
 the trial to run.
+
+## Declared gaps
+
+Each of these is a known limit of what landed, written down so a reader does
+not have to discover it. None is a defect to be found later.
+
+**No durable table.** The recorder logs; see above for why, and for what
+CHAOS-3619 has to decide.
+
+**`native_shadow_wiring` is not called from `production_runtime.py`.** The
+flags gate a tested constructor rather than a live path.
+
+**`authorization_filtered_count` is always 0, and unresolved-mention texts
+are not surfaced.** `FinishedRunContext` carries neither. The contract
+treats an unknown count as zero and says so rather than guessing, which is
+honest, but it is still a gap.
+
+**The producer Protocol is synchronous (CHAOS-3625).** `build_packet` is a
+plain method, so a slow or blocking arm stalls the event loop, and the run's
+remaining wall-clock budget is not re-checked afterwards.
+
+Be precise about what the post-`terminal()` placement buys here, because the
+two properties are easy to conflate. It protects **durability**: the run is
+already written, so a slow producer can no longer delay or lose it. It does
+**not** protect **tail latency**: `finish()` awaits the seam before
+returning, so a blocking producer still delays the caller's response.
+Streamed output ordering is unaffected either way, since the terminal event
+reaches the sink first.
+
+The honest fixes are an async Protocol or a post-producer budget check, and
+that Protocol is the interface the graph arm is already being built against,
+so it is not reshaped here. CHAOS-3619's trial infrastructure needs a
+runner-level timeout regardless and owns this.
 
 ## Historical slice
 

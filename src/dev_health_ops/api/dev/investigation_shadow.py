@@ -179,19 +179,35 @@ class InvestigationShadowStatus(StrEnum):
 
     #: A valid packet was accepted and a shadow frame assembled.
     RECORDED = "recorded"
-    #: The seam is switched off. Recorded rather than silent, so a run that
-    #: chose to do nothing is distinguishable from a seam that never ran.
+    #: The seam was asked to evaluate while switched off.
+    #:
+    #: **Unreachable from the production wiring, and that is not a defect
+    #: to fix -- it is a claim to state accurately.** The orchestrator
+    #: returns before calling :meth:`InvestigationShadow.evaluate` when the
+    #: seam is disabled, and ``native_shadow_wiring`` only ever constructs
+    #: ``InvestigationShadow(enabled=True)``, so "off" is the ABSENCE of a
+    #: collaborator rather than a disabled one. This member is reachable
+    #: only by calling ``evaluate`` directly on a disabled seam, which the
+    #: seam's own tests do.
+    #:
+    #: An earlier version of this comment leaned on ``SKIPPED_DISABLED`` to
+    #: justify ``PRODUCER_GAP`` by contrast -- "a disabled seam records, so
+    #: an unprojectable run should too". The independent verifier caught
+    #: that the contrast describes a state production never reaches. The
+    #: justification below is the one that survives.
     SKIPPED_DISABLED = "skipped_disabled"
     #: The arm ran and reported this run as unprojectable.
     #:
-    #: Added by the codex review, which caught the asymmetry: a producer
-    #: returning ``None`` used to produce NO record at all, while a disabled
-    #: seam produced ``SKIPPED_DISABLED`` -- so the trial could tell "the
-    #: seam chose to do nothing" from "the seam never ran", but could NOT
-    #: tell "the arm could not express this run" from either. Those are the
-    #: runs the trial most needs to count. The seam stays arm-neutral about
-    #: WHY: the reason is the arm's own vocabulary, and it lives in the
-    #: arm's log line, not in a field this seam would have to understand.
+    #: Added by the codex review. The defect was simple and did not need a
+    #: contrast to be real: a producer returning ``None`` produced NO record
+    #: at all, so a run the arm could not express was indistinguishable
+    #: from a run the seam never saw -- and those are the runs the trial
+    #: most needs to count, because "how often can the baseline express its
+    #: own run" is one of the numbers the comparison turns on.
+    #:
+    #: The seam stays arm-neutral about WHY: the reason is the arm's own
+    #: vocabulary, and it lives in the arm's log line, not in a field this
+    #: seam would have to understand.
     PRODUCER_GAP = "producer_gap"
     #: The payload failed the canonical validator.
     PACKET_INVALID = "packet_invalid"

@@ -1834,6 +1834,26 @@ class DevOrchestrator:
             # Its record remains a local nothing reads, which is still the
             # structural half of "flipping the flag changes zero live-path
             # behavior"; the inertness tests prove the other half.
+            #
+            # DECLARED GAP -- CHAOS-3625. ``build_packet`` is SYNCHRONOUS
+            # (PR 1's frozen Protocol), so a slow or blocking producer stalls
+            # the event loop here and the run's remaining wall-clock budget is
+            # not re-checked after it.
+            #
+            # Be precise about what this position does and does not buy,
+            # because the two are easy to conflate: sitting below
+            # ``terminal()`` protects DURABILITY -- the run is already
+            # written, so a slow producer can no longer delay or lose it. It
+            # does NOT protect TAIL LATENCY: ``finish()`` awaits this before
+            # returning, so a blocking producer still delays the caller's
+            # response. Streamed output ordering is unaffected either way,
+            # since the terminal event reaches the sink above.
+            #
+            # Not fixed here on purpose: the honest fixes are an async
+            # Protocol or a post-producer budget check, and that Protocol is
+            # the interface the graph arm is already being built against.
+            # CHAOS-3619's trial infrastructure needs a runner-level timeout
+            # regardless, and owns this.
             if persisted_frame is not None:
                 await self._run_investigation_shadow(
                     run_id=run_id,
@@ -3862,12 +3882,20 @@ class DevOrchestrator:
                 # A normal outcome -- the native arm reports several kinds
                 # of run as unprojectable by design -- but a RECORDED one.
                 #
-                # This used to `return None`, and the codex review named the
-                # asymmetry: a disabled seam records SKIPPED_DISABLED, so
-                # the trial could distinguish "chose to do nothing" from
-                # "never ran", but an arm that could not express a run
-                # produced nothing at all and was indistinguishable from
-                # both. Those are the runs the trial most needs to count.
+                # This used to `return None`, so a run the arm could not
+                # express left no trace and was indistinguishable from a run
+                # the seam never saw. Those are the runs the trial most
+                # needs to count: "how often can the baseline express its
+                # own run" is one of the numbers the comparison turns on.
+                #
+                # (An earlier version of this comment justified the change
+                # by contrast with SKIPPED_DISABLED. The independent
+                # verifier caught that SKIPPED_DISABLED is unreachable from
+                # the production wiring -- the guard above returns first,
+                # and the factory only ever builds an enabled seam -- so the
+                # contrast described a state that never occurs. The defect
+                # was real without it.)
+                #
                 # The REASON stays in the arm's own log line, because the
                 # reason is the arm's vocabulary and this seam must not
                 # learn to speak it.

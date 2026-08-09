@@ -1158,6 +1158,37 @@ def _base_env() -> dict[str, str]:
     return env
 
 
+def failure_region(output: str) -> str:
+    """The part of a pytest run that says why it FAILED.
+
+    The whole reason this function exists: ``expected_failure`` used to be
+    matched against the entire output, and pytest echoes SOURCE. So a
+    ``GUARD`` token could be credited from anywhere -- a passing assertion
+    above the real failure, a docstring, even a comment. The independent
+    verifier demonstrated exactly that: an unearned kill, credited from an
+    echoed line, in a harness whose entire purpose is refusing unearned
+    kills. 15 of the 31 cases were structurally exposed to it.
+
+    Two line shapes carry the real verdict and neither can be produced by
+    echoed source:
+
+    * ``E   ...`` -- pytest's assertion-detail lines, which is where the
+      failing assertion's own message lands;
+    * ``FAILED <nodeid> - <message>`` -- the short-summary line.
+
+    Everything else is context. Matching only here is what makes "the test
+    failed for the reason this case claims" a measurement rather than a
+    coincidence.
+    """
+
+    lines = [
+        line
+        for line in output.splitlines()
+        if line.startswith("E ") or line.startswith("FAILED ")
+    ]
+    return "\n".join(lines)
+
+
 def _verify(case: GuardCase, *, verbose: bool) -> str | None:
     """Return an error string, or ``None`` when the guard behaved as claimed."""
 
@@ -1222,23 +1253,38 @@ def _verify(case: GuardCase, *, verbose: bool) -> str | None:
     # review found: two plants were reported KILLED while the failure came
     # from the contract validator downstream, so the projection's own
     # assertion was never reached and was never proven load-bearing.
+    #
+    # Both checks below read the FAILURE REGION, not the whole output, and
+    # that is the second half of the same hole. pytest echoes source, so a
+    # token matched anywhere could be credited from a PASSING assertion
+    # above the real failure, or from a docstring, or from a comment. The
+    # independent verifier demonstrated an unearned kill through exactly
+    # that path, with 15 of these cases structurally exposed -- an
+    # echo-credited kill in the harness whose whole job is refusing
+    # unearned kills. Symmetrically applied: a forbidden token echoed from
+    # source used to REJECT a case that had genuinely fired, which cost a
+    # round to diagnose and forced an awkward workaround in a test comment.
+    region = failure_region(output)
     for forbidden in case.forbidden_failure:
-        if forbidden in output:
+        if forbidden in region:
             return (
                 f"{case.case_id}: the test failed, but on {forbidden!r} -- not "
                 f"the named assertion {case.expected_failure!r}. A "
                 "producer-side guard proved by a downstream rejection is "
                 "proving somebody else's invariant.\n"
                 f"  stake: {case.stake}\n"
-                f"  output tail: {output[-800:]}"
+                f"  failure region: {region[-800:]}"
             )
-    if case.expected_failure not in output:
+    if case.expected_failure not in region:
         return (
             f"{case.case_id}: the test failed, but {case.expected_failure!r} "
-            "never appeared in the output, so the failure is not the one this "
-            "case claims to prove.\n"
+            "never appeared in the FAILURE region, so the failure is not the "
+            "one this case claims to prove. (It may well appear elsewhere in "
+            "the output -- pytest echoes source -- which is precisely what "
+            "this check refuses to credit.)\n"
             f"  stake: {case.stake}\n"
-            f"  output tail: {output[-800:]}"
+            f"  failure region: {region[-800:] or '<empty>'}\n"
+            f"  output tail: {output[-600:]}"
         )
     if verbose:
         print(output[-1500:])
@@ -1260,13 +1306,28 @@ def main() -> int:
             return 2
 
     failures: list[str] = []
+    unmeasured = 0
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.case_id} ... ", end="", flush=True)
         error = _verify(case, verbose=args.verbose)
         if error is None:
             print("guard observed failing")
         else:
-            print("NOT LOAD-BEARING")
+            # A case that never got measured is not a case that failed, and
+            # the two demand different responses: "not load-bearing" sends a
+            # reader to delete a guard, "unmeasured" sends them to fix their
+            # environment or their plant. The per-case message always said
+            # which; only this label conflated them, and a label is what
+            # most readers act on.
+            measured = not (
+                "the PLANT could not run" in error
+                or "does not pass against the pristine tree" in error
+            )
+            if measured:
+                print("NOT LOAD-BEARING")
+            else:
+                print("UNMEASURED")
+                unmeasured += 1
             failures.append(error)
 
     print()
@@ -1274,8 +1335,14 @@ def main() -> int:
         for failure in failures:
             print(failure, file=sys.stderr)
             print(file=sys.stderr)
+        not_load_bearing = len(failures) - unmeasured
+        parts = []
+        if not_load_bearing:
+            parts.append(f"{not_load_bearing} not load-bearing")
+        if unmeasured:
+            parts.append(f"{unmeasured} UNMEASURED (never proved anything)")
         print(
-            f"{len(failures)} of {len(cases)} guards are not load-bearing.",
+            f"{len(failures)} of {len(cases)} guards failed: {', '.join(parts)}.",
             file=sys.stderr,
         )
         return 1

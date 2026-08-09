@@ -1102,6 +1102,63 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="DID NOT RAISE",
     ),
     Mutation(
+        mutation_id="trusted-record-vouches-for-a-linkage-it-is-not-about",
+        defect=(
+            "trust is read off the record and never checked against what the "
+            "record is ABOUT, so an edge that merely CITES a canonical record "
+            "inherits its trust -- the residue of the scoping defect, which "
+            "put the corpus's planted false dependency back at principal "
+            "standing"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "        vouching=tuple(\n"
+            "            item\n"
+            "            for item in trusted\n"
+            "            if endpoints & set("
+            "context.observations[item].subject_canonical_ids)\n"
+            "        ),"
+        ),
+        replacement="        vouching=tuple(trusted),",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestOnlyARecordAboutTheLinkageMayVouchForIt",
+        ),
+        expect_failure="vouched for a linkage it is not about",
+    ),
+    Mutation(
+        mutation_id="attribution-proceeds-without-readable-attachment",
+        defect=(
+            "a reader that cannot say what a record is about still attributes "
+            "on it, or reports the support as withheld -- an authorization "
+            "claim about the caller's grant that nothing supports"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    if not trusted and not context.observation_attachment_available:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestAttributionNeedsAReaderThatKnowsWhatARecordIsAbout",
+        ),
+        expect_failure="DriverExclusionReason.UNAUTHORIZED_EVIDENCE",
+    ),
+    Mutation(
+        mutation_id="live-reader-overclaims-attachment-capability",
+        defect=(
+            "the live reader declares it can recover observation attachment "
+            "when it cannot, which turns the 'is this record about the "
+            "linkage' rule into a silent no-op on the live path alone"
+        ),
+        path=SRC / "readback.py",
+        anchor="            observation_attachment_available=False,",
+        replacement="            observation_attachment_available=True,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_each_reader_declares_the_attachment_capability_it_actually_has",
+        ),
+        expect_failure="claims it can recover observation attachment",
+    ),
+    Mutation(
         mutation_id="packet-assembly-derives-an-unnamed-number",
         defect=(
             "the no-arithmetic proof stops at the two discovery modules while "

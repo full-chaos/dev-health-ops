@@ -246,6 +246,56 @@ class DriverFinding:
 
 
 @dataclass(frozen=True, slots=True)
+class _Support:
+    """The records cited for one claim, split by what each may establish.
+
+    Was a three-tuple. Named because the split that matters is no longer
+    trusted-versus-untrusted: a *trusted* record that is about neither end of
+    the linkage it is cited on cannot vouch for it either, and a positional
+    tuple that grew a fourth slot is how a field ends up read from the wrong
+    one.
+    """
+
+    #: Trusted records about an ENDPOINT of the asserting linkage. Only these
+    #: can establish that the linkage is canonically asserted.
+    vouching: tuple[str, ...] = ()
+    #: Trusted records the edge cites that are about neither endpoint. They
+    #: enrich a linkage something else already vouched for; on their own they
+    #: establish nothing, because "canonical record X exists somewhere" is
+    #: not a statement about this edge.
+    corroborating: tuple[str, ...] = ()
+    #: Records asserting the claim whose trust level does not permit
+    #: attribution.
+    untrusted: tuple[str, ...] = ()
+    #: Ids the edge references that the traversal did not return.
+    withheld: tuple[str, ...] = ()
+
+    @property
+    def trusted(self) -> tuple[str, ...]:
+        """Every record this finding may cite as support.
+
+        Empty without a voucher, whatever else was cited. That is the whole
+        rule: support travels with the edge, and a record about neither of
+        the things the edge links is not support for linking them.
+        """
+
+        if not self.vouching:
+            return ()
+        return (*self.vouching, *self.corroborating)
+
+    @property
+    def unvouching(self) -> tuple[str, ...]:
+        """What was cited and could not vouch, for the exclusion to report.
+
+        An absence explains nothing, and the two shapes are different
+        findings: an untrusted note asserting a linkage, and a canonical
+        record that is simply about something else.
+        """
+
+        return (*self.untrusted, *self.corroborating)
+
+
+@dataclass(frozen=True, slots=True)
 class _Context:
     """Everything the rules read, assembled once."""
 
@@ -257,6 +307,12 @@ class _Context:
     observations: Mapping[str, DiscoveredObservation]
     #: observation id -> whether its record may support an attribution.
     trusted_observation: Mapping[str, bool] = field(default_factory=dict)
+    #: Whether the reader that produced this readout can say what an
+    #: observation is ABOUT. Declared by the reader, never inferred from
+    #: whether attachments happen to be present: inferring it would make the
+    #: endpoint check a silent no-op on exactly the reader that cannot
+    #: perform it, which is the original defect with a smaller blast radius.
+    observation_attachment_available: bool = True
 
 
 def _is_trusted(observation: DiscoveredObservation) -> bool:
@@ -326,8 +382,8 @@ def _linkage_observations(
     context: _Context,
     paths: Sequence[DiscoveredPath],
     linkage: tuple[str, RelationshipType, str],
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """``(trusted, untrusted, withheld)`` observation ids for ONE edge.
+) -> _Support:
+    """The records cited by ONE edge, split by what each may establish.
 
     Scoped to the edge that asserts the linkage, and to nothing else. The
     first version of this collected every observation touching the *cause
@@ -339,10 +395,27 @@ def _linkage_observations(
     That version promoted the corpus's planted false claim to PRINCIPAL
     DRIVER. Support has to travel with the edge, not with the entity.
 
-    Both halves are returned because the untrusted set is not noise to be
-    dropped — a linkage whose only support is untrusted content is a
-    specific, named finding, and discarding those ids would leave the
-    exclusion unable to say what it excluded.
+    **Scoping to the edge was necessary and was not sufficient.** Adversarial
+    review then made the fabricated edge *cite* a canonical record that is
+    about neither of its endpoints, and the claim reached PRINCIPAL DRIVER
+    again: this function checked relationship type, unordered endpoints and
+    global trust, and never asked whether the cited record was ABOUT the
+    linkage. A canonical record's trust says its own content can be relied
+    on; it says nothing about an edge that merely names it. So a record may
+    vouch only for a linkage one of whose ends it is about, and
+    :attr:`_Support.trusted` is empty without such a voucher.
+
+    Trusted records about a third entity are kept as ``corroborating`` rather
+    than dropped, because the corpus has real ones -- a CI run recorded
+    against the repository, cited on the ``blocked_by`` edge between a project
+    and a work unit -- and deleting genuine evidence would trade a false
+    claim for a false absence. They ride along with a linkage something else
+    vouched for; alone they establish nothing.
+
+    Nothing is discarded, in any bucket. A linkage whose only support is
+    untrusted content, and one whose only support is about something else,
+    are different findings, and an exclusion that could not say which is
+    which would report both as "no evidence".
     """
 
     near, relationship, far = linkage
@@ -363,25 +436,39 @@ def _linkage_observations(
     # when the truth is "you may not see what does".
     withheld = tuple(item for item in ordered if item not in context.observations)
     visible = [item for item in ordered if item in context.observations]
-    trusted = tuple(item for item in visible if context.trusted_observation.get(item))
-    untrusted = tuple(
-        item for item in visible if not context.trusted_observation.get(item)
+    endpoints = {near, far}
+    trusted = [item for item in visible if context.trusted_observation.get(item)]
+    return _Support(
+        vouching=tuple(
+            item
+            for item in trusted
+            if endpoints & set(context.observations[item].subject_canonical_ids)
+        ),
+        corroborating=tuple(
+            item
+            for item in trusted
+            if not endpoints & set(context.observations[item].subject_canonical_ids)
+        ),
+        untrusted=tuple(
+            item for item in visible if not context.trusted_observation.get(item)
+        ),
+        withheld=withheld,
     )
-    return trusted, untrusted, withheld
 
 
-def _observation_support(
-    context: _Context, observation_id: str
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """``(trusted, untrusted, withheld)`` for a one-observation finding.
+def _observation_support(context: _Context, observation_id: str) -> _Support:
+    """Support for a finding built from ONE observation.
 
     Nothing can be withheld here: the observation came from the readout, so
-    the caller can see it by construction.
+    the caller can see it by construction. Nor can it fail the endpoint test
+    the linkage rules apply — the rules that build these findings select the
+    observation *because* it is about the subject, so the record and the claim
+    are the same thing and a trusted record vouches for itself.
     """
 
     if context.trusted_observation.get(observation_id):
-        return (observation_id,), (), ()
-    return (), (observation_id,), ()
+        return _Support(vouching=(observation_id,))
+    return _Support(untrusted=(observation_id,))
 
 
 def _classify(
@@ -394,25 +481,27 @@ def _classify(
     summary_detail: str,
     summary_subject: str | None = None,
     paths: Sequence[DiscoveredPath],
-    support: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    support: _Support,
     mechanism: str = StandingMechanism.STRUCTURAL,
     assertion_basis: AssertionBasis = AssertionBasis.SOURCE_ASSERTED,
     forced_exclusion: DriverExclusionReason | None = None,
 ) -> DriverFinding:
     """Decide one candidate's standing and, if excluded, why.
 
-    ``support`` is ``(trusted, untrusted)`` observation ids, computed by the
-    caller because the correct scope differs by rule: an attribution's
-    support is the *edge* that asserts it, and a symptom's is the
-    observation itself. Centralising it here was the first design and it is
-    what let a canonical record attached to a different edge vouch for a
-    fabricated one.
+    ``support`` is a :class:`_Support`, computed by the caller because the
+    correct scope differs by rule: an attribution's support is the *edge*
+    that asserts it, and a symptom's is the observation itself. Centralising
+    it here was the first design and it is what let a canonical record
+    attached to a different edge vouch for a fabricated one.
 
-    The order of the checks is the point and is not arbitrary: withheld
-    evidence first (a caller who may not see the support must be told that,
-    not told the claim is unsupported), then trust, then — for a *driver*
-    claim only — currency. Each earlier check would mask a later one, and
-    the reason reported must be the first thing actually wrong.
+    The order of the checks is the point and is not arbitrary: an unreadable
+    attachment first (a reader that cannot say what a record is about has not
+    withheld anything and has not been contradicted — it simply cannot
+    answer), then withheld evidence (a caller who may not see the support
+    must be told that, not told the claim is unsupported), then trust, then —
+    for a *driver* claim only — currency. Each earlier check would mask a
+    later one, and the reason reported must be the first thing actually
+    wrong.
 
     **Two of the contract's six exclusion reasons are deliberately not
     produced by the structural rules, and saying so is the point.**
@@ -428,7 +517,7 @@ def _classify(
     """
 
     path_ids = tuple(path.path_id for path in paths)
-    trusted, untrusted, withheld = support
+    trusted, withheld = support.trusted, support.withheld
 
     def finding(
         standing: DriverStanding,
@@ -474,6 +563,25 @@ def _classify(
         # record backing it is trustworthy -- an untrusted measurement
         # is refused for its trust before its comparability.
         return finding(DriverStanding.EXCLUDED, forced_exclusion)
+    if not trusted and not context.observation_attachment_available:
+        # The reader cannot say what any record is ABOUT, so nothing can be
+        # shown to vouch for anything. Reported as its own state rather than
+        # folded into "withheld": the live reader has not withheld a record
+        # from this caller and has not been contradicted by one -- it cannot
+        # answer the question. Saying "you may not see the support" there
+        # would be an authorization claim the arm has no basis for, and
+        # saying nothing at all would let the endpoint rule become a silent
+        # no-op on precisely the reader that cannot perform it.
+        return finding(
+            DriverStanding.EXCLUDED,
+            DriverExclusionReason.EVIDENCE_CONFLICT_UNRESOLVED,
+            conflicting_evidence_ids=support.unvouching,
+            conflict_detail=(
+                "this readout carries no observation attachment, so no record "
+                "can be shown to be about either end of this linkage and none "
+                "of them may vouch for it"
+            ),
+        )
     if not trusted and withheld:
         # Everything that would have supported this is outside the caller's
         # grant. Reported as its own reason rather than folded into
@@ -483,20 +591,20 @@ def _classify(
             DriverStanding.EXCLUDED, DriverExclusionReason.UNAUTHORIZED_EVIDENCE
         )
     if not trusted:
-        # Every record backing this is untrusted content. The edge or the
-        # observation exists in the graph -- it is ingested, not filtered,
-        # so a correct arm can be SEEN declining it rather than never having
-        # had it. ``untrusted`` may be empty too, which is the plain
-        # no-evidence case and reported the same way: nothing canonical
-        # supports the claim.
+        # Nothing cited here may vouch. Two shapes reach this branch and the
+        # detail says which, because they are different findings: every
+        # record backing the claim is untrusted content, or the records are
+        # trustworthy and about something else entirely. Both may be empty
+        # too, which is the plain no-evidence case.
+        #
+        # The edge or the observation exists in the graph -- it is ingested,
+        # not filtered -- so a correct arm can be SEEN declining it rather
+        # than never having had it.
         return finding(
             DriverStanding.EXCLUDED,
             DriverExclusionReason.EVIDENCE_CONFLICT_UNRESOLVED,
-            conflicting_evidence_ids=untrusted,
-            conflict_detail=(
-                "no canonical or provider-asserted record supports this; the "
-                "only records asserting it are untrusted content"
-            ),
+            conflicting_evidence_ids=support.unvouching,
+            conflict_detail=_unvouched_detail(support),
         )
     if role is not DriverRole.DRIVER:
         # A symptom or a correlate may be reported; it may not be asserted,
@@ -515,6 +623,28 @@ def _classify(
             DriverStanding.EXCLUDED, DriverExclusionReason.NOT_CURRENTLY_RELEVANT
         )
     return finding(DriverStanding.CONTRIBUTING_DRIVER)
+
+
+def _unvouched_detail(support: _Support) -> str:
+    """Why nothing cited here could vouch, in the words that are true of it.
+
+    One sentence for both shapes would have to be vague enough to cover
+    "untrusted" and "about something else", and a reader acting on a vague
+    exclusion cannot tell a poisoned linkage from an evidence-scoping miss.
+    """
+
+    about_something_else = (
+        "records asserting this are trustworthy but are about neither end of "
+        "the linkage, so none of them is a statement about it"
+    )
+    untrusted_only = "the only records asserting it are untrusted content"
+    if support.corroborating and support.untrusted:
+        reason = f"{untrusted_only}, and the remaining {about_something_else}"
+    elif support.corroborating:
+        reason = f"the {about_something_else}"
+    else:
+        reason = untrusted_only
+    return f"no canonical or provider-asserted record supports this; {reason}"
 
 
 def _canonical_endpoints(step: PathStep) -> tuple[str, str]:
@@ -941,6 +1071,7 @@ def discover_drivers(
         trusted_observation={
             item.canonical_id: _is_trusted(item) for item in readout.observations
         },
+        observation_attachment_available=readout.observation_attachment_available,
     )
 
     findings = (

@@ -228,6 +228,7 @@ class TestBudgets:
             authorized=frozenset(fixtures.alpha_authorized_ids()),
             max_hops=3,
             budgets=TrialBudgets(),
+            observation_attachment_available=True,
             clock=lambda: next(ticks),
         )
         assert readout.entities_truncated is True

@@ -236,6 +236,25 @@ class InvestigationReadout:
 
     observed_source_classes: frozenset[SourceClass] = field(default_factory=frozenset)
 
+    #: Whether the reader that produced this readout can say what an
+    #: observation is ABOUT. **Declared by the reader**, never inferred from
+    #: whether attachments happen to be present.
+    #:
+    #: The distinction is load-bearing rather than pedantic.
+    #: :class:`LiveGraphReader` cannot recover attachment today (see its
+    #: docstring), and a rule that skipped the "is this record about the
+    #: linkage" check whenever attachments were absent would become a silent
+    #: no-op on exactly the reader that cannot perform it -- the original
+    #: defect, live-only. Declaring the capability instead makes the gap a
+    #: visible, attributable state: ``discover_drivers`` refuses to attribute
+    #: on such a readout and says so in the exclusion's own words rather than
+    #: reporting the support as withheld, which would be an authorization
+    #: claim nothing supports.
+    #:
+    #: Defaults to ``True`` because a hand-built readout carries whatever
+    #: attachments its author wrote; both real readers set it explicitly.
+    observation_attachment_available: bool = True
+
     def entity_by_id(self) -> Mapping[str, DiscoveredEntity]:
         return {entity.canonical_id: entity for entity in self.entities}
 
@@ -375,6 +394,7 @@ def _traverse(
     authorized: frozenset[str],
     max_hops: int,
     budgets: TrialBudgets,
+    observation_attachment_available: bool,
     clock: Callable[[], float] = time.monotonic,
 ) -> InvestigationReadout:
     # Whichever of the two numbers is smaller becomes the ceiling, and the
@@ -618,6 +638,7 @@ def _traverse(
         paths_truncation_reason=paths_reason,
         evidence_truncation_reason=evidence_reason,
         observed_source_classes=frozenset(observed_classes),
+        observation_attachment_available=observation_attachment_available,
     )
 
 
@@ -747,6 +768,9 @@ class ProjectionGraphReader:
             authorized=frozenset(authorized_entity_ids),
             max_hops=max_hops,
             budgets=budgets,
+            # The projection carries ``observation_attachments`` outright, so
+            # this reader can always say what a record is about.
+            observation_attachment_available=True,
         )
 
 
@@ -972,6 +996,13 @@ class LiveGraphReader:
             authorized=frozenset(authorized_entity_ids),
             max_hops=max_hops,
             budgets=budgets,
+            # ``add_nodes_and_edges_bulk`` writes entity edges only, so this
+            # reader cannot recover which entities an observation was about.
+            # Declared rather than left to be inferred from the empty subject
+            # lists below: a consumer that inferred it would have to guess,
+            # and ``discover_drivers`` would silently stop checking exactly
+            # the thing it cannot check here.
+            observation_attachment_available=False,
         )
 
 

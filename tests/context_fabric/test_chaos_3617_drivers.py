@@ -436,6 +436,186 @@ class TestPoisonedLinkageIsRefused:
         )
 
 
+class TestOnlyARecordAboutTheLinkageMayVouchForIt:
+    """The residue of the scoping defect, and the half scoping did not close.
+
+    Scoping support to the asserting *edge* stopped a canonical record on a
+    neighbouring edge from vouching. Adversarial review then made the
+    fabricated edge **cite** a canonical record that is about neither of its
+    endpoints, and the claim reached PRINCIPAL DRIVER again — because trust
+    was read off the record and never checked against what the record is
+    about. A canonical record's trust says its own content can be relied on.
+    It says nothing about an edge that merely names it.
+
+    The rule has to be honest in both directions, which is why the tests come
+    in pairs: a record about a third entity may not establish a linkage, and
+    a linkage something else already vouched for still keeps such a record as
+    support — the corpus has real ones, and deleting genuine evidence would
+    trade a false claim for a false absence.
+    """
+
+    @staticmethod
+    def _world(*, attached_to: str):
+        """The fabricated citation, with the cited record's subject varied.
+
+        ``proj_other`` sits two hops out so the record is genuinely REACHED
+        and genuinely trusted -- otherwise its rejection would be the
+        traversal never returning it rather than the rule refusing it.
+        """
+
+        return _probe_world(
+            relationships=(
+                (
+                    "proj_subject",
+                    RelationshipType.BLOCKED_BY,
+                    "wu_one",
+                    ("obs_elsewhere",),
+                ),
+                ("proj_subject", RelationshipType.DEPENDS_ON, "dep_two", ()),
+                ("proj_other", RelationshipType.DEPENDS_ON, "dep_two", ()),
+            ),
+            observations=(("obs_elsewhere", attached_to),),
+        )
+
+    def test_a_canonical_record_about_a_third_entity_cannot_establish_a_linkage(
+        self,
+    ) -> None:
+        """The reproduction. This was PRINCIPAL_DRIVER before the endpoint rule."""
+
+        projection, grant = self._world(attached_to="proj_other")
+        readout = _probe_readout(projection, grant, "proj_subject", max_hops=3)
+        # Anti-vacuity: the record really is in this readout, really is
+        # canonical, and really is about neither endpoint.
+        visible = {item.canonical_id: item for item in readout.observations}
+        assert "obs_elsewhere" in visible, "the record was never reached; vacuous"
+        assert visible["obs_elsewhere"].attributes["corpus_trust"] == "canonical"
+        assert visible["obs_elsewhere"].subject_canonical_ids == ("proj_other",)
+
+        claim = _by_id(discover_drivers(readout, "proj_subject", as_of=_PROBE_NOW)[0])[
+            "drv_block_wu_one"
+        ]
+        assert claim.standing is DriverStanding.EXCLUDED, (
+            "a canonical record vouched for a linkage it is not about, which "
+            "is how the corpus's planted false dependency reached principal "
+            "standing"
+        )
+        assert claim.evidence_ids == ()
+        # Present and excluded: the reader is told what was cited and why it
+        # could not be used, rather than being told nothing was cited.
+        assert claim.conflicting_evidence_ids == ("obs_elsewhere",)
+        assert claim.conflict_detail is not None
+        assert "neither end of the linkage" in claim.conflict_detail
+
+    def test_the_same_record_about_an_endpoint_does_establish_it(self) -> None:
+        """The control, and the one that catches a rule tightened too far.
+
+        Identical world, identical record, identical trust — attached to the
+        blocker instead. A rule that refused both would pass the test above
+        while destroying the capability the arm exists to demonstrate.
+        """
+
+        projection, grant = self._world(attached_to="wu_one")
+        found = _by_id(_probe_findings(projection, grant, "proj_subject", max_hops=3))
+        claim = found["drv_block_wu_one"]
+        assert claim.standing is DriverStanding.PRINCIPAL_DRIVER
+        assert claim.evidence_ids == ("obs_elsewhere",)
+
+    def test_a_third_entity_record_still_rides_along_with_a_real_voucher(
+        self, helio
+    ) -> None:
+        """Corroboration is kept; it just cannot be the thing that establishes.
+
+        The corpus models exactly this: ``proj_identity_rewrite blocked_by
+        wu_authcore_release`` cites the work-item record about the blocker
+        AND a CI run recorded against ``repo_identity``, which is neither
+        endpoint. The CI run is genuine evidence and must survive — a rule
+        that only kept endpoint records would trade a false claim for a false
+        absence and would quietly lower the arm's evidence recall.
+        """
+
+        blocker = _by_id(
+            _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
+        )["drv_block_wu_authcore_release"]
+        assert blocker.standing is DriverStanding.PRINCIPAL_DRIVER
+        assert "wi_authcore_release_open" in blocker.evidence_ids  # the voucher
+        assert "ci_identity_blocked" in blocker.evidence_ids  # the corroborator
+
+
+class TestAttributionNeedsAReaderThatKnowsWhatARecordIsAbout:
+    """The live reader cannot recover attachment, and must say so.
+
+    Making the endpoint rule conditional on attachments being present would
+    turn it into a silent no-op on precisely the reader that cannot perform
+    it — the original defect, live-only. Declaring the capability instead
+    makes the gap an attributable state: nothing is attributed, and the
+    exclusion says why in its own words rather than claiming the caller may
+    not see the support.
+
+    CHAOS-3617's H3 residual is what makes this reachable, and it is stated
+    in the PR body as owed rather than closed.
+    """
+
+    def _readout_without_attachment(self):
+        import dataclasses
+
+        projection, grant = _probe_world(
+            relationships=(
+                ("proj_subject", RelationshipType.BLOCKED_BY, "wu_one", ("obs_one",)),
+            ),
+            observations=(("obs_one", "wu_one"),),
+        )
+        honest = _probe_readout(projection, grant, "proj_subject")
+        # The live reader's shape, reproduced exactly: the observations come
+        # back with no subjects, and the reader declares it cannot recover
+        # them. Both halves, because either alone is a different world.
+        return honest, dataclasses.replace(
+            honest,
+            observations=(),
+            observation_attachment_available=False,
+        )
+
+    def test_nothing_is_attributed_when_attachment_cannot_be_read(self) -> None:
+        honest, blind = self._readout_without_attachment()
+        claim = _by_id(discover_drivers(blind, "proj_subject", as_of=_PROBE_NOW)[0])[
+            "drv_block_wu_one"
+        ]
+        assert claim.standing is DriverStanding.EXCLUDED
+        assert claim.evidence_ids == ()
+
+    def test_the_refusal_names_the_capability_and_not_authorization(self) -> None:
+        """ "You may not see it" is a claim about the caller's grant.
+
+        Reporting UNAUTHORIZED_EVIDENCE here would assert something the arm
+        has no basis for: the record was not withheld from this caller, it
+        was unreadable to this reader.
+        """
+
+        _, blind = self._readout_without_attachment()
+        claim = _by_id(discover_drivers(blind, "proj_subject", as_of=_PROBE_NOW)[0])[
+            "drv_block_wu_one"
+        ]
+        assert (
+            claim.exclusion_reason is DriverExclusionReason.EVIDENCE_CONFLICT_UNRESOLVED
+        )
+        assert claim.exclusion_reason is not (
+            DriverExclusionReason.UNAUTHORIZED_EVIDENCE
+        )
+        assert claim.conflict_detail is not None
+        assert "no observation attachment" in claim.conflict_detail
+
+    def test_the_same_world_resolves_on_a_reader_that_can_read_attachment(
+        self,
+    ) -> None:
+        """The control. Otherwise the refusal could be the world being empty."""
+
+        honest, _ = self._readout_without_attachment()
+        assert honest.observation_attachment_available is True
+        claim = _by_id(discover_drivers(honest, "proj_subject", as_of=_PROBE_NOW)[0])[
+            "drv_block_wu_one"
+        ]
+        assert claim.standing is DriverStanding.PRINCIPAL_DRIVER
+
+
 class TestChildCandidatesMustBeAdjacent:
     def test_a_portfolio_reached_further_along_a_path_is_not_an_open_child(
         self, helio
@@ -768,8 +948,47 @@ class TestAuthorization:
         assert claim.standing is DriverStanding.EXCLUDED
         assert claim.exclusion_reason is DriverExclusionReason.UNAUTHORIZED_EVIDENCE
 
-    def test_the_same_world_resolves_when_the_caller_may_see_it(self) -> None:
-        """The control. Otherwise 'withheld' could mean 'never existed'."""
+    def test_the_same_shape_resolves_when_the_support_is_visible_and_its_own(
+        self,
+    ) -> None:
+        """The control. Otherwise 'withheld' could mean 'never existed'.
+
+        The record has to be *about* the linkage as well as visible, which is
+        the H1 rule and is why this control cites a record attached to
+        ``wu_one`` rather than the one attached to ``wu_restricted``. An
+        earlier version of this control simply widened the grant over the
+        withheld world, and after the endpoint rule landed it went red — for
+        the right reason: making a record about a third entity visible does
+        not make it a statement about this edge. That case is now asserted in
+        its own right below rather than lost.
+        """
+
+        projection, _ = _probe_world(
+            relationships=(
+                (
+                    "proj_subject",
+                    RelationshipType.BLOCKED_BY,
+                    "wu_one",
+                    ("obs_own",),
+                ),
+                ("proj_subject", RelationshipType.BLOCKED_BY, "wu_restricted", ()),
+            ),
+            observations=(("obs_own", "wu_one"),),
+        )
+        grant = ("proj_subject", "wu_one", "wu_restricted")
+        found = _by_id(_probe_findings(projection, grant, "proj_subject"))
+        assert found["drv_block_wu_one"].standing is not DriverStanding.EXCLUDED
+
+    def test_a_visible_record_about_a_third_entity_still_does_not_vouch(self) -> None:
+        """Authorization and relevance are different questions.
+
+        The same world as the withheld case with the grant widened: the
+        caller can now see ``obs_secret``, and it still says nothing about
+        the edge between ``proj_subject`` and ``wu_one``. The reason must
+        move from UNAUTHORIZED_EVIDENCE to the unvouched one rather than the
+        claim resolving — being allowed to read a record is not the same as
+        the record being about your question.
+        """
 
         projection, _ = _probe_world(
             relationships=(
@@ -784,8 +1003,18 @@ class TestAuthorization:
             observations=(("obs_secret", "wu_restricted"),),
         )
         grant = ("proj_subject", "wu_one", "wu_restricted")
-        found = _by_id(_probe_findings(projection, grant, "proj_subject"))
-        assert found["drv_block_wu_one"].standing is not DriverStanding.EXCLUDED
+        claim = _by_id(_probe_findings(projection, grant, "proj_subject"))[
+            "drv_block_wu_one"
+        ]
+        assert claim.standing is DriverStanding.EXCLUDED
+        assert (
+            claim.exclusion_reason is DriverExclusionReason.EVIDENCE_CONFLICT_UNRESOLVED
+        )
+        # Present and excluded, never merely absent: the record it could not
+        # use is named, and the note says why it could not use it.
+        assert "obs_secret" in claim.conflicting_evidence_ids
+        assert claim.conflict_detail is not None
+        assert "neither end of the linkage" in claim.conflict_detail
 
 
 class TestWhatTheStructuralRulesCannotProduce:

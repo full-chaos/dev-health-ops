@@ -255,6 +255,16 @@ class TestReaderDifferential:
             "derived entirely from entities/paths/observations; excluded only "
             "because observations are, and it would report that gap twice"
         ),
+        "observation_attachment_available": (
+            "a reader's declaration about its own capability, not a result of "
+            "the traversal -- the same category as org_id and the seeds. The "
+            "two readers are SUPPOSED to differ here, because one can recover "
+            "observation attachment and the other cannot, and a differential "
+            "that demanded agreement would be demanding that the live reader "
+            "lie about it. Excluded from the comparison and checked directly "
+            "instead: test_each_reader_declares_the_attachment_capability_it_"
+            "actually_has binds each declaration to what that reader returns"
+        ),
     }
 
     @classmethod
@@ -322,6 +332,51 @@ class TestReaderDifferential:
             max_hops=max_hops,
         )
         assert self._comparable(live) == self._comparable(reference)
+
+    async def test_each_reader_declares_the_attachment_capability_it_actually_has(
+        self, alpha_store
+    ) -> None:
+        """The declaration is excluded from the differential, so check it here.
+
+        ``observation_attachment_available`` decides whether
+        ``discover_drivers`` will attribute anything at all, so a reader that
+        declared the wrong value would either silently stop checking that a
+        record is about the linkage it vouches for, or refuse every honest
+        finding. Neither is visible in a comparison the field is excluded
+        from — so each declaration is asserted against what that reader
+        actually returns, on the live store rather than on an assumption
+        about it.
+        """
+
+        store, projection = alpha_store
+        reference = await ProjectionGraphReader(projection).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+
+        assert reference.observation_attachment_available is True
+        assert reference.observations, "the reference returned none; vacuous"
+        assert all(item.subject_canonical_ids for item in reference.observations), (
+            "the reference claims attachment and returned an unattached record"
+        )
+
+        assert live.observation_attachment_available is False, (
+            "the live reader claims it can recover observation attachment; it "
+            "cannot, and discover_drivers would stop checking that a record "
+            "is about the linkage it vouches for"
+        )
+        assert all(not item.subject_canonical_ids for item in live.observations), (
+            "the live reader declares it cannot recover attachment while "
+            "returning one; the declaration must track the capability"
+        )
 
     async def test_declared_attributes_survive_the_live_round_trip(
         self, alpha_store

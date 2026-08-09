@@ -13,6 +13,9 @@ from dev_health_ops.api.dev.contracts_v2 import (
     QuestionIntentID,
 )
 from dev_health_ops.api.dev.question_interpreter import (
+    _KIND_NOUNS,
+    _NON_NAMING_MODIFIERS,
+    _WORK_HEAD_NOUNS,
     CLARIFICATION_REASONS,
     FALLBACK_CONFIDENCE_FLOOR,
     INTERPRETER_VERSION,
@@ -20,6 +23,7 @@ from dev_health_ops.api.dev.question_interpreter import (
     ClassifierProposal,
     QuestionInterpreter,
     extract_mentions,
+    untyped_name_candidates,
 )
 from tests._chaos_3292_preflight import fixed_now, request_for, sequential_ids
 
@@ -249,6 +253,131 @@ def test_context_refs_are_used_only_when_the_question_names_nothing() -> None:
     assert [mention.normalized_lookup_text for mention in unnamed] == [
         "project-page-ctx"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Definite descriptions of a body of work (CHAOS-3648)
+# ---------------------------------------------------------------------------
+#
+# Every phrasing below is invented for the test. None of it is drawn from the
+# frozen investigation corpus: a recall rule justified by "it makes a corpus
+# case pass" is tuning, and would read as capability it does not have.
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # Lowercase name, non-kind head noun: both readings are emitted,
+        # specific first, because English does not settle without a catalog
+        # whether the head noun belongs to the name.
+        ("What about the payroll migration?", ("payroll migration", "payroll")),
+        ("how's the checkout redesign going", ("checkout redesign", "checkout")),
+        (
+            "why has the invoicing consolidation stalled?",
+            ("invoicing consolidation", "invoicing"),
+        ),
+        # Two modifiers are as much a name as one.
+        (
+            "what happened to the mobile onboarding rewrite?",
+            ("mobile onboarding rewrite", "mobile onboarding"),
+        ),
+        # Determiners other than "the" are definite too.
+        ("is our billing rollout on track?", ("billing rollout", "billing")),
+    ],
+)
+def test_a_definite_description_of_work_names_a_subject(
+    question: str, expected: tuple[str, ...]
+) -> None:
+    assert untyped_name_candidates(question) == expected
+
+
+def test_a_capitalized_head_noun_keeps_the_head_inside_the_name() -> None:
+    """A capitalized head belongs to the proper name, so no second reading.
+
+    "the Payroll Migration" is one name; "the payroll migration" is two
+    readings. Capitalizing the head noun is the writer's own evidence that it
+    belongs to the name, so the classifier reading is not offered.
+    """
+
+    assert untyped_name_candidates("What about the Payroll Migration?") == (
+        "Payroll Migration",
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # Nothing but quantificational, temporal, or contrastive modifiers:
+        # they restrict by recency or contrast, never by identity.
+        "What about the current work?",
+        "how is the remaining work going",
+        "What about the other migration?",
+        "is the whole rollout done?",
+        # No definite determiner, so no presupposed referent: this is a
+        # description of an activity, not a reference to a named one.
+        "we did a lot of work this week",
+        # A determiner immediately followed by the head noun names nothing.
+        "What about the rewrite?",
+    ],
+)
+def test_a_description_without_a_name_mints_nothing(question: str) -> None:
+    assert untyped_name_candidates(question) == ()
+    assert extract_mentions(question, mint_id=sequential_ids()) == ()
+
+
+def test_a_leading_non_naming_modifier_is_not_part_of_the_name() -> None:
+    assert untyped_name_candidates("how is the current payroll migration going") == (
+        "payroll migration",
+        "payroll",
+    )
+
+
+def test_a_definite_description_never_mints_a_typed_mention() -> None:
+    """The kind is unstated, so the mention must stay untyped.
+
+    A wrong *typed* mention terminates a question that works today; a wrong
+    untyped one only fails to match. That asymmetry is the whole reason this
+    rule lives in the untyped path.
+    """
+
+    assert extract_mentions("What about the payroll migration?") == ()
+
+
+def test_a_kind_noun_head_stays_with_the_typed_grammar() -> None:
+    """ "the Payroll project" states its kind, so the typed grammar claims it."""
+
+    question = "What about the Payroll project?"
+    mentions = extract_mentions(question, mint_id=sequential_ids())
+    assert [
+        (mention.original_text_span, mention.requested_entity_kind.value)
+        for mention in mentions
+    ] == [("Payroll", "project")]
+    claimed = [mention.normalized_lookup_text for mention in mentions]
+    assert untyped_name_candidates(question, claimed) == ()
+
+
+def test_definite_descriptions_are_ordered_by_position_among_bare_names() -> None:
+    question = "is the payroll migration blocking Beacon?"
+    assert untyped_name_candidates(question) == (
+        "payroll migration",
+        "payroll",
+        "Beacon",
+    )
+
+
+def test_the_work_noun_vocabulary_stays_disjoint_from_the_kind_nouns() -> None:
+    """A head noun that names a kind belongs to the typed grammar, not here.
+
+    Structural rather than exemplary: it holds for every future addition to
+    either list, where a test naming today's members would not.
+    """
+
+    kind_nouns = {noun for noun, _kind in _KIND_NOUNS}
+    assert not _WORK_HEAD_NOUNS & kind_nouns
+    assert not _WORK_HEAD_NOUNS & _NON_NAMING_MODIFIERS
+    # Single tokens only: a multi-word entry would be a phrase, and a phrase
+    # is how a corpus-specific string gets smuggled into a "generic" list.
+    assert all(" " not in noun for noun in _WORK_HEAD_NOUNS | _NON_NAMING_MODIFIERS)
 
 
 # ---------------------------------------------------------------------------

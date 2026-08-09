@@ -576,6 +576,152 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="exhaustive-comparison-shape-silently-accepted",
+        defect=(
+            "a portfolio-wide or organization-wide shape is built from a "
+            "peer cohort, presenting a partial sweep as an exhaustive one"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    elif job.comparison_shape not in _COHORT_CAPABLE_SHAPES:",
+        replacement="    elif False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_an_exhaustive_shape_is_still_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="cohort-shape-emitted-with-no-cohort-behind-it",
+        defect=(
+            "a cohort-bearing shape is emitted with only the subject in it, "
+            "scoring as a comparison the arm never made. Note what the RED "
+            "line shows: the emission is still blocked -- by the frozen "
+            "contract, late and as a validation error. What this refusal "
+            "adds is the typed, attributable 'this arm cannot do that', "
+            "which is a different statement from 'this packet is malformed'"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    elif cohort is None:",
+        replacement="    elif False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_a_cohort_shape_with_no_proposal_is_refused",
+        ),
+        expect_failure="needs at least two members",
+    ),
+    Mutation(
+        mutation_id="incomparable-cohort-emitted-as-a-comparison",
+        defect=(
+            "a cohort with nothing to compare against, or nothing to compare "
+            "on, is emitted as though a comparison were performed. Contract-"
+            "backed like the mutation above: the packet still cannot be "
+            "built, and what is lost is the distinction between a capability "
+            "gap and an empty result"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if len(cohort_members) < 2 or not cohort_dimensions:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_a_cohort_that_cannot_compare_is_refused_distinguishably",
+        ),
+        expect_failure="needs at least two members",
+    ),
+    Mutation(
+        mutation_id="cohort-built-against-a-wider-grant-accepted",
+        defect=(
+            "a cohort built with a wider authorization set than the traversal "
+            "used names entities the caller may not see. The frozen "
+            "contract's own cross-section check is the backstop and fires "
+            "here; this refusal is the earlier, attributable one"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if outside:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_a_cohort_naming_an_unauthorized_entity_is_refused",
+        ),
+        expect_failure="not in related_context.authorized_entity_ids",
+    ),
+    Mutation(
+        mutation_id="outcome-asserted-instead-of-derived",
+        defect=(
+            "the packet claims a supported outcome without a driver that "
+            "earned standing -- the dashboard-redirect fault, stated as an "
+            "answer"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if not asserted or not evidence:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::"
+            "TestOutcomeIsDerivedFromDriversNotFromShape",
+        ),
+        expect_failure="InvestigationOutcome.UNSUPPORTED",
+    ),
+    Mutation(
+        mutation_id="cohort-anchor-authorization-skipped",
+        defect=(
+            "a peer reached only through a team the caller cannot see joins "
+            "the cohort, disclosing the shared owner by its own membership"
+        ),
+        path=SRC / "cohort.py",
+        anchor="            if far not in authorized:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestAuthorizationBoundsTheCohort::"
+            "test_a_peer_reachable_only_through_an_unseen_anchor_is_excluded",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="cohort-peer-authorization-skipped",
+        defect=(
+            "a restricted same-tenant peer joins the cohort, which is the "
+            "leak no tenant-level check catches"
+        ),
+        path=SRC / "cohort.py",
+        anchor="            if peer not in authorized:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestAuthorizationBoundsTheCohort::"
+            "test_a_restricted_peer_is_withheld_and_counted",
+        ),
+        expect_failure="proj_quarry",
+    ),
+    Mutation(
+        mutation_id="cohort-size-bound-not-applied",
+        defect=(
+            "the cohort size bound is not applied, so a caller that asked "
+            "for a bounded comparison silently gets an unbounded one"
+        ),
+        path=SRC / "cohort.py",
+        anchor="    included = considered[:max_members]",
+        replacement="    included = considered",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestBoundsAreDisclosed::"
+            "test_the_size_bound_truncates_and_says_so",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="cohort-dimensions-outlive-the-members-that-earned-them",
+        defect=(
+            "the cohort claims a comparison dimension whose only supporting "
+            "member was dropped by the size bound, so the packet asserts a "
+            "comparison nothing in it can make"
+        ),
+        path=SRC / "cohort.py",
+        anchor="    for member in included:",
+        replacement="    for member in considered:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestBoundsAreDisclosed::"
+            "test_a_dimension_only_a_dropped_member_supported_is_dropped_too",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

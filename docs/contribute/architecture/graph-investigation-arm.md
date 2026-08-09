@@ -37,9 +37,9 @@ product feature, and nothing about it is on a user-visible path.
 | Bounded, authorized neighbourhood traversal | Yes |
 | Related entities, lineage paths, evidence index | Yes |
 | Packet emission through the canonical validator | Yes |
-| Alias / acronym / renamed-entity candidate search | Not yet |
+| Alias / acronym / renamed-entity candidate search | Yes — by lookup, never retrieval |
 | Semantic retrieval | Seam + guard in place; search not yet |
-| Cohort construction | Not yet — refused loudly, never faked |
+| Cohort construction | Peer shapes yes; exhaustive shapes still refused |
 | Driver synthesis | Not yet — the packet's outcome says so |
 | Approved-unstructured extraction | Boundary in place, extraction not yet |
 
@@ -410,7 +410,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **32** guards the arm relies on, the harness disables
+For each of the **41** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -435,6 +435,62 @@ follows:
 3. **where the mutation died** is recorded, so a reader can check the failure
    is the one the guard exists to prevent rather than an unrelated collapse
    in setup.
+
+## Comparison cohorts, and the refusal that did not open
+
+`cohort.build_cohort` answers "which subjects belong in this comparison, and
+why" from edges already in the graph. Two relationship families, kept
+deliberately separate:
+
+- **anchor edges** (`owned_by_team`, `belongs_to_portfolio`,
+  `contributes_to`) — subject → anchor ← peer. The shared team, portfolio or
+  initiative is named in the member's rationale, so "shares an owning team"
+  becomes "shares owning team `team_atlas`", which a reader can check;
+- **peer edges** (`shares_dependency_with`) — the edge already *means* the
+  two are comparable, so there is no anchor to name.
+
+`depends_on` is in neither. A project depending on a database is *related* to
+it, not a peer of it, and a cohort built from that comparison would compare a
+project with its own dependency.
+
+Splitting the two families was not tidiness. The first version read
+`shares_dependency_with` as an anchor edge, which made the peer an *anchor* —
+and anchors are excluded from their own cohort, so the single most obviously
+comparable subject in the graph silently vanished from it. The CHAOS-3616
+corpus caught it: `proj_beacon` was missing from `proj_identity_rewrite`'s
+cohort while every test still passed, because no test had yet asserted it
+should be there.
+
+Three things hold this capability honest:
+
+- **authorization is applied to the anchor as well as the peer.** A peer
+  reached only through a team the caller cannot see is a peer whose
+  membership discloses that team. Withheld subjects are counted, never named
+  — including as *exclusions*, since naming a subject in order to say it was
+  left out still tells the caller it exists;
+- **dimensions are derived from the members that survived the size bound.**
+  A dimension whose only supporting member was truncated away is a comparison
+  the packet cannot make;
+- **the shape opening is partial and deliberately so.** `discovered_cohort`
+  and `explicit_cohort` are "peers of a committed subject", which is what the
+  builder derives. `portfolio_wide` and `organization_wide` assert an
+  *exhaustive* enumeration this arm cannot prove it achieved, and a partial
+  sweep presented as complete is a stronger false claim than refusing. They
+  still raise `UnsupportedComparisonShapeError`.
+
+A cohort that cannot compare raises `IncomparableCohortError` instead —
+deliberately a different exception from the shape refusal, because "this arm
+cannot do that kind of work" and "the arm did the work and the world has no
+comparison here" must not score identically.
+
+**A cohort does not make a packet an answer.** This is the easiest thing in
+the packet to mistake for one: it is populated, structured, and looks like a
+comparison was performed. `derive_outcome` evaluates the frozen contract's
+own rule — a supported outcome needs a driver with asserted standing and a
+non-empty evidence index — and this revision synthesizes no drivers, so every
+cohort-bearing packet it emits is still `unsupported`. The function exists
+rather than a constant precisely so both branches can be observed; a constant
+would make "the arm cannot over-claim" unfalsifiable.
 
 ## What the differential oracle found
 

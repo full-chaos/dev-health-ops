@@ -310,6 +310,77 @@ def _check_match_mechanisms(
         )
 
 
+def _assert_support_is_closed(
+    drivers: Sequence[DriverCandidate],
+    evidence: Sequence[InvestigationEvidenceEntry],
+    known_paths: Container[str],
+    about: Mapping[str, frozenset[str]],
+) -> None:
+    """Every asserted driver's support must be its OWN, and in this packet.
+
+    The contract's rule is satisfied by "some asserted driver exists and the
+    evidence index is non-empty" — which is weaker than it reads. Adversarial
+    review reproduced both gaps: swapping an honest driver's evidence for an
+    indexed handle belonging to a DIFFERENT subject still produced a
+    supported outcome, and so did emptying its paths while keeping one
+    indexed handle. Neither driver had support; the packet had support
+    somewhere, and the outcome could not tell the difference.
+
+    So this arm holds itself to a stricter bar than the contract:
+
+    * the driver must cite evidence, and every handle it cites must be in
+      THIS packet's index — a citation the packet cannot resolve is not
+      support, it is a reference;
+    * the driver must cite a lineage path. The contract permits a
+      contributing driver with evidence and no path; this arm does not,
+      because "every asserted finding is path-born" is the property the
+      whole graph claim rests on. Enforcing it only inside
+      ``discover_drivers`` left the packet boundary open, which is exactly
+      where a caller-assembled driver arrives.
+    """
+
+    by_handle = {entry.evidence.evidence_ref_id: entry for entry in evidence}
+    for driver in drivers:
+        if driver.standing not in ASSERTED_DRIVER_STANDINGS:
+            continue
+        # What this driver is ABOUT: the subject it affects and the cause
+        # it names. Both matter -- a blocker's evidence is legitimately
+        # about the BLOCKER, not about the thing being blocked, and a
+        # rule that demanded the affected subject refused every honest
+        # blocking driver in the corpus.
+        subjects = set(driver.affected_subject_ids) | set(
+            about.get(driver.driver_id, frozenset())
+        )
+        problems: list[str] = []
+        if not driver.supporting_path_ids:
+            problems.append("cites no lineage path")
+        elif any(item not in known_paths for item in driver.supporting_path_ids):
+            problems.append("cites a path this packet never declared")
+        if not driver.supporting_evidence_ids:
+            problems.append("cites no evidence")
+        else:
+            entries = [
+                by_handle[handle]
+                for handle in driver.supporting_evidence_ids
+                if handle in by_handle
+            ]
+            if len(entries) != len(driver.supporting_evidence_ids):
+                problems.append("cites evidence this packet never indexed")
+            elif not any(
+                subjects & set(entry.supports_entity_ids) for entry in entries
+            ):
+                problems.append(
+                    "cites only evidence about other subjects, which is "
+                    "support for something else"
+                )
+        if problems:
+            raise ValueError(
+                f"asserted driver {driver.driver_id} {'; '.join(problems)}. An "
+                "asserted driver whose support is not in this packet is a "
+                "judgment with nothing behind it"
+            )
+
+
 def derive_outcome(
     drivers: Sequence[DriverCandidate],
     evidence: Sequence[InvestigationEvidenceEntry],
@@ -324,7 +395,10 @@ def derive_outcome(
     than an input beside them.
 
     The rule is the frozen contract's own: a supported outcome needs at least
-    one driver with asserted standing *and* a non-empty evidence index. This
+    one driver with asserted standing *and* a non-empty evidence index. What
+    makes that rule mean what it appears to mean is
+    :func:`_assert_support_is_closed`, which runs first and refuses any
+    asserted driver whose support is not actually in this packet. This
     revision synthesizes no drivers, so it reaches ``UNSUPPORTED`` every
     time — but it reaches it by evaluating the rule, not by asserting the
     answer. Written as a function precisely so both branches can be observed:
@@ -1010,6 +1084,37 @@ def build_packet(
         _driver_candidate(finding, handle_by_observation, known_subject_ids)
         for finding in drivers or ()
     )
+    # Evidence entries now name the drivers that cite them. Without this the
+    # index and the drivers agree only in one direction: a driver could point
+    # at an entry that never claimed to support it, which is how unrelated
+    # evidence passed for a driver's own.
+    cited_by: dict[str, list[str]] = {}
+    for candidate in driver_candidates:
+        for handle in candidate.supporting_evidence_ids:
+            cited_by.setdefault(handle, []).append(candidate.driver_id)
+    evidence_entries = [
+        entry.model_copy(
+            update={
+                "supports_driver_ids": tuple(
+                    sorted(cited_by.get(entry.evidence.evidence_ref_id, ()))
+                )
+            }
+        )
+        if entry.evidence.evidence_ref_id in cited_by
+        else entry
+        for entry in evidence_entries
+    ]
+
+    _assert_support_is_closed(
+        driver_candidates,
+        evidence_entries,
+        {path.path_id for path in paths},
+        {
+            finding.driver_id: frozenset({finding.subject_id, finding.cause_id})
+            for finding in drivers or ()
+        },
+    )
+
     driver_analysis = DriverAnalysis(
         schema_version="ask_dev_driver_analysis.v1",
         candidates=driver_candidates,

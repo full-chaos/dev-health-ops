@@ -1083,6 +1083,22 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="causality is inverted",
     ),
     Mutation(
+        mutation_id="asserted-driver-support-not-closed-at-the-packet",
+        defect=(
+            "an asserted driver's support is not required to be its own: "
+            "evidence about a different subject, or no lineage at all, still "
+            "yields a supported outcome -- a judgment with nothing behind it"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if problems:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestAssertedSupportMustBeTheDriversOwn",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

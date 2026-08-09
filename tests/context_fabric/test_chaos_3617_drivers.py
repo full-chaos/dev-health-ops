@@ -1002,6 +1002,98 @@ class TestEvidenceTranslationFailsLoudly:
             _packet(helio, "proj_identity_rewrite", signer, drivers=(tampered,))
 
 
+class TestAssertedSupportMustBeTheDriversOwn:
+    """The packet boundary, which `discover_drivers` does not defend.
+
+    The contract's supported-outcome rule reads stronger than it is: "some
+    asserted driver exists AND the evidence index is non-empty". Adversarial
+    review reproduced both gaps — an honest driver whose evidence was swapped
+    for an indexed handle belonging to a DIFFERENT subject still produced a
+    supported outcome, and so did one with its paths emptied. Neither driver
+    had support; the packet had support somewhere, and the outcome could not
+    tell the difference.
+
+    A caller-assembled driver arrives exactly here, so the bar has to be at
+    the boundary rather than inside discovery.
+    """
+
+    def test_a_driver_citing_another_subjects_evidence_is_refused(
+        self, helio, signer
+    ) -> None:
+        from dataclasses import replace
+
+        findings = _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
+        honest = findings[0]
+        base = _packet(helio, "proj_identity_rewrite", signer)
+        elsewhere = sorted(
+            entry.evidence.entity_id
+            for entry in base.evidence_coverage.evidence_index
+            if entry.evidence.entity_id not in honest.evidence_ids
+        )
+        assert elsewhere, "no unrelated indexed evidence exists; vacuous"
+        swapped = replace(
+            honest,
+            standing=DriverStanding.CONTRIBUTING_DRIVER,
+            evidence_ids=(elsewhere[0],),
+        )
+        with pytest.raises(ValueError, match="evidence about other subjects"):
+            _packet(helio, "proj_identity_rewrite", signer, drivers=(swapped,))
+
+    def test_an_asserted_driver_with_no_lineage_is_refused(self, helio, signer) -> None:
+        """Stricter than the contract, deliberately.
+
+        The contract permits a CONTRIBUTING driver with evidence and no path.
+        This arm does not: "every asserted finding is path-born" is the
+        property the whole graph claim rests on, and enforcing it only inside
+        discovery left the boundary open.
+        """
+
+        from dataclasses import replace
+
+        findings = _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
+        pathless = replace(
+            findings[0],
+            standing=DriverStanding.CONTRIBUTING_DRIVER,
+            path_ids=(),
+        )
+        with pytest.raises(ValueError, match="cites no lineage path"):
+            _packet(helio, "proj_identity_rewrite", signer, drivers=(pathless,))
+
+    def test_the_honest_driver_still_passes_the_boundary(self, helio, signer) -> None:
+        """The control, and the one that catches a rule tightened too far.
+
+        A blocker's evidence is about the BLOCKER, not about the thing it
+        blocks. A first version of this check demanded the affected subject
+        and refused every honest blocking driver in the corpus.
+        """
+
+        packet = _packet(helio, "proj_identity_rewrite", signer)
+        assert packet.driver_analysis.principal_driver_ids == (
+            "drv_block_wu_authcore_release",
+        )
+        assert packet.outcome in SUPPORTED_OUTCOMES
+
+    def test_each_cited_entry_names_the_driver_that_cites_it(
+        self, helio, signer
+    ) -> None:
+        """Closure in both directions, not just from the driver outwards."""
+
+        packet = _packet(helio, "proj_identity_rewrite", signer)
+        naming = {
+            entry.evidence.evidence_ref_id: entry.supports_driver_ids
+            for entry in packet.evidence_coverage.evidence_index
+            if entry.supports_driver_ids
+        }
+        assert naming, "no evidence entry names a driver; closure is one-way"
+        principal = next(
+            item
+            for item in packet.driver_analysis.candidates
+            if item.driver_id == "drv_block_wu_authcore_release"
+        )
+        for handle in principal.supporting_evidence_ids:
+            assert principal.driver_id in naming[handle]
+
+
 def _packet(projection, subject: str, signer, *, drivers=None):
     from dev_health_ops.api.dev.investigation_contract import (
         ComparisonShape,

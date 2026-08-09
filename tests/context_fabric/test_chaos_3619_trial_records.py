@@ -19,10 +19,12 @@ from pathlib import Path
 
 import pytest
 
+from trials.chaos_3619.binding import RunClass, collect_binding
 from trials.chaos_3619.budget import (
     DEFAULT_PER_CASE_TIMEOUT_SECONDS,
     BudgetOutcome,
     enforce,
+    hard_bound,
 )
 from trials.chaos_3619.dispositions import (
     MEASURED_DISPOSITIONS,
@@ -372,6 +374,7 @@ class TestTheArtifactRefusesToBeMisread:
         from trials.chaos_3619.binding import collect_binding
 
         binding = collect_binding(
+            run_class=RunClass.MEASURED,
             per_case_timeout_seconds=DEFAULT_PER_CASE_TIMEOUT_SECONDS,
             trial_store_backend="falkordb (test)",
             graph_embedder_model_id="deterministic_blake2b.v1.d1024",
@@ -394,6 +397,7 @@ class TestTheArtifactRefusesToBeMisread:
         from trials.chaos_3619.binding import collect_binding
 
         binding = collect_binding(
+            run_class=RunClass.MEASURED,
             per_case_timeout_seconds=DEFAULT_PER_CASE_TIMEOUT_SECONDS,
             trial_store_backend="falkordb (test)",
             graph_embedder_model_id="deterministic_blake2b.v1.d1024",
@@ -415,6 +419,7 @@ class TestTheBindingIsReadFromTheSystem:
         from trials.chaos_3619.binding import collect_binding
 
         binding = collect_binding(
+            run_class=RunClass.MEASURED,
             per_case_timeout_seconds=1.0,
             trial_store_backend="falkordb",
             graph_embedder_model_id="deterministic_blake2b.v1.d1024",
@@ -431,6 +436,7 @@ class TestTheBindingIsReadFromTheSystem:
         from trials.chaos_3619.binding import collect_binding
 
         binding = collect_binding(
+            run_class=RunClass.MEASURED,
             per_case_timeout_seconds=1.0,
             trial_store_backend="falkordb",
             graph_embedder_model_id="deterministic_blake2b.v1.d1024",
@@ -472,3 +478,238 @@ class TestBudgetOutcomeDetailIsDiscriminating:
         fine = BudgetOutcome(elapsed_seconds=0.2, limit_seconds=1.0, exceeded=False)
         details = {timed_out.detail, faulted.detail, fine.detail}
         assert len(details) == 3, details
+
+
+# ---------------------------------------------------------------------------
+# The runner-level hard bound: a wedged producer must not stall the sweep
+# ---------------------------------------------------------------------------
+
+
+class _NeverFinishingThread:
+    """A thread stand-in that is always still running.
+
+    The abandoned path must be observed, and observing it with a REAL wedge
+    would mean blocking a socket for the length of the timeout -- slow,
+    environment-dependent, and it would tempt someone to shrink the bound
+    until the guard stopped discriminating. Substituting the thread keeps the
+    assertion about ``hard_bound``'s own logic, which is what is under test.
+    """
+
+    def __init__(self, *, target, daemon: bool) -> None:
+        self.target = target
+        self.daemon = daemon
+        self.started = False
+        self.joined_with: float | None = None
+
+    def start(self) -> None:
+        self.started = True
+
+    def join(self, timeout: float | None = None) -> None:
+        self.joined_with = timeout
+
+    def is_alive(self) -> bool:
+        return True
+
+
+class TestTheRunnerLevelHardBound:
+    """CHAOS-3625's residual, bounded rather than accepted.
+
+    ``enforce`` cannot return until the call does, so a graph-arm producer
+    blocked on FalkorDB (constructed with no socket timeout of any kind)
+    would stall the whole sweep. ``hard_bound`` returns at the deadline
+    regardless.
+    """
+
+    def test_a_worker_still_running_at_the_deadline_is_abandoned(self) -> None:
+        """The sweep proceeds, and the leak is recorded rather than hidden."""
+
+        spawned: list[_NeverFinishingThread] = []
+
+        def spawn(*, target: object, daemon: bool) -> _NeverFinishingThread:
+            thread = _NeverFinishingThread(target=target, daemon=daemon)
+            spawned.append(thread)
+            return thread
+
+        outcome = hard_bound(
+            lambda: "packet",
+            limit_seconds=5.0,
+            clock=_FakeClock(0.0, 5.0),
+            spawn=spawn,
+        )
+        assert outcome.abandoned_thread is True
+        assert outcome.exceeded is True
+        assert outcome.value is None, (
+            "an abandoned worker's slot yielded a value; the runner would "
+            "score a case it recorded as NOT RUN"
+        )
+        assert "Python cannot kill" in outcome.detail, (
+            "the detail does not disclose that the thread leaks; a reader "
+            "would take the timeout as a clean cancellation"
+        )
+        assert spawned[0].daemon is True, (
+            "the worker is not a daemon, so a leaked wedge would keep the "
+            "interpreter alive at exit and turn a recorded timeout into a "
+            "hung sweep"
+        )
+        assert spawned[0].joined_with == 5.0
+
+    def test_the_bound_waits_no_longer_than_its_deadline(self) -> None:
+        """The join deadline IS the bound. Asserted on the value passed to
+        join, because a bound that passed ``None`` would block forever while
+        every other assertion here still held."""
+
+        captured: list[_NeverFinishingThread] = []
+
+        def spawn(*, target: object, daemon: bool) -> _NeverFinishingThread:
+            thread = _NeverFinishingThread(target=target, daemon=daemon)
+            captured.append(thread)
+            return thread
+
+        hard_bound(
+            lambda: None, limit_seconds=3.5, clock=_FakeClock(0.0, 3.5), spawn=spawn
+        )
+        assert captured[0].joined_with == 3.5
+
+    def test_a_worker_that_finishes_returns_its_value(self) -> None:
+        """The control, on a REAL thread. Without it every assertion above is
+        satisfiable by an implementation that abandons everything."""
+
+        outcome = hard_bound(lambda: "packet", limit_seconds=30.0)
+        assert outcome.abandoned_thread is False
+        assert outcome.exceeded is False
+        assert outcome.value == "packet"
+
+    def test_a_fault_on_the_worker_is_carried_back_not_lost(self) -> None:
+        """A real thread swallowing its exception would report the case as a
+        silent empty result rather than as an arm fault."""
+
+        def boom() -> object:
+            raise RuntimeError("arm exploded on its worker")
+
+        outcome = hard_bound(boom, limit_seconds=30.0)
+        assert outcome.abandoned_thread is False
+        assert isinstance(outcome.fault, RuntimeError)
+        assert "arm exploded on its worker" in outcome.detail
+
+    @pytest.mark.parametrize("limit", [0.0, -1.0])
+    def test_a_non_positive_bound_is_refused(self, limit: float) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            hard_bound(lambda: None, limit_seconds=limit)
+
+    def test_the_abandoned_detail_differs_from_the_plain_timeout_detail(
+        self,
+    ) -> None:
+        """Both are NOT RUN, but only one leaks a thread.
+
+        A shared message would make the raw record unable to distinguish a
+        producer that returned late from one that never returned -- and only
+        the second leaves a connection against the shared trial store.
+        """
+
+        abandoned = BudgetOutcome(
+            elapsed_seconds=5.0,
+            limit_seconds=5.0,
+            exceeded=True,
+            abandoned_thread=True,
+        )
+        late = BudgetOutcome(elapsed_seconds=9.0, limit_seconds=5.0, exceeded=True)
+        assert abandoned.detail != late.detail
+        assert "leaks" in abandoned.detail
+        assert "leaks" not in late.detail
+
+
+# ---------------------------------------------------------------------------
+# A voided pipeline exercise may never be mistaken for a measurement
+# ---------------------------------------------------------------------------
+
+
+def _binding(run_class: RunClass) -> object:
+    return collect_binding(
+        run_class=run_class,
+        per_case_timeout_seconds=DEFAULT_PER_CASE_TIMEOUT_SECONDS,
+        trial_store_backend="falkordb (test)",
+        graph_embedder_model_id="deterministic_blake2b.v1.d1024",
+    )
+
+
+class TestAVoidRunCannotBeFiledAsAMeasurement:
+    """Team-lead's instruction, made structural.
+
+    The runner needs exercising before CHAOS-3627/3628 land, and a smoke run
+    produces a file shaped exactly like a real sweep -- carrying arm packets
+    with known-defective vocabulary and withdrawn evidence. The run class is
+    inside the JSON, but a reader holding two files sees names first.
+    """
+
+    def test_a_void_run_written_under_a_normal_name_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        records = TrialRecordSet(
+            schema_version="chaos_3619_trial_results.v1",
+            binding=_binding(RunClass.SMOKE_VOID),  # type: ignore[arg-type]
+            cases=(),
+        )
+        with pytest.raises(ValueError, match="filename must contain"):
+            write_records(records, tmp_path / "trial-results.records.json")
+
+    def test_a_void_run_written_under_a_marked_name_is_accepted(
+        self, tmp_path: Path
+    ) -> None:
+        """The control. Without it the refusal above would also pass against
+        a writer that rejected every void run outright."""
+
+        records = TrialRecordSet(
+            schema_version="chaos_3619_trial_results.v1",
+            binding=_binding(RunClass.SMOKE_VOID),  # type: ignore[arg-type]
+            cases=(),
+        )
+        target = tmp_path / "trial-results.SMOKE-VOID.records.json"
+        write_records(records, target)
+        assert load_records(target)["binding"]["run_class"] == "smoke_void"
+
+    def test_a_measured_run_written_under_a_void_name_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """The reverse direction. A real measurement filed where nobody may
+        cite it is as unusable as a void run filed where they would."""
+
+        records = TrialRecordSet(
+            schema_version="chaos_3619_trial_results.v1",
+            binding=_binding(RunClass.MEASURED),  # type: ignore[arg-type]
+            cases=(),
+        )
+        with pytest.raises(ValueError, match="filename claims"):
+            write_records(records, tmp_path / "trial.SMOKE-VOID.records.json")
+
+
+class TestTheBindingNamesTheEmitterAndTheExecutionDifference:
+    def test_the_feature_tip_is_recorded_separately_from_the_lane_commit(
+        self,
+    ) -> None:
+        """Two sweeps are comparable only if the ARMS match.
+
+        ``commit`` is the lane tip carrying the runner; the arms move on the
+        integration branch. Recording only ``commit`` would make two sweeps
+        taken across an arm fix look like one series.
+        """
+
+        binding = _binding(RunClass.MEASURED)
+        assert binding.feature_tip_commit, (  # type: ignore[attr-defined]
+            "no feature-tip commit was recorded; the artifact cannot say "
+            "which emitter produced its packets"
+        )
+        assert not binding.feature_tip_commit.startswith("<"), (  # type: ignore[attr-defined]
+            f"feature tip is an error marker: {binding.feature_tip_commit!r}"  # type: ignore[attr-defined]
+        )
+
+    def test_the_execution_mode_discloses_the_orchestrator_bypass(self) -> None:
+        """A named, intentional difference from a production-shaped run.
+
+        The seam is real; what this trial does NOT prove is that an
+        orchestrator-hosted run emits the same packet. CHAOS-3620's
+        differential leg owns that, and it can only own it if the artifact
+        says the gap exists.
+        """
+
+        binding = _binding(RunClass.MEASURED)
+        assert "orchestrator_bypassed" in binding.execution_mode  # type: ignore[attr-defined]

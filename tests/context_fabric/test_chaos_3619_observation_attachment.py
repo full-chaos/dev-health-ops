@@ -217,15 +217,26 @@ class TestTheDeclarationTracksTheAttestation:
     """
 
     def test_an_unattested_partition_is_not_available(self) -> None:
-        assert attachment_encoding_supported(set()) is False
+        assert attachment_encoding_supported(set()) is False, (
+            "GUARD attachment_encoding_unattested -- a partition that attests "
+            "no encoding was read as attachment-capable; that is every "
+            "partition written before the encoding existed"
+        )
 
     def test_the_understood_encoding_is_available(self) -> None:
-        assert attachment_encoding_supported({ATTACHMENT_ENCODING}) is True
+        assert attachment_encoding_supported({ATTACHMENT_ENCODING}) is True, (
+            "GUARD attachment_encoding_understood -- the reader rejects the "
+            "encoding it writes itself, so no partition would ever be usable"
+        )
 
     def test_another_encoding_is_not_available(self) -> None:
         """A future or foreign writer is refused, not assumed compatible."""
 
-        assert attachment_encoding_supported({"canonical_ids.v2"}) is False
+        assert attachment_encoding_supported({"canonical_ids.v2"}) is False, (
+            "GUARD attachment_encoding_unknown -- an encoding this revision "
+            "does not understand was accepted, so a newer writer's layout "
+            "would be misparsed rather than declined"
+        )
 
     def test_a_mixed_partition_is_not_available(self) -> None:
         """Half a partition's worth of attachment is not an attachment."""
@@ -233,6 +244,10 @@ class TestTheDeclarationTracksTheAttestation:
         assert (
             attachment_encoding_supported({ATTACHMENT_ENCODING, "canonical_ids.v2"})
             is False
+        ), (
+            "GUARD attachment_encoding_mixed -- a partition written by two "
+            "writers was accepted, so drivers would be attributed from "
+            "whichever half happened to carry attachment"
         )
 
 

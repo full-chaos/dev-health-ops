@@ -454,7 +454,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **93** guards the arm relies on, the harness disables
+For each of the **95** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -555,15 +555,47 @@ names it. So the cited records are split by what each may establish:
   deleting genuine evidence would trade a false claim for a false absence;
 - **untrusted** and **withheld**, as before.
 
-`LiveGraphReader` cannot recover observation attachment, so it cannot say
-what any record is about. That capability is **declared on the readout**
-(`observation_attachment_available`) rather than inferred from whether
-attachments happen to be present — inferring it would make the endpoint rule
-a silent no-op on exactly the reader that cannot perform it, which is the
-original defect with a smaller blast radius. `discover_drivers` attributes
-nothing on such a readout and says so in the exclusion's own words; it does
-**not** report the support as withheld, which would be an authorization claim
-about the caller's grant that nothing supports.
+Whether a reader can say what a record is *about* is **declared on the
+readout** (`observation_attachment_available`) rather than inferred from
+whether attachments happen to be present — inferring it would make the
+endpoint rule a silent no-op on exactly a reader that cannot perform it,
+which is the original defect with a smaller blast radius.
+`discover_drivers` attributes nothing on a readout that declares the
+capability absent, and says so in the exclusion's own words; it does **not**
+report the support as withheld, which would be an authorization claim about
+the caller's grant that nothing supports.
+
+**CHAOS-3619 (H3) gave `LiveGraphReader` that capability.** It previously
+could not recover attachment, and the consequence was worse than an
+unlabelled record: `_traverse` keeps an observation only when one of its
+subjects is in the visited set, so an empty subject list dropped *every*
+observation. Measured on the CHAOS-3616 corpus, one neighbourhood returned
+39 attached observations through `ProjectionGraphReader` and **0** through
+the live reader — which would have made a comparative trial score the graph
+arm as emitting evidence-free, driver-free packets and published that as a
+fact about graph assistance.
+
+`add_nodes_and_edges_bulk` writes entity edges only, so attachment travels
+as a joined canonical-id property on the observation node
+(`cf_subject_canonical_ids`). The declaration stays a declaration: it is
+derived per partition from the encoding the store itself attests
+(`cf_attachment_encoding`), the same DISTINCT-attestation shape the embedder
+provenance uses, so a partition written before the encoding existed, by a
+newer writer, or by two writers all read as unavailable — and in that case
+the subjects are not populated either, so the declaration and the data
+cannot disagree. Replacing the old literal `False` with a literal `True`
+would have claimed the capability over every partition ever written; the
+negative control in `test_chaos_3619_observation_attachment.py` writes a
+partition under an unrecognised encoding and requires the reader to decline
+again.
+
+This is also why a canonical id may no longer contain a comma or a unit
+separator (`projection.py` promotes `canonical_id` from the
+control-character check to `_reject_separator_bytes`): attachment makes a
+canonical id a member of a joined multi-valued property for the first time,
+and a comma-bearing id would read back as two subjects — an attachment no
+source supplied. This is a **strictness increase on ingestion**: a
+comma-bearing canonical id that was previously accepted is now refused.
 
 **`blocked_by` and `depends_on` are treated asymmetrically on purpose.**
 `blocked_by` *is* the provider asserting that something blocks, so the far end
@@ -795,10 +827,13 @@ nothing in the live store.
 
 The scope that remains is stated honestly rather than implied: both readers
 share `_traverse`, so the comparison measures two **fetch** strategies rather
-than two search algorithms, and observation-to-entity attachment is a *known
-gap* (not a permitted difference) because `add_nodes_and_edges_bulk` writes
-entity edges only — a Graphiti evidence/readback defect can still pass this
-differential while changing the packet.
+than two search algorithms. Observation-to-entity attachment **was** a known
+gap here (not a permitted difference); CHAOS-3619 (H3) closed it, and the
+differential now covers attachment explicitly — `test_chaos_3619_observation
+_attachment.py` asserts the live and reference attachment maps are equal
+rather than merely non-empty, because recovering *some* subjects would
+satisfy a presence check while silently narrowing every driver the arm can
+attribute.
 
 ## Cross-repository ownership
 

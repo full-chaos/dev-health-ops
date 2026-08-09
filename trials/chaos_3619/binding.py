@@ -26,12 +26,16 @@ import hashlib
 import json
 import subprocess
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "EXECUTION_MODE_DIRECT",
+    "FEATURE_BRANCH",
     "TRIAL_ARTIFACT_SCHEMA_VERSION",
+    "RunClass",
     "TrialBinding",
     "collect_binding",
 ]
@@ -63,6 +67,39 @@ _CONTRACT_MANIFEST = (
 
 #: Distributions whose exact version changes what a graph run means.
 _BOUND_DISTRIBUTIONS = ("graphiti-core", "falkordb", "redis", "pydantic")
+
+#: The integration branch every arm change merges into. A trial result is
+#: only comparable with another one taken from the same emitter, and the
+#: emitter is defined by this branch's tip rather than by the lane branch
+#: HEAD sits on -- the lane carries the runner, the feature tip carries the
+#: arms being measured.
+FEATURE_BRANCH = "feature/chaos-3498-context-fabric"
+
+#: How the arms were invoked. Named because it is a real, intentional
+#: difference from production and CHAOS-3620's differential leg owns closing
+#: it: the trial calls each arm's ``build_packet`` directly and hands the
+#: result to the real seam, rather than letting the orchestrator host the
+#: seam call. The seam code is identical either way; what is NOT proven by
+#: this trial is that an orchestrator-hosted run produces the same packet.
+EXECUTION_MODE_DIRECT = "producer_invoked_directly_seam_real_orchestrator_bypassed"
+
+
+class RunClass(StrEnum):
+    """Whether a record set may be cited as a trial result.
+
+    A smoke run exists -- the pipeline needs exercising before the arms are
+    fixed -- and its outputs live in the same shape as a real sweep. That is
+    exactly why the distinction has to be IN the artifact rather than in
+    whoever remembers which file was which: a voided run and a measured run
+    are indistinguishable by inspection once both are JSON.
+    """
+
+    #: A citable measurement. Only legitimate on a tree where every arm
+    #: defect blocking the trial has merged.
+    MEASURED = "measured"
+    #: Pipeline exercise. NOT a result, must never be quoted, and the report
+    #: renderer refuses to present it as one.
+    SMOKE_VOID = "smoke_void"
 
 
 def _git(*args: str) -> str:
@@ -110,9 +147,20 @@ class TrialBinding:
     """Everything a later reader needs to know what produced a result set."""
 
     schema_version: str
+    #: Whether this record set is citable at all. First field a reader
+    #: should look at, and the report prints it in the header.
+    run_class: str
     commit: str
     tree_clean: bool
     branch: str
+    #: The integration-branch commit this run's ARMS came from, as opposed
+    #: to ``commit``, which is the lane tip carrying the runner. Two sweeps
+    #: are comparable only if this matches: the arms are what is being
+    #: measured, and they move on the feature branch.
+    feature_tip_commit: str
+    #: The named, intentional difference from a production-shaped run. See
+    #: :data:`EXECUTION_MODE_DIRECT`.
+    execution_mode: str
     corpus_version: str
     corpus_manifest_sha256: str
     contract_manifest_sha256: str
@@ -137,9 +185,11 @@ class TrialBinding:
 
 def collect_binding(
     *,
+    run_class: RunClass,
     per_case_timeout_seconds: float,
     trial_store_backend: str,
     graph_embedder_model_id: str,
+    execution_mode: str = EXECUTION_MODE_DIRECT,
     notes: tuple[str, ...] = (),
 ) -> TrialBinding:
     """Read the binding off the running system.
@@ -170,9 +220,17 @@ def collect_binding(
     )
 
     status = _git("status", "--porcelain")
+    # The merge base rather than the branch tip: it is the feature-branch
+    # commit this lane is actually built on, which is what decides which
+    # emitter produced the packets. Reading the remote tip instead would
+    # record a commit the run never contained.
+    feature_tip = _git("merge-base", "HEAD", FEATURE_BRANCH)
     return TrialBinding(
         schema_version=TRIAL_ARTIFACT_SCHEMA_VERSION,
+        run_class=run_class.value,
         commit=_git("rev-parse", "HEAD"),
+        feature_tip_commit=feature_tip,
+        execution_mode=execution_mode,
         # An error marker is not "clean". ``status`` returning a git-failure
         # string would otherwise be truthy in the wrong direction if this
         # were written as ``not status``.

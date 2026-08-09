@@ -44,10 +44,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .binding import TRIAL_ARTIFACT_SCHEMA_VERSION, TrialBinding
+from .binding import TRIAL_ARTIFACT_SCHEMA_VERSION, RunClass, TrialBinding
 from .dispositions import CaseDisposition, is_measured
 
 __all__ = [
+    "VOID_FILENAME_MARKER",
     "ArmResult",
     "CaseRecord",
     "DimensionOutcome",
@@ -55,6 +56,14 @@ __all__ = [
     "load_records",
     "write_records",
 ]
+
+#: The filename infix a voided run must carry.
+#:
+#: The run class is already inside the file, but a reader holding two
+#: artifacts sees filenames first, and "which of these was the real sweep" is
+#: exactly the question a smoke run makes ambiguous. Enforced rather than
+#: conventional: a convention is what fails the one time it matters.
+VOID_FILENAME_MARKER = "SMOKE-VOID"
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,8 +184,33 @@ def write_records(records: TrialRecordSet, path: Path) -> None:
     ``sort_keys`` and a fixed indent make the file byte-reproducible from
     the same sweep, so a diff between two runs shows what the runs did and
     not how a dict happened to iterate.
+
+    A voided run must say so in its own filename. Putting that only in a JSON
+    field would leave two identically-named artifacts whose difference is one
+    line deep, and the interim graph-arm packets a smoke run captures today
+    carry known-defective vocabulary and withdrawn evidence
+    (CHAOS-3627/3628). Those must never survive into anything a reader could
+    mistake for the measured sweep. The check runs in both directions,
+    because a real measurement filed under a void name is as unusable as the
+    reverse.
     """
 
+    run_class = getattr(records.binding, "run_class", None)
+    if run_class == RunClass.SMOKE_VOID.value and VOID_FILENAME_MARKER not in path.name:
+        raise ValueError(
+            f"refusing to write a {RunClass.SMOKE_VOID.value} run to "
+            f"{path.name!r}: a voided run's filename must contain "
+            f"{VOID_FILENAME_MARKER!r}. A smoke run has the same shape as a "
+            "measurement and its packets carry known-defective arm output; a "
+            "filename that does not say so is the one thing standing between "
+            "it and being quoted as a result"
+        )
+    if run_class == RunClass.MEASURED.value and VOID_FILENAME_MARKER in path.name:
+        raise ValueError(
+            f"refusing to write a {RunClass.MEASURED.value} run to "
+            f"{path.name!r}: the filename claims {VOID_FILENAME_MARKER!r}, so "
+            "a real measurement would be filed where nobody may cite it"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(records.to_json(), indent=2, sort_keys=True, default=str) + "\n"

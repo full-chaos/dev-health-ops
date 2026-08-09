@@ -265,6 +265,14 @@ class TestReaderDifferential:
             "instead: test_each_reader_declares_the_attachment_capability_it_"
             "actually_has binds each declaration to what that reader returns"
         ),
+        "embedder_model_id": (
+            "what the STORE attests produced its vectors, which the in-memory "
+            "reader has no store to ask -- an unwritten projection holds no "
+            "vectors at all. The two readers are supposed to differ for the "
+            "same reason as the field above, and this one is checked directly "
+            "by test_the_live_readout_attests_the_embedder_that_wrote_it, "
+            "against the embedder the store was really constructed with"
+        ),
     }
 
     @classmethod
@@ -376,6 +384,104 @@ class TestReaderDifferential:
         assert all(not item.subject_canonical_ids for item in live.observations), (
             "the live reader declares it cannot recover attachment while "
             "returning one; the declaration must track the capability"
+        )
+
+    async def test_the_live_readout_attests_the_embedder_that_wrote_it(
+        self, alpha_store
+    ) -> None:
+        """Provenance has to come from the store, or it is the caller's word.
+
+        ``build_packet`` takes an embedder argument with no connection to
+        whatever wrote the partition, so "were these vectors produced by
+        something semantic" had only the caller's claim to go on. This is the
+        measurement that makes the answer real: the store is constructed with
+        a known embedder, and the readout must name that one.
+        """
+
+        store, _ = alpha_store
+        readout = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        assert readout.embedder_model_id == store.embedder.model_id, (
+            "the partition attests no embedder, or attests the wrong one, so "
+            "a semantic claim built on it would rest on the caller's word"
+        )
+        # Anti-vacuity in both directions: the store really does carry an
+        # embedder with a non-trivial id, and the reference reader -- which
+        # has no store to ask -- attests nothing rather than guessing.
+        assert store.embedder.model_id.startswith("deterministic_blake2b")
+        assert (
+            await ProjectionGraphReader(
+                build_projection(_reorg(fixtures.alpha_batch(), store.org_id))
+            ).neighbourhood(
+                org_id=store.org_id,
+                seed_canonical_ids=["proj_nightfall_migration"],
+                authorized_entity_ids=fixtures.alpha_authorized_ids(),
+                max_hops=3,
+            )
+        ).embedder_model_id is None
+
+    async def test_a_packet_from_the_live_readout_cannot_name_another_embedder(
+        self, alpha_store, signer
+    ) -> None:
+        """The refusal, end to end against a real partition.
+
+        A packet stamped for a model that did not embed the store is how two
+        incomparable runs come to look comparable — and the stamp is derived
+        from an argument, so nothing but this check stands between a caller
+        passing the wrong object and a wrong recorded provenance.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.backend import (
+            CloudEmbedder,
+            embedder_projection_suffix,
+        )
+        from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+            EmbedderProvenanceMismatchError,
+        )
+
+        store, _ = alpha_store
+        readout = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+
+        def build(embedder):
+            return build_packet(
+                readout=readout,
+                job=JobContext(
+                    job_id="job_live_embedder",
+                    question_family=QuestionFamilyID("project_status_drivers"),
+                    job_statement="Status of the Nightfall Migration project.",
+                    comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+                    window_start=fixtures.WINDOW_START,
+                    window_end=fixtures.WINDOW_END,
+                ),
+                watermark=IndexWatermark(
+                    indexed_through=fixtures.WINDOW_END,
+                    projected_at=fixtures.WINDOW_END,
+                    records_indexed=1,
+                ),
+                signer=signer,
+                trial=TrialContext(run_id=_RUN_ID),
+                produced_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
+                embedder=embedder,
+            )
+
+        with pytest.raises(EmbedderProvenanceMismatchError, match="did not embed"):
+            build(CloudEmbedder(api_key="sk-not-a-real-key"))
+        # The control: the embedder that DID write the store still emits, and
+        # the stamp names it. Without this the refusal could be "no packet
+        # can be built from a live readout".
+        packet = build(store.embedder)
+        assert (
+            embedder_projection_suffix(store.embedder)
+            in packet.versions.projection_version
         )
 
     async def test_declared_attributes_survive_the_live_round_trip(

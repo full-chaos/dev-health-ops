@@ -450,7 +450,10 @@ MUTATIONS: tuple[Mutation, ...] = (
             "capability the arm does not have"
         ),
         path=SRC / "packet_builder.py",
-        anchor="    if embedder.semantic:\n        return",
+        anchor=(
+            "    if embedder.semantic and attested_embedder is not None:\n"
+            "        return"
+        ),
         replacement="    if True:\n        return",
         tests=(
             f"{TESTS}/test_chaos_3617_semantic_claims.py::"
@@ -1098,6 +1101,91 @@ MUTATIONS: tuple[Mutation, ...] = (
         tests=(
             f"{TESTS}/test_chaos_3617_drivers.py::"
             "TestAssertedSupportMustBeTheDriversOwn",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="semantic-claim-rests-on-the-callers-word",
+        defect=(
+            "a semantic claim is authorized by the PASSED embedder's "
+            "self-report rather than by anything that can be shown about the "
+            "vectors, so an embedder with no connection to whatever wrote the "
+            "store unlocks a retrieval capability claim"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if embedder.semantic and attested_embedder is not None:",
+        replacement="    if embedder.semantic:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestASemanticClaimNeedsProvenanceNotAPromise::"
+            "test_a_usable_semantic_embedder_alone_does_not_unlock_a_claim",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="packet-stamps-an-embedder-that-did-not-write-the-store",
+        defect=(
+            "the projection version names an embedder the partition does not "
+            "attest, so a packet is stamped for an OpenAI model while the "
+            "stored vectors are BLAKE2b hashes -- and that stamp is what a "
+            "consumer uses to decide two runs are comparable"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if attested is not None and attested != embedder.model_id:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestASemanticClaimNeedsProvenanceNotAPromise::"
+            "test_the_stamped_projection_version_cannot_name_another_embedder",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="cloud-embedder-reports-semantics-without-a-key",
+        defect=(
+            "a bare CloudEmbedder with api_key=None still reports semantic, "
+            "so an instance that cannot embed anything unlocks semantic "
+            "claims -- the guard never asks it to embed, it reads the flag"
+        ),
+        path=SRC / "backend.py",
+        anchor="        return bool(self.api_key)",
+        replacement="        return True",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestASemanticClaimNeedsProvenanceNotAPromise::"
+            "test_a_bare_cloud_embedder_carries_no_semantics",
+        ),
+        expect_failure="a bare CloudEmbedder reports semantics it cannot produce",
+    ),
+    Mutation(
+        mutation_id="projection-records-no-embedder-provenance",
+        defect=(
+            "the store writes vectors without recording what produced them, "
+            "so the only available answer to 'were these vectors semantic' is "
+            "the caller's own claim"
+        ),
+        path=SRC / "backend.py",
+        anchor="            PROJECTION_EMBEDDER_ATTRIBUTE: embedder.model_id,",
+        replacement="            PROJECTION_EMBEDDER_ATTRIBUTE: None,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_the_live_readout_attests_the_embedder_that_wrote_it",
+        ),
+        expect_failure="the partition attests no embedder",
+    ),
+    Mutation(
+        mutation_id="mixed-partition-provenance-collapses-to-one",
+        defect=(
+            "a partition whose vectors came from two embedders reads back as "
+            "one of them, so an incomparable mixture is stamped with whichever "
+            "model won the read"
+        ),
+        path=SRC / "readback.py",
+        anchor="    if len(attested) > 1:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestOnePartitionMustAttestOneEmbedder",
         ),
         expect_failure="DID NOT RAISE",
     ),

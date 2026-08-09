@@ -115,6 +115,7 @@ __all__ = [
     "ARM_ID",
     "PRODUCER_ID",
     "RANKING_VERSION",
+    "EmbedderProvenanceMismatchError",
     "IncomparableCohortError",
     "JobContext",
     "PacketTooLargeError",
@@ -192,6 +193,18 @@ class UnsupportedMatchMechanismError(RuntimeError):
     alias or fuzzy-label match would score as a retrieval capability the arm
     does not have. Raising is the only outcome that cannot be mistaken for a
     result.
+    """
+
+
+class EmbedderProvenanceMismatchError(RuntimeError):
+    """The packet would name an embedder that did not write the store.
+
+    ``versions.projection_version`` is what a consumer reads to decide
+    whether two recorded runs are comparable, and it is derived from an
+    argument. Refusing rather than correcting the stamp: the two possible
+    intentions — "I meant to read the other partition" and "I meant to pass
+    the other embedder" — are the caller's to resolve, and silently picking
+    one would make a run's provenance depend on which the builder guessed.
     """
 
 
@@ -281,18 +294,63 @@ def signer_from_environment() -> EvidenceReferenceSigner:
     return EvidenceReferenceSigner(secret)
 
 
-def _check_match_mechanisms(
-    matches: Sequence[SubjectMatchFinding], embedder: EmbeddingBackend
+def _check_embedder_provenance(
+    readout: InvestigationReadout, embedder: EmbeddingBackend
 ) -> None:
-    """Refuse semantic claims the active embedder cannot support.
+    """The caller's embedder must be the one that wrote these vectors.
 
-    Both directions are checked, because a producer can get this wrong from
-    either end: a mechanism that needs semantics under a non-semantic
-    embedder, and a signal that is *inherently* semantic however it claims to
-    have been produced.
+    ``embedder`` decides what ``versions.projection_version`` says, and a
+    consumer reads that stamp to decide whether two runs are comparable. It
+    is an *argument*, with no connection to the embedder ``GraphArmStore``
+    was constructed with at write time — so a packet could be stamped
+    ``…openai_text_embedding_3_small.v1`` over a partition of BLAKE2b hashes
+    purely because the caller passed a different object. Adversarial review
+    reproduced it.
+
+    Where the partition attests to an embedder, disagreement is refused here.
+    Where it attests to none — an in-memory readout, which has no vectors at
+    all, or a partition written before the attestation existed — there is
+    nothing to disagree with, and the stamp names the only embedder anyone
+    has offered. What such a readout cannot do is support a *semantic claim*:
+    see :func:`_check_match_mechanisms`.
     """
 
-    if embedder.semantic:
+    attested = readout.embedder_model_id
+    if attested is not None and attested != embedder.model_id:
+        raise EmbedderProvenanceMismatchError(
+            f"this readout's partition records {attested!r} as having produced "
+            f"its vectors, but the packet would be stamped for "
+            f"{embedder.model_id!r}. A projection version naming a model that "
+            "did not embed the store is how two incomparable runs come to look "
+            "comparable"
+        )
+
+
+def _check_match_mechanisms(
+    matches: Sequence[SubjectMatchFinding],
+    embedder: EmbeddingBackend,
+    attested_embedder: str | None,
+) -> None:
+    """Refuse semantic claims nothing can show the vectors support.
+
+    Both directions of the caller's claim are checked, because a producer can
+    get it wrong from either end: a mechanism that needs semantics under a
+    non-semantic embedder, and a signal that is *inherently* semantic however
+    it claims to have been produced.
+
+    Neither direction is enough on its own, which is the finding this guard
+    was widened for. ``embedder.semantic`` is the passed object's self-report,
+    and the question that matters is whether the vectors this readout was
+    searched over were produced by something semantic. So a semantic claim
+    needs BOTH: an embedder that says it carries semantics, and a partition
+    that attests the vectors came from it. A readout with no attestation
+    supports no semantic claim whatever the caller passes — including a
+    perfectly usable :class:`~.backend.CloudEmbedder`, because "this embedder
+    could have produced semantic vectors" is not "these vectors are
+    semantic".
+    """
+
+    if embedder.semantic and attested_embedder is not None:
         return
     offending = [
         (match.canonical_id, match.signal.value, match.mechanism.value)
@@ -301,12 +359,20 @@ def _check_match_mechanisms(
         or match.signal in _INHERENTLY_SEMANTIC_SIGNALS
     ]
     if offending:
+        cause = (
+            f"the active embedder ({embedder.model_id}) carries no semantics"
+            if not embedder.semantic
+            else (
+                "nothing attests that this readout's vectors were produced by "
+                f"{embedder.model_id}; the partition records no embedder, so "
+                "the claim rests on the caller's word"
+            )
+        )
         raise UnsupportedMatchMechanismError(
-            f"these subject matches claim semantics the active embedder "
-            f"({embedder.model_id}) does not have: {offending}. Similarity "
-            "over non-semantic vectors is a confident arbitrary ordering, and "
-            "a packet presenting it as a match would score as a retrieval "
-            "capability this arm does not have"
+            f"these subject matches claim semantics {cause}: {offending}. "
+            "Similarity over non-semantic vectors is a confident arbitrary "
+            "ordering, and a packet presenting it as a match would score as a "
+            "retrieval capability this arm does not have"
         )
 
 
@@ -606,7 +672,10 @@ def build_packet(
     """
 
     active_embedder = embedder or DeterministicEmbedder()
-    _check_match_mechanisms(subject_matches or (), active_embedder)
+    _check_embedder_provenance(readout, active_embedder)
+    _check_match_mechanisms(
+        subject_matches or (), active_embedder, readout.embedder_model_id
+    )
 
     if job.comparison_shape is ComparisonShape.SINGULAR_SUBJECT:
         if cohort is not None:

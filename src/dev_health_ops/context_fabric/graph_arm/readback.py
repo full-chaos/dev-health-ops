@@ -74,6 +74,7 @@ __all__ = [
     "GraphReader",
     "InvestigationReadout",
     "LiveGraphReader",
+    "MixedProjectionProvenanceError",
     "PathStep",
     "ProjectionGraphReader",
     "NODE_COUNT_QUERY",
@@ -255,8 +256,27 @@ class InvestigationReadout:
     #: attachments its author wrote; both real readers set it explicitly.
     observation_attachment_available: bool = True
 
+    #: The embedder the STORE records as having produced this partition's
+    #: vectors, or ``None`` when nothing attests to one.
+    #:
+    #: This is the arm's only honest answer to "were these vectors produced
+    #: by something semantic". ``build_packet`` takes an embedder argument
+    #: that has no connection to whatever wrote the store — different object,
+    #: different run, possibly a different model — so a guard that read
+    #: ``embedder.semantic`` was asking the caller whether the caller's claim
+    #: was true.
+    #:
+    #: ``None`` on the in-memory reader, and not a gap: an unwritten
+    #: projection has no vectors at all, so there is nothing to attest and
+    #: nothing that could be searched by similarity.
+    embedder_model_id: str | None = None
+
     def entity_by_id(self) -> Mapping[str, DiscoveredEntity]:
         return {entity.canonical_id: entity for entity in self.entities}
+
+
+class MixedProjectionProvenanceError(RuntimeError):
+    """One partition's vectors were written by more than one embedder."""
 
 
 class AuthorizationDerivationNotImplementedError(NotImplementedError):
@@ -395,6 +415,7 @@ def _traverse(
     max_hops: int,
     budgets: TrialBudgets,
     observation_attachment_available: bool,
+    embedder_model_id: str | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> InvestigationReadout:
     # Whichever of the two numbers is smaller becomes the ceiling, and the
@@ -639,6 +660,7 @@ def _traverse(
         evidence_truncation_reason=evidence_reason,
         observed_source_classes=frozenset(observed_classes),
         observation_attachment_available=observation_attachment_available,
+        embedder_model_id=embedder_model_id,
     )
 
 
@@ -862,6 +884,18 @@ RETURN e.fact AS fact,
        e.invalid_at AS valid_to
 """
 
+#: What the STORE says produced this partition's vectors.
+#:
+#: Distinct rather than "any one node": a partition written twice with
+#: different embedders holds a mixture, and the difference between "one
+#: attested model" and "two" is the difference between a comparable
+#: projection and an incomparable one.
+_PROJECTION_EMBEDDER_QUERY = """
+MATCH (n:Entity)
+WHERE n.group_id = $partition
+RETURN DISTINCT n.cf_projection_embedder AS embedder_model_id
+"""
+
 
 #: Every Cypher statement the arm can issue, in one place.
 #:
@@ -878,6 +912,7 @@ READ_ONLY_QUERIES: tuple[str, ...] = (
     _ENTITY_QUERY,
     _OBSERVATION_QUERY,
     _EDGE_QUERY,
+    _PROJECTION_EMBEDDER_QUERY,
     NODE_COUNT_QUERY,
 )
 
@@ -1003,7 +1038,42 @@ class LiveGraphReader:
             # and ``discover_drivers`` would silently stop checking exactly
             # the thing it cannot check here.
             observation_attachment_available=False,
+            embedder_model_id=await _attested_embedder(driver, partition),
         )
+
+
+async def _attested_embedder(driver: Any, partition: str) -> str | None:
+    """What the partition itself records as having produced its vectors.
+
+    Returns ``None`` when nothing is recorded — a partition written before
+    the attestation existed, which is an honest "cannot say" rather than a
+    permission. Every semantic claim is refused on such a readout, which is
+    the safe direction.
+
+    Raises when the partition records **more than one** embedder. A partition
+    whose vectors came from two models is not one projection, and every
+    packet built from it would be stamped with whichever model won the read;
+    that is precisely the "two incomparable runs look comparable" failure the
+    projection version exists to prevent, arriving inside a single store.
+    """
+
+    attested = {
+        str(record["embedder_model_id"])
+        for record in await _rows(
+            driver, _PROJECTION_EMBEDDER_QUERY, partition=partition
+        )
+        if record.get("embedder_model_id") is not None
+    }
+    if not attested:
+        return None
+    if len(attested) > 1:
+        raise MixedProjectionProvenanceError(
+            f"partition {partition!r} records {sorted(attested)} as having "
+            "produced its vectors. A partition written by two embedders holds "
+            "a mixture, so no packet built from it can name the projection it "
+            "came from; re-project the organization from a single run"
+        )
+    return attested.pop()
 
 
 async def _rows(driver: Any, query: str, **params: object) -> list[dict[str, Any]]:

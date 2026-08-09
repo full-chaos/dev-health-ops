@@ -58,6 +58,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "EMBEDDING_MODEL_VAR",
     "GRAPHITI_EXTRA",
+    "PROJECTION_EMBEDDER_ATTRIBUTE",
     "SEMANTIC_MECHANISMS",
     "CloudEmbedder",
     "MatchMechanism",
@@ -79,6 +80,14 @@ __all__ = [
 #: The optional dependency extra that installs Graphiti. Named in the error
 #: message so the failure is actionable rather than an ImportError traceback.
 GRAPHITI_EXTRA = "context-graph-trial"
+
+#: The node property recording which embedder produced a node's vector.
+#:
+#: Deliberately NOT one of ``projection.READBACK_ATTRIBUTE_KEYS``: those are
+#: the arm's structured record attributes and travel on every
+#: ``DiscoveredEntity``. This is a property of the *write*, read back once per
+#: partition as an attestation and never as entity data.
+PROJECTION_EMBEDDER_ATTRIBUTE = "cf_projection_embedder"
 
 #: A canonical triple rendering: three whitespace-separated tokens.
 TRIPLE_FACT_PATTERN = re.compile(
@@ -315,7 +324,22 @@ class CloudEmbedder:
 
     @property
     def semantic(self) -> bool:
-        return True
+        """Whether this instance can actually produce a semantic vector.
+
+        Keyed on the API key, not on the class. ``CloudEmbedder()`` with no
+        key used to report ``True`` while being unable to embed anything:
+        :meth:`create` would fail on the first call, but the packet builder
+        never asks it to embed — it reads this flag — so a bare, unusable
+        instance unlocked semantic match claims. Adversarial review
+        reproduced exactly that.
+
+        This is the *smaller* half of that finding and is not the whole of
+        it: an embedder that CAN embed still says nothing about what produced
+        the vectors already in the store. That is what the readout's
+        ``embedder_model_id`` attestation is for.
+        """
+
+        return bool(self.api_key)
 
     @classmethod
     def from_environment(cls) -> CloudEmbedder:
@@ -447,6 +471,13 @@ def to_graphiti_nodes(
         attributes: dict[str, Any] = {
             "cf_canonical_id": node.canonical_id,
             "cf_org_id": node.org_id,
+            # What actually produced this node's vector, recorded ON the node
+            # rather than remembered by the caller. ``build_packet`` takes an
+            # embedder argument that has no connection to whatever wrote the
+            # store, so without this the only available answer to "were these
+            # vectors produced by something semantic" is the caller's own
+            # claim -- which is the question, not the answer.
+            PROJECTION_EMBEDDER_ATTRIBUTE: embedder.model_id,
             "cf_source_class": node.source_class.value,
             "cf_observed_at": node.observed_at.isoformat(),
             "cf_is_entity": node.is_entity,

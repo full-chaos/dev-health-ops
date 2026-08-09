@@ -40,6 +40,7 @@ from dev_health_ops.context_fabric.graph_arm.backend import (
     MatchMechanism,
 )
 from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+    EmbedderProvenanceMismatchError,
     JobContext,
     SubjectMatchFinding,
     TrialContext,
@@ -74,10 +75,19 @@ class _StubSemanticEmbedder:
         return [0.0]
 
 
-def _readout(projection):
-    import asyncio
+def _readout(projection, *, attested: str | None = None):
+    """A readout, optionally attesting which embedder wrote its vectors.
 
-    return asyncio.run(
+    The in-memory reader attests nothing and is right not to — an unwritten
+    projection holds no vectors. ``attested`` stands in for a store that
+    recorded one, which is what the live partition really does; the live
+    suite measures the real thing against a real FalkorDB write.
+    """
+
+    import asyncio
+    import dataclasses
+
+    readout = asyncio.run(
         ProjectionGraphReader(projection).neighbourhood(
             org_id=projection.org_id,
             seed_canonical_ids=[_SUBJECT],
@@ -85,6 +95,12 @@ def _readout(projection):
             max_hops=3,
         )
     )
+    assert readout.embedder_model_id is None, (
+        "the in-memory reader attested an embedder; it has no store to ask"
+    )
+    if attested is None:
+        return readout
+    return dataclasses.replace(readout, embedder_model_id=attested)
 
 
 def _build(readout, signer, *, embedder, matches):
@@ -186,7 +202,7 @@ class TestSemanticClaimsAreRefusedUnderANonSemanticEmbedder:
         assert packet is not None
 
     @pytest.mark.parametrize("mechanism", sorted(SEMANTIC_MECHANISMS))
-    def test_the_same_match_is_permitted_under_a_semantic_embedder(
+    def test_the_same_match_is_permitted_under_an_ATTESTED_semantic_embedder(
         self, alpha_projection, signer, mechanism
     ) -> None:
         """The negative control.
@@ -194,10 +210,15 @@ class TestSemanticClaimsAreRefusedUnderANonSemanticEmbedder:
         Without this, "the guard raised" could mean the builder is broken for
         every embedder, and the guard would look effective while proving
         nothing about the property it claims to enforce.
+
+        The readout has to *attest* the embedder now, which is the finding
+        this guard was widened for: an embedder object saying it carries
+        semantics is a claim about the object, and the question is what
+        produced the vectors that were searched.
         """
 
         packet = _build(
-            _readout(alpha_projection),
+            _readout(alpha_projection, attested="stub_semantic"),
             signer,
             embedder=_StubSemanticEmbedder(),
             matches=[_finding(mechanism, SubjectMatchSignal.FUZZY_LABEL)],
@@ -228,12 +249,184 @@ class TestSemanticClaimsAreRefusedUnderANonSemanticEmbedder:
             )
 
 
+class TestASemanticClaimNeedsProvenanceNotAPromise:
+    """The guard asked the caller whether the caller was right.
+
+    ``embedder`` is an argument. ``GraphArmStore`` embeds at write time with
+    whatever embedder it was constructed with, and ``build_packet`` is called
+    later with an unrelated one; nothing compared them. So the check "does
+    this embedder carry semantics" answered a different question from the one
+    that matters — "were the vectors this readout was searched over produced
+    by something semantic" — and three consequences followed, each reproduced
+    by adversarial review and each pinned below.
+    """
+
+    def test_a_usable_semantic_embedder_alone_does_not_unlock_a_claim(
+        self, alpha_projection, signer
+    ) -> None:
+        """Trap 1: the vectors and the embedder were never associated.
+
+        Nothing about a perfectly good embedder says it produced what is in
+        the store. On a readout that attests nothing, a semantic claim rests
+        on the caller's word and is refused.
+        """
+
+        with pytest.raises(UnsupportedMatchMechanismError, match="nothing attests"):
+            _build(
+                _readout(alpha_projection),
+                signer,
+                embedder=_StubSemanticEmbedder(),
+                matches=[
+                    _finding(
+                        MatchMechanism.EMBEDDING_SIMILARITY,
+                        SubjectMatchSignal.FUZZY_LABEL,
+                    )
+                ],
+            )
+
+    def test_a_bare_cloud_embedder_carries_no_semantics(self) -> None:
+        """Trap 2: ``CloudEmbedder()`` with no key still reported semantic.
+
+        It refuses to *embed* without a key — but the guard never asks it to
+        embed, it reads the flag. So a bare, unusable instance unlocked
+        semantic claims outright.
+        """
+
+        assert CloudEmbedder().semantic is False, (
+            "a bare CloudEmbedder reports semantics it cannot produce, so an "
+            "instance that could not embed anything unlocks a semantic claim"
+        )
+        assert CloudEmbedder(api_key="sk-not-a-real-key").semantic is True
+
+    def test_the_stamped_projection_version_cannot_name_another_embedder(
+        self, alpha_projection, signer
+    ) -> None:
+        """Trap 3: the suffix is a label, and a consumer trusts it.
+
+        ``embedder_projection_suffix`` goes into
+        ``versions.projection_version``, so a packet could be stamped for an
+        OpenAI model while the stored vectors are BLAKE2b hashes. Where the
+        partition attests an embedder, a disagreeing caller is refused rather
+        than silently restamped.
+        """
+
+        with pytest.raises(EmbedderProvenanceMismatchError, match="did not embed"):
+            _build(
+                _readout(alpha_projection, attested="deterministic_blake2b.v1.d1024"),
+                signer,
+                embedder=CloudEmbedder(api_key="sk-not-a-real-key"),
+                matches=[],
+            )
+
+    def test_the_attested_embedder_still_builds_and_stamps_itself(
+        self, alpha_projection, signer
+    ) -> None:
+        """The control. A refusal that fires on everything proves nothing."""
+
+        from dev_health_ops.context_fabric.graph_arm.backend import (
+            embedder_projection_suffix,
+        )
+
+        embedder = DeterministicEmbedder()
+        packet = _build(
+            _readout(alpha_projection, attested=embedder.model_id),
+            signer,
+            embedder=embedder,
+            matches=[],
+        )
+        assert (
+            embedder_projection_suffix(embedder) in packet.versions.projection_version
+        )
+
+    def test_an_unattested_readout_still_builds_without_a_semantic_claim(
+        self, alpha_projection, signer
+    ) -> None:
+        """The scope of the refusal, stated as a test.
+
+        An in-memory readout has no vectors, so there is nothing to disagree
+        with and nothing to search by similarity. It may still produce a
+        packet — refusing those would break every non-live path — it just may
+        not carry a semantic match.
+        """
+
+        packet = _build(
+            _readout(alpha_projection),
+            signer,
+            embedder=DeterministicEmbedder(),
+            matches=[
+                _finding(
+                    MatchMechanism.EXACT_LOOKUP, SubjectMatchSignal.EXACT_CANONICAL_ID
+                )
+            ],
+        )
+        assert packet is not None
+
+
+class TestOnePartitionMustAttestOneEmbedder:
+    """Two embedders in one keyspace is a mixture, not a projection.
+
+    Tested against the function rather than the store: producing a genuinely
+    mixed partition needs two disjoint writes with different embedders, and a
+    second write over the same nodes upserts them — so a live reproduction
+    would quietly test the single-value case while looking like the mixed
+    one. The read is what has to refuse, and the read is what is exercised.
+    """
+
+    @staticmethod
+    def _driver(*rows):
+        class _Driver:
+            async def execute_query(self, query: str, **params: object):
+                return list(rows), None, None
+
+        return _Driver()
+
+    def _attested(self, *rows):
+        import asyncio
+
+        from dev_health_ops.context_fabric.graph_arm import readback
+
+        return asyncio.run(
+            readback._attested_embedder(self._driver(*rows), "cfgraph_orgalpha")
+        )
+
+    def test_two_attested_embedders_are_refused(self) -> None:
+        from dev_health_ops.context_fabric.graph_arm.readback import (
+            MixedProjectionProvenanceError,
+        )
+
+        with pytest.raises(MixedProjectionProvenanceError, match="two embedders"):
+            self._attested(
+                {"embedder_model_id": "deterministic_blake2b.v1.d1024"},
+                {"embedder_model_id": "openai_text_embedding_3_small"},
+            )
+
+    def test_one_attested_embedder_is_returned(self) -> None:
+        """The control: a normal partition reads back its own embedder."""
+
+        assert (
+            self._attested({"embedder_model_id": "deterministic_blake2b.v1.d1024"})
+            == "deterministic_blake2b.v1.d1024"
+        )
+
+    def test_a_partition_that_attests_nothing_says_so(self) -> None:
+        """A store written before the attestation existed. Not a permission.
+
+        ``None`` refuses every semantic claim downstream, which is the safe
+        direction; returning a plausible default would be the permissive one.
+        """
+
+        assert self._attested() is None
+        assert self._attested({"embedder_model_id": None}) is None
+
+
 class TestEmbedderContracts:
     def test_the_deterministic_embedder_declares_itself_non_semantic(self) -> None:
         assert DeterministicEmbedder().semantic is False
 
-    def test_the_cloud_embedder_declares_itself_semantic(self) -> None:
-        assert CloudEmbedder().semantic is True
+    def test_a_configured_cloud_embedder_declares_itself_semantic(self) -> None:
+        """Keyed on being usable. See the trap-2 test above for the why."""
+
+        assert CloudEmbedder(api_key="sk-not-a-real-key").semantic is True
 
     def test_the_cloud_embedder_refuses_to_degrade_silently(self, monkeypatch) -> None:
         """No key means no semantic run — not a hash run wearing its label.

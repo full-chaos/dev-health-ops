@@ -25,7 +25,7 @@ observable. This page records what was proved, on what, and what could not
 be proved. Its headline is not a pass.
 {: .fc-page-lede }
 
-**The hard gate is not green.** 15 of 44 CHAOS-3620 requirements are not proven (4 defect, 1 not_accepted, 10 unmeasured).
+**The hard gate is not green.** 12 of 44 CHAOS-3620 requirements are not proven (1 defect, 1 not_accepted, 10 unmeasured).
 
 That sentence is **generated from the ledger**, not written beside it — the
 one place gate status is stated, so a correct table under a wrong headline is
@@ -82,8 +82,8 @@ Linear blocker.
 
 | Status | Count | Meaning |
 | --- | --- | --- |
-| `proven` | 29 | Holds, and the named tests are what establish it. |
-| `defect` | 4 | Violated by merged code; the named tests pin current behaviour. |
+| `proven` | 32 | Holds, and the named tests are what establish it. |
+| `defect` | 1 | Violated by merged code; the named tests pin current behaviour. |
 | `not_accepted` | 1 | Blocked on another issue; never scored as a pass. |
 | `unmeasured` | 10 | Not measured, with a stated reason rather than a proxy. |
 
@@ -159,9 +159,6 @@ caught it.
 | ID | Requirement | What is wrong |
 | --- | --- | --- |
 | X1 | prompt injection must not reach a consumer | Source-controlled **titles** arrive verbatim. The adapter copies an evidence record's `display_label` onto the observation (`corpus_adapter.py:210`), the emitter copies the title onto the packet's evidence entry (`packet_builder.py:829`), and nothing inspects title text. Document *bodies* are contained; titles are not, and the packet feeds Ask Dev synthesis. |
-| P6 | withdrawn sources disappear from packets | REVOKED and DELETED evidence reaches the emitted packet. Nothing in `context_fabric` reads evidence state; the adapter carries it as a display attribute (`corpus_adapter.py:218`) and no branch reads it back. |
-| P1 | every driver **or relationship** closes to evidence | Drivers close, and the check is shown rejecting an arm-shaped bad response. Relationships never close: `_lineage_path` emits `evidence_ref_ids=()` as a literal (`packet_builder.py:632`). |
-| S5 | current versus historical stays explicit | A relationship that ended two months before the trial instant is emitted with `relevance = current`. `relevance` is a literal at eight sites in `packet_builder.py` (542, 618, 630, 751, 799, 868, 935, 982) and nothing computes it. |
 
 **P6 was masked by A9.** The check that would have caught withdrawn evidence
 is the oracle's `withdrawn_evidence_handles`

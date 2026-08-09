@@ -371,21 +371,15 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "P1",
-        Status.DEFECT,
+        Status.PROVEN,
         f"{_PROV}::TestEveryAssertedDriverClosesToEvidenceInThisPacket::"
         "test_the_closure_check_REJECTS_a_driver_citing_unindexed_evidence",
-        f"{_PROV}::TestRelationshipsDoNotCloseToEvidence::"
+        f"{_PROV}::TestRelationshipsCloseToEvidence::"
         "test_the_readout_carries_evidence_for_its_relationships",
-        f"{_PROV}::TestRelationshipsDoNotCloseToEvidence::"
-        "test_and_the_emitted_paths_carry_none",
-        reason=(
-            "The DRIVER half holds and is enforced by _assert_support_is_closed "
-            "(packet_builder.py:379-447), shown rejecting an arm-shaped bad "
-            "response. The RELATIONSHIP half does not: _lineage_path emits "
-            "evidence_ref_ids=() as a literal (packet_builder.py:632) while "
-            "the corpus edge's observation_ids reach the emitter via "
-            "PathStep (corpus_adapter.py:195). No emitted relationship closes "
-            "to evidence, and none can."
+        f"{_PROV}::TestRelationshipsCloseToEvidence::"
+        "test_and_the_emitted_paths_carry_it",
+        notes=(
+            "FLIPPED by CHAOS-3630 (PR #1618): lineage paths now carry the evidence their own edges name, threaded through as source-issued handles and emitted after the evidence index.",
         ),
     ),
     _req(
@@ -448,23 +442,13 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "P6",
-        Status.DEFECT,
+        Status.PROVEN,
         f"{_ADV}::TestWithdrawnSourcesDoNotDisappear::"
-        "test_withdrawn_evidence_reaches_the_emitted_packet",
+        "test_withdrawn_evidence_is_excluded_from_the_emitted_packet",
         f"{_ADV}::TestWithdrawnSourcesDoNotDisappear::"
         "test_the_arm_has_no_concept_of_evidence_state_at_all",
-        reason=(
-            "REVOKED and DELETED evidence reaches the emitted packet: "
-            "rv_vertex_revoked at proj_vertex and proj_meridian, "
-            "wi_beacon_deleted at proj_acr, proj_beacon, proj_meridian and "
-            "proj_pulse. Nothing in context_fabric reads evidence state -- "
-            "the adapter carries it through as a display attribute "
-            "(corpus_adapter.py:218) and no branch reads it back. Only "
-            "wi_quarry_redacted stays out, and for the wrong reason: its "
-            "subject is unauthorized, so the authorization filter removes it "
-            "and redaction does no work anywhere. The check that would have "
-            "caught this is authorization.py:278-279, dead for the reason "
-            "recorded against A9 -- one defect was masking the other."
+        notes=(
+            "FLIPPED by CHAOS-3628 (PR #1618): withdrawn (REVOKED/REDACTED/DELETED) evidence is excluded at read time and never reaches an emitted packet.",
         ),
     ),
     _req(
@@ -726,24 +710,15 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "S5",
-        Status.DEFECT,
-        f"{_PROV}::TestHistoricalRelationshipsAreEmittedAsCurrent::"
+        Status.PROVEN,
+        f"{_PROV}::TestHistoricalRelationshipsAreEmittedAsHistorical::"
         "test_the_traversal_knows_the_relationship_has_ended",
-        f"{_PROV}::TestHistoricalRelationshipsAreEmittedAsCurrent::"
+        f"{_PROV}::TestHistoricalRelationshipsAreEmittedAsHistorical::"
         "test_the_driver_layer_correctly_refuses_to_assert_on_it",
-        f"{_PROV}::TestHistoricalRelationshipsAreEmittedAsCurrent::"
-        "test_but_the_emitted_lineage_calls_it_current",
-        reason=(
-            "The corpus's closed dependency -- proj_pulse depends_on "
-            "dep_ratelimitd, valid_to 2026-06-12, two months before "
-            "TRIAL_NOW -- is emitted with relevance=current on both the hop "
-            "and the path. The arm KNOWS: PathStep.is_current_at returns "
-            "False (readback.py:157-169) and discover_drivers correctly "
-            "excludes the driver built on it with not_currently_relevant. "
-            "relevance is a literal RelevanceState.CURRENT at eight emitter "
-            "sites (packet_builder.py 542, 618, 630, 751, 799, 868, 935, "
-            "982) and nothing computes it, so the frozen scoring dimension "
-            "current_relevance is measuring a constant."
+        f"{_PROV}::TestHistoricalRelationshipsAreEmittedAsHistorical::"
+        "test_and_the_emitted_lineage_says_so",
+        notes=(
+            "FLIPPED by CHAOS-3629 (PR #1618): relevance is derived from the readout's own validity; the corpus's closed dependency emits HISTORICAL_ONLY while live edges still emit CURRENT.",
         ),
     ),
     _req(

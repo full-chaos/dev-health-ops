@@ -241,7 +241,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         anchor="    if not _currency(paths, context.as_of):",
         replacement="    if False:",
         tests=(
-            f"{_PROVENANCE}::TestHistoricalRelationshipsAreEmittedAsCurrent::"
+            f"{_PROVENANCE}::TestHistoricalRelationshipsAreEmittedAsHistorical::"
             "test_the_driver_layer_correctly_refuses_to_assert_on_it",
         ),
         expect_failure="a driver was asserted on a relationship that ended",

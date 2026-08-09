@@ -528,8 +528,8 @@ class TestMultiSourceFactsRetainOnlyAuthorizedProvenance:
 # --------------------------------------------------------------------------
 
 
-class TestRelationshipsDoNotCloseToEvidence:
-    """CHAOS-3620 DEFECT RECORD — arm-side, merged code.
+class TestRelationshipsCloseToEvidence:
+    """FLIPPED by CHAOS-3630 (PR #1618). Was: a defect record.
 
     "Every material graph-assisted driver or relationship closes to
     authorized canonical evidence." Drivers do. Relationships do not, and
@@ -554,22 +554,35 @@ class TestRelationshipsDoNotCloseToEvidence:
             "discarded and this defect record is stale"
         )
 
-    def test_and_the_emitted_paths_carry_none(self) -> None:
+    def test_and_the_emitted_paths_carry_it(self) -> None:
+        """The emitter threads the ids through as handles now.
+
+        Paths are built AFTER the evidence index, because a reference is a
+        handle and a handle does not exist until its record is indexed.
+        """
+
         packet = spine.investigate("proj_identity_rewrite", with_drivers=True).packet
+        indexed = {
+            entry.evidence.evidence_ref_id
+            for entry in packet.evidence_coverage.evidence_index
+        }
         cited = {
             handle
             for path in packet.related_context.paths
             for handle in path.evidence_ref_ids
         }
-        assert not cited, (
-            "lineage paths now cite evidence -- the CHAOS-3620 "
-            "relationship-closure defect record must be updated and this "
-            "test replaced by the proof that every path closes"
+
+        assert cited, (
+            "no lineage path cites evidence -- the CHAOS-3630 threading has "
+            "regressed to the literal"
+        )
+        assert not cited - indexed, (
+            f"paths cite unindexed evidence: {sorted(cited - indexed)}"
         )
 
 
-class TestHistoricalRelationshipsAreEmittedAsCurrent:
-    """CHAOS-3620 DEFECT RECORD — arm-side, merged code.
+class TestHistoricalRelationshipsAreEmittedAsHistorical:
+    """FLIPPED by CHAOS-3629 (PR #1618). Was: a defect record.
 
     "Current versus historical evidence remains explicit." The arm *knows*:
     ``PathStep.is_current_at`` returns False for the corpus's closed
@@ -622,7 +635,14 @@ class TestHistoricalRelationshipsAreEmittedAsCurrent:
             "a driver was asserted on a relationship that ended two months ago"
         )
 
-    def test_but_the_emitted_lineage_calls_it_current(self) -> None:
+    def test_and_the_emitted_lineage_says_so(self) -> None:
+        """Relevance is derived from the readout's own validity now.
+
+        Both ends asserted: the closed relationship reads historical, AND
+        some hop in the same packet still reads current. Without the second
+        half, swapping one constant for another would satisfy this.
+        """
+
         edge = self._closed_edge()
         packet = spine.investigate(edge.source_entity_id, with_drivers=True).packet
         hops = [
@@ -633,9 +653,15 @@ class TestHistoricalRelationshipsAreEmittedAsCurrent:
             == {edge.source_entity_id, edge.target_entity_id}
         ]
         assert hops, "the closed relationship was not emitted at all"
-        assert all(str(hop.relevance) == "current" for hop in hops), (
-            "emitted relevance is no longer an unconditional 'current' -- the "
-            "CHAOS-3620 relevance-literal defect record must be updated"
+        assert all(str(hop.relevance) != "current" for hop in hops), (
+            "the closed relationship is still emitted as current -- the "
+            "CHAOS-3629 derivation has regressed to the literal"
+        )
+
+        every = [hop for path in packet.related_context.paths for hop in path.hops]
+        assert any(str(hop.relevance) == "current" for hop in every), (
+            "no hop reads current, so relevance is a constant again -- one "
+            "literal swapped for another"
         )
 
 

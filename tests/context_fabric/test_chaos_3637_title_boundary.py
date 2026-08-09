@@ -11,31 +11,41 @@ are not ingested, so titles were the one open path.
 Every prior test passed because the corpus's adversarial records carry benign
 titles. The green result measured the corpus's title hygiene, not the arm's.
 
-**Why REFUSE rather than bound-and-annotate.** The ruling offered both and
-required the choice be argued against the other.
+**The shape: withhold the TITLE, keep the RECORD.** On detection the entry
+carries a system-generated neutral label — the observation's kind and
+canonical id, nothing source-controlled — and the record's evidentiary
+contribution is preserved. Three shapes were considered and two rejected.
 
-*Annotating as untrusted is already true and therefore says nothing.*
-``DevEvidenceFlags.untrusted_content`` defaults to ``True`` on **every**
-evidence ref (``contracts.py:575``), and ``FactDisclosure``'s own docstring
-records why that makes it useless as a signal: deriving a disclosure from it
-"would fire on nearly every fact and make ``answered`` unreachable". A marker
-that is on for all evidence cannot distinguish a poisoned title from a benign
-one, so annotating changes what the packet *says* and not what a consumer can
-*act on*.
+*Rejected: annotate as untrusted.* ``DevEvidenceFlags.untrusted_content``
+defaults to ``True`` on **every** evidence ref (``contracts.py:575``), and
+``FactDisclosure``'s own docstring records why that makes it useless as a
+signal: deriving a disclosure from it "would fire on nearly every fact and
+make ``answered`` unreachable". A marker that is on for all evidence cannot
+distinguish a poisoned title from a benign one, so annotating changes what the
+packet *says* and not what a consumer can *act on*. The ruling also required
+proving the frame preserves the marker; the frame is downstream and owned
+elsewhere, and a guarantee resting on a consumer's behaviour is not one this
+lane can make. A length bound misses the vector outright — this payload is 47
+characters and size was already bounded.
 
-*Proving the marker survives is not mine to prove.* The ruling requires that
-if the marker route is taken, the frame must be shown to preserve it. The
-frame is downstream of this arm and owned elsewhere; a guarantee resting on a
-consumer's behaviour is a guarantee this lane cannot make.
+*Rejected: refuse the record.* **This was the first implementation of this
+ticket and it was wrong.** Titles are ATTACKER-CONTROLLED, so a refusal that
+drops the record hands the attacker an eraser: poison the title of your own
+incriminating observation, trip the regex, and your evidence disappears from
+every packet with a clean audit and no disclosure. Denial-of-evidence is the
+dual of injection, and a refuse-the-record shape converts one into the other.
 
-*A length bound does not touch the vector.* The payload here is 47 characters.
-Size was already bounded before this ticket and the channel was open anyway.
+The author's own diagnosis of the mistake, kept because the distinction is
+easy to lose: *refuse-don't-sanitize protects against ACCEPTING attacker
+text; I applied it to whether to KEEP attacker-influenced data — a different
+question, with the opposite answer.*
 
-So the arm refuses at ingestion, which is also the posture the rest of this
-module already takes for separator bytes, control characters and malformed
-handles: refuse the record, name it, and never repair the value. **This is not
-a claim to detect prompt injection in general** — see the residual at the foot
-of this module.
+Withholding the title is not sanitize-in-place. No attacker text is repaired
+or partially kept: the field is replaced wholesale by system-derived content,
+and the withholding is disclosed rather than silent.
+
+**This is not a claim to detect prompt injection in general** — see the
+residual at the foot of this module.
 """
 
 from __future__ import annotations
@@ -59,7 +69,6 @@ from dev_health_ops.context_fabric.graph_arm.packet_builder import (
     TrialContext,
     build_packet,
 )
-from dev_health_ops.context_fabric.graph_arm.projection import ProjectionError
 from dev_health_ops.context_fabric.graph_arm.readback import ProjectionGraphReader
 from dev_health_ops.context_fabric.graph_arm.records import (
     CanonicalRef,
@@ -125,59 +134,102 @@ def _batch(title: str) -> IngestionBatch:
     )
 
 
+def _read_probe(projection):
+    return asyncio.run(
+        ProjectionGraphReader(projection).neighbourhood(
+            org_id=world.ORG_HELIO,
+            seed_canonical_ids=["proj_title_probe"],
+            authorized_entity_ids=["proj_title_probe"],
+            max_hops=1,
+        )
+    )
+
+
+def _probe_packet(projection):
+    readout = _read_probe(projection)
+    return build_packet(
+        readout=readout,
+        job=JobContext(
+            job_id="job_chaos_3637",
+            question_family=QuestionFamilyID.PROJECT_STATUS_DRIVERS,
+            job_statement="What is the current state of this subject?",
+            comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+            window_start=world.WINDOW_START,
+            window_end=world.WINDOW_END,
+        ),
+        watermark=IndexWatermark(
+            indexed_through=world.WINDOW_END,
+            projected_at=world.WINDOW_END,
+            records_indexed=len(readout.entities),
+        ),
+        signer=_SIGNER,
+        trial=TrialContext(run_id="3c637a44-5555-4666-8777-888899990000"),
+        produced_at=datetime(2026, 8, 8, 12, 0, tzinfo=UTC),
+    )
+
+
 class TestTheInjectionChannelIsClosed:
-    def test_the_executed_payload_is_refused_at_ingestion(self) -> None:
-        """The CHAOS-3620 lane's repro, as a refusal.
+    def test_the_executed_payload_never_reaches_the_packet(self) -> None:
+        """The CHAOS-3620 lane's repro: the payload must not be carried."""
 
-        Refused where the record is still in scope, so the error names the
-        observation rather than surfacing as an unexplained packet.
+        packet = _probe_packet(build_projection(_batch(_PAYLOAD)))
+
+        assert "ignore previous instructions" not in packet.model_dump_json().lower()
+
+    def test_the_entry_carries_a_system_generated_label_instead(self) -> None:
+        """Withheld, not blanked, and not repaired.
+
+        The replacement is derived from the arm's own vocabulary and the
+        record's canonical id — nothing the source controls — so there is no
+        partial attacker text left in the field and nothing was rewritten.
         """
 
-        with pytest.raises(ProjectionError, match="instruction-shaped"):
-            build_projection(_batch(_PAYLOAD))
+        packet = _probe_packet(build_projection(_batch(_PAYLOAD)))
+        entry = packet.evidence_coverage.evidence_index[0]
 
-    def test_the_payload_never_reaches_an_emitted_packet(self) -> None:
-        """The property the ticket is actually about, asserted end to end.
+        assert "rev_title_probe" in entry.evidence.display_label
+        assert _PAYLOAD not in entry.evidence.display_label
 
-        A refusal at ingestion is the mechanism; this is the consequence, and
-        it is asserted separately because a future change could move the
-        refusal and leave this true, or keep the refusal and leak the text
-        through some other field.
+    def test_the_withholding_is_disclosed_not_silent(self) -> None:
+        """A substitution nobody can see is a substitution nobody can audit."""
+
+        packet = _probe_packet(build_projection(_batch(_PAYLOAD)))
+        entry = packet.evidence_coverage.evidence_index[0]
+
+        assert "withheld" in entry.evidence.display_label.lower()
+
+
+class TestTheEraserAttackIsClosed:
+    """The dual, and the reason the first implementation of this ticket was
+    wrong. Titles are attacker-controlled: if detection DROPS the record, an
+    attacker poisons the title of their own incriminating observation and the
+    evidence vanishes from every packet with a clean audit.
+
+    So a poisoned title must cost the attacker the title and nothing else.
+    """
+
+    def test_a_poisoned_title_does_not_remove_the_evidence(self) -> None:
+        clean = _probe_packet(build_projection(_batch("benign review title")))
+        poisoned = _probe_packet(build_projection(_batch(_PAYLOAD)))
+
+        assert len(clean.evidence_coverage.evidence_index) == 1, (
+            "the benign control indexed nothing; this comparison is vacuous"
+        )
+        assert len(poisoned.evidence_coverage.evidence_index) == len(
+            clean.evidence_coverage.evidence_index
+        ), "poisoning the title erased the record"
+
+    def test_the_poisoned_records_evidence_still_supports_its_subject(self) -> None:
+        """Presence is not enough — the contribution has to survive too.
+
+        An entry that is indexed but supports nothing has been erased in every
+        way that matters to a consumer.
         """
 
-        projection = build_projection(adapter.corpus_batch(world.ORG_HELIO))
-        readout = asyncio.run(
-            ProjectionGraphReader(projection).neighbourhood(
-                org_id=world.ORG_HELIO,
-                seed_canonical_ids=[world.TEAM_CINDER],
-                authorized_entity_ids=sorted(
-                    adapter.authorized_entity_ids_for(world.PRINCIPAL_ANALYST)
-                ),
-                max_hops=2,
-            )
-        )
-        packet = build_packet(
-            readout=readout,
-            job=JobContext(
-                job_id="job_chaos_3637",
-                question_family=QuestionFamilyID.PROJECT_STATUS_DRIVERS,
-                job_statement="What is the current state of this subject?",
-                comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
-                window_start=world.WINDOW_START,
-                window_end=world.WINDOW_END,
-            ),
-            watermark=IndexWatermark(
-                indexed_through=world.WINDOW_END,
-                projected_at=world.WINDOW_END,
-                records_indexed=len(readout.entities),
-            ),
-            signer=_SIGNER,
-            trial=TrialContext(run_id="3c637a44-5555-4666-8777-888899990000"),
-            produced_at=datetime(2026, 8, 8, 12, 0, tzinfo=UTC),
-        )
+        poisoned = _probe_packet(build_projection(_batch(_PAYLOAD)))
+        entry = poisoned.evidence_coverage.evidence_index[0]
 
-        serialized = packet.model_dump_json().lower()
-        assert "ignore previous instructions" not in serialized
+        assert "proj_title_probe" in entry.supports_entity_ids
 
     @pytest.mark.parametrize("title", _LEGITIMATE_TITLES)
     def test_legitimate_titles_still_ingest(self, title: str) -> None:

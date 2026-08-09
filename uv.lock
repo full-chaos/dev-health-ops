@@ -185,6 +185,15 @@ wheels = [
 ]
 
 [[package]]
+name = "backoff"
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001, upload-time = "2022-10-05T19:19:32.061Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148, upload-time = "2022-10-05T19:19:30.546Z" },
+]
+
+[[package]]
 name = "bcrypt"
 version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -674,6 +683,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+context-graph-trial = [
+    { name = "graphiti-core", extra = ["falkordb"] },
+]
 dev = [
     { name = "fakeredis", extra = ["valkey"] },
     { name = "jsonschema" },
@@ -711,6 +723,7 @@ requires-dist = [
     { name = "fakeredis", extras = ["valkey"], marker = "extra == 'dev'" },
     { name = "fastapi", specifier = ">=0.136.1,<0.137" },
     { name = "gitpython", specifier = ">=3.1.47" },
+    { name = "graphiti-core", extras = ["falkordb"], marker = "extra == 'context-graph-trial'", specifier = "==0.29.3" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jira", specifier = ">=3.10.5" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.20.0" },
@@ -762,7 +775,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.46.0" },
     { name = "valkey", specifier = ">=6.0.0" },
 ]
-provides-extras = ["dev", "enterprise-sso"]
+provides-extras = ["dev", "enterprise-sso", "context-graph-trial"]
 
 [[package]]
 name = "distro"
@@ -832,6 +845,19 @@ valkey = [
 ]
 
 [[package]]
+name = "falkordb"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "redis" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c6/9f/d02f8282490b525ff6a05024ce23e2f519d3fc3dbd6cb2f004ab1bae4920/falkordb-1.2.2.tar.gz", hash = "sha256:3fc150d3262b971916a0f2c15f419f7fe521a94fe3a672b6f174288d885fd239", size = 30179, upload-time = "2025-12-07T13:29:53.746Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/56/5e79a1a3ed0afa4c8e32a99edb862f1d2ab66b7dc65a35fd638ea157f33d/falkordb-1.2.2-py3-none-any.whl", hash = "sha256:cc1fcccaa1148be9e3d22d85af03d027f19b398e0f38d04424f3757a02744976", size = 36046, upload-time = "2025-12-07T13:29:52.686Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.136.3"
 source = { registry = "https://pypi.org/simple" }
@@ -890,6 +916,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googleapis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035, upload-time = "2026-05-07T08:04:49.423Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631, upload-time = "2026-05-07T08:03:30.345Z" },
+]
+
+[[package]]
+name = "graphiti-core"
+version = "0.29.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "neo4j" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "posthog" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "tenacity" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/af/5b/afc2c564f4bcc247720dad769096184e3c298429ea4302a6ae4635267efc/graphiti_core-0.29.3.tar.gz", hash = "sha256:c3650626c0eb61c1ba2765ce6f08900abe68ec7f984f2e098b4922ebf5e81298", size = 6978366, upload-time = "2026-07-27T20:58:03.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/e4/8273941a0e7a1a3ef4350ff810ed6ddd2d907ebdce95cbbcf2484b2c5de7/graphiti_core-0.29.3-py3-none-any.whl", hash = "sha256:0210510e8043b5b4fa57aa038934e849b2e61d31d298200b0074faf7ca793ed5", size = 361487, upload-time = "2026-07-27T20:58:00.971Z" },
+]
+
+[package.optional-dependencies]
+falkordb = [
+    { name = "falkordb" },
 ]
 
 [[package]]
@@ -1393,6 +1442,18 @@ wheels = [
 ]
 
 [[package]]
+name = "neo4j"
+version = "6.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytz" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/f4/aaa4ac19adae4b01bc742b63afd2672a77e7351566f02721e713e4b863ee/neo4j-6.2.0.tar.gz", hash = "sha256:e1e246b65b572bd8ea97f9e0e721b7d40a5ce53e53d0007c29aef63e4f9124d9", size = 241459, upload-time = "2026-05-04T07:35:41.428Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/cf/1c3795866cefaac6e648d4e98c373cafd97810f6e317c307371007ab4abb/neo4j-6.2.0-py3-none-any.whl", hash = "sha256:b87abdd13a5cc2e3bd51026926c2f20ac38fa3febe98c340520dce19e97388d0", size = 327824, upload-time = "2026-05-04T07:35:39.604Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1746,6 +1807,21 @@ wheels = [
 ]
 
 [[package]]
+name = "posthog"
+version = "7.38.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "backoff" },
+    { name = "distro" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/4f/edfbe2aac190ade695693a452bb6d979e8ca5bc54236c28cb796a43ce79d/posthog-7.38.3.tar.gz", hash = "sha256:2a21f13eb48985be58d9533221ec032f579a0f5becf14264a3ea277888af21d1", size = 422163, upload-time = "2026-08-07T18:05:13.739Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/f4/e5a968a7f843dc31215c694e2edfafa0644e9b9e833588c1f4adfc0175ee/posthog-7.38.3-py3-none-any.whl", hash = "sha256:099aeea324b6c20e352a5bf37a43428fce20c76459d3d27da3b8c8df7814179f", size = 496878, upload-time = "2026-08-07T18:05:12.178Z" },
+]
+
+[[package]]
 name = "prometheus-client"
 version = "0.25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2038,6 +2114,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "python-dotenv"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
 ]
 
 [[package]]
@@ -2469,6 +2554,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/45/26/5d6f5f5beae6f1ff78213e2e6f4fbd431518dcd98733cdd39fb4ba0d01d3/stripe-15.1.0.tar.gz", hash = "sha256:24bd3b6bd0969a4841bd4d7681556a9e35e46c414a07c8590a225fbd5a878450", size = 1501673, upload-time = "2026-04-24T00:18:58.612Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/4e/fd9cb74ddf1e61fb6241e2f6799a81ef99bf6cf2e94f8812ee1cd5458e5d/stripe-15.1.0-py3-none-any.whl", hash = "sha256:bdfb556be08662a41833e6403607ebf12e0062cae4f9b93e2b89b6ba926d7c82", size = 2143199, upload-time = "2026-04-24T00:18:56.027Z" },
+]
+
+[[package]]
+name = "tenacity"
+version = "9.1.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
 ]
 
 [[package]]

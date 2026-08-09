@@ -274,16 +274,26 @@ FalkorDB client and never touches the Graphiti driver. The test asserts this
 keyspace afterwards — the creation races `close()`'s cancellation, so a
 "keyspace absent" assertion could pass with the defect present.
 
-**An unreachable configured store fails visibly.** Two cases return `0`,
-because in both the organization provably has no graph data: the store is not
-configured (the production default), or graphiti-core is not installed.
-Everything else propagates, including a connection failure. Reporting `0`
-there would record a complete deletion of data nobody looked at, and
-propagating does not block the deletion —
+**Once the store is configured, an unverifiable deletion fails visibly.** A
+missing graphiti-core does not make the data disappear, and an unreachable
+endpoint is an unknown rather than an absence — both raise. `0` is returned
+only after a positive existence check proved the partition absent.
+Propagating does not block deletion:
 `OrganizationDeletionService._purge_external_stores` catches, records
 `"Derived store '…' deletion failed: …"` in `result.warnings`, and carries
-on. So the choice is only ever between a visible incomplete deletion and an
+on, so the choice is only between a *visible* incomplete deletion and an
 invisible one.
+
+**The one exception is a store that is not configured at all**, which returns
+`0` with a logged warning. Adversarial review argued this should raise too,
+and the full gate showed why it must not: raising made every org deletion in
+every unconfigured environment record a warning about an optional trial
+store, breaking the property CHAOS-3566's registry requires — that a
+deployment without the trial store sees no behaviour change — and a warning
+channel with a permanent entry is one nobody reads. The residual (a
+deployment that once *had* the store configured) is carried in the log, and
+its remedy is to point `CONTEXT_FABRIC_GRAPH_STORE_URI` at the store for the
+deletion run.
 
 ## Running the trial store
 

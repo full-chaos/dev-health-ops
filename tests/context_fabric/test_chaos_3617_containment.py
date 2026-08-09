@@ -319,19 +319,32 @@ class TestOrgDeletionRegistration:
         )
 
     @pytest.mark.asyncio
-    async def test_an_unconfigured_store_is_unknown_not_zero(self, monkeypatch) -> None:
-        """Zero means "checked, nothing there" -- never "could not check".
+    async def test_an_unconfigured_store_returns_zero_without_warning_noise(
+        self, monkeypatch, caplog
+    ) -> None:
+        """The production default must stay a silent no-op on the result.
 
-        Adversarial review found this returning 0 whenever the store URI was
-        absent. But a partition written while the store WAS configured
-        survives the variable being removed, so 0 would have recorded it as
-        purged. Raising surfaces the unknown; the deletion service catches it
-        into ``result.warnings`` and continues, so nothing is blocked.
+        Adversarial review argued this should raise, and the full gate showed
+        why it must not: raising made EVERY org deletion in every
+        unconfigured environment record a warning about an optional trial
+        store (``test_org_deletion_clickhouse_dry_run_counts_without_delete``
+        went red). CHAOS-3566's registry requires that a deployment without
+        the trial store sees no behaviour change, and a warning channel that
+        always has an entry is one nobody reads.
+
+        The residual -- a deployment that once HAD the store configured --
+        is real, and is carried in the log rather than silently: an operator
+        who removed the variable can re-point it for the deletion run.
         """
 
+        import logging
+
         monkeypatch.delenv("CONTEXT_FABRIC_GRAPH_STORE_URI", raising=False)
-        with pytest.raises(store_module.DeletionCompletenessUnknownError):
-            await store_module.org_deletion_visit("org_alpha", False)
+        with caplog.at_level(logging.WARNING):
+            assert await store_module.org_deletion_visit("org_alpha", False) == 0
+        assert any("not configured" in record.message for record in caplog.records), (
+            "the unchecked-absence residual must be logged, not silent"
+        )
 
     @pytest.mark.asyncio
     async def test_a_missing_graphiti_extra_is_unknown_not_zero(

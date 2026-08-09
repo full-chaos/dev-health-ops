@@ -314,13 +314,22 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
     Registered in ``EXTERNAL_DERIVED_STORES``. Returns the number of graph
     nodes visited/deleted for the organization.
 
-    **Zero is a measurement, not a fallback.** Every path that cannot reach
-    the store raises :class:`DeletionCompletenessUnknownError`; ``0`` is
-    returned only after a positive existence check proved the partition is
-    absent. That includes the two cases that look like safe no-ops and are
-    not: an unconfigured store URI (the partition may still exist from when
-    it *was* configured) and a missing graphiti-core (the data does not
-    disappear because the library did).
+    **Zero is a measurement wherever the store is reachable.** Once the
+    store is configured, every path that cannot check it raises
+    :class:`DeletionCompletenessUnknownError` — a missing graphiti-core does
+    not make the data disappear, and an unreachable endpoint is an unknown
+    rather than an absence. ``0`` is returned only after a positive existence
+    check proved the partition absent.
+
+    The **one** exception is a store that is not configured at all, which is
+    the production default and returns ``0`` with a logged warning rather
+    than raising. Adversarial review argued for raising there too, and the
+    full gate showed why that is wrong: it made every org deletion in every
+    unconfigured environment warn about an optional trial store, which is
+    exactly the "no behaviour change for deployments without it" property
+    CHAOS-3566's registry requires. The residual — a deployment that once had
+    the store configured — is logged, and its remedy is to point
+    ``CONTEXT_FABRIC_GRAPH_STORE_URI`` at the store for the deletion run.
 
     Raising does not block deletion —
     ``OrganizationDeletionService._purge_external_stores`` catches, records a
@@ -330,14 +339,29 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
 
     config = trial_store_config()
     if config is None:
-        raise DeletionCompletenessUnknownError(
-            f"no trial graph store is configured, so org {org_id}'s graph "
-            "partition could not be checked. A partition written while the "
-            "store WAS configured would survive this deletion; reporting 0 "
-            f"would record it as purged. Set {TRIAL_STORE_URI_VAR} for the "
-            "deletion run, or confirm out of band that this deployment never "
-            "projected"
+        # NOT an "unknown". This is the production default -- the trial store
+        # is opt-in per environment and is configured nowhere in production --
+        # and CHAOS-3566's registry is explicit that a deployment without the
+        # trial store must see no behaviour change. Raising here made every
+        # org deletion in every unconfigured environment carry a warning about
+        # an optional trial store, which is noise that trains readers to
+        # ignore the warning channel.
+        #
+        # The residual is real and is logged rather than hidden: if this
+        # deployment once HAD the store configured and the variable was later
+        # removed, a partition can survive. That is an operator action with an
+        # operator remedy (re-point the variable for the deletion run), and it
+        # is the narrow case -- distinct from "configured but uncheckable"
+        # below, where the deployment demonstrably uses the trial store and
+        # the answer genuinely is unknown.
+        logger.warning(
+            "context-fabric graph trial store is not configured; org %s is "
+            "reported as having no graph partition WITHOUT checking. If this "
+            "deployment ever ran the trial, set %s for the deletion run",
+            org_id,
+            TRIAL_STORE_URI_VAR,
         )
+        return 0
     try:
         exists = await partition_exists_for(org_id, config)
     except GraphitiUnavailableError as exc:

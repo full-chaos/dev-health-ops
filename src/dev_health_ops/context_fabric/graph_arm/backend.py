@@ -42,7 +42,7 @@ import hashlib
 import math
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -88,6 +88,58 @@ GRAPHITI_EXTRA = "context-graph-trial"
 #: ``DiscoveredEntity``. This is a property of the *write*, read back once per
 #: partition as an attestation and never as entity data.
 PROJECTION_EMBEDDER_ATTRIBUTE = "cf_projection_embedder"
+
+#: The node property carrying which entities an observation was observed on.
+#:
+#: CHAOS-3619 (H3). Before this existed, ``add_nodes_and_edges_bulk`` wrote
+#: entity edges only, so the live reader could not recover an observation's
+#: subjects -- and ``_traverse`` keeps an observation only when one of its
+#: subjects is in the visited set, so it recovered no observations at all.
+#: Measured against the CHAOS-3616 corpus: the reference reader returned 39
+#: attached observations for one neighbourhood and the live reader returned 0.
+#:
+#: Multi-valued, joined the way ``cf_repository_ids`` is joined. That is what
+#: promotes ``canonical_id`` to the separator check in ``projection.py``: a
+#: canonical id carrying a comma would read back as two subjects, which is an
+#: attachment no source supplied.
+OBSERVATION_SUBJECTS_ATTRIBUTE = "cf_subject_canonical_ids"
+
+#: How this writer encodes attachment, recorded on every node it writes.
+#:
+#: A partition-level attestation, exactly like
+#: :data:`PROJECTION_EMBEDDER_ATTRIBUTE`, and for the same reason: the reader
+#: must derive what it can recover from what the partition actually says,
+#: never from a literal. ``observation_attachment_available`` used to be a
+#: hardcoded ``False``, and the failure mode of replacing a literal ``False``
+#: with a literal ``True`` is a reader that claims a capability over a
+#: partition written before the capability existed -- which would make
+#: ``discover_drivers`` stop checking that a record is about the linkage it
+#: vouches for, silently.
+ATTACHMENT_ENCODING_ATTRIBUTE = "cf_attachment_encoding"
+
+#: The one encoding this revision understands. Versioned because a later
+#: encoding must make an older reader decline rather than misparse.
+ATTACHMENT_ENCODING = "canonical_ids.v1"
+
+
+def attachment_encoding_supported(attested: Collection[str]) -> bool:
+    """Whether a partition's attested encoding is one this reader can read.
+
+    Total and deliberately conservative in three directions, because each of
+    them is a way a reader could claim a capability it does not have:
+
+    * nothing attested -- a partition written before the attestation existed;
+    * an encoding this revision does not know -- a newer or foreign writer;
+    * more than one encoding -- a partition written twice, so some
+      observations carry attachment and some do not, and a reader that
+      averaged over that would attribute drivers from the half that happened
+      to be complete.
+
+    Only the exact single understood encoding returns ``True``.
+    """
+
+    return set(attested) == {ATTACHMENT_ENCODING}
+
 
 #: A canonical triple rendering: three whitespace-separated tokens.
 TRIPLE_FACT_PATTERN = re.compile(
@@ -467,10 +519,19 @@ def to_graphiti_nodes(
 
     entity_node_cls = graphiti_module("nodes").EntityNode
     nodes: list[EntityNode] = []
+    # Observation attachment travels as canonical ids rather than node uuids,
+    # so the reader recovers the same identifiers the traversal works in and
+    # never has to resolve a uuid it may not have fetched.
+    canonical_by_uuid = {item.uuid: item.canonical_id for item in projection.nodes}
     for node in projection.nodes:
         attributes: dict[str, Any] = {
             "cf_canonical_id": node.canonical_id,
             "cf_org_id": node.org_id,
+            # On EVERY node, not only observations. The reader's DISTINCT read
+            # is what decides whether this partition's attachment can be
+            # trusted, and a partially-attested partition must read as
+            # untrustworthy rather than as "the nodes I happened to sample".
+            ATTACHMENT_ENCODING_ATTRIBUTE: ATTACHMENT_ENCODING,
             # What actually produced this node's vector, recorded ON the node
             # rather than remembered by the caller. ``build_packet`` takes an
             # embedder argument that has no connection to whatever wrote the
@@ -488,6 +549,18 @@ def to_graphiti_nodes(
             attributes["cf_observation_kind"] = node.observation_kind.value
         if node.repository_ids:
             attributes["cf_repository_ids"] = ",".join(sorted(node.repository_ids))
+        if not node.is_entity:
+            # Sorted, so the stored string is a function of the attachment set
+            # and not of dict iteration order -- a store written twice from
+            # the same batch must be byte-identical or the differential
+            # oracle reports drift that is really nondeterminism.
+            subjects = sorted(
+                canonical_by_uuid[uuid]
+                for uuid in projection.observation_attachments.get(node.uuid, ())
+                if uuid in canonical_by_uuid
+            )
+            if subjects:
+                attributes[OBSERVATION_SUBJECTS_ATTRIBUTE] = ",".join(subjects)
         if node.valid_from is not None:
             attributes["cf_valid_from"] = node.valid_from.isoformat()
         if node.valid_to is not None:

@@ -682,6 +682,35 @@ class TestAVoidRunCannotBeFiledAsAMeasurement:
             write_records(records, tmp_path / "trial.SMOKE-VOID.records.json")
 
 
+def _resolvable_feature_refs() -> tuple[str, ...]:
+    """Which of the binding's candidate feature refs this clone can resolve.
+
+    The binding prefers ``origin/<branch>`` and falls back to the bare local
+    name; when neither resolves it records an error marker rather than a
+    commit. A CI checkout of a PR branch legitimately has neither -- the
+    integration branch is not fetched -- so that marker is an absent input,
+    not a defect the guard should fail on. Gated the same way the
+    remote-preference sibling below already gates.
+    """
+
+    import subprocess
+
+    from trials.chaos_3619.binding import _REPOSITORY_ROOT, FEATURE_BRANCH
+
+    resolvable = []
+    for ref in (f"origin/{FEATURE_BRANCH}", FEATURE_BRANCH):
+        done = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            cwd=_REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if done.returncode == 0 and done.stdout.strip():
+            resolvable.append(ref)
+    return tuple(resolvable)
+
+
 class TestTheBindingNamesTheEmitterAndTheExecutionDifference:
     def test_the_feature_tip_is_recorded_separately_from_the_lane_commit(
         self,
@@ -693,6 +722,11 @@ class TestTheBindingNamesTheEmitterAndTheExecutionDifference:
         taken across an arm fix look like one series.
         """
 
+        if not _resolvable_feature_refs():
+            pytest.skip(
+                "neither the remote nor the local feature ref exists in this "
+                "clone; there is no tip for the binding to record"
+            )
         binding = _binding(RunClass.MEASURED)
         assert binding.feature_tip_commit, (  # type: ignore[attr-defined]
             "no feature-tip commit was recorded; the artifact cannot say "

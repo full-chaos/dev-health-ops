@@ -221,20 +221,34 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "A2",
-        Status.PROVEN,
+        Status.UNMEASURED,
         f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
         "test_narrowing_the_grant_removes_the_entity_from_the_next_packet",
         f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
         "test_a_packet_built_before_revocation_is_caught_by_the_audit_after_it",
         f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
-        "test_the_SAME_principal_losing_a_grant_mid_session_loses_the_entity",
+        "test_revocation_through_the_PRODUCTION_grant_source_is_not_constructible",
+        f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
+        "test_a_grant_narrowed_between_calls_narrows_the_next_read",
         f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
         "test_the_readout_records_the_grant_it_actually_used",
-        notes=(
-            "The first version modelled revocation as a principal SWAP, "
-            "which only shows that different callers see different things -- "
-            "a stale grant cached against a principal identity would survive "
-            "it. A same-principal grant transition was added after review.",
+        reason=(
+            "SPLIT, and downgraded because the half that matters most is not "
+            "constructible on this arm. derive_authorized_entity_ids raises "
+            "unconditionally (readback.py:294-312) and has ZERO call sites "
+            "in src/: grant supply is caller-side by design -- the H7 "
+            "boundary CHAOS-3617 recorded deliberately, with CHAOS-3616's "
+            "authorization oracle scoring the grant externally instead. "
+            "There is no production grant source to revoke THROUGH, so "
+            "revocation-via-the-real-derivation cannot be tested without "
+            "building a fake production path, which would prove only that "
+            "the fake works. What IS proved: a narrowed set narrows the next "
+            "read (per-call filtering, no cache), and a packet emitted under "
+            "a wider grant is caught by the audit against the narrower one. "
+            "Two earlier framings were corrected getting here -- a principal "
+            "SWAP, then a same-principal transition still passing both grants "
+            "explicitly; neither reached the production source because none "
+            "exists."
         ),
     ),
     _req(
@@ -329,8 +343,16 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "test_the_audit_can_therefore_never_be_clean_for_this_arm",
         blocker="CHAOS-3627",
         reason=(
-            "Zero leakage is MEASURED and HOLDS: across every project and "
-            "team the analyst may see, no packet the arm can produce "
+            "Zero leakage is MEASURED and HOLDS -- **at base SHA 1ab76d955, "
+            "pre-CHAOS-3627 vocabulary, and it must be re-derived after the "
+            "rebase onto that fix**: entity_sightings reads an evidence "
+            "entry's entity_id as a sighting, and pre-fix that field is an "
+            "observation slug or measurement key on every slug-bearing "
+            "entry, so the attributions the measurement runs over are "
+            "known-unsound (the masking direction -- leaked evidence "
+            "attributed to a permitted entity -- is the dangerous one). "
+            "Within that scope: across every entity the analyst may see, no "
+            "packet the arm can produce "
             "discloses any entity outside the true grant, and the same code "
             "path under a tenant-derived grant does leak, so the result is "
             "earned. The hard gate still cannot be signed off, because the "

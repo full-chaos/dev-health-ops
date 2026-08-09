@@ -193,6 +193,49 @@ class TestEveryMutationDeclaresACheckableReason:
     def test_the_table_is_not_empty(self, harness) -> None:
         assert harness.MUTATIONS, "the mutation table is empty"
 
+    def test_there_is_deliberately_NO_citation_cap_mutation(self, harness) -> None:
+        """Why the set is 15 and not 16, measured rather than asserted.
+
+        My round-2 reports said the flood work would move this pin 15 → 16 by
+        adding a distinct "cap disabled" mutation alongside the ordering one.
+        It did not, and adversarial review caught the discrepancy. **The
+        reports were wrong; the tree was right**, and the reason is worth
+        recording so nobody adds the mutation later thinking it was an
+        oversight.
+
+        Disabling the citation cap does not need a CHAOS-3620 mutation
+        because the cap is already guarded by something stronger: the frozen
+        contract bounds ``RelatedEntity.supporting_path_ids`` at 10, so an
+        uncapped emission fails validation outright. Measured by disabling
+        ``if len(ordered) > _MAX_PATH_CITATIONS`` and running the suite —
+        six CHAOS-3617 tests go red, including the packet-validator parity
+        tests. A 3620 mutation would re-prove 3617's coverage.
+
+        What genuinely needed a 3620 mutation is the ORDERING, because the
+        cap is safe only if what it keeps is chosen well. That mutation
+        exists and kills on the flood test.
+        """
+
+        cap_mutations = [
+            mutation.mutation_id
+            for mutation in harness.MUTATIONS
+            if "_MAX_PATH_CITATIONS" in mutation.anchor
+        ]
+        assert not cap_mutations, (
+            "a citation-cap mutation was added. If that is deliberate, "
+            "update this test and the count claims; if it was added believing "
+            f"the cap was unguarded, it is not: {cap_mutations}"
+        )
+        ordering = [
+            mutation.mutation_id
+            for mutation in harness.MUTATIONS
+            if mutation.mutation_id == "path-citations-unordered"
+        ]
+        assert ordering, (
+            "the ordering mutation is gone; the cap is now unguarded against "
+            "keeping the wrong paths"
+        )
+
     def test_the_mutation_SET_is_pinned_by_name(self, harness) -> None:
         """ "Not empty" is not a coverage claim.
 

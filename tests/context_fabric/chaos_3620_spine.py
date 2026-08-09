@@ -371,7 +371,21 @@ def restricted_material(principal_id: str) -> RestrictedMaterial:
     for label in candidates:
         if not label:
             continue
-        (ambiguous if label.casefold() in permitted_text else labels).add(label)
+        # Classified by the SAME whole-token predicate the matcher uses.
+        # Adversarial review found these two disagreeing: classification by
+        # substring, matching by token. A label excluded for a substring
+        # collision the matcher would never have made is a blind spot created
+        # by the exclusion rule itself.
+        #
+        # Measured consequence, recorded because it corrects the finding's
+        # stated cause: making them consistent recovers NOTHING on this
+        # corpus. ``Core`` is excluded either way, because the analyst can
+        # legitimately see ``platform core`` (team_atlas's previous name),
+        # which contains ``core`` as a whole token. The asymmetry was real
+        # and was not what created the blind spot — genuine ambiguity is.
+        # Both are fixed: the rule is now consistent, and the residual it
+        # leaves is asserted rather than left in a field nobody reads.
+        (ambiguous if _contains_token(permitted_text, label) else labels).add(label)
 
     return RestrictedMaterial(
         principal_id=principal_id,

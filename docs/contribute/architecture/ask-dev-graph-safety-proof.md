@@ -78,10 +78,10 @@ Linear blocker.
 
 | Status | Count | Meaning |
 | --- | --- | --- |
-| `proven` | 29 | Holds, and the named tests are what establish it. |
+| `proven` | 28 | Holds, and the named tests are what establish it. |
 | `defect` | 4 | Violated by merged code; the named tests pin current behaviour. |
 | `not_accepted` | 2 | Blocked on another issue; never scored as a pass. |
-| `unmeasured` | 9 | Not measured, with a stated reason rather than a proxy. |
+| `unmeasured` | 10 | Not measured, with a stated reason rather than a proxy. |
 
 Three of those nine were `proven` before adversarial review and were
 downgraded rather than defended: `A1` (the cross-*repository* half is not
@@ -111,9 +111,17 @@ the tests check.
 
 ### A9 — zero unauthorized result leakage (blocked by CHAOS-3627)
 
-The measurement holds. Across every project and team the analyst may see, no
-packet the arm can produce discloses any entity outside the true grant, and
-the same code path under a widened grant does leak.
+The measurement holds **at base SHA `1ab76d955`, pre-CHAOS-3627 vocabulary,
+and must be re-derived after the rebase onto that fix.** `entity_sightings`
+reads an evidence entry's `entity_id` as a sighting, and pre-fix that field
+is an observation slug or measurement key on every slug-bearing entry — so
+the attributions the measurement runs over are known-unsound, and the masking
+direction (leaked evidence attributed to a permitted entity) is the dangerous
+one. A source pin forces the re-derivation at rebase.
+
+Within that scope: across every entity the analyst may see, no packet the arm
+can produce discloses any entity outside the true grant, and the same code
+path under a widened grant does leak.
 
 The gate still cannot be signed off. `audit_authorization` — the independent
 oracle that owns this dimension — cannot return clean for **any** graph-arm

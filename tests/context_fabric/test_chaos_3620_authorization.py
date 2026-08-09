@@ -436,6 +436,97 @@ class TestTheDisclosureWalkerCatchesWhatTheOldCheckMissed:
         clean = spine.investigate("team_cinder").packet
         assert spine.disclosures(clean, world.PRINCIPAL_ANALYST) == []
 
+    def test_the_ambiguous_set_is_EXACTLY_these_two_names(self) -> None:
+        """The blind spot the exclusion rule creates, pinned by name.
+
+        Adversarial review demonstrated a label-only leak: a packet whose
+        ``display_label`` is ``Core`` — the restricted Lumen team's name —
+        produces zero disclosures, because ``Core`` is excluded as ambiguous.
+
+        The finding is real. Its stated cause was not, and the correction
+        matters more than the fix: review attributed it to classification
+        using substring containment while matching used whole tokens. Making
+        them consistent (done) recovers **nothing** — measured, both rules
+        exclude exactly ``{Agent Context Runtime, Core}`` for the analyst and
+        ``{Agent Context Runtime}`` for Lumen. ``Core`` is *genuinely*
+        ambiguous: the analyst may legitimately see ``platform core``,
+        team_atlas's previous name, which contains ``core`` as a whole token.
+
+        So the residual is not a bug to fix but a limit to state: **a
+        label-only prose leak of an ambiguous name is undetectable by this
+        walker**, and this test says exactly which names that is. Pinned as a
+        set so a corpus that makes a third name ambiguous — silently widening
+        the blind spot — turns this red.
+        """
+
+        analyst = spine.restricted_material(world.PRINCIPAL_ANALYST)
+        assert analyst.ambiguous_labels == {"Agent Context Runtime", "Core"}, (
+            "the analyst's ambiguous-label set changed; the walker's blind "
+            f"spot moved and must be re-stated: {sorted(analyst.ambiguous_labels)}"
+        )
+        lumen = spine.restricted_material(world.PRINCIPAL_LUMEN)
+        assert lumen.ambiguous_labels == {"Agent Context Runtime"}, (
+            f"Lumen's ambiguous-label set changed: {sorted(lumen.ambiguous_labels)}"
+        )
+
+    def test_every_ambiguous_name_is_still_covered_by_its_ID_channel(self) -> None:
+        """What keeps the blind spot narrow, asserted rather than assumed.
+
+        A label this walker cannot match belongs to an entity whose
+        **identifier** it still matches. So the residual is precisely: a
+        packet that carries the restricted entity's NAME and never its ID.
+        Anything that names the entity the way the arm actually emits
+        entities is caught.
+
+        If an ambiguous label ever belonged to an entity outside the id
+        channel too, the blind spot would be total for that entity — this is
+        the test that would say so.
+        """
+
+        material = spine.restricted_material(world.PRINCIPAL_ANALYST)
+        for label in material.ambiguous_labels:
+            owners = [
+                entity_id
+                for entity_id, entity in world.ENTITIES_BY_ID.items()
+                if entity.display_label == label
+            ]
+            restricted_owners = [
+                entity_id for entity_id in owners if entity_id in material.entity_ids
+            ]
+            assert restricted_owners, (
+                f"ambiguous label {label!r} belongs to no restricted entity, "
+                "so nothing explains why it was a candidate at all"
+            )
+            for entity_id in restricted_owners:
+                assert entity_id in material.entity_ids, (
+                    f"{entity_id} carries an unmatchable label AND is outside "
+                    "the id channel: the walker is fully blind to it"
+                )
+
+    def test_the_label_only_leak_of_an_ambiguous_name_is_a_STATED_residual(
+        self,
+    ) -> None:
+        """The leak review demonstrated, executed and recorded as the limit.
+
+        Kept as an executable statement of what this walker does **not**
+        catch, so the limit is discoverable from the suite rather than only
+        from a review transcript. If a future change makes it detectable this
+        goes red and the residual is retired deliberately.
+        """
+
+        packet = spine.investigate("team_cinder").packet
+        forged = _forge(packet, display_label="Core")
+        assert spine.disclosures(forged, world.PRINCIPAL_ANALYST) == [], (
+            "a label-only leak of an ambiguous name is now detected -- the "
+            "CHAOS-3620 ambiguity residual must be updated and this test "
+            "replaced by the proof that it is caught"
+        )
+        # And the reason it is tolerable: the same entity's id IS caught.
+        by_id = _forge(packet, entity_id="lumen_team_core")
+        assert spine.disclosures(by_id, world.PRINCIPAL_ANALYST) == [
+            "entity_id:lumen_team_core"
+        ], "the id channel does not cover the entity whose label is unmatchable"
+
     def test_an_ambiguous_label_is_excluded_and_recorded_not_matched(self) -> None:
         """Why the walker cannot simply match every restricted name.
 
@@ -579,21 +670,70 @@ class TestAuthorizationIsCurrentAfterRevocation:
             "effect on material already emitted"
         )
 
-    def test_the_SAME_principal_losing_a_grant_mid_session_loses_the_entity(
+    def test_revocation_through_the_PRODUCTION_grant_source_is_not_constructible(
         self,
     ) -> None:
-        """Revocation as a grant transition, not a principal swap.
+        """The boundary, measured — because the honest answer is "you can't".
 
-        Adversarial review was right that the tests above model revocation by
-        switching from the compliance principal to the analyst — two
-        principals, two grants, no transition. That exercises "different
-        callers see different things", which is a weaker property: a stale
-        grant cached against a principal identity would survive it.
+        Round-2 review was right that the test below passes both grants
+        explicitly and so proves per-call filtering rather than revocation
+        through the real authorization source. The instruction was to measure
+        what the boundary IS rather than build a fake production path to
+        satisfy the finding, and the measurement is unambiguous:
 
-        Here one principal's grant is narrowed between two investigations, so
-        the transition itself is what changes. The arm holds no grant cache —
-        ``neighbourhood`` takes the authorized set per call — and this is
-        what proves it rather than assuming it from the signature.
+        ``derive_authorized_entity_ids`` raises unconditionally
+        (``readback.py:294-312``) and has **zero call sites in src/**. Grant
+        supply is caller-side by design — the H7 boundary CHAOS-3617 recorded
+        deliberately, with CHAOS-3616's authorization oracle scoring the
+        grant externally instead. There is no production grant source on this
+        arm to revoke *through*.
+
+        So "current authorization after revocation, via the production
+        derivation" is **not constructible on this arm**, for a stated design
+        reason rather than a missing test. What IS constructible — that a
+        narrowed grant narrows the next read, and that an already-emitted
+        packet is caught by the audit afterwards — is proved below and in
+        this class's other tests.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.readback import (
+            AuthorizationDerivationNotImplementedError,
+            derive_authorized_entity_ids,
+        )
+
+        with pytest.raises(AuthorizationDerivationNotImplementedError):
+            derive_authorized_entity_ids(world.ORG_HELIO, world.PRINCIPAL_ANALYST)
+
+        arm_root = (
+            Path(spine.__file__).resolve().parents[2]
+            / "src"
+            / "dev_health_ops"
+            / "context_fabric"
+        )
+        callers = sorted(
+            path.name
+            for path in arm_root.rglob("*.py")
+            if "derive_authorized_entity_ids(" in path.read_text(encoding="utf-8")
+            and path.name != "readback.py"
+        )
+        assert not callers, (
+            "production code now derives the grant "
+            f"({callers}); revocation through the real source has become "
+            "constructible and this disposition must be replaced by the test"
+        )
+
+    def test_a_grant_narrowed_between_calls_narrows_the_next_read(self) -> None:
+        """What IS constructible: per-call filtering, stated as exactly that.
+
+        Two investigations by ONE principal with a narrowed set between them.
+        This is *not* revocation through a production grant source — that is
+        not constructible (see above) — it is the property the arm actually
+        offers: ``neighbourhood`` takes the authorized set per call and holds
+        no cache, so a caller that narrows gets a narrowed answer.
+
+        Named for what it proves rather than for what would be more
+        impressive. The earlier name claimed a session-level revocation this
+        cannot demonstrate.
         """
 
         principal = world.PRINCIPAL_COMPLIANCE

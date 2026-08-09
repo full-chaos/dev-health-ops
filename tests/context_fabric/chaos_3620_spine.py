@@ -281,6 +281,22 @@ def investigate(
     )
 
 
+def lineage_path_for(path):
+    """One discovered path, converted by the arm's own emitter helper.
+
+    Exposed so a test can hand the *contract* exactly the lineage the arm
+    would have emitted, without going through ``build_packet`` — which is the
+    only way to exercise the contract's own authorization validator
+    independently of the emitter's earlier check. Hand-building an equivalent
+    ``LineagePath`` here would test a hand-built shape rather than the arm's.
+    """
+
+    from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
+    from dev_health_ops.context_fabric.graph_arm.packet_builder import _lineage_path
+
+    return _lineage_path(path, SourceRequirementState.AVAILABLE_CURRENT)
+
+
 def with_grant(
     readout: InvestigationReadout, authorized: frozenset[str] | tuple[str, ...]
 ) -> InvestigationReadout:

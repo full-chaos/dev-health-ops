@@ -350,7 +350,16 @@ class TestTheThreeKindsOfClaimStayDistinguishable:
             "ceiling above was never tested"
         )
 
-    def test_a_measurement_only_category_without_a_citation_is_excluded(self) -> None:
+    def test_an_uncomparable_measurement_is_excluded_for_insufficient_measurement(
+        self,
+    ) -> None:
+        """The refusal that IS exercised: a value with no cohort median.
+
+        Distinct from the measurement-only *category* guard recorded below —
+        guard injection established that the two are different code paths and
+        that only this one fires on the corpus.
+        """
+
         investigation = spine.investigate("proj_meridian", with_drivers=True)
         uncited = [
             finding
@@ -362,6 +371,51 @@ class TestTheThreeKindsOfClaimStayDistinguishable:
         assert uncited, (
             "no finding was excluded for insufficient measurement, so the "
             "measurement-only refusal is not exercised by this corpus"
+        )
+
+    def test_the_measurement_only_CATEGORY_guard_is_currently_unreachable(
+        self,
+    ) -> None:
+        """CHAOS-3620 RECORD — a defensive guard with no reachable input.
+
+        ``_classify`` refuses a measurement-only category reached by anything
+        other than a cited measurement (``drivers.py:544-560``). Guard
+        injection disabled it and every test still passed: SURVIVED. The
+        reason is structural rather than a missing test — no structural rule
+        in this revision produces a measurement-only category at all, so the
+        guard's condition can never be true.
+
+        Recorded as an assertion rather than deleted, because the guard is
+        the right guard for the rule someone adds next, and "unreachable
+        today" is exactly the claim that stops being true silently. If a
+        structural rule starts producing one of those categories this test
+        goes red and the mutation becomes worth writing.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.drivers import (
+            MEASUREMENT_ONLY_CATEGORIES,
+            StandingMechanism,
+        )
+
+        reachable = [
+            (seed, finding.driver_id, str(finding.category))
+            for seed in (
+                "proj_identity_rewrite",
+                "proj_pulse",
+                "proj_meridian",
+                "proj_acr",
+                "proj_ledger_migration",
+                "proj_solstice",
+                "proj_vertex",
+            )
+            for finding in spine.investigate(seed, with_drivers=True).findings
+            if finding.category in MEASUREMENT_ONLY_CATEGORIES
+            and finding.mechanism is not StandingMechanism.CITED_MEASUREMENT
+        ]
+        assert not reachable, (
+            "a structural rule now produces a measurement-only category, so "
+            "the guard at drivers.py:544-560 is reachable -- add the guard "
+            f"injection mutation the CHAOS-3620 record defers: {reachable}"
         )
 
 

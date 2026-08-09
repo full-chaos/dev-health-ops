@@ -368,16 +368,12 @@ class TestPathsNeverMixAuthorizedAndUnauthorizedEntities:
             f"outside the caller's grant: {escapes}"
         )
 
-    def test_the_builder_refuses_a_readout_whose_path_escapes_the_declared_grant(
-        self,
-    ) -> None:
-        """The emitter is not allowed to trust the traversal.
+    def _escaping_readout(self):
+        """A real privileged readout, relabelled with the narrower grant.
 
-        Constructed by relabelling a *real* compliance-grant readout with the
-        *analyst's* narrower grant: a genuine path through the restricted
-        project, now outside the set the packet will declare. This is the
-        shape a stale grant or a re-used readout produces, and it must not be
-        emittable.
+        A genuine path through the restricted project, now outside the set
+        the packet will declare. This is the shape a stale grant or a re-used
+        readout produces, and it must not be emittable.
         """
 
         privileged = spine.readout_for(
@@ -391,13 +387,56 @@ class TestPathsNeverMixAuthorizedAndUnauthorizedEntities:
             "project, so relabelling it cannot produce the escape this test "
             "is about"
         )
+        return spine.with_grant(privileged, _analyst_grant())
 
-        relabelled = spine.with_grant(privileged, _analyst_grant())
+    def test_the_builder_refuses_it_before_the_contract_ever_sees_it(self) -> None:
+        """The emitter is not allowed to trust the traversal.
+
+        The emitter's own check is the *first* of two independent refusals.
+        Which one fires matters: guard injection showed that disabling this
+        one does not let the packet out — the frozen contract's
+        ``validate_paths_stay_inside_authorized_set`` catches it instead — so
+        the claim being made here is specifically that the emitter refuses
+        early and names the entity, not that a packet cannot escape.
+        """
+
         with pytest.raises(PermissionError) as raised:
-            spine.packet_from(relabelled)
+            spine.packet_from(self._escaping_readout())
         assert world.PROJ_QUARRY in str(raised.value), (
             "the builder refused the readout but did not name the entity the "
             f"path escaped through; it said {str(raised.value)!r}"
+        )
+
+    def test_and_the_frozen_contract_refuses_the_same_shape_independently(
+        self,
+    ) -> None:
+        """The second layer, exercised without disabling the first.
+
+        Recorded because two enforcers are worth having only if both are
+        known to work; an unexercised second layer is an assumption, and this
+        one is what actually holds if the emitter check is ever refactored
+        away.
+        """
+
+        from pydantic import ValidationError
+
+        from dev_health_ops.api.dev.investigation_contract.packet import RelatedContext
+
+        readout = self._escaping_readout()
+        with pytest.raises(ValidationError) as raised:
+            RelatedContext(
+                schema_version="ask_dev_related_context.v1",
+                entities=(),
+                paths=tuple(spine.lineage_path_for(path) for path in readout.paths),
+                authorized_entity_ids=tuple(sorted(_analyst_grant())),
+                authorization_filtered_count=0,
+                entities_truncated=False,
+                paths_truncated=False,
+                truncation_reason=None,
+            )
+        assert "authorized" in str(raised.value), (
+            "the contract refused the escaping paths for some reason other "
+            f"than authorization: {str(raised.value)[:200]!r}"
         )
 
 
@@ -449,16 +488,46 @@ class TestCandidateSearchWithholdsBeforeRanking:
 
 
 class TestCohortConstructionWithholdsAndCounts:
+    #: A subject that shares its owning team with the restricted project, so
+    #: the restricted project is a genuine *peer* rather than merely a nearby
+    #: node. Chosen after guard injection showed that a subject where the
+    #: restricted project could never have been a member kills nothing: the
+    #: membership assertion passed with the authorization filter disabled,
+    #: and only the count moved.
+    PEER_SUBJECT = "proj_pulse"
+
     def _labels(self):
         return {
             node.canonical_id: (node.entity_kind, node.display_label)
             for node in spine.helio_projection().entity_nodes()
         }
 
+    def test_the_restricted_project_really_is_a_peer_of_this_subject(self) -> None:
+        """Anti-vacuity, and the thing guard injection caught.
+
+        Under the granted principal the restricted project appears as a
+        cohort MEMBER. Without that, "it is not a member for the analyst" is
+        satisfied by a subject it could never have been a member of.
+        """
+
+        projection = spine.helio_projection()
+        proposal = build_cohort(
+            self.PEER_SUBJECT,
+            projection.edges,
+            self._labels(),
+            adapter.authorized_entity_ids_for(world.PRINCIPAL_COMPLIANCE),
+        )
+        assert world.PROJ_QUARRY in {
+            member.canonical_id for member in proposal.members
+        }, (
+            f"{world.PROJ_QUARRY} is not a cohort peer of {self.PEER_SUBJECT} "
+            "for anyone, so withholding it from the analyst measures nothing"
+        )
+
     def test_an_unauthorized_peer_is_withheld_and_counted(self) -> None:
         projection = spine.helio_projection()
         proposal = build_cohort(
-            "team_cinder", projection.edges, self._labels(), _analyst_grant()
+            self.PEER_SUBJECT, projection.edges, self._labels(), _analyst_grant()
         )
         assert world.PROJ_QUARRY not in {
             member.canonical_id for member in proposal.members
@@ -474,12 +543,41 @@ class TestCohortConstructionWithholdsAndCounts:
             f"counted; reported {proposal.authorization_filtered_count}"
         )
 
+    def test_an_unauthorized_peer_reaches_the_EXCLUSION_list_too(self) -> None:
+        """The channel a membership-only check would miss.
+
+        For a subject whose peers are filtered out on kind, the restricted
+        project surfaces as an *exclusion* under the granted principal — a
+        named entity with a stated reason, which is a disclosure. The analyst
+        must see neither.
+        """
+
+        projection = spine.helio_projection()
+        privileged = build_cohort(
+            "repo_pulse",
+            projection.edges,
+            self._labels(),
+            adapter.authorized_entity_ids_for(world.PRINCIPAL_COMPLIANCE),
+        )
+        assert world.PROJ_QUARRY in {
+            exclusion.canonical_id for exclusion in privileged.exclusions
+        }, (
+            "the restricted project no longer reaches the exclusion list for "
+            "anyone, so this disclosure channel is untested"
+        )
+        narrowed = build_cohort(
+            "repo_pulse", projection.edges, self._labels(), _analyst_grant()
+        )
+        assert world.PROJ_QUARRY not in {
+            exclusion.canonical_id for exclusion in narrowed.exclusions
+        }, "the restricted project was disclosed through a cohort exclusion"
+
     def test_the_same_cohort_under_the_granted_principal_withholds_nothing(
         self,
     ) -> None:
         projection = spine.helio_projection()
         proposal = build_cohort(
-            "team_cinder",
+            self.PEER_SUBJECT,
             projection.edges,
             self._labels(),
             adapter.authorized_entity_ids_for(world.PRINCIPAL_COMPLIANCE),
@@ -487,6 +585,27 @@ class TestCohortConstructionWithholdsAndCounts:
         assert proposal.authorization_filtered_count == 0, (
             "the fully-granted principal was told a cohort candidate was "
             "withheld, so the analyst's count is not measuring the grant"
+        )
+
+    def test_an_unauthorized_ANCHOR_is_withheld_and_counted_separately(self) -> None:
+        """The other of the two authorization checks in cohort construction.
+
+        Guard injection made the distinction necessary: ``build_cohort``
+        filters the *anchor* a peer is reached through
+        (``cohort.py:232``) and the *peer* itself (``cohort.py:252``) at two
+        different sites, and disabling either alone leaves the other
+        standing. The anchor check's observable effect on this subject is the
+        withheld count, and a count that silently went to zero would tell a
+        consumer the answer was complete when it was narrowed.
+        """
+
+        projection = spine.helio_projection()
+        proposal = build_cohort(
+            "team_cinder", projection.edges, self._labels(), _analyst_grant()
+        )
+        assert proposal.authorization_filtered_count == 1, (
+            "an unauthorized cohort ANCHOR was skipped without being counted; "
+            f"reported {proposal.authorization_filtered_count}"
         )
 
     def test_an_unauthorized_cohort_anchor_yields_no_cohort_at_all(self) -> None:

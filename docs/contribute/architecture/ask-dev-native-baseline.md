@@ -215,13 +215,14 @@ because that posture is already proven in production.
 
 ## Flags
 
-Both are off unless explicitly set to `1`, matching the CHAOS-3617
-convention:
+`CONTEXT_FABRIC_SHADOW_SYNTHESIS_ENABLED` gates the shadow seam. It is off
+unless explicitly set to `1`, matching the CHAOS-3617 convention, and it is
+listed in `tests/_env_isolation.py`'s scrub set so an ambient value on a
+developer machine cannot leak into a test run.
 
-| Flag | Effect |
-| --- | --- |
-| `CONTEXT_FABRIC_NATIVE_PROJECTION_ENABLED` | Native arm projection |
-| `CONTEXT_FABRIC_SHADOW_SYNTHESIS_ENABLED` | Shadow seam |
+There is deliberately **no** flag for the projection itself. It is a pure
+function that nothing calls yet; a flag gating nothing is dead configuration
+that reads as a control. One arrives with the orchestrator wiring.
 
 ## Historical slice
 

@@ -426,3 +426,56 @@ class TestEveryWrittenAttributeIsReadable:
         assert written <= set(READBACK_ATTRIBUTE_KEYS), sorted(
             written - set(READBACK_ATTRIBUTE_KEYS)
         )
+
+
+class TestObservationTrustSurvivesTheTraversal:
+    def test_an_untrusted_record_is_still_marked_untrusted_after_readback(
+        self,
+    ) -> None:
+        """The attribute has to survive the *traversal*, not just the write.
+
+        ``_traverse`` narrows each observation's subject list to the entities
+        it reached, and it used to do that by rebuilding the observation
+        field by field — which silently dropped ``attributes`` the moment the
+        readout grew them. Both readers share that function, so the
+        differential oracle could not see it: two readers agreeing on a value
+        neither carries is still agreement.
+
+        The consequence was not cosmetic. Driver attribution reads trust from
+        here, so with the attribute gone the corpus's planted false
+        dependency claim — asserted only by an untrusted planning note —
+        looked canonical.
+        """
+
+        import asyncio
+
+        from dev_health_ops.context_fabric.graph_arm import build_projection
+        from dev_health_ops.context_fabric.graph_arm.readback import (
+            ProjectionGraphReader,
+        )
+
+        projection = build_projection(adapter.corpus_batch(world.ORG_HELIO))
+        readout = asyncio.run(
+            ProjectionGraphReader(projection).neighbourhood(
+                org_id=world.ORG_HELIO,
+                seed_canonical_ids=["proj_meridian"],
+                authorized_entity_ids=sorted(
+                    adapter.authorized_entity_ids_for(world.PRINCIPAL_ANALYST)
+                ),
+                max_hops=2,
+            )
+        )
+        by_id = {item.canonical_id: item for item in readout.observations}
+        planted = by_id.get("doc_false_dependency_claim")
+        assert planted is not None, (
+            "the untrusted record was not reached at all, so this proves "
+            "nothing about whether its trust survived"
+        )
+        assert planted.attributes.get("corpus_trust") == "untrusted_content"
+
+        # The control: a canonical record in the same readout reads as
+        # canonical, so the assertion above is about trust and not about
+        # every observation coming back blank.
+        canonical = by_id.get("wi_meridian_demand")
+        assert canonical is not None
+        assert canonical.attributes.get("corpus_trust") == "canonical"

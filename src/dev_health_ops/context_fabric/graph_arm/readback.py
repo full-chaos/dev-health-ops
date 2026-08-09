@@ -49,7 +49,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -569,17 +569,14 @@ def _traverse(
         )
         if not subjects:
             continue
+        # ``replace`` rather than a field-by-field rebuild. The rebuild
+        # silently dropped ``attributes`` the moment the readout grew them,
+        # and because BOTH readers share this function the differential
+        # oracle could not see it: two readers agreeing on a value neither
+        # of them carries is still agreement. Found by printing real corpus
+        # output, which is the only thing that would have found it.
         visible_observations.append(
-            DiscoveredObservation(
-                canonical_id=observation.canonical_id,
-                kind=observation.kind,
-                title=observation.title,
-                source_class=observation.source_class,
-                observed_at=observation.observed_at,
-                subject_canonical_ids=subjects,
-                repository_ids=observation.repository_ids,
-                outcome=observation.outcome,
-            )
+            replace(observation, subject_canonical_ids=subjects)
         )
 
     evidence_outcome = budgets.check_evidence(len(visible_observations))

@@ -756,6 +756,34 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="observation-attributes-dropped-by-the-traversal",
+        defect=(
+            "an observation's trust level is lost when the traversal narrows "
+            "its subject list, so an untrusted record reads as canonical -- "
+            "invisible to the differential oracle because both readers share "
+            "the function that drops it"
+        ),
+        path=SRC / "readback.py",
+        anchor="            replace(observation, subject_canonical_ids=subjects)",
+        replacement=(
+            "            DiscoveredObservation(\n"
+            "                canonical_id=observation.canonical_id,\n"
+            "                kind=observation.kind,\n"
+            "                title=observation.title,\n"
+            "                source_class=observation.source_class,\n"
+            "                observed_at=observation.observed_at,\n"
+            "                subject_canonical_ids=subjects,\n"
+            "                repository_ids=observation.repository_ids,\n"
+            "                outcome=observation.outcome,\n"
+            "            )"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_corpus_adapter.py::"
+            "TestObservationTrustSurvivesTheTraversal",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

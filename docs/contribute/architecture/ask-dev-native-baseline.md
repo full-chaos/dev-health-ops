@@ -68,24 +68,41 @@ pull_request, team`. The contract's `InvestigationSubjectKind` adds
 `portfolio, initiative, service, dependency`. The native path can never name
 those four, which removes every relationship that terminates on one.
 
-### Relationships: 4 of 12, and only 3 with evidence
+### Relationships: 3 of 12
 
 | State | Types |
 | --- | --- |
 | Available | `implemented_by`, `parent_of`, `contributes_to` |
-| Available without evidence | `owned_by_team` |
-| Unreachable | `blocked_by`, `references`, `depends_on`, `shares_dependency_with`, `reviews`, `deploys`, `operates`, `belongs_to_portfolio` |
+| Unreachable | `owned_by_team`, `blocked_by`, `references`, `depends_on`, `shares_dependency_with`, `reviews`, `deploys`, `operates`, `belongs_to_portfolio` |
 
-Four distinct mechanisms produce that list:
+**Available means evidence-backed.** An earlier revision of the table gave
+`owned_by_team` its own "available without evidence" state, because
+`DevResolutionEntry.team_attribution` is a real canonical attribution and
+both endpoint kinds are expressible. But the ledger entry holds no evidence
+handle, so nothing in the packet could be dereferenced to check the claim —
+and a third kind of availability invites exactly the reading that the
+relationship is mostly fine. It is a gap, with `NO_EVIDENCE_BACKING` naming
+precisely which one.
 
-- **Endpoint kinds discarded.** `WorkGraphNeighborEdge` carries
+Five distinct mechanisms produce that list:
+
+- **Endpoint kinds discarded** (CHAOS-3622). `WorkGraphNeighborEdge` carries
   `source_type` and `target_type`; `DevGraphEdge` has no field for either,
-  and `_wire_work_graph_content` drops both. The types survive only inside an
-  evidence *display label*, which is human copy. So no work-graph edge can
-  become a `LineageHop`, because `LineageHop.validate_direction_matches_allowlist`
-  needs both endpoint kinds. This is filed as an out-of-scope defect; parsing
-  the label back out would be exactly the fabrication this arm exists not to
-  commit.
+  and `_wire_work_graph_content` drops both. So no work-graph edge can become
+  a `LineageHop`, because `LineageHop.validate_direction_matches_allowlist`
+  needs both endpoint kinds.
+
+  The types do survive in one place: the evidence *display label*, as
+  `f"{source_type}:{source_id} …"`. **Parsing them back out of that string is
+  prohibited.** A display label is human copy with no schema and no
+  stability guarantee; reconstructing typed lineage from it would manufacture
+  exactly the relationship claim this arm exists to report as missing, and it
+  would do so in a form that looks well-sourced. If CHAOS-3622 lands a typed
+  field, this row changes — until then the recall loss is reported, not
+  recovered.
+- **No evidence backing.** The relationship is asserted by a canonical
+  service, but its carrier holds no evidence handle, so the packet could
+  state it and no reader could check it.
 - **Sub-kinds flattened.** `status_snapshot` merges declared, child and
   blocker facts into one `status_facts` list, and the executor cannot recover
   which sub-kind a fact came from. A blocker is therefore indistinguishable
@@ -111,6 +128,19 @@ requirement under either class — they ride under `HEALTH_PROFILE`. So the
 measurement exists and the source class is unobserved, and the packet's
 `MissingSource.impact` says exactly that rather than implying the number does
 not exist.
+
+### CI, deployment and incident links are evidence, never lineage
+
+`status_snapshot` mints `linked_ci_run`, `linked_deployment` and
+`linked_incident` facts, and they are real. But `InvestigationSubjectKind`
+has no member for a CI run, a deployment or an incident, so there is no
+`LineageHop` that can carry one. They therefore appear in the packet as
+**evidence entries only**.
+
+Coercing them into `references` — the nearest structurally legal
+relationship — would make the packet claim a typed association the contract
+does not model and the run never established. The recall loss is real and is
+reported as such.
 
 ### The headline: no native run can assert a driver
 

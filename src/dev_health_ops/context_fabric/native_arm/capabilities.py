@@ -132,10 +132,6 @@ class NativeRelationshipState(StrEnum):
     #: Both endpoint kinds are pinned by a typed native slot, and the fact
     #: carries real evidence handles.
     AVAILABLE = "available"
-    #: Both endpoint kinds are pinned, but the carrier is a canonical
-    #: assertion with no evidence handle of its own. Projectable as a path,
-    #: never as ``AssertionBasis.MEASURED``.
-    AVAILABLE_WITHOUT_EVIDENCE = "available_without_evidence"
     #: Not emittable. ``gap_mechanism`` says why.
     UNREACHABLE = "unreachable"
 
@@ -144,7 +140,7 @@ class NativeGapMechanism(StrEnum):
     """The exact reason a contract relationship is out of native reach.
 
     Deliberately mechanistic. "Not implemented yet" is not a member,
-    because three of these are structural properties of landed contracts
+    because several of these are structural properties of landed contracts
     rather than unfinished work, and a trial report that cannot tell those
     apart cannot tell a scheduling gap from a design gap.
     """
@@ -165,6 +161,14 @@ class NativeGapMechanism(StrEnum):
     #: The relationship needs more than one hop, and native traversal depth
     #: is fixed at one.
     TRAVERSAL_DEPTH_FIXED_AT_ONE = "traversal_depth_fixed_at_one"
+    #: Both endpoint kinds are pinned and a canonical service does assert
+    #: the relationship, but its carrier holds no evidence handle. An
+    #: earlier revision of this table gave that case its own "available
+    #: without evidence" state; the ruling (team lead, CHAOS-3618) is that
+    #: available means evidence-backed, so an assertion nothing can be
+    #: dereferenced against is a gap with a precise mechanism rather than a
+    #: third kind of availability.
+    NO_EVIDENCE_BACKING = "no_evidence_backing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,14 +229,12 @@ def _capability(
 
 
 _AVAILABLE = NativeRelationshipState.AVAILABLE
-_NO_EVIDENCE = NativeRelationshipState.AVAILABLE_WITHOUT_EVIDENCE
 _UNREACHABLE = NativeRelationshipState.UNREACHABLE
 _M = NativeGapMechanism
 
 #: The whole honest relationship story of the native arm, one row per
-#: contract relationship type. Three of twelve are emittable with evidence;
-#: one more is emittable as a canonical assertion; eight are out of reach,
-#: each for a named, mechanical reason.
+#: contract relationship type. Three of twelve are emittable; the other
+#: nine are out of reach, each for a named, mechanical reason.
 NATIVE_RELATIONSHIP_CAPABILITY: Mapping[
     RelationshipType, NativeRelationshipCapability
 ] = {
@@ -270,12 +272,13 @@ NATIVE_RELATIONSHIP_CAPABILITY: Mapping[
         ),
         _capability(
             RelationshipType.OWNED_BY_TEAM,
-            _NO_EVIDENCE,
-            content_slot="resolution_ledger.team_attribution",
+            _UNREACHABLE,
+            gap_mechanism=_M.NO_EVIDENCE_BACKING,
             detail=(
-                "DevResolutionEntry.team_attribution is a canonical attribution fact, "
-                "but the ledger entry carries no evidence handle, so this is "
-                "source_asserted and can never be a measured basis."
+                "DevResolutionEntry.team_attribution is a real canonical attribution "
+                "and both endpoint kinds are expressible, but the ledger entry holds "
+                "no evidence handle, so nothing in the packet could be dereferenced "
+                "to check it."
             ),
         ),
         _capability(

@@ -49,12 +49,7 @@ from dev_health_ops.api.dev.investigation_plans.relationship_matrix import (
 from dev_health_ops.context_fabric.native_arm import capabilities as caps
 
 _NATIVE_KINDS = frozenset(caps.NATIVE_SUBJECT_KIND.values())
-_REACHABLE_STATES = frozenset(
-    {
-        caps.NativeRelationshipState.AVAILABLE,
-        caps.NativeRelationshipState.AVAILABLE_WITHOUT_EVIDENCE,
-    }
-)
+_REACHABLE_STATES = frozenset({caps.NativeRelationshipState.AVAILABLE})
 
 
 def _sorted_relationships(

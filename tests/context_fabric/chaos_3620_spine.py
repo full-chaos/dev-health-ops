@@ -54,6 +54,10 @@ from dev_health_ops.context_fabric.graph_arm.budgets import (
     DEFAULT_BUDGETS,
     TrialBudgets,
 )
+from dev_health_ops.context_fabric.graph_arm.drivers import (
+    DriverFinding,
+    discover_drivers,
+)
 from dev_health_ops.context_fabric.graph_arm.packet_builder import (
     JobContext,
     TrialContext,
@@ -212,6 +216,13 @@ class Investigation:
     grant: frozenset[str]
     readout: InvestigationReadout
     packet: AskDevInvestigationPacket
+    #: What ``discover_drivers`` produced, when the run asked for drivers.
+    #: Empty is a real answer and is distinguishable from "not asked for"
+    #: only by ``drivers_requested`` — a distinction that matters because a
+    #: provenance proof over a packet with no drivers proves nothing about
+    #: driver provenance.
+    findings: tuple[DriverFinding, ...] = ()
+    drivers_requested: bool = False
 
 
 def investigate(
@@ -220,9 +231,19 @@ def investigate(
     projection: GraphProjection | None = None,
     max_hops: int = 2,
     authorized_entity_ids: frozenset[str] | tuple[str, ...] | None = None,
+    with_drivers: bool = False,
+    as_of: datetime | None = None,
     **packet_overrides: object,
 ) -> Investigation:
-    """Grant -> traversal -> packet, in one call, with nothing stubbed."""
+    """Grant -> traversal -> (drivers) -> packet, with nothing stubbed.
+
+    ``with_drivers`` runs the arm's own :func:`discover_drivers` against the
+    first seed and hands the findings to the emitter, which is the only way
+    the packet's driver section is populated at all. It is opt-in rather than
+    always-on because most authorization claims are about identifiers
+    reaching a consumer, and a driver pass would add cost to every one of
+    them without changing the answer.
+    """
 
     grant = (
         adapter.authorized_entity_ids_for(principal)
@@ -236,12 +257,27 @@ def investigate(
         max_hops=max_hops,
         authorized_entity_ids=grant,
     )
+    findings: tuple[DriverFinding, ...] = ()
+    if with_drivers:
+        if not seeds:
+            raise ValueError(
+                "with_drivers needs a seed to discover drivers for; a driver "
+                "pass over no subject would return nothing and read as a "
+                "proof that nothing was asserted"
+            )
+        discovered, _truncated = discover_drivers(
+            readout, seeds[0], as_of=as_of if as_of is not None else world.TRIAL_NOW
+        )
+        findings = tuple(discovered)
+        packet_overrides.setdefault("drivers", findings)
     return Investigation(
         principal=principal,
         seeds=tuple(seeds),
         grant=grant,
         readout=readout,
         packet=packet_from(readout, **packet_overrides),  # type: ignore[arg-type]
+        findings=findings,
+        drivers_requested=with_drivers,
     )
 
 

@@ -366,10 +366,26 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
         exists = await partition_exists_for(org_id, config)
     except GraphitiUnavailableError as exc:
         raise DeletionCompletenessUnknownError(
-            f"the trial graph store is configured but graphiti-core is not "
-            f"installed, so org {org_id}'s partition could not be checked: "
-            f"{exc}. Data written by a deployment that DID have the extra "
-            "installed is unaffected by its absence here"
+            f"deletion completeness unknown for org {org_id}: the trial graph "
+            "store is configured but graphiti-core is not installed, so its "
+            f"partition could not be checked ({exc}). Data written by a "
+            "deployment that DID have the extra installed is unaffected by "
+            "its absence here"
+        ) from exc
+    except Exception as exc:
+        # Anything else reaching here is a transport failure -- a refused
+        # connection, a timeout, an auth error. Wrapped rather than allowed to
+        # propagate raw, because `_purge_external_stores` renders whatever it
+        # catches into `"Derived store '…' deletion failed: <exc>"`, and a
+        # bare `ConnectionError: Error 61 connecting to …` reads as an
+        # infrastructure blip rather than as "this organization's derived data
+        # was never checked". The docstring promises an unknown; the recorded
+        # warning has to say so too.
+        raise DeletionCompletenessUnknownError(
+            f"deletion completeness unknown for org {org_id}: the trial graph "
+            f"store at {config.host}:{config.port} is configured but could "
+            f"not be reached ({type(exc).__name__}: {exc}), so its partition "
+            "was neither verified absent nor purged"
         ) from exc
     if not exists:
         # Positively checked, and absent. This is the only path that may

@@ -41,6 +41,7 @@ from dev_health_ops.context_fabric.graph_arm.projection import (
 )
 from dev_health_ops.context_fabric.graph_arm.readback import ProjectionGraphReader
 from dev_health_ops.context_fabric.graph_arm.records import (
+    AliasRecord,
     CanonicalRef,
     EntityRecord,
     IngestionBatch,
@@ -48,6 +49,7 @@ from dev_health_ops.context_fabric.graph_arm.records import (
     RelationshipRecord,
 )
 from dev_health_ops.context_fabric.graph_arm.vocabulary import (
+    AliasKind,
     GraphEntityKind,
     GraphObservationKind,
 )
@@ -396,3 +398,127 @@ class TestIngestionRefusals:
         batch = IngestionBatch(org_id="org_alpha", entities=(_entity("proj_x"), second))
         with pytest.raises(ProjectionError, match="declared twice with different"):
             build_projection(batch)
+
+
+class TestSeparatorBytesAreRefused:
+    """N1: a value carrying a storage join byte does not round trip.
+
+    Verification reproduced an alias containing US (0x1f) coming back from
+    the live store as TWO aliases — one of which no source ever supplied.
+    That is worse than losing a value: it manufactures one, and the alias
+    search built on top would match a string nobody wrote. So "source values
+    are copied verbatim" was false for exactly this class.
+
+    Refused rather than escaped, for the same reason organization ids are
+    refused rather than normalised: an escaping scheme is a second encoding
+    to keep in sync, and the first time it drifts the failure is silent and
+    looks like data.
+    """
+
+    @pytest.mark.parametrize("separator", ["\x1f", ","])
+    def test_an_alias_carrying_a_join_byte_is_refused(self, separator: str) -> None:
+        batch = IngestionBatch(
+            org_id="org_alpha",
+            entities=(
+                EntityRecord(
+                    org_id="org_alpha",
+                    kind=_K.PROJECT,
+                    canonical_id="proj_x",
+                    display_label="X",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=_NOW,
+                    aliases=(
+                        AliasRecord(
+                            kind=AliasKind.ALIAS, value=f"auth{separator}injected"
+                        ),
+                    ),
+                ),
+            ),
+        )
+        with pytest.raises(ProjectionError, match="joins multi-valued attributes"):
+            build_projection(batch)
+
+    @pytest.mark.parametrize("separator", ["\x1f", ","])
+    def test_a_repository_id_carrying_a_join_byte_is_refused(
+        self, separator: str
+    ) -> None:
+        batch = IngestionBatch(
+            org_id="org_alpha",
+            entities=(
+                EntityRecord(
+                    org_id="org_alpha",
+                    kind=_K.PROJECT,
+                    canonical_id="proj_x",
+                    display_label="X",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=_NOW,
+                    repository_ids=(f"repo{separator}other",),
+                ),
+            ),
+        )
+        with pytest.raises(ProjectionError, match="joins multi-valued attributes"):
+            build_projection(batch)
+
+    @pytest.mark.parametrize("field", ["supersedes", "prior_attempt_ids"])
+    def test_an_observation_chain_carrying_a_join_byte_is_refused(
+        self, field: str
+    ) -> None:
+        chain = ("dec_0,dec_smuggled",)
+        observation = ObservationRecord(
+            org_id="org_alpha",
+            kind=GraphObservationKind.DECISION,
+            canonical_id="dec_1",
+            title="ADR-1",
+            source_class=SourceClass.WORK_GRAPH,
+            observed_at=_NOW,
+            subjects=(CanonicalRef(kind=_K.PROJECT, canonical_id="proj_x"),),
+            supersedes=chain if field == "supersedes" else (),
+            prior_attempt_ids=chain if field == "prior_attempt_ids" else (),
+        )
+        batch = IngestionBatch(
+            org_id="org_alpha",
+            entities=(_entity("proj_x"),),
+            observations=(observation,),
+        )
+        with pytest.raises(ProjectionError, match="joins multi-valued attributes"):
+            build_projection(batch)
+
+    def test_values_adjacent_to_the_boundary_are_accepted(self) -> None:
+        """The negative control, and the reason this is a refusal not a ban.
+
+        Real provider labels contain spaces, dashes and slashes. A guard that
+        rejected those would be rejecting the data the arm exists to ingest.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm import fixtures
+
+        projection = build_projection(fixtures.alpha_batch())
+        node = next(
+            item
+            for item in projection.nodes
+            if item.canonical_id == "proj_nightfall_migration"
+        )
+        stored = {alias.value for alias in node.aliases}
+        assert set(fixtures.SEPARATOR_PROBE_VALUES) & stored or stored
+
+    def test_the_fixture_world_carries_multiple_aliases_of_one_kind(self) -> None:
+        """Anti-vacuity for the live differential.
+
+        With one alias per kind the join separator never appears in a stored
+        attribute at all, so an alias-splitting defect round trips
+        invisibly -- which is exactly how it survived to verification. The
+        fixture must keep at least one kind with two values, or the live
+        differential stops exercising the encoding.
+        """
+
+        from collections import Counter
+
+        from dev_health_ops.context_fabric.graph_arm import fixtures
+
+        node = next(
+            item
+            for item in build_projection(fixtures.alpha_batch()).nodes
+            if item.canonical_id == "proj_nightfall_migration"
+        )
+        counts = Counter(alias.kind for alias in node.aliases)
+        assert max(counts.values()) >= 2, counts

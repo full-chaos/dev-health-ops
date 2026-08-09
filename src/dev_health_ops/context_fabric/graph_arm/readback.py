@@ -179,7 +179,30 @@ class InvestigationReadout:
     #: disclosed as path truncation while hardcoding evidence coverage as
     #: complete -- a consumer reading the evidence section saw nothing wrong.
     evidence_truncated: bool = False
-    truncation_reason: TruncationReason | None = None
+    #: One reason PER FLAG. A single shared field misattributed the cause
+    #: whenever two bounds fired in the same read: a path truncation followed
+    #: by an evidence truncation reported both as ``evidence_budget``, so the
+    #: packet told a consumer the wrong thing about why lineage was partial.
+    entities_truncation_reason: TruncationReason | None = None
+    paths_truncation_reason: TruncationReason | None = None
+    evidence_truncation_reason: TruncationReason | None = None
+
+    @property
+    def truncation_reason(self) -> TruncationReason | None:
+        """The first reason any bound fired, for callers wanting one value.
+
+        Ordered entities -> paths -> evidence, which is traversal order. It
+        is a convenience over the three authoritative fields, never a
+        substitute: a consumer that needs to know why *evidence* is partial
+        must read ``evidence_truncation_reason``.
+        """
+
+        return (
+            self.entities_truncation_reason
+            or self.paths_truncation_reason
+            or self.evidence_truncation_reason
+        )
+
     observed_source_classes: frozenset[SourceClass] = field(default_factory=frozenset)
 
     def entity_by_id(self) -> Mapping[str, DiscoveredEntity]:
@@ -303,11 +326,14 @@ def _traverse(
     budgets: TrialBudgets,
     clock: Callable[[], float] = time.monotonic,
 ) -> InvestigationReadout:
-    # A budget that silences a caller's requested depth is a budget that
-    # removed work, so it discloses. Adversarial review found this shortening
-    # the walk (7 entities -> 5, 15 paths -> 4) with every flag False.
+    # Whichever of the two numbers is smaller becomes the ceiling, and the
+    # disclosure does not depend on which one won: see
+    # ``declined_with_edges_remaining`` below. An earlier fix only disclosed
+    # when the BUDGET undercut the caller, which left the default read path
+    # (caller default 3, budget cap 6) silently truncating -- verification
+    # reproduced 4 of 6 reachable authorized entities returned with every flag
+    # False.
     hops_allowed = min(max_hops, budgets.max_path_hops)
-    hop_cap_bit = hops_allowed < max_hops
     started = clock()
     # Distinct entities refused, not refusal *events*: the same restricted
     # neighbour is reached once per path that touches its neighbour, and
@@ -325,13 +351,19 @@ def _traverse(
 
     reached: dict[str, DiscoveredEntity] = {}
     paths: list[DiscoveredPath] = []
-    truncation_reason: TruncationReason | None = None
+    entities_reason: TruncationReason | None = None
+    paths_reason: TruncationReason | None = None
+    evidence_reason: TruncationReason | None = None
     entities_truncated = False
     paths_truncated = False
     evidence_truncated = False
-    if hop_cap_bit:
-        paths_truncated = True
-        truncation_reason = TruncationReason.PATH_BUDGET
+    # N2: whether the walk ever stopped at the hop ceiling while the prefix it
+    # stopped at still had edges it had not followed. That is the honest
+    # trigger -- not "was the ceiling the budget's or the caller's", because a
+    # caller who passed no depth got a library default nobody chose, and a
+    # result missing reachable authorized entities must not read complete
+    # whichever number produced the ceiling.
+    declined_with_edges_remaining = False
 
     for seed in reachable_seeds:
         reached[seed] = adjacency.entities[seed]
@@ -360,14 +392,25 @@ def _traverse(
         work_outcome = budgets.check_nodes(visited)
         if not work_outcome.within_budget:
             entities_truncated = True
-            truncation_reason = work_outcome.truncation_reason
+            entities_reason = work_outcome.truncation_reason
             break
         elapsed_outcome = budgets.check_elapsed(clock() - started)
         if not elapsed_outcome.within_budget:
             entities_truncated = True
-            truncation_reason = elapsed_outcome.truncation_reason
+            entities_reason = elapsed_outcome.truncation_reason
             break
         if len(steps) >= hops_allowed:
+            # Stopped at the ceiling. Only a disclosure if this prefix still
+            # had somewhere to go: a walk that ran out of graph is complete,
+            # and flagging it would make the flag meaningless.
+            if any(
+                other in adjacency.entities
+                and other in authorized
+                and other != current
+                and all(step.from_canonical_id != other for step in steps)
+                for _, other, *_ in _ordered_edges(adjacency, current)
+            ):
+                declined_with_edges_remaining = True
             continue
         for (
             relationship,
@@ -420,18 +463,18 @@ def _traverse(
                 # an explanation silently is the same fault as dropping a
                 # result silently. It discloses.
                 paths_truncated = True
-                truncation_reason = TruncationReason.PATH_BUDGET
+                paths_reason = TruncationReason.PATH_BUDGET
                 continue
 
             node_outcome = budgets.check_entities(len(reached) + 1)
             if other not in reached and not node_outcome.within_budget:
                 entities_truncated = True
-                truncation_reason = node_outcome.truncation_reason
+                entities_reason = node_outcome.truncation_reason
                 continue
             path_outcome = budgets.check_paths(len(paths) + 1)
             if not path_outcome.within_budget:
                 paths_truncated = True
-                truncation_reason = path_outcome.truncation_reason
+                paths_reason = path_outcome.truncation_reason
                 queue.clear()
                 break
 
@@ -477,8 +520,16 @@ def _traverse(
     evidence_outcome = budgets.check_evidence(len(visible_observations))
     if not evidence_outcome.within_budget:
         visible_observations = visible_observations[: budgets.max_evidence_entries]
-        truncation_reason = evidence_outcome.truncation_reason
+        evidence_reason = evidence_outcome.truncation_reason
         evidence_truncated = True
+
+    if declined_with_edges_remaining:
+        # Entities beyond the ceiling were reachable and authorized and were
+        # not returned, so the ENTITY set is partial too -- not only the paths.
+        entities_truncated = True
+        entities_reason = entities_reason or TruncationReason.PATH_BUDGET
+        paths_truncated = True
+        paths_reason = paths_reason or TruncationReason.PATH_BUDGET
 
     observed_classes = (
         {entity.source_class for entity in reached.values()}
@@ -500,7 +551,9 @@ def _traverse(
         entities_truncated=entities_truncated,
         paths_truncated=paths_truncated,
         evidence_truncated=evidence_truncated,
-        truncation_reason=truncation_reason,
+        entities_truncation_reason=entities_reason,
+        paths_truncation_reason=paths_reason,
+        evidence_truncation_reason=evidence_reason,
         observed_source_classes=frozenset(observed_classes),
     )
 

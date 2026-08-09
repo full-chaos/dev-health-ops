@@ -108,6 +108,42 @@ MAX_ATTRIBUTE_CHARS = 256
 
 _ATTRIBUTE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
+#: Bytes the storage encoding uses to join multiple values into one attribute
+#: string: US (0x1f) for alias lists, "," for repository ids, supersession
+#: chains and prior-attempt chains.
+#:
+#: A source value containing one of these does not round trip -- adversarial
+#: verification reproduced an alias containing US coming back as TWO aliases,
+#: one of which no source ever supplied. That is worse than losing the value:
+#: it manufactures one, and a later alias search would match a string nobody
+#: wrote.
+#:
+#: Refused, not escaped, for the same reason organization ids are refused
+#: rather than normalised: an escaping scheme is a second encoding to keep in
+#: sync, and the first time it drifts the failure is silent and looks like
+#: data. These bytes do not occur in real provider identifiers or labels.
+_UNIT_SEPARATOR = "\x1f"
+_LIST_SEPARATORS: tuple[tuple[str, str], ...] = (
+    (_UNIT_SEPARATOR, "unit separator (0x1f)"),
+    (",", "comma"),
+)
+
+
+def _reject_separator_bytes(where: str, field: str, value: str) -> None:
+    """Raise if a value carries a byte the storage encoding joins on."""
+
+    for separator, name in _LIST_SEPARATORS:
+        if separator in value:
+            raise ProjectionError(
+                f"{where} {field} contains a {name}, which is the byte the "
+                "graph arm joins multi-valued attributes on. Storing it would "
+                "split one source value into several on read -- inventing a "
+                "value no source supplied -- so it is refused rather than "
+                "escaped: an escaping scheme is a second encoding to keep in "
+                "sync, and its first drift would look like data"
+            )
+
+
 #: How an alias kind becomes a match signal the packet can cite. Total over
 #: :class:`AliasKind` — checked by :func:`_validate_alias_signal_totality` at
 #: import time, because an unmapped alias kind would silently degrade to the
@@ -295,6 +331,10 @@ def _entity_node(record: EntityRecord, partition: str) -> GraphNode:
     where = f"entity {record.canonical_id!r}"
     _validate_label(where, record.display_label)
     _validate_attributes(where, record.attributes)
+    for alias in record.aliases:
+        _reject_separator_bytes(where, f"alias {alias.kind.value}", alias.value)
+    for repository_id in record.repository_ids:
+        _reject_separator_bytes(where, "repository_ids", repository_id)
     return GraphNode(
         uuid=identity.node_uuid(record.org_id, record.kind, record.canonical_id),
         org_id=record.org_id,
@@ -317,6 +357,12 @@ def _observation_node(record: ObservationRecord, partition: str) -> GraphNode:
     where = f"observation {record.canonical_id!r}"
     _validate_label(where, record.title)
     _validate_attributes(where, record.attributes)
+    for repository_id in record.repository_ids:
+        _reject_separator_bytes(where, "repository_ids", repository_id)
+    for superseded in record.supersedes:
+        _reject_separator_bytes(where, "supersedes", superseded)
+    for attempt in record.prior_attempt_ids:
+        _reject_separator_bytes(where, "prior_attempt_ids", attempt)
     attributes: dict[str, str | int | float | bool | None] = dict(record.attributes)
     if record.outcome is not None:
         if len(record.outcome) > MAX_ATTRIBUTE_CHARS:
@@ -358,8 +404,8 @@ def build_projection(
     Order of checks is deliberate and each one is a fault mode:
 
     1. **org homogeneity** — a foreign record never reaches the store at all;
-    2. **record budget** — a batch over budget truncates *and says so*,
-       rather than being written half-way with no record of where it stopped;
+    2. **record budget** — a batch over budget is REFUSED. It used to be
+       annotated and then projected in full, which bounded nothing;
     3. **duplicate canonical ids** — the same canonical id declared twice
        with different labels is a genuine ambiguity, not something to
        last-write-wins;

@@ -301,15 +301,72 @@ class TestBudgets:
         the evidence section saw complete coverage.
         """
 
+        # Depth 6 so the walk exhausts the fixture graph and nothing is left
+        # unexplored -- otherwise the (correct) N2 hop disclosure fires too and
+        # this test could not tell the two flags apart.
         readout = self._read(
-            max_hops=3,
+            max_hops=6,
             budgets=TrialBudgets(max_evidence_entries=1, max_paths_per_entity=100),
         )
         assert readout.evidence_truncated is True
+        assert readout.evidence_truncation_reason is TruncationReason.EVIDENCE_BUDGET
         assert readout.paths_truncated is False, (
             "evidence loss was disclosed as path truncation"
         )
-        assert readout.truncation_reason is TruncationReason.EVIDENCE_BUDGET
+        assert readout.paths_truncation_reason is None
+        assert readout.entities_truncation_reason is None
+
+    def test_each_flag_carries_its_own_reason_when_two_bounds_fire(self) -> None:
+        """One reason per flag, because a shared field misattributes.
+
+        With a path bound AND an evidence bound both biting, a single shared
+        ``truncation_reason`` reported whichever fired last -- so a consumer
+        asking "why is the lineage partial?" was told ``evidence_budget``.
+        """
+
+        readout = self._read(
+            max_hops=6,
+            budgets=TrialBudgets(max_paths=2, max_evidence_entries=1),
+        )
+        assert readout.paths_truncated is True
+        assert readout.evidence_truncated is True
+        assert readout.paths_truncation_reason is TruncationReason.PATH_BUDGET
+        assert readout.evidence_truncation_reason is TruncationReason.EVIDENCE_BUDGET
+        assert readout.paths_truncation_reason != readout.evidence_truncation_reason, (
+            "the two flags collapsed back onto one reason"
+        )
+
+    def test_the_default_read_path_discloses_when_it_stops_early(self) -> None:
+        """The N2 defect: silence on the path nobody configures.
+
+        The reader's default depth (3) is below the budget ceiling (6), so the
+        earlier fix -- which only disclosed when the BUDGET undercut the
+        caller -- left the default read path truncating silently. Verification
+        reproduced 4 of 6 reachable authorized entities returned with every
+        flag False. The trigger is now "declined to expand a prefix that still
+        had edges", whichever number produced the ceiling.
+        """
+
+        shallow = self._read(max_hops=1, budgets=TrialBudgets(max_paths_per_entity=100))
+        assert shallow.paths_truncated is True
+        assert shallow.entities_truncated is True, (
+            "entities beyond the ceiling were reachable and authorized and "
+            "were not returned, so the entity set is partial too"
+        )
+
+    def test_a_walk_that_exhausts_the_graph_is_not_marked_truncated(self) -> None:
+        """The negative control for the trigger above.
+
+        A walk that ran out of graph is complete. If this flagged, the
+        disclosure would fire on every read and mean nothing.
+        """
+
+        complete = self._read(
+            max_hops=6, budgets=TrialBudgets(max_paths_per_entity=100)
+        )
+        assert complete.entities_truncated is False
+        assert complete.paths_truncated is False
+        assert complete.truncation_reason is None
 
     def test_an_oversized_ingest_batch_is_refused_not_annotated(self) -> None:
         """The bound must bound. It used to only describe.

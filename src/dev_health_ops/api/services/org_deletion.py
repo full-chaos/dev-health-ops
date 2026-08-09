@@ -786,11 +786,14 @@ class OrganizationDeletionService:
     ) -> None:
         """CHAOS-3566: visit every registered non-ClickHouse derived store.
 
-        `EXTERNAL_DERIVED_STORES` is empty in production today (no such store
-        exists yet), so this is a no-op there. It exists so a future derived
-        store (e.g. the CHAOS-3499/3500 discovery-lane shadow store) only has
-        to register a `DerivedStore(kind=EXTERNAL, visit=...)` entry -- this
-        method, and the rest of `delete()`, do not need to change.
+        `EXTERNAL_DERIVED_STORES` holds one entry as of CHAOS-3617: the
+        Context Fabric graph trial store. It is still a no-op in production,
+        but for a different reason than "the registry is empty" -- the trial
+        store is opt-in per environment, so where `CONTEXT_FABRIC_GRAPH_STORE_URI`
+        is unset its visit returns 0 (and logs) without touching anything.
+        Registering a store remains a pure registry edit: add a
+        `DerivedStore(kind=EXTERNAL, visit=...)` entry; this method and the
+        rest of `delete()` do not change.
         """
         for store in EXTERNAL_DERIVED_STORES:
             if store.visit is None:

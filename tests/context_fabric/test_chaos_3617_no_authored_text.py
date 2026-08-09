@@ -169,6 +169,22 @@ class TestTheArmComposesNoText:
         :func:`~.backend.triple_fact`, round-tripped by ``parse_triple_fact``.
         It is excluded by name so a second constructed field cannot join it
         silently.
+
+        **What this scan does NOT cover, stated because a partial guard
+        described as total is worse than no guard.** It matches *direct
+        keyword assignment* only. Text composed into a local first and then
+        passed by name — ``label = f"{a} {b}"`` … ``display_label=label`` — is
+        invisible to it, as is composition through a helper function or a
+        dict built elsewhere and splatted.
+
+        Two other layers cover what it misses, and both caught the planted
+        cases during verification:
+        ``TestSourceTextTransitsVerbatimAsUntrustedEvidence`` asserts
+        byte-identity between what a source record supplied and what the
+        projection stored, which fails for *any* composition however it was
+        written; and the live differential compares the whole readout, which
+        fails when the two readers disagree about a stored value. This scan is
+        the cheap, fast, specific layer — not the proof.
         """
 
         offenders = _composed_assignments(_SOURCE_TEXT_FIELDS)

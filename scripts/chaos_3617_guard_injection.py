@@ -341,6 +341,54 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="separator-bytes-accepted-into-joined-attributes",
+        defect=(
+            "a source value containing the storage join byte is stored and "
+            "comes back split into several, inventing an alias no source "
+            "supplied -- which a later alias search would then match"
+        ),
+        path=SRC / "projection.py",
+        anchor="        if separator in value:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_structured_ingestion.py::"
+            "TestSeparatorBytesAreRefused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="default-read-path-truncates-silently",
+        defect=(
+            "the walk stops at the hop ceiling with edges still unexplored "
+            "and reports complete -- reachable authorized entities missing, "
+            "every flag False, on the path nobody configures"
+        ),
+        path=SRC / "readback.py",
+        anchor="    if declined_with_edges_remaining:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
+            "test_the_default_read_path_discloses_when_it_stops_early",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="one-shared-truncation-reason-misattributes",
+        defect=(
+            "path truncation and evidence truncation collapse onto one "
+            "reason, so a consumer asking why lineage is partial is told "
+            "evidence_budget"
+        ),
+        path=SRC / "readback.py",
+        anchor="        evidence_reason = evidence_outcome.truncation_reason",
+        replacement="        paths_reason = evidence_outcome.truncation_reason\n        evidence_reason = evidence_outcome.truncation_reason",
+        tests=(
+            f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
+            "test_the_evidence_budget_sets_the_evidence_flag_not_the_path_flag",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

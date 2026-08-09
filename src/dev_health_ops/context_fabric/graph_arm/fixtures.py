@@ -37,6 +37,7 @@ from .vocabulary import AliasKind, GraphEntityKind, GraphObservationKind
 
 __all__ = [
     "ALPHA_ORG",
+    "SEPARATOR_PROBE_VALUES",
     "BETA_ORG",
     "WINDOW_END",
     "WINDOW_START",
@@ -44,6 +45,19 @@ __all__ = [
     "alpha_batch",
     "beta_batch",
 ]
+
+#: Values that sit right up against the storage encoding's join bytes without
+#: containing them. The arm refuses a value that *contains* US (0x1f) or a
+#: comma (see ``projection._reject_separator_bytes``); these are the legal
+#: neighbours of that boundary, and they exist so the live differential
+#: actually carries multi-value attributes through a real store rather than
+#: only single-valued ones -- which is how the alias-splitting defect stayed
+#: invisible: with one alias per kind, a bad separator round trips fine.
+SEPARATOR_PROBE_VALUES: tuple[str, ...] = (
+    "auth-gateway",
+    "auth gateway rewrite",
+    "NFM-2",
+)
 
 ALPHA_ORG = "org_alpha"
 BETA_ORG = "org_beta"
@@ -121,7 +135,15 @@ def alpha_batch() -> IngestionBatch:
             SourceClass.WORK_GRAPH,
             aliases=(
                 AliasRecord(kind=AliasKind.ALIAS, value="the auth work"),
+                # A second alias of the SAME kind: this is what makes the
+                # multi-value join encoding real in the fixture world. With
+                # one value per kind the separator never appears in a stored
+                # attribute and an alias-splitting defect round trips
+                # invisibly -- which is exactly how it survived to
+                # verification.
+                AliasRecord(kind=AliasKind.ALIAS, value="auth gateway rewrite"),
                 AliasRecord(kind=AliasKind.ACRONYM, value="NFM"),
+                AliasRecord(kind=AliasKind.ACRONYM, value="NFM-2"),
                 AliasRecord(kind=AliasKind.PREVIOUS_NAME, value="Auth Gateway Rewrite"),
                 AliasRecord(
                     kind=AliasKind.PROVIDER_IDENTIFIER,

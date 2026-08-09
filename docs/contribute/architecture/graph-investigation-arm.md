@@ -130,10 +130,13 @@ Structured records instead go through
 write, with a deterministic hash embedder supplying vectors. Projection is
 therefore reproducible, offline and free.
 
-**There is nowhere for a sentence to live.** Attribute values are bounded at
-256 characters and attribute keys must be `snake_case` tokens.
-`EntityNode.summary` — Graphiti's slot for a model-written regional
-description — is always empty.
+**The structured attribute map is not a second free-text channel.**
+Attribute values are bounded at 256 characters and attribute keys must be
+`snake_case` tokens. `EntityNode.summary` — Graphiti's slot for a
+model-written regional description — is always empty. (This heading used
+to read "there is nowhere for a sentence to live", which the paragraph
+sixteen lines above had already retracted. A heading a reader skims is
+exactly where a withdrawn claim does its damage.)
 
 **Edge facts are triples, not sentences.** `EntityEdge.fact` is a required
 string whose intended value is natural language; it is precisely where a
@@ -243,6 +246,28 @@ heuristics over timestamps.
 | Content-safe logs | `IndexWatermark.detail_for` — timestamps and counts only |
 | Exact dependency/projection/query versions | `versions.*` on every packet; `backend.graphiti_version()` reads installed metadata |
 
+**Every bound that removes work discloses, and each flag carries its own
+reason.** The trigger for hop-depth disclosure is "the walk declined to
+expand a prefix that still had edges", not "the budget undercut the caller" —
+the earlier form left the *default* read path silently truncating, because
+the reader's default depth (3) sits below the budget ceiling (6) and nobody
+chose either number. A walk that simply ran out of graph is complete and does
+not flag. `entities_truncation_reason`, `paths_truncation_reason` and
+`evidence_truncation_reason` are separate fields because a single shared one
+reported whichever bound fired last, telling a consumer that partial lineage
+was caused by the evidence budget.
+
+**Values carrying a storage join byte are refused, not escaped.** Multi-value
+attributes are joined with US (0x1f) for aliases and `,` for repository ids,
+supersession and prior-attempt chains. A source alias containing US came back
+from a real store as *two* aliases, one of which no source supplied — worse
+than losing a value, because a later alias search would match a string nobody
+wrote. Escaping would be a second encoding to keep in sync whose first drift
+looks like data, so the refusal follows the same rule as organization ids.
+The fixture world deliberately carries two aliases of one kind: with a single
+value per kind the separator never appears in a stored attribute and this
+whole class round trips invisibly.
+
 `max_nodes_visited` counts *dequeued path prefixes*, not reached entities:
 the traversal enumerates simple paths, so a dense neighbourhood can expand
 for a long time while reaching nothing new. `max_wall_seconds` backstops it
@@ -299,6 +324,9 @@ deletion run.
 
 ```bash
 # Bring up the isolated store (profile-gated; a bare `up` creates nothing).
+# Compose interpolates EVERY service before it filters by profile, so this
+# needs the repo's usual root .env present (e.g. BUGSINK_SECRET_KEY) even
+# though none of those services start.
 docker compose --profile graph-trial up -d graph-trial-store
 
 export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
@@ -345,7 +373,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **18** guards the arm relies on, the harness disables
+For each of the **21** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it

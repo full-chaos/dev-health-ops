@@ -454,7 +454,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **95** guards the arm relies on, the harness disables
+For each of the **96** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -872,7 +872,17 @@ note claimed both indexes refuse, which was an overclaim a reviewer caught.
 Whether the entity index should refuse too is recorded on CHAOS-3627 and is
 not changed here.
 
-**Residual, stated because a reader would otherwise assume otherwise.**
+**Residual: a minted handle no longer verifies independently.** The arm signs
+a minted handle over the record's canonical id while the emitted `entity_id`
+is the entity, so `signer.verify` on the emitted ref cannot reproduce it and
+verification means re-deriving through the arm's own `_mint_handle`. That is
+verification by the same code that did the minting: a bug in the mint now
+verifies itself. It is the price of not shipping a denial-of-packet on
+legitimate handle-less sources, and it is temporary — CHAOS-3633's platform
+fix to the signer payload should restore true independent verifiability, and
+that ticket carries this requirement.
+
+**Residual: a carried handle's identity is asserted, never verified.**
 Ingestion checks a carried handle's *grammar* and the *completeness* of the
 handle/record-id/record-entity triple. It does **not** verify that the handle
 is genuinely the one that source issued for that record — the arm has no way

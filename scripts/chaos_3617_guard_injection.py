@@ -685,6 +685,25 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="DID NOT RAISE",
     ),
     Mutation(
+        mutation_id="instruction-shaped-title-reaches-synthesis",
+        defect=(
+            "a source-controlled title carrying an imperative addressed to a "
+            "model is projected and copied verbatim into a packet field Ask "
+            "Dev synthesis reads -- the open injection channel the CHAOS-3620 "
+            "lane executed. Every prior test passed with it open, because the "
+            "corpus's adversarial records carry benign titles"
+        ),
+        path=SRC / "projection.py",
+        anchor='    _reject_instruction_shaped(where, "label", label)',
+        replacement="    pass",
+        tests=(
+            f"{TESTS}/test_chaos_3637_title_boundary.py::"
+            "TestTheInjectionChannelIsClosed::"
+            "test_the_executed_payload_is_refused_at_ingestion",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
         mutation_id="graphiti-telemetry-left-on",
         defect=(
             "the trial phones one organization's structure home to a "

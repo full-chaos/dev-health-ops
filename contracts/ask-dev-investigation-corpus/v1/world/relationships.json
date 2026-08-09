@@ -185,6 +185,34 @@
       "valid_to": null
     },
     {
+      "evidence_slugs": [],
+      "is_false_claim": false,
+      "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
+      "relationship": "belongs_to_portfolio",
+      "relationship_key": "lattice_pf",
+      "relevance_at_trial_now": "current",
+      "source_entity_id": "proj_lattice",
+      "target_entity_id": "pf_platform",
+      "tenant_id": "org_helio",
+      "valid_from": "2026-04-01 00:00:00Z",
+      "valid_to": null
+    },
+    {
+      "evidence_slugs": [],
+      "is_false_claim": false,
+      "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
+      "relationship": "belongs_to_portfolio",
+      "relationship_key": "meridian_pf",
+      "relevance_at_trial_now": "current",
+      "source_entity_id": "proj_meridian",
+      "target_entity_id": "pf_platform",
+      "tenant_id": "org_helio",
+      "valid_from": "2026-04-01 00:00:00Z",
+      "valid_to": null
+    },
+    {
       "evidence_slugs": [
         "wg_identity_rewrite"
       ],

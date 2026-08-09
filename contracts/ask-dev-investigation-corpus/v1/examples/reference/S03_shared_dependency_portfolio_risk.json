@@ -36,7 +36,7 @@
         "canonical_id": "proj_identity_rewrite",
         "display_label": "Identity Platform Rewrite",
         "inclusion_basis": [
-          "comparable_delivery_profile"
+          "shared_dependency"
         ],
         "inclusion_evidence_classification": "canonical_registry_membership",
         "inclusion_evidence_ids": [],
@@ -48,7 +48,7 @@
         "canonical_id": "proj_pulse",
         "display_label": "Pulse Analytics",
         "inclusion_basis": [
-          "comparable_delivery_profile"
+          "shared_dependency"
         ],
         "inclusion_evidence_classification": "canonical_registry_membership",
         "inclusion_evidence_ids": [],
@@ -60,7 +60,7 @@
         "canonical_id": "proj_beacon",
         "display_label": "Beacon Ingest",
         "inclusion_basis": [
-          "comparable_delivery_profile"
+          "shared_dependency"
         ],
         "inclusion_evidence_classification": "canonical_registry_membership",
         "inclusion_evidence_ids": [],
@@ -71,8 +71,7 @@
     ],
     "schema_version": "ask_dev_comparison_cohort.v1",
     "supported_comparison_dimensions": [
-      "delivery_throughput",
-      "review_load"
+      "dependency_exposure"
     ],
     "truncation_reason": null
   },

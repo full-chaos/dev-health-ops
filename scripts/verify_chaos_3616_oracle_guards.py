@@ -181,6 +181,39 @@ def _mutate_demote_every_driver(payload: dict[str, Any]) -> None:
     ]
 
 
+def _mutate_false_inclusion_basis(payload: dict[str, Any]) -> None:
+    """A member whose stated basis is a plausible sentence and untrue."""
+
+    payload["comparison_cohort"]["members"].append(
+        {
+            "subject_kind": "project",
+            "canonical_id": world_module.PROJ_MERIDIAN,
+            "display_label": "Meridian Docs",
+            "inclusion_basis": ["shared_dependency"],
+            "inclusion_rationale": (
+                "Shares the authcore dependency with the rest of the set."
+            ),
+            "inclusion_evidence_ids": [],
+            "inclusion_evidence_classification": "canonical_registry_membership",
+            "relevance": "current",
+        }
+    )
+    payload["related_context"]["authorized_entity_ids"] = sorted(
+        {
+            *payload["related_context"]["authorized_entity_ids"],
+            world_module.PROJ_MERIDIAN,
+        }
+    )
+
+
+def _mutate_unbacked_comparison_axis(payload: dict[str, Any]) -> None:
+    """Compare on an axis the world has no numbers for."""
+
+    payload["comparison_cohort"]["supported_comparison_dimensions"] = [
+        "deployment_frequency"
+    ]
+
+
 def _mutate_fuzzy_signal_only(payload: dict[str, Any]) -> None:
     for candidate in payload["subject_discovery"]["candidates"]:
         if candidate["commitment_state"] != "committed":
@@ -697,6 +730,20 @@ CASES: tuple[GuardCase, ...] = (
         "know_every_entity",
     ),
     GuardCase(
+        _D.COHORT_INCLUSION_EXPLAINABILITY,
+        "T01_clearly_struggling_team",
+        "_mutate_false_inclusion_basis",
+        None,
+        "believe_every_stated_basis",
+    ),
+    GuardCase(
+        _D.COMPARATIVE_JUDGMENT_SUPPORT,
+        "P01_demand_exceeds_capacity",
+        "_mutate_unbacked_comparison_axis",
+        None,
+        "believe_every_comparison",
+    ),
+    GuardCase(
         _D.ZERO_UNSUPPORTED_STAFFING_CERTAINTY,
         "P05_allocation_absent_still_supportable",
         "_mutate_certain_staffing",
@@ -738,16 +785,6 @@ MUTATIONS["_mutate_fabricated_entity"] = _mutate_fabricated_entity
 #: reads no oracle field and no world fact, so there is nothing to remove:
 #: neutralizing it would mean stubbing the function, which proves nothing.
 UNINJECTED: dict[ScoringDimensionID, str] = {
-    _D.COHORT_INCLUSION_EXPLAINABILITY: (
-        "reads only the packet's own inclusion_rationale, which the contract "
-        "already requires to be non-empty. There is no corpus knowledge behind "
-        "it to remove."
-    ),
-    _D.COMPARATIVE_JUDGMENT_SUPPORT: (
-        "reads only whether the packet declared comparison dimensions, which "
-        "the contract already requires of a cohort-bearing shape. The corpus "
-        "adds the applicability rule and nothing else."
-    ),
     _D.ZERO_GRAPH_NATIVE_SURFACE_LEAKAGE: (
         "scans the serialized packet for a fixed banned-token list. The list "
         "is the guard; removing it is deleting the scorer, not removing an "
@@ -827,6 +864,29 @@ def _erase_world_relationships() -> None:
     evaluate_module.world.WORLD_RELATIONSHIPS = ()
 
 
+def _believe_every_stated_basis() -> None:
+    """Take a member's word for why it belongs.
+
+    Not a stub of the scorer: this is what the corpus would do if nobody had
+    written ``shares_basis`` -- accept the stated basis, exactly as the
+    contract does. The dimension was genuinely unfailable in that state, which
+    is why the function exists.
+    """
+
+    evaluate_module.world.shares_basis = lambda basis, entity_id, peers: True
+
+
+def _believe_every_comparison() -> None:
+    """Take the packet's word for what can be compared.
+
+    The same shape: without ``COMPARISON_DIMENSION_METRICS`` the scorer can
+    only check that a dimension was declared, which the packet contract
+    already requires -- so it could never reject anything.
+    """
+
+    evaluate_module.world.comparable_on = lambda dimension, entity_ids: True
+
+
 def _unfollow_the_case() -> None:
     from dev_health_ops.api.dev.investigation_corpus import cases
 
@@ -845,6 +905,8 @@ NEUTRALIZERS = {
     "erase_world_relationships": _erase_world_relationships,
     "unfollow_the_case": _unfollow_the_case,
     "permit_every_candidate": _permit_every_candidate,
+    "believe_every_stated_basis": _believe_every_stated_basis,
+    "believe_every_comparison": _believe_every_comparison,
 }
 
 #: Oracle fields whose neutral value is not simply "empty".

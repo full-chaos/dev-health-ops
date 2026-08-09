@@ -2,43 +2,43 @@
   "digests": [
     {
       "case_id": "T01_clearly_struggling_team",
-      "sha256": "e1f9de354d8e96d00eb07cf247b8e0f9a0c65f140aa16eee5b0ed840af6ddc99"
+      "sha256": "31c8bf2e5576219cdd04d8ba8ecd719bffad3945e4011caee344f7aecc171132"
     },
     {
       "case_id": "T02_high_wip_without_struggle",
-      "sha256": "79ba9899aa2b4f4ff59975ca9be0368988f768ea1a9ce9459d31f4401309cd68"
+      "sha256": "ba4c5f5146643f072e71902f406830d1f0343ccdbf27a642681812b5db36a5c3"
     },
     {
       "case_id": "T03_operational_displaces_feature",
-      "sha256": "e76e516d7901d1f881a5ae4793f0e6ed74f101375c11ef6552f34a042612cbf3"
+      "sha256": "363eecadd58f31eea62af5bd87f7bb6ce43e4e7d38e13796bc9263e011b52ca9"
     },
     {
       "case_id": "T04_review_pressure_across_projects",
-      "sha256": "140f5ea38d382b5f32c09af16f7c4e197359915eb0b3076dfc6a378a0de10f00"
+      "sha256": "397da57f2cefba471dd78a07413dac5e71c908e2b65194adc778866112dbad07"
     },
     {
       "case_id": "T05_stale_source_data",
-      "sha256": "056d3e203cecee046e4294d9fdfbf03b0b133a2b4a0d3c56c53f161559af73af"
+      "sha256": "5a06429780507cc93a7617ba1331fa99c1e5c7f647a3a081a21a8fc837eb71dd"
     },
     {
       "case_id": "T06_healthy_despite_noisy_metric",
-      "sha256": "338404727681f951c0e2bc2d03efe40ed34f89a6ab4773ec429cd9778774084e"
+      "sha256": "8907a0e9ced15c2210ce08a986dd2227c0c6017542ddc55e2424bb26d7d0120f"
     },
     {
       "case_id": "T07_going_sideways_open_question",
-      "sha256": "a9b065f871a953b2d2ae2219c94d4a0e68fde672824bc80a39d6f0cffb084ea1"
+      "sha256": "63b3402d594e70812c898bcfb7033bad8bf3d532ad84a38af639f9d9b254a747"
     },
     {
       "case_id": "P01_demand_exceeds_capacity",
-      "sha256": "87bf52c3fb2c58fdb5158d0a2bc7806d9adcf1fd0c55ef6ea9729663fb1f62b6"
+      "sha256": "4fc415e00210c74c659a760d8ad6b067a877096e119d6deb2917f05e9e41f0da"
     },
     {
       "case_id": "P02_critical_path_few_contributors",
-      "sha256": "e0603ed3e42c8d4365ff2160b4ab0d42965d0131c60189dfe0e74dc4c73729bb"
+      "sha256": "899d940f7430437eee4eae1664fb12e876ca92c36eca84baea0aa094c1eefad8"
     },
     {
       "case_id": "P03_lightly_loaded_project",
-      "sha256": "06eae9e67a5c63c8d9df37b452782667b80acc6f33e7d7f14b5a93bb47e35881"
+      "sha256": "cea819a3553ab78927b7b5edef19eeca87af2d722980b6ee0772a536a8522393"
     },
     {
       "case_id": "P04_misleading_contributor_count",
@@ -66,7 +66,7 @@
     },
     {
       "case_id": "S03_shared_dependency_portfolio_risk",
-      "sha256": "2404bd65f11dff24bbd73e5507abb86e2b4729b20cd9fab6be12def23b219e13"
+      "sha256": "49ca8a5bf1c2d657f45593508d26a6b7ba9522d8d9a07923111b751fc3892ba3"
     },
     {
       "case_id": "S04_symptom_versus_driver",
@@ -78,7 +78,7 @@
     },
     {
       "case_id": "S06_declared_complete_without_delivery_evidence",
-      "sha256": "068a46b54b4e628d96851794f5be7d939af4822c8f18e95c76d5bc4e426e92ae"
+      "sha256": "bdbf4e3ccfb32d7d5b3339708ebd7e813c8e8b35943818c8421f5bd061e081ba"
     },
     {
       "case_id": "S07_renamed_and_superseded_project",
@@ -126,7 +126,7 @@
     },
     {
       "case_id": "A03_false_relationship_on_real_entity",
-      "sha256": "872bee6bfb602008094393a59d41e43fe6efa0a1156acb6ec76cee5f7de3ba3c"
+      "sha256": "bccf7384159ef52b33fed198cb1059aedc3419e98e9aa71d4c0975e5f5f94fd8"
     },
     {
       "case_id": "A04_prompt_injection_in_document",
@@ -146,7 +146,7 @@
     },
     {
       "case_id": "A08_stale_and_truncated_state",
-      "sha256": "d50e73bf0cc2881848f2b7d02dde2e3751ab170e0fad828135ee21197cb9ec37"
+      "sha256": "3db4d991c1d57c86b7d03a2fc9e7ce64c2339aa4c429945c50ca3098f5af8da4"
     },
     {
       "case_id": "A09_unauthorized_same_tenant_entity",

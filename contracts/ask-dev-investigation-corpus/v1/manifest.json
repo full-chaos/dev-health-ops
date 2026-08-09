@@ -11,10 +11,10 @@
     "cases_total": 40,
     "entities": 50,
     "episodes": 3,
-    "evidence_records": 67,
-    "measurements": 35,
+    "evidence_records": 68,
+    "measurements": 39,
     "oracles": 38,
-    "relationships": 71,
+    "relationships": 73,
     "required_topics": 40,
     "source_feeds": 16
   },
@@ -25,7 +25,7 @@
     },
     {
       "path": "examples/reference/S03_shared_dependency_portfolio_risk.json",
-      "sha256": "2404bd65f11dff24bbd73e5507abb86e2b4729b20cd9fab6be12def23b219e13"
+      "sha256": "49ca8a5bf1c2d657f45593508d26a6b7ba9522d8d9a07923111b751fc3892ba3"
     },
     {
       "path": "examples/reference/S04_symptom_versus_driver.json",
@@ -33,7 +33,7 @@
     },
     {
       "path": "examples/reference_digests.json",
-      "sha256": "98d69244f3237036309dc0b1be27b26a37bd028533b3052ca0a4e02ff7e5df86"
+      "sha256": "ac4fd82dcd408faa365f44d5754e1e49701d4b79f8fb8acac84666c9368a04c2"
     },
     {
       "path": "registries/cases.json",
@@ -57,7 +57,7 @@
     },
     {
       "path": "world/evidence.json",
-      "sha256": "6fb59cd603f39b18e411f266fd4a585ce59cc0c6a15010fff48d7124e5500951"
+      "sha256": "ad8076570d8494cd490e2f60d7ec6f1739aca72dec752874055825dee1fbe315"
     },
     {
       "path": "world/principals.json",
@@ -65,7 +65,7 @@
     },
     {
       "path": "world/relationships.json",
-      "sha256": "d9111172c04e0b2e167e66d364143609657c311554c83735b21ea2a89adef03c"
+      "sha256": "84520124abcbf74a73b98b978a8fd22e0e387cb4ac2694725e867dfd21bbaa40"
     },
     {
       "path": "world/source_manifest.json",

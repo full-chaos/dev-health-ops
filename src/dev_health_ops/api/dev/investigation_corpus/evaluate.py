@@ -461,17 +461,31 @@ def _score_cohort_inclusion_explainability(
 ) -> DimensionResult:
     if not packet.comparison_cohort.members:
         return _na(_D.COHORT_INCLUSION_EXPLAINABILITY, "the packet carries no cohort")
-    unexplained = [
-        member.canonical_id
-        for member in packet.comparison_cohort.members
-        if not member.inclusion_rationale.strip()
-    ]
+    # Checking only that a rationale is non-empty would be vacuous: the
+    # contract already types it ShortText with min_length=1, so no valid
+    # packet can fail that. What the contract cannot check is whether the
+    # stated basis is TRUE -- a well-explained member can still be factually
+    # unrelated, which is precisely the half the oracle owns.
+    peers = [member.canonical_id for member in packet.comparison_cohort.members]
+    unsupported: list[str] = []
+    for member in packet.comparison_cohort.members:
+        if member.canonical_id not in world.ENTITIES_BY_ID:
+            unsupported.append(f"{member.canonical_id}: not a canonical entity")
+            continue
+        holds = [
+            basis
+            for basis in member.inclusion_basis
+            if world.shares_basis(basis, member.canonical_id, peers)
+        ]
+        if not holds:
+            stated = sorted(str(item) for item in member.inclusion_basis)
+            unsupported.append(f"{member.canonical_id}: {stated} not true of the world")
     return _result(
         _D.COHORT_INCLUSION_EXPLAINABILITY,
-        Verdict.PASS if not unexplained else Verdict.FAIL,
-        f"members with no rationale: {sorted(unexplained)}"
-        if unexplained
-        else "every member states a basis and rationale",
+        Verdict.PASS if not unsupported else Verdict.FAIL,
+        "; ".join(unsupported)
+        if unsupported
+        else "every member's stated inclusion basis holds in the world",
     )
 
 
@@ -851,12 +865,32 @@ def _score_comparative_judgment(
             _D.COMPARATIVE_JUDGMENT_SUPPORT, "the case is not a comparison question"
         )
     dimensions = packet.comparison_cohort.supported_comparison_dimensions
+    if not dimensions:
+        # Unreachable through a valid packet -- the contract rejects a
+        # cohort-bearing shape with no declared dimension -- and kept anyway
+        # so the scorer does not depend on that rule staying true elsewhere.
+        return _result(
+            _D.COMPARATIVE_JUDGMENT_SUPPORT,
+            Verdict.FAIL,
+            "a comparison cohort with no declared comparison dimension",
+        )
+    # The real check: "declared" is cheap, and the contract already requires
+    # it. Whether the WORLD can compare these members on the declared axis is
+    # what distinguishes a supported comparison from a claimed one.
+    members = [member.canonical_id for member in packet.comparison_cohort.members]
+    backed = [
+        dimension for dimension in dimensions if world.comparable_on(dimension, members)
+    ]
     return _result(
         _D.COMPARATIVE_JUDGMENT_SUPPORT,
-        Verdict.PASS if dimensions else Verdict.FAIL,
-        f"declared comparison dimensions: {sorted(str(item) for item in dimensions)}"
-        if dimensions
-        else "a comparison cohort with no declared comparison dimension",
+        Verdict.PASS if backed else Verdict.FAIL,
+        f"backed by world measurements: {sorted(str(item) for item in backed)}"
+        if backed
+        else (
+            "declared "
+            f"{sorted(str(item) for item in dimensions)}, and the world has no "
+            "comparable numbers for these members on any of them"
+        ),
     )
 
 

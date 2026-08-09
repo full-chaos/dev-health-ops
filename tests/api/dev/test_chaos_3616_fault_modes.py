@@ -799,6 +799,85 @@ def test_a_cross_source_answer_that_reads_one_source_is_caught() -> None:
     )
 
 
+def test_a_cohort_member_whose_stated_basis_is_false_is_caught() -> None:
+    """A well-explained member that is factually unrelated.
+
+    This is the half the contract explicitly leaves to the oracle: it can
+    stop a member being added *silently*, and it cannot tell whether a stated
+    basis is true. Meridian shares no dependency with anything; saying it
+    does is a plausible sentence and a false one.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["comparison_cohort"]["members"].append(
+            {
+                "subject_kind": "project",
+                "canonical_id": PROJ_MERIDIAN,
+                "display_label": "Meridian Docs",
+                "inclusion_basis": ["shared_dependency"],
+                "inclusion_rationale": (
+                    "Shares the authcore dependency with the rest of the set."
+                ),
+                "inclusion_evidence_ids": [],
+                "inclusion_evidence_classification": "canonical_registry_membership",
+                "relevance": "current",
+            }
+        )
+        payload["related_context"]["authorized_entity_ids"] = sorted(
+            {*payload["related_context"]["authorized_entity_ids"], PROJ_MERIDIAN}
+        )
+
+    _assert_caught(
+        "T01_clearly_struggling_team",
+        mutate,
+        _D.COHORT_INCLUSION_EXPLAINABILITY,
+        "not true of the world",
+    )
+
+
+def test_a_comparison_axis_the_world_cannot_measure_is_caught() -> None:
+    """'Declared a dimension' is cheap; the contract already requires it.
+
+    Neither Beacon nor Solstice has a deployment-frequency number, so a
+    cohort that claims to compare them on it has claimed a comparison rather
+    than supported one.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["comparison_cohort"]["supported_comparison_dimensions"] = [
+            "deployment_frequency"
+        ]
+
+    _assert_caught(
+        "P01_demand_exceeds_capacity",
+        mutate,
+        _D.COMPARATIVE_JUDGMENT_SUPPORT,
+        "no comparable numbers",
+    )
+
+
+def test_backend_vocabulary_in_a_free_text_field_is_caught() -> None:
+    """The contract is backend-neutral structurally; free text is the hole.
+
+    Every enum and field name in the packet is neutral by construction, so
+    the only route a backend name can take to a consumer is a producer-authored
+    string.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["driver_analysis"]["candidates"][0]["summary"] = (
+            "Traversal found this via a Cypher MATCH ( ) over the Neo4j "
+            "projection."
+        )
+
+    _assert_caught(
+        "T01_clearly_struggling_team",
+        mutate,
+        _D.ZERO_GRAPH_NATIVE_SURFACE_LEAKAGE,
+        "backend vocabulary in the packet",
+    )
+
+
 # --------------------------------------------------------------------------
 # Anti-vacuity of the harness itself
 # --------------------------------------------------------------------------

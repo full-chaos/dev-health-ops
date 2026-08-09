@@ -32,6 +32,8 @@ from typing import Any
 
 from ..investigation_contract.question_families import QUESTION_FAMILY_REGISTRY
 from ..investigation_contract.vocabulary import (
+    ALL_COMPARISON_DIMENSIONS,
+    CohortInclusionBasis,
     ComparisonShape,
     ConfidenceQualifier,
     DriverStanding,
@@ -45,12 +47,51 @@ from .oracles import CaseOracle, DriverExpectation, PathExpectation, oracle_for
 
 __all__ = ["reference_packet"]
 
-_ALLOWED_COMPARISON_DIMENSIONS = (
-    "delivery_throughput",
-    "review_load",
-    "work_in_progress",
-    "capacity_load_ratio",
-)
+
+def _backed_dimensions(member_ids: list[str]) -> list[str]:
+    """Only axes the world can actually compare these members on.
+
+    Declaring an axis the world has no numbers for is a claimed comparison
+    rather than a supported one, and the comparative-judgment scorer now
+    rejects it -- so the witness must not do it either.
+    """
+
+    backed = [
+        dimension.value
+        for dimension in ALL_COMPARISON_DIMENSIONS
+        if world.comparable_on(dimension, member_ids)
+    ]
+    if not backed:
+        raise RuntimeError(
+            f"the world can compare {member_ids} on no axis at all, so no "
+            "legal cohort-bearing packet exists for this case"
+        )
+    return backed[:3]
+
+
+def _inclusion_basis(entity_id: str, peers: list[str], case: CorpusCase) -> str:
+    """The strongest inclusion basis the world actually supports.
+
+    Picked from the world rather than hard-coded so the witness cannot state
+    a basis that is false -- which is the fault the cohort-inclusion scorer
+    exists to catch.
+    """
+
+    if case.comparison_shape is ComparisonShape.SINGULAR_SUBJECT:
+        return CohortInclusionBasis.EXPLICITLY_NAMED.value
+    for basis in (
+        CohortInclusionBasis.SHARED_DEPENDENCY,
+        CohortInclusionBasis.SAME_INITIATIVE,
+        CohortInclusionBasis.SHARED_TEAM_OWNERSHIP,
+        CohortInclusionBasis.SAME_PORTFOLIO,
+        CohortInclusionBasis.COMPARABLE_DELIVERY_PROFILE,
+    ):
+        if world.shares_basis(basis, entity_id, peers):
+            return basis.value
+    raise RuntimeError(
+        f"the world supports no inclusion basis for {entity_id} among {peers}; "
+        "the oracle is asking for a cohort the world does not justify"
+    )
 
 
 def _packet_id(case_id: str) -> str:
@@ -331,9 +372,7 @@ def reference_packet(case_id: str) -> dict[str, Any]:
             "subject_kind": world.ENTITIES_BY_ID[entity_id].kind.value,
             "canonical_id": entity_id,
             "display_label": world.ENTITIES_BY_ID[entity_id].display_label,
-            "inclusion_basis": ["comparable_delivery_profile"]
-            if case.comparison_shape is not ComparisonShape.SINGULAR_SUBJECT
-            else ["explicitly_named"],
+            "inclusion_basis": [_inclusion_basis(entity_id, member_ids, case)],
             "inclusion_rationale": (
                 "Included because the world's canonical registry places it in "
                 "the comparison set this question asks about."
@@ -366,7 +405,7 @@ def reference_packet(case_id: str) -> dict[str, Any]:
         "members": members,
         "exclusions": exclusions,
         "supported_comparison_dimensions": (
-            list(_ALLOWED_COMPARISON_DIMENSIONS[:2])
+            _backed_dimensions(member_ids)
             if case.comparison_shape is not ComparisonShape.SINGULAR_SUBJECT
             else []
         ),

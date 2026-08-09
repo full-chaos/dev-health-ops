@@ -240,6 +240,20 @@
     },
     {
       "control_entity_id": null,
+      "display_label": "Lattice demand and delivery",
+      "entity_id": "proj_lattice",
+      "handle": "ev1_7683e1096e00d5d3c63c4dc8e45d1ae6022a27f2",
+      "is_adversarial": false,
+      "is_citable": true,
+      "observed_at": "2026-08-07 00:00:00Z",
+      "slug": "wi_lattice_demand",
+      "source_class": "work_item",
+      "state": "active",
+      "tenant_id": "org_helio",
+      "trust": "canonical"
+    },
+    {
+      "control_entity_id": null,
       "display_label": "Pulse on-call runbook",
       "entity_id": "wu_pulse_runbook",
       "handle": "ev1_e1643224ffa63939595610dd850c62964c15e7fb",

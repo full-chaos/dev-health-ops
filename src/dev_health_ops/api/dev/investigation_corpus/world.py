@@ -50,7 +50,7 @@ Five properties are load-bearing, and all five are enforced by
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -63,6 +63,8 @@ from ..investigation_contract.relationships import (
     RelationshipType,
 )
 from ..investigation_contract.vocabulary import (
+    CohortInclusionBasis,
+    ComparisonDimension,
     InvestigationSubjectKind,
     RelevanceState,
     SubjectMatchSignal,
@@ -104,8 +106,11 @@ __all__ = [
     "WorldEvidence",
     "WorldMeasurement",
     "WorldRelationship",
+    "COMPARISON_DIMENSION_METRICS",
     "authorized_entity_ids",
+    "comparable_on",
     "evidence_handle",
+    "shares_basis",
     "validate_world",
 ]
 
@@ -1154,6 +1159,19 @@ WORLD_EVIDENCE: tuple[WorldEvidence, ...] = (
         ),
     ),
     _ev(
+        "wi_lattice_demand",
+        _SC.WORK_ITEM,
+        PROJ_LATTICE,
+        "Lattice demand and delivery",
+        "19 items arrived in the window; 5 completed.",
+        _t("2026-08-07T00:00:00"),
+        note=(
+            "Lattice's own demand, so the contributor-concentration finding "
+            "can be compared against another project rather than asserted "
+            "alone."
+        ),
+    ),
+    _ev(
         "wi_pulse_runbook_open",
         _SC.WORK_ITEM,
         WU_PULSE_RUNBOOK,
@@ -1694,6 +1712,10 @@ WORLD_RELATIONSHIPS: tuple[WorldRelationship, ...] = (
     ),
     _rel("tidal_pf", PROJ_TIDAL, _R.BELONGS_TO_PORTFOLIO, PF_GROWTH, WORLD_EPOCH),
     _rel("solstice_pf", PROJ_SOLSTICE, _R.BELONGS_TO_PORTFOLIO, PF_GROWTH, WORLD_EPOCH),
+    _rel("lattice_pf", PROJ_LATTICE, _R.BELONGS_TO_PORTFOLIO, PF_PLATFORM, WORLD_EPOCH),
+    _rel(
+        "meridian_pf", PROJ_MERIDIAN, _R.BELONGS_TO_PORTFOLIO, PF_PLATFORM, WORLD_EPOCH
+    ),
     # -- ownership ----------------------------------------------------------
     _rel(
         "own_ipr",
@@ -2199,6 +2221,17 @@ WORLD_MEASUREMENTS: tuple[WorldMeasurement, ...] = (
         "rv_dorado_outbound",
         cohort_median=12,
     ),
+    _m(
+        "dorado_review_wait",
+        TEAM_DORADO,
+        _SC.REVIEW,
+        "median_review_wait_days",
+        5.6,
+        "days",
+        "rv_dorado_outbound",
+        cohort_median=1.8,
+        note="The axis on which Dorado and Atlas are actually comparable.",
+    ),
     # Frost: healthy except one noisy metric.
     _m(
         "frost_cycle_p90",
@@ -2306,6 +2339,24 @@ WORLD_MEASUREMENTS: tuple[WorldMeasurement, ...] = (
         note="No allocation denominator exists; the mismatch is still measurable.",
     ),
     _m(
+        "lattice_arrivals",
+        PROJ_LATTICE,
+        _SC.WORK_ITEM,
+        "arrived_items",
+        19,
+        "items",
+        "wi_lattice_demand",
+    ),
+    _m(
+        "lattice_completions",
+        PROJ_LATTICE,
+        _SC.WORK_ITEM,
+        "completed_items",
+        5,
+        "items",
+        "wi_lattice_demand",
+    ),
+    _m(
         "lattice_touching_contributors",
         PROJ_LATTICE,
         _SC.WORK_GRAPH,
@@ -2351,6 +2402,20 @@ WORLD_MEASUREMENTS: tuple[WorldMeasurement, ...] = (
         1,
         "deployments",
         "dp_pulse_prod",
+    ),
+    _m(
+        "pulse_open_children",
+        PROJ_PULSE,
+        _SC.WORK_ITEM,
+        "open_child_units",
+        1,
+        "items",
+        "wi_pulse_runbook_open",
+        note=(
+            "The readiness work unit. Gives Pulse and Ledger a shared axis, so "
+            "the declared-versus-actual sweep is a real comparison rather than "
+            "two unrelated verdicts side by side."
+        ),
     ),
     _m(
         "acr_target_slips",
@@ -2406,6 +2471,155 @@ WORLD_MEASUREMENTS: tuple[WorldMeasurement, ...] = (
         note="The measurement that explains the one above.",
     ),
 )
+
+
+#: Which world metrics back each comparison axis.
+#:
+#: A cohort may declare a ``ComparisonDimension`` only if the world can
+#: actually compare its members on it. Without this mapping the
+#: comparative-judgment dimension was unfailable: the packet contract already
+#: requires a cohort-bearing shape to declare at least one dimension, so a
+#: scorer that checked only "did you declare one" could never reject
+#: anything. What it can reject, with this, is a cohort that claims to
+#: compare on an axis the world has no numbers for.
+COMPARISON_DIMENSION_METRICS: Mapping[ComparisonDimension, tuple[str, ...]] = {
+    ComparisonDimension.DELIVERY_THROUGHPUT: ("completed_items",),
+    ComparisonDimension.CYCLE_TIME: (
+        "cycle_time_p90_days",
+        "cycle_time_median_days",
+    ),
+    ComparisonDimension.REVIEW_LOAD: (
+        "median_review_wait_days",
+        "outbound_review_share",
+        "review_cycles_max",
+    ),
+    ComparisonDimension.WORK_IN_PROGRESS: ("work_in_progress",),
+    ComparisonDimension.DEPENDENCY_EXPOSURE: (),
+    ComparisonDimension.INCIDENT_LOAD: ("incidents",),
+    ComparisonDimension.DEPLOYMENT_FREQUENCY: ("production_deployments",),
+    ComparisonDimension.INVESTMENT_MIX: ("new_value_share", "ktlo_share"),
+    ComparisonDimension.OPEN_DEFICIENCY_COUNT: (
+        "open_deficiencies",
+        "missing_controls",
+    ),
+    ComparisonDimension.STATUS_DECLARATION_GAP: (
+        "open_child_units",
+        "target_date_changes",
+    ),
+    ComparisonDimension.CAPACITY_LOAD_RATIO: ("arrived_items", "assigned_fte"),
+    ComparisonDimension.DATA_COVERAGE: ("feed_lag_days",),
+}
+
+
+def comparable_on(dimension: ComparisonDimension, entity_ids: Sequence[str]) -> bool:
+    """Whether the world can compare these entities on this axis.
+
+    ``DEPENDENCY_EXPOSURE`` is backed by relationships rather than by
+    measurements, so it is satisfied by two or more of the entities sharing a
+    dependency. Every other axis needs a measurement of the same metric on at
+    least two of them -- one number is not a comparison.
+    """
+
+    if dimension is ComparisonDimension.DEPENDENCY_EXPOSURE:
+        depended: dict[str, set[str]] = {}
+        for edge in WORLD_RELATIONSHIPS:
+            if edge.relationship is not RelationshipType.DEPENDS_ON:
+                continue
+            if edge.source_entity_id not in entity_ids:
+                continue
+            if not edge.true_at(TRIAL_NOW):
+                continue
+            depended.setdefault(edge.target_entity_id, set()).add(edge.source_entity_id)
+        return any(len(sources) >= 2 for sources in depended.values())
+    metrics = COMPARISON_DIMENSION_METRICS[dimension]
+    for metric in metrics:
+        covered = {
+            item.entity_id
+            for item in WORLD_MEASUREMENTS
+            if item.metric == metric and item.entity_id in entity_ids
+        }
+        if len(covered) >= 2:
+            return True
+    return False
+
+
+def shares_basis(
+    basis: CohortInclusionBasis, entity_id: str, peers: Sequence[str]
+) -> bool:
+    """Whether the world supports this inclusion basis for this member.
+
+    The named fault is "an unrelated project appears in the cohort". The
+    contract removes the ability to add one *silently* -- every member must
+    state a basis and a rationale -- but a well-explained member can still be
+    factually irrelevant, and that is the oracle's half. This function is
+    that half: the basis has to be true of the world, not merely stated.
+    """
+
+    others = [peer for peer in peers if peer != entity_id]
+    if not others:
+        return True
+    if basis is CohortInclusionBasis.EXPLICITLY_NAMED:
+        return True
+
+    def _targets(source: str, relationship: RelationshipType) -> set[str]:
+        return {
+            edge.target_entity_id
+            for edge in WORLD_RELATIONSHIPS
+            if edge.source_entity_id == source
+            and edge.relationship is relationship
+            and not edge.is_false_claim
+            and edge.true_at(TRIAL_NOW)
+        }
+
+    if basis is CohortInclusionBasis.SHARED_DEPENDENCY:
+        mine = _targets(entity_id, RelationshipType.DEPENDS_ON)
+        return any(
+            mine & _targets(peer, RelationshipType.DEPENDS_ON) for peer in others
+        )
+    if basis is CohortInclusionBasis.SHARED_TEAM_OWNERSHIP:
+        mine = _targets(entity_id, RelationshipType.OWNED_BY_TEAM)
+        return any(
+            mine & _targets(peer, RelationshipType.OWNED_BY_TEAM) for peer in others
+        )
+    if basis is CohortInclusionBasis.SAME_PORTFOLIO:
+        mine = _targets(entity_id, RelationshipType.BELONGS_TO_PORTFOLIO)
+        return any(
+            mine & _targets(peer, RelationshipType.BELONGS_TO_PORTFOLIO)
+            for peer in others
+        )
+    if basis is CohortInclusionBasis.SAME_INITIATIVE:
+        parents = {
+            edge.source_entity_id
+            for edge in WORLD_RELATIONSHIPS
+            if edge.relationship is RelationshipType.PARENT_OF
+            and edge.target_entity_id == entity_id
+        }
+        for peer in others:
+            peer_parents = {
+                edge.source_entity_id
+                for edge in WORLD_RELATIONSHIPS
+                if edge.relationship is RelationshipType.PARENT_OF
+                and edge.target_entity_id == peer
+            }
+            if parents & peer_parents:
+                return True
+        return False
+    if basis is CohortInclusionBasis.COMPARABLE_DELIVERY_PROFILE:
+        mine = {
+            item.metric for item in WORLD_MEASUREMENTS if item.entity_id == entity_id
+        }
+        for peer in others:
+            theirs = {
+                item.metric for item in WORLD_MEASUREMENTS if item.entity_id == peer
+            }
+            if mine & theirs:
+                return True
+        return False
+    if basis is CohortInclusionBasis.PEER_OF_NAMED_SUBJECT:
+        return shares_basis(
+            CohortInclusionBasis.SHARED_TEAM_OWNERSHIP, entity_id, peers
+        ) or shares_basis(CohortInclusionBasis.SAME_PORTFOLIO, entity_id, peers)
+    return False
 
 
 # --------------------------------------------------------------------------

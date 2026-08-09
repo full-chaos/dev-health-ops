@@ -237,7 +237,32 @@ iteration on the critical path of the CHAOS-3615 freeze.
   expectations describe the right answers rests on the world being an
   independent construction record, which `test_chaos_3616_world.py` checks
   separately.
-* **Three dimensions have no guard-injection case**, each because its scorer
-  reads no corpus knowledge that could be removed. The reasons are recorded
-  in `UNINJECTED` in the injection script and asserted by
-  `test_chaos_3616_coverage_matrix.py`.
+* **One dimension has no guard-injection case.**
+  `zero_graph_native_surface_leakage` scans the serialized packet against a
+  fixed banned-token list; the list *is* the guard, so removing it would be
+  deleting the scorer rather than removing an expectation. It has a
+  fault-mode test instead, which is what keeps it from being a dimension that
+  cannot fail. The reason is recorded in `UNINJECTED` in the injection script
+  and asserted by `test_chaos_3616_coverage_matrix.py`.
+
+## An audit that changed the design
+
+Two dimensions were, on first implementation, **unfailable** --
+`cohort_inclusion_explainability` checked only that a rationale was non-empty,
+and `comparative_judgment_support` only that a dimension was declared. The
+packet contract already requires both, so no valid packet could ever have
+failed either, and both would have rendered as covered cells in the matrix
+above while measuring nothing.
+
+The fix was to ground them in the world rather than in the packet.
+`shares_basis` decides whether a member's stated inclusion basis is *true* --
+whether it really shares that dependency, owner, portfolio or initiative --
+and `comparable_on` decides whether the world holds numbers that let those
+members be compared on the declared axis. Both can now fail, both have
+fault-mode tests, and both are in the injection table.
+
+Running the injection script is what surfaced this, and one further case:
+`relevant_entity_recall` counted cohort members and committed subjects as
+"present", so on every cohort-bearing case the entity was always found
+somewhere. It now reads `related_context.entities`, the field the frozen
+scoring registry names for it.

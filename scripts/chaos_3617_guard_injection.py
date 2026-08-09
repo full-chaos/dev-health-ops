@@ -409,6 +409,119 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
         expect_failure="DID NOT RAISE",
     ),
+    # ---- CHAOS-3628: withdrawn evidence never reaches a packet ------------
+    Mutation(
+        mutation_id="withdrawn-evidence-presented-as-live-support",
+        defect=(
+            "revoked, redacted and deleted source records are returned by the "
+            "traversal and cited as live support. This was the arm's state "
+            "for its whole existence -- it had no evidence-state concept at "
+            "all -- and the CHAOS-3620 lane measured it on five corpus seeds"
+        ),
+        path=SRC / "readback.py",
+        anchor="        if not _is_citable(observation):",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3628_evidence_state.py::"
+            "TestWithdrawnEvidenceIsPresentInTheWorldAndAbsentFromThePacket",
+        ),
+        # The oracle's own words for the record, so the recorded RED line
+        # evidences the withdrawal rather than merely a red suite.
+        expect_failure="handles-withdrawn=",
+    ),
+    Mutation(
+        mutation_id="unreadable-evidence-state-reads-as-citable",
+        defect=(
+            "a state token the arm cannot read is ingested and then treated "
+            "as citable, so a record withdrawn under a vocabulary this "
+            "revision does not know is presented as live support -- the "
+            "stripped-attribute promotion, in the direction that "
+            "manufactures support"
+        ),
+        path=SRC / "projection.py",
+        anchor="    if state is not None and state not in _SOURCE_EVIDENCE_STATES:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3628_evidence_state.py::"
+            "TestAnUnreadableStateIsRefused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="issued-handle-accepted-with-no-evidence-state",
+        defect=(
+            "a source that issues handles loses its state attribute in "
+            "transit and the arm infers the record was never withdrawn. This "
+            "is the guard that makes readback's absent-state-is-citable "
+            "default safe; without it that default is the whole defect again, "
+            "reachable by data rather than by code"
+        ),
+        path=SRC / "projection.py",
+        anchor="    if handle is not None and state is None:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3628_evidence_state.py::"
+            "TestAnIssuedHandleMustDeclareItsState",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    # ---- CHAOS-3629 / CHAOS-3630: the lineage emitter stops declaring ----
+    Mutation(
+        mutation_id="relevance-hardcoded-current-again",
+        defect=(
+            "an expired relationship is emitted as a live one. The corpus "
+            "plants dep_pulse_ratelimitd closed two months before TRIAL_NOW "
+            "for exactly this, PathStep.is_current_at already returns False "
+            "for it, and the emitter used to discard that and declare CURRENT "
+            "at all eight construction sites -- so CHAOS-3619's "
+            "current_relevance dimension was scoring a constant"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if step.is_current_at(as_of):",
+        replacement="    if True:",
+        tests=(
+            f"{TESTS}/test_chaos_3629_3630_lineage_honesty.py::"
+            "TestRelevanceIsDerivedNotDeclared",
+        ),
+        expect_failure="RelevanceState.HISTORICAL_ONLY",
+    ),
+    Mutation(
+        mutation_id="path-evidence-dropped-again",
+        defect=(
+            "lineage paths stop carrying the evidence their own edges name, "
+            "so no relationship in any packet closes to evidence while every "
+            "driver does -- half the provenance claim, silently absent, which "
+            "is what a constant field looks like from outside"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="            if handle is not None and handle not in evidence:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3629_3630_lineage_honesty.py::"
+            "TestLineagePathsCloseToEvidence",
+        ),
+        expect_failure="no path cites evidence",
+    ),
+    Mutation(
+        mutation_id="driver-rests-on-a-path-that-cites-nothing",
+        defect=(
+            "an asserted driver leans on lineage that closes to no evidence "
+            "at all, so the mechanism it names rests on the arm's assertion "
+            "alone. Driver-closure was enforced and relationship-closure was "
+            "not, because the field it would have checked was a literal"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        elif all(item in evidence_free_paths for item in "
+            "driver.supporting_path_ids):"
+        ),
+        replacement="        elif False:",
+        tests=(
+            f"{TESTS}/test_chaos_3629_3630_lineage_honesty.py::"
+            "TestRelationshipClosureIsEnforcedLikeDriverClosure",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
     Mutation(
         mutation_id="observation-subjects-narrowed-instead-of-refused",
         defect=(

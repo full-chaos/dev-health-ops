@@ -64,6 +64,7 @@ from .vocabulary import (
     SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    SOURCE_EVIDENCE_STATE_ATTRIBUTE,
     AliasKind,
     GraphEntityKind,
     GraphObservationKind,
@@ -250,6 +251,12 @@ def corpus_batch(tenant_id: str) -> IngestionBatch:
                     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE: evidence.handle,
                     SOURCE_EVIDENCE_ID_ATTRIBUTE: slug,
                     SOURCE_EVIDENCE_ENTITY_ATTRIBUTE: evidence.entity_id,
+                    # CHAOS-3628. Carried as state, not as prose. ``outcome``
+                    # above already held ``str(evidence.state)`` and nothing
+                    # read it -- a display string is not a concept, which is
+                    # how revoked and deleted records were cited as live
+                    # support for as long as this adapter has existed.
+                    SOURCE_EVIDENCE_STATE_ATTRIBUTE: str(evidence.state),
                 },
             )
         )
@@ -304,6 +311,11 @@ def corpus_batch(tenant_id: str) -> IngestionBatch:
             # measurement's subject while carrying the record's handle is the
             # mis-attribution both reviewers measured.
             SOURCE_EVIDENCE_ENTITY_ATTRIBUTE: backing.entity_id,
+            # The state of the RECORD, not of the number. A measurement whose
+            # backing record was revoked is a number with withdrawn support,
+            # and citing it would present the withdrawal as though it had not
+            # happened -- through a field the packet never shows.
+            SOURCE_EVIDENCE_STATE_ATTRIBUTE: str(backing.state),
         }
         if measurement.cohort_median is not None:
             measured["measurement_cohort_median"] = measurement.cohort_median

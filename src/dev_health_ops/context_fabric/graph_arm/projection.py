@@ -81,9 +81,11 @@ from .vocabulary import (
     SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    SOURCE_EVIDENCE_STATE_ATTRIBUTE,
     AliasKind,
     GraphEntityKind,
     GraphObservationKind,
+    SourceEvidenceState,
     entity_kind_to_subject_kind,
 )
 
@@ -146,6 +148,7 @@ READBACK_ATTRIBUTE_KEYS: tuple[str, ...] = (
     SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
+    SOURCE_EVIDENCE_STATE_ATTRIBUTE,
     "superseded_by",
 )
 
@@ -156,6 +159,11 @@ _ATTRIBUTE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 #: identity, and an arm that trimmed, lowercased or re-derived a malformed one
 #: would be inventing a different record's identity out of a broken one.
 _EVIDENCE_HANDLE = re.compile(f"^{EVIDENCE_HANDLE_PATTERN}$")
+
+#: The state tokens an ingested record may declare. A closed set, checked at
+#: ingestion, so an unreadable state is a refusal rather than a silent
+#: promotion to citable.
+_SOURCE_EVIDENCE_STATES = frozenset(str(state) for state in SourceEvidenceState)
 
 #: Bytes the storage encoding uses to join multiple values into one attribute
 #: string: US (0x1f) for alias lists, "," for repository ids, supersession
@@ -388,7 +396,8 @@ def _validate_source_evidence(
     handle = attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
     source_id = attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE)
     source_entity = attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
-    if handle is None and source_id is None and source_entity is None:
+    state = attributes.get(SOURCE_EVIDENCE_STATE_ATTRIBUTE)
+    if handle is None and source_id is None and source_entity is None and state is None:
         return
     if handle is not None and (not isinstance(source_entity, str) or not source_entity):
         raise ProjectionError(
@@ -397,6 +406,23 @@ def _validate_source_evidence(
             "record must name the entity the RECORD is about, and the arm "
             "will not re-derive that from whichever observation happens to "
             "cite it"
+        )
+    if state is not None and state not in _SOURCE_EVIDENCE_STATES:
+        # CHAOS-3628. Refused rather than treated as unknown-therefore-citable.
+        # The only available default is "citable", which is the direction that
+        # manufactures support: a state token this arm cannot read would make
+        # a revoked record indistinguishable from a live one.
+        raise ProjectionError(
+            f"{where} declares source evidence state {state!r}, which is not "
+            f"one of {sorted(_SOURCE_EVIDENCE_STATES)}. A state the arm cannot "
+            "read must not be presented as live support"
+        )
+    if handle is not None and state is None:
+        raise ProjectionError(
+            f"{where} carries a source-issued evidence handle with no "
+            f"{SOURCE_EVIDENCE_STATE_ATTRIBUTE}. A source that issues handles "
+            "is a source that knows whether its records have been withdrawn, "
+            "and the arm will not infer that they have not"
         )
     if handle is None or source_id is None:
         raise ProjectionError(

@@ -113,6 +113,7 @@ from .readback import (
     DiscoveredObservation,
     DiscoveredPath,
     InvestigationReadout,
+    PathStep,
 )
 from .vocabulary import (
     SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
@@ -157,6 +158,11 @@ _SOURCE_CONTRACT_VERSION = "graph_arm_source_read.v1"
 #: Mirrored here rather than caught as a pydantic error, so exceeding it is a
 #: disclosed cap instead of a crash at emission time.
 _MAX_PATH_CITATIONS = 10
+
+#: ``LineagePath.evidence_ref_ids`` is bounded at 25 by the frozen contract.
+#: Held here so the emitter stays inside it rather than discovering the bound
+#: as a validation error on a dense path.
+_MAX_PATH_EVIDENCE = 25
 
 
 #: The cohort-bearing shapes this arm revision can actually construct.
@@ -408,7 +414,7 @@ def _check_match_mechanisms(
 def _assert_support_is_closed(
     drivers: Sequence[DriverCandidate],
     evidence: Sequence[InvestigationEvidenceEntry],
-    known_paths: Container[str],
+    paths: Sequence[LineagePath],
     about: Mapping[str, frozenset[str]],
 ) -> None:
     """Every asserted driver's support must be its OWN, and in this packet.
@@ -431,10 +437,24 @@ def _assert_support_is_closed(
       because "every asserted finding is path-born" is the property the
       whole graph claim rests on. Enforcing it only inside
       ``discover_drivers`` left the packet boundary open, which is exactly
-      where a caller-assembled driver arrives.
+      where a caller-assembled driver arrives;
+    * CHAOS-3630: every path the driver cites must itself close to evidence.
+      Until that ticket, ``LineagePath.evidence_ref_ids`` was the literal
+      ``()``, so relationship-closure could not be checked at all -- drivers
+      closed to evidence and the relationships they rested on did not, which
+      is half of the provenance claim missing while the other half was
+      enforced. A path with no evidence explains the mechanism only in the
+      sense that the arm asserts it.
+
+    Paths with no evidence are perfectly legitimate in general -- roughly half
+    the corpus's edges carry no evidence slugs -- which is why this is scoped
+    to paths an ASSERTED driver leans on. A path nobody builds a judgment from
+    owes nobody a citation.
     """
 
     by_handle = {entry.evidence.evidence_ref_id: entry for entry in evidence}
+    known_paths = {path.path_id for path in paths}
+    evidence_free_paths = {path.path_id for path in paths if not path.evidence_ref_ids}
     for driver in drivers:
         if driver.standing not in ASSERTED_DRIVER_STANDINGS:
             continue
@@ -451,6 +471,11 @@ def _assert_support_is_closed(
             problems.append("cites no lineage path")
         elif any(item not in known_paths for item in driver.supporting_path_ids):
             problems.append("cites a path this packet never declared")
+        elif all(item in evidence_free_paths for item in driver.supporting_path_ids):
+            problems.append(
+                "cites only lineage paths that close to no evidence, so the "
+                "mechanism it names rests on the arm's assertion alone"
+            )
         if not driver.supporting_evidence_ids:
             problems.append("cites no evidence")
         else:
@@ -520,6 +545,7 @@ def _driver_candidate(
     handle_by_observation: Mapping[str, str],
     known_subject_ids: Container[str],
     filtered_ids: Container[str],
+    path_relevance: Mapping[str, RelevanceState],
 ) -> DriverCandidate:
     """One structural finding, as the frozen contract's driver candidate.
 
@@ -593,7 +619,18 @@ def _driver_candidate(
         supporting_evidence_ids=supporting[:25],
         conflicting_evidence_ids=conflicting[:25],
         conflict_note=finding.conflict_detail if conflicting else None,
-        relevance=RelevanceState.CURRENT,
+        # A driver is as current as the best route that explains it. Derived
+        # rather than declared (CHAOS-3629): a driver whose every supporting
+        # path closed months ago is a historical cause, and the contract's
+        # own CURRENTLY_RELEVANT_STATES is what stops such a thing being
+        # reported as the principal current driver.
+        relevance=_strongest(
+            [
+                path_relevance[path_id]
+                for path_id in finding.path_ids
+                if path_id in path_relevance
+            ]
+        ),
         exclusion_reason=finding.exclusion_reason,
     )
 
@@ -789,10 +826,97 @@ def _cohort_subject_kind(
     return subject_kind
 
 
+#: Relevance from best to worst, for the two directions this module reduces
+#: over. ``UNKNOWN`` is deliberately absent: it is not a rung on this ladder
+#: but the answer when there is no ladder to stand on, and folding it in would
+#: make "we could not tell" comparable with "we could, and it is historical".
+_RELEVANCE_ORDER: tuple[RelevanceState, ...] = (
+    RelevanceState.CURRENT,
+    RelevanceState.RECENTLY_CURRENT,
+    RelevanceState.HISTORICAL_ONLY,
+)
+
+
+def _step_relevance(
+    step: PathStep, as_of: datetime, window_start: datetime
+) -> RelevanceState:
+    """What the readout's own validity data says about one traversed edge.
+
+    CHAOS-3629. This was ``RelevanceState.CURRENT``, a literal, at all eight
+    construction sites, so the corpus's planted expired dependency was
+    reported as a live cause and CHAOS-3619's ``current_relevance`` dimension
+    was scoring a constant.
+
+    The four cases mirror ``world.WorldRelationship.relevance_at`` member for
+    member, because the corpus is the spec for this vocabulary and a second
+    definition of "current" is how two of them drift apart:
+
+    * not yet observed at ``as_of`` -> ``UNKNOWN``. The arm cannot describe
+      the relevance of something it had not learned;
+    * in force at ``as_of`` -> ``CURRENT``;
+    * closed, but not before the investigation window opened ->
+      ``RECENTLY_CURRENT``. It stopped being true recently enough to matter
+      to the question being asked;
+    * closed before the window -> ``HISTORICAL_ONLY``.
+
+    An edge with no interval at all reads ``CURRENT`` through
+    ``is_current_at``, and that is deliberate rather than an oversight — see
+    that method, and the corpus's ``true_at``, which agree: most providers
+    assert no interval, and reading silence as "expired" would erase the
+    majority of a real graph.
+    """
+
+    if step.observed_at > as_of:
+        return RelevanceState.UNKNOWN
+    if step.is_current_at(as_of):
+        return RelevanceState.CURRENT
+    if step.valid_to is not None and step.valid_to >= window_start:
+        return RelevanceState.RECENTLY_CURRENT
+    return RelevanceState.HISTORICAL_ONLY
+
+
+def _weakest(states: Sequence[RelevanceState]) -> RelevanceState:
+    """A chain is only as current as its weakest link.
+
+    Used for a path over its hops: a route through an edge that closed two
+    months ago is not a live route, however current the rest of it is. Any
+    ``UNKNOWN`` makes the whole thing ``UNKNOWN`` — an unknown link means the
+    chain's status is unknown, not that it is merely old.
+    """
+
+    if not states:
+        return RelevanceState.UNKNOWN
+    if RelevanceState.UNKNOWN in states:
+        return RelevanceState.UNKNOWN
+    return max(states, key=_RELEVANCE_ORDER.index)
+
+
+def _strongest(states: Sequence[RelevanceState]) -> RelevanceState:
+    """One live route is enough.
+
+    Used for an entity over the paths that reach it, and for a driver over the
+    paths it cites. The opposite reduction to :func:`_weakest`, and the
+    difference is not stylistic: an entity connected by both a live and an
+    expired route is currently related, while a route through both a live and
+    an expired edge is not a live route.
+    """
+
+    known = [state for state in states if state is not RelevanceState.UNKNOWN]
+    if not known:
+        return RelevanceState.UNKNOWN
+    return min(known, key=_RELEVANCE_ORDER.index)
+
+
 def _lineage_path(
-    path: DiscoveredPath, source_state: SourceRequirementState
+    path: DiscoveredPath,
+    source_state: SourceRequirementState,
+    as_of: datetime,
+    window_start: datetime,
+    handle_by_observation: Mapping[str, str],
 ) -> LineagePath:
     hops: list[LineageHop] = []
+    hop_relevance: list[RelevanceState] = []
+    evidence: list[str] = []
     for step in path.steps:
         from_kind = entity_kind_to_subject_kind(step.from_kind)
         to_kind = entity_kind_to_subject_kind(step.to_kind)
@@ -810,9 +934,23 @@ def _lineage_path(
                 target_entity_id=step.to_canonical_id,
                 target_entity_kind=to_kind,
                 observed_at=step.observed_at,
-                relevance=RelevanceState.CURRENT,
+                relevance=_step_relevance(step, as_of, window_start),
             )
         )
+        hop_relevance.append(hops[-1].relevance)
+        # CHAOS-3630. The ids were on the step the whole time; this field was
+        # the literal ``()``, so no relationship in any packet ever closed to
+        # evidence while every driver did.
+        #
+        # Only handles this packet actually carries are cited. An observation
+        # the traversal reached but did not index -- withdrawn (CHAOS-3628),
+        # or attached to nothing it returned -- has no handle here, and citing
+        # a reference the index cannot resolve is the fault
+        # ``_assert_support_is_closed`` exists to prevent for drivers.
+        for observation_id in step.observation_ids:
+            handle = handle_by_observation.get(observation_id)
+            if handle is not None and handle not in evidence:
+                evidence.append(handle)
     return LineagePath(
         path_id=path.path_id,
         origin_entity_id=path.origin_canonical_id,
@@ -822,8 +960,8 @@ def _lineage_path(
             "reached by bounded authorized traversal from the committed "
             "subject over the frozen relationship allowlist"
         ),
-        relevance=RelevanceState.CURRENT,
-        evidence_ref_ids=(),
+        relevance=_weakest(hop_relevance),
+        evidence_ref_ids=tuple(evidence[:_MAX_PATH_EVIDENCE]),
         truncated=False,
         truncation_reason=None,
         source_health=source_state,
@@ -906,7 +1044,21 @@ def build_packet(
     entity_by_id = readout.entity_by_id()
 
     # ---- lineage -------------------------------------------------------
-    paths = tuple(_lineage_path(path, source_state) for path in readout.paths)
+    #
+    # The emitted paths are built at the END of this function, not here.
+    # CHAOS-3630 made a path's evidence references real, and they are handles
+    # -- so a path cannot be emitted until the evidence index exists. What is
+    # computed here is only what the rest of the assembly needs: which paths
+    # touch which entity, and how each path's own relevance reads.
+    path_relevance = {
+        path.path_id: _weakest(
+            [
+                _step_relevance(step, job.window_end, job.window_start)
+                for step in path.steps
+            ]
+        )
+        for path in readout.paths
+    }
     touched: dict[str, list[str]] = {}
     for path in readout.paths:
         for canonical_id in path.touched_ids():
@@ -943,7 +1095,11 @@ def build_packet(
                     "authorized relationship path"
                 ),
                 supporting_path_ids=tuple(ordered),
-                relevance=RelevanceState.CURRENT,
+                # One live route is enough: an entity reached by both a
+                # current and an expired path IS currently related. The
+                # opposite reduction to a path's own, and the difference is
+                # the point -- see ``_strongest``.
+                relevance=_strongest([path_relevance[path_id] for path_id in ordered]),
                 observed_at=entity.observed_at,
             )
         )
@@ -991,7 +1147,12 @@ def build_packet(
                     ),
                 ),
                 match_confidence=1.0,
-                relevance=RelevanceState.CURRENT,
+                # A candidate the traversal reached takes the relevance of
+                # the best route to it; a seed no path touched has none to
+                # take, and UNKNOWN is the contract's word for that.
+                relevance=_strongest(
+                    [path_relevance[path_id] for path_id in touched.get(seed, ())]
+                ),
             )
         )
         if commit:
@@ -1243,9 +1404,35 @@ def build_packet(
                 supports_subject_ids=tuple(
                     subject for subject in entry_supports if subject in candidate_ids
                 ),
-                relevance=RelevanceState.CURRENT,
+                # An observation carries no validity interval, so the arm has
+                # no basis for a relevance claim about it. UNKNOWN is the
+                # contract's word for exactly that; CURRENT would be an
+                # assertion that the record is still pertinent, which nothing
+                # in the readout supports. This is the honest answer until
+                # observations carry validity, and it is deliberately not
+                # derived from the entities the evidence supports -- what a
+                # record is ABOUT does not date the record.
+                relevance=RelevanceState.UNKNOWN,
             )
         )
+
+    # ---- lineage paths -------------------------------------------------
+    #
+    # Emitted here, after the evidence index exists, because CHAOS-3630 made
+    # a path's references real handles rather than the literal ``()`` and a
+    # handle only exists once its record has been indexed. The ordering is
+    # load-bearing, not incidental: built earlier, a path could only ever
+    # cite nothing.
+    paths = tuple(
+        _lineage_path(
+            path,
+            source_state,
+            job.window_end,
+            job.window_start,
+            handle_by_observation,
+        )
+        for path in readout.paths
+    )
 
     # ---- source coverage ----------------------------------------------
     observed_classes = sorted(
@@ -1288,7 +1475,16 @@ def build_packet(
             inclusion_evidence_classification=(
                 CohortEvidenceClassification.EXPLICITLY_NAMED_BY_QUESTION
             ),
-            relevance=RelevanceState.CURRENT,
+            # The committed subject's own relevance, which the traversal
+            # derived; the same member the subject candidate carries, because
+            # this IS that subject and two different answers about one entity
+            # in one packet would be the packet contradicting itself.
+            relevance=_strongest(
+                [
+                    path_relevance[path_id]
+                    for path_id in touched.get(candidate.canonical_id, ())
+                ]
+            ),
         )
         for candidate in candidates
         if candidate.commitment_state is SubjectCommitmentState.COMMITTED
@@ -1335,7 +1531,14 @@ def build_packet(
                 inclusion_evidence_classification=(
                     CohortEvidenceClassification.CANONICAL_REGISTRY_MEMBERSHIP
                 ),
-                relevance=RelevanceState.CURRENT,
+                # A peer is found through registry edges the cohort builder
+                # walks, and ``CohortCandidate`` carries no validity interval
+                # for them, so this packet has no basis for a relevance claim
+                # about the membership. UNKNOWN says that. Reaching for the
+                # peer's own path relevance would answer a different question
+                # -- how current is the ENTITY, not how current is its
+                # membership -- and quietly present one as the other.
+                relevance=RelevanceState.UNKNOWN,
             )
             for member in cohort.members
         )
@@ -1521,7 +1724,11 @@ def build_packet(
     )
     driver_candidates = tuple(
         _driver_candidate(
-            finding, handle_by_observation, known_subject_ids, withheld_observation_ids
+            finding,
+            handle_by_observation,
+            known_subject_ids,
+            withheld_observation_ids,
+            path_relevance,
         )
         for finding in drivers or ()
     )
@@ -1549,7 +1756,7 @@ def build_packet(
     _assert_support_is_closed(
         driver_candidates,
         evidence_entries,
-        {path.path_id for path in paths},
+        paths,
         {
             finding.driver_id: frozenset({finding.subject_id, finding.cause_id})
             for finding in drivers or ()

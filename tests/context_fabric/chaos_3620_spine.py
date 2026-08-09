@@ -503,7 +503,18 @@ def lineage_path_for(path):
     from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
     from dev_health_ops.context_fabric.graph_arm.packet_builder import _lineage_path
 
-    return _lineage_path(path, SourceRequirementState.AVAILABLE_CURRENT)
+    # CHAOS-3629/3630 flip: _lineage_path derives relevance from validity and
+    # threads path evidence, so it needs the window and the handle map. The
+    # spine passes an empty map deliberately -- this helper exists to inspect
+    # HOP SHAPE, and supplying handles here would make it assert about
+    # evidence closure as a side effect.
+    return _lineage_path(
+        path,
+        SourceRequirementState.AVAILABLE_CURRENT,
+        world.TRIAL_NOW,
+        world.WINDOW_START,
+        {},
+    )
 
 
 def with_grant(

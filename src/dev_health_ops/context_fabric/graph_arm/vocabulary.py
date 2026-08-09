@@ -53,13 +53,16 @@ __all__ = [
     "ALL_GRAPH_ENTITY_KINDS",
     "ALL_GRAPH_OBSERVATION_KINDS",
     "EMITTABLE_ENTITY_KINDS",
+    "CITABLE_EVIDENCE_STATES",
     "EVIDENCE_HANDLE_PATTERN",
     "SOURCE_EVIDENCE_ENTITY_ATTRIBUTE",
     "SOURCE_EVIDENCE_HANDLE_ATTRIBUTE",
     "SOURCE_EVIDENCE_ID_ATTRIBUTE",
+    "SOURCE_EVIDENCE_STATE_ATTRIBUTE",
     "AliasKind",
     "GraphEntityKind",
     "GraphObservationKind",
+    "SourceEvidenceState",
     "entity_kind_to_subject_kind",
 ]
 
@@ -99,6 +102,46 @@ SOURCE_EVIDENCE_ID_ATTRIBUTE = "source_evidence_id"
 #: record is about -- that is the source's statement, and re-deriving it is
 #: the same class of mistake as re-minting the handle.
 SOURCE_EVIDENCE_ENTITY_ATTRIBUTE = "source_evidence_entity_id"
+
+#: The attribute carrying what has happened to the source record since it was
+#: issued. Required alongside the handle pair, never defaulted.
+#:
+#: CHAOS-3628. The arm had no evidence-state concept at all: the corpus state
+#: arrived as a display string and nothing read it, so revoked and deleted
+#: records were cited as live support. State is a member of
+#: :class:`SourceEvidenceState` here rather than free text precisely so an
+#: unrecognised value is a refusal instead of quietly reading as citable --
+#: the direction that manufactures support.
+SOURCE_EVIDENCE_STATE_ATTRIBUTE = "source_evidence_state"
+
+
+class SourceEvidenceState(StrEnum):
+    """What has happened to a source record since it was issued.
+
+    Mirrors the corpus's ``world.EvidenceState`` member for member, because
+    the corpus is the spec for this vocabulary and a translation table between
+    two nearly-identical enums is a place for them to drift apart.
+
+    They are distinct members rather than one ``withdrawn`` flag for the
+    reason the corpus states: the correct disclosure differs. What the arm
+    does with all three is identical today -- none may be presented as live
+    support -- and keeping them apart is what lets that change without
+    re-deriving which records were which.
+    """
+
+    ACTIVE = "active"
+    REVOKED = "revoked"
+    REDACTED = "redacted"
+    DELETED = "deleted"
+
+
+#: The states an arm may present as live support. Exactly one member, and
+#: written as a set rather than ``== ACTIVE`` so the citable/withdrawn split
+#: is one named thing a reader can find, not a comparison repeated at each
+#: site that happens to agree today.
+CITABLE_EVIDENCE_STATES: frozenset[SourceEvidenceState] = frozenset(
+    {SourceEvidenceState.ACTIVE}
+)
 
 #: The frozen contract's ``EvidenceHandle`` grammar: ``ev1_`` and 40 lowercase
 #: hex characters. Repeated here so an ingested handle can be refused at the

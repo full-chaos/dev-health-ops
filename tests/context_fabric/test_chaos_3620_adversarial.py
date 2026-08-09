@@ -1448,28 +1448,36 @@ class TestWithdrawnSourcesDoNotDisappear:
             ("proj_beacon", "wi_beacon_deleted"),
         ),
     )
-    def test_withdrawn_evidence_reaches_the_emitted_packet(
+    def test_withdrawn_evidence_is_excluded_from_the_emitted_packet(
         self, seed: str, expected: str
     ) -> None:
-        indexed = {
-            # CHAOS-3627 flip: detection moved from evidence.entity_id to the
-            # cited HANDLE. That field is entity vocabulary now -- the arm was
-            # putting the observation's own slug in it, which is the
-            # vocabulary defect this ledger's own P-row records -- so a slug
-            # no longer appears there and this test would have reported the
-            # withdrawn defect fixed when it is not. The DEFECT STANDS: the
-            # withdrawn record still reaches the packet, and the world's
-            # handle is how you see it. CHAOS-3628 (PR #1618) is what
-            # actually excludes it; this row flips to absence then.
-            world.EVIDENCE_BY_SLUG[entry_slug].handle
-            for entry_slug in [expected]
+        """FLIPPED by CHAOS-3628 (PR #1618). Was: the defect record.
+
+        This pinned withdrawn evidence REACHING the packet — REVOKED and
+        DELETED records cited as live support on five corpus seeds. The arm
+        now excludes them at read time, where the authorization filter
+        already draws the same line, so everything downstream works from
+        material the arm may actually present.
+
+        Both halves are asserted, because absence alone proves nothing: the
+        record must still be IN THE WORLD and must NOT be in the packet. A
+        test that only checked absence would pass against a corpus that never
+        held the record.
+        """
+
+        record = world.EVIDENCE_BY_SLUG[expected]
+        assert record.state is not world.EvidenceState.ACTIVE, (
+            f"{expected} is no longer planted as withdrawn; this would pass vacuously"
+        )
+
+        cited = {
+            entry.evidence.evidence_ref_id
             for entry in spine.investigate(seed).packet.evidence_coverage.evidence_index
-            if entry.evidence.evidence_ref_id == world.EVIDENCE_BY_SLUG[expected].handle
         }
-        assert world.EVIDENCE_BY_SLUG[expected].handle in indexed, (
-            f"{expected} no longer reaches the packet for {seed} -- the "
-            "CHAOS-3620 withdrawn-evidence defect record must be updated and "
-            "this test replaced by the proof that it is excluded"
+        assert cited, "no evidence was indexed; this would pass vacuously"
+        assert record.handle not in cited, (
+            f"{expected} still reaches the packet for {seed} -- the "
+            "CHAOS-3628 exclusion has regressed"
         )
 
     def test_the_arm_has_no_concept_of_evidence_state_at_all(self) -> None:

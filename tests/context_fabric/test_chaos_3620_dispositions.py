@@ -324,7 +324,12 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
             for requirement in REQUIREMENTS
             if requirement.status is Status.DEFECT
         }
-        assert defects == {"P1", "P6", "S5", "X1"}, (
+        # FLIPPED by PR #1618: P1 (CHAOS-3630), P6 (CHAOS-3628) and S5
+        # (CHAOS-3629) are fixed and their proving tests now assert the fixed
+        # behaviour. X1 (CHAOS-3637, title injection) remains a defect: its
+        # fix is parked in PR #1619, decoupled from the trial because the
+        # corpus carries no instruction-shaped titles.
+        assert defects == {"X1"}, (
             f"the recorded defect set changed to {sorted(defects)}; update "
             "the CHAOS-3620 findings record and the lane report together"
         )

@@ -44,6 +44,7 @@ from dev_health_ops.api.dev.contracts_v2.base import (
     SourceClass,
     SourceRequirementState,
 )
+from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
 from dev_health_ops.api.dev.evidence_service import (
     EvidenceRecord,
     EvidenceReferenceSigner,
@@ -776,6 +777,22 @@ def _mint_handle(
     )
 
 
+def _admission_locator(observation: DiscoveredObservation) -> str:
+    """The locator this observation's record was submitted for admission under.
+
+    Must agree with ``admission.candidate_locator`` -- the same rule stated in
+    one place would be better, but the arm's admission module imports the
+    evidence service and this module must not import the admission module
+    (``build_packet`` is called by harnesses that never admit anything). The
+    agreement is therefore asserted by a test that calls both, rather than
+    assumed from two identical-looking expressions.
+    """
+
+    return observation.attributes.get(
+        SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
+    )
+
+
 def _packet_id(run_id: str, job_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cf-graph-arm/{run_id}/{job_id}"))
 
@@ -1005,8 +1022,27 @@ def build_packet(
     drivers_truncated: bool = False,
     budgets: TrialBudgets = DEFAULT_BUDGETS,
     staleness_tolerance: timedelta = DEFAULT_STALENESS_TOLERANCE,
+    admitted_evidence: Mapping[str, DevEvidenceRefV2] | None = None,
 ) -> AskDevInvestigationPacket:
     """Turn one bounded traversal into the frozen investigation packet.
+
+    ``admitted_evidence`` (CHAOS-3646) is the canonical evidence service's
+    answer to this run's admission round, keyed by the SOURCE's own record
+    identity (``admission.candidate_locator``). Two modes, and the default is
+    the merged trial's behaviour byte for byte:
+
+    * ``None`` -- the arm mints its own handles through
+      :func:`_mint_handle`, as it has since CHAOS-3617. A packet built this
+      way is what the CHAOS-3619 trial measured, and it is what the Ask Dev
+      frame boundary rejects as a canonical bypass.
+    * supplied -- the arm mints **nothing**. Each evidence entry is the
+      admitted ref's own field values verbatim, and a record with no admitted
+      ref is DROPPED and disclosed rather than self-minted. Verbatim is not
+      tidiness: ``investigation_shadow.canonical_bypass_offenders`` digests
+      the whole payload, so an arm that altered any field of an admitted
+      record would have its packet rejected -- which is the check continuing
+      to bite, not a problem to route around.
+
 
     ``embedder`` is the embedder the run actually used. It decides two
     things: whether a semantic match may be emitted at all
@@ -1342,13 +1378,36 @@ def build_packet(
     # and may be read before the record it cites. The first pass builds the
     # entries the source issued handles FOR; the second attaches everything
     # that merely cites one of them.
+    #: CHAOS-3646. Locators the canonical service refused, so the disclosure
+    #: below can say how many records this packet is NOT carrying because
+    #: admission declined them. Separate from ``unattributable``: that set is
+    #: the ARM withholding an entity it may not name, this one is the
+    #: canonical service withholding a record the arm asked about.
+    admission_refused: set[str] = set()
+    #: handle -> the admitted ref, so the entry can carry it VERBATIM.
+    admitted_by_handle: dict[str, DevEvidenceRefV2] = {}
     for observation, supports in indexable:
         if not _describes_its_own_evidence(observation):
             continue
         record = _evidence_record(observation, supports, source_state)
-        handle = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
-        if handle is None:
-            handle = _mint_handle(signer, readout.org_id, observation, record)
+        if admitted_evidence is not None:
+            # The arm mints nothing on this path. An unadmitted record is
+            # dropped, never fallen back to a self-minted handle: a fallback
+            # here would make admission advisory, and an advisory
+            # authorization boundary is not one.
+            admitted = admitted_evidence.get(_admission_locator(observation))
+            if admitted is None:
+                admission_refused.add(_admission_locator(observation))
+                continue
+            handle = admitted.evidence_ref_id
+            admitted_by_handle[handle] = admitted
+        else:
+            issued = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
+            handle = (
+                issued
+                if issued is not None
+                else _mint_handle(signer, readout.org_id, observation, record)
+            )
         if handle in evidence_groups:
             # Only reachable for a genuinely repeated SOURCE-issued handle
             # now: the arm's own mint discriminates by record identity (see
@@ -1380,7 +1439,21 @@ def build_packet(
     for observation, supports in indexable:
         if _describes_its_own_evidence(observation):
             continue
-        handle = observation.attributes[SOURCE_EVIDENCE_HANDLE_ATTRIBUTE]
+        if admitted_evidence is not None:
+            # A citing observation names the record it rests on; under
+            # admission the handle for that record is the canonical service's,
+            # so the citation is resolved through the SAME locator the record
+            # itself was admitted under. Reading the source-issued handle here
+            # would reintroduce the arm's own identity for a record the
+            # service already named.
+            cited = admitted_evidence.get(_admission_locator(observation))
+            if cited is None:
+                admission_refused.add(_admission_locator(observation))
+                continue
+            handle = cited.evidence_ref_id
+            admitted_by_handle[handle] = cited
+        else:
+            handle = observation.attributes[SOURCE_EVIDENCE_HANDLE_ATTRIBUTE]
         group = evidence_groups.get(handle)
         if group is not None and (
             observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE) != group.source_id
@@ -1431,6 +1504,33 @@ def build_packet(
     evidence_entries: list[InvestigationEvidenceEntry] = []
     for handle, group in evidence_groups.items():
         entry_supports = tuple(group.supports)
+        admitted = admitted_by_handle.get(handle)
+        if admitted is not None:
+            # VERBATIM, and this is the load-bearing line of CHAOS-3646.
+            # ``canonical_bypass_offenders`` digests the whole payload against
+            # the frame's copy, so the entry has to be the admitted ref
+            # itself, not a re-derivation that agrees with it today. A
+            # re-derivation would drift the first time either side changed a
+            # default, and the seam would report a bypass that never happened
+            # -- or, far worse, the arm could substitute a field and the only
+            # thing standing between that and a consumer would be whether the
+            # re-derivation happened to reproduce it.
+            evidence_entries.append(
+                InvestigationEvidenceEntry(
+                    evidence=admitted,
+                    source_class=group.source_class,
+                    supports_path_ids=(),
+                    supports_entity_ids=entry_supports,
+                    supports_driver_ids=(),
+                    supports_subject_ids=tuple(
+                        subject
+                        for subject in entry_supports
+                        if subject in candidate_ids
+                    ),
+                    relevance=RelevanceState.UNKNOWN,
+                )
+            )
+            continue
         evidence_entries.append(
             InvestigationEvidenceEntry(
                 evidence={
@@ -1673,13 +1773,35 @@ def build_packet(
         + cohort_authorization_filtered
         + len(unattributable)
     )
-    if filtered_total:
+    #: CHAOS-3646. Records the canonical evidence service declined to admit,
+    #: carried in the SAME limitation as the authorization-filtered count.
+    #: The frozen vocabulary has one member for withheld material and
+    #: ``EvidenceCoverage`` refuses a repeated kind, so a second limitation is
+    #: not available and adding a member would be a contract change this lane
+    #: may not make. Two clauses rather than one number, so the two facts stay
+    #: distinguishable: the count is the ARM withholding what it may not name,
+    #: the clause is the CANONICAL SERVICE declining a record the arm asked
+    #: about, and a reader must not have to guess which happened.
+    admission_clause = (
+        f"; a further {len(admission_refused)} source records the traversal "
+        "reached were not admitted by the canonical evidence service and are "
+        "not cited by this packet"
+        if admission_refused
+        else ""
+    )
+    if filtered_total or admission_refused:
         limitations.append(
             PacketLimitation(
                 kind=PacketLimitationKind.AUTHORIZATION_FILTERED,
+                # Implicit concatenation, not ``+``: the CHAOS-3617
+                # no-arithmetic guard scans these modules for unnamed
+                # operators and a ``+`` joining two strings here reads to it
+                # exactly like a derived number. Observed failing before this
+                # form was chosen.
                 detail=(
                     f"{filtered_total} candidate results were outside the "
-                    "caller's authorized scope and were removed before ranking"
+                    f"caller's authorized scope and were removed before "
+                    f"ranking{admission_clause}"
                 ),
             )
         )

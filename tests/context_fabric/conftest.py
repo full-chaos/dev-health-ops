@@ -48,6 +48,7 @@ def _flags_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED",
         "CONTEXT_FABRIC_GRAPH_READ_ENABLED",
+        "CONTEXT_FABRIC_GRAPH_EVIDENCE_ADMISSION_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
     assert os.getenv("CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED") is None

@@ -41,7 +41,14 @@ from .scope_service import (
 SEARCH_EVIDENCE_VERSION = "search-evidence.v1"
 EVIDENCE_RANKING_VERSION = "evidence-ranking.v1"
 GET_EVIDENCE_VERSION = "get-evidence.v1"
+#: CHAOS-3646. Versioned like the other two entry points, because the
+#: admission result is a shape a trial artifact reads.
+ADMIT_EVIDENCE_VERSION = "admit-evidence.v1"
 MAX_SEARCH_REFS = 25
+#: The same bound as a search page. An admission round is a discovery layer
+#: asking "resolve these for me", and a caller that could ask for more than a
+#: search can return would be using admission to enumerate.
+MAX_ADMISSION_CANDIDATES = 25
 MAX_EXPANSION_REFS = 10
 MAX_EXPANSION_BYTES = 64 * 1024
 MAX_SOURCE_CANDIDATES = 100
@@ -102,6 +109,74 @@ class EvidenceSearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenceCandidate:
+    """A record a discovery layer POINTS AT, carrying no authority of its own.
+
+    CHAOS-3646. The CHAOS-3619 trial recorded a canonical bypass as an
+    architectural fact: the graph arm can discover authentic world evidence
+    it cannot cite, because the frame's canonical set does not contain it and
+    nothing could put it there. This type is one half of the path across
+    that boundary, and **its field set is the guarantee**.
+
+    There is no ``evidence_ref_id`` here, and no ``display_label``,
+    ``citation_text``, ``observed_at``, ``confidence``, ``provenance`` or
+    ``freshness``. A discovery layer therefore cannot hand across a handle it
+    minted or a claim about the record's content, because the dataclass has
+    nowhere to put one -- every field a reader would take as canonical comes
+    back from the source during resolution, not from the candidate. That is
+    checked by a field-set test rather than left to review, because "the
+    graph never mints authority" is the whole property and a widened
+    dataclass would repeal it silently.
+
+    :attr:`locator` is the SOURCE's own identity for the record, and it is
+    deliberately distinct from :attr:`entity_id`, which is the entity the
+    record is *about*. CHAOS-3633 is exactly this distinction going wrong:
+    two records of one kind about one entity are two records, and a candidate
+    that could not tell them apart would admit whichever one the source
+    happened to return.
+    """
+
+    source_system: str
+    entity_type: str
+    entity_id: str
+    locator: str
+    repository_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceAdmission:
+    """One candidate's outcome. ``evidence`` is ``None`` unless admitted."""
+
+    candidate: EvidenceCandidate
+    state: EvidenceAvailability
+    evidence: DevEvidenceRef | None = None
+    warning: str | None = None
+
+    @property
+    def admitted(self) -> bool:
+        return self.evidence is not None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceAdmissionResult:
+    """Every candidate's outcome, in the order they were submitted.
+
+    One entry per candidate, always. A refused candidate that simply vanished
+    from the result would be indistinguishable from one that was never
+    submitted, and a caller cannot disclose a drop it cannot see.
+    """
+
+    admissions: tuple[EvidenceAdmission, ...]
+    query_version: str = ADMIT_EVIDENCE_VERSION
+
+    @property
+    def admitted(self) -> tuple[DevEvidenceRef, ...]:
+        return tuple(
+            item.evidence for item in self.admissions if item.evidence is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceExpansion:
     evidence: DevEvidenceRef
     state: EvidenceAvailability
@@ -135,6 +210,43 @@ class EvidenceSourceAdapter(Protocol):
         org_id: str,
         scope: ScopeResolution,
         evidence: DevEvidenceRef,
+    ) -> EvidenceRecord | None: ...
+
+
+class EvidenceCandidateResolver(Protocol):
+    """A source that can resolve a discovery layer's locator to its record.
+
+    CHAOS-3646, and deliberately a **separate** protocol from
+    :class:`EvidenceSourceAdapter` rather than a method added to it. Every
+    existing adapter answers "search my records" and "expand this ref I
+    already minted"; neither question is "here is an identity someone else
+    discovered -- do you have it". Widening the existing protocol would make
+    every adapter in the tree claim an ability it does not have, and a
+    default implementation returning ``None`` would make an unimplemented
+    source indistinguishable from a genuinely absent record.
+
+    ``EvidenceRecord | None`` is the whole contract: the source either has the
+    record or it does not, and the discovery layer's belief about it is never
+    consulted. A resolver that echoed its input back would be the graph
+    minting authority through a canonical-looking door, which is why the
+    trial's resolver reads the world rather than the projection.
+    """
+
+    # A read-only ``@property``, not a plain annotation, for the reason
+    # ``IdentityPayload`` above gives: a plain Protocol annotation demands a
+    # SETTABLE attribute, which a frozen dataclass resolver is not. Read-only
+    # is also the honest shape -- nothing may reassign a resolver's source
+    # system -- and it still admits the mutable-attribute adapters that
+    # ``EvidenceSourceAdapter`` describes.
+    @property
+    def source_system(self) -> str: ...
+
+    async def resolve(
+        self,
+        *,
+        org_id: str,
+        scope: ScopeResolution,
+        candidate: EvidenceCandidate,
     ) -> EvidenceRecord | None: ...
 
 
@@ -335,15 +447,27 @@ class EvidenceService:
         signer: EvidenceReferenceSigner,
         native_adapters: Sequence[EvidenceSourceAdapter],
         acr_adapter: EvidenceSourceAdapter | None = None,
+        candidate_resolvers: Sequence[EvidenceCandidateResolver] = (),
     ) -> None:
         adapters = [*native_adapters]
         if len({adapter.source_system for adapter in adapters}) != len(adapters):
             raise ValueError("Evidence adapter source systems must be unique")
+        resolvers = [*candidate_resolvers]
+        if len({resolver.source_system for resolver in resolvers}) != len(resolvers):
+            raise ValueError(
+                "Evidence candidate resolver source systems must be unique"
+            )
         self._entitlement = entitlement
         self._authorizer = authorizer
         self._signer = signer
         self._native = tuple(adapters)
         self._acr = acr_adapter
+        #: CHAOS-3646. Empty by default, and that default is a STRUCTURAL
+        #: off-switch rather than a convenience: no existing construction of
+        #: this service passes the argument, so :meth:`admit` can only refuse
+        #: in every process that ships today -- with the graph arm's flag on
+        #: or off. The flag is the second lock, not the only one.
+        self._resolvers = {resolver.source_system: resolver for resolver in resolvers}
 
     async def search(
         self,
@@ -513,6 +637,136 @@ class EvidenceService:
                 )
             )
         return EvidenceExpansionResult(tuple(expansions), total)
+
+    async def admit(
+        self,
+        *,
+        org_id: str,
+        permission_fingerprint: str,
+        scope_request: ScopeResolveRequest,
+        candidates: Sequence[EvidenceCandidate],
+    ) -> EvidenceAdmissionResult:
+        """Resolve, authorize and mint handles for discovered candidates.
+
+        CHAOS-3646. The bounded admission path: a discovery layer -- the
+        CHAOS-3617 graph arm is the first -- points at records it believes
+        exist, and **this service** decides whether they do, whether this
+        principal may see them, and what their canonical identity is. The
+        discovery layer never mints, and an unresolvable or unauthorized
+        candidate is refused in the vocabulary refusals already use.
+
+        Order is load-bearing: resolve, then **mint, then authorize**.
+        Authorizing before minting would need a second authorization surface
+        shaped like :meth:`_authorize_expansion` but taking a candidate, and
+        two authorization surfaces over one decision is the defect class this
+        whole seam exists to prevent. Minting first means authorization runs
+        over exactly the object the caller would receive, through exactly the
+        code path expansion uses -- called, not copied.
+
+        Nothing here relaxes a check, and one existing check is made to do
+        real work rather than duplicated. :meth:`_authorize_expansion` runs
+        the signature comparison, the ``valid_entity_ids`` containment check,
+        and the separate repository re-resolution with organization fallback
+        disabled, all unmodified.
+
+        The subtlety is what ``valid_entity_ids`` is set to. ``search`` mints
+        with the whole authorized set, which makes the containment check
+        compare a set to itself -- harmless there, because an adapter is
+        handed the scope and returns records within it. Admission mints with
+        **the record's own entity**, so the same unmodified check becomes the
+        real question: is the entity this record is about one this principal
+        may see? A resolver that returned a record outside the grant is
+        refused by the existing code path rather than by a second one written
+        here, and the emitted ref also stops claiming validity for entities
+        that have nothing to do with it.
+        """
+
+        await self._entitlement.require(org_id)
+        if len(candidates) > MAX_ADMISSION_CANDIDATES:
+            raise ValueError(
+                f"At most {MAX_ADMISSION_CANDIDATES} evidence candidates may be "
+                "admitted in one round"
+            )
+
+        admissions: list[EvidenceAdmission] = []
+        for candidate in candidates:
+            resolver = self._resolvers.get(candidate.source_system)
+            if resolver is None:
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=EvidenceAvailability.UNCONFIGURED,
+                        warning="source_unconfigured",
+                    )
+                )
+                continue
+            # Re-resolved for EVERY candidate, exactly as ``expand`` does and
+            # for the same reason: one denied locator must not inherit
+            # another's successful authorization decision.
+            resolution = await self._authorizer.resolve(
+                org_id, permission_fingerprint, scope_request
+            )
+            if not _authorized_outcome(resolution):
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=EvidenceAvailability.UNAUTHORIZED,
+                        warning="not_found",
+                    )
+                )
+                continue
+            try:
+                record = await resolver.resolve(
+                    org_id=org_id, scope=resolution, candidate=candidate
+                )
+            except Exception:
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=EvidenceAvailability.UNAVAILABLE,
+                        warning="source_unavailable",
+                    )
+                )
+                continue
+            if record is None:
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=EvidenceAvailability.NO_MATCHES,
+                        warning="evidence_deleted_or_unavailable",
+                    )
+                )
+                continue
+            # Minted over the record the SOURCE returned, never over the
+            # candidate. A candidate that pointed at one record and got
+            # another back still yields a truthful handle, because the handle
+            # describes what the source actually had.
+            #
+            # ``valid_entity_ids`` is the record's OWN entity -- see the
+            # docstring. That single-element set is what turns the existing
+            # containment check in ``_authorize_expansion`` from a tautology
+            # into the admission path's entity authorization.
+            ref = self._to_ref(org_id, record, valid_entity_ids=(record.entity_id,))
+            state, warning = await self._authorize_expansion(
+                org_id,
+                permission_fingerprint,
+                scope_request,
+                resolution,
+                ref,
+            )
+            if state is not EvidenceAvailability.AVAILABLE:
+                admissions.append(
+                    EvidenceAdmission(candidate=candidate, state=state, warning=warning)
+                )
+                continue
+            admissions.append(
+                EvidenceAdmission(
+                    candidate=candidate,
+                    state=EvidenceAvailability.AVAILABLE,
+                    evidence=ref,
+                )
+            )
+        return EvidenceAdmissionResult(tuple(admissions))
 
     async def _authorize_expansion(
         self,

@@ -14,6 +14,7 @@ from .contracts import DevContractVersions, DevMessageRequest
 from .contracts_v2.base import QuestionIntentID
 from .contracts_v2.plan import DevInvestigationPlan
 from .investigation_plans import PlanExecutor
+from .investigation_shadow import InvestigationPacketProducer, InvestigationShadow
 from .orchestrator import (
     DevOrchestrator,
     EventSink,
@@ -73,6 +74,13 @@ class BoundedDevRuntime:
     #: without this it would leak a connection on every request once the
     #: shadow flag is enabled.
     qua_shadow_provider: AgentLLMProvider | None = None
+    #: CHAOS-3618 PR 2. ``None`` on both is the flag-off path, and they are
+    #: separate fields on purpose: the seam is arm-neutral machinery and the
+    #: producer is one arm, so wiring a second arm later touches only the
+    #: producer. Neither is constructed unless its flag is on, so "off" is
+    #: the absence of an object rather than a branch inside one.
+    investigation_shadow: InvestigationShadow | None = None
+    investigation_packet_producer: InvestigationPacketProducer | None = None
 
     async def run(
         self,
@@ -102,6 +110,8 @@ class BoundedDevRuntime:
             plan_executor=self.plan_executor,
             narrative_provider=self.narrative_provider,
             qua_shadow=self.qua_shadow,
+            investigation_shadow=self.investigation_shadow,
+            investigation_packet_producer=self.investigation_packet_producer,
         )
         return await orchestrator.run(
             request=request,

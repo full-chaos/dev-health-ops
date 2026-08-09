@@ -129,8 +129,48 @@ _LIST_SEPARATORS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: C0 control characters, minus the unit separator handled above with its own
+#: message. Refused for two independent reasons, either of which is enough:
+#:
+#: 1. the live store silently DROPS NUL from stored values, so the two readers
+#:    disagree about what a source supplied -- the same "copied verbatim" lie
+#:    the separator bytes told, with no error anywhere;
+#: 2. :mod:`.identity` joins its hash inputs on NUL precisely so that
+#:    ``("a", "b:c")`` and ``("a:b", "c")`` cannot collide. A canonical id
+#:    containing NUL defeats exactly that guarantee, and two different
+#:    relationships can then be addressed identically.
+#:
+#: No provider identifier or human label contains a C0 control character, so
+#: this refuses nothing real.
+_CONTROL_CHARACTERS = frozenset(chr(code) for code in range(0x20)) | {chr(0x7F)}
+
+
+def _reject_control_characters(where: str, field: str, value: str) -> None:
+    """Raise if a value carries a C0 control character."""
+
+    found = sorted(_CONTROL_CHARACTERS & set(value))
+    if not found:
+        return
+    codes = ", ".join(f"0x{ord(char):02x}" for char in found)
+    raise ProjectionError(
+        f"{where} {field} contains control characters ({codes}). The live "
+        "store drops some of them silently -- so the two readers disagree "
+        "about what the source supplied, with no error anywhere -- and NUL "
+        "additionally defeats the NUL-separated hash inputs identity.py "
+        "relies on to keep two different relationships from sharing one "
+        "address. Refused rather than stripped: stripping is the silent "
+        "rewrite this exists to prevent"
+    )
+
+
 def _reject_separator_bytes(where: str, field: str, value: str) -> None:
-    """Raise if a value carries a byte the storage encoding joins on."""
+    """Raise if a value carries a byte the storage encoding joins on.
+
+    Separators are checked BEFORE control characters, and the order matters
+    for the error message rather than the outcome: US (0x1f) is both, and
+    "this is the byte we join on" tells the reader the actual mechanism,
+    where "this is a control character" would leave them guessing why.
+    """
 
     for separator, name in _LIST_SEPARATORS:
         if separator in value:
@@ -142,6 +182,7 @@ def _reject_separator_bytes(where: str, field: str, value: str) -> None:
                 "escaped: an escaping scheme is a second encoding to keep in "
                 "sync, and its first drift would look like data"
             )
+    _reject_control_characters(where, field, value)
 
 
 #: How an alias kind becomes a match signal the packet can cite. Total over
@@ -284,6 +325,7 @@ def _validate_attributes(
 
 
 def _validate_label(where: str, label: str) -> None:
+    _reject_control_characters(where, "label", label)
     if not label.strip():
         raise ProjectionError(f"{where} has an empty display label")
     if len(label) > MAX_ATTRIBUTE_CHARS:
@@ -329,6 +371,7 @@ def _check_orientation(record: RelationshipRecord) -> None:
 
 def _entity_node(record: EntityRecord, partition: str) -> GraphNode:
     where = f"entity {record.canonical_id!r}"
+    _reject_control_characters(where, "canonical_id", record.canonical_id)
     _validate_label(where, record.display_label)
     _validate_attributes(where, record.attributes)
     for alias in record.aliases:
@@ -355,6 +398,7 @@ def _entity_node(record: EntityRecord, partition: str) -> GraphNode:
 
 def _observation_node(record: ObservationRecord, partition: str) -> GraphNode:
     where = f"observation {record.canonical_id!r}"
+    _reject_control_characters(where, "canonical_id", record.canonical_id)
     _validate_label(where, record.title)
     _validate_attributes(where, record.attributes)
     for repository_id in record.repository_ids:

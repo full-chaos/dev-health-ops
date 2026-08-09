@@ -613,7 +613,14 @@ def build_packet(
         authorization_filtered_count=0,
         entities_truncated=readout.entities_truncated,
         paths_truncated=readout.paths_truncated,
-        truncation_reason=readout.truncation_reason,
+        # The per-flag reason, never the first-wins convenience property.
+        # Fixing the readout alone MOVED this defect instead of killing it:
+        # both sections went on reading `truncation_reason`, so once a path
+        # bound and an evidence bound fired in the same read, related_context
+        # and evidence_coverage both reported whichever came first.
+        truncation_reason=(
+            readout.entities_truncation_reason or readout.paths_truncation_reason
+        ),
     )
     driver_analysis = DriverAnalysis(
         schema_version="ask_dev_driver_analysis.v1",
@@ -632,9 +639,7 @@ def build_packet(
         clarification_needs=(),
         authorization_filtered_count=0,
         evidence_truncated=readout.evidence_truncated,
-        truncation_reason=(
-            readout.truncation_reason if readout.evidence_truncated else None
-        ),
+        truncation_reason=readout.evidence_truncation_reason,
     )
     versions = InvestigationVersions(
         schema_version="ask_dev_investigation_versions.v1",

@@ -53,10 +53,14 @@ __all__ = [
 #: actually carries multi-value attributes through a real store rather than
 #: only single-valued ones -- which is how the alias-splitting defect stayed
 #: invisible: with one alias per kind, a bad separator round trips fine.
+#: Every value here IS an alias of ``proj_nightfall_migration``, so a test can
+#: assert the whole set survives the round trip as a subset. The earlier
+#: version listed a value that was not an alias at all, which is what made the
+#: assertion using it fall through to something always true.
 SEPARATOR_PROBE_VALUES: tuple[str, ...] = (
-    "auth-gateway",
     "auth gateway rewrite",
     "NFM-2",
+    "LIN-PRJ-4412",
 )
 
 ALPHA_ORG = "org_alpha"
@@ -135,6 +139,11 @@ def alpha_batch() -> IngestionBatch:
             SourceClass.WORK_GRAPH,
             aliases=(
                 AliasRecord(kind=AliasKind.ALIAS, value="the auth work"),
+                # Hyphens, spaces and dots are the characters real provider
+                # identifiers actually use, and sit immediately next to the
+                # bytes the arm refuses. They must survive untouched, or the
+                # refusal has become a ban on real data.
+                AliasRecord(kind=AliasKind.ALIAS, value="auth-gateway v1.2"),
                 # A second alias of the SAME kind: this is what makes the
                 # multi-value join encoding real in the fixture world. With
                 # one value per kind the separator never appears in a stored

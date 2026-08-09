@@ -486,8 +486,14 @@ class TestSeparatorBytesAreRefused:
     def test_values_adjacent_to_the_boundary_are_accepted(self) -> None:
         """The negative control, and the reason this is a refusal not a ban.
 
-        Real provider labels contain spaces, dashes and slashes. A guard that
-        rejected those would be rejecting the data the arm exists to ingest.
+        Real provider identifiers contain spaces, dashes and dots and sit
+        immediately next to the bytes the arm refuses. A guard that rejected
+        those would be banning the data the arm exists to ingest.
+
+        The first version of this assertion was ``probe & stored or stored``,
+        which falls through to a non-empty set and is true for any projection
+        at all -- a vacuous assertion introduced by the commit that closed a
+        vacuous-assertion finding. Subset, not intersection.
         """
 
         from dev_health_ops.context_fabric.graph_arm import fixtures
@@ -499,7 +505,55 @@ class TestSeparatorBytesAreRefused:
             if item.canonical_id == "proj_nightfall_migration"
         )
         stored = {alias.value for alias in node.aliases}
-        assert set(fixtures.SEPARATOR_PROBE_VALUES) & stored or stored
+        assert set(fixtures.SEPARATOR_PROBE_VALUES) <= stored, (
+            set(fixtures.SEPARATOR_PROBE_VALUES) - stored
+        )
+
+    @pytest.mark.parametrize("control", ["\x00", "\x01", "\x1e", "\x7f"])
+    def test_a_control_character_is_refused(self, control: str) -> None:
+        """N10. Two independent reasons, either sufficient.
+
+        The live store silently DROPS NUL from a stored value, so the two
+        readers disagree about what the source supplied with no error
+        anywhere. And ``identity`` joins its hash inputs on NUL precisely so
+        ``("a", "b:c")`` and ``("a:b", "c")`` cannot collide -- a canonical id
+        containing NUL defeats exactly that guarantee.
+        """
+
+        batch = IngestionBatch(
+            org_id="org_alpha",
+            entities=(
+                EntityRecord(
+                    org_id="org_alpha",
+                    kind=_K.PROJECT,
+                    canonical_id="proj_x",
+                    display_label=f"Nightfall{control}Migration",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=_NOW,
+                ),
+            ),
+        )
+        with pytest.raises(ProjectionError, match="control characters"):
+            build_projection(batch)
+
+    def test_a_control_character_in_a_canonical_id_is_refused(self) -> None:
+        """The half that defeats the identity guarantee rather than the store."""
+
+        batch = IngestionBatch(
+            org_id="org_alpha",
+            entities=(
+                EntityRecord(
+                    org_id="org_alpha",
+                    kind=_K.PROJECT,
+                    canonical_id="proj\x00smuggled",
+                    display_label="X",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=_NOW,
+                ),
+            ),
+        )
+        with pytest.raises(ProjectionError, match="control characters"):
+            build_projection(batch)
 
     def test_the_fixture_world_carries_multiple_aliases_of_one_kind(self) -> None:
         """Anti-vacuity for the live differential.

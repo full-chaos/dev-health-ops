@@ -336,6 +336,53 @@ class TestBudgets:
             "the two flags collapsed back onto one reason"
         )
 
+        # The PACKET, not just the readout. Asserting only on the readout is
+        # exactly why the first fix MOVED this defect instead of killing it:
+        # the readout gained per-flag reasons while both packet sections went
+        # on reading the first-wins convenience property, so evidence_coverage
+        # reported path_budget.
+        from dev_health_ops.api.dev.evidence_service import EvidenceReferenceSigner
+        from dev_health_ops.api.dev.investigation_contract import (
+            ComparisonShape,
+            QuestionFamilyID,
+        )
+        from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+            JobContext,
+            TrialContext,
+            build_packet,
+        )
+
+        packet = build_packet(
+            readout=readout,
+            job=JobContext(
+                job_id="job_reasons",
+                question_family=QuestionFamilyID("project_status_drivers"),
+                job_statement="Status of the Nightfall Migration project.",
+                comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+                window_start=fixtures.WINDOW_START,
+                window_end=fixtures.WINDOW_END,
+            ),
+            watermark=IndexWatermark(
+                indexed_through=fixtures.WINDOW_END,
+                projected_at=fixtures.WINDOW_END,
+                records_indexed=1,
+            ),
+            signer=EvidenceReferenceSigner(
+                "chaos-3617-test-signing-secret-not-a-real-key"
+            ),
+            trial=TrialContext(run_id="4f9a2c1e-1111-4222-8333-444455556666"),
+            produced_at=_WINDOW_END,
+        )
+        assert (
+            packet.evidence_coverage.truncation_reason
+            is TruncationReason.EVIDENCE_BUDGET
+        ), "the evidence section reported a reason that was not the evidence bound"
+        assert packet.related_context.truncation_reason is TruncationReason.PATH_BUDGET
+        assert (
+            packet.related_context.truncation_reason
+            != packet.evidence_coverage.truncation_reason
+        )
+
     def test_the_default_read_path_discloses_when_it_stops_early(self) -> None:
         """The N2 defect: silence on the path nobody configures.
 
@@ -352,6 +399,88 @@ class TestBudgets:
         assert shallow.entities_truncated is True, (
             "entities beyond the ceiling were reachable and authorized and "
             "were not returned, so the entity set is partial too"
+        )
+
+    def test_a_diamond_does_not_claim_missing_entities(self) -> None:
+        """N12: the entity flag fires only when an entity is actually missing.
+
+        In a diamond, every entity beyond the ceiling is already reached by
+        another branch, so an unfollowed edge costs an *explanation*, not a
+        result. Flagging entity truncation there over-reports -- and a flag
+        that over-reports is read as noise exactly as fast as one that
+        under-reports.
+        """
+
+        from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+        from dev_health_ops.api.dev.investigation_contract import RelationshipType
+        from dev_health_ops.context_fabric.graph_arm.records import (
+            CanonicalRef,
+            EntityRecord,
+            IngestionBatch,
+            RelationshipRecord,
+        )
+        from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
+
+        now = fixtures.WINDOW_END
+
+        def entity(kind, canonical_id):
+            return EntityRecord(
+                org_id="org_alpha",
+                kind=kind,
+                canonical_id=canonical_id,
+                display_label=canonical_id,
+                source_class=SourceClass.WORK_GRAPH,
+                observed_at=now,
+            )
+
+        def owns(project, team):
+            return RelationshipRecord(
+                org_id="org_alpha",
+                source=CanonicalRef(kind=GraphEntityKind.PROJECT, canonical_id=project),
+                relationship=RelationshipType.OWNED_BY_TEAM,
+                target=CanonicalRef(kind=GraphEntityKind.TEAM, canonical_id=team),
+                source_class=SourceClass.WORK_GRAPH,
+                observed_at=now,
+            )
+
+        # Two projects, both owned by both teams. From proj_a, depth 1 reaches
+        # both teams and depth 2 reaches proj_b via either -- so at depth 2
+        # every entity is returned while edges remain unfollowed.
+        batch = IngestionBatch(
+            org_id="org_alpha",
+            entities=(
+                entity(GraphEntityKind.PROJECT, "proj_a"),
+                entity(GraphEntityKind.PROJECT, "proj_b"),
+                entity(GraphEntityKind.TEAM, "team_1"),
+                entity(GraphEntityKind.TEAM, "team_2"),
+            ),
+            relationships=(
+                owns("proj_a", "team_1"),
+                owns("proj_a", "team_2"),
+                owns("proj_b", "team_1"),
+                owns("proj_b", "team_2"),
+            ),
+        )
+        readout = asyncio.run(
+            ProjectionGraphReader(build_projection(batch)).neighbourhood(
+                org_id="org_alpha",
+                seed_canonical_ids=["proj_a"],
+                authorized_entity_ids=("proj_a", "proj_b", "team_1", "team_2"),
+                max_hops=2,
+                budgets=TrialBudgets(max_paths_per_entity=100),
+            )
+        )
+        assert {item.canonical_id for item in readout.entities} == {
+            "proj_a",
+            "proj_b",
+            "team_1",
+            "team_2",
+        }
+        assert readout.entities_truncated is False, (
+            "every entity was returned, so nothing about the entity set is partial"
+        )
+        assert readout.paths_truncated is True, (
+            "explanations were still dropped, and that half must stay disclosed"
         )
 
     def test_a_walk_that_exhausts_the_graph_is_not_marked_truncated(self) -> None:

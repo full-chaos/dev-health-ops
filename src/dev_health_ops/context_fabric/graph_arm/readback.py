@@ -364,6 +364,9 @@ def _traverse(
     # result missing reachable authorized entities must not read complete
     # whichever number produced the ceiling.
     declined_with_edges_remaining = False
+    #: Narrower: at least one entity beyond the ceiling was never reached by
+    #: ANY branch. Only this justifies the entity flag.
+    declined_leaving_entities_unreached = False
 
     for seed in reachable_seeds:
         reached[seed] = adjacency.entities[seed]
@@ -403,14 +406,26 @@ def _traverse(
             # Stopped at the ceiling. Only a disclosure if this prefix still
             # had somewhere to go: a walk that ran out of graph is complete,
             # and flagging it would make the flag meaningless.
-            if any(
-                other in adjacency.entities
+            # Only an UNREACHED neighbour means the entity set is short. In a
+            # diamond, every entity beyond the ceiling is already reached by
+            # another branch, so flagging on any unfollowed edge claimed
+            # entities were missing when none were -- and a flag that
+            # over-reports is read as noise exactly as fast as one that
+            # under-reports.
+            unfollowed = [
+                other
+                for _, other, *_ in _ordered_edges(adjacency, current)
+                if other in adjacency.entities
                 and other in authorized
                 and other != current
                 and all(step.from_canonical_id != other for step in steps)
-                for _, other, *_ in _ordered_edges(adjacency, current)
-            ):
+            ]
+            if unfollowed:
+                # Paths are short either way: an unfollowed edge is an
+                # explanation not returned.
                 declined_with_edges_remaining = True
+                if any(other not in reached for other in unfollowed):
+                    declined_leaving_entities_unreached = True
             continue
         for (
             relationship,
@@ -524,12 +539,13 @@ def _traverse(
         evidence_truncated = True
 
     if declined_with_edges_remaining:
-        # Entities beyond the ceiling were reachable and authorized and were
-        # not returned, so the ENTITY set is partial too -- not only the paths.
-        entities_truncated = True
-        entities_reason = entities_reason or TruncationReason.PATH_BUDGET
+        # An unfollowed edge is always an explanation not returned.
         paths_truncated = True
         paths_reason = paths_reason or TruncationReason.PATH_BUDGET
+    if declined_leaving_entities_unreached:
+        # ...but only an entity no branch reached makes the ENTITY set partial.
+        entities_truncated = True
+        entities_reason = entities_reason or TruncationReason.PATH_BUDGET
 
     observed_classes = (
         {entity.source_class for entity in reached.values()}

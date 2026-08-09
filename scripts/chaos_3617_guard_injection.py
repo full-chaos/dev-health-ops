@@ -389,6 +389,56 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="packet-sections-share-one-truncation-reason",
+        defect=(
+            "the packet's evidence section reports the path bound's reason "
+            "when both fire -- the defect the readout-only fix MOVED rather "
+            "than killed, because both sections kept reading the first-wins "
+            "convenience property"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        truncation_reason=readout.evidence_truncation_reason,",
+        replacement="        truncation_reason=readout.truncation_reason,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
+            "test_each_flag_carries_its_own_reason_when_two_bounds_fire",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="control-characters-accepted",
+        defect=(
+            "a NUL is silently dropped by the live store (so the readers "
+            "disagree about what the source supplied) and defeats the "
+            "NUL-separated hash inputs identity.py relies on to keep two "
+            "relationships from sharing one address"
+        ),
+        path=SRC / "projection.py",
+        anchor="    found = sorted(_CONTROL_CHARACTERS & set(value))",
+        replacement="    found = []",
+        tests=(
+            f"{TESTS}/test_chaos_3617_structured_ingestion.py::"
+            "TestSeparatorBytesAreRefused::test_a_control_character_is_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="entity-flag-over-reports-on-a-diamond",
+        defect=(
+            "the entity-truncation flag fires whenever an edge was left "
+            "unfollowed, even when every entity was returned by another "
+            "branch -- over-reporting reads as noise as fast as silence"
+        ),
+        path=SRC / "readback.py",
+        anchor="                if any(other not in reached for other in unfollowed):",
+        replacement="                if True:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_operational_controls.py::TestBudgets::"
+            "test_a_diamond_does_not_claim_missing_entities",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

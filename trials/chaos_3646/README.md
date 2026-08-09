@@ -141,11 +141,22 @@ not a graph-versus-native difference: both arms run the same extraction.
    substitution; the admission path needs no change, because it never depends
    on *which* mint the service holds, only that the service holds it.
 4. **Not deployed subject extraction.** Production `extract_mentions` only
-   recognises a name adjacent to a kind noun, which reaches zero of these
+   recognises a name adjacent to a kind noun, which reaches **zero** of these
    cases. The sweep adds an untyped capitalized-span backstop, clearly marked
    in `sweep.py`, which is NOT production code and is not claimed as any
    arm's capability. Every one of the 17 reached cases is a case the deployed
    extraction would not reach.
+
+   **Re-verified on the post-CHAOS-3648 base rather than carried forward.**
+   CHAOS-3648 (#1622, unflagged) improved extraction recall on colloquial
+   singular-subject questions, so this claim had to be re-measured rather than
+   repeated; production extraction alone still reaches 0 of 41. The two are
+   disjoint by construction: 3648 recognises lowercase *definite descriptions*
+   ("the payroll migration"), while every case this sweep reaches is unlocked
+   by a capitalized proper name with no kind noun ("do we have enough people
+   on Lattice Search?"). The backstop is therefore still doing distinct work,
+   and the sweep's seeds and scores are byte-identical across that base
+   change.
 5. **Not a comparison with the native arm, in any direction.** There is no
    native column here and there must not be one. The CHAOS-3619 trial's
    native scored column is produced by `FakePlanExecutorRuntime` — the test

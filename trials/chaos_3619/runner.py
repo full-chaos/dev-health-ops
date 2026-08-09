@@ -43,6 +43,7 @@ from .budget import DEFAULT_PER_CASE_TIMEOUT_SECONDS, BudgetOutcome, hard_bound
 from .dispositions import CaseDisposition
 from .legs import LEG_B_NATIVE_LABEL, LegId
 from .records import ArmResult, DimensionOutcome, InterpretationDisposition
+from .unsound import deferred_for
 
 __all__ = [
     "ArmAttempt",
@@ -205,6 +206,14 @@ def arm_result(
     """
 
     disposition, detail = classify(attempt, budget)
+    # A fault this trial already expects carries its ticket; an unexpected
+    # one stays unattributed so it reads as the surprise it is rather than
+    # being absorbed into a known defect.
+    owner = ""
+    if disposition is CaseDisposition.ARM_FAULT:
+        known = deferred_for(detail)
+        if known is not None:
+            owner = known.owner
     scored: dict[str, Any] = {}
     if disposition is CaseDisposition.SCORED:
         assert attempt is not None and attempt.payload is not None
@@ -224,6 +233,7 @@ def arm_result(
         authorization_summary=scored.get("authorization_summary", ""),
         dimension_outcomes=scored.get("dimension_outcomes", ()),
         interpretation=interpretation,
+        limitation_owner=owner,
         figure_label=(
             LEG_B_NATIVE_LABEL
             if leg is LegId.JOB_HELD_CONSTANT and arm_id == "native"

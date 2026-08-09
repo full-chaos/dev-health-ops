@@ -228,3 +228,76 @@ class TestTheSweepClockIsPinned:
         from trials.chaos_3619.runner import deterministic_produced_at
 
         assert deterministic_produced_at([]) == world.TRIAL_NOW
+
+
+class TestDeferredDefectsAreAttributedButSurprisesAreNot:
+    """CHAOS-3634 is descoped, so its fault PERSISTS into the results.
+
+    A fault row carrying no owner is indistinguishable from an unexplained
+    crash. The important half is the other direction: an UNEXPECTED fault
+    must stay unattributed, or a genuine surprise gets quietly absorbed into
+    a known defect and stops looking like news.
+    """
+
+    def test_a_known_deferred_fault_carries_its_ticket(self) -> None:
+        result = arm_result(
+            arm_id="graph_assisted_shadow_arm",
+            leg=LegId.AS_DEPLOYED,
+            case_id="A05_person_level_bait",
+            attempt=ArmAttempt(
+                invoked=True,
+                payload=None,
+                fault=(
+                    "ValidationError: driver drv_metric_atlas_load is a "
+                    "capacity/staffing driver with no staffing_qualification"
+                ),
+            ),
+            budget=_ok(),
+        )
+        assert result.disposition == CaseDisposition.ARM_FAULT.value
+        assert result.limitation_owner == "CHAOS-3634"
+
+    def test_an_unexpected_fault_stays_unattributed(self) -> None:
+        """The half that matters more.
+
+        Attributing an unrecognised fault to a known ticket would hide a new
+        defect inside an accepted one -- the trial would report a surprise as
+        business as usual.
+        """
+
+        result = arm_result(
+            arm_id="graph_assisted_shadow_arm",
+            leg=LegId.AS_DEPLOYED,
+            case_id="S01",
+            attempt=ArmAttempt(
+                invoked=True, payload=None, fault="ZeroDivisionError: nobody expected"
+            ),
+            budget=_ok(),
+        )
+        assert result.disposition == CaseDisposition.ARM_FAULT.value
+        assert result.limitation_owner == "", (
+            "an unrecognised fault was attributed to a known ticket; a new "
+            "defect would be published as an accepted one"
+        )
+
+    def test_a_declared_gap_is_not_given_a_defect_owner(self) -> None:
+        """Attribution is scoped to faults. A gap is a capability result and
+        giving it a defect ticket would recast a boundary as a bug."""
+
+        result = arm_result(
+            arm_id="native",
+            leg=LegId.AS_DEPLOYED,
+            case_id="T01",
+            attempt=ArmAttempt(invoked=True, payload=None),
+            budget=_ok(),
+        )
+        assert result.disposition == CaseDisposition.ARM_DECLARED_GAP.value
+        assert result.limitation_owner == ""
+
+    def test_every_deferred_entry_names_a_ticket_and_a_transfer(self) -> None:
+        from trials.chaos_3619.unsound import DEFERRED_DEFECTS
+
+        for entry in DEFERRED_DEFECTS:
+            assert entry.owner.startswith("CHAOS-"), entry
+            assert entry.signature, "an empty signature matches every fault"
+            assert len(entry.note) > 80, "note too thin to act on"

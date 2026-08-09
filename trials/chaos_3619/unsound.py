@@ -37,6 +37,9 @@ from dataclasses import dataclass
 from dev_health_ops.api.dev.investigation_contract import ScoringDimensionID
 
 __all__ = [
+    "DEFERRED_DEFECTS",
+    "DeferredDefect",
+    "deferred_for",
     "UNSOUND_DIMENSIONS",
     "UnsoundDimension",
     "is_unsound",
@@ -96,3 +99,72 @@ def unsound_for(dimension_id: str, arm_id: str) -> UnsoundDimension | None:
 
 def is_unsound(dimension_id: str, arm_id: str) -> bool:
     return unsound_for(dimension_id, arm_id) is not None
+
+
+# ---------------------------------------------------------------------------
+# Defects that persist into the measured results
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredDefect:
+    """A defect this trial observed, ticketed, and did NOT get fixed.
+
+    From the descoping of CHAOS-3634 onward the standing rule is that a
+    defect this trial finds gets a disposition and a ticket, not a fix,
+    unless it blocks measurement itself. H3 was fixed because without it the
+    trial measured nothing; CHAOS-3634 is not, because the trial can measure
+    and report it.
+
+    That makes attribution load-bearing rather than tidy. **A fault row
+    carrying no owner is indistinguishable from an unexplained crash**, and a
+    reader of the artifact cannot tell a known, accepted boundary from a
+    surprise. This registry is what lets the runner attach the ticket to a
+    fault it already expects, so "observed and deferred" and "observed and
+    unexplained" stay different facts.
+
+    ``signature`` is matched as a substring of the recorded fault detail.
+    Deliberately not a case id: the same defect can surface on more than one
+    case (CHAOS-3634 was found from two directions on two different subjects),
+    and keying on the case would attribute it in one place and leave it
+    anonymous in the other.
+    """
+
+    signature: str
+    owner: str
+    note: str
+
+
+#: Defects known to persist into the measured sweep. **Empty is the healthy
+#: state**, and an entry here is a claim that the defect was seen, ticketed
+#: and deliberately not fixed -- never that it was tolerated silently.
+DEFERRED_DEFECTS: tuple[DeferredDefect, ...] = (
+    DeferredDefect(
+        signature="staffing_qualification",
+        owner="CHAOS-3634",
+        note=(
+            "the arm builds a capacity/staffing driver with no staffing "
+            "qualification and the frozen contract refuses it. Descoped from "
+            "the fix train, so it persists in these results: the bait "
+            "WORKED on the arm, and that is measured rather than transient. "
+            "Whoever implements the staffing-qualification derivation on the "
+            "path CHAOS-3621 chooses must re-verify BOTH directions -- "
+            "denial-of-packet and bait-acceptance -- because a fix for one "
+            "can leave the other intact"
+        ),
+    ),
+)
+
+
+def deferred_for(detail: str) -> DeferredDefect | None:
+    """The ticket owning a fault detail, if this trial already expects it.
+
+    Returns ``None`` for anything unrecognised, and that is the important
+    half: an unexpected fault must stay unattributed so it reads as the
+    surprise it is, rather than being quietly absorbed into a known one.
+    """
+
+    for entry in DEFERRED_DEFECTS:
+        if entry.signature in detail:
+            return entry
+    return None

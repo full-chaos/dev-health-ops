@@ -255,6 +255,16 @@ def render_report(payload: dict[str, Any]) -> str:
         )
         lines.append("")
 
+    # The binding's notes carry the disclosures that are true of the RUN
+    # rather than of any one case -- CHAOS-3645's partial re-run is the first
+    # of them. Rendered at the top and unconditionally, because a records file
+    # holding a slice of the corpus is indistinguishable by inspection from a
+    # full sweep that lost the rest, and a disclosure the report drops is a
+    # disclosure that does not exist for anyone reading the report.
+    for note in binding.get("notes", ()) or ():
+        lines.append(f"> **{note}**")
+        lines.append("")
+
     lines.append("## What produced this")
     lines.append("")
     lines.append("| binding | value |")
@@ -482,3 +492,33 @@ def _unsound_section() -> list[str]:
         )
     lines.append("")
     return lines
+
+
+def main() -> None:
+    """Render a records file to markdown.
+
+    A CLI, because the merged report was produced ad hoc and the next person
+    had to reconstruct the incantation from a commit message. ``--records``
+    rather than a hardcoded path so a partial re-run renders its own
+    addendum instead of overwriting the full sweep's document.
+    """
+
+    import argparse
+    from pathlib import Path
+
+    from .records import load_records
+
+    parser = argparse.ArgumentParser(
+        description="Render a CHAOS-3619 trial report from raw records"
+    )
+    parser.add_argument("--records", required=True, type=Path)
+    parser.add_argument("--out", required=True, type=Path)
+    args = parser.parse_args()
+    rendered = render_report(load_records(args.records))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(rendered)
+    print(f"rendered {len(rendered.splitlines())} lines to {args.out}")
+
+
+if __name__ == "__main__":
+    main()

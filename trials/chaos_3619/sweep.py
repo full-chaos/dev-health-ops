@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -277,19 +278,51 @@ async def _run_graph(
     """
 
     grant = frozenset(adapter.authorized_entity_ids_for(principal_id))
+    if question_family is None or comparison_shape is None:
+        # No analytical job, so no entry mode is selected and neither runs.
+        # ``discover_subjects`` is not called either: its withheld count is a
+        # disclosure about an investigation, and there was none.
+        return GraphOutcome(
+            attempt=None,
+            shadow=None,
+            seeds=(),
+            authorization_filtered_count=0,
+        )
+
+    watermark = IndexWatermark(
+        indexed_through=world.WINDOW_END,
+        projected_at=world.WINDOW_END,
+        records_indexed=len(projection.nodes),
+    )
+    reader = LiveGraphReader(store)
+
+    if comparison_shape is ComparisonShape.DISCOVERED_COHORT:
+        # CHAOS-3645, the second entry mode. The branch is chosen by the
+        # analytical job's SHAPE, not by whether extraction happened to come
+        # up empty. A mode that only ran as a fallback from failed extraction
+        # would still be an extraction-dependent capability, and these cases
+        # refuse precisely because no extractor can reach a question that
+        # contains no subject.
+        return await _run_graph_cohort(
+            reader=reader,
+            store=store,
+            projection=projection,
+            question=question,
+            case_id=case_id,
+            grant=grant,
+            leg=leg,
+            question_family=question_family,
+            comparison_shape=comparison_shape,
+            watermark=watermark,
+            produced_at=produced_at,
+        )
+
     discovery = graph_leg.discover_subjects(
         question=question,
         projection=projection,
         authorized_entity_ids=grant,
     )
     seeds = tuple(graph_leg.seeds_from(discovery))
-    if question_family is None or comparison_shape is None:
-        return GraphOutcome(
-            attempt=None,
-            shadow=None,
-            seeds=seeds,
-            authorization_filtered_count=discovery.authorization_filtered_count,
-        )
     if not seeds:
         return GraphOutcome(
             attempt=ArmAttempt(
@@ -302,7 +335,7 @@ async def _run_graph(
             authorization_filtered_count=discovery.authorization_filtered_count,
         )
 
-    readout = await LiveGraphReader(store).neighbourhood(
+    readout = await reader.neighbourhood(
         org_id=store.org_id,
         seed_canonical_ids=list(seeds),
         authorized_entity_ids=sorted(grant),
@@ -318,16 +351,129 @@ async def _run_graph(
         window_start=world.WINDOW_START,
         window_end=world.WINDOW_END,
         run_id=run_id_for(leg, case_id),
-        watermark=IndexWatermark(
-            indexed_through=world.WINDOW_END,
-            projected_at=world.WINDOW_END,
-            records_indexed=len(projection.nodes),
-        ),
+        watermark=watermark,
         signer=EvidenceReferenceSigner(SIGNING_SECRET),
         produced_at=produced_at,
         as_of=world.WINDOW_END,
         authorized_entity_ids=grant,
     )
+    return _graph_outcome(
+        outcome=outcome,
+        store=store,
+        leg=leg,
+        case_id=case_id,
+        seeds=seeds,
+    )
+
+
+async def _run_graph_cohort(
+    *,
+    reader: LiveGraphReader,
+    store: GraphArmStore,
+    projection: GraphProjection,
+    question: str,
+    case_id: str,
+    grant: frozenset[str],
+    leg: LegId,
+    question_family: QuestionFamilyID,
+    comparison_shape: ComparisonShape,
+    watermark: IndexWatermark,
+    produced_at: datetime,
+) -> GraphOutcome:
+    """One subjectless attempt: enumerate, read back live, assemble, submit.
+
+    ``question`` reaches this function for ONE purpose -- it is the packet's
+    ``job_statement``, the human sentence a reader needs in order to know what
+    the packet was answering. It is not parsed, matched or extracted from
+    here, and the cohort is already fully determined before it is used.
+    """
+
+    from dev_health_ops.context_fabric.graph_arm.cohort_discovery import (
+        UnsupportedCohortFamilyError,
+    )
+
+    try:
+        cohort = graph_leg.discover_cohort_for(
+            question_family=question_family,
+            projection=projection,
+            authorized_entity_ids=grant,
+            as_of=world.WINDOW_END,
+        )
+    except UnsupportedCohortFamilyError as raised:
+        # A named capability boundary, recorded as a refusal rather than as a
+        # gap: the arm decided, and it must be visible that it decided.
+        return GraphOutcome(
+            attempt=ArmAttempt(
+                invoked=True,
+                payload=None,
+                refusal=f"UnsupportedCohortFamilyError: {raised}",
+            ),
+            shadow=None,
+            seeds=(),
+            authorization_filtered_count=0,
+        )
+
+    seeds = tuple(graph_leg.cohort_seeds_from(cohort))
+    if not seeds:
+        return GraphOutcome(
+            attempt=ArmAttempt(
+                invoked=True,
+                payload=None,
+                refusal=(
+                    "no authorized cohort could be enumerated for this "
+                    "question family; the candidate universe was "
+                    f"{cohort.universe_size} entities and none of them shared "
+                    "a basis the graph can state with another"
+                ),
+            ),
+            shadow=None,
+            seeds=(),
+            authorization_filtered_count=cohort.authorization_filtered_count,
+        )
+
+    readout = await reader.neighbourhood(
+        org_id=store.org_id,
+        seed_canonical_ids=list(seeds),
+        authorized_entity_ids=sorted(grant),
+        max_hops=MAX_HOPS,
+    )
+    outcome = graph_leg.assemble_cohort_packet(
+        readout=readout,
+        cohort=cohort,
+        question_family=question_family,
+        comparison_shape=comparison_shape,
+        job_statement=question,
+        window_start=world.WINDOW_START,
+        window_end=world.WINDOW_END,
+        run_id=run_id_for(leg, case_id),
+        watermark=watermark,
+        signer=EvidenceReferenceSigner(SIGNING_SECRET),
+        produced_at=produced_at,
+    )
+    return _graph_outcome(
+        outcome=outcome,
+        store=store,
+        leg=leg,
+        case_id=case_id,
+        seeds=seeds,
+    )
+
+
+def _graph_outcome(
+    *,
+    outcome: graph_leg.GraphPacketOutcome,
+    store: GraphArmStore,
+    leg: LegId,
+    case_id: str,
+    seeds: tuple[str, ...],
+) -> GraphOutcome:
+    """Submit an emitted packet to the real seam and record the row.
+
+    Shared by both entry modes deliberately. The seam call is the part the
+    trial is measuring; a second copy of it beside the second entry mode is
+    how one mode ends up quietly skipping a submission the other makes.
+    """
+
     shadow = None
     if outcome.payload is not None:
         record = seam.InvestigationShadow(enabled=True).evaluate(
@@ -433,9 +579,10 @@ async def _sweep_leg(
     store: GraphArmStore,
     projection: GraphProjection,
     produced_at: datetime,
+    cases: Sequence[Any],
 ) -> list[CaseRecord]:
     records: list[CaseRecord] = []
-    for case in authored_cases():
+    for case in cases:
         native_budget = await _bounded(
             _run_native(
                 question=case.question,
@@ -547,8 +694,23 @@ async def _sweep_leg(
     return records
 
 
-async def run_sweep(out_path: Path) -> TrialRecordSet:
+async def run_sweep(
+    out_path: Path, *, only_comparison_shape: ComparisonShape | None = None
+) -> TrialRecordSet:
     """The whole sweep: ingest once, then both legs over all authored cases.
+
+    ``only_comparison_shape`` re-runs one slice of the corpus -- CHAOS-3645
+    re-runs the ``discovered_cohort`` families and nothing else. **A partial
+    sweep is disclosed in the binding's notes, not left for a reader to
+    notice**, because a records file holding fourteen cases is
+    indistinguishable by inspection from a full sweep that lost twenty-five,
+    and the notes travel with the file into the report. The cases that were
+    NOT run are named individually rather than counted: "25 cases were
+    skipped" tells a reader they are missing something and not what.
+
+    The corpus, the oracles and both arms are untouched by the filter. It
+    selects which authored cases run and changes nothing about how they run,
+    which is what makes the resulting rows comparable with the full sweep's.
 
     **The partition is the corpus's real tenant, and it has to be.** The
     obvious hygiene move -- a throwaway partition id, so two lanes sharing
@@ -565,7 +727,31 @@ async def run_sweep(out_path: Path) -> TrialRecordSet:
     config = _require_store_config()
     org_id = world.ORG_HELIO
     projection = build_projection(adapter.corpus_batch(world.ORG_HELIO))
+    # Derived from EVERY authored case, filtered or not. The emission
+    # timestamp is a property of the corpus rather than of the slice, and a
+    # partial re-run whose packets carry a different clock would diff against
+    # the full sweep in every row.
     produced_at = deterministic_produced_at(list(authored_cases()))
+
+    selected = [
+        case
+        for case in authored_cases()
+        if only_comparison_shape is None
+        or case.comparison_shape is only_comparison_shape
+    ]
+    if not selected:
+        raise RuntimeError(
+            f"no authored case has comparison shape {only_comparison_shape}; "
+            "refusing to write an empty artifact, which would read as a sweep "
+            "that measured nothing and found nothing wrong"
+        )
+    skipped = tuple(
+        sorted(
+            case.case_id
+            for case in authored_cases()
+            if case not in selected  # noqa: PLR6201 - CorpusCase is unhashable
+        )
+    )
 
     store = GraphArmStore.for_org(org_id, config=config)
     cases: list[CaseRecord] = []
@@ -582,6 +768,7 @@ async def run_sweep(out_path: Path) -> TrialRecordSet:
                     store=store,
                     projection=projection,
                     produced_at=produced_at,
+                    cases=selected,
                 )
             )
     finally:
@@ -605,6 +792,19 @@ async def run_sweep(out_path: Path) -> TrialRecordSet:
         if case.case_id not in authored_ids
     )
 
+    notes: tuple[str, ...] = ()
+    if only_comparison_shape is not None:
+        notes = (
+            f"PARTIAL SWEEP. Only cases whose declared comparison shape is "
+            f"{only_comparison_shape.value!r} were run: "
+            f"{len(selected)} of {len(list(authored_cases()))} authored cases, "
+            "both legs. This artifact is a re-run of one slice and is NOT a "
+            "replacement for the full sweep; any figure quoted from it must "
+            "name the slice.",
+            "Cases NOT run in this artifact, named rather than counted so a "
+            f"reader can tell absence from omission: {', '.join(skipped)}",
+        )
+
     records = TrialRecordSet(
         schema_version="chaos_3619_trial_results.v1",
         binding=collect_binding(
@@ -612,6 +812,7 @@ async def run_sweep(out_path: Path) -> TrialRecordSet:
             per_case_timeout_seconds=DEFAULT_PER_CASE_TIMEOUT_SECONDS,
             trial_store_backend=f"falkordb ({config.host}:{config.port})",
             graph_embedder_model_id=DeterministicEmbedder().model_id,
+            notes=notes,
         ),
         cases=tuple(cases),
         non_authored=non_authored,
@@ -623,8 +824,23 @@ async def run_sweep(out_path: Path) -> TrialRecordSet:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the CHAOS-3619 sweep")
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument(
+        "--only-comparison-shape",
+        choices=[shape.value for shape in ComparisonShape],
+        default=None,
+        help=(
+            "re-run only the authored cases declaring this comparison shape. "
+            "The resulting artifact records the restriction in its binding "
+            "notes and names every case it did not run"
+        ),
+    )
     args = parser.parse_args()
-    records = asyncio.run(run_sweep(args.out))
+    only = (
+        ComparisonShape(args.only_comparison_shape)
+        if args.only_comparison_shape
+        else None
+    )
+    records = asyncio.run(run_sweep(args.out, only_comparison_shape=only))
     print(f"wrote {len(records.cases)} case rows to {args.out}")
 
 

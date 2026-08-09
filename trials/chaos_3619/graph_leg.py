@@ -67,6 +67,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         ComparisonShape,
         QuestionFamilyID,
     )
+    from dev_health_ops.context_fabric.graph_arm.cohort_discovery import (
+        CohortDiscovery,
+    )
     from dev_health_ops.context_fabric.graph_arm.readback import (
         InvestigationReadout,
     )
@@ -84,11 +87,15 @@ def _mint() -> str:
 
 
 __all__ = [
+    "MAX_COHORT_SEEDS",
     "MAX_SEEDS",
     "GraphPacketOutcome",
     "SubjectDiscovery",
+    "assemble_cohort_packet",
     "assemble_packet",
     "authorized_ids_for",
+    "cohort_seeds_from",
+    "discover_cohort_for",
     "discover_subjects",
     "seeds_from",
 ]
@@ -434,4 +441,158 @@ def assemble_packet(
         payload=json.loads(packet.model_dump_json()),
         seeds=seeds,
         authorization_filtered_count=discovery.authorization_filtered_count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3645: the subjectless cohort entry mode
+# ---------------------------------------------------------------------------
+
+
+#: How many cohort members seed the traversal.
+#:
+#: A different bound from :data:`MAX_SEEDS`, and for a different reason.
+#: ``MAX_SEEDS`` is the contract's top-3 SUBJECT horizon -- the packet may
+#: commit to at most three candidates, so reading further would be reading
+#: about entities the packet cannot speak for. A scope-enumerated cohort has
+#: no committed subject and every member is equally the answer, so the
+#: traversal has to reach all of them or the packet's evidence describes an
+#: arbitrary subset of its own cohort. Bounded regardless, because "read the
+#: neighbourhood of every entity in the tenant" is the sweep the contract
+#: refuses; a cohort larger than this is read partially and says so.
+MAX_COHORT_SEEDS = 12
+
+
+def cohort_seeds_from(
+    discovery: CohortDiscovery, *, limit: int = MAX_COHORT_SEEDS
+) -> list[str]:
+    """The traversal seeds for an enumerated cohort, in canonical-id order.
+
+    Ordered by canonical id rather than by any notion of strength. There is
+    no ranking here to express: the members are peers by construction, and an
+    order derived from measurement values would be the arm computing a
+    comparison the canonical services own.
+    """
+
+    return [member.canonical_id for member in discovery.proposal.members][:limit]
+
+
+def discover_cohort_for(
+    *,
+    question_family: QuestionFamilyID,
+    projection: GraphProjection,
+    authorized_entity_ids: frozenset[str],
+    as_of: datetime,
+) -> CohortDiscovery:
+    """The second entry mode, driven by the analytical job and the grant alone.
+
+    The 3(a) fairness surface again, and the same absence proves it: there is
+    no question, no mention, no seed and no case id in this signature. A
+    cohort question's text contains no subject to be fair about, so what has
+    to be guaranteed here is the other half -- that the arm is not handed the
+    answer's shape from outside. It is handed a family and a grant.
+    """
+
+    from dev_health_ops.context_fabric.graph_arm.cohort_discovery import (
+        discover_cohort,
+    )
+
+    return discover_cohort(
+        question_family=question_family,
+        nodes=projection.nodes,
+        edges=projection.edges,
+        authorized_entity_ids=authorized_entity_ids,
+        as_of=as_of,
+    )
+
+
+def assemble_cohort_packet(
+    *,
+    readout: InvestigationReadout,
+    cohort: CohortDiscovery,
+    question_family: QuestionFamilyID,
+    comparison_shape: ComparisonShape,
+    job_statement: str,
+    window_start: datetime,
+    window_end: datetime,
+    run_id: str,
+    watermark: IndexWatermark,
+    signer: EvidenceReferenceSigner,
+    produced_at: datetime,
+) -> GraphPacketOutcome:
+    """Emit a packet for an enumerated cohort, or a named refusal.
+
+    Deliberately the SAME ``build_packet`` the seeded path calls, handed the
+    same kind of proposal. A private assembly path for the second entry mode
+    is how the two modes would drift into producing differently-shaped
+    packets that a reader would compare as if they were alike -- and the
+    trial's whole value is that the two columns are comparable.
+
+    **This mode attributes no drivers, and that is a scope boundary rather
+    than an oversight.** ``discover_drivers`` answers "what is causing THIS
+    subject's state", and a scope-enumerated cohort has no subject; the
+    per-member generalisation is its own capability, not a loop around this
+    one. Two things were measured while establishing that, and both belong in
+    the artifact rather than in a commit message:
+
+    * running it per member DOES produce findings, so the absence here is a
+      decision and not an inability;
+    * the first of those findings the contract sees is refused --
+      ``drv_metric_atlas_load`` is a capacity/staffing driver and the graph
+      arm sets no ``staffing_qualification`` on any driver it emits, which
+      the frozen contract rejects outright. That is a latent defect in the
+      SEEDED path too, reachable there the moment a scored case's subject
+      yields a capacity driver; it is filed rather than fixed here
+      (CHAOS-3651), because a fix smuggled into a measurement run is a change
+      to the thing being measured.
+
+    A packet with no drivers already carries the contract limitation saying
+    so, so a reader cannot mistake "attempted none" for "found no causes".
+    """
+
+    from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+        JobContext,
+        TrialContext,
+        build_packet,
+    )
+
+    seeds = tuple(cohort_seeds_from(cohort))
+
+    try:
+        packet = build_packet(
+            readout=readout,
+            job=JobContext(
+                # Named for the cohort rather than for a subject, because
+                # there is no subject. A job id borrowed from one member
+                # would read as "this investigation was about that member".
+                job_id=f"job_cohort_{question_family.value}",
+                question_family=question_family,
+                job_statement=job_statement,
+                comparison_shape=comparison_shape,
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            watermark=watermark,
+            signer=signer,
+            trial=TrialContext(run_id=run_id, corpus_version=CORPUS_VERSION),
+            produced_at=produced_at,
+            cohort=cohort.proposal,
+        )
+    except Exception as raised:  # noqa: BLE001 - classified, not swallowed
+        name = type(raised).__name__
+        outcome_kwargs = {
+            "payload": None,
+            "seeds": seeds,
+            "authorization_filtered_count": cohort.authorization_filtered_count,
+        }
+        if name in _NAMED_REFUSALS:
+            return GraphPacketOutcome(refusal=f"{name}: {raised}", **outcome_kwargs)  # type: ignore[arg-type]
+        return GraphPacketOutcome(fault=f"{name}: {raised}", **outcome_kwargs)  # type: ignore[arg-type]
+
+    import json
+
+    return GraphPacketOutcome(
+        payload=json.loads(packet.model_dump_json()),
+        seeds=seeds,
+        authorization_filtered_count=cohort.authorization_filtered_count,
     )

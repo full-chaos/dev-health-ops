@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from dev_health_ops.api.dev.investigation_contract import (
     CohortExclusionReason,
@@ -43,10 +44,43 @@ __all__ = [
     "COHORT_BEARING_RELATIONSHIPS",
     "PEER_RELATIONSHIPS",
     "CohortCandidate",
+    "CohortEntryMode",
     "CohortExclusionRecord",
     "CohortProposal",
     "build_cohort",
 ]
+
+
+class CohortEntryMode(StrEnum):
+    """How the arm arrived at this cohort.
+
+    Two modes, and telling them apart is load-bearing rather than
+    descriptive: they differ in whether the packet has a *subject* at all.
+
+    ``SUBJECT_ANCHORED`` is :func:`build_cohort` -- a subject was resolved
+    from the question and its peers were walked out from there, so every
+    member's rationale is "shares X with that subject" and the packet commits
+    to the subject.
+
+    ``SCOPE_ENUMERATED`` is :func:`~.cohort_discovery.discover_cohort` -- the
+    question named no subject, because a cohort question has none to name
+    ("which teams are struggling" contains no reference to resolve). The
+    members were enumerated from the principal's authorized scope, so a
+    member's rationale is what it shares with the OTHER MEMBERS, and the
+    packet commits to no subject. The emitter must NOT manufacture one: the
+    frozen contract's only vocabulary for a committed candidate's match
+    signal describes matching a reference the question supplied, and there
+    was no reference. A pivot invented to satisfy the shape would put a
+    fabricated ``exact_canonical_id`` match into a scored packet.
+
+    Carried on the proposal rather than inferred from an empty
+    ``subject_id``, because "" is also what a bug produces and the packet
+    builder relaxes a real guard on the strength of this value.
+    """
+
+    SUBJECT_ANCHORED = "subject_anchored"
+    SCOPE_ENUMERATED = "scope_enumerated"
+
 
 #: Edges to a shared *anchor*: subject -> anchor <- peer. The anchor is the
 #: team, portfolio or initiative both sides hang off, and it is named in the
@@ -159,6 +193,10 @@ class CohortProposal:
     #: it. The truncation flag plus this count is the disclosure.
     truncated_count: int
     authorization_filtered_count: int
+    #: Which entry mode produced this proposal. Defaults to the original
+    #: subject-anchored one so every existing caller keeps its meaning and
+    #: the relaxation below has to be asked for explicitly.
+    entry_mode: CohortEntryMode = CohortEntryMode.SUBJECT_ANCHORED
 
     @property
     def is_comparable(self) -> bool:

@@ -429,6 +429,63 @@ seam.canonical_bypass_offenders = canonical_bypass_offenders
 """,
     ),
     GuardCase(
+        case_id="forged_evidence_payload_accepted",
+        stake=(
+            "a cited evidence record whose payload differs from what a "
+            "canonical service minted -- a forgery behind a genuine handle"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_investigation_shadow.py::"
+            "test_a_forged_evidence_payload_is_rejected_even_with_a_genuine_handle"
+        ),
+        expected_failure="GUARD forged_evidence_payload_is_rejected",
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+
+def canonical_bypass_offenders(*, packet_evidence, canonical_evidence):
+    # The pre-fix logic: compare handles, ignore the record itself.
+    minted = {ref.evidence_ref_id for ref in canonical_evidence}
+    return tuple(
+        sorted(
+            {
+                ref.evidence_ref_id
+                for ref in packet_evidence
+                if ref.evidence_ref_id not in minted
+            }
+        )
+    )
+
+
+seam.canonical_bypass_offenders = canonical_bypass_offenders
+""",
+    ),
+    GuardCase(
+        case_id="disabled_seam_still_records",
+        stake=(
+            "a seam whose off switch does nothing -- the advertised flag "
+            "would have no runtime effect at all"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_investigation_shadow.py::"
+            "test_a_disabled_seam_records_that_it_chose_to_do_nothing"
+        ),
+        expected_failure="GUARD disabled_seam_does_not_record_a_packet",
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+_real = seam.InvestigationShadow.__init__
+
+
+def __init__(self, *, enabled):
+    # The pre-fix state: the flag is stored and never consulted.
+    _real(self, enabled=True)
+
+
+seam.InvestigationShadow.__init__ = __init__
+""",
+    ),
+    GuardCase(
         case_id="unattributed_comparison_record",
         stake=(
             "a persisted comparison record that cannot say which arm produced "

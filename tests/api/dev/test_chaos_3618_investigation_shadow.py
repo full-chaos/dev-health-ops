@@ -26,17 +26,13 @@ from typing import Any
 import pytest
 
 from dev_health_ops.api.dev import investigation_shadow as seam
-from dev_health_ops.api.dev.contracts import (
-    DevEvidenceFlags,
-    DevEvidenceRef,
-    FreshnessState,
-)
 from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
 from dev_health_ops.api.dev.investigation_contract.fixtures import (
     positive_variant_fixtures,
 )
 
 _RUN = "run-3618"
+_ORG = "org_fullchaos"
 _OBSERVED_AT = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
 
 
@@ -60,26 +56,21 @@ def _handles(payload: dict[str, Any]) -> list[str]:
 
 
 def _canonical(payload: dict[str, Any]) -> list[DevEvidenceRefV2]:
-    """Canonical evidence covering exactly what the golden packet cites."""
+    """The canonical records this run minted.
+
+    Parsed from the packet's own evidence index, because that is what an
+    honest arm does: canonical services mint the records and the arm copies
+    them verbatim. Building lookalike records here would compare the seam
+    against fixtures rather than against canonical truth, and would make the
+    forged-payload test unfalsifiable in the wrong direction.
+
+    Call this BEFORE mutating the payload, so it captures the pristine
+    records the mutation is then measured against.
+    """
 
     return [
-        DevEvidenceRefV2.model_validate(
-            DevEvidenceRef(
-                schema_version="dev_evidence_ref.v1",
-                evidence_ref_id=handle,
-                source_system="work_items",
-                source_version="status.entity.v2",
-                entity_type="project",
-                entity_id="proj-1",
-                display_label="canonical",
-                observed_at=_OBSERVED_AT,
-                freshness=FreshnessState.FRESH,
-                provenance="persisted",
-                confidence=1.0,
-                flags=DevEvidenceFlags(),
-            ).model_dump()
-        )
-        for handle in _handles(payload)
+        DevEvidenceRefV2.model_validate(entry["evidence"])
+        for entry in payload["evidence_coverage"]["evidence_index"]
     ]
 
 
@@ -111,6 +102,7 @@ def test_an_invalid_packet_is_recorded_not_raised() -> None:
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload={"schema_version": "ask_dev_investigation_packet.v1"},
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=[],
     )
     assert record.status is seam.InvestigationShadowStatus.PACKET_INVALID
@@ -124,6 +116,7 @@ def test_a_hostile_payload_is_recorded_not_raised() -> None:
         record = seam.InvestigationShadow(enabled=True).evaluate(
             payload=payload,
             run_id=_RUN,
+            organization_id=_ORG,
             canonical_evidence=[],
         )
         assert record.status is seam.InvestigationShadowStatus.PACKET_INVALID
@@ -139,6 +132,7 @@ def test_a_faulting_canonical_evidence_sequence_is_contained() -> None:
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload=_packet_payload(),
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=Exploding(),
     )
     assert record.status is seam.InvestigationShadowStatus.SEAM_FAULT
@@ -151,6 +145,7 @@ def test_an_invalid_packet_still_records_the_arm_that_sent_it() -> None:
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload={"versions": {"trial": {"arm_id": "graph"}}},
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=[],
     )
     assert record.status is seam.InvestigationShadowStatus.PACKET_INVALID
@@ -175,6 +170,7 @@ def test_a_packet_citing_uncoined_evidence_is_rejected() -> None:
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload=payload,
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=[],  # canonical services minted nothing
     )
     assert record.status is seam.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED, (
@@ -189,6 +185,7 @@ def test_a_packet_within_canonical_evidence_is_accepted() -> None:
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload=payload,
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=_canonical(payload),
     )
     assert record.status is seam.InvestigationShadowStatus.RECORDED
@@ -203,28 +200,89 @@ def test_one_uncoined_handle_among_many_is_enough_to_reject() -> None:
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload=payload,
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=canonical[:-1],
     )
     assert record.status is seam.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED
 
 
 def test_the_bypass_check_names_offenders_rather_than_returning_a_boolean() -> None:
+    payload = _packet_payload()
+    cited = [
+        DevEvidenceRefV2.model_validate(entry["evidence"])
+        for entry in payload["evidence_coverage"]["evidence_index"]
+    ]
     offenders = seam.canonical_bypass_offenders(
-        packet_evidence_handles=["ev1_" + "a" * 40, "ev1_" + "b" * 40],
-        canonical_evidence=[],
+        packet_evidence=cited, canonical_evidence=[]
     )
-    assert offenders == ("ev1_" + "a" * 40, "ev1_" + "b" * 40)
+    assert set(offenders) == {ref.evidence_ref_id for ref in cited}
+
+
+def test_a_forged_evidence_payload_is_rejected_even_with_a_genuine_handle() -> None:
+    """A handle is a pointer; the claim lives in the record.
+
+    The first version of this check compared handles only, and the
+    adversarial review broke it in one line: keep a real handle, rewrite the
+    record's display label, and the forgery was accepted as RECORDED.
+    """
+
+    payload = _packet_payload()
+    canonical = _canonical(payload)
+    index = payload["evidence_coverage"]["evidence_index"]
+    index[0]["evidence"]["display_label"] = "FORGED - a different entity entirely"
+    record = seam.InvestigationShadow(enabled=True).evaluate(
+        payload=payload,
+        run_id=_RUN,
+        organization_id=_ORG,
+        canonical_evidence=canonical,
+    )
+    assert record.status is seam.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED, (
+        "GUARD forged_evidence_payload_is_rejected"
+    )
+
+
+def test_a_packet_from_another_organization_is_rejected() -> None:
+    """Canonical material is tenant-scoped; comparing across tenants is not
+    a check at all."""
+
+    payload = _packet_payload()
+    record = seam.InvestigationShadow(enabled=True).evaluate(
+        payload=payload,
+        run_id=_RUN,
+        organization_id="org_someone_else",
+        canonical_evidence=_canonical(payload),
+    )
+    assert record.status is seam.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED
+    assert record.detail is not None
+    assert "different organization" in record.detail
+
+
+def test_a_disabled_seam_records_that_it_chose_to_do_nothing() -> None:
+    """ "The seam ran and skipped" and "the seam never ran" are different facts."""
+
+    payload = _packet_payload()
+    record = seam.InvestigationShadow(enabled=False).evaluate(
+        payload=payload,
+        run_id=_RUN,
+        organization_id=_ORG,
+        canonical_evidence=_canonical(payload),
+    )
+    assert record.status is seam.InvestigationShadowStatus.SKIPPED_DISABLED, (
+        "GUARD disabled_seam_does_not_record_a_packet"
+    )
+    assert record.latency_ms == 0
 
 
 def test_the_bypass_check_is_not_vacuous() -> None:
     """It must actually pass when the packet stays inside canonical evidence."""
 
     payload = _packet_payload()
+    cited = [
+        DevEvidenceRefV2.model_validate(entry["evidence"])
+        for entry in payload["evidence_coverage"]["evidence_index"]
+    ]
     assert (
-        seam.canonical_bypass_offenders(
-            packet_evidence_handles=_handles(payload),
-            canonical_evidence=_canonical(payload),
-        )
+        seam.canonical_bypass_offenders(packet_evidence=cited, canonical_evidence=cited)
         == ()
     )
 
@@ -239,6 +297,7 @@ def test_a_recorded_evaluation_preserves_arm_packet_version_and_lineage() -> Non
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload=payload,
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=_canonical(payload),
     )
     assert record.arm_id
@@ -259,7 +318,12 @@ def test_arm_identity_is_read_off_the_packet_not_supplied_by_the_caller() -> Non
     parameters = set(
         inspect.signature(seam.InvestigationShadow.evaluate).parameters
     ) - {"self"}
-    assert parameters == {"payload", "run_id", "canonical_evidence"}
+    assert parameters == {
+        "payload",
+        "run_id",
+        "organization_id",
+        "canonical_evidence",
+    }
 
 
 def _module_dependencies() -> set[str]:
@@ -340,6 +404,7 @@ def test_a_packet_without_trial_metadata_is_not_recorded_as_comparable() -> None
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload=payload,
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=_canonical(payload),
     )
     assert record.status is seam.InvestigationShadowStatus.PACKET_INVALID
@@ -359,6 +424,7 @@ def test_the_shadow_frame_carries_only_server_assembled_structure() -> None:
     record = seam.InvestigationShadow(enabled=True).evaluate(
         payload=payload,
         run_id=_RUN,
+        organization_id=_ORG,
         canonical_evidence=_canonical(payload),
     )
     assert record.frame_facts

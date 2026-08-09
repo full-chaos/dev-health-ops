@@ -33,6 +33,7 @@ measurement would arrive in.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections.abc import Mapping, Sequence
@@ -82,6 +83,9 @@ class InvestigationShadowStatus(StrEnum):
 
     #: A valid packet was accepted and a shadow frame assembled.
     RECORDED = "recorded"
+    #: The seam is switched off. Recorded rather than silent, so a run that
+    #: chose to do nothing is distinguishable from a seam that never ran.
+    SKIPPED_DISABLED = "skipped_disabled"
     #: The payload failed the canonical validator.
     PACKET_INVALID = "packet_invalid"
     #: The packet cited evidence no canonical service minted for this run.
@@ -129,27 +133,44 @@ class InvestigationShadowRecord:
             )
 
 
+def _evidence_digest(ref: DevEvidenceRefV2) -> str:
+    """A stable digest of an evidence record's whole payload."""
+
+    return hashlib.sha256(
+        ref.model_dump_json(exclude_none=False).encode("utf-8")
+    ).hexdigest()
+
+
 def canonical_bypass_offenders(
     *,
-    packet_evidence_handles: Sequence[str],
+    packet_evidence: Sequence[DevEvidenceRefV2],
     canonical_evidence: Sequence[DevEvidenceRefV2],
 ) -> tuple[str, ...]:
-    """Handles the packet cites that no canonical service minted.
+    """Cited evidence that does not match what canonical services minted.
 
     This is the whole "graph facts cannot bypass canonical validation"
-    rule, expressed as something a test can plant a violation against. A
-    fabricated measurement does not arrive as a wrong number — the packet
-    contract has nowhere to put a number — it arrives as a citation to an
-    evidence handle that never existed. So that is what is checked.
+    rule, expressed as something a test can plant a violation against.
 
-    Returns the offenders rather than a boolean, so the record can name
-    them and a reviewer can tell one bad handle from a wholesale forgery.
+    The first version compared **handles only**, and the adversarial review
+    broke it in one line: mutate a record's ``display_label`` while keeping
+    a genuine handle, and the forged payload was accepted as RECORDED. A
+    handle is a pointer; the claim lives in the record. So the whole payload
+    is digested and compared, and a packet whose copy of a record differs
+    from the canonical one in ANY field is an offender -- there is no
+    "cosmetic" field on an evidence record, because every field is something
+    a reader would take as canonical.
+
+    Returns the offenders rather than a boolean, so a record can name them
+    and a reviewer can tell one altered field from a wholesale forgery.
     """
 
-    minted = {ref.evidence_ref_id for ref in canonical_evidence}
-    return tuple(
-        sorted({handle for handle in packet_evidence_handles if handle not in minted})
-    )
+    minted = {ref.evidence_ref_id: _evidence_digest(ref) for ref in canonical_evidence}
+    offenders: set[str] = set()
+    for ref in packet_evidence:
+        canonical = minted.get(ref.evidence_ref_id)
+        if canonical is None or canonical != _evidence_digest(ref):
+            offenders.add(ref.evidence_ref_id)
+    return tuple(sorted(offenders))
 
 
 class InvestigationShadow:
@@ -173,6 +194,7 @@ class InvestigationShadow:
         *,
         payload: Mapping[str, Any],
         run_id: str,
+        organization_id: str,
         canonical_evidence: Sequence[DevEvidenceRefV2],
     ) -> InvestigationShadowRecord:
         """Validate, check canonical authority, and record. Never raises.
@@ -188,6 +210,24 @@ class InvestigationShadow:
 
         def elapsed() -> int:
             return int((time.monotonic() - started) * 1000)
+
+        if not self._enabled:
+            # Recorded, not silent: "the seam ran and chose to do nothing"
+            # and "the seam never ran" are different facts, and a trial that
+            # cannot tell them apart cannot audit its own coverage. Mirrors
+            # QUAShadowStatus.SKIPPED_DISABLED.
+            return InvestigationShadowRecord(
+                run_id=run_id,
+                status=InvestigationShadowStatus.SKIPPED_DISABLED,
+                arm_id=_arm_id_of(payload),
+                packet_schema_version=None,
+                projection_version=None,
+                packet_id=None,
+                outcome=None,
+                evidence_handles=(),
+                latency_ms=0,
+                detail="the shadow seam is switched off for this process",
+            )
 
         try:
             # Validated through the registry the frozen manifest names as
@@ -223,16 +263,36 @@ class InvestigationShadow:
             return _fault_record(run_id, fault, elapsed())
 
         try:
-            handles = tuple(
-                entry.evidence.evidence_ref_id
-                for entry in packet.evidence_coverage.evidence_index
+            cited = tuple(
+                entry.evidence for entry in packet.evidence_coverage.evidence_index
             )
-            offenders = canonical_bypass_offenders(
-                packet_evidence_handles=handles,
-                canonical_evidence=canonical_evidence,
-            )
+            handles = tuple(ref.evidence_ref_id for ref in cited)
             versions = packet.versions
             trial = versions.trial
+            if packet.organization_id != organization_id:
+                # Canonical material is scoped to an organization. A packet
+                # claiming a different one cannot be checked against this
+                # run's evidence at all, and accepting it would compare a
+                # tenant against another tenant's canonical records.
+                return InvestigationShadowRecord(
+                    run_id=run_id,
+                    status=InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED,
+                    arm_id=trial.arm_id if trial else None,
+                    packet_schema_version=versions.packet_schema_version,
+                    projection_version=versions.projection_version,
+                    packet_id=packet.packet_id,
+                    outcome=packet.outcome.value,
+                    evidence_handles=handles,
+                    latency_ms=elapsed(),
+                    detail=(
+                        "the packet declares a different organization than the "
+                        "run whose canonical evidence it is checked against"
+                    ),
+                )
+            offenders = canonical_bypass_offenders(
+                packet_evidence=cited,
+                canonical_evidence=canonical_evidence,
+            )
             if offenders:
                 return InvestigationShadowRecord(
                     run_id=run_id,
@@ -245,8 +305,9 @@ class InvestigationShadow:
                     evidence_handles=handles,
                     latency_ms=elapsed(),
                     detail=(
-                        f"{len(offenders)} evidence handles were never minted by a "
-                        f"canonical service: {list(offenders[:3])}"
+                        f"{len(offenders)} cited evidence records were never minted "
+                        f"by a canonical service, or differ from what was: "
+                        f"{list(offenders[:3])}"
                     ),
                 )
             if trial is None:

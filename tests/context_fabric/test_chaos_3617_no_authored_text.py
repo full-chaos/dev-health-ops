@@ -64,29 +64,70 @@ _PROSE_ALIAS = "the thing Ada broke"
 _PROSE_OUTCOME = "Ada thinks this needs another pass"
 
 
+def _call_name(call: ast.Call) -> str:
+    """The bare constructor name of a call, e.g. ``DriverCandidate``."""
+
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ast.unparse(func)
+
+
+def _keywords_in(tree: ast.AST, fields: frozenset[str]):
+    """Every ``(constructor, keyword)`` in ``tree`` assigning one of ``fields``."""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        owner = _call_name(node)
+        for keyword in node.keywords:
+            if keyword.arg in fields:
+                yield owner, keyword
+
+
+def _is_composed(value: ast.expr) -> bool:
+    if isinstance(value, ast.JoinedStr | ast.BinOp):
+        return True
+    return isinstance(value, ast.Call) and ast.unparse(value.func).endswith(
+        (".format", ".join")
+    )
+
+
 def _keyword_nodes(fields: frozenset[str]):
-    """Every keyword argument in the arm assigning one of ``fields``."""
+    """Every keyword argument in the arm assigning one of ``fields``.
+
+    Yields the *constructor* each keyword belongs to as well, because one
+    field name can carry opposite rules in two different types. ``summary``
+    is the live example: on Graphiti's ``EntityNode`` it is the
+    model-written slot that must stay an empty literal, and on the frozen
+    contract's ``DriverCandidate`` it is a required field in which the arm
+    states its own finding. A field-name-only rule cannot express both, and
+    the tempting workaround — composing into a local and assigning the local
+    — is explicitly outside what this scan can see, so taking it would be
+    evading the guard rather than satisfying it.
+    """
 
     for path in sorted(_ARM_ROOT.glob("*.py")):
         if path.name == "fixtures.py":
             # The fixture world is authored test data by definition.
             continue
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.keyword) and node.arg in fields:
-                yield path, node
+        for owner, keyword in _keywords_in(ast.parse(path.read_text()), fields):
+            yield path, owner, keyword
 
 
-def _composed_assignments(fields: frozenset[str]) -> list[str]:
+def _composed_assignments(
+    fields: frozenset[str], *, exempt: frozenset[tuple[str, str]] = frozenset()
+) -> list[str]:
     offenders: list[str] = []
-    for path, node in _keyword_nodes(fields):
-        value = node.value
-        if isinstance(value, ast.JoinedStr | ast.BinOp):
-            offenders.append(f"{path.name}: {node.arg}={ast.unparse(value)[:70]}")
-        elif isinstance(value, ast.Call) and ast.unparse(value.func).endswith(
-            (".format", ".join")
-        ):
-            offenders.append(f"{path.name}: {node.arg}={ast.unparse(value.func)}")
+    for path, owner, node in _keyword_nodes(fields):
+        if (owner, node.arg) in exempt:
+            continue
+        if _is_composed(node.value):
+            offenders.append(
+                f"{path.name}: {owner}.{node.arg}={ast.unparse(node.value)[:70]}"
+            )
     return offenders
 
 
@@ -148,6 +189,20 @@ _ARM_AUTHORED_FIELDS = frozenset(
     }
 )
 
+#: ``(constructor, field)`` pairs where a name in :data:`_SOURCE_TEXT_FIELDS`
+#: is in fact the arm writing about its own finding, and composing it is
+#: correct.
+#:
+#: Exactly one entry, and it is a name collision rather than an exception to
+#: the rule: Graphiti's ``EntityNode.summary`` is the model-written slot the
+#: arm keeps empty, while the frozen contract's ``DriverCandidate.summary``
+#: is a required field in which the arm states what it found. Keyed on the
+#: constructor so the first rule survives untouched — the
+#: ``EntityNode.summary`` plant below still has to pass.
+_ARM_AUTHORED_BY_CONSTRUCTOR: frozenset[tuple[str, str]] = frozenset(
+    {("DriverCandidate", "summary")}
+)
+
 
 class TestTheArmComposesNoText:
     """The compose guard. A property of the code, checked against the code."""
@@ -187,7 +242,9 @@ class TestTheArmComposesNoText:
         the cheap, fast, specific layer — not the proof.
         """
 
-        offenders = _composed_assignments(_SOURCE_TEXT_FIELDS)
+        offenders = _composed_assignments(
+            _SOURCE_TEXT_FIELDS, exempt=_ARM_AUTHORED_BY_CONSTRUCTOR
+        )
         assert not offenders, (
             "the arm composed text into a field that must be a verbatim copy "
             f"of a source value: {offenders}"
@@ -204,15 +261,63 @@ class TestTheArmComposesNoText:
         """
 
         quoted = {"display_label", "title", "name", "matched_text", "outcome"}
+        checked = _ARM_AUTHORED_FIELDS | {
+            field for _, field in _ARM_AUTHORED_BY_CONSTRUCTOR
+        }
+        exempt_owners = {
+            owner
+            for owner, field in _ARM_AUTHORED_BY_CONSTRUCTOR
+            if field in _SOURCE_TEXT_FIELDS
+        }
         offenders: list[str] = []
-        for path, node in _keyword_nodes(_ARM_AUTHORED_FIELDS):
+        for path, owner, node in _keyword_nodes(checked):
+            if node.arg in _SOURCE_TEXT_FIELDS and owner not in exempt_owners:
+                # A source-text field outside the collision list is governed
+                # by the verbatim-copy rule above, not by this one.
+                continue
             rendered = ast.unparse(node.value)
             for attribute in quoted:
                 if f".{attribute}" in rendered:
-                    offenders.append(f"{path.name}: {node.arg}={rendered[:80]}")
+                    offenders.append(f"{path.name}: {owner}.{node.arg}={rendered[:80]}")
         assert not offenders, (
             f"an arm-authored disclosure interpolated source-supplied text: {offenders}"
         )
+
+    def test_the_constructor_exemption_is_narrow(self) -> None:
+        """The collision list exempts a TYPE, not a field name.
+
+        Two plants, and both halves matter. ``DriverCandidate.summary`` may
+        be composed because it is the arm stating its own finding. The same
+        keyword on Graphiti's ``EntityNode`` is the model-written slot and
+        must still be caught — that is the rule the call-aware scan was
+        introduced to preserve, so it gets a plant of its own rather than an
+        assurance.
+        """
+
+        planted = ast.parse(
+            "DriverCandidate(summary=f'{a} blocked {b}')\n"
+            "EntityNode(summary=f'{a} blocked {b}')\n"
+            "SomeOtherNode(summary=f'{a} blocked {b}')\n"
+        )
+        flagged = {
+            owner
+            for owner, keyword in _keywords_in(planted, _SOURCE_TEXT_FIELDS)
+            if _is_composed(keyword.value)
+            and (owner, keyword.arg) not in _ARM_AUTHORED_BY_CONSTRUCTOR
+        }
+        assert flagged == {"EntityNode", "SomeOtherNode"}
+
+    def test_every_constructor_exemption_names_a_real_collision(self) -> None:
+        """An exemption for a field nobody treats as source text is dead weight.
+
+        A pair that drifted out of ``_SOURCE_TEXT_FIELDS`` would silently
+        exempt nothing while reading as a deliberate carve-out — and the next
+        reader would trust it.
+        """
+
+        assert _ARM_AUTHORED_BY_CONSTRUCTOR
+        for owner, field in _ARM_AUTHORED_BY_CONSTRUCTOR:
+            assert field in _SOURCE_TEXT_FIELDS, (owner, field)
 
     def test_the_scan_would_notice_a_composed_field(self) -> None:
         """Anti-vacuity: the detector must fire on a planted composition.

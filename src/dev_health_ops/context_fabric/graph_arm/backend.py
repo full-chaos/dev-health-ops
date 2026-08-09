@@ -44,6 +44,7 @@ import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from dev_health_ops.api.dev.investigation_contract import RelationshipType
@@ -55,7 +56,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from graphiti_core.nodes import EntityNode
 
 __all__ = [
+    "EMBEDDING_MODEL_VAR",
     "GRAPHITI_EXTRA",
+    "PROJECTION_EMBEDDER_ATTRIBUTE",
+    "SEMANTIC_MECHANISMS",
+    "CloudEmbedder",
+    "MatchMechanism",
     "TELEMETRY_ENV_VAR",
     "TRIPLE_FACT_PATTERN",
     "DeterministicEmbedder",
@@ -75,6 +81,14 @@ __all__ = [
 #: message so the failure is actionable rather than an ImportError traceback.
 GRAPHITI_EXTRA = "context-graph-trial"
 
+#: The node property recording which embedder produced a node's vector.
+#:
+#: Deliberately NOT one of ``projection.READBACK_ATTRIBUTE_KEYS``: those are
+#: the arm's structured record attributes and travel on every
+#: ``DiscoveredEntity``. This is a property of the *write*, read back once per
+#: partition as an attestation and never as entity data.
+PROJECTION_EMBEDDER_ATTRIBUTE = "cf_projection_embedder"
+
 #: A canonical triple rendering: three whitespace-separated tokens.
 TRIPLE_FACT_PATTERN = re.compile(
     r"^(?P<source>\S+) (?P<relationship>[a-z_]+) (?P<target>\S+)$"
@@ -85,6 +99,46 @@ TRIPLE_FACT_PATTERN = re.compile(
 #: with a real one does not fail on a dimension mismatch — it will return
 #: nonsense, which is a measurement question, not a crash.
 DETERMINISTIC_EMBEDDING_DIM = 1024
+
+
+#: Where the cloud embedder reads its model from. The key follows the repo's
+#: existing convention (``llm/credentials.py``): ``LLM_API_KEY`` first, then
+#: ``OPENAI_API_KEY``.
+EMBEDDING_MODEL_VAR = "CONTEXT_FABRIC_GRAPH_EMBEDDING_MODEL"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+class MatchMechanism(StrEnum):
+    """*How* a subject match was produced, as opposed to what it matched.
+
+    The wire's ``SubjectMatchSignal`` says what matched — an alias, an
+    acronym, a fuzzy label. It cannot say how, and the distinction is the one
+    that decides whether a claim is honest: ``FUZZY_LABEL`` produced by
+    Levenshtein over stored labels is a real lexical match that needs no
+    model, while the same signal produced by nearest-neighbour search over
+    embeddings is a semantic claim that means nothing at all when the
+    embedder is a hash.
+
+    So the mechanism is tracked inside the arm and checked at emission. It
+    never reaches the packet: the contract is frozen and ``extra="forbid"``,
+    and this is an arm-internal integrity concern rather than something a
+    consumer should branch on.
+    """
+
+    EXACT_LOOKUP = "exact_lookup"
+    ALIAS_LOOKUP = "alias_lookup"
+    LEXICAL_FUZZY = "lexical_fuzzy"
+    EMBEDDING_SIMILARITY = "embedding_similarity"
+    MODEL_INFERENCE = "model_inference"
+
+
+#: Mechanisms that are meaningless unless the active embedder actually
+#: carries semantics. Emitting a match produced by one of these under
+#: :class:`DeterministicEmbedder` would be a confident, arbitrary ordering
+#: that no downstream scorer could distinguish from a real one.
+SEMANTIC_MECHANISMS: frozenset[MatchMechanism] = frozenset(
+    {MatchMechanism.EMBEDDING_SIMILARITY, MatchMechanism.MODEL_INFERENCE}
+)
 
 
 class GraphitiUnavailableError(RuntimeError):
@@ -237,6 +291,108 @@ def _as_text(input_data: Any) -> str:
     return str(input_data)
 
 
+@dataclass(frozen=True, slots=True)
+class CloudEmbedder:
+    """A real, semantic embedder: Graphiti's OpenAI client, wrapped.
+
+    Exists so that the retrieval capabilities under test measure Graphiti's
+    actual value-add rather than a bare graph store —
+    :class:`DeterministicEmbedder` produces vectors with no semantic content,
+    so similarity search over it is meaningless by construction.
+
+    Two properties this wrapper adds over using ``OpenAIEmbedder`` directly:
+
+    * ``semantic`` is ``True``, which is what
+      ``packet_builder`` consults before letting an embedding-derived match
+      reach a packet;
+    * ``model_id`` names the exact model, and that string is folded into the
+      emitted ``projection_version`` — because a store embedded with one
+      model and a store embedded with another are not the same projection,
+      and comparing runs across them would be comparing different things.
+
+    Cost is real and is bounded before any call is made: see
+    ``store.GraphArmStore.write_projection``, which checks the embedding
+    budget against the node+edge count it already knows.
+    """
+
+    model: str = DEFAULT_EMBEDDING_MODEL
+    api_key: str | None = None
+
+    @property
+    def model_id(self) -> str:
+        return f"openai_{self.model.replace('-', '_').replace('.', '_')}"
+
+    @property
+    def semantic(self) -> bool:
+        """Whether this instance can actually produce a semantic vector.
+
+        Keyed on the API key, not on the class. ``CloudEmbedder()`` with no
+        key used to report ``True`` while being unable to embed anything:
+        :meth:`create` would fail on the first call, but the packet builder
+        never asks it to embed — it reads this flag — so a bare, unusable
+        instance unlocked semantic match claims. Adversarial review
+        reproduced exactly that.
+
+        This is the *smaller* half of that finding and is not the whole of
+        it: an embedder that CAN embed still says nothing about what produced
+        the vectors already in the store. That is what the readout's
+        ``embedder_model_id`` attestation is for.
+        """
+
+        return bool(self.api_key)
+
+    @classmethod
+    def from_environment(cls) -> CloudEmbedder:
+        """Build from the repo's existing LLM credential convention.
+
+        Raises rather than falling back to a non-semantic embedder: silently
+        degrading would produce a run that *looks* like a semantic one and
+        scores like noise, which is the worst of both.
+        """
+
+        key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "no LLM_API_KEY/OPENAI_API_KEY is set, so no semantic embedder "
+                "can be built. Refusing to fall back to DeterministicEmbedder: "
+                "a run that silently used hash vectors would look like a "
+                "semantic run and score like noise"
+            )
+        return cls(
+            model=os.getenv(EMBEDDING_MODEL_VAR, DEFAULT_EMBEDDING_MODEL), api_key=key
+        )
+
+    def _client(self) -> Any:
+        module = graphiti_module("embedder.openai")
+        return module.OpenAIEmbedder(
+            config=module.OpenAIEmbedderConfig(
+                embedding_model=self.model, api_key=self.api_key
+            )
+        )
+
+    async def create(self, input_data: Any) -> list[float]:
+        return await self._client().create(input_data=input_data)
+
+    async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
+        return await self._client().create_batch(input_data_list)
+
+
+def embedder_projection_suffix(embedder: EmbeddingBackend) -> str:
+    """The embedder's contribution to ``projection_version``.
+
+    Folded into the version rather than carried in its own field because the
+    frozen packet contract has no slot for it and ``extra="forbid"`` — and
+    because it belongs there anyway: two stores embedded with different
+    models are different projections, and a version that called them the same
+    would make two incomparable runs look comparable.
+    """
+
+    token = re.sub(r"[^a-z0-9_]+", "_", embedder.model_id.lower()).strip("_")
+    if not token or not token[0].isalpha():
+        token = f"e_{token}"
+    return token
+
+
 def triple_fact(edge: GraphEdge) -> str:
     """The canonical triple rendering of an edge. Not a sentence.
 
@@ -315,6 +471,13 @@ def to_graphiti_nodes(
         attributes: dict[str, Any] = {
             "cf_canonical_id": node.canonical_id,
             "cf_org_id": node.org_id,
+            # What actually produced this node's vector, recorded ON the node
+            # rather than remembered by the caller. ``build_packet`` takes an
+            # embedder argument that has no connection to whatever wrote the
+            # store, so without this the only available answer to "were these
+            # vectors produced by something semantic" is the caller's own
+            # claim -- which is the question, not the answer.
+            PROJECTION_EMBEDDER_ATTRIBUTE: embedder.model_id,
             "cf_source_class": node.source_class.value,
             "cf_observed_at": node.observed_at.isoformat(),
             "cf_is_entity": node.is_entity,

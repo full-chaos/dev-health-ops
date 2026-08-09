@@ -13,6 +13,8 @@ always reports what the environment actually offers.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from dev_health_ops.context_fabric.graph_arm.flags import REQUIRE_LIVE_FLAG
@@ -43,6 +45,70 @@ def test_the_gate_fails_rather_than_skips_when_a_live_run_is_required(
     assert isinstance(excinfo.value, pytest.fail.Exception)
     assert not isinstance(excinfo.value, pytest.skip.Exception)
     assert "did not happen" in str(excinfo.value)
+
+
+def _hide_graphiti(monkeypatch) -> None:
+    """Make ``import graphiti_core`` fail, as it does in the CI unit job.
+
+    Patched at the import machinery rather than by faking a status object, so
+    the gate takes the same branch for the same reason CI does — a stubbed
+    status would test the branch and not the condition that reaches it.
+    """
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name == "graphiti_core" or name.startswith("graphiti_core."):
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+    monkeypatch.delitem(sys.modules, "graphiti_core", raising=False)
+
+
+def test_the_extra_gate_fails_rather_than_skips_when_a_run_is_required(
+    monkeypatch,
+) -> None:
+    """The same rule, for the half of the suite that needs no server.
+
+    Some measurements need graphiti-core and no FalkorDB — the write path
+    builds Graphiti node and edge objects before it talks to anything. One of
+    them was reaching the extra directly and dying with
+    ``GraphitiUnavailableError`` in CI, which reads as a defect in the arm
+    rather than as a measurement that did not happen. It routes through the
+    gate now, and the gate must have the same two outcomes as its sibling.
+    """
+
+    monkeypatch.setenv(REQUIRE_LIVE_FLAG, "1")
+    _hide_graphiti(monkeypatch)
+    with pytest.raises(BaseException) as excinfo:  # noqa: B017, PT011
+        live_gate.require_graphiti_extra()
+    assert isinstance(excinfo.value, pytest.fail.Exception)
+    assert not isinstance(excinfo.value, pytest.skip.Exception)
+    assert "did not happen" in str(excinfo.value)
+
+
+def test_the_extra_gate_skips_with_an_actionable_reason_when_not_required(
+    monkeypatch,
+) -> None:
+    """The other outcome, and the one that keeps CI honest rather than red."""
+
+    monkeypatch.delenv(REQUIRE_LIVE_FLAG, raising=False)
+    _hide_graphiti(monkeypatch)
+    with pytest.raises(BaseException) as excinfo:  # noqa: B017, PT011
+        live_gate.require_graphiti_extra()
+    assert isinstance(excinfo.value, pytest.skip.Exception)
+    assert "context-graph-trial" in str(excinfo.value)
+    assert REQUIRE_LIVE_FLAG in str(excinfo.value)
+
+
+def test_the_extra_gate_is_a_no_op_when_the_extra_is_installed() -> None:
+    """The control. A gate that always raised would pass both tests above."""
+
+    pytest.importorskip("graphiti_core")
+    live_gate.require_graphiti_extra()
 
 
 def test_the_gate_skips_with_an_actionable_reason_when_not_required(
@@ -193,3 +259,35 @@ def test_the_harness_summary_pattern_cannot_backtrack_exponentially() -> None:
     assert _SUMMARY.search("13724 passed, 268 skipped, 1 xfailed in 154.82s")
     assert _SUMMARY.search("1 failed, 42 warnings in 1.24s")
     assert _SUMMARY.search("208 passed in 5.40s")
+
+
+def test_the_documented_guard_count_matches_the_harness() -> None:
+    """A hand-maintained number in prose is a claim guaranteed to drift.
+
+    And it did: PR1 shipped with the architecture note claiming 21 guards
+    while the harness held 24, because a later round added three mutations
+    and updated the code but not the sentence. Nobody noticed, because
+    nothing could.
+
+    The number is worth keeping — a reader wants the scale — so it is pinned
+    instead of removed. This reads both and compares.
+    """
+
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    harness = (root / "scripts" / "chaos_3617_guard_injection.py").read_text()
+    note = (
+        root / "docs" / "contribute" / "architecture" / "graph-investigation-arm.md"
+    ).read_text()
+
+    actual = harness.count("mutation_id=")
+    assert actual > 20, f"suspiciously few mutations found: {actual}"
+
+    claimed = re.search(r"For each of the \*\*(\d+)\*\* guards", note)
+    assert claimed is not None, "the note no longer states a guard count"
+    assert int(claimed.group(1)) == actual, (
+        f"the architecture note claims {claimed.group(1)} guards; the harness "
+        f"defines {actual}"
+    )

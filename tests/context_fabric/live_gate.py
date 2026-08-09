@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from dev_health_ops.context_fabric.graph_arm.backend import GRAPHITI_EXTRA
 from dev_health_ops.context_fabric.graph_arm.flags import (
     REQUIRE_LIVE_FLAG,
     TRIAL_STORE_URI_VAR,
@@ -30,7 +31,12 @@ from dev_health_ops.context_fabric.graph_arm.flags import (
     trial_store_config,
 )
 
-__all__ = ["LiveStoreStatus", "live_store_status", "require_live_store"]
+__all__ = [
+    "LiveStoreStatus",
+    "live_store_status",
+    "require_graphiti_extra",
+    "require_live_store",
+]
 
 _COMPOSE_HINT = (
     "start it with `docker compose --profile graph-trial up -d "
@@ -116,6 +122,39 @@ def require_live_store() -> TrialStoreConfig:
     # cannot distinguish from a real missing return, and this function's
     # whole job is that it never quietly yields "no store".
     raise AssertionError("pytest.skip always raises")
+
+
+def require_graphiti_extra() -> None:
+    """Gate a test that needs the optional extra but no live store.
+
+    Same two-outcome contract as :func:`require_live_store`, and here for the
+    same reason: a test that reached into ``graphiti_core`` and decided for
+    itself what to do about its absence is the per-test bypass this module
+    exists to prevent.
+
+    The distinction from ``require_live_store`` is real. Some paths — the
+    write path's node/edge construction, for one — call into Graphiti without
+    needing a server, so demanding a reachable FalkorDB would make them skip
+    in environments where they could genuinely run.
+    """
+
+    try:
+        import graphiti_core  # noqa: F401
+    except ModuleNotFoundError:
+        missing = (
+            "graphiti-core is not installed (optional extra "
+            f"'{GRAPHITI_EXTRA}'); install with "
+            f"`uv sync --extra {GRAPHITI_EXTRA}`"
+        )
+        if live_store_required():
+            pytest.fail(
+                f"{REQUIRE_LIVE_FLAG}=1 was set, so a measurement needing "
+                f"graphiti-core was required and did not happen: {missing}"
+            )
+        pytest.skip(
+            f"CHAOS-3617 graphiti extra unavailable: {missing}. Set "
+            f"{REQUIRE_LIVE_FLAG}=1 to turn this skip into a failure."
+        )
 
 
 def require_flag_state() -> None:

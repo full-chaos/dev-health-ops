@@ -77,6 +77,12 @@ class TrialBudgets:
     max_evidence_entries: int = 200
     max_cohort_members: int = 50
     max_result_bytes: int = 2_000_000
+    #: Bounds embedding calls per projection write. Checked BEFORE the first
+    #: call, against the node+edge count the writer already knows, so an
+    #: over-budget run costs nothing rather than costing most of the budget
+    #: and then stopping. Only bites for a semantic embedder --
+    #: DeterministicEmbedder makes no calls at all.
+    max_embedding_calls: int = 5_000
     max_wall_seconds: float = 60.0
     #: Bounds model *output* on the approved-unstructured extraction path.
     #: **Not enforced by anything in this revision, and deliberately so:**
@@ -120,6 +126,7 @@ class TrialBudgets:
             "max_evidence_entries",
             "max_cohort_members",
             "max_result_bytes",
+            "max_embedding_calls",
             "max_output_tokens",
         ):
             if getattr(self, name) < 1:
@@ -173,6 +180,14 @@ class TrialBudgets:
             within_budget=False,
             truncation_reason=TruncationReason.TIME_BUDGET,
             detail=f"{seconds:.3f}s elapsed exceeds the {self.max_wall_seconds}s budget",
+        )
+
+    def check_embedding_calls(self, count: int) -> BudgetOutcome:
+        return self._check(
+            count,
+            self.max_embedding_calls,
+            TruncationReason.EVIDENCE_BUDGET,
+            "embedding calls",
         )
 
     def check_output_tokens(self, tokens: int) -> BudgetOutcome:

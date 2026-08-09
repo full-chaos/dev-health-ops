@@ -32,6 +32,9 @@ from dev_health_ops.context_fabric.graph_arm.backend import (
     TELEMETRY_ENV_VAR,
     require_graphiti,
 )
+from dev_health_ops.context_fabric.graph_arm.projection import (
+    READBACK_ATTRIBUTE_KEYS,
+)
 from dev_health_ops.context_fabric.graph_arm.readback import READ_ONLY_QUERIES
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -257,6 +260,33 @@ class TestNoProductionCoupling:
                         value.strip().splitlines()[0]
                     )
         assert not stray, stray
+
+    def test_every_declared_attribute_has_a_column_in_both_queries(self) -> None:
+        """The one drift the literal Cypher surface makes possible.
+
+        The queries are plain string literals so the AST-based surface scan
+        above can see them, which means the attribute columns are typed out
+        rather than generated from ``READBACK_ATTRIBUTE_KEYS``. This is what
+        makes that duplication safe in both directions: a key declared with
+        no column would silently read back empty from the live store while
+        the in-memory reader returned it -- a differential failure whose
+        cause is a missing column, not a graph difference -- and a column
+        with no key would be fetched and thrown away.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm import readback
+
+        assert READBACK_ATTRIBUTE_KEYS, "the declared set is empty; vacuous"
+        for query in (readback._ENTITY_QUERY, readback._OBSERVATION_QUERY):
+            selected = set(re.findall(r"n\.cf_attr_(\w+) AS attr_(?:\w+)", query))
+            assert selected == set(READBACK_ATTRIBUTE_KEYS), {
+                "declared_but_not_selected": sorted(
+                    set(READBACK_ATTRIBUTE_KEYS) - selected
+                ),
+                "selected_but_not_declared": sorted(
+                    selected - set(READBACK_ATTRIBUTE_KEYS)
+                ),
+            }
 
     def test_no_declared_query_writes_or_maintains(self) -> None:
         """Read-only in the literal sense: no write or DDL clause.

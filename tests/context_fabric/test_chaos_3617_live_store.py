@@ -40,7 +40,10 @@ from dev_health_ops.context_fabric.graph_arm.packet_builder import (
     TrialContext,
     build_packet,
 )
-from dev_health_ops.context_fabric.graph_arm.projection import GraphProjection
+from dev_health_ops.context_fabric.graph_arm.projection import (
+    READBACK_ATTRIBUTE_KEYS,
+    GraphProjection,
+)
 from dev_health_ops.context_fabric.graph_arm.readback import (
     InvestigationReadout,
     LiveGraphReader,
@@ -252,6 +255,24 @@ class TestReaderDifferential:
             "derived entirely from entities/paths/observations; excluded only "
             "because observations are, and it would report that gap twice"
         ),
+        "observation_attachment_available": (
+            "a reader's declaration about its own capability, not a result of "
+            "the traversal -- the same category as org_id and the seeds. The "
+            "two readers are SUPPOSED to differ here, because one can recover "
+            "observation attachment and the other cannot, and a differential "
+            "that demanded agreement would be demanding that the live reader "
+            "lie about it. Excluded from the comparison and checked directly "
+            "instead: test_each_reader_declares_the_attachment_capability_it_"
+            "actually_has binds each declaration to what that reader returns"
+        ),
+        "embedder_model_id": (
+            "what the STORE attests produced its vectors, which the in-memory "
+            "reader has no store to ask -- an unwritten projection holds no "
+            "vectors at all. The two readers are supposed to differ for the "
+            "same reason as the field above, and this one is checked directly "
+            "by test_the_live_readout_attests_the_embedder_that_wrote_it, "
+            "against the embedder the store was really constructed with"
+        ),
     }
 
     @classmethod
@@ -319,6 +340,251 @@ class TestReaderDifferential:
             max_hops=max_hops,
         )
         assert self._comparable(live) == self._comparable(reference)
+
+    async def test_each_reader_declares_the_attachment_capability_it_actually_has(
+        self, alpha_store
+    ) -> None:
+        """The declaration is excluded from the differential, so check it here.
+
+        ``observation_attachment_available`` decides whether
+        ``discover_drivers`` will attribute anything at all, so a reader that
+        declared the wrong value would either silently stop checking that a
+        record is about the linkage it vouches for, or refuse every honest
+        finding. Neither is visible in a comparison the field is excluded
+        from — so each declaration is asserted against what that reader
+        actually returns, on the live store rather than on an assumption
+        about it.
+        """
+
+        store, projection = alpha_store
+        reference = await ProjectionGraphReader(projection).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+
+        assert reference.observation_attachment_available is True
+        assert reference.observations, "the reference returned none; vacuous"
+        assert all(item.subject_canonical_ids for item in reference.observations), (
+            "the reference claims attachment and returned an unattached record"
+        )
+
+        assert live.observation_attachment_available is False, (
+            "the live reader claims it can recover observation attachment; it "
+            "cannot, and discover_drivers would stop checking that a record "
+            "is about the linkage it vouches for"
+        )
+        assert all(not item.subject_canonical_ids for item in live.observations), (
+            "the live reader declares it cannot recover attachment while "
+            "returning one; the declaration must track the capability"
+        )
+
+    async def test_the_live_readout_attests_the_embedder_that_wrote_it(
+        self, alpha_store
+    ) -> None:
+        """Provenance has to come from the store, or it is the caller's word.
+
+        ``build_packet`` takes an embedder argument with no connection to
+        whatever wrote the partition, so "were these vectors produced by
+        something semantic" had only the caller's claim to go on. This is the
+        measurement that makes the answer real: the store is constructed with
+        a known embedder, and the readout must name that one.
+        """
+
+        store, _ = alpha_store
+        readout = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        assert readout.embedder_model_id == store.embedder.model_id, (
+            "the partition attests no embedder, or attests the wrong one, so "
+            "a semantic claim built on it would rest on the caller's word"
+        )
+        # Anti-vacuity in both directions: the store really does carry an
+        # embedder with a non-trivial id, and the reference reader -- which
+        # has no store to ask -- attests nothing rather than guessing.
+        assert store.embedder.model_id.startswith("deterministic_blake2b")
+        assert (
+            await ProjectionGraphReader(
+                build_projection(_reorg(fixtures.alpha_batch(), store.org_id))
+            ).neighbourhood(
+                org_id=store.org_id,
+                seed_canonical_ids=["proj_nightfall_migration"],
+                authorized_entity_ids=fixtures.alpha_authorized_ids(),
+                max_hops=3,
+            )
+        ).embedder_model_id is None
+
+    async def test_a_packet_from_the_live_readout_cannot_name_another_embedder(
+        self, alpha_store, signer
+    ) -> None:
+        """The refusal, end to end against a real partition.
+
+        A packet stamped for a model that did not embed the store is how two
+        incomparable runs come to look comparable — and the stamp is derived
+        from an argument, so nothing but this check stands between a caller
+        passing the wrong object and a wrong recorded provenance.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.backend import (
+            CloudEmbedder,
+            embedder_projection_suffix,
+        )
+        from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+            EmbedderProvenanceMismatchError,
+        )
+
+        store, _ = alpha_store
+        readout = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+
+        def build(embedder):
+            return build_packet(
+                readout=readout,
+                job=JobContext(
+                    job_id="job_live_embedder",
+                    question_family=QuestionFamilyID("project_status_drivers"),
+                    job_statement="Status of the Nightfall Migration project.",
+                    comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+                    window_start=fixtures.WINDOW_START,
+                    window_end=fixtures.WINDOW_END,
+                ),
+                watermark=IndexWatermark(
+                    indexed_through=fixtures.WINDOW_END,
+                    projected_at=fixtures.WINDOW_END,
+                    records_indexed=1,
+                ),
+                signer=signer,
+                trial=TrialContext(run_id=_RUN_ID),
+                produced_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
+                embedder=embedder,
+            )
+
+        with pytest.raises(EmbedderProvenanceMismatchError, match="did not embed"):
+            build(CloudEmbedder(api_key="sk-not-a-real-key"))
+        # The control: the embedder that DID write the store still emits, and
+        # the stamp names it. Without this the refusal could be "no packet
+        # can be built from a live readout".
+        packet = build(store.embedder)
+        assert (
+            embedder_projection_suffix(store.embedder)
+            in packet.versions.projection_version
+        )
+
+    async def test_declared_attributes_survive_the_live_round_trip(
+        self, alpha_store
+    ) -> None:
+        """Non-vacuity for the attribute half of the comparison.
+
+        ``_comparable`` compares every readout field automatically, so the
+        attributes ARE compared -- but two empty dicts compare equal, and a
+        live reader that returned nothing at all would pass the differential
+        silently. This asserts the live reader actually carries a declared
+        attribute back out of FalkorDB.
+        """
+
+        store, _ = alpha_store
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        subject = next(
+            entity
+            for entity in live.entities
+            if entity.canonical_id == "proj_nightfall_migration"
+        )
+        assert subject.attributes.get("declared_status") == "in_progress"
+
+    async def test_an_undeclared_attribute_is_not_read_back(self, alpha_store) -> None:
+        """The closed list is closed, and that is the documented behaviour.
+
+        ``archived`` is written by the alpha fixture and is deliberately not
+        in ``READBACK_ATTRIBUTE_KEYS``. It must be absent from the readout
+        rather than appearing through some other route -- otherwise the
+        "declared subset" claim is decorative and the two readers can drift
+        on whatever else the store happens to hold.
+        """
+
+        assert "archived" not in READBACK_ATTRIBUTE_KEYS
+        store, projection = alpha_store
+        written = next(
+            node
+            for node in projection.nodes
+            if node.canonical_id == "proj_nightfall_migration"
+        )
+        assert "archived" in written.attributes, (
+            "the fixture stopped writing the undeclared attribute, so this "
+            "test no longer proves anything"
+        )
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        subject = next(
+            entity
+            for entity in live.entities
+            if entity.canonical_id == "proj_nightfall_migration"
+        )
+        assert "archived" not in subject.attributes
+
+    async def test_edge_validity_survives_the_live_round_trip(
+        self, alpha_store
+    ) -> None:
+        """A closed dependency must come back closed.
+
+        Graphiti stores the interval in its own ``valid_at``/``invalid_at``
+        fields rather than in the arm's ``cf_`` namespace, so this is the
+        one readout field whose live round trip depends on an upstream
+        convention the arm does not control. If graphiti-core ever stops
+        persisting them, this fails here rather than showing up later as a
+        resolved dependency reported as a live driver.
+        """
+
+        store, _ = alpha_store
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["svc_auth_gateway"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=1,
+        )
+        closed = [
+            step
+            for path in live.paths
+            for step in path.steps
+            if step.to_canonical_id == "dep_legacy_session"
+            or step.from_canonical_id == "dep_legacy_session"
+        ]
+        assert closed, "the historical edge was not traversed at all"
+        assert all(step.valid_to is not None for step in closed)
+        assert not any(step.is_current_at(fixtures.WINDOW_END) for step in closed)
+
+        # The control: a live edge in the same readout is current, so the
+        # assertion above is about this edge and not about the clock.
+        live_steps = [
+            step
+            for path in live.paths
+            for step in path.steps
+            if step.to_canonical_id == "dep_authlib"
+        ]
+        assert live_steps
+        assert all(step.is_current_at(fixtures.WINDOW_END) for step in live_steps)
 
     async def test_the_differential_can_actually_fail(self, alpha_store) -> None:
         """The acceptance case for the comparator itself.

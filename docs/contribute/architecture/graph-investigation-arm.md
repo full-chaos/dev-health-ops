@@ -37,18 +37,29 @@ product feature, and nothing about it is on a user-visible path.
 | Bounded, authorized neighbourhood traversal | Yes |
 | Related entities, lineage paths, evidence index | Yes |
 | Packet emission through the canonical validator | Yes |
-| Alias / acronym / renamed-entity candidate search | Not yet |
-| Cohort construction | Not yet — refused loudly, never faked |
-| Driver synthesis | Not yet — the packet's outcome says so |
+| Alias / acronym / renamed-entity candidate search | Yes — by lookup, never retrieval |
+| Semantic retrieval | Seam + guard in place; search not yet |
+| Cohort construction | Peer shapes yes; exhaustive shapes still refused |
+| Driver synthesis | Structural yes — reaches a supported outcome |
+| Canonical measurements | Cited, never computed |
 | Approved-unstructured extraction | Boundary in place, extraction not yet |
 
-Because it synthesizes no drivers, `build_packet` **never** emits a supported
-outcome. A packet with no asserted driver is, by the frozen contract's own
+The outcome is **derived from what was produced**, never passed in. A packet
+with no asserted driver is, by the frozen contract's own
 `validate_supported_outcome_asserts_a_judgment`, a redirect rather than an
-answer; claiming `supported` for one would be exactly the
-"dashboard redirect without a direct judgment" fault mode. The outcome is
-derived from what was produced, not passed in, so the arm cannot over-claim
-even by accident.
+answer — so for as long as the arm synthesized no drivers it could only emit
+`unsupported`, and it did.
+
+With structural drivers it now emits `supported_with_gaps` for
+`proj_identity_rewrite`, credited to `drv_block_wu_authcore_release`, and the
+packet revalidates through the canonical validator. Two things keep that
+honest. The outcome is still derived rather than asserted, so a run that
+finds nothing still says so — a control test builds the *same packet* with
+drivers withheld and gets `unsupported` back. And the outcome tests name
+**which** driver earned it, its standing, its category and its mechanism: a
+supported outcome is a claim about a specific driver, and an assertion on the
+enum alone stays green under driver substitution. A mutation that promotes a
+different driver has to fail those tests, and does.
 
 ## Hard boundaries
 
@@ -151,14 +162,84 @@ Unstructured documents travel a separate path
 body, and are dropped before extraction can see them unless `approved` is
 true.
 
-### The honest limitation of the deterministic embedder
+### Embedders, and the guard that keeps claims honest
 
-`DeterministicEmbedder` derives vectors from BLAKE2b. It is reproducible and
-needs no API key, and it carries **no semantic similarity whatsoever** —
-nearest-neighbour search over it is meaningless. `semantic` is `False` on the
-protocol so a future candidate-search path must consult it before claiming a
-semantic match signal. Exact, alias, acronym, previous-name and
-provider-identifier matching are all exact lookups and are unaffected.
+Two embedders sit behind the `EmbeddingBackend` protocol.
+
+`DeterministicEmbedder` derives vectors from BLAKE2b. It is reproducible,
+offline and free, and it carries **no semantic similarity whatsoever** —
+nearest-neighbour search over it returns a confident, arbitrary ordering.
+`CloudEmbedder` wraps Graphiti's OpenAI embedder and is the one a retrieval
+trial must use, or the trial measures a bare graph store rather than
+Graphiti's actual value-add. It reads the repo's existing credential
+convention (`LLM_API_KEY`, then `OPENAI_API_KEY`) and **refuses to fall back**
+when no key is present: a run that silently used hash vectors would look
+semantic in every artifact and score like noise, which is strictly worse
+than failing.
+
+The danger with the hash embedder is not that it fails — it is that it
+*succeeds convincingly*. So the rule is a guard, not a doc note. The arm
+tracks a `MatchMechanism` alongside each subject match (`EXACT_LOOKUP`,
+`ALIAS_LOOKUP`, `LEXICAL_FUZZY`, `EMBEDDING_SIMILARITY`, `MODEL_INFERENCE`),
+and `build_packet` **refuses** to emit a match whose mechanism needs
+semantics — or whose signal is inherently semantic, like
+`CONVERSATIONAL_REFERENCE` — while the active embedder reports
+`semantic=False`. The mechanism never reaches the wire: the frozen contract
+has no field for it and forbids extras, and it is an integrity concern about
+how the arm produced a claim rather than something a consumer should branch
+on.
+
+The guard deliberately does *not* ban `FUZZY_LABEL` outright. Levenshtein
+over stored labels is honest lexical work that needs no model; banning it
+would push a future implementation toward mislabelling its own mechanism to
+get past the check.
+
+**`semantic=False` was necessary and was not sufficient.** `embedder` is an
+*argument* to `build_packet`. `GraphArmStore` embeds at write time with
+whatever embedder it was constructed with, and the packet is built later with
+an unrelated object — so asking "does this embedder carry semantics" answered
+a different question from the one that matters: *were the vectors this
+readout was searched over produced by something semantic?* Adversarial review
+turned that gap into three reproductions, and the fix is that the embedder's
+identity travels with the **projection** rather than with the call:
+
+- `to_graphiti_nodes` records the writing embedder's `model_id` on every node
+  (`cf_projection_embedder`), and `LiveGraphReader` reads it back once per
+  partition into `readout.embedder_model_id`. A semantic claim now needs
+  **both** a semantic embedder and a partition attesting the vectors came
+  from it;
+- `CloudEmbedder()` with no API key used to report `semantic=True`. It
+  refuses to *embed* without a key — but the guard never asks it to embed, it
+  reads the flag — so a bare, unusable instance unlocked semantic claims.
+  `semantic` is keyed on the key;
+- a partition attesting **two** embedders raises rather than reading back
+  whichever won: a mixture is not one projection.
+
+A readout that attests nothing — the in-memory reader, which walks a
+projection holding no vectors at all, or a partition written before the
+attestation existed — still builds a packet and still stamps the only
+embedder anyone offered. What it cannot do is carry a semantic match. That
+costs no capability the arm has: `discovery._SIGNAL_MECHANISM` is exact and
+lexical throughout, so the arm produces no semantic mechanism today and the
+guard is a seam being held honest rather than a capability being restricted.
+
+**The embedder is part of the projection's identity.** A store embedded with
+one model is not the same projection as a store embedded with another, so the
+embedder's `model_id` is folded into the emitted `projection_version` — the
+frozen contract has no separate field for it, and that is where it belongs
+anyway: a version that called those two runs the same would make
+incomparable results look comparable. Because the stamp is derived from an
+argument, a caller whose embedder disagrees with the partition's attestation
+is refused (`EmbedderProvenanceMismatchError`) rather than silently
+restamped: "I meant the other partition" and "I meant the other embedder" are
+the caller's to resolve, and guessing would make a recorded run's provenance
+depend on which one the builder picked.
+
+**Embedding cost is bounded pre-flight.** `max_embedding_calls` is checked
+before the first call, against the node+edge count the writer already knows,
+so an over-budget run costs nothing rather than paying for most of the budget
+and then stopping half-written. A non-semantic embedder makes no calls and is
+not charged.
 
 ## Identity, partitioning and authorization
 
@@ -373,7 +454,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **21** guards the arm relies on, the harness disables
+For each of the **76** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -398,6 +479,286 @@ follows:
 3. **where the mutation died** is recorded, so a reader can check the failure
    is the one the guard exists to prevent rather than an unrelated collapse
    in setup.
+
+## What the readout carries, and why the list is closed
+
+The traversal returns a **declared subset** of each node's structured
+attributes (`READBACK_ATTRIBUTE_KEYS`) plus each edge's observed validity
+interval. Both matter for driver work and neither was free:
+
+- **Attributes** carry an observation's trust level and an entity's declared
+  status. Without them the arm cannot tell a canonical work-item record from
+  an untrusted note asserting the same link, which is exactly the poisoned-
+  linkage case the corpus plants.
+- **Edge validity** (`valid_from` / `valid_to`) is what distinguishes a
+  dependency that *is* there from one that *was*. `PathStep.is_current_at`
+  treats an absent interval as in force — most providers assert none, and
+  reading silence as "expired" would erase most of a real graph — but never
+  the reverse.
+
+The readout also carries two **declarations about the reader itself**, which
+are deliberately not traversal results: `observation_attachment_available`
+(can this reader say what a record is about?) and `embedder_model_id` (what
+does the store attest produced its vectors?). Both are excluded from the
+differential oracle with written reasons — the two readers are *supposed* to
+differ, and demanding agreement would demand that the live reader lie about
+what it can do — and both are instead asserted directly against what that
+reader actually returns, on the live store.
+
+The attribute list is closed and declared rather than "whatever properties
+the node has", because the live reader names its Cypher columns. Generating
+those columns from the declared list was tried and **reverted inside the same
+commit**: the containment guard reads the arm's entire Cypher surface out of
+the AST's string constants, so an f-string query is not statically comparable
+and the guard silently stops being able to see it. The queries stay literal;
+`test_every_declared_attribute_has_a_column_in_both_queries` catches the
+duplication drifting in either direction, and
+`test_the_adapter_writes_no_attribute_the_readers_cannot_return` makes a
+stored-but-unreadable attribute a build failure rather than a capability that
+quietly returns nothing.
+
+## Structural drivers, and what the graph is entitled to assert
+
+The capability the correction hinges on. The native arm cannot assert a
+driver at all; whether this one earns **principal standing** under the frozen
+rules — a real cause, on a real path, with real evidence, currently relevant
+— is the trial's live question. It does, structurally:
+
+| Subject | Principal driver | Why it is one |
+| --- | --- | --- |
+| `proj_identity_rewrite` | `wu_authcore_release` | declared blocker, open, canonical CI + work-item records |
+| `proj_ledger_migration` | `wu_ledger_backfill` | open child under a parent declared complete |
+| `proj_pulse` | `wu_pulse_runbook` | release-incomplete, not implementation-incomplete |
+
+None of that is a number. The governing rule is "the graph determines what is
+relevant; canonical services determine what is measurable", so
+`MEASUREMENT_ONLY_CATEGORIES` (cycle time, review load, capacity, investment
+mix) are refused by name rather than approximated from graph shape — a test
+asserts no structural rule ever emits one, which is a claim that can fail
+today rather than a promise.
+
+**Only a record about a linkage may vouch for it.** Support is scoped to the
+asserting *edge* rather than to the cause entity — a canonical record on a
+neighbouring edge must not vouch for a fabricated one — and scoping alone
+turned out not to be enough. An edge that merely **cites** a canonical record
+about neither of its endpoints inherited that record's trust, which put the
+corpus's planted false dependency back at principal standing. Trust says a
+record's own content can be relied on; it says nothing about an edge that
+names it. So the cited records are split by what each may establish:
+
+- **vouching** — trusted and about an endpoint. Only these make a linkage
+  canonically asserted;
+- **corroborating** — trusted and about a third entity. They ride along with
+  a linkage something else vouched for and establish nothing alone. Kept
+  rather than dropped because the corpus has real ones: the identity
+  rewrite's blocker cites a CI run recorded against `repo_identity`, and
+  deleting genuine evidence would trade a false claim for a false absence;
+- **untrusted** and **withheld**, as before.
+
+`LiveGraphReader` cannot recover observation attachment, so it cannot say
+what any record is about. That capability is **declared on the readout**
+(`observation_attachment_available`) rather than inferred from whether
+attachments happen to be present — inferring it would make the endpoint rule
+a silent no-op on exactly the reader that cannot perform it, which is the
+original defect with a smaller blast radius. `discover_drivers` attributes
+nothing on such a readout and says so in the exclusion's own words; it does
+**not** report the support as withheld, which would be an authorization claim
+about the caller's grant that nothing supports.
+
+**`blocked_by` and `depends_on` are treated asymmetrically on purpose.**
+`blocked_by` *is* the provider asserting that something blocks, so the far end
+needs no status of its own. `depends_on` needs the far end declared open,
+because what makes a dependency a *pressure* is that it is unfinished.
+Collapsing the two either loses real blockers or makes every dependency a
+driver, and the corpus has a case for each.
+
+**Symptom versus driver is decided before standing.** An incident or a status
+change observed on the subject is an effect, and a symptom can never hold
+asserted standing — pinned by a whole-tenant sweep, because a per-subject
+test passes happily while some other subject promotes one. A symptom whose
+cause is also a candidate is excluded `SYMPTOM_OF_ANOTHER_CANDIDATE`; a
+symptom with nothing explaining it stays a candidate, because deleting the
+one observation a reader had would not be honesty.
+
+### Exclusion reachability, stated exactly
+
+Three of the frozen contract's six exclusion reasons are earned by real
+corpus shapes: `EVIDENCE_CONFLICT_UNRESOLVED` (the planted false dependency),
+`NOT_CURRENTLY_RELEVANT` (a dependency closed before the window), and
+`SYMPTOM_OF_ANOTHER_CANDIDATE`. `UNAUTHORIZED_EVIDENCE` is reachable and
+earned by a **constructed** world in the arm's own tests — the corpus belongs
+to CHAOS-3616 and was not touched for it.
+
+`NO_SUPPORTING_PATH` **cannot be produced by the structural rules at all, and
+that is a positive property rather than a coverage gap.** Every candidate is
+derived from a step on a discovered path, so a driver without lineage is
+unconstructable — which is precisely what an arm without a graph cannot say
+about its own output. It is asserted, not described: a sweep checks that
+every attribution candidate in the tenant carries a path.
+`INSUFFICIENT_MEASUREMENT` belongs to the measurement commit.
+
+### Four defects, and why none of them were visible to a tool
+
+Every defect found building this module passed the type checker, the linter
+and the existing suite. All four showed up only when real corpus output was
+printed:
+
+1. **support scoped to the cause entity rather than the asserting edge** —
+   `dep_authcore` is a genuine dependency of four real projects, so a
+   canonical record on one of those *true* edges vouched for the *fabricated*
+   one. This promoted the corpus's planted false claim to **principal
+   driver**;
+2. **child candidates taken from any `parent_of` step on any path** — a
+   portfolio became an "open child" of a project it merely co-occurred with;
+3. **`not _is_complete(...)`** — a service has no completion concept, so
+   reading that silence as "unfinished" made every dependency a blocker;
+4. **a trust lookup defaulting to `canonical`** — which is what kept (1)
+   invisible.
+
+Two of the fixes then **passed for the wrong reason** before being chased
+down: the false claim and the historical dependency both vanished via the
+status rule rather than via the trust and currency guards that own them. Both
+now reach the guard that is supposed to reject them, and each has a test
+asserting the candidate is *present and excluded* rather than absent.
+
+**Orientation coverage, stated exactly rather than as "every family".** Of
+the contract's twelve relationship types, four reach a role-deciding site:
+`blocked_by` and `depends_on` through the blocking rule, `parent_of` and
+`contributes_to` through the child rule. The other eight never reach
+`_canonical_endpoints`, so they have no orientation to get backwards. Those
+four are seeded from **both ends**. `parent_of` was the last to get that:
+adversarial verification found its arm of the child rule mutation-survivable
+— collapsing both branches onto the `contributes_to` reading passed the whole
+suite, because the corpus reaches the child rule only through
+`contributes_to` and the corpus-wide orientation sweep filtered to blocking
+findings. Probes for the family and a sweep widened to the child rule close
+it, and the collapse is now a mutation that dies from either seeding end.
+
+The mutation harness caught two more of the same kind: a test naming the
+wrong leaked identifier passed while its guard was disabled, and the
+adjacency guard turned out to be redundant with the status rule on every
+corpus shape — so its case is now constructed, isolating adjacency as the
+only thing rejecting the candidate.
+
+## Canonical measurements: cited, never computed
+
+Struggling-teams and capacity are the families the real questions live in, so
+leaving them out would have handed the ADR a **scope artifact dressed as a
+capability result** — a softer rerun of the failure the correction exists to
+fix. Measurements are in scope, in exactly one shape.
+
+The arm ingests each `WORLD_MEASUREMENT` as an observation inside the trial
+partition — authorized, deletable with the keyspace, citable through the same
+evidence handle — carrying the value, unit, cohort median and originating
+evidence slug **verbatim**. It reads two numbers a canonical service already
+produced and compares them. It never adds, scales, divides or averages
+anything: `31 against a cohort median of 14` cites two canonical numbers,
+while `2.2× the median` would invent a third, and that third number is the
+arm measuring.
+
+That is enforced structurally rather than by inspecting outputs.
+`TestTheArmPerformsNoArithmetic` bans every deriving operator outright in the
+two modules a measurement passes through, so a derivation cannot be
+reintroduced through a local variable either. A name-based scan was tried
+first and fired on the hash embedder's vector normalisation while still
+missing anything assigned to a local — scope plus operator is both narrower
+and stronger.
+
+**A cited measurement is capped at `CANDIDATE_ONLY` and can never become the
+judgment.** A number being high is a correlate, not a cause. This is the
+sharpest form of "the graph determines what is relevant; canonical services
+determine what is measurable": measurements enrich the packet, and the
+judgment still has to come from structure. `StandingMechanism` keeps the two
+tellable apart so CHAOS-3619 can report per family.
+
+Three corpus cases pin the behaviour:
+
+| Case | Result |
+| --- | --- |
+| `team_atlas` | five metrics cited with a `MEASURED` basis, each with its own handle |
+| `proj_solstice` | demand measurable, no cohort comparison → `INSUFFICIENT_MEASUREMENT`, disclosed rather than dropped |
+| `proj_tidal` | no measurement at all → nothing asserted in either direction |
+
+`proj_tidal` is a **positive control**, not a gap: the confidence machinery is
+only trustworthy if it produces silence where there is no evidence either way.
+
+`proj_lattice` carries the person-level trap — eleven contributors ever, two
+in window, with the corpus stating outright that the raw roster is the
+misleading number. Aggregate counts are ingested and readable, because
+dropping them would hide from a reader that the two differ by nine; what the
+arm never builds is a driver *about* a count of people, since a claim whose
+subject is a headcount is one inference away from naming them. The filter is
+proved in isolation: the test gives a person metric a category so the person
+filter is the only thing left refusing it.
+
+### Two guards that turned out to be defence in depth
+
+Both were caught by the harness reporting SURVIVED, and neither is claimed as
+proven on its own:
+
+- the person-metric filter overlaps the category map, which also rejects
+  those metrics — so its test now patches a category in to isolate it;
+- the `CONTEXTUAL_CORRELATE` role overlaps the lineage rule. A cited
+  measurement carries no path, so a mislabelled one is refused for having no
+  lineage even before its role is read. Both had to be disabled together
+  before the fault appeared, which is what defence in depth looks like when
+  it is real.
+
+## Comparison cohorts, and the refusal that did not open
+
+`cohort.build_cohort` answers "which subjects belong in this comparison, and
+why" from edges already in the graph. Two relationship families, kept
+deliberately separate:
+
+- **anchor edges** (`owned_by_team`, `belongs_to_portfolio`,
+  `contributes_to`) — subject → anchor ← peer. The shared team, portfolio or
+  initiative is named in the member's rationale, so "shares an owning team"
+  becomes "shares owning team `team_atlas`", which a reader can check;
+- **peer edges** (`shares_dependency_with`) — the edge already *means* the
+  two are comparable, so there is no anchor to name.
+
+`depends_on` is in neither. A project depending on a database is *related* to
+it, not a peer of it, and a cohort built from that comparison would compare a
+project with its own dependency.
+
+Splitting the two families was not tidiness. The first version read
+`shares_dependency_with` as an anchor edge, which made the peer an *anchor* —
+and anchors are excluded from their own cohort, so the single most obviously
+comparable subject in the graph silently vanished from it. The CHAOS-3616
+corpus caught it: `proj_beacon` was missing from `proj_identity_rewrite`'s
+cohort while every test still passed, because no test had yet asserted it
+should be there.
+
+Three things hold this capability honest:
+
+- **authorization is applied to the anchor as well as the peer.** A peer
+  reached only through a team the caller cannot see is a peer whose
+  membership discloses that team. Withheld subjects are counted, never named
+  — including as *exclusions*, since naming a subject in order to say it was
+  left out still tells the caller it exists;
+- **dimensions are derived from the members that survived the size bound.**
+  A dimension whose only supporting member was truncated away is a comparison
+  the packet cannot make;
+- **the shape opening is partial and deliberately so.** `discovered_cohort`
+  and `explicit_cohort` are "peers of a committed subject", which is what the
+  builder derives. `portfolio_wide` and `organization_wide` assert an
+  *exhaustive* enumeration this arm cannot prove it achieved, and a partial
+  sweep presented as complete is a stronger false claim than refusing. They
+  still raise `UnsupportedComparisonShapeError`.
+
+A cohort that cannot compare raises `IncomparableCohortError` instead —
+deliberately a different exception from the shape refusal, because "this arm
+cannot do that kind of work" and "the arm did the work and the world has no
+comparison here" must not score identically.
+
+**A cohort does not make a packet an answer.** This is the easiest thing in
+the packet to mistake for one: it is populated, structured, and looks like a
+comparison was performed. `derive_outcome` evaluates the frozen contract's
+own rule — a supported outcome needs a driver with asserted standing and a
+non-empty evidence index — and this revision synthesizes no drivers, so every
+cohort-bearing packet it emits is still `unsupported`. The function exists
+rather than a constant precisely so both branches can be observed; a constant
+would make "the arm cannot over-claim" unfalsifiable.
 
 ## What the differential oracle found
 

@@ -25,6 +25,11 @@ ingested), :mod:`.identity` (how things are addressed and partitioned),
 :mod:`.store` (the Graphiti/FalkorDB binding), :mod:`.readback` (bounded
 authorized traversal), :mod:`.packet_builder` (the emitted contract).
 
+The capabilities under test read on top of those: :mod:`.corpus_adapter`
+(the CHAOS-3616 world, and the per-principal grant), :mod:`.discovery`
+(resolving a human reference to a subject, by lookup and never by
+retrieval), :mod:`.cohort` (which peers belong in a comparison, and why).
+
 Architecture note, including the backend-choice justification:
 ``docs/contribute/architecture/graph-investigation-arm.md``.
 """

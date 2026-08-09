@@ -86,6 +86,7 @@ from .vocabulary import (
 __all__ = [
     "ALIAS_SIGNAL",
     "MAX_ATTRIBUTE_CHARS",
+    "READBACK_ATTRIBUTE_KEYS",
     "PROJECTION_VERSION",
     "GraphEdge",
     "GraphNode",
@@ -105,6 +106,36 @@ PROJECTION_VERSION = "graph_arm_projection.v1"
 #: comfortably more than any identifier, status token or provider key, and
 #: comfortably less than a sentence anyone would call a summary.
 MAX_ATTRIBUTE_CHARS = 256
+
+#: The attribute keys the arm commits to reading BACK out of the store.
+#:
+#: Deliberately a closed, declared list rather than "whatever properties the
+#: node has". The live reader names its columns, so a query that returned an
+#: open property map would either drag the embedding vectors back with it or
+#: silently vary by what happened to be written — and the differential oracle
+#: can only compare fields both readers agree exist.
+#:
+#: Writing an attribute outside this list is legal and lossless in the store;
+#: it simply is not read. ``test_chaos_3617_structured_ingestion`` fails if
+#: the corpus adapter writes a key that is not here, so "stored but silently
+#: unreadable" is a build failure rather than a capability that quietly does
+#: not work.
+READBACK_ATTRIBUTE_KEYS: tuple[str, ...] = (
+    "corpus_is_adversarial",
+    "corpus_state",
+    "corpus_trust",
+    "declared_status",
+    # A canonical measurement, carried verbatim. The arm cites these; it
+    # never computes, aggregates or derives a number from them, and
+    # ``test_chaos_3617_measurements`` enforces that structurally.
+    "measurement_basis",
+    "measurement_cohort_median",
+    "measurement_evidence_slug",
+    "measurement_metric",
+    "measurement_unit",
+    "measurement_value",
+    "superseded_by",
+)
 
 _ATTRIBUTE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 

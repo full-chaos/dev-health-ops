@@ -134,6 +134,12 @@ class GraphObservationKind(StrEnum):
     AGENT_TASK = "agent_task"
     AGENT_ARTIFACT = "agent_artifact"
     AGENT_OUTCOME = "agent_outcome"
+    #: A canonical service's measurement, ingested so the arm can CITE the
+    #: number. Deliberately its own kind: a measurement is not a status
+    #: change or a review, and filing it under one of those would make it
+    #: indistinguishable from the structured records the arm reasons about
+    #: structurally — which is the boundary the whole trial rests on.
+    MEASUREMENT = "measurement"
 
 
 ALL_GRAPH_OBSERVATION_KINDS: tuple[GraphObservationKind, ...] = tuple(

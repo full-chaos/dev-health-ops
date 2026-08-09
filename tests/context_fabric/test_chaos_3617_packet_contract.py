@@ -98,6 +98,7 @@ def _packet(readout, signer, **overrides):
             records_indexed=42,
         ),
     )
+    embedder = overrides.pop("embedder", None)
     return build_packet(
         readout=readout,
         job=job,
@@ -105,6 +106,7 @@ def _packet(readout, signer, **overrides):
         signer=signer,
         trial=TrialContext(run_id=_RUN_ID, **overrides),
         produced_at=_PRODUCED_AT,
+        embedder=embedder,
     )
 
 
@@ -187,7 +189,62 @@ class TestReproducibilityMetadata:
     ) -> None:
         assert packet.versions.query_version == QUERY_VERSION
         assert packet.versions.ranking_version == RANKING_VERSION
-        assert packet.versions.projection_version == PROJECTION_VERSION
+        assert packet.versions.projection_version.startswith(
+            PROJECTION_VERSION.removesuffix(".v1")
+        )
+
+    def test_the_projection_version_names_the_embedder_that_produced_it(
+        self, alpha_projection, signer
+    ) -> None:
+        """Two embedders, two projections — and the version has to say so.
+
+        A store embedded with a hash and a store embedded with a real model
+        are not the same projection. The frozen contract has no field for the
+        embedder and forbids extras, so the identity is folded into
+        ``projection_version`` — which is where it belongs anyway, because a
+        version that called those two runs the same would make incomparable
+        results look comparable.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.backend import (
+            CloudEmbedder,
+            DeterministicEmbedder,
+        )
+
+        readout = _readout(alpha_projection)
+        hashed = _packet(readout, signer, embedder=DeterministicEmbedder())
+        semantic = _packet(
+            readout, signer, embedder=CloudEmbedder(model="text-embedding-3-small")
+        )
+
+        assert "deterministic" in hashed.versions.projection_version
+        assert "openai" in semantic.versions.projection_version
+        assert (
+            hashed.versions.projection_version != semantic.versions.projection_version
+        )
+
+    def test_the_projection_version_stays_a_platform_version_token(
+        self, alpha_projection, signer
+    ) -> None:
+        """The fold must not break the frozen token grammar.
+
+        ``PlatformVersionToken`` exists so a provenance block cannot carry
+        producer-authored copy; a model name spliced in carelessly (dots,
+        dashes) would either fail validation or smuggle punctuation through.
+        """
+
+        import re
+
+        from dev_health_ops.context_fabric.graph_arm.backend import CloudEmbedder
+
+        pattern = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v\d+(?:\.\d+)*$")
+        for model in ("text-embedding-3-small", "text-embedding-3-large"):
+            packet = _packet(
+                _readout(alpha_projection), signer, embedder=CloudEmbedder(model=model)
+            )
+            assert pattern.fullmatch(packet.versions.projection_version), (
+                packet.versions.projection_version
+            )
 
     def test_the_packet_id_is_derived_from_the_run_and_job(
         self, alpha_projection, signer

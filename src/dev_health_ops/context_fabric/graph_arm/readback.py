@@ -49,7 +49,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -63,7 +63,7 @@ from dev_health_ops.api.dev.investigation_contract import (
 from .backend import parse_triple_fact
 from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .identity import assert_partition_matches_org
-from .projection import GraphProjection
+from .projection import READBACK_ATTRIBUTE_KEYS, GraphProjection
 from .vocabulary import GraphEntityKind, GraphObservationKind
 
 __all__ = [
@@ -74,6 +74,7 @@ __all__ = [
     "GraphReader",
     "InvestigationReadout",
     "LiveGraphReader",
+    "MixedProjectionProvenanceError",
     "PathStep",
     "ProjectionGraphReader",
     "NODE_COUNT_QUERY",
@@ -98,6 +99,13 @@ class DiscoveredEntity:
     source_class: SourceClass
     observed_at: datetime
     alias_values: tuple[str, ...] = ()
+    #: The arm's own structured attributes, restricted to
+    #: :data:`~.projection.READBACK_ATTRIBUTE_KEYS`. Values are strings on
+    #: the way out of both readers, because FalkorDB does not preserve the
+    #: Python type and a reader that returned ``True`` where the other
+    #: returned ``"True"`` would fail the differential oracle for a reason
+    #: that has nothing to do with the graph.
+    attributes: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +120,10 @@ class DiscoveredObservation:
     subject_canonical_ids: tuple[str, ...] = ()
     repository_ids: tuple[str, ...] = ()
     outcome: str | None = None
+    #: As on :class:`DiscoveredEntity`. This is where an observation's trust
+    #: level travels, which is what lets a caller tell a canonical record
+    #: from an untrusted note asserting the same thing.
+    attributes: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +147,26 @@ class PathStep:
     source_class: SourceClass
     observed_at: datetime
     observation_ids: tuple[str, ...] = ()
+    #: The relationship's observed validity interval, carried through so a
+    #: caller can tell a dependency that *is* there from one that *was*.
+    #: ``None``/``None`` means the source asserted no interval, which is not
+    #: the same as "current" and must not be read as it.
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+
+    def is_current_at(self, moment: datetime) -> bool:
+        """Whether this edge was in force at ``moment``.
+
+        An absent interval counts as in force: most providers assert no
+        interval at all, and treating silence as "expired" would erase the
+        majority of a real graph. What must never happen is the reverse —
+        an interval that closed before the window being read as current,
+        which is a historical cause presented as a live one.
+        """
+
+        if self.valid_from is not None and moment < self.valid_from:
+            return False
+        return not (self.valid_to is not None and moment >= self.valid_to)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,8 +237,46 @@ class InvestigationReadout:
 
     observed_source_classes: frozenset[SourceClass] = field(default_factory=frozenset)
 
+    #: Whether the reader that produced this readout can say what an
+    #: observation is ABOUT. **Declared by the reader**, never inferred from
+    #: whether attachments happen to be present.
+    #:
+    #: The distinction is load-bearing rather than pedantic.
+    #: :class:`LiveGraphReader` cannot recover attachment today (see its
+    #: docstring), and a rule that skipped the "is this record about the
+    #: linkage" check whenever attachments were absent would become a silent
+    #: no-op on exactly the reader that cannot perform it -- the original
+    #: defect, live-only. Declaring the capability instead makes the gap a
+    #: visible, attributable state: ``discover_drivers`` refuses to attribute
+    #: on such a readout and says so in the exclusion's own words rather than
+    #: reporting the support as withheld, which would be an authorization
+    #: claim nothing supports.
+    #:
+    #: Defaults to ``True`` because a hand-built readout carries whatever
+    #: attachments its author wrote; both real readers set it explicitly.
+    observation_attachment_available: bool = True
+
+    #: The embedder the STORE records as having produced this partition's
+    #: vectors, or ``None`` when nothing attests to one.
+    #:
+    #: This is the arm's only honest answer to "were these vectors produced
+    #: by something semantic". ``build_packet`` takes an embedder argument
+    #: that has no connection to whatever wrote the store — different object,
+    #: different run, possibly a different model — so a guard that read
+    #: ``embedder.semantic`` was asking the caller whether the caller's claim
+    #: was true.
+    #:
+    #: ``None`` on the in-memory reader, and not a gap: an unwritten
+    #: projection has no vectors at all, so there is nothing to attest and
+    #: nothing that could be searched by similarity.
+    embedder_model_id: str | None = None
+
     def entity_by_id(self) -> Mapping[str, DiscoveredEntity]:
         return {entity.canonical_id: entity for entity in self.entities}
+
+
+class MixedProjectionProvenanceError(RuntimeError):
+    """One partition's vectors were written by more than one embedder."""
 
 
 class AuthorizationDerivationNotImplementedError(NotImplementedError):
@@ -264,14 +334,29 @@ class GraphReader(Protocol):
 
 #: One adjacency entry: ``(relationship, other canonical id, direction,
 #: source class, observed_at, observation ids)``.
-_EdgeTuple = tuple[
-    RelationshipType,
-    str,
-    RelationshipDirection,
-    SourceClass,
-    datetime,
-    tuple[str, ...],
-]
+@dataclass(frozen=True, slots=True)
+class _Neighbour:
+    """One edge as the traversal sees it, from either reader.
+
+    Was a six-tuple. Named because driver work needs the validity interval
+    too, and a positional unpack that grows silently is how a field ends up
+    read from the wrong slot in one reader and the right one in the other —
+    precisely the class of divergence the differential oracle exists to
+    catch, made harder to catch by the shape of the code.
+    """
+
+    relationship: RelationshipType
+    other_canonical_id: str
+    direction: RelationshipDirection
+    source_class: SourceClass
+    observed_at: datetime
+    observation_ids: tuple[str, ...] = ()
+    #: The edge's observed validity interval. ``valid_to`` in the past is
+    #: what distinguishes a dependency that *was* there from one that is,
+    #: and a driver built on the former is a historical cause presented as a
+    #: current one.
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,11 +372,11 @@ class _Adjacency:
 
     entities: Mapping[str, DiscoveredEntity]
     #: canonical id -> every edge touching it, in either direction.
-    edges: Mapping[str, tuple[_EdgeTuple, ...]]
+    edges: Mapping[str, tuple[_Neighbour, ...]]
     observations: tuple[DiscoveredObservation, ...]
 
 
-def _ordered_edges(adjacency: _Adjacency, canonical_id: str) -> tuple[_EdgeTuple, ...]:
+def _ordered_edges(adjacency: _Adjacency, canonical_id: str) -> tuple[_Neighbour, ...]:
     """One entity's edges in a total, backend-independent order.
 
     Found by the differential oracle, not by review: the in-memory reader
@@ -311,7 +396,11 @@ def _ordered_edges(adjacency: _Adjacency, canonical_id: str) -> tuple[_EdgeTuple
     return tuple(
         sorted(
             adjacency.edges.get(canonical_id, ()),
-            key=lambda edge: (edge[0].value, edge[1], edge[2].value),
+            key=lambda edge: (
+                edge.relationship.value,
+                edge.other_canonical_id,
+                edge.direction.value,
+            ),
         )
     )
 
@@ -325,6 +414,8 @@ def _traverse(
     authorized: frozenset[str],
     max_hops: int,
     budgets: TrialBudgets,
+    observation_attachment_available: bool,
+    embedder_model_id: str | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> InvestigationReadout:
     # Whichever of the two numbers is smaller becomes the ceiling, and the
@@ -415,7 +506,10 @@ def _traverse(
             # under-reports.
             unfollowed = [
                 other
-                for _, other, *_ in _ordered_edges(adjacency, current)
+                for other in (
+                    edge.other_canonical_id
+                    for edge in _ordered_edges(adjacency, current)
+                )
                 if other in adjacency.entities
                 and other in authorized
                 and other != current
@@ -428,14 +522,8 @@ def _traverse(
                 if any(other not in reached for other in unfollowed):
                     declined_leaving_entities_unreached = True
             continue
-        for (
-            relationship,
-            other,
-            direction,
-            source_class,
-            observed_at,
-            observation_ids,
-        ) in _ordered_edges(adjacency, current):
+        for neighbour in _ordered_edges(adjacency, current):
+            other = neighbour.other_canonical_id
             if other not in adjacency.entities:
                 continue
             if other not in authorized:
@@ -452,13 +540,15 @@ def _traverse(
             step = PathStep(
                 from_canonical_id=current,
                 from_kind=adjacency.entities[current].kind,
-                relationship=relationship,
-                direction=direction,
+                relationship=neighbour.relationship,
+                direction=neighbour.direction,
                 to_canonical_id=other,
                 to_kind=adjacency.entities[other].kind,
-                source_class=source_class,
-                observed_at=observed_at,
-                observation_ids=observation_ids,
+                source_class=neighbour.source_class,
+                observed_at=neighbour.observed_at,
+                observation_ids=neighbour.observation_ids,
+                valid_from=neighbour.valid_from,
+                valid_to=neighbour.valid_to,
             )
             extended = (*steps, step)
             signature = tuple(
@@ -520,17 +610,14 @@ def _traverse(
         )
         if not subjects:
             continue
+        # ``replace`` rather than a field-by-field rebuild. The rebuild
+        # silently dropped ``attributes`` the moment the readout grew them,
+        # and because BOTH readers share this function the differential
+        # oracle could not see it: two readers agreeing on a value neither
+        # of them carries is still agreement. Found by printing real corpus
+        # output, which is the only thing that would have found it.
         visible_observations.append(
-            DiscoveredObservation(
-                canonical_id=observation.canonical_id,
-                kind=observation.kind,
-                title=observation.title,
-                source_class=observation.source_class,
-                observed_at=observation.observed_at,
-                subject_canonical_ids=subjects,
-                repository_ids=observation.repository_ids,
-                outcome=observation.outcome,
-            )
+            replace(observation, subject_canonical_ids=subjects)
         )
 
     evidence_outcome = budgets.check_evidence(len(visible_observations))
@@ -572,7 +659,25 @@ def _traverse(
         paths_truncation_reason=paths_reason,
         evidence_truncation_reason=evidence_reason,
         observed_source_classes=frozenset(observed_classes),
+        observation_attachment_available=observation_attachment_available,
+        embedder_model_id=embedder_model_id,
     )
+
+
+def _readback_attributes(attributes: Mapping[str, object]) -> dict[str, str]:
+    """The declared subset of a node's attributes, stringified.
+
+    Both readers go through this, so "what the in-memory reader returns" and
+    "what the Cypher reader returns" cannot drift into different type
+    conventions — the divergence would be real and would look like a graph
+    difference rather than a marshalling one.
+    """
+
+    return {
+        key: str(attributes[key])
+        for key in READBACK_ATTRIBUTE_KEYS
+        if attributes.get(key) is not None
+    }
 
 
 def _adjacency_from_projection(projection: GraphProjection) -> _Adjacency:
@@ -589,43 +694,36 @@ def _adjacency_from_projection(projection: GraphProjection) -> _Adjacency:
             source_class=node.source_class,
             observed_at=node.observed_at,
             alias_values=alias_values,
+            attributes=_readback_attributes(node.attributes),
         )
         by_uuid[node.uuid] = node.canonical_id
 
-    edges: dict[
-        str,
-        list[
-            tuple[
-                RelationshipType,
-                str,
-                RelationshipDirection,
-                SourceClass,
-                datetime,
-                tuple[str, ...],
-            ]
-        ],
-    ] = {}
+    edges: dict[str, list[_Neighbour]] = {}
     for edge in projection.edges:
-        edges.setdefault(edge.source_canonical_id, []).append(
+        for owner, other, direction in (
             (
-                edge.relationship,
+                edge.source_canonical_id,
                 edge.target_canonical_id,
                 RelationshipDirection.FORWARD,
-                edge.source_class,
-                edge.observed_at,
-                edge.observation_ids,
-            )
-        )
-        edges.setdefault(edge.target_canonical_id, []).append(
+            ),
             (
-                edge.relationship,
+                edge.target_canonical_id,
                 edge.source_canonical_id,
                 RelationshipDirection.REVERSE,
-                edge.source_class,
-                edge.observed_at,
-                edge.observation_ids,
+            ),
+        ):
+            edges.setdefault(owner, []).append(
+                _Neighbour(
+                    relationship=edge.relationship,
+                    other_canonical_id=other,
+                    direction=direction,
+                    source_class=edge.source_class,
+                    observed_at=edge.observed_at,
+                    observation_ids=edge.observation_ids,
+                    valid_from=edge.valid_from,
+                    valid_to=edge.valid_to,
+                )
             )
-        )
 
     observations: list[DiscoveredObservation] = []
     for node in projection.nodes:
@@ -645,6 +743,7 @@ def _adjacency_from_projection(projection: GraphProjection) -> _Adjacency:
                 ),
                 repository_ids=node.repository_ids,
                 outcome=str(outcome) if outcome is not None else None,
+                attributes=_readback_attributes(node.attributes),
             )
         )
 
@@ -691,6 +790,9 @@ class ProjectionGraphReader:
             authorized=frozenset(authorized_entity_ids),
             max_hops=max_hops,
             budgets=budgets,
+            # The projection carries ``observation_attachments`` outright, so
+            # this reader can always say what a record is about.
+            observation_attachment_available=True,
         )
 
 
@@ -701,6 +803,19 @@ class ProjectionGraphReader:
 #: aliases at all while the reference returned them. That gap would have
 #: surfaced later as PR2's alias/acronym search finding nothing in the live
 #: store and everything in the reference.
+#: Every Cypher statement below is a plain literal, never an f-string.
+#:
+#: Building them by interpolation was tried and reverted inside one commit.
+#: The containment guard reads the arm's Cypher surface out of the AST's
+#: string *constants*, so an f-string query is not statically comparable and
+#: the guard silently stops being able to see it — the query surface would
+#: still be small and read-only, and nothing would be checking that any more.
+#:
+#: The cost is that the attribute columns are typed out twice, here and in
+#: :data:`~.projection.READBACK_ATTRIBUTE_KEYS`. That drift is caught by
+#: ``test_every_declared_attribute_has_a_column_in_both_queries``, which
+#: fails when a key is declared without a column or a column without a key.
+
 _ENTITY_QUERY = """
 MATCH (n:Entity)
 WHERE n.group_id = $partition AND n.cf_is_entity = true
@@ -712,7 +827,18 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_alias_alias AS alias_alias,
        n.cf_alias_acronym AS alias_acronym,
        n.cf_alias_previous_name AS alias_previous_name,
-       n.cf_alias_provider_identifier AS alias_provider_identifier
+       n.cf_alias_provider_identifier AS alias_provider_identifier,
+       n.cf_attr_corpus_is_adversarial AS attr_corpus_is_adversarial,
+       n.cf_attr_corpus_state AS attr_corpus_state,
+       n.cf_attr_corpus_trust AS attr_corpus_trust,
+       n.cf_attr_declared_status AS attr_declared_status,
+       n.cf_attr_measurement_basis AS attr_measurement_basis,
+       n.cf_attr_measurement_cohort_median AS attr_measurement_cohort_median,
+       n.cf_attr_measurement_evidence_slug AS attr_measurement_evidence_slug,
+       n.cf_attr_measurement_metric AS attr_measurement_metric,
+       n.cf_attr_measurement_unit AS attr_measurement_unit,
+       n.cf_attr_measurement_value AS attr_measurement_value,
+       n.cf_attr_superseded_by AS attr_superseded_by
 """
 
 #: The separator :func:`~.backend.to_graphiti_nodes` joins alias values with.
@@ -733,7 +859,18 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_source_class AS source_class,
        n.cf_observed_at AS observed_at,
        n.cf_repository_ids AS repository_ids,
-       n.outcome AS outcome
+       n.outcome AS outcome,
+       n.cf_attr_corpus_is_adversarial AS attr_corpus_is_adversarial,
+       n.cf_attr_corpus_state AS attr_corpus_state,
+       n.cf_attr_corpus_trust AS attr_corpus_trust,
+       n.cf_attr_declared_status AS attr_declared_status,
+       n.cf_attr_measurement_basis AS attr_measurement_basis,
+       n.cf_attr_measurement_cohort_median AS attr_measurement_cohort_median,
+       n.cf_attr_measurement_evidence_slug AS attr_measurement_evidence_slug,
+       n.cf_attr_measurement_metric AS attr_measurement_metric,
+       n.cf_attr_measurement_unit AS attr_measurement_unit,
+       n.cf_attr_measurement_value AS attr_measurement_value,
+       n.cf_attr_superseded_by AS attr_superseded_by
 """
 
 _EDGE_QUERY = """
@@ -742,7 +879,21 @@ WHERE e.group_id = $partition
 RETURN e.fact AS fact,
        e.cf_source_class AS source_class,
        e.created_at AS observed_at,
-       e.cf_observation_ids AS observation_ids
+       e.cf_observation_ids AS observation_ids,
+       e.valid_at AS valid_from,
+       e.invalid_at AS valid_to
+"""
+
+#: What the STORE says produced this partition's vectors.
+#:
+#: Distinct rather than "any one node": a partition written twice with
+#: different embedders holds a mixture, and the difference between "one
+#: attested model" and "two" is the difference between a comparable
+#: projection and an incomparable one.
+_PROJECTION_EMBEDDER_QUERY = """
+MATCH (n:Entity)
+WHERE n.group_id = $partition
+RETURN DISTINCT n.cf_projection_embedder AS embedder_model_id
 """
 
 
@@ -761,6 +912,7 @@ READ_ONLY_QUERIES: tuple[str, ...] = (
     _ENTITY_QUERY,
     _OBSERVATION_QUERY,
     _EDGE_QUERY,
+    _PROJECTION_EMBEDDER_QUERY,
     NODE_COUNT_QUERY,
 )
 
@@ -816,21 +968,10 @@ class LiveGraphReader:
                 source_class=SourceClass(record["source_class"]),
                 observed_at=datetime.fromisoformat(record["observed_at"]),
                 alias_values=tuple(sorted(aliases)),
+                attributes=_attributes_from_row(record),
             )
 
-        edges: dict[
-            str,
-            list[
-                tuple[
-                    RelationshipType,
-                    str,
-                    RelationshipDirection,
-                    SourceClass,
-                    datetime,
-                    tuple[str, ...],
-                ]
-            ],
-        ] = {}
+        edges: dict[str, list[_Neighbour]] = {}
         for record in await _rows(driver, _EDGE_QUERY, partition=partition):
             source_id, relationship, target_id = parse_triple_fact(record["fact"])
             observed_at = _as_datetime(record["observed_at"])
@@ -838,26 +979,24 @@ class LiveGraphReader:
             observation_ids = tuple(
                 item for item in (record["observation_ids"] or "").split(",") if item
             )
-            edges.setdefault(source_id, []).append(
-                (
-                    relationship,
-                    target_id,
-                    RelationshipDirection.FORWARD,
-                    source_class,
-                    observed_at,
-                    observation_ids,
+            valid_from = _as_optional_datetime(record.get("valid_from"))
+            valid_to = _as_optional_datetime(record.get("valid_to"))
+            for owner, other, direction in (
+                (source_id, target_id, RelationshipDirection.FORWARD),
+                (target_id, source_id, RelationshipDirection.REVERSE),
+            ):
+                edges.setdefault(owner, []).append(
+                    _Neighbour(
+                        relationship=relationship,
+                        other_canonical_id=other,
+                        direction=direction,
+                        source_class=source_class,
+                        observed_at=observed_at,
+                        observation_ids=observation_ids,
+                        valid_from=valid_from,
+                        valid_to=valid_to,
+                    )
                 )
-            )
-            edges.setdefault(target_id, []).append(
-                (
-                    relationship,
-                    source_id,
-                    RelationshipDirection.REVERSE,
-                    source_class,
-                    observed_at,
-                    observation_ids,
-                )
-            )
 
         observations: list[DiscoveredObservation] = []
         for record in await _rows(driver, _OBSERVATION_QUERY, partition=partition):
@@ -875,6 +1014,7 @@ class LiveGraphReader:
                         if item
                     ),
                     outcome=record["outcome"],
+                    attributes=_attributes_from_row(record),
                 )
             )
 
@@ -891,7 +1031,49 @@ class LiveGraphReader:
             authorized=frozenset(authorized_entity_ids),
             max_hops=max_hops,
             budgets=budgets,
+            # ``add_nodes_and_edges_bulk`` writes entity edges only, so this
+            # reader cannot recover which entities an observation was about.
+            # Declared rather than left to be inferred from the empty subject
+            # lists below: a consumer that inferred it would have to guess,
+            # and ``discover_drivers`` would silently stop checking exactly
+            # the thing it cannot check here.
+            observation_attachment_available=False,
+            embedder_model_id=await _attested_embedder(driver, partition),
         )
+
+
+async def _attested_embedder(driver: Any, partition: str) -> str | None:
+    """What the partition itself records as having produced its vectors.
+
+    Returns ``None`` when nothing is recorded — a partition written before
+    the attestation existed, which is an honest "cannot say" rather than a
+    permission. Every semantic claim is refused on such a readout, which is
+    the safe direction.
+
+    Raises when the partition records **more than one** embedder. A partition
+    whose vectors came from two models is not one projection, and every
+    packet built from it would be stamped with whichever model won the read;
+    that is precisely the "two incomparable runs look comparable" failure the
+    projection version exists to prevent, arriving inside a single store.
+    """
+
+    attested = {
+        str(record["embedder_model_id"])
+        for record in await _rows(
+            driver, _PROJECTION_EMBEDDER_QUERY, partition=partition
+        )
+        if record.get("embedder_model_id") is not None
+    }
+    if not attested:
+        return None
+    if len(attested) > 1:
+        raise MixedProjectionProvenanceError(
+            f"partition {partition!r} records {sorted(attested)} as having "
+            "produced its vectors. A partition written by two embedders holds "
+            "a mixture, so no packet built from it can name the projection it "
+            "came from; re-project the organization from a single run"
+        )
+    return attested.pop()
 
 
 async def _rows(driver: Any, query: str, **params: object) -> list[dict[str, Any]]:
@@ -906,3 +1088,33 @@ def _as_datetime(value: object) -> datetime:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value))
+
+
+def _as_optional_datetime(value: object) -> datetime | None:
+    """A validity bound, or ``None`` when the source asserted none.
+
+    Deliberately does NOT substitute a default. "No interval recorded" and
+    "in force from the epoch" are different claims, and the second one is
+    the arm inventing currency it was never told about.
+    """
+
+    if value is None or value == "":
+        return None
+    return _as_datetime(value)
+
+
+def _attributes_from_row(record: Mapping[str, object]) -> dict[str, str]:
+    """The declared attributes from one Cypher row.
+
+    Mirrors :func:`_readback_attributes` on the in-memory side, including
+    its "absent means absent" rule: a property FalkorDB returns as ``None``
+    is one the node does not carry, and materialising it as the string
+    ``"None"`` would make the two readers disagree about a node they both
+    read correctly.
+    """
+
+    return {
+        key: str(record[f"attr_{key}"])
+        for key in READBACK_ATTRIBUTE_KEYS
+        if record.get(f"attr_{key}") is not None
+    }

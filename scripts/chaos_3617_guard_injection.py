@@ -21,6 +21,13 @@ not have:
    failure is the one the guard exists to prevent rather than an unrelated
    collapse somewhere in setup.
 
+One residual shape in the region check, found by adversarial verification and
+**unexploited**: the ``FAILED <nodeid>`` line is inside the region, so a token
+that happened to be a substring of a mutation's own test node id would be
+credited without any assertion carrying it — audited across all mutations,
+zero do, and ``test_no_expected_reason_hides_inside_its_own_node_id`` keeps it
+that way.
+
 Usage::
 
     uv run python scripts/chaos_3617_guard_injection.py            # all
@@ -236,7 +243,11 @@ MUTATIONS: tuple[Mutation, ...] = (
             "    return tuple(\n"
             "        sorted(\n"
             "            adjacency.edges.get(canonical_id, ()),\n"
-            "            key=lambda edge: (edge[0].value, edge[1], edge[2].value),\n"
+            "            key=lambda edge: (\n"
+            "                edge.relationship.value,\n"
+            "                edge.other_canonical_id,\n"
+            "                edge.direction.value,\n"
+            "            ),\n"
             "        )\n"
             "    )"
         ),
@@ -439,17 +450,962 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="semantic-claim-allowed-under-a-hash-embedder",
+        defect=(
+            "a match produced by similarity over non-semantic hash vectors is "
+            "emitted as a real subject match, and scores as a retrieval "
+            "capability the arm does not have"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "    if embedder.semantic and attested_embedder is not None:\n"
+            "        return"
+        ),
+        replacement="    if True:\n        return",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestSemanticClaimsAreRefusedUnderANonSemanticEmbedder",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="embedding-budget-not-checked-before-spending",
+        defect=(
+            "a projection spends unbounded embedding calls, and an "
+            "over-budget run pays for most of them before stopping"
+        ),
+        path=SRC / "store.py",
+        anchor="            if not outcome.within_budget:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::TestEmbeddingBudget::"
+            "test_a_projection_over_the_embedding_budget_is_refused_before_any_call",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="projection-version-omits-the-embedder",
+        defect=(
+            "two runs embedded with different models report the same "
+            "projection version, making incomparable results look comparable"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        projection_version=(\n"
+            "            f\"{PROJECTION_VERSION.removesuffix('.v1')}.\"\n"
+            '            f"{embedder_projection_suffix(active_embedder)}.v1"\n'
+            "        ),"
+        ),
+        replacement="        projection_version=PROJECTION_VERSION,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_packet_contract.py::"
+            "TestReproducibilityMetadata::"
+            "test_the_projection_version_names_the_embedder_that_produced_it",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="cloud-embedder-degrades-silently-without-a-key",
+        defect=(
+            "a run with no API key silently uses hash vectors while every "
+            "artifact says it was semantic"
+        ),
+        path=SRC / "backend.py",
+        anchor="        if not key:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::TestEmbedderContracts::"
+            "test_the_cloud_embedder_refuses_to_degrade_silently",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="candidate-search-ranks-a-withheld-entity",
+        defect=(
+            "a restricted entity that matches the query is filtered AFTER "
+            "ranking, so its position leaks even though its record is never "
+            "returned -- and the corpus's restricted project is same-tenant, "
+            "so no tenant check catches it"
+        ),
+        path=SRC / "discovery.py",
+        anchor="        if node.canonical_id not in authorized:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_candidate_search.py::"
+            "TestAuthorizationBoundsTheSearch",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="candidate-ranking-depends-on-node-order",
+        defect=(
+            "the ranking falls back on iteration order, so the same world and "
+            "the same query rank differently between runs and a recorded "
+            "trial result cannot be reproduced"
+        ),
+        path=SRC / "discovery.py",
+        anchor="    ranked = sorted(matches.values(), key=lambda item: item.rank_key)",
+        replacement="    ranked = list(matches.values())",
+        tests=(
+            f"{TESTS}/test_chaos_3617_candidate_search.py::"
+            "TestRankingIsTotalAndContentDerived::"
+            "test_shuffling_the_node_order_does_not_change_the_ranking",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="fuzzy-match-accepts-an-infix",
+        defect=(
+            "fuzzy matching becomes substring containment, so 'acr' matches "
+            "'sacred' and a wrong-but-confident subject reaches rank"
+        ),
+        path=SRC / "discovery.py",
+        anchor="    return any(query_tokens <= set(text.split()) for text in haystacks)",
+        replacement="    return any(normalized_query in text for text in haystacks)",
+        tests=(
+            f"{TESTS}/test_chaos_3617_candidate_search.py::"
+            "TestFuzzyMatchingIsConservative::"
+            "test_a_query_appearing_only_as_an_infix_matches_nothing",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="corpus-authorization-falls-back-to-tenancy",
+        defect=(
+            "the arm authorizes by tenant instead of by grant, so the "
+            "same-tenant restricted project is returned to a principal who "
+            "cannot see it -- invisible to every tenant-level check"
+        ),
+        path=SRC / "corpus_adapter.py",
+        anchor="    return world.authorized_entity_ids(principal_id)",
+        replacement=(
+            "    return frozenset(\n"
+            "        seed_ids_for_tenant(world.PRINCIPALS[principal_id].tenant_id)\n"
+            "    )"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_corpus_adapter.py::"
+            "TestAuthorizationIsByGrantNotTenancy",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="exhaustive-comparison-shape-silently-accepted",
+        defect=(
+            "a portfolio-wide or organization-wide shape is built from a "
+            "peer cohort, presenting a partial sweep as an exhaustive one"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    elif job.comparison_shape not in _COHORT_CAPABLE_SHAPES:",
+        replacement="    elif False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_an_exhaustive_shape_is_still_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="cohort-shape-emitted-with-no-cohort-behind-it",
+        defect=(
+            "a cohort-bearing shape is emitted with only the subject in it, "
+            "scoring as a comparison the arm never made. Note what the RED "
+            "line shows: the emission is still blocked -- by the frozen "
+            "contract, late and as a validation error. What this refusal "
+            "adds is the typed, attributable 'this arm cannot do that', "
+            "which is a different statement from 'this packet is malformed'"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    elif cohort is None:",
+        replacement="    elif False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_a_cohort_shape_with_no_proposal_is_refused",
+        ),
+        expect_failure="needs at least two members",
+    ),
+    Mutation(
+        mutation_id="incomparable-cohort-emitted-as-a-comparison",
+        defect=(
+            "a cohort with nothing to compare against, or nothing to compare "
+            "on, is emitted as though a comparison were performed. Contract-"
+            "backed like the mutation above: the packet still cannot be "
+            "built, and what is lost is the distinction between a capability "
+            "gap and an empty result"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if len(cohort_members) < 2 or not cohort_dimensions:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_a_cohort_that_cannot_compare_is_refused_distinguishably",
+        ),
+        expect_failure="needs at least two members",
+    ),
+    Mutation(
+        mutation_id="cohort-built-against-a-wider-grant-accepted",
+        defect=(
+            "a cohort built with a wider authorization set than the traversal "
+            "used names entities the caller may not see. The frozen "
+            "contract's own cross-section check is the backstop and fires "
+            "here; this refusal is the earlier, attributable one"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if outside:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestTheRefusalThatRemains::"
+            "test_a_cohort_naming_an_unauthorized_entity_is_refused",
+        ),
+        expect_failure="not in related_context.authorized_entity_ids",
+    ),
+    Mutation(
+        mutation_id="outcome-asserted-instead-of-derived",
+        defect=(
+            "the packet claims a supported outcome without a driver that "
+            "earned standing -- the dashboard-redirect fault, stated as an "
+            "answer"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if not asserted or not evidence:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::"
+            "TestOutcomeIsDerivedFromDriversNotFromShape",
+        ),
+        expect_failure="InvestigationOutcome.UNSUPPORTED",
+    ),
+    Mutation(
+        mutation_id="cohort-anchor-authorization-skipped",
+        defect=(
+            "a peer reached only through a team the caller cannot see joins "
+            "the cohort, disclosing the shared owner by its own membership"
+        ),
+        path=SRC / "cohort.py",
+        anchor="            if far not in authorized:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestAuthorizationBoundsTheCohort::"
+            "test_a_peer_reachable_only_through_an_unseen_anchor_is_excluded",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="cohort-peer-authorization-skipped",
+        defect=(
+            "a restricted same-tenant peer joins the cohort, which is the "
+            "leak no tenant-level check catches"
+        ),
+        path=SRC / "cohort.py",
+        anchor="            if peer not in authorized:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestAuthorizationBoundsTheCohort::"
+            "test_a_restricted_peer_is_withheld_and_counted",
+        ),
+        expect_failure="proj_quarry",
+    ),
+    Mutation(
+        mutation_id="cohort-size-bound-not-applied",
+        defect=(
+            "the cohort size bound is not applied, so a caller that asked "
+            "for a bounded comparison silently gets an unbounded one"
+        ),
+        path=SRC / "cohort.py",
+        anchor="    included = considered[:max_members]",
+        replacement="    included = considered",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestBoundsAreDisclosed::"
+            "test_the_size_bound_truncates_and_says_so",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="cohort-dimensions-outlive-the-members-that-earned-them",
+        defect=(
+            "the cohort claims a comparison dimension whose only supporting "
+            "member was dropped by the size bound, so the packet asserts a "
+            "comparison nothing in it can make"
+        ),
+        path=SRC / "cohort.py",
+        anchor="    for member in included:",
+        replacement="    for member in considered:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_cohort.py::TestBoundsAreDisclosed::"
+            "test_a_dimension_only_a_dropped_member_supported_is_dropped_too",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="edge-validity-dropped-on-read",
+        defect=(
+            "a dependency that closed before the window comes back with no "
+            "interval, so a resolved cause reads as a live one"
+        ),
+        path=SRC / "readback.py",
+        anchor="                valid_to=neighbour.valid_to,",
+        replacement="                valid_to=None,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_edge_validity_survives_the_live_round_trip",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="declared-attributes-not-read-back",
+        defect=(
+            "an attribute the arm stores is silently unreadable, so every "
+            "consumer sees an absent field while the store holds the value"
+        ),
+        path=SRC / "readback.py",
+        anchor="        if attributes.get(key) is not None",
+        replacement="        if False",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_the_live_reader_agrees_with_the_reference",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="observation-attributes-dropped-by-the-traversal",
+        defect=(
+            "an observation's trust level is lost when the traversal narrows "
+            "its subject list, so an untrusted record reads as canonical -- "
+            "invisible to the differential oracle because both readers share "
+            "the function that drops it"
+        ),
+        path=SRC / "readback.py",
+        anchor="            replace(observation, subject_canonical_ids=subjects)",
+        replacement=(
+            "            DiscoveredObservation(\n"
+            "                canonical_id=observation.canonical_id,\n"
+            "                kind=observation.kind,\n"
+            "                title=observation.title,\n"
+            "                source_class=observation.source_class,\n"
+            "                observed_at=observation.observed_at,\n"
+            "                subject_canonical_ids=subjects,\n"
+            "                repository_ids=observation.repository_ids,\n"
+            "                outcome=observation.outcome,\n"
+            "            )"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_corpus_adapter.py::"
+            "TestObservationTrustSurvivesTheTraversal",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="driver-support-scoped-to-the-entity-not-the-edge",
+        defect=(
+            "a canonical record attached to a DIFFERENT edge vouches for a "
+            "fabricated one, promoting the corpus's planted false dependency "
+            "to principal driver"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "            if step.relationship is not relationship:\n"
+            "                continue\n"
+            "            if {step.from_canonical_id, step.to_canonical_id} "
+            "!= {near, far}:\n"
+            "                continue"
+        ),
+        replacement=(
+            "            if far not in {step.from_canonical_id, "
+            "step.to_canonical_id}:\n"
+            "                continue"
+        ),
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestPoisonedLinkageIsRefused",),
+        # The specific canonical record that must not vouch for the fabricated
+        # edge. A bare ``assert`` here would be satisfied by either of this
+        # class's other two tests going red for any reason at all.
+        expect_failure="wg_authcore_shared",
+    ),
+    Mutation(
+        mutation_id="untrusted-record-defaults-to-canonical",
+        defect=(
+            "a record with no trust level reads as canonical, so a stripped "
+            "attribute silently turns every untrusted note into a "
+            "trustworthy one -- in the direction that manufactures claims"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return trust is not None and trust in TRUSTED_ATTRIBUTION_LEVELS",
+        replacement=("    return (trust or 'canonical') in TRUSTED_ATTRIBUTION_LEVELS"),
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestTrustHasNoDefault",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="symptom-promoted-to-driver",
+        defect=(
+            "an effect observed on the subject is classified as a cause, "
+            "which is unsupported attribution in its most recognisable form"
+        ),
+        path=SRC / "drivers.py",
+        anchor="                role=DriverRole.SYMPTOM,",
+        replacement="                role=DriverRole.DRIVER,",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestSymptomsAreNeverDrivers",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="absent-status-read-as-unfinished",
+        defect=(
+            "an entity with no completion concept reads as unfinished, so "
+            "every dependency becomes a blocker of whatever depends on it"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return declared is not None and declared not in COMPLETE_DECLARED_STATUSES",
+        replacement="    return declared not in COMPLETE_DECLARED_STATUSES",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestAbsentStatusIsNotEvidenceOfIncompleteness",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="parent-of-read-as-contributes-to",
+        defect=(
+            "the two child relationships are read with ONE ordering, so "
+            "``parent parent_of child`` is taken for ``child contributes_to "
+            "parent`` -- a parent reported as the open child of its own "
+            "child, and the child rule's real finding lost. Survived the "
+            "whole suite before this: the corpus reaches the child rule only "
+            "through contributes_to, and the corpus-wide orientation sweep "
+            "filtered to drv_block_*"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "            if step.relationship is RelationshipType.PARENT_OF:\n"
+            "                parent_id, child_id = source_id, target_id\n"
+            "            else:\n"
+            "                child_id, parent_id = source_id, target_id"
+        ),
+        replacement="            child_id, parent_id = source_id, target_id",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestOrientationIsReadFromDirectionNotTraversalOrder",
+        ),
+        expect_failure="the child rule is reading the edge backwards",
+    ),
+    Mutation(
+        mutation_id="child-candidate-taken-from-a-non-adjacent-step",
+        defect=(
+            "any parent_of step anywhere on a path yields an open-child "
+            "candidate, so a portfolio becomes a child of a project it "
+            "merely co-occurred with"
+        ),
+        path=SRC / "drivers.py",
+        anchor="            if parent_id != context.subject_id:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestChildCandidatesMustBeAdjacent",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="historical-edge-silently-dropped-instead-of-excluded",
+        defect=(
+            "a dependency that closed before the window disappears instead "
+            "of being reported as considered-and-rejected, so the currency "
+            "guard is never exercised and the reader cannot see it was asked"
+        ),
+        path=SRC / "drivers.py",
+        anchor="            if not step.is_current_at(context.as_of):",
+        replacement="            if not step.is_current_at(context.as_of):\n                continue\n            if False:",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestCurrency",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="withheld-evidence-reported-as-unsupported",
+        defect=(
+            "evidence the caller may not see is reported as absent, which "
+            "tells a reader 'nothing supports this' when the truth is 'you "
+            "may not see what does'"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    if not trusted and withheld:",
+        replacement="    if False:",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestAuthorization",),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="principal-standing-awarded-on-a-tie",
+        defect=(
+            "two equally-supported blockers make 'the principal driver' a "
+            "coin toss, and a coin toss presented as a judgment is worse "
+            "than reporting both as contributing"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    if len(ordered) > 1 and rank(ordered[0])[0] == rank(ordered[1])[0]:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestPrincipalStandingIsEarned::"
+            "test_principal_standing_is_withheld_when_two_candidates_tie",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="a-different-driver-is-promoted",
+        defect=(
+            "the driver credited with the supported outcome is not the one "
+            "that earned it -- an outcome assertion on the enum alone stays "
+            "green under exactly this substitution"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    winner = ordered[0].driver_id",
+        replacement="    winner = ordered[-1].driver_id",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestPrincipalStandingIsEarned::"
+            "test_principal_standing_is_withheld_when_two_candidates_tie",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="excluded-drivers-listed-as-principal",
+        defect=(
+            "the packet's principal list names candidates that never held "
+            "principal standing, so an excluded candidate is presented as "
+            "the judgment"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="            if candidate.standing is DriverStanding.PRINCIPAL_DRIVER",
+        replacement="            if candidate.standing is not None",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestTheFirstSupportedPacket",),
+        expect_failure="principal_driver_ids must be exactly",
+    ),
+    Mutation(
+        mutation_id="driver-cites-evidence-the-packet-never-indexed",
+        defect=(
+            "a driver cites an observation the packet does not carry, so "
+            "discovery and emission disagree about what the run observed and "
+            "the driver is emitted with less support than it was built from"
+        ),
+        path=SRC / "packet_builder.py",
+        # Restores the ORIGINAL silent-drop behaviour rather than merely
+        # blanking the check: with ``missing = []`` the code goes on to a raw
+        # dict lookup and dies with a bare ``KeyError``, which blocks the
+        # packet but proves nothing about the guard -- the guard's value is
+        # an attributable refusal, and the fault it prevents is the driver
+        # being emitted with less support than it was built from.
+        anchor=(
+            "        missing = sorted(set(ids) - set(handle_by_observation))\n"
+            "        if missing:"
+        ),
+        replacement=(
+            "        ids = [item for item in ids if item in handle_by_observation]\n"
+            "        missing = []\n"
+            "        if missing:"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestEvidenceTranslationFailsLoudly",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="arm-derives-a-number-from-two-measurements",
+        defect=(
+            "the arm computes a ratio from a measurement and its cohort "
+            "median, putting a number no canonical service produced into a "
+            "packet under that service's authority"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return left > right if metric in HIGHER_IS_WORSE else left < right",
+        replacement=(
+            "    ratio = left / right if right else left\n"
+            "    return ratio > 1.0 if metric in HIGHER_IS_WORSE else ratio < 1.0"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheArmPerformsNoArithmetic",
+        ),
+        expect_failure="derives a number",
+    ),
+    Mutation(
+        mutation_id="cohort-direction-inferred-instead-of-declared",
+        defect=(
+            "one comparison rule governs every metric, so completed_items "
+            "and work_in_progress are reported in opposite directions and "
+            "one of them is exactly backwards"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return left > right if metric in HIGHER_IS_WORSE else left < right",
+        replacement="    return left > right",
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::"
+            "TestTheArmPerformsNoArithmetic::"
+            "test_comparison_is_not_arithmetic_and_is_still_allowed",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="person-counting-metric-becomes-a-driver",
+        defect=(
+            "a count of people becomes the subject of a driver, which is one "
+            "inference away from naming them and is the person-level "
+            "attribution the contract bans outright"
+        ),
+        path=SRC / "drivers.py",
+        anchor="        if metric is None or metric in PERSON_COUNTING_METRICS:",
+        replacement="        if metric is None:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::"
+            "TestNoPersonLevelClaimIsEverBuilt",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="uncomparable-measurement-silently-dropped",
+        defect=(
+            "a number with no cohort comparison disappears instead of being "
+            "disclosed, so a reader cannot tell the arm had the measurement "
+            "and still could not answer"
+        ),
+        path=SRC / "drivers.py",
+        anchor="        if median is None:",
+        replacement="        if median is None:\n            continue\n        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheQualifiedCapacityCase",
+        ),
+        expect_failure="KeyError",
+    ),
+    Mutation(
+        mutation_id="cited-measurement-promoted-to-a-judgment",
+        defect=(
+            "a number being high is presented as a cause, so the judgment "
+            "stops coming from the graph and starts coming from a metric "
+            "threshold -- the measuring-something-adjacent fault"
+        ),
+        path=SRC / "drivers.py",
+        # Compound on purpose. Flipping the role ALONE is not enough, and
+        # that is a property worth recording rather than a mutation worth
+        # fixing: a cited measurement carries no lineage, so the pathless
+        # rule refuses it even when it is mislabelled a driver. Both have to
+        # go before the fault appears, which is what defence in depth means
+        # when it is real.
+        anchor=(
+            "                paths=(),\n"
+            "                support=support,\n"
+            "                mechanism=StandingMechanism.CITED_MEASUREMENT,\n"
+            "                assertion_basis=AssertionBasis.MEASURED,"
+        ),
+        replacement=(
+            "                paths=readout.paths,\n"
+            "                support=support,\n"
+            "                mechanism=StandingMechanism.STRUCTURAL,\n"
+            "                assertion_basis=AssertionBasis.MEASURED,"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheStrugglingTeamCase::"
+            "test_a_cited_measurement_never_becomes_the_judgment",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="relationship-direction-ignored-blocking",
+        defect=(
+            "candidate roles are read from traversal order instead of the "
+            "edge's canonical orientation, so seeding a blocker reports the "
+            "thing it blocks as the PRINCIPAL DRIVER of its own blocker -- "
+            "causality inverted, at the highest standing the contract offers"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "    if step.direction is RelationshipDirection.FORWARD:\n"
+            "        return step.from_canonical_id, step.to_canonical_id\n"
+            "    return step.to_canonical_id, step.from_canonical_id"
+        ),
+        replacement="    return step.from_canonical_id, step.to_canonical_id",
+        # Both seeding directions. The defect survived 60 killed mutations
+        # because every test seeded one END of the edge; a mutation checked
+        # from that same end would have survived too.
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestOrientationIsReadFromDirectionNotTraversalOrder",
+        ),
+        expect_failure="causality is inverted",
+    ),
+    Mutation(
+        mutation_id="asserted-driver-support-not-closed-at-the-packet",
+        defect=(
+            "an asserted driver's support is not required to be its own: "
+            "evidence about a different subject, or no lineage at all, still "
+            "yields a supported outcome -- a judgment with nothing behind it"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if problems:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestAssertedSupportMustBeTheDriversOwn",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="semantic-claim-rests-on-the-callers-word",
+        defect=(
+            "a semantic claim is authorized by the PASSED embedder's "
+            "self-report rather than by anything that can be shown about the "
+            "vectors, so an embedder with no connection to whatever wrote the "
+            "store unlocks a retrieval capability claim"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if embedder.semantic and attested_embedder is not None:",
+        replacement="    if embedder.semantic:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestASemanticClaimNeedsProvenanceNotAPromise::"
+            "test_a_usable_semantic_embedder_alone_does_not_unlock_a_claim",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="packet-stamps-an-embedder-that-did-not-write-the-store",
+        defect=(
+            "the projection version names an embedder the partition does not "
+            "attest, so a packet is stamped for an OpenAI model while the "
+            "stored vectors are BLAKE2b hashes -- and that stamp is what a "
+            "consumer uses to decide two runs are comparable"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if attested is not None and attested != embedder.model_id:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestASemanticClaimNeedsProvenanceNotAPromise::"
+            "test_the_stamped_projection_version_cannot_name_another_embedder",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="cloud-embedder-reports-semantics-without-a-key",
+        defect=(
+            "a bare CloudEmbedder with api_key=None still reports semantic, "
+            "so an instance that cannot embed anything unlocks semantic "
+            "claims -- the guard never asks it to embed, it reads the flag"
+        ),
+        path=SRC / "backend.py",
+        anchor="        return bool(self.api_key)",
+        replacement="        return True",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestASemanticClaimNeedsProvenanceNotAPromise::"
+            "test_a_bare_cloud_embedder_carries_no_semantics",
+        ),
+        expect_failure="a bare CloudEmbedder reports semantics it cannot produce",
+    ),
+    Mutation(
+        mutation_id="projection-records-no-embedder-provenance",
+        defect=(
+            "the store writes vectors without recording what produced them, "
+            "so the only available answer to 'were these vectors semantic' is "
+            "the caller's own claim"
+        ),
+        path=SRC / "backend.py",
+        anchor="            PROJECTION_EMBEDDER_ATTRIBUTE: embedder.model_id,",
+        replacement="            PROJECTION_EMBEDDER_ATTRIBUTE: None,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_the_live_readout_attests_the_embedder_that_wrote_it",
+        ),
+        expect_failure="the partition attests no embedder",
+    ),
+    Mutation(
+        mutation_id="mixed-partition-provenance-collapses-to-one",
+        defect=(
+            "a partition whose vectors came from two embedders reads back as "
+            "one of them, so an incomparable mixture is stamped with whichever "
+            "model won the read"
+        ),
+        path=SRC / "readback.py",
+        anchor="    if len(attested) > 1:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_semantic_claims.py::"
+            "TestOnePartitionMustAttestOneEmbedder",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="trusted-record-vouches-for-a-linkage-it-is-not-about",
+        defect=(
+            "trust is read off the record and never checked against what the "
+            "record is ABOUT, so an edge that merely CITES a canonical record "
+            "inherits its trust -- the residue of the scoping defect, which "
+            "put the corpus's planted false dependency back at principal "
+            "standing"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "        vouching=tuple(\n"
+            "            item\n"
+            "            for item in trusted\n"
+            "            if endpoints & set("
+            "context.observations[item].subject_canonical_ids)\n"
+            "        ),"
+        ),
+        replacement="        vouching=tuple(trusted),",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestOnlyARecordAboutTheLinkageMayVouchForIt",
+        ),
+        expect_failure="vouched for a linkage it is not about",
+    ),
+    Mutation(
+        mutation_id="attribution-proceeds-without-readable-attachment",
+        defect=(
+            "a reader that cannot say what a record is about still attributes "
+            "on it, or reports the support as withheld -- an authorization "
+            "claim about the caller's grant that nothing supports"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    if not trusted and not context.observation_attachment_available:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestAttributionNeedsAReaderThatKnowsWhatARecordIsAbout",
+        ),
+        expect_failure="DriverExclusionReason.UNAUTHORIZED_EVIDENCE",
+    ),
+    Mutation(
+        mutation_id="live-reader-overclaims-attachment-capability",
+        defect=(
+            "the live reader declares it can recover observation attachment "
+            "when it cannot, which turns the 'is this record about the "
+            "linkage' rule into a silent no-op on the live path alone"
+        ),
+        path=SRC / "readback.py",
+        anchor="            observation_attachment_available=False,",
+        replacement="            observation_attachment_available=True,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_each_reader_declares_the_attachment_capability_it_actually_has",
+        ),
+        expect_failure="claims it can recover observation attachment",
+    ),
+    Mutation(
+        mutation_id="packet-assembly-derives-an-unnamed-number",
+        defect=(
+            "the no-arithmetic proof stops at the two discovery modules while "
+            "packet ASSEMBLY derives a number straight into the packet -- the "
+            "blind spot adversarial review found, with the derivation landing "
+            "in a limitation string a consumer reads"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if filtered_total:",
+        replacement=(
+            "    filtered_share = filtered_total / max(len(related_entities), 1)\n"
+            "    if filtered_total or filtered_share:"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheArmPerformsNoArithmetic",
+        ),
+        expect_failure="the operational allowlist does not name",
+    ),
+    Mutation(
+        mutation_id="caller-can-supply-entity-status",
+        defect=(
+            "a caller-supplied attribute channel reappears on discovery, "
+            "through which a caller can declare the corpus's blocker complete "
+            "and delete the arm's own principal driver"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    as_of: datetime,\n    max_candidates: int = 50,",
+        replacement=(
+            "    as_of: datetime,\n"
+            "    entity_attributes: Mapping[str, Mapping[str, str]] | None = None,\n"
+            "    max_candidates: int = 50,"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestDeclaredStatusComesOnlyFromTheReadout",
+        ),
+        expect_failure="entity_attributes",
+    ),
+    Mutation(
+        mutation_id="driver-truncation-not-disclosed",
+        defect=(
+            "the driver candidate bound fires and the packet discloses no "
+            "TRUNCATED_TRAVERSAL limitation, so the frozen contract refuses "
+            "the packet outright -- and the only way past that refusal is for "
+            "a caller to drop the flag, which presents a capped candidate set "
+            "as the complete one"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        cohort_truncated,\n        drivers_truncated,\n    )",
+        replacement="        cohort_truncated,\n    )",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestATruncatedCandidateSetIsDisclosed",
+        ),
+        expect_failure="no TRUNCATED_TRAVERSAL limitation is disclosed",
+    ),
+    Mutation(
+        mutation_id="driver-truncation-discloses-but-does-not-weaken",
+        defect=(
+            "a bound that discloses a limitation without weakening the "
+            "outcome lets a partial investigation reach a fully SUPPORTED "
+            "verdict with the limitation nobody reads sitting beside it"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="                or any(truncation_bounds)",
+        replacement="                or False",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestATruncatedCandidateSetIsDisclosed::"
+            "test_a_truncated_candidate_set_cannot_reach_an_ungapped_outcome",
+        ),
+        expect_failure="InvestigationOutcome.SUPPORTED_WITH_GAPS",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "
             "in a recorded reproduction"
         ),
         path=REPO_ROOT / TESTS / "live_gate.py",
-        anchor="    if live_store_required():",
-        replacement="    if False:",
+        # Anchored on the guard PLUS the message that identifies it. The bare
+        # `if live_store_required():` stopped being unique the moment a second
+        # gate was added for the graphiti extra, and the harness refused the
+        # run as INVALID rather than disabling both -- which is the anchor
+        # rule working, not a nuisance: a mutation that turns off two guards
+        # proves nothing about either.
+        anchor=(
+            "    if live_store_required():\n"
+            "        pytest.fail(\n"
+            '            f"{REQUIRE_LIVE_FLAG}=1 was set, so a live-store '
+            'measurement was "'
+        ),
+        replacement=(
+            "    if False:\n"
+            "        pytest.fail(\n"
+            '            f"{REQUIRE_LIVE_FLAG}=1 was set, so a live-store '
+            'measurement was "'
+        ),
         tests=(
             f"{TESTS}/test_chaos_3617_live_gate.py::"
             "test_the_gate_fails_rather_than_skips_when_a_live_run_is_required",
+        ),
+        expect_failure="Failed",
+    ),
+    Mutation(
+        mutation_id="graphiti-extra-gate-skips-when-a-run-was-required",
+        defect=(
+            "a measurement that needs the optional extra is skipped in a run "
+            "that required it, so an unmeasured half of the suite reads as "
+            "coverage in a recorded reproduction"
+        ),
+        path=REPO_ROOT / TESTS / "live_gate.py",
+        anchor=(
+            "        if live_store_required():\n"
+            "            pytest.fail(\n"
+            '                f"{REQUIRE_LIVE_FLAG}=1 was set, so a measurement '
+            'needing "'
+        ),
+        replacement=(
+            "        if False:\n"
+            "            pytest.fail(\n"
+            '                f"{REQUIRE_LIVE_FLAG}=1 was set, so a measurement '
+            'needing "'
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_gate.py::"
+            "test_the_extra_gate_fails_rather_than_skips_when_a_run_is_required",
         ),
         expect_failure="Failed",
     ),
@@ -511,20 +1467,58 @@ def _first_failure(output: str) -> str:
     return "<no failure line captured>"
 
 
-def _failure_evidence(output: str) -> str:
-    """Every line pytest attributes to a failure, joined.
+def failure_region(output: str) -> str:
+    """Only the lines pytest attributes to an actual failure.
 
-    Includes the ``E   `` assertion/exception lines and the ``FAILED``
-    summary, because the category can appear in either: an assertion message
-    for a guard that raises a typed error, or the exception name for one that
-    refuses by construction.
+    Two shapes and nothing else: ``E ``-prefixed assertion/exception lines,
+    and the ``FAILED <nodeid> - <message>`` summary. The category can appear
+    in either — an assertion message for a guard that raises a typed error,
+    or the exception name for one that refuses by construction.
+
+    **Why the region matters more than the token.** pytest echoes the failing
+    test's SOURCE up to the failing line, and echoed source is indented, not
+    ``E ``-prefixed. So a phrase sitting in a docstring, a comment, or an
+    assertion that PASSED earlier in the same test cannot enter this region —
+    while a looser filter would credit it and report an unearned kill.
+
+    This function previously also admitted any line containing ``" - "``,
+    which let skipped/xfailed reason prose in. Those lines carry long
+    free-text explanations and are not failures at all; a token appearing in
+    one would have been credited exactly like a real assertion message.
+
+    A sibling lane demonstrated an unearned kill from this class of hole. The
+    fix is the region, not a cleverer phrase: the region is what makes any
+    phrase trustworthy.
     """
 
     return "\n".join(
         line
         for line in output.splitlines()
-        if line.startswith(("E ", "FAILED ", "E\t")) or " - " in line
+        if line.startswith(("E ", "E\t")) or _FAILED_SUMMARY.match(line)
     )
+
+
+#: ``FAILED <nodeid> - <message>``. Anchored, so a stray line that merely
+#: contains the word cannot pass for the summary.
+_FAILED_SUMMARY = re.compile(r"^FAILED \S+")
+
+
+def _reason_is_proven(region: str, expected: str) -> tuple[bool, str]:
+    """Whether the failure region actually evidences the expected reason.
+
+    Both emptiness checks are load-bearing. An empty ``expected`` would make
+    ``"" in region`` true and credit every mutation ever run; an empty region
+    means pytest attributed nothing to a failure, so there is no evidence to
+    read whatever the token says.
+    """
+
+    if not expected.strip():
+        return False, "the mutation declares an empty expected failure"
+    if not region.strip():
+        return False, "pytest attributed no lines to a failure"
+    if expected not in region:
+        return False, "the expected reason is absent from the failure region"
+    return True, ""
 
 
 def main() -> int:
@@ -584,11 +1578,11 @@ def main() -> int:
             return 1
 
         died_at = _first_failure(output)
-        evidence = _failure_evidence(output)
-        if mutation.expect_failure not in evidence:
+        evidence = failure_region(output)
+        proven, why = _reason_is_proven(evidence, mutation.expect_failure)
+        if not proven:
             print(
-                f"WRONG-REASON {mutation.mutation_id}: the tests failed, but "
-                f"not for the reason this mutation claims to prove.\n"
+                f"WRONG-REASON {mutation.mutation_id}: {why}.\n"
                 f"      expected the failure to mention: "
                 f"{mutation.expect_failure!r}\n"
                 f"      actual: {died_at}\n"

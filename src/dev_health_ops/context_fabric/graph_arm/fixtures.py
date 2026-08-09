@@ -107,6 +107,8 @@ def _rel(
     *,
     contributor_count: int | None = None,
     observation_ids: tuple[str, ...] = (),
+    valid_from: datetime | None = None,
+    valid_to: datetime | None = None,
 ) -> RelationshipRecord:
     return RelationshipRecord(
         org_id=org_id,
@@ -117,6 +119,8 @@ def _rel(
         observed_at=_OBSERVED,
         contributor_count=contributor_count,
         observation_ids=observation_ids,
+        valid_from=valid_from,
+        valid_to=valid_to,
     )
 
 
@@ -186,6 +190,13 @@ def alpha_batch() -> IngestionBatch:
             _K.DEPENDENCY,
             "dep_authlib",
             "authlib",
+            SourceClass.WORK_GRAPH,
+        ),
+        _entity(
+            ALPHA_ORG,
+            _K.DEPENDENCY,
+            "dep_legacy_session",
+            "legacy-session",
             SourceClass.WORK_GRAPH,
         ),
         _entity(
@@ -353,6 +364,22 @@ def alpha_batch() -> IngestionBatch:
             (_K.DEPENDENCY, "dep_authlib"),
             SourceClass.WORK_GRAPH,
         ),
+        # A dependency that CLOSED before the window opened. Structurally
+        # identical to every live edge above, which is the point: nothing
+        # about its shape says "historical", only its validity interval. An
+        # arm that reads it as a current dependency has invented a live
+        # cause out of a resolved one, and without an edge like this in the
+        # fixture world the validity round-trip would be untested and the
+        # currency guard would have nothing to bite on.
+        _rel(
+            ALPHA_ORG,
+            (_K.SERVICE, "svc_auth_gateway"),
+            RelationshipType.DEPENDS_ON,
+            (_K.DEPENDENCY, "dep_legacy_session"),
+            SourceClass.WORK_GRAPH,
+            valid_from=datetime(2026, 1, 5, tzinfo=UTC),
+            valid_to=datetime(2026, 6, 30, tzinfo=UTC),
+        ),
         _rel(
             ALPHA_ORG,
             (_K.REPOSITORY, "repo_auth_gateway"),
@@ -493,6 +520,7 @@ def alpha_authorized_ids() -> tuple[str, ...]:
         "team_platform",
         "svc_auth_gateway",
         "dep_authlib",
+        "dep_legacy_session",
         "repo_auth_gateway",
         "wu_nightfall_cutover",
         "pr_4412",

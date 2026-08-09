@@ -520,14 +520,26 @@ class TestBudgets:
             )
 
     def test_a_batch_inside_the_ingest_budget_projects_completely(self) -> None:
-        """The negative control, and the anti-vacuity check on the bound."""
+        """The negative control, and the anti-vacuity check on the bound.
+
+        Counts derived from the batch rather than written as literals. The
+        literals were correct and then silently wrong the moment the fixture
+        world grew an entity — and a test whose expected value has to be
+        hand-edited after every unrelated change is one that gets edited to
+        whatever the code now produces. Deriving them keeps the real claim,
+        which is "every record projected and none dropped".
+        """
 
         batch = fixtures.alpha_batch()
         projection = build_projection(
             batch, budgets=TrialBudgets(max_ingest_records=batch.record_count())
         )
-        assert len(projection.nodes) == 19
-        assert len(projection.edges) == 10
+        assert len(projection.nodes) == len(batch.entities) + len(batch.observations)
+        assert len(projection.edges) == len(batch.relationships)
+        # Anti-vacuity: a fixture that shrank to nothing would satisfy the
+        # equalities above while projecting nothing at all.
+        assert len(projection.nodes) > 10
+        assert len(projection.edges) > 5
 
 
 class TestPacketByteBudget:

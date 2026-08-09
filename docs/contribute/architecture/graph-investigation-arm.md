@@ -410,7 +410,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **41** guards the arm relies on, the harness disables
+For each of the **43** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -435,6 +435,34 @@ follows:
 3. **where the mutation died** is recorded, so a reader can check the failure
    is the one the guard exists to prevent rather than an unrelated collapse
    in setup.
+
+## What the readout carries, and why the list is closed
+
+The traversal returns a **declared subset** of each node's structured
+attributes (`READBACK_ATTRIBUTE_KEYS`) plus each edge's observed validity
+interval. Both matter for driver work and neither was free:
+
+- **Attributes** carry an observation's trust level and an entity's declared
+  status. Without them the arm cannot tell a canonical work-item record from
+  an untrusted note asserting the same link, which is exactly the poisoned-
+  linkage case the corpus plants.
+- **Edge validity** (`valid_from` / `valid_to`) is what distinguishes a
+  dependency that *is* there from one that *was*. `PathStep.is_current_at`
+  treats an absent interval as in force — most providers assert none, and
+  reading silence as "expired" would erase most of a real graph — but never
+  the reverse.
+
+The attribute list is closed and declared rather than "whatever properties
+the node has", because the live reader names its Cypher columns. Generating
+those columns from the declared list was tried and **reverted inside the same
+commit**: the containment guard reads the arm's entire Cypher surface out of
+the AST's string constants, so an f-string query is not statically comparable
+and the guard silently stops being able to see it. The queries stay literal;
+`test_every_declared_attribute_has_a_column_in_both_queries` catches the
+duplication drifting in either direction, and
+`test_the_adapter_writes_no_attribute_the_readers_cannot_return` makes a
+stored-but-unreadable attribute a build failure rather than a capability that
+quietly returns nothing.
 
 ## Comparison cohorts, and the refusal that did not open
 

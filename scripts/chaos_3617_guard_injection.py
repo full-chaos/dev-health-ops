@@ -236,7 +236,11 @@ MUTATIONS: tuple[Mutation, ...] = (
             "    return tuple(\n"
             "        sorted(\n"
             "            adjacency.edges.get(canonical_id, ()),\n"
-            "            key=lambda edge: (edge[0].value, edge[1], edge[2].value),\n"
+            "            key=lambda edge: (\n"
+            "                edge.relationship.value,\n"
+            "                edge.other_canonical_id,\n"
+            "                edge.direction.value,\n"
+            "            ),\n"
             "        )\n"
             "    )"
         ),
@@ -718,6 +722,36 @@ MUTATIONS: tuple[Mutation, ...] = (
         tests=(
             f"{TESTS}/test_chaos_3617_cohort.py::TestBoundsAreDisclosed::"
             "test_a_dimension_only_a_dropped_member_supported_is_dropped_too",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="edge-validity-dropped-on-read",
+        defect=(
+            "a dependency that closed before the window comes back with no "
+            "interval, so a resolved cause reads as a live one"
+        ),
+        path=SRC / "readback.py",
+        anchor="                valid_to=neighbour.valid_to,",
+        replacement="                valid_to=None,",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_edge_validity_survives_the_live_round_trip",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="declared-attributes-not-read-back",
+        defect=(
+            "an attribute the arm stores is silently unreadable, so every "
+            "consumer sees an absent field while the store holds the value"
+        ),
+        path=SRC / "readback.py",
+        anchor="        if attributes.get(key) is not None",
+        replacement="        if False",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
+            "test_the_live_reader_agrees_with_the_reference",
         ),
         expect_failure="assert",
     ),

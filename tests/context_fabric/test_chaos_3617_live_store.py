@@ -40,7 +40,10 @@ from dev_health_ops.context_fabric.graph_arm.packet_builder import (
     TrialContext,
     build_packet,
 )
-from dev_health_ops.context_fabric.graph_arm.projection import GraphProjection
+from dev_health_ops.context_fabric.graph_arm.projection import (
+    READBACK_ATTRIBUTE_KEYS,
+    GraphProjection,
+)
 from dev_health_ops.context_fabric.graph_arm.readback import (
     InvestigationReadout,
     LiveGraphReader,
@@ -319,6 +322,108 @@ class TestReaderDifferential:
             max_hops=max_hops,
         )
         assert self._comparable(live) == self._comparable(reference)
+
+    async def test_declared_attributes_survive_the_live_round_trip(
+        self, alpha_store
+    ) -> None:
+        """Non-vacuity for the attribute half of the comparison.
+
+        ``_comparable`` compares every readout field automatically, so the
+        attributes ARE compared -- but two empty dicts compare equal, and a
+        live reader that returned nothing at all would pass the differential
+        silently. This asserts the live reader actually carries a declared
+        attribute back out of FalkorDB.
+        """
+
+        store, _ = alpha_store
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        subject = next(
+            entity
+            for entity in live.entities
+            if entity.canonical_id == "proj_nightfall_migration"
+        )
+        assert subject.attributes.get("declared_status") == "in_progress"
+
+    async def test_an_undeclared_attribute_is_not_read_back(self, alpha_store) -> None:
+        """The closed list is closed, and that is the documented behaviour.
+
+        ``archived`` is written by the alpha fixture and is deliberately not
+        in ``READBACK_ATTRIBUTE_KEYS``. It must be absent from the readout
+        rather than appearing through some other route -- otherwise the
+        "declared subset" claim is decorative and the two readers can drift
+        on whatever else the store happens to hold.
+        """
+
+        assert "archived" not in READBACK_ATTRIBUTE_KEYS
+        store, projection = alpha_store
+        written = next(
+            node
+            for node in projection.nodes
+            if node.canonical_id == "proj_nightfall_migration"
+        )
+        assert "archived" in written.attributes, (
+            "the fixture stopped writing the undeclared attribute, so this "
+            "test no longer proves anything"
+        )
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["proj_nightfall_migration"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=3,
+        )
+        subject = next(
+            entity
+            for entity in live.entities
+            if entity.canonical_id == "proj_nightfall_migration"
+        )
+        assert "archived" not in subject.attributes
+
+    async def test_edge_validity_survives_the_live_round_trip(
+        self, alpha_store
+    ) -> None:
+        """A closed dependency must come back closed.
+
+        Graphiti stores the interval in its own ``valid_at``/``invalid_at``
+        fields rather than in the arm's ``cf_`` namespace, so this is the
+        one readout field whose live round trip depends on an upstream
+        convention the arm does not control. If graphiti-core ever stops
+        persisting them, this fails here rather than showing up later as a
+        resolved dependency reported as a live driver.
+        """
+
+        store, _ = alpha_store
+        live = await LiveGraphReader(store).neighbourhood(
+            org_id=store.org_id,
+            seed_canonical_ids=["svc_auth_gateway"],
+            authorized_entity_ids=fixtures.alpha_authorized_ids(),
+            max_hops=1,
+        )
+        closed = [
+            step
+            for path in live.paths
+            for step in path.steps
+            if step.to_canonical_id == "dep_legacy_session"
+            or step.from_canonical_id == "dep_legacy_session"
+        ]
+        assert closed, "the historical edge was not traversed at all"
+        assert all(step.valid_to is not None for step in closed)
+        assert not any(step.is_current_at(fixtures.WINDOW_END) for step in closed)
+
+        # The control: a live edge in the same readout is current, so the
+        # assertion above is about this edge and not about the clock.
+        live_steps = [
+            step
+            for path in live.paths
+            for step in path.steps
+            if step.to_canonical_id == "dep_authlib"
+        ]
+        assert live_steps
+        assert all(step.is_current_at(fixtures.WINDOW_END) for step in live_steps)
 
     async def test_the_differential_can_actually_fail(self, alpha_store) -> None:
         """The acceptance case for the comparator itself.

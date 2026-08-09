@@ -398,3 +398,31 @@ class TestTheBatchIsProjectable:
             for edge in helio_projection.edges
         }
         assert projected <= planted, sorted(projected - planted)
+
+
+class TestEveryWrittenAttributeIsReadable:
+    def test_the_adapter_writes_no_attribute_the_readers_cannot_return(self) -> None:
+        """A stored-but-unreadable attribute is a capability that silently fails.
+
+        The arm reads back a declared subset of attributes, because the live
+        Cypher names its columns. An adapter that writes a key outside that
+        subset loses it at the first read, and the loss is invisible: the
+        write succeeds, the store holds the value, and every consumer sees
+        an absent field. Failing here makes that a build error instead.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.projection import (
+            READBACK_ATTRIBUTE_KEYS,
+        )
+
+        written: set[str] = set()
+        for tenant in (world.ORG_HELIO, world.ORG_LUMEN):
+            batch = adapter.corpus_batch(tenant)
+            for entity in batch.entities:
+                written.update(entity.attributes)
+            for observation in batch.observations:
+                written.update(observation.attributes)
+        assert written, "the adapter writes no attributes at all; vacuous"
+        assert written <= set(READBACK_ATTRIBUTE_KEYS), sorted(
+            written - set(READBACK_ATTRIBUTE_KEYS)
+        )

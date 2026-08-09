@@ -61,7 +61,11 @@ from dev_health_ops.api.dev.investigation_contract import (
     InvestigationOutcome,
     PacketLimitationKind,
     PacketSection,
+    QuestionFamilyID,
     SubjectCommitmentState,
+    SubjectDiscovery,
+    UnresolvedMention,
+    UnresolvedMentionReason,
 )
 from dev_health_ops.api.dev.question_interpreter import InterpretedQuestion
 from dev_health_ops.context_fabric.native_arm import capabilities as caps
@@ -597,3 +601,159 @@ def test_a_committed_subject_always_ranks_first() -> None:
 def test_an_outcome_carries_exactly_one_of_a_packet_or_a_gap() -> None:
     with pytest.raises(ValueError, match="exactly one"):
         proj.NativeProjectionOutcome(packet=None, gaps=())
+
+
+# --------------------------------------------------------------------------
+# Totality — a packet or a gap, never a raise (codex H2)
+# --------------------------------------------------------------------------
+
+
+def _ambiguous_ledger() -> DevResolutionLedger:
+    """Two candidates, nothing committed — the shape that used to crash."""
+
+    a = _ref("proj-1", EntityKind.PROJECT, "Atlas migration")
+    b = _ref("proj-2", EntityKind.PROJECT, "Atlas migration (legacy)")
+    mention = _handle("mention-0")
+    return DevResolutionLedger(
+        schema_version="dev_resolution_ledger.v1",
+        ledger_id=_handle("ledger"),
+        mention_ids=(mention,),
+        entries=(
+            DevResolutionEntry(
+                entry_ordinal=0,
+                mention_id=mention,
+                outcome=ResolutionOutcome.AMBIGUOUS_CANDIDATES,
+                candidates=(
+                    DevResolutionCandidate(entity_ref=a, reason="label match"),
+                    DevResolutionCandidate(entity_ref=b, reason="label match"),
+                ),
+                resolver_version="subject_preflight.v1",
+                query_version="scope_catalog.v1",
+                resolved_at=_NOW,
+            ),
+        ),
+        updated_at=_NOW,
+    )
+
+
+def test_an_empty_organization_wide_cohort_is_a_named_gap_not_a_crash() -> None:
+    """The projection's contract is a packet or a gap. Never an exception.
+
+    This exact input used to raise ``ValidationError`` out of
+    ``project_native_investigation``. That matters more than it looks: the
+    consumer is a shadow seam whose job is to contain faults, so a raise
+    would have been recorded as a *seam* fault — attributing the arm's
+    inability to express its own run to the harness measuring it.
+    """
+
+    outcome = proj.project_native_investigation(
+        _payload(
+            interpretation=_interpretation(
+                intent_id=QuestionIntentID.PROJECT_HEALTH,
+                cardinality=Cardinality.ORGANIZATION_WIDE,
+            ),
+            ledger=_ambiguous_ledger(),
+            committed_subject=None,
+            subject_set=None,
+        )
+    )
+    assert outcome.packet is None
+    assert [gap.reason for gap in outcome.gaps] == [
+        proj.NativeProjectionGapReason.COHORT_TOO_SMALL_TO_COMPARE
+    ]
+
+
+def test_an_unresolved_mention_blocks_driver_assertion_even_without_lineage_need() -> (
+    None
+):
+    """The clarification family requires no related context, so the
+    family-based half of ``_may_assert`` does not fire. The unresolved-mention
+    half must, or an org-wide run promotes a driver for a subject it could
+    not name.
+    """
+
+    projects = (
+        _ref("proj-1", EntityKind.PROJECT, "Atlas migration"),
+        _ref("proj-3", EntityKind.PROJECT, "Beacon rollout"),
+    )
+    subject_set = DevSubjectSet(
+        schema_version="dev_subject_set.v1",
+        set_id=_handle("set-amb"),
+        entity_kind=EntityKind.PROJECT,
+        committed_entity_refs=projects,
+        original_mention_count=2,
+        unresolved_mention_ids=(),
+        ambiguous_mention_ids=(),
+        cohort_complete=True,
+        fingerprint=_handle("fp-amb"),
+    )
+    packet = proj.project_native_investigation(
+        _payload(
+            interpretation=_interpretation(
+                intent_id=QuestionIntentID.PROJECT_HEALTH,
+                cardinality=Cardinality.ORGANIZATION_WIDE,
+            ),
+            ledger=_ambiguous_ledger(),
+            committed_subject=None,
+            subject_set=subject_set,
+        )
+    ).packet
+    assert packet is not None
+    _validate(packet)
+    assert packet.outcome is InvestigationOutcome.NEEDS_CLARIFICATION
+    assert {c.standing.value for c in packet.driver_analysis.candidates} == {
+        "candidate_only"
+    }
+
+
+def test_may_assert_is_a_named_decision_not_a_downstream_consequence() -> None:
+    """Assert the DECISION, so a plant against it fails on this assertion.
+
+    The original suite only observed ``_may_assert`` through the final
+    packet, which meant removing it failed inside the contract validator —
+    proving the contract's invariant, not the projection's.
+    """
+
+    discovery_clean = SubjectDiscovery(
+        schema_version="ask_dev_subject_discovery.v1",
+        candidates=(),
+        unresolved_mentions=(),
+        committed_subject_ids=(),
+        authorization_filtered_count=0,
+        candidates_truncated=False,
+    )
+    discovery_unresolved = discovery_clean.model_copy(
+        update={
+            "unresolved_mentions": (
+                UnresolvedMention(
+                    mention_id=_handle("m"),
+                    mention_text="the atlas thing",
+                    reason=UnresolvedMentionReason.NO_CANDIDATE,
+                ),
+            )
+        }
+    )
+    # Clarification family requires no related context.
+    assert (
+        proj._may_assert(
+            family=QuestionFamilyID.CLARIFICATION_AND_NO_MATCH,
+            discovery=discovery_clean,
+        )
+        is True
+    )
+    # ...but an unresolved mention still forbids assertion.
+    assert (
+        proj._may_assert(
+            family=QuestionFamilyID.CLARIFICATION_AND_NO_MATCH,
+            discovery=discovery_unresolved,
+        )
+        is False
+    )
+    # ...and a lineage-requiring family forbids it regardless.
+    assert (
+        proj._may_assert(
+            family=QuestionFamilyID.DECLARED_VERSUS_ACTUAL,
+            discovery=discovery_clean,
+        )
+        is False
+    )

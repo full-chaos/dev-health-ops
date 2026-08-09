@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from pydantic import ValidationError
+
 from dev_health_ops.api.dev.contracts import DevEvidenceRef
 from dev_health_ops.api.dev.contracts_v2.base import EntityKind, SourceClass
 from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
@@ -193,6 +195,15 @@ class NativeProjectionGapReason(StrEnum):
     #: measures a comparison dimension, so the cohort would support no
     #: comparison at all.
     NO_SUPPORTED_COMPARISON_DIMENSION = "no_supported_comparison_dimension"
+    #: The run has a cohort-bearing shape but fewer than the two members a
+    #: comparison needs.
+    COHORT_TOO_SMALL_TO_COMPARE = "cohort_too_small_to_compare"
+    #: The assembled packet was rejected by the frozen contract. This is a
+    #: real, reportable measurement -- the arm could not express its own run
+    #: -- and never an exception, because a raise here would be caught by
+    #: the shadow seam's containment and disappear as a "seam fault",
+    #: attributing the arm's failure to the harness.
+    PACKET_REJECTED_BY_CONTRACT = "packet_rejected_by_contract"
 
 
 @dataclass(frozen=True, slots=True)
@@ -561,6 +572,29 @@ def _supported_dimensions(
     return tuple(sorted(found, key=lambda item: item.value))
 
 
+def _cohort_refs(
+    payload: NativeProjectionInput, *, shape: ComparisonShape
+) -> tuple[DevEntityRefV2, ...]:
+    """The entities this run would place in a cohort.
+
+    Extracted so the pre-flight size check and the builder read the SAME
+    derivation. They used to be separate, and the check sat after the
+    ``ComparisonCohort`` model had already rejected a vacuous cohort at
+    construction -- making the targeted gap unreachable and routing a real,
+    nameable outcome through the catch-all instead.
+    """
+
+    if payload.subject_set is not None:
+        refs = tuple(payload.subject_set.committed_entity_refs)
+    elif payload.committed_subject is not None:
+        refs = (payload.committed_subject,)
+    else:
+        refs = ()
+    if shape is ComparisonShape.SINGULAR_SUBJECT:
+        return refs[:1]
+    return refs
+
+
 def _comparison_cohort(
     payload: NativeProjectionInput,
     *,
@@ -578,12 +612,11 @@ def _comparison_cohort(
     not perform.
     """
 
-    refs: tuple[DevEntityRefV2, ...] = ()
+    refs = _cohort_refs(payload, shape=shape)
     completeness = CohortCompleteness.COMPLETE
     uncertainty: str | None = None
 
     if payload.subject_set is not None:
-        refs = tuple(payload.subject_set.committed_entity_refs)
         if not payload.subject_set.cohort_complete:
             completeness = CohortCompleteness.BEST_EFFORT_UNCERTAIN
             uncertainty = (
@@ -591,11 +624,6 @@ def _comparison_cohort(
                 f"{len(payload.subject_set.unresolved_mention_ids)} unresolved and "
                 f"{len(payload.subject_set.ambiguous_mention_ids)} ambiguous mentions"
             )[:240]
-    elif payload.committed_subject is not None:
-        refs = (payload.committed_subject,)
-
-    if shape is ComparisonShape.SINGULAR_SUBJECT:
-        refs = refs[:1]
 
     members = tuple(
         CohortMember(
@@ -836,6 +864,32 @@ def _versions(payload: NativeProjectionInput) -> InvestigationVersions:
     )
 
 
+def _may_assert(*, family: QuestionFamilyID, discovery: SubjectDiscovery) -> bool:
+    """Whether this run may assert a driver at all.
+
+    Two independent reasons to refuse, and the function exists as a named
+    decision (rather than an inline condition) so a test can assert the
+    DECISION rather than its downstream consequence. The first version of
+    this logic was only checked through the packet validator, which meant a
+    plant removing it "failed" on the contract's rejection and never
+    reached the projection's own assertion -- a guard that proved someone
+    else's invariant.
+
+    * The question family requires a ``related_context`` section this arm
+      cannot fill, so a judgment would rest on lineage that does not exist.
+    * A named reference did not resolve. A run that does not know what it
+      is talking about may not assert why that thing is in trouble, and
+      promoting a driver here also produces a packet the contract rejects
+      outright (an organization-wide supported outcome with mentions
+      outstanding).
+    """
+
+    if discovery.unresolved_mentions:
+        return False
+    required = QUESTION_FAMILY_REGISTRY[family].required_packet_sections
+    return PacketSection.RELATED_CONTEXT not in required
+
+
 def _driver_analysis(
     payload: NativeProjectionInput,
     *,
@@ -969,7 +1023,63 @@ def _staffing_qualification(family: QuestionFamilyID) -> StaffingQualification |
 def project_native_investigation(
     payload: NativeProjectionInput,
 ) -> NativeProjectionOutcome:
-    """Project one finished native run, or report why it cannot be projected."""
+    """Project one finished native run. **Returns; never raises.**
+
+    Totality is the contract, not a nicety. The consumer is a shadow seam
+    whose whole job is to contain faults, so a raise here would be caught
+    there and recorded as a *seam* fault -- attributing the arm's inability
+    to express its own run to the harness measuring it. A contract
+    rejection is a real result about the baseline and has to survive as
+    one.
+
+    ``_project`` below holds the logic; this wrapper is the guarantee, and
+    ``scripts/verify_chaos_3618_baseline_honesty_guards.py`` plants a raise
+    inside ``_project`` to prove the guarantee is load-bearing rather than
+    incidentally true.
+    """
+
+    try:
+        return _project(payload)
+    except ValidationError as rejected:
+        return NativeProjectionOutcome(
+            packet=None,
+            gaps=(
+                NativeProjectionGap(
+                    reason=NativeProjectionGapReason.PACKET_REJECTED_BY_CONTRACT,
+                    detail=(
+                        f"the frozen contract rejected the assembled packet: "
+                        f"{rejected.error_count()} errors; first="
+                        f"{_first_error(rejected)}"
+                    )[:2000],
+                ),
+            ),
+        )
+    except Exception as fault:
+        return NativeProjectionOutcome(
+            packet=None,
+            gaps=(
+                NativeProjectionGap(
+                    reason=NativeProjectionGapReason.PACKET_REJECTED_BY_CONTRACT,
+                    detail=(f"projection raised {type(fault).__name__}: {fault}")[
+                        :2000
+                    ],
+                ),
+            ),
+        )
+
+
+def _first_error(rejected: ValidationError) -> str:
+    errors = rejected.errors()
+    if not errors:
+        return "unreported"
+    return str(errors[0].get("msg", "unreported"))[:400]
+
+
+def _project(
+    payload: NativeProjectionInput,
+) -> NativeProjectionOutcome:
+    """The projection proper. May raise; ``project_native_investigation`` is
+    the total wrapper every caller uses."""
 
     shape = comparison_shape_for(
         cardinality=payload.interpretation.intent.cardinality,
@@ -1012,6 +1122,23 @@ def project_native_investigation(
                 ),
             ),
         )
+    prospective = _cohort_refs(payload, shape=shape)
+    if shape is not ComparisonShape.SINGULAR_SUBJECT and len(prospective) < 2:
+        # ``validate_comparison_is_not_vacuous`` rejects this, and a rejection
+        # reaching the caller as an exception would be the arm's own
+        # unprojectable run disguised as a crash.
+        return NativeProjectionOutcome(
+            packet=None,
+            gaps=(
+                NativeProjectionGap(
+                    reason=NativeProjectionGapReason.COHORT_TOO_SMALL_TO_COMPARE,
+                    detail=(
+                        f"a {shape.value} cohort needs at least two members and "
+                        f"the run committed {len(prospective)}"
+                    ),
+                ),
+            ),
+        )
     cohort, cohort_refs = _comparison_cohort(
         payload, shape=shape, dimensions=dimensions, limitations=limitations
     )
@@ -1034,8 +1161,7 @@ def project_native_investigation(
     subject_ids = [item.canonical_id for item in discovery.candidates]
 
     entries, handles = _evidence_entries(payload, subject_ids=subject_ids)
-    required_sections = QUESTION_FAMILY_REGISTRY[family].required_packet_sections
-    may_assert = PacketSection.RELATED_CONTEXT not in required_sections
+    may_assert = _may_assert(family=family, discovery=discovery)
     drivers = _driver_analysis(
         payload,
         subject_ids=subject_ids,

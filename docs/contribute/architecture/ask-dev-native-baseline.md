@@ -265,13 +265,40 @@ before the split.
 
 ## The arm connected to the seam
 
-The orchestrator calls the seam once, after the frame and any narrative have
-persisted, from inside `finish()`. It holds two **separate** injected
-values — an `InvestigationShadow` and an `InvestigationPacketProducer` — and
-never imports an arm: wiring the graph arm later changes the construction
-site and nothing in the run path. Both are `None` when off, so a flag-off
-process reaches the seam through no branch at all, only through a missing
-collaborator.
+The orchestrator calls the seam once per finished run, from inside
+`finish()`, **after the terminal state is written**. It holds two
+**separate** injected values — an `InvestigationShadow` and an
+`InvestigationPacketProducer` — and never imports an arm: wiring the graph
+arm later changes the construction site and nothing in the run path. Both
+are `None` when off, so a flag-off process reaches the seam through no
+branch at all, only through a missing collaborator.
+
+That position is load-bearing and was corrected during review. The call
+originally sat inside the branch that builds `finish()`'s own compatibility
+frame, and before `terminal()`. Three consequences, all measured:
+
+- Runs that terminate inside **preflight** record their own richer frame and
+  never entered that branch, so they never reached the seam at all — the
+  trial's denominator silently lost the whole class of unresolved and
+  ambiguous-subject runs, which is exactly where a graph arm is expected to
+  beat this baseline.
+- A record could describe a run that never terminalized, and because the
+  outer handler **retries `finish()`** when the terminal write fails, the
+  retry emitted a second record for the same run. Log-only persistence has
+  no dedup key to repair that with.
+- It added an await point between the frame and the terminal write, widening
+  the window in which a cancellation lands before the run is durable.
+
+Below `terminal_written`, all three are gone. A cancellation there loses one
+comparison record and nothing else, which is the trade a shadow seam should
+make — and the seam deliberately does **not** catch `BaseException`:
+swallowing a cancellation would make it the one thing in the run path that
+refuses to be cancelled.
+
+The frame handed to an arm is the frame that actually **persisted**
+(`persisted_frame`), set on the success side of both write paths. A dropped
+frame means a run with no server-owned evidence, and inventing one would be
+the same class of dishonesty as inventing a window.
 
 `native_arm/producer.py` is the native side of that Protocol. It adapts one
 `FinishedRunContext` into a `NativeProjectionInput` and calls the
@@ -308,6 +335,33 @@ Two further gap reasons name the refusals: `no_bounded_window` and
 "the product understood the question and found nothing" from "the product
 never got that far".
 
+## Every finished run leaves exactly one record
+
+The seam's outcomes are a partition, and that is what makes the trial's
+denominator readable:
+
+| Outcome | Meaning |
+| --- | --- |
+| `recorded` | the arm produced a packet and it survived validation |
+| `producer_gap` | the arm ran and reported the run as unprojectable |
+| `skipped_disabled` | the seam is switched off for this process |
+| `packet_invalid` / `canonical_bypass_rejected` | the packet was refused, and why |
+| `seam_fault` | the seam itself faulted; the live run is unaffected |
+
+`producer_gap` was added during review. A producer returning `None` used to
+produce **no record at all**, while a disabled seam produced
+`skipped_disabled` — so the trial could distinguish "the seam chose to do
+nothing" from "the seam never ran", but could distinguish neither from "the
+arm could not express this run". Those are the runs the trial most needs to
+count.
+
+The seam stays arm-neutral about *why*: the reason is the arm's own
+vocabulary, and it lives in the arm's own log line
+(`native_projection_gap.v1`) rather than in a field this seam would have to
+learn to interpret. That line is emitted **once per run** with every reason
+in it, not once per gap — counting lines otherwise over-counted any run with
+more than one gap.
+
 ## Where a comparison record goes
 
 `PersistenceRunRecorder.record_investigation_shadow` **logs** the record.
@@ -324,6 +378,15 @@ That last part matters: `configure_logging` renders extras only on its JSON
 path, and `LOG_JSON=false` installs a plain handler that discards them
 silently — a consumer would then read a healthy-looking stream with no
 records in it.
+
+Two further hazards are pinned rather than left to be discovered by the
+field that trips them. Field values are coerced for JSON (`datetime`, plain
+`Enum`, nested dataclass, set, mapping), because `json.dumps` raising inside
+a contained recorder write means the record simply never appears. And no
+record field may be named for a `LogRecord` attribute: the payload is also
+passed as `extra=`, where `Logger.makeRecord` raises `KeyError` on a
+collision — silencing the entire trial stream. The reserved set is derived
+from a real `LogRecord`, so it cannot drift from the stdlib.
 
 ## Flags
 

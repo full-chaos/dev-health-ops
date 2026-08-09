@@ -37,10 +37,10 @@ import hashlib
 import logging
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime
-from enum import StrEnum
-from typing import Any, Protocol
+from enum import Enum, StrEnum
+from typing import Any, Protocol, Self
 
 from pydantic import ValidationError
 
@@ -61,6 +61,7 @@ __all__ = [
     "InvestigationShadow",
     "InvestigationShadowRecord",
     "InvestigationShadowStatus",
+    "RESERVED_LOG_RECORD_ATTRS",
     "canonical_bypass_offenders",
     "run_window",
     "shadow_record_payload",
@@ -181,6 +182,17 @@ class InvestigationShadowStatus(StrEnum):
     #: The seam is switched off. Recorded rather than silent, so a run that
     #: chose to do nothing is distinguishable from a seam that never ran.
     SKIPPED_DISABLED = "skipped_disabled"
+    #: The arm ran and reported this run as unprojectable.
+    #:
+    #: Added by the codex review, which caught the asymmetry: a producer
+    #: returning ``None`` used to produce NO record at all, while a disabled
+    #: seam produced ``SKIPPED_DISABLED`` -- so the trial could tell "the
+    #: seam chose to do nothing" from "the seam never ran", but could NOT
+    #: tell "the arm could not express this run" from either. Those are the
+    #: runs the trial most needs to count. The seam stays arm-neutral about
+    #: WHY: the reason is the arm's own vocabulary, and it lives in the
+    #: arm's log line, not in a field this seam would have to understand.
+    PRODUCER_GAP = "producer_gap"
     #: The payload failed the canonical validator.
     PACKET_INVALID = "packet_invalid"
     #: The packet cited evidence no canonical service minted for this run.
@@ -213,6 +225,28 @@ class InvestigationShadowRecord:
     detail: str | None = None
     #: Present only for :attr:`InvestigationShadowStatus.RECORDED`.
     frame_facts: tuple[str, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def producer_gap(cls, *, run_id: str, latency_ms: int) -> Self:
+        """The record for a run its arm could not express.
+
+        A constructor rather than a caller-assembled record, so the shape
+        cannot vary between the two arms: every field a packet would have
+        supplied is genuinely absent here, and nothing may invent one.
+        """
+
+        return cls(
+            run_id=run_id,
+            status=InvestigationShadowStatus.PRODUCER_GAP,
+            arm_id=None,
+            packet_schema_version=None,
+            projection_version=None,
+            packet_id=None,
+            outcome=None,
+            evidence_handles=(),
+            latency_ms=latency_ms,
+            detail="the arm reported this run as unprojectable",
+        )
 
     def __post_init__(self) -> None:
         recorded = self.status is InvestigationShadowStatus.RECORDED
@@ -249,13 +283,58 @@ def shadow_record_payload(record: InvestigationShadowRecord) -> dict[str, Any]:
         "schema_version": INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION
     }
     for entry in fields(record):
-        value = getattr(record, entry.name)
-        if isinstance(value, StrEnum):
-            value = value.value
-        elif isinstance(value, tuple):
-            value = list(value)
-        payload[entry.name] = value
+        payload[entry.name] = _json_safe(getattr(record, entry.name))
     return payload
+
+
+#: Attribute names ``logging`` reserves on a ``LogRecord``.
+#:
+#: Derived from a real ``LogRecord`` rather than typed out, because the
+#: consequence of missing one is not a wrong value: ``Logger.makeRecord``
+#: raises ``KeyError`` for a colliding ``extra`` key, inside a recorder whose
+#: failures are contained -- so the whole trial stream would go quiet with
+#: nothing to read but a contained-write log line. Found by the codex review
+#: as a latent risk for a FUTURE field; pinned now, because the cost of
+#: discovering it later is every record between then and now.
+RESERVED_LOG_RECORD_ATTRS = frozenset(
+    vars(
+        logging.LogRecord(
+            name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
+        )
+    )
+) | {"message", "asctime", "taskName"}
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce one record field into something ``json.dumps`` accepts.
+
+    Deliberately total and deliberately lossy-but-legible at the edges. The
+    fields today are strings, ints, ``None`` and tuples of strings, so none
+    of this fires; it exists because the field set is DERIVED and will grow,
+    and the failure it prevents is silent: ``json.dumps`` raising inside a
+    contained recorder write means the record simply never appears, and a
+    trial reading that stream cannot tell an absent record from a run that
+    never happened.
+    """
+
+    if isinstance(value, StrEnum):
+        return value.value
+    if isinstance(value, Enum):
+        return _json_safe(value.value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            entry.name: _json_safe(getattr(value, entry.name))
+            for entry in fields(value)
+        }
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def _evidence_digest(ref: DevEvidenceRefV2) -> str:

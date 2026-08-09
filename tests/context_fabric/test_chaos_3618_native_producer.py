@@ -205,6 +205,7 @@ async def _investigated_run(
     shadow: seam.InvestigationShadow | None,
     script_id: str,
     question: str = _QUESTION,
+    recorder_factory: Any = InvestigationRecorder,
 ) -> Any:
     """One fully investigated run: preflight commits, the plan executes."""
 
@@ -215,7 +216,7 @@ async def _investigated_run(
         script_id=script_id,
         run_id=_RUN_ID,
         registry_factory=_minted_registry,
-        recorder_factory=InvestigationRecorder,
+        recorder_factory=recorder_factory,
         plan_registry=CORE_PLANS_BY_INTENT,
         plan_executor=executor_for(FakePlanExecutorRuntime()),
         investigation_shadow=shadow,
@@ -248,6 +249,16 @@ async def test_a_real_run_produces_one_recorded_native_shadow_record() -> None:
 
     [record] = output.recorder.investigation_shadow_records
     assert record.status is seam.InvestigationShadowStatus.RECORDED, record.detail
+    # NOT decoration. The codex review monkeypatched the frame's evidence to
+    # `()` and this test still passed: `RECORDED` is reachable by a packet
+    # that cites nothing, so the headline assertion was vacuity-prone
+    # exactly where it claimed to be strongest. An evidence-free run is a
+    # legitimate outcome in general -- it is not a legitimate outcome for
+    # THIS fixture, which exists to drive the digest path.
+    assert record.evidence_handles, (
+        "GUARD recorded_packet_cites_evidence -- a RECORDED verdict over an "
+        "empty evidence set proves the digest path was never exercised"
+    )
     # Arm-attributed, and attributed from the PACKET rather than from the
     # caller -- so this is the arm the packet declares, not the arm the
     # wiring believed it configured.
@@ -480,6 +491,109 @@ async def test_wiring_the_real_native_arm_leaves_the_run_byte_identical() -> Non
     )
     assert baseline.recorder.investigation_shadow_records == []
     assert len(wired.recorder.investigation_shadow_records) == 1
+
+
+# --------------------------------------------------------------------------
+# Every finished run, not merely the convenient ones
+# --------------------------------------------------------------------------
+
+
+async def test_a_preflight_terminated_run_still_reaches_the_seam() -> None:
+    """The trial's denominator must include the runs that terminate early.
+
+    A run whose named subject does not resolve terminates inside preflight,
+    which records its own richer frame and tells ``finish()``
+    ``frame_already_recorded=True``. The seam call used to live INSIDE the
+    branch that builds the other frame, so this entire class of run never
+    reached it: 1 frame recorded, 0 producer calls, 0 records.
+
+    These are the runs the trial most needs. Ambiguous and unresolved
+    subjects are precisely where a graph arm is supposed to beat this
+    baseline, so silently dropping them would bias the comparison toward
+    the arm under test.
+    """
+
+    producer = _CapturingProducer()
+    output = await run_preflight_orchestrator(
+        question="What's the status of the Nightfall project?",
+        entities=[(ORG_ID, ASK_DEV_PROJECT)],
+        script_id="native-preflight-terminate",
+        run_id=_RUN_ID,
+        recorder_factory=InvestigationRecorder,
+        investigation_shadow=seam.InvestigationShadow(enabled=True),
+        investigation_packet_producer=producer,
+    )
+    recorder = output.recorder
+    assert recorder is not None
+    assert recorder.frames, "fixture must record a frame or this proves nothing"
+    assert producer.contexts, "GUARD every_persisted_frame_reaches_the_seam"
+    assert len(recorder.investigation_shadow_records) == 1
+
+
+async def test_a_run_whose_arm_cannot_project_it_is_still_recorded() -> None:
+    """An unprojectable run is a measurement, and measurements are recorded.
+
+    A producer returning ``None`` used to produce no record at all, while a
+    disabled seam produced ``SKIPPED_DISABLED`` -- so the trial could tell
+    "the seam chose to do nothing" from "the seam never ran" but could not
+    tell either from "the arm could not express this run".
+    """
+
+    output = await _investigated_run(
+        producer=_NullProducer(),
+        shadow=seam.InvestigationShadow(enabled=True),
+        script_id="native-producer-gap",
+    )
+    records = output.recorder.investigation_shadow_records
+    # The GUARD assertion is FIRST, and that ordering is the point: the
+    # defect this pins is "no record at all", so an unpacking assertion
+    # above it would raise ValueError and the harness would see a failure
+    # that never reached the named claim.
+    assert records, "GUARD an_unprojectable_run_is_recorded"
+    [record] = records
+    assert record.status is seam.InvestigationShadowStatus.PRODUCER_GAP
+    # Every packet-derived field is genuinely absent, and none is invented.
+    assert record.arm_id is None
+    assert record.packet_schema_version is None
+    assert record.evidence_handles == ()
+
+
+async def test_the_record_is_written_after_the_terminal_state() -> None:
+    """Ordering, because two findings turned on it.
+
+    A record written before ``terminal()`` can describe a run that never
+    terminalized -- and the outer handler RETRIES ``finish()`` when the
+    terminal write fails, so the retry emitted a second record for the same
+    run, with no dedup key anywhere to repair it.
+    """
+
+    order: list[str] = []
+
+    class _OrderingRecorder(InvestigationRecorder):
+        async def terminal(self, **values: Any) -> None:
+            order.append("terminal")
+            await super().terminal(**values)
+
+        async def record_investigation_shadow(self, record: Any) -> None:
+            order.append("shadow")
+            await super().record_investigation_shadow(record)
+
+    await _investigated_run(
+        producer=NativeInvestigationPacketProducer(),
+        shadow=seam.InvestigationShadow(enabled=True),
+        script_id="native-ordering",
+        recorder_factory=_OrderingRecorder,
+    )
+    assert order == ["terminal", "shadow"], (
+        "GUARD the_shadow_record_follows_the_terminal_write"
+    )
+
+
+class _NullProducer:
+    """An arm that reports every run as unprojectable."""
+
+    def build_packet(self, run: seam.FinishedRunContext) -> Any:
+        return None
 
 
 # --------------------------------------------------------------------------

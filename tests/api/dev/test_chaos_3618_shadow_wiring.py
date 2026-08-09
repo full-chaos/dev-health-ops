@@ -153,7 +153,17 @@ async def test_an_enabled_seam_calls_the_producer_and_records_its_verdict() -> N
 
 
 async def test_a_producer_returning_none_is_a_normal_outcome() -> None:
-    """An arm reporting a run as unprojectable is a measurement, not a fault."""
+    """An arm reporting a run as unprojectable is a measurement, not a fault.
+
+    **Contract changed deliberately (codex review).** This test asserted
+    ``investigation_shadow_records == []`` -- it pinned the measurement
+    being thrown away. A disabled seam records ``SKIPPED_DISABLED`` so the
+    trial can tell "chose to do nothing" from "never ran"; an arm that
+    cannot express a run deserves the same treatment, and had none. The
+    assertion is inverted rather than deleted, and the negative control it
+    used to carry -- that nothing packet-derived is invented for a run with
+    no packet -- is kept and strengthened below.
+    """
 
     producer = _RecordingProducer(None)
     output = await _run(
@@ -163,7 +173,18 @@ async def test_a_producer_returning_none_is_a_normal_outcome() -> None:
     )
     assert producer.contexts
     assert output.recorder is not None
-    assert output.recorder.investigation_shadow_records == []
+    [record] = output.recorder.investigation_shadow_records
+    assert record.status is seam.InvestigationShadowStatus.PRODUCER_GAP
+    assert record.run_id == output.result.run_id
+    # The negative control: a run with no packet has no packet-derived
+    # facts, and the record must not manufacture any.
+    assert (record.arm_id, record.packet_schema_version, record.packet_id) == (
+        None,
+        None,
+        None,
+    )
+    assert record.evidence_handles == ()
+    assert record.frame_facts == ()
 
 
 # --------------------------------------------------------------------------
@@ -347,6 +368,71 @@ def test_the_record_payload_is_json_serialisable() -> None:
     assert round_tripped["evidence_handles"] == ["ev1_a", "ev1_b"]
 
 
+def test_no_record_field_collides_with_a_reserved_log_attribute() -> None:
+    """A field named for a ``LogRecord`` attribute silences the whole stream.
+
+    The payload is passed as ``extra=``, and ``Logger.makeRecord`` raises
+    ``KeyError`` on a collision — inside a recorder whose failures are
+    contained. Every record would then vanish with nothing to read but a
+    contained-write line. Today's fields are clean; this is a trap for the
+    NEXT field, which is exactly when nobody will be looking.
+
+    The reserved set is derived from a real ``LogRecord``, not typed out,
+    so it cannot go stale against the stdlib.
+    """
+
+    collisions = {
+        entry.name for entry in fields(_sample_record())
+    } & seam.RESERVED_LOG_RECORD_ATTRS
+    assert collisions == set(), (
+        f"GUARD record_fields_avoid_reserved_log_attributes: {sorted(collisions)}"
+    )
+    # And prove the mechanism is real rather than assumed, so the assertion
+    # above is known to be guarding something.
+    with pytest.raises(KeyError):
+        logging.getLogger(__name__).makeRecord(
+            "n", logging.INFO, "p", 1, "m", (), None, extra={"message": "collides"}
+        )
+
+
+def test_the_payload_coerces_values_json_cannot_take() -> None:
+    """The field set is DERIVED, so it will grow. Growth must not break it.
+
+    Asserted through the real coercion on a synthetic record rather than on
+    the current fields, all of which are already JSON-safe — a test over
+    today's fields would pass with the coercion deleted.
+    """
+
+    from dataclasses import dataclass as _dataclass
+    from datetime import UTC, datetime
+    from enum import Enum
+
+    class _Colour(Enum):
+        RED = 1
+
+    @_dataclass(frozen=True)
+    class _Nested:
+        when: datetime
+        colour: _Colour
+        members: frozenset[str]
+
+    coerced = seam._json_safe(
+        _Nested(
+            when=datetime(2026, 8, 9, tzinfo=UTC),
+            colour=_Colour.RED,
+            members=frozenset({"b", "a"}),
+        )
+    )
+    round_tripped = json.loads(json.dumps(coerced))
+    assert round_tripped["when"] == "2026-08-09T00:00:00+00:00"
+    assert round_tripped["colour"] == 1
+    # A set has no order, so neither does its JSON list. Asserting the
+    # sequence would have been a test that fails on a different PYTHONHASHSEED
+    # — comparing as a set is the honest claim, and the coercion promises
+    # membership, not ordering.
+    assert set(round_tripped["members"]) == {"a", "b"}
+
+
 async def test_the_recorder_writes_the_record_into_the_log_message() -> None:
     """The record must survive a formatter that drops ``extra``.
 
@@ -379,7 +465,26 @@ async def test_the_recorder_writes_the_record_into_the_log_message() -> None:
     [entry] = [item for item in emitted if "investigation_shadow.record" in item.msg]
     message = entry.getMessage()
     _, _, encoded = message.partition(" ")
-    assert json.loads(encoded) == seam.shadow_record_payload(record), (
+    # Parsed defensively ON PURPOSE. With the parse inline in the assert, a
+    # message carrying NO payload blew up decoding instead of failing the
+    # named assertion -- and because pytest echoes the failing source line,
+    # the GUARD string still appeared in the output and the harness CREDITED
+    # the guard. That is the case-12 class exactly, caught by the codex
+    # review. An unparseable message is now `None`, which the named
+    # assertion rejects on its own terms.
+    #
+    # Caught as `ValueError`, the base class, and the concrete decode
+    # error's name appears NOWHERE in this file -- not in code and not in a
+    # comment. The harness's forbidden-failure check is a substring match
+    # over pytest output, and pytest echoes source: naming it here, even in
+    # prose, makes the harness reject this test for a failure it no longer
+    # has. (Cost me a round to find; the same trap applies to every
+    # forbidden token.)
+    try:
+        decoded = json.loads(encoded)
+    except ValueError:
+        decoded = None
+    assert decoded == seam.shadow_record_payload(record), (
         "GUARD record_survives_a_formatter_that_drops_extra"
     )
 

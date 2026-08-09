@@ -903,6 +903,76 @@ seam.InvestigationShadowRecord.__post_init__ = _post_init
     # ----------------------------------------------------------------------
     # CHAOS-3618 PR 2: the native arm connected to the seam.
     # ----------------------------------------------------------------------
+    # ----------------------------------------------------------------------
+    # From the codex review of PR 2: what the seam was NOT seeing.
+    # ----------------------------------------------------------------------
+    GuardCase(
+        case_id="preflight_terminated_runs_never_reach_the_seam",
+        stake=(
+            "an entire class of finished run missing from the trial's "
+            "denominator -- and the class where a graph arm is most expected "
+            "to win, so the bias runs toward the arm under test"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_a_preflight_terminated_run_still_reaches_the_seam"
+        ),
+        expected_failure="GUARD every_persisted_frame_reaches_the_seam",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+_real = DevOrchestrator._run_investigation_shadow
+
+
+async def _run_investigation_shadow(self, *, preflight_result, **kwargs):
+    # The pre-review position, expressed as a predicate: a run whose frame
+    # came from the preflight TERMINATE branch is skipped. That branch is
+    # exactly what `if not frame_already_recorded` used to exclude.
+    if preflight_result is not None and preflight_result.answer is not None:
+        return None
+    return await _real(self, preflight_result=preflight_result, **kwargs)
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
+        case_id="unprojectable_runs_are_not_recorded",
+        stake=(
+            "a run its arm could not express leaving no trace, so the trial "
+            "cannot distinguish it from a seam that never ran"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_a_run_whose_arm_cannot_project_it_is_still_recorded"
+        ),
+        expected_failure="GUARD an_unprojectable_run_is_recorded",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+# The pre-review behaviour: a gap record is never constructible, so the
+# orchestrator's `producer_gap` branch produces nothing to record.
+def _producer_gap(cls, *, run_id, latency_ms):
+    raise RuntimeError("no gap record exists")
+
+
+seam.InvestigationShadowRecord.producer_gap = classmethod(_producer_gap)
+""",
+    ),
+    # NOTE: there is deliberately NO case here for "the shadow record must
+    # follow the terminal write". That property is enforced by the POSITION
+    # of a statement inside ``finish()``, and no sitecustomize plant can
+    # reorder inline statements — every plant I could write would prove
+    # something adjacent instead, which is the failure mode this whole
+    # harness exists to prevent. Its RED evidence was taken the honest way,
+    # by moving the call back above ``terminal()`` in the working tree,
+    # observing
+    # ``test_the_record_is_written_after_the_terminal_state`` fail on its
+    # own declared assertion, and restoring with the restore VERIFIED by
+    # ``git diff --quiet`` rather than assumed. Recorded here so the absence
+    # of a case is a stated decision, not an oversight.
     GuardCase(
         case_id="window_taken_from_nowhere",
         stake=(
@@ -1025,7 +1095,11 @@ seam.shadow_record_payload = _payload
             "test_the_recorder_writes_the_record_into_the_log_message"
         ),
         expected_failure="GUARD record_survives_a_formatter_that_drops_extra",
-        forbidden_failure=("PLANT-FAILED",),
+        # JSONDecodeError means the test blew up parsing an empty payload
+        # instead of failing its own assertion -- which is what it DID until
+        # the codex review, while still printing the GUARD string in the
+        # failing source line and being credited for it.
+        forbidden_failure=("PLANT-FAILED", "JSONDecodeError"),
         plant="""
 from dev_health_ops.api.dev import orchestrator_persistence as persistence
 
@@ -1089,9 +1163,19 @@ def _verify(case: GuardCase, *, verbose: bool) -> str | None:
 
     baseline = _run_pytest(case.test, plant_dir=None)
     if baseline.returncode != 0:
+        # STDERR too, and that is not tidiness. The codex review ran every
+        # case in an environment with no usable temp directory: pytest died
+        # on stderr with FileNotFoundError, this branch reported only
+        # stdout, and all six cases came back with the same generic "the
+        # named test does not pass" -- indistinguishable from six genuinely
+        # broken pristine tests. A harness that cannot tell an environment
+        # failure from the thing it measures is a measurement layer failing
+        # toward a confident wrong answer.
         return (
             f"{case.case_id}: the named test does not pass against the pristine "
-            f"tree, so the plant would prove nothing\n{baseline.stdout[-2000:]}"
+            f"tree, so the plant would prove nothing\n"
+            f"--- stdout ---\n{baseline.stdout[-2000:]}\n"
+            f"--- stderr ---\n{baseline.stderr[-2000:]}"
         )
 
     workspace = Path(tempfile.mkdtemp(prefix=f"chaos3618-{case.case_id}-"))

@@ -1092,6 +1092,17 @@ class DevOrchestrator:
         # ambiguous "Atlas" and a not-found "Nightfall" both published
         # `inherited`, with zero candidates.
         preflight_terminal_resolution: DevScopeResolution | None = None
+        # CHAOS-3618 PR 2, codex review: the frame this run actually
+        # PERSISTED, or ``None`` when it persisted none.
+        #
+        # Set from both places a frame is written -- ``finish()``'s own
+        # compatibility frame and the preflight TERMINATE branch's richer
+        # one -- because the shadow seam must see every finished run, and
+        # those two branches are exactly what it used to see only half of.
+        # Set only on the success side of each write: a dropped frame means
+        # a run with no server-owned evidence to hand an arm, and inventing
+        # one would be the same class of dishonesty as inventing a window.
+        persisted_frame: DevAnswerFrame | None = None
         #: CHAOS-3525: ``(user's span, authorized entity label)`` for a subject
         #: committed from a QUA proposal -- set at the promotion seam, read by
         #: ``finish()``'s closure. A free variable rather than a parameter for
@@ -1189,7 +1200,7 @@ class DevOrchestrator:
             grounding_validation_status: str | None = None,
             extra_attested: tuple[str, ...] = (),
         ) -> OrchestratorResult:
-            nonlocal terminal_written
+            nonlocal terminal_written, persisted_frame
             if terminal_written:
                 raise RuntimeError("terminal state already written")
 
@@ -1768,28 +1779,10 @@ class DevOrchestrator:
                             narrative_failure_code = (
                                 failure_code.value if failure_code is not None else None
                             )
-                    # CHAOS-3618 PR 2: runs strictly AFTER the frame (and any
-                    # narrative) is persisted, and its record is a local
-                    # nothing below reads -- the structural half of "flipping
-                    # the flag changes zero live-path behavior", exactly as
-                    # the CHAOS-3389 QUA seam is built. The RED test proves
-                    # the other half: OrchestratorResult is byte-identical
-                    # with the seam on vs off, against a producer that always
-                    # raises.
-                    await self._run_investigation_shadow(
-                        run_id=run_id,
-                        org_id=org_id,
-                        frame=frame,
-                        investigation_result=investigation_result,
-                        preflight_result=preflight_result,
-                        # The run's OWN scope decision, and therefore its own
-                        # bounded window -- the same value this terminal
-                        # publishes on the wire below. Reading the window off
-                        # anything else (``request.scope``, a clock) would
-                        # hand an arm a time context the run's queries never
-                        # used.
-                        scope_resolution=terminal_resolution(),
-                    )
+                    # CHAOS-3618 PR 2: this frame reached storage, so it is
+                    # what an arm may be shown. The seam itself now runs
+                    # below, after terminal() -- see the call site.
+                    persisted_frame = frame
             await self._recorder.terminal(
                 state=state,
                 answer=answer,
@@ -1817,6 +1810,44 @@ class DevOrchestrator:
             events.append(event)
             if selected_event_sink is not None:
                 await selected_event_sink(event)
+            # CHAOS-3618 PR 2. Position moved here by the codex review, and
+            # the move is the fix for three separate findings:
+            #
+            # 1. It used to sit inside ``if not frame_already_recorded``, so
+            #    the preflight TERMINATE path -- which records its own,
+            #    richer frame -- never reached the seam AT ALL. Reproduced:
+            #    a run terminating on an unresolved name recorded 1 frame, 0
+            #    producer calls and 0 shadow records. That is the trial's
+            #    denominator quietly losing a whole class of run, and the
+            #    WORST class to lose: ambiguous-subject runs are precisely
+            #    where a graph arm is supposed to beat this baseline.
+            # 2. It used to sit BEFORE ``terminal()``, so a record could
+            #    describe a run that never terminalized -- and because the
+            #    outer handler retries ``finish()`` when the terminal write
+            #    fails, the retry emitted a SECOND record for the same run.
+            #    Log-only persistence has no dedup key to repair that with.
+            # 3. It added an await point between the frame and the terminal
+            #    write, widening the window in which a cancellation lands
+            #    before the run terminalizes. Below ``terminal_written``,
+            #    that window is gone: the run is already durable.
+            #
+            # Its record remains a local nothing reads, which is still the
+            # structural half of "flipping the flag changes zero live-path
+            # behavior"; the inertness tests prove the other half.
+            if persisted_frame is not None:
+                await self._run_investigation_shadow(
+                    run_id=run_id,
+                    org_id=org_id,
+                    frame=persisted_frame,
+                    investigation_result=investigation_result,
+                    preflight_result=preflight_result,
+                    # The run's OWN scope decision, and therefore its own
+                    # bounded window -- the same value this terminal
+                    # published on the wire. Reading the window off anything
+                    # else (``request.scope``, a clock) would hand an arm a
+                    # time context the run's queries never used.
+                    scope_resolution=terminal_resolution(),
+                )
             return OrchestratorResult(
                 run_id=run_id,
                 state=state,
@@ -2486,6 +2517,9 @@ class DevOrchestrator:
                             ),
                         )
                     except Exception:
+                        # (the CHAOS-3618 assignment below is deliberately
+                        # NOT in this handler: a dropped frame is not a
+                        # persisted one)
                         # A database-layer failure here (constraint
                         # violation, dropped connection) marks the
                         # recorder's session rollback-only; the terminal()
@@ -2510,6 +2544,13 @@ class DevOrchestrator:
                             preflight_outcome=preflight_result.diagnostic,
                             legacy_guard_reason=None,
                         )
+                    else:
+                        # CHAOS-3618 PR 2, codex review: the frame landed, so
+                        # the seam may see this run. ``else`` rather than a
+                        # line after the try: the handler above reaches here
+                        # too, and a run whose frame was rolled back must not
+                        # be handed to an arm as though it had one.
+                        persisted_frame = preflight_result.answer.frame
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=preflight_error,
@@ -3815,17 +3856,32 @@ class DevOrchestrator:
                 # appearance of one.
                 canonical_evidence=tuple(frame.evidence),
             )
+            started = time.monotonic()
             payload = producer.build_packet(context)
             if payload is None:
-                # A normal outcome. The native arm reports several kinds of
-                # run as unprojectable by design, and that is a measurement.
-                return None
-            record = shadow.evaluate(
-                payload=payload,
-                run_id=run_id,
-                organization_id=org_id,
-                canonical_evidence=context.canonical_evidence,
-            )
+                # A normal outcome -- the native arm reports several kinds
+                # of run as unprojectable by design -- but a RECORDED one.
+                #
+                # This used to `return None`, and the codex review named the
+                # asymmetry: a disabled seam records SKIPPED_DISABLED, so
+                # the trial could distinguish "chose to do nothing" from
+                # "never ran", but an arm that could not express a run
+                # produced nothing at all and was indistinguishable from
+                # both. Those are the runs the trial most needs to count.
+                # The REASON stays in the arm's own log line, because the
+                # reason is the arm's vocabulary and this seam must not
+                # learn to speak it.
+                record = InvestigationShadowRecord.producer_gap(
+                    run_id=run_id,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+            else:
+                record = shadow.evaluate(
+                    payload=payload,
+                    run_id=run_id,
+                    organization_id=org_id,
+                    canonical_evidence=context.canonical_evidence,
+                )
         except Exception as shadow_fault:
             logger.exception(
                 "ask_dev.orchestrator.investigation_shadow_fault",
@@ -3838,6 +3894,17 @@ class DevOrchestrator:
         try:
             await self._recorder.record_investigation_shadow(record)
         except Exception as write_fault:
+            # ``Exception``, deliberately NOT ``BaseException``. The codex
+            # review found that ``asyncio.CancelledError`` escapes here, and
+            # it is right that it does: swallowing a cancellation would make
+            # the seam the one thing in this file that refuses to be
+            # cancelled, and a "shadow" that outlives its run is worse than
+            # one that loses a record. What made it a DEFECT was the call's
+            # old position -- before ``terminal()``, where an escaping
+            # cancellation took the terminal write with it. Below
+            # ``terminal_written`` the run is already durable, so a
+            # cancellation here loses this record and nothing else, which is
+            # exactly the trade a shadow seam should make.
             logger.exception(
                 "ask_dev.orchestrator.investigation_shadow_write_fault",
                 extra={

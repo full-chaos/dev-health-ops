@@ -30,6 +30,7 @@ current product; a packet dated to a window nothing queried would not be.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import Callable, Mapping
@@ -55,7 +56,17 @@ from .projection import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["NativeInvestigationPacketProducer", "native_shadow_wiring"]
+__all__ = [
+    "NATIVE_PROJECTION_GAP_SCHEMA_VERSION",
+    "NativeInvestigationPacketProducer",
+    "native_shadow_wiring",
+]
+
+#: Versioned for the same reason the shadow record is: until CHAOS-3619
+#: lands a table, this log line IS the only record that a run existed and
+#: its arm could not express it, and a shape a consumer parses is a
+#: contract whether or not anybody calls it one.
+NATIVE_PROJECTION_GAP_SCHEMA_VERSION = "native_projection_gap.v1"
 
 
 def _utc_now() -> datetime:
@@ -105,17 +116,27 @@ class NativeInvestigationPacketProducer:
             )
             return None
         if outcome.packet is None:
-            for gap in outcome.gaps:
-                logger.info(
-                    "context_fabric.native_arm.projection_gap",
-                    extra={
-                        "run_id": run.run_id,
-                        "organization_id": run.organization_id,
-                        "arm_id": NATIVE_ARM_ID,
-                        "gap_reason": gap.reason.value,
-                        "gap_detail": gap.detail,
-                    },
-                )
+            # ONE line per run, not one per gap, and the payload goes INTO
+            # the message. Both were codex review findings and both are the
+            # same mistake: the record shape one layer up had already been
+            # fixed to survive a formatter that drops ``extra``, and this
+            # line -- the only place a gap REASON exists -- had not. A
+            # consumer counting gap lines would also have over-counted every
+            # multi-gap run, so "unprojectable runs" was recoverable from
+            # neither the seam (which recorded nothing) nor from here.
+            payload = {
+                "schema_version": NATIVE_PROJECTION_GAP_SCHEMA_VERSION,
+                "run_id": run.run_id,
+                "organization_id": run.organization_id,
+                "arm_id": NATIVE_ARM_ID,
+                "gap_reasons": [gap.reason.value for gap in outcome.gaps],
+                "gap_details": [gap.detail for gap in outcome.gaps],
+            }
+            logger.info(
+                "context_fabric.native_arm.projection_gap %s",
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                extra=payload,
+            )
             return None
         return outcome.packet.model_dump(mode="json")
 

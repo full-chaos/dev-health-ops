@@ -434,3 +434,110 @@ def test_permitting_and_forbidding_the_same_candidate_is_rejected(
     )
     with pytest.raises(RuntimeError, match="both permits and forbids candidates"):
         validate_oracles()
+
+
+def test_an_oracle_whose_driver_and_symptom_share_evidence_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The disjointness guard had no test, and it is load-bearing twice over.
+
+    Independent verification round 2 found that neutering
+    ``_check_driver_evidence_is_unambiguous`` produced **zero** failures --
+    nothing measured it. That matters more than an ordinary untested guard:
+    the driver matcher binds a principal to the one expectation its evidence
+    overlaps, so with disjointness off an overlapping oracle makes a
+    *correct* witness fail. The guard and the matcher are coupled, and this
+    test is the only thing holding the coupling.
+    """
+
+    case_id = "T01_clearly_struggling_team"
+    oracle = CASE_ORACLES[case_id]
+    principal = oracle.expected_principal_drivers[0]
+    symptom = oracle.expected_non_drivers[0]
+    overlapping = dataclasses.replace(
+        symptom,
+        supporting_evidence_slugs=(
+            *symptom.supporting_evidence_slugs,
+            *principal.supporting_evidence_slugs,
+        ),
+    )
+    monkeypatch.setattr(
+        oracles_module,
+        "CASE_ORACLES",
+        _replace(case_id, expected_non_drivers=(overlapping,)),
+    )
+    with pytest.raises(RuntimeError, match="shares evidence with an expected"):
+        validate_oracles()
+
+
+def test_the_prose_discriminator_holds_over_the_whole_alias_set() -> None:
+    """Every contract string alias is safe to classify by its pattern.
+
+    The prose scan decides whether a field is free text by asking whether the
+    contract constrains it with a ``pattern``. That rests on an invariant of
+    the *contract*, not of the corpus, and nothing on the contract side
+    asserted it.
+
+    The two directions are not symmetric, and the test is written around
+    that. Scanning an identifier as prose is **noise** -- a handle contains no
+    English and matches no person word. Skipping prose as an identifier is a
+    **hole**, because it is a field a producer chose the words in. So:
+
+    * every alias whose values can carry a sentence must be pattern-free, so
+      the scan reaches it;
+    * every pattern-constrained alias must be genuinely unable to carry one,
+      proved by testing its own pattern against a string with a space in it.
+
+    Written over the alias set rather than over today's fields, so a new
+    alias fails this rather than a new field failing something subtler later.
+    """
+
+    import re as _re
+
+    from dev_health_ops.api.dev import contracts
+    from dev_health_ops.api.dev.contracts_v2 import base
+
+    #: Aliases whose values are producer-authored text. Losing pattern-freedom
+    #: on any of these silently removes every field using it from the scan.
+    prose_bearing = {"Label", "ShortText", "LongText"}
+
+    def _pattern_of(alias: object) -> str | None:
+        for item in getattr(alias, "__metadata__", ()):
+            pattern = getattr(item, "pattern", None)
+            if pattern:
+                return str(pattern)
+        return None
+
+    seen: set[str] = set()
+    for module in (contracts, base):
+        for name in dir(module):
+            alias = getattr(module, name)
+            if getattr(alias, "__origin__", None) is not str:
+                continue
+            pattern = _pattern_of(alias)
+            if name in prose_bearing:
+                seen.add(name)
+                assert pattern is None, (
+                    f"{name} is a prose-bearing alias and now carries the "
+                    f"pattern {pattern!r}. Every field using it would be "
+                    "skipped by the person-attribution scan -- the dangerous "
+                    "direction."
+                )
+                continue
+            if pattern is None:
+                # Pattern-free and not on the prose list: the scan will read
+                # it as text. Harmless over-inclusion, and better than the
+                # alternative, so this is allowed rather than asserted away.
+                continue
+            seen.add(name)
+            assert not _re.match(pattern, "alpha beta"), (
+                f"{name} is pattern-constrained but its pattern admits a "
+                "string containing a space, so it could carry a sentence the "
+                f"scan would skip: {pattern!r}"
+            )
+
+    missing = sorted(prose_bearing - seen)
+    assert not missing, (
+        f"these prose-bearing aliases were not found on the contract modules: "
+        f"{missing}; the invariant is unverified for them"
+    )

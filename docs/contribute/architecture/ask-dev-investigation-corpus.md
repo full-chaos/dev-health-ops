@@ -355,6 +355,68 @@ entity "A developer", which after the fix tripped the prose branch instead of
 the identifier branch it names; the label was changed so the injection still
 isolates what it claims to.
 
+## Verification round 2, and one accepted residual
+
+A second verification pass confirmed the slot coverage and the promotion fix
+closed, and found the driver matcher still defeatable by **substitution**:
+emit the expected *number* of principals, drop a real one, and add an
+invented driver citing several expectations' evidence. Precision saw every
+principal overlapping something; recall unioned evidence across principals,
+so the invented driver satisfied the dropped one's expectation on its behalf.
+
+Precision and recall now read **one exclusive binding**, computed once. A
+principal binds to the single expectation its evidence overlaps; overlapping
+several is a merged driver and binds to none; a claimed expectation cannot be
+claimed twice; and recall credits an expectation only to the principal that
+claims it. Two scorers reading the same binding cannot disagree the way those
+two did.
+
+Also closed: four more separators a negation could hide behind (em dash, en
+dash, hyphen, newline, brackets); a test for the driver-evidence disjointness
+guard, which had none and is *coupled* to the matcher — with it off, an
+overlapping oracle makes a correct witness fail; and an alias-level invariant
+behind the prose scan.
+
+### The alias invariant, and why it is one-sided
+
+The prose scan classifies a field by whether the contract constrains it with
+a `pattern`. That is an invariant of the **contract**, not of this package,
+and nothing asserted it. The two directions are not symmetric:
+
+* scanning an identifier as prose is **noise** — a handle contains no English;
+* skipping prose as an identifier is a **hole** — it is a field a producer
+  chose the words in.
+
+So the test requires prose-bearing aliases (`Label`, `ShortText`, `LongText`)
+to stay pattern-free, and requires every pattern-constrained alias to be
+provably unable to carry a sentence — by running its own pattern against a
+string with a space in it. Pattern-free aliases that are not on the prose list
+are simply scanned, which is the safe direction. Writing it over the alias set
+means a *new* alias fails this test, rather than a new field failing something
+subtler later.
+
+### The accepted residual: intensifier phrasings
+
+Clause scoping closes every separator-based evasion. It cannot close an
+intensifier with no separator at all — "Without doubt one developer carries
+this". Punctuation modelling does not reach that class.
+
+The alternative was a disclaimer grammar: exempt a person word only when a
+negation governs it and no attributive verb follows. That closes the
+intensifier class and opens a worse one — *"no single developer is
+responsible"* is a genuine disclaimer with an attributive verb, and would be
+flagged. `zero_person_level_ranking` is a MUST_BE_ZERO dimension, so a
+spurious failure reads as a safety breach rather than as a lint, and a safety
+scorer that fails correct answers is one somebody switches off.
+
+**Decision: accept the residual, and pin it.** The demonstrated phrasings live
+as `strict=True` xfail tests. They fail today by design; the moment anyone
+makes the check catch them the tests XPASS, strict mode turns that into a
+build failure, and whoever fixed it has to retire this section rather than let
+the residual be silently outgrown. The residual is bounded — it takes a
+deliberately constructed negation-intensifier — and the structural person
+guards (fabricated identifier, cohort on a refusal case) are untouched by it.
+
 ## An audit that changed the design
 
 Two dimensions were, on first implementation, **unfailable** --

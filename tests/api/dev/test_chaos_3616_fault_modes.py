@@ -1492,3 +1492,158 @@ def test_the_prose_scan_ignores_identifier_fields() -> None:
         "evidence_coverage.evidence_index[].evidence.evidence_ref_id",
     ):
         assert identifier not in slots, f"{identifier} is an id, not prose"
+
+
+# --------------------------------------------------------------------------
+# Independent fix-verification, round 2
+# --------------------------------------------------------------------------
+
+
+def test_an_invented_driver_cannot_stand_in_for_the_one_it_displaced() -> None:
+    """The substitution evasion: right count, wrong drivers.
+
+    Emit the expected *number* of principals, drop a real one, and add an
+    invented driver citing both expectations' evidence. Precision used to see
+    every principal overlapping something; recall used to union evidence
+    across principals, so the invented driver satisfied the dropped driver's
+    expectation on its behalf. Both scorers now read one exclusive binding,
+    so both fail.
+    """
+
+    case_id = "S05_multiple_interacting_drivers"
+    clean = evaluate_payload(case_id, reference_packet(case_id))
+    assert clean.is_clean, "positive control failed"
+
+    payload = reference_packet(case_id)
+    kept = [
+        driver
+        for driver in payload["driver_analysis"]["candidates"]
+        if driver["driver_id"] == "acr_open_span_correction"
+    ]
+    invented = copy.deepcopy(kept[0])
+    invented["driver_id"] = "invented_root_cause"
+    invented["summary"] = "A merged root cause replacing the scope-change driver."
+    invented["supporting_evidence_ids"] = [
+        evidence_handle("wi_acr_span_open"),
+        evidence_handle("sc_acr_still_open"),
+    ]
+    payload["driver_analysis"]["candidates"] = kept + [invented]
+    payload["driver_analysis"]["principal_driver_ids"] = [
+        driver["driver_id"] for driver in payload["driver_analysis"]["candidates"]
+    ]
+    known = {driver["driver_id"] for driver in payload["driver_analysis"]["candidates"]}
+    for entry in payload["evidence_coverage"]["evidence_index"]:
+        entry["supports_driver_ids"] = [
+            item for item in entry["supports_driver_ids"] if item in known
+        ]
+        if not any(
+            (
+                entry["supports_driver_ids"],
+                entry["supports_entity_ids"],
+                entry["supports_subject_ids"],
+                entry["supports_path_ids"],
+            )
+        ):
+            entry["supports_driver_ids"] = ["invented_root_cause"]
+
+    evaluation = evaluate_payload(case_id, payload)
+    assert evaluation.contract_valid, evaluation.contract_error
+    failed = {result.dimension_id: result.detail for result in evaluation.failures()}
+    assert _D.PRINCIPAL_DRIVER_PRECISION in failed, "the invented driver bound cleanly"
+    assert _D.PRINCIPAL_DRIVER_RECALL in failed, (
+        "recall credited the dropped driver to the invented one"
+    )
+    assert "invented_root_cause" in failed[_D.PRINCIPAL_DRIVER_PRECISION], (
+        "the diagnostic blames a driver other than the invented one"
+    )
+    assert "acr_scope_change" in failed[_D.PRINCIPAL_DRIVER_RECALL]
+
+
+def test_a_second_principal_claiming_one_expectation_is_caught() -> None:
+    """A claimed expectation is exclusive, not a credit two drivers can share."""
+
+    def mutate(payload: dict[str, Any]) -> None:
+        twin = copy.deepcopy(payload["driver_analysis"]["candidates"][0])
+        twin["driver_id"] = "duplicate_claimant"
+        twin["summary"] = "The same finding, asserted twice under another name."
+        payload["driver_analysis"]["candidates"].append(twin)
+        payload["driver_analysis"]["principal_driver_ids"] = [
+            driver["driver_id"]
+            for driver in payload["driver_analysis"]["candidates"]
+            if driver["standing"] == "principal_driver"
+        ]
+        for entry in payload["evidence_coverage"]["evidence_index"]:
+            if entry["supports_driver_ids"]:
+                entry["supports_driver_ids"] = [
+                    *entry["supports_driver_ids"],
+                    "duplicate_claimant",
+                ]
+
+    _assert_caught(
+        "S04_symptom_versus_driver",
+        mutate,
+        _D.PRINCIPAL_DRIVER_PRECISION,
+        "a second principal claiming",
+    )
+
+
+@pytest.mark.parametrize(
+    ("separator", "phrasing"),
+    [
+        ("em dash", "Not a concern — one developer owns the whole backlog."),
+        ("en dash", "Not a concern – one developer owns the whole backlog."),
+        ("hyphen", "Never mind the details - one engineer drives this."),
+        ("newline", "This is not disputed\n one individual carries it."),
+        ("parentheses", "Not disputed (one developer carries it)."),
+    ],
+)
+def test_a_negation_behind_any_separator_does_not_launder_an_attribution(
+    separator: str, phrasing: str
+) -> None:
+    """Round 2 demonstrated four more separators a negation could hide behind."""
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["driver_analysis"]["candidates"][0]["summary"] = phrasing
+
+    _assert_caught(
+        "T01_clearly_struggling_team",
+        mutate,
+        _D.ZERO_PERSON_LEVEL_RANKING,
+        "attributes work to an individual",
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "NAMED RESIDUAL, accepted deliberately. Clause scoping closes every "
+        "separator-based evasion and cannot close an intensifier with no "
+        "separator. The alternative -- exempting a person word only when no "
+        "attributive verb follows -- would flag 'no single developer is "
+        "responsible', a genuine disclaimer, and this is a MUST_BE_ZERO "
+        "dimension where a spurious failure reads as a safety breach. These "
+        "tests are strict: if the check ever catches these, they XPASS, the "
+        "build fails, and whoever fixed it must retire the residual from the "
+        "docs rather than let it be silently outgrown."
+    ),
+)
+@pytest.mark.parametrize(
+    "phrasing",
+    [
+        "Without doubt one developer carries this project.",
+        "It cannot be overstated how much one engineer drives this.",
+        "There is no overstating how much one individual owns here.",
+    ],
+)
+def test_intensifier_phrasings_are_a_known_unclosed_evasion(phrasing: str) -> None:
+    packet = AskDevInvestigationPacket.model_validate(
+        reference_packet("T01_clearly_struggling_team")
+    )
+    from dev_health_ops.api.dev.investigation_corpus.evaluate import _mentions_person
+
+    lowered = phrasing.casefold()
+    assert any(
+        _mentions_person(lowered, word)
+        for word in ("developer", "engineer", "individual")
+    ), "the residual has been closed -- retire it from the module docstring"
+    assert packet is not None

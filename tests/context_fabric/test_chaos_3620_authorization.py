@@ -1560,27 +1560,35 @@ class TestTheIndependentOracleCannotYetScoreThisArm:
         footnote nobody re-checks.
         """
 
-        sound = unsound = 0
+        sound = unsound = measurement_keys = 0
         for seed in _subject_seeds():
             packet = spine.investigate(seed).packet
             for entry in packet.evidence_coverage.evidence_index:
                 record = world.EVIDENCE_BY_SLUG.get(entry.evidence.entity_id)
                 if record is None:
-                    continue  # measurement keys: a different vocabulary again
+                    # Measurement keys: a THIRD vocabulary. Counted rather
+                    # than skipped -- review found that skipping let a
+                    # partial vocabulary fix pass silently, because a fixed
+                    # entry stops being a known slug and simply vanishes from
+                    # the denominator.
+                    measurement_keys += 1
+                    continue
                 if entry.evidence.entity_id == record.entity_id:
                     sound += 1
                 else:
                     unsound += 1
 
-        assert unsound, (
-            "no evidence entry misattributes any more -- the CHAOS-3620 "
-            "mis-attribution scope note must be updated and the zero-leakage "
-            "claim RE-DERIVED against sound attributions"
-        )
-        assert sound == 0, (
-            f"{sound} evidence entries now attribute soundly while {unsound} "
-            "do not. A partial fix means the claim's scope changed; re-derive "
-            "it and update the CHAOS-3620 mis-attribution note"
+        # CARDINALITY, not a direction. `unsound > 0 and sound == 0` was
+        # tautological under a partial fix: entries that became sound would
+        # leave the slug vocabulary entirely and be skipped, so both halves
+        # stayed true while the defect shrank. Pinning the exact counts makes
+        # any movement -- in either direction -- loud.
+        assert (unsound, sound, measurement_keys) == (785, 0, 532), (
+            "the mis-attribution census moved from the documented "
+            f"785 unsound / 0 sound / 532 measurement-key entries to "
+            f"{unsound} / {sound} / {measurement_keys}. The zero-leakage "
+            "claim's scope has changed and must be RE-DERIVED; update the "
+            "CHAOS-3620 mis-attribution record with the new census"
         )
 
     def test_the_audit_can_therefore_never_be_clean_for_this_arm(self) -> None:

@@ -571,7 +571,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "X5",
-        Status.PROVEN,
+        Status.UNMEASURED,
         f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
         "test_a_flood_of_low_quality_paths_cannot_displace_the_required_one",
         f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
@@ -606,6 +606,24 @@ REQUIREMENTS: tuple[Requirement, ...] = (
             "cap as belt-and-braces; both are pinned, and the reachable fault "
             "-- ordering REVERSAL -- is planted and displaces the path "
             "entirely.",
+        ),
+        reason=(
+            "UN-PROVEN BY ORCHESTRATOR RULING, and the ruling stands over my "
+            "own refutation deliberately. Round-2 review required the "
+            "required path to be enumerated LAST plus a pid-only mutation, "
+            "so that 'kept because shortest' and 'kept because "
+            "first-enumerated' could be told apart. I could not build it and "
+            "recorded why with executed evidence: traversal is breadth-first, "
+            "so path ids are assigned in non-decreasing length order and pid "
+            "is a PROXY for length -- a pid-only ordering keeps the required "
+            "path anyway, and registering the required edge last does not "
+            "move its id because discovery order assigns ids. What defends "
+            "the path is BFS discovery order with the length-ordered cap over "
+            "it; both are pinned, and the reachable fault (ordering reversal) "
+            "displaces the path entirely. That may be a complete answer or it "
+            "may be a comfortable one, and the person who built the world is "
+            "the worst judge of which. Recorded un-proven until the "
+            "orchestrator rules on the refutation."
         ),
     ),
     _req(
@@ -976,6 +994,10 @@ INHERITED_INVARIANTS: tuple[InheritedInvariant, ...] = (
         (
             f"{_ADV}::TestAnAliasCannotRedirectASubject::"
             "test_a_shared_acronym_across_tenants_never_crosses_the_partition",
+            f"{_A3617}::TestTenantIsolation::"
+            "test_an_identical_canonical_id_in_two_tenants_is_two_distinct_nodes",
+            f"{_A3617}::TestTenantIsolation::"
+            "test_betas_near_duplicate_project_is_unreachable_from_alpha",
         ),
         reason=(
             "Re-proved with the corpus's own cross-tenant collision: the "
@@ -1021,6 +1043,8 @@ INHERITED_INVARIANTS: tuple[InheritedInvariant, ...] = (
             "test_no_public_callable_accepts_a_partition",
             f"{_SEM}::TestNoGraphNativeSurfaceLeaves::"
             "test_the_storage_partition_name_never_appears_in_the_packet",
+            f"{_P3617}::TestPublicEntryPointsRejectTheKeyword::"
+            "test_the_partition_a_traversal_uses_comes_from_the_org_id",
         ),
         reason=(
             "The 3617 half inspects the arm's public callables' signatures, "
@@ -1041,6 +1065,24 @@ INHERITED_INVARIANTS: tuple[InheritedInvariant, ...] = (
         reason=(
             "Import-graph and declared-query-set properties. Which world is "
             "loaded cannot add a route or a write."
+        ),
+    ),
+    InheritedInvariant(
+        "evidence carries its repository scope through to the packet",
+        Transfer.SYNTHETIC_ONLY,
+        (
+            f"{_A3617}::TestRepositoryScoping::"
+            "test_evidence_carries_repository_scope_through_to_the_packet",
+        ),
+        reason=(
+            "NOT exercised on the corpus world, and found undisposed by the "
+            "register's own completeness check rather than by review. The "
+            "3617 fixtures attach repository ids to evidence; the corpus's "
+            "evidence records carry none, so every corpus packet reports an "
+            "empty repository scope and the carriage path is inert on this "
+            "world. Relied on as a 3617 result with that limitation stated. "
+            "A corpus that later plants repository-scoped evidence makes the "
+            "transfer question live and this entry must be re-derived."
         ),
     ),
     InheritedInvariant(

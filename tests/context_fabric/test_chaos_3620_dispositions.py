@@ -357,6 +357,38 @@ class TestInheritedInvariantsCarryATransferDisposition:
             f"without justifying it: {thin}"
         )
 
+    def test_every_inherited_3617_test_appears_in_the_register(self) -> None:
+        """F9: the register must be complete, not merely non-empty.
+
+        The register exists so that leaning on a CHAOS-3617 result carries an
+        explicit transfer disposition. That guarantee is worth nothing if a
+        ledger entry can cite a 3617 test the register never mentions —
+        which is exactly the shape of "the check covers what it happens to
+        list" this lane has now hit six times.
+
+        Derived from the ledger rather than hand-listed, so adding a 3617
+        citation without a disposition is red immediately.
+        """
+
+        cited_3617 = {
+            node_id
+            for requirement in REQUIREMENTS
+            for node_id in requirement.proving_tests
+            if "test_chaos_3617" in node_id
+        }
+        registered = {
+            node_id
+            for inherited in INHERITED_INVARIANTS
+            for node_id in inherited.evidence
+        }
+        undisposed = sorted(cited_3617 - registered)
+        assert not undisposed, (
+            "these CHAOS-3617 tests are cited as proving a CHAOS-3620 "
+            "requirement but carry no transfer disposition, so nobody has "
+            "said whether the result transfers to the corpus world under "
+            f"true grants: {undisposed}"
+        )
+
     def test_a_synthetic_only_disposition_explains_why_the_corpus_cannot_reach_it(
         self,
     ) -> None:

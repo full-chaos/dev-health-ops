@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "GraphArmStore",
     "ProjectionDisabledError",
+    "partition_exists_for",
     "StoreUnavailableError",
     "TRIAL_DERIVED_STORE_NAME",
     "org_deletion_visit",
@@ -202,7 +203,20 @@ class GraphArmStore:
             nodes_written=len(nodes), edges_written=len(edges), watermark=watermark
         )
 
+    async def partition_exists(self) -> bool:
+        """Whether this organization has a keyspace, per the live store.
+
+        Note the ordering caveat this cannot fix: constructing the store has
+        *already* created the keyspace by the time you can call this. See
+        :func:`partition_exists_for`, which is the read-only check.
+        """
+
+        graphs = await self._driver.client.list_graphs()
+        return self._partition in set(graphs or ())
+
     async def count_nodes(self) -> int:
+        if not await self.partition_exists():
+            return 0
         result = await self._driver.execute_query(NODE_COUNT_QUERY)
         if not result:
             return 0
@@ -213,28 +227,59 @@ class GraphArmStore:
         """Delete this organization's whole partition. Returns nodes visited.
 
         ``dry_run`` counts without deleting, which is what
-        ``OrganizationDeletionService`` needs for its preview mode. The
-        count is the node count, not a row count, and that is what the
-        registry entry's note records.
+        ``OrganizationDeletionService`` needs for its preview mode. The count
+        is the node count, not a row count, and that is what the registry
+        entry's note records.
+
+        Failures propagate. An earlier version swallowed "graph not found"
+        style errors by matching the message text, on the assumption that
+        deleting a never-projected organization would raise; probing the real
+        store showed ``delete()`` is idempotent and raises nothing, so that
+        branch was dead code whose only effect would have been to swallow a
+        *genuine* deletion failure that happened to contain the same words.
+        An incomplete deletion has to be visible —
+        ``_purge_external_stores`` records exactly that.
         """
 
+        if not await self.partition_exists():
+            return 0
         total = await self.count_nodes()
         if dry_run:
             return total
         # One keyspace per organization, so deletion is a drop: there is no
         # partial state a failure could leave behind, and no node that a
         # traversal-based delete could miss.
-        graph = self._driver.client.select_graph(self._partition)
-        try:
-            await graph.delete()
-        except Exception as exc:  # noqa: BLE001 - re-raised with context below
-            message = str(exc).lower()
-            if "empty key" in message or "not found" in message:
-                # Nothing was ever projected for this organization. Deleting
-                # nothing is the correct outcome, not an error.
-                return 0
-            raise
+        await self._driver.client.select_graph(self._partition).delete()
         return total
+
+
+async def partition_exists_for(org_id: str, config: TrialStoreConfig) -> bool:
+    """Whether an organization has a trial keyspace, **without creating one**.
+
+    Found by probing the running store: ``FalkorDriver.__init__`` schedules
+    ``build_indices_and_constraints()`` as a background task, so merely
+    *constructing* a store for an organization creates that organization's
+    keyspace — asynchronously, and with nothing in the call site to suggest
+    it. A dry-run org deletion, which is supposed to be read-only, would
+    therefore have created an empty keyspace for every organization it
+    previewed.
+
+    So this opens a bare FalkorDB client, lists graphs, and never touches the
+    Graphiti driver. ``test_chaos_3617_live_store.py`` asserts the keyspace
+    is still absent afterwards, against the live store rather than against an
+    assumption about it.
+    """
+
+    client = graphiti_module("driver.falkordb_driver").FalkorDB(
+        host=config.host, port=config.port, password=config.password
+    )
+    try:
+        graphs = await client.list_graphs()
+        return partition_for_org(org_id) in set(graphs or ())
+    finally:
+        aclose = getattr(client, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
@@ -243,14 +288,24 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
     Registered in ``EXTERNAL_DERIVED_STORES``. Returns the number of graph
     nodes visited/deleted for the organization.
 
-    An unconfigured or unreachable trial store returns ``0`` **and logs**,
-    rather than raising: org deletion must not be blocked by an optional
-    trial store that may not exist in the environment doing the deletion.
-    A store that *is* configured and *does* fail propagates, because that is
-    an incomplete deletion and the deletion service records those.
+    Two "nothing to do" cases return ``0`` and log, because in both of them
+    the organization provably has no graph data: the trial store is not
+    configured (the production default), or graphiti-core is not installed,
+    without which nothing could ever have been projected.
+
+    Everything else **propagates**, including an unreachable store. That is
+    deliberate and is the opposite of the obvious choice. A configured store
+    the deletion cannot reach is an organization whose derived data may
+    still exist; reporting ``0`` would record a complete deletion of data
+    nobody looked at. Propagating does not block the deletion either --
+    ``OrganizationDeletionService._purge_external_stores`` catches, records
+    ``"Derived store '…' deletion failed: …"`` in ``result.warnings``, and
+    carries on -- so the choice is purely between a visible incomplete
+    deletion and an invisible one.
     """
 
-    if trial_store_config() is None:
+    config = trial_store_config()
+    if config is None:
         logger.info(
             "context-fabric graph trial store is not configured; org %s has "
             "no graph partition to purge",
@@ -258,15 +313,21 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
         )
         return 0
     try:
-        store = GraphArmStore.for_org(org_id)
-    except (GraphitiUnavailableError, StoreUnavailableError) as exc:
+        exists = await partition_exists_for(org_id, config)
+    except GraphitiUnavailableError as exc:
         logger.warning(
-            "context-fabric graph trial store unavailable during deletion of "
-            "org %s: %s",
+            "context-fabric graph trial store is configured but graphiti-core "
+            "is not installed, so org %s can have no projected graph data: %s",
             org_id,
             exc,
         )
         return 0
+    if not exists:
+        # Nothing was ever projected for this organization. Returning here --
+        # rather than constructing a store and finding it empty -- is what
+        # keeps the preview read-only: see partition_exists_for.
+        return 0
+    store = GraphArmStore.for_org(org_id, config=config)
     try:
         return await store.purge_org(dry_run=dry_run)
     finally:

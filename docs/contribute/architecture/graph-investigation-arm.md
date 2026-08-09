@@ -195,6 +195,7 @@ heuristics over timestamps.
 | Indexed-through watermark, stale / partial / never-projected | `watermark.py` |
 | Canonical writes never wait on graph indexing | `projection.py` is pure and synchronous; the store write happens strictly after |
 | Deterministic cleanup | `store.purge_org` drops the keyspace |
+| Read-only deletion preview | `store.partition_exists_for` — no driver, so no keyspace is created |
 | Org-deletion registration | `EXTERNAL_DERIVED_STORES` (CHAOS-3566) |
 | Content-safe logs | `IndexWatermark.detail_for` — timestamps and counts only |
 | Exact dependency/projection/query versions | `versions.*` on every packet; `backend.graphiti_version()` reads installed metadata |
@@ -217,6 +218,29 @@ control cannot start reading as enforced without the test failing first.
 
 A never-projected store reports `unavailable`, checked **before** staleness,
 so an empty store can never read as "current with nothing in it".
+
+### Two deletion behaviours worth knowing about
+
+**Constructing a store creates the organization's keyspace.**
+`FalkorDriver.__init__` schedules `build_indices_and_constraints()` as a
+background task, so a dry-run deletion that constructed a store would create
+an empty keyspace for every organization it previewed. `org_deletion_visit`
+therefore checks existence through `partition_exists_for`, which opens a bare
+FalkorDB client and never touches the Graphiti driver. The test asserts this
+*structurally* (no store is constructed) rather than by looking for the
+keyspace afterwards — the creation races `close()`'s cancellation, so a
+"keyspace absent" assertion could pass with the defect present.
+
+**An unreachable configured store fails visibly.** Two cases return `0`,
+because in both the organization provably has no graph data: the store is not
+configured (the production default), or graphiti-core is not installed.
+Everything else propagates, including a connection failure. Reporting `0`
+there would record a complete deletion of data nobody looked at, and
+propagating does not block the deletion —
+`OrganizationDeletionService._purge_external_stores` catches, records
+`"Derived store '…' deletion failed: …"` in `result.warnings`, and carries
+on. So the choice is only ever between a visible incomplete deletion and an
+invisible one.
 
 ## Running the trial store
 
@@ -259,7 +283,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **17** guards the arm relies on, the harness disables
+For each of the **18** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it

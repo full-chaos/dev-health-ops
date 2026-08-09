@@ -48,6 +48,8 @@ from dev_health_ops.context_fabric.graph_arm.readback import (
 from dev_health_ops.context_fabric.graph_arm.store import (
     GraphArmStore,
     ProjectionDisabledError,
+    org_deletion_visit,
+    partition_exists_for,
 )
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 from tests.context_fabric import live_gate
@@ -407,6 +409,87 @@ class TestDeterministicCleanup:
             assert await store.purge_org() == 0
         finally:
             await store.close()
+
+    async def test_previewing_an_absent_organization_constructs_no_store(
+        self, monkeypatch
+    ) -> None:
+        """The dry run never constructs a driver for an absent organization.
+
+        Found by probing the running store: ``FalkorDriver.__init__``
+        schedules ``build_indices_and_constraints()`` as a background task,
+        so merely *constructing* a store creates that organization's
+        keyspace. A preview that constructed one would create an empty
+        keyspace for every organization it previewed.
+
+        Asserted structurally -- ``for_org`` is never called -- rather than
+        by looking for the keyspace afterwards. That matters: the creation is
+        a background task racing ``close()``'s cancellation, so a
+        "keyspace absent" assertion can pass while the defect is present,
+        which would make this test's green meaningless.
+        """
+
+        config = live_gate.require_live_store()
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", config.uri)
+        org_id = _unique_org("orgpreview")
+
+        constructed: list[str] = []
+        real_for_org = GraphArmStore.for_org
+
+        def _spy(org: str, **kwargs: object) -> GraphArmStore:
+            constructed.append(org)
+            return real_for_org(org, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(GraphArmStore, "for_org", staticmethod(_spy))
+
+        assert await partition_exists_for(org_id, config) is False
+        assert await org_deletion_visit(org_id, True) == 0
+        assert constructed == [], (
+            "a preview of an organization with no graph data constructed a "
+            "store, whose background index build creates the keyspace"
+        )
+
+    async def test_a_deletion_failure_is_not_swallowed(self, monkeypatch) -> None:
+        """An incomplete deletion has to be visible.
+
+        The deletion service records external-store failures; a purge that
+        caught them would turn an incomplete deletion into a silent success.
+        An earlier version matched the error *text* to swallow "graph not
+        found"; probing showed ``delete()`` never raises that, so the branch
+        was dead code whose only reachable effect would have been to hide a
+        genuine failure containing the same words. This pins its removal.
+        """
+
+        config = live_gate.require_live_store()
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED", "1")
+        org_id = _unique_org("orgfail")
+        projection = build_projection(_reorg(fixtures.alpha_batch(), org_id))
+        store = GraphArmStore.for_org(org_id, config=config)
+        try:
+            await store.write_projection(projection)
+
+            real_select = store._driver.client.select_graph
+
+            class RefusesToDelete:
+                def __init__(self, inner: object) -> None:
+                    self._inner = inner
+
+                def __getattr__(self, name: str) -> object:
+                    return getattr(self._inner, name)
+
+                async def delete(self) -> None:
+                    raise RuntimeError("graph not found while deleting")
+
+            store._driver.client.select_graph = lambda name: RefusesToDelete(
+                real_select(name)
+            )
+            with pytest.raises(RuntimeError, match="graph not found"):
+                await store.purge_org()
+            store._driver.client.select_graph = real_select
+        finally:
+            try:
+                await store.purge_org()
+            finally:
+                await store.close()
 
     async def test_the_registered_deletion_visit_purges_the_real_partition(
         self, monkeypatch

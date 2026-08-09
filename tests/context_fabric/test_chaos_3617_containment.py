@@ -335,13 +335,33 @@ class TestOrgDeletionRegistration:
         assert await entry.visit("org_alpha", False) == 0
 
     @pytest.mark.asyncio
-    async def test_an_unreachable_configured_store_does_not_block_deletion(
+    async def test_an_unreachable_configured_store_fails_visibly(
         self, monkeypatch
     ) -> None:
+        """A store that cannot be reached is an *unknown*, not a zero.
+
+        Reporting 0 would record a complete deletion of data nobody looked
+        at. Propagating does not block the deletion:
+        ``_purge_external_stores`` catches, records the failure in
+        ``result.warnings``, and carries on -- so the choice is between a
+        visible incomplete deletion and an invisible one.
+        """
+
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
+        with pytest.raises(Exception) as excinfo:  # noqa: B017, PT011
+            await store_module.org_deletion_visit("org_alpha", False)
+        assert not isinstance(excinfo.value, pytest.skip.Exception)
+
+    @pytest.mark.asyncio
+    async def test_a_configured_store_without_graphiti_installed_is_a_no_op(
+        self, monkeypatch
+    ) -> None:
+        """Nothing could have been projected without the optional extra."""
+
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
 
-        def _boom(*_args, **_kwargs):
-            raise store_module.StoreUnavailableError("unreachable")
+        async def _unavailable(*_args, **_kwargs):
+            raise store_module.GraphitiUnavailableError("not installed")
 
-        monkeypatch.setattr(store_module.GraphArmStore, "for_org", _boom)
+        monkeypatch.setattr(store_module, "partition_exists_for", _unavailable)
         assert await store_module.org_deletion_visit("org_alpha", False) == 0

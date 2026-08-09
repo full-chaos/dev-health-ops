@@ -277,6 +277,20 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
     ),
     Mutation(
+        mutation_id="preview-creates-the-keyspace-it-previewed",
+        defect=(
+            "a dry-run org deletion constructs a store and thereby creates an "
+            "empty keyspace for every organization it previewed"
+        ),
+        path=SRC / "store.py",
+        anchor="    if not exists:",
+        replacement="    if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_live_store.py::TestDeterministicCleanup::"
+            "test_previewing_an_absent_organization_constructs_no_store",
+        ),
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

@@ -1,0 +1,3315 @@
+{
+ "authorization_probes": [
+  {
+   "authorization_filtered_count": 1,
+   "detail": "retrieval surfaced proj_quarry and authorization removed it before ranking; the filter was exercised and held",
+   "effective": true,
+   "principal_id": "principal_helio_analyst",
+   "probe_id": "restricted_exact_label",
+   "query": "Quarry Compliance",
+   "ranked_canonical_ids": [
+    "proj_zenith",
+    "svc_checkout",
+    "proj_beacon",
+    "proj_auth_gateway_hardening",
+    "proj_meridian",
+    "proj_lattice",
+    "proj_tidal",
+    "proj_vertex",
+    "wu_pulse_runbook",
+    "svc_auth_gateway",
+    "pr_vertex_401"
+   ],
+   "target_entity_id": "proj_quarry",
+   "target_is_restricted": true,
+   "target_present_in_home_partition": null,
+   "target_ranked": false,
+   "target_retrieved": true,
+   "verdict": "pass",
+   "withheld_canonical_ids": [
+    "proj_quarry"
+   ]
+  },
+  {
+   "authorization_filtered_count": 1,
+   "detail": "retrieval surfaced proj_quarry and authorization removed it before ranking; the filter was exercised and held",
+   "effective": true,
+   "principal_id": "principal_helio_analyst",
+   "probe_id": "restricted_topical",
+   "query": "how is the compliance work going",
+   "ranked_canonical_ids": [
+    "pr_pulse_212",
+    "wu_pulse_runbook",
+    "wu_ledger_cutover",
+    "svc_checkout",
+    "wu_beacon_ingest",
+    "pr_identity_882"
+   ],
+   "target_entity_id": "proj_quarry",
+   "target_is_restricted": true,
+   "target_present_in_home_partition": null,
+   "target_ranked": false,
+   "target_retrieved": true,
+   "verdict": "pass",
+   "withheld_canonical_ids": [
+    "proj_quarry"
+   ]
+  },
+  {
+   "authorization_filtered_count": 0,
+   "detail": "the identical query ranked lumen_proj_acr in its own partition cf_trial_org_lumen and returned it nowhere in cf_trial_org_helio; the group filter is what removed it, and the presence check is what makes that a measurement rather than an empty result",
+   "effective": true,
+   "principal_id": "principal_helio_analyst",
+   "probe_id": "cross_tenant_near_duplicate",
+   "query": "Agent Context Runtime",
+   "ranked_canonical_ids": [
+    "proj_acr",
+    "dep_authcore",
+    "wu_authcore_release",
+    "svc_auth_gateway",
+    "pr_identity_882",
+    "proj_auth_gateway_hardening",
+    "pf_platform",
+    "proj_identity_rewrite",
+    "init_identity_modernization",
+    "svc_checkout",
+    "team_atlas",
+    "proj_beacon",
+    "pr_pulse_212",
+    "issue_acr_span_decl",
+    "proj_pulse",
+    "team_ember"
+   ],
+   "target_entity_id": "lumen_proj_acr",
+   "target_is_restricted": true,
+   "target_present_in_home_partition": true,
+   "target_ranked": false,
+   "target_retrieved": false,
+   "verdict": "pass",
+   "withheld_canonical_ids": []
+  },
+  {
+   "authorization_filtered_count": 0,
+   "detail": "an authorized target was ranked and nothing was withheld, so the filter is not simply withholding everything",
+   "effective": true,
+   "principal_id": "principal_helio_analyst",
+   "probe_id": "unrestricted_control",
+   "query": "Identity Platform Rewrite",
+   "ranked_canonical_ids": [
+    "proj_identity_rewrite",
+    "init_identity_modernization",
+    "pr_identity_882",
+    "proj_payments_rewrite",
+    "pf_platform",
+    "svc_auth_gateway",
+    "repo_identity",
+    "proj_auth_gateway_hardening",
+    "dep_authcore",
+    "wu_authcore_release",
+    "pr_pulse_212",
+    "proj_ledger_migration",
+    "proj_acr",
+    "wu_ledger_schema",
+    "proj_zenith",
+    "pr_ledger_990",
+    "pf_growth",
+    "proj_beacon",
+    "repo_checkout",
+    "wu_ledger_dual_write"
+   ],
+   "target_entity_id": "proj_identity_rewrite",
+   "target_is_restricted": false,
+   "target_present_in_home_partition": null,
+   "target_ranked": true,
+   "target_retrieved": true,
+   "verdict": "pass",
+   "withheld_canonical_ids": []
+  }
+ ],
+ "binding": {
+  "branch": "chaos-3647-semantic-leg",
+  "commit": "b4584fb033b4e41981883e0ec4cb64da59b39b99",
+  "contract_manifest_sha256": "b14307dbbbf5b5dd84d0b9b79648c7c6bdbf35bda7f56511dfcfc63f02a3cd38",
+  "corpus_manifest_sha256": "f12a7dcef216c8fedc19538fba1d284bfdf6968461e718bbfcee2a4fea1bd0c4",
+  "corpus_version": "ask_dev_investigation_corpus.v1",
+  "dependency_versions": {
+   "falkordb": "1.2.2",
+   "graphiti-core": "0.29.3",
+   "pydantic": "2.13.4",
+   "redis": "6.4.0"
+  },
+  "execution_mode": "producer_invoked_directly_seam_real_orchestrator_bypassed",
+  "feature_tip_commit": "ec3532bfd929411831b967cd28123d4ea4acc335",
+  "graph_arm_id": "graph_assisted_shadow_arm",
+  "graph_attachment_encoding": "canonical_ids.v1",
+  "graph_embedder_model_id": "openai_text_embedding_3_small",
+  "graph_projection_version": "graph_arm_projection.v1",
+  "graph_query_version": "graph_arm_neighbourhood.v1",
+  "graph_ranking_version": "graph_arm_no_ranking.v1",
+  "native_arm_id": "native",
+  "native_projection_version": "native_investigation_projection.v1",
+  "notes": [
+   "CHAOS-3647 semantic/hybrid retrieval leg. Subject resolution only; no packet assembly."
+  ],
+  "packet_schema_version": "ask_dev_investigation_packet.v1",
+  "per_case_timeout_seconds": 120.0,
+  "run_class": "measured",
+  "schema_version": "chaos_3619_trial_results.v1",
+  "shadow_record_schema_version": "investigation_shadow_record.v1",
+  "tree_clean": false,
+  "trial_store_backend": "falkordb (127.0.0.1:6389)"
+ },
+ "cases": [
+  {
+   "case_id": "H01_acronym_resolution",
+   "committed_subject_id": "proj_identity_rewrite",
+   "delta": {
+    "baseline_correct": true,
+    "baseline_ranked": 1,
+    "classification": "both_correct",
+    "detail": "baseline: rank-1 was proj_identity_rewrite, as expected | semantic: rank-1 was proj_identity_rewrite, as expected",
+    "semantic_correct": true,
+    "semantic_ranked": 8
+   },
+   "expected_answer": "direct",
+   "forbidden_subject_ids": [],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [
+      "IPR"
+     ],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "status on IPR?",
+     "score": {
+      "case_id": "H01_acronym_resolution",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 1 ranked",
+      "resolved": true,
+      "stray_candidates": [],
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "rank-1 was proj_identity_rewrite, as expected",
+      "subject_top_1": "pass",
+      "subject_top_1_detail": "rank-1 was proj_identity_rewrite; expected proj_identity_rewrite",
+      "subject_top_3": "pass",
+      "subject_top_3_detail": "top-3 ['proj_identity_rewrite']; expected proj_identity_rewrite"
+     },
+     "subjects": [
+      {
+       "canonical_id": "proj_identity_rewrite",
+       "display_label": "Identity Platform Rewrite",
+       "mechanism": "alias_lookup",
+       "methods": [],
+       "rank": 0,
+       "rrf_score": null,
+       "signal": "acronym"
+      }
+     ],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "status on IPR?",
+     "score": {
+      "case_id": "H01_acronym_resolution",
+      "leg": "deterministic_question",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [
+      "sc_acr_still_open"
+     ],
+     "cosine_order": [
+      "sc_acr_still_open",
+      "borealis_wip",
+      "atlas_wip",
+      "doc_injected_runbook",
+      "pr_pulse_212_merged",
+      "wg_identity_rewrite",
+      "proj_identity_rewrite",
+      "oc_pulse_missing",
+      "ci_pulse_green",
+      "dep_ratelimitd",
+      "ci_identity_blocked",
+      "tr_pulse_suite",
+      "wg_ratelimitd_removed",
+      "borealis_load",
+      "frost_load",
+      "atlas_load",
+      "pr_ledger_990_merged",
+      "pr_pulse_212",
+      "rv_vertex_revoked",
+      "dorado_outbound_reviews",
+      "inc_atlas_gateway",
+      "di_pulse_open",
+      "rv_vertex_cycles",
+      "rv_atlas_queue",
+      "cinder_incidents",
+      "atlas_incident_load",
+      "wg_payments_rewrite_superseded",
+      "issue_acr_span_decl",
+      "wi_acr_span_open",
+      "dp_pulse_prod",
+      "sc_pulse_declared_complete",
+      "tr_ledger_suite",
+      "wi_beacon_deleted",
+      "cinder_new_value",
+      "svc_pulse_api",
+      "pr_identity_882_open",
+      "sc_payments_rewrite_cancelled",
+      "pr_identity_882",
+      "cinder_ktlo",
+      "cinder_deficiencies",
+      "wu_beacon_ingest",
+      "frost_cycle_p90",
+      "sc_ledger_declared_complete",
+      "pf_platform",
+      "oc_ledger_present",
+      "dp_identity_none",
+      "pulse_deployments",
+      "acr_target_slips",
+      "ia_beacon_allocation",
+      "ia_atlas_mix"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "sc_acr_still_open",
+      "borealis_wip",
+      "atlas_wip",
+      "doc_injected_runbook",
+      "pr_pulse_212_merged",
+      "wg_identity_rewrite",
+      "oc_pulse_missing",
+      "ci_pulse_green",
+      "ci_identity_blocked",
+      "tr_pulse_suite",
+      "wg_ratelimitd_removed",
+      "borealis_load",
+      "frost_load",
+      "atlas_load",
+      "pr_ledger_990_merged",
+      "rv_vertex_revoked",
+      "dorado_outbound_reviews",
+      "inc_atlas_gateway",
+      "di_pulse_open",
+      "rv_vertex_cycles",
+      "rv_atlas_queue",
+      "cinder_incidents",
+      "atlas_incident_load",
+      "wg_payments_rewrite_superseded",
+      "wi_acr_span_open",
+      "dp_pulse_prod",
+      "sc_pulse_declared_complete",
+      "tr_ledger_suite",
+      "wi_beacon_deleted",
+      "cinder_new_value",
+      "pr_identity_882_open",
+      "sc_payments_rewrite_cancelled",
+      "cinder_ktlo",
+      "cinder_deficiencies",
+      "frost_cycle_p90",
+      "sc_ledger_declared_complete",
+      "oc_ledger_present",
+      "dp_identity_none",
+      "pulse_deployments",
+      "acr_target_slips",
+      "ia_beacon_allocation",
+      "ia_atlas_mix"
+     ],
+     "prose_disclosures": [],
+     "query": "status on IPR?",
+     "score": {
+      "case_id": "H01_acronym_resolution",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['dep_ratelimitd', 'pr_pulse_212']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "7 stray candidates across 8 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "dep_ratelimitd",
+       "issue_acr_span_decl",
+       "pf_platform",
+       "pr_identity_882",
+       "pr_pulse_212",
+       "svc_pulse_api",
+       "wu_beacon_ingest"
+      ],
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "rank-1 was proj_identity_rewrite, as expected",
+      "subject_top_1": "pass",
+      "subject_top_1_detail": "rank-1 was proj_identity_rewrite; expected proj_identity_rewrite",
+      "subject_top_3": "pass",
+      "subject_top_3_detail": "top-3 ['proj_identity_rewrite', 'dep_ratelimitd', 'pr_pulse_212']; expected proj_identity_rewrite"
+     },
+     "subjects": [
+      {
+       "canonical_id": "proj_identity_rewrite",
+       "display_label": "Identity Platform Rewrite",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 0,
+       "rrf_score": 0.14285714285714285,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "dep_ratelimitd",
+       "display_label": "ratelimitd",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.1,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_pulse_212",
+       "display_label": "pulse#212 analytics rollout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.05555555555555555,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "issue_acr_span_decl",
+       "display_label": "ACR span declaration correction",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.03571428571428571,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_pulse_api",
+       "display_label": "Pulse API",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.02857142857142857,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_identity_882",
+       "display_label": "identity#882 authcore 2.0 adoption",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.02631578947368421,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_beacon_ingest",
+       "display_label": "Beacon ingest throughput",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.024390243902439025,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pf_platform",
+       "display_label": "Platform Portfolio",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.022727272727272728,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [
+    "proj_identity_rewrite",
+    "proj_auth_gateway_hardening"
+   ],
+   "pinned_baseline_detail": "packet emitted and scored",
+   "pinned_baseline_disposition": "scored",
+   "principal_id": "principal_helio_analyst",
+   "question": "status on IPR?",
+   "question_family": "ambiguous_identity"
+  },
+  {
+   "case_id": "H02_old_and_current_name",
+   "committed_subject_id": "proj_identity_rewrite",
+   "delta": {
+    "baseline_correct": true,
+    "baseline_ranked": 1,
+    "classification": "deterministic_only_correct",
+    "detail": "baseline: rank-1 was proj_identity_rewrite, as expected | semantic: rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
+    "semantic_correct": false,
+    "semantic_ranked": 18
+   },
+   "expected_answer": "direct",
+   "forbidden_subject_ids": [],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [
+      "Northstar"
+     ],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "how's the thing we used to call Northstar going?",
+     "score": {
+      "case_id": "H02_old_and_current_name",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 1 ranked",
+      "resolved": true,
+      "stray_candidates": [],
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "rank-1 was proj_identity_rewrite, as expected",
+      "subject_top_1": "pass",
+      "subject_top_1_detail": "rank-1 was proj_identity_rewrite; expected proj_identity_rewrite",
+      "subject_top_3": "pass",
+      "subject_top_3_detail": "top-3 ['proj_identity_rewrite']; expected proj_identity_rewrite"
+     },
+     "subjects": [
+      {
+       "canonical_id": "proj_identity_rewrite",
+       "display_label": "Identity Platform Rewrite",
+       "mechanism": "alias_lookup",
+       "methods": [],
+       "rank": 0,
+       "rrf_score": null,
+       "signal": "previous_name"
+      }
+     ],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "how's the thing we used to call Northstar going?",
+     "score": {
+      "case_id": "H02_old_and_current_name",
+      "leg": "deterministic_question",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [
+      "wu_pulse_runbook",
+      "wi_pulse_runbook_open"
+     ],
+     "cosine_order": [
+      "wi_borealis_wip",
+      "team_borealis",
+      "rv_borealis_normal",
+      "pr_pulse_212",
+      "pr_pulse_212_merged",
+      "repo_beacon",
+      "rv_vertex_revoked",
+      "rv_atlas_queue",
+      "doc_false_dependency_claim",
+      "rv_vertex_cycles",
+      "cl_borealis",
+      "repo_ledger",
+      "borealis_wip",
+      "atlas_wip",
+      "wi_beacon_deleted",
+      "wi_atlas_wip",
+      "rv_dorado_outbound",
+      "repo_acr",
+      "pr_vertex_401_cycles",
+      "cinder_new_value",
+      "pr_ledger_990_merged",
+      "wu_authcore_release",
+      "wi_authcore_release_open",
+      "repo_identity",
+      "wi_meridian_demand",
+      "sc_acr_still_open",
+      "pr_identity_882",
+      "wi_beacon_demand",
+      "proj_solstice",
+      "doc_injected_runbook",
+      "di_cinder_open",
+      "repo_checkout",
+      "sc_pulse_declared_complete",
+      "wi_solstice_demand",
+      "inc_atlas_gateway",
+      "ep_keyword_stuffed",
+      "dep_authcore",
+      "wg_authcore_shared",
+      "ia_meridian_allocation",
+      "repo_pulse",
+      "dp_identity_none",
+      "proj_beacon",
+      "team_atlas",
+      "wu_beacon_ingest",
+      "pr_ledger_990",
+      "ia_beacon_allocation",
+      "inc_cinder_load",
+      "dorado_outbound_reviews",
+      "proj_meridian"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "wi_borealis_wip",
+      "wi_pulse_runbook_open",
+      "rv_borealis_normal",
+      "pr_pulse_212_merged",
+      "rv_vertex_revoked",
+      "rv_atlas_queue",
+      "doc_false_dependency_claim",
+      "rv_vertex_cycles",
+      "cl_borealis",
+      "borealis_wip",
+      "atlas_wip",
+      "wi_beacon_deleted",
+      "wi_atlas_wip",
+      "rv_dorado_outbound",
+      "pr_vertex_401_cycles",
+      "cinder_new_value",
+      "pr_ledger_990_merged",
+      "wi_authcore_release_open",
+      "wi_meridian_demand",
+      "sc_acr_still_open",
+      "wi_beacon_demand",
+      "doc_injected_runbook",
+      "di_cinder_open",
+      "sc_pulse_declared_complete",
+      "wi_solstice_demand",
+      "inc_atlas_gateway",
+      "ep_keyword_stuffed",
+      "wg_authcore_shared",
+      "ia_meridian_allocation",
+      "dp_identity_none",
+      "ia_beacon_allocation",
+      "inc_cinder_load",
+      "dorado_outbound_reviews"
+     ],
+     "prose_disclosures": [],
+     "query": "how's the thing we used to call Northstar going?",
+     "score": {
+      "case_id": "H02_old_and_current_name",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_pulse_212', 'team_borealis', 'wu_pulse_runbook']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "18 stray candidates across 18 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "dep_authcore",
+       "pr_identity_882",
+       "pr_ledger_990",
+       "pr_pulse_212",
+       "proj_beacon",
+       "proj_meridian",
+       "proj_solstice",
+       "repo_acr",
+       "repo_beacon",
+       "repo_checkout",
+       "repo_identity",
+       "repo_ledger",
+       "repo_pulse",
+       "team_atlas",
+       "team_borealis",
+       "wu_authcore_release",
+       "wu_beacon_ingest",
+       "wu_pulse_runbook"
+      ],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 ['wu_pulse_runbook', 'team_borealis', 'pr_pulse_212']; expected proj_identity_rewrite"
+     },
+     "subjects": [
+      {
+       "canonical_id": "wu_pulse_runbook",
+       "display_label": "Pulse on-call runbook and alerts",
+       "mechanism": "lexical_fuzzy",
+       "methods": [
+        "bm25"
+       ],
+       "rank": 0,
+       "rrf_score": 1.0,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "team_borealis",
+       "display_label": "Borealis",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.5,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_pulse_212",
+       "display_label": "pulse#212 analytics rollout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.25,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_beacon",
+       "display_label": "helio/beacon",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.16666666666666666,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_ledger",
+       "display_label": "helio/ledger",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.08333333333333333,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_acr",
+       "display_label": "helio/acr",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.05555555555555555,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_authcore_release",
+       "display_label": "authcore 2.0 release",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.045454545454545456,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_identity",
+       "display_label": "helio/identity",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.041666666666666664,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_identity_882",
+       "display_label": "identity#882 authcore 2.0 adoption",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 0.037037037037037035,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_solstice",
+       "display_label": "Solstice Billing",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 9,
+       "rrf_score": 0.034482758620689655,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_checkout",
+       "display_label": "helio/checkout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 10,
+       "rrf_score": 0.03125,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "dep_authcore",
+       "display_label": "authcore",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 11,
+       "rrf_score": 0.02702702702702703,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_pulse",
+       "display_label": "helio/pulse",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 12,
+       "rrf_score": 0.025,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_beacon",
+       "display_label": "Beacon Ingest",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 13,
+       "rrf_score": 0.023809523809523808,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "team_atlas",
+       "display_label": "Atlas",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 14,
+       "rrf_score": 0.023255813953488372,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_beacon_ingest",
+       "display_label": "Beacon ingest throughput",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 15,
+       "rrf_score": 0.022727272727272728,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_ledger_990",
+       "display_label": "ledger#990 dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 16,
+       "rrf_score": 0.022222222222222223,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_meridian",
+       "display_label": "Meridian Docs",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 17,
+       "rrf_score": 0.02040816326530612,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [
+    "proj_identity_rewrite"
+   ],
+   "pinned_baseline_detail": "packet emitted and scored",
+   "pinned_baseline_disposition": "scored",
+   "principal_id": "principal_helio_analyst",
+   "question": "how's the thing we used to call Northstar going?",
+   "question_family": "ambiguous_identity"
+  },
+  {
+   "case_id": "H03_the_auth_work",
+   "committed_subject_id": "proj_identity_rewrite",
+   "delta": {
+    "baseline_correct": false,
+    "baseline_ranked": 0,
+    "classification": "neither_correct_semantic_ranked_anyway",
+    "detail": "baseline: resolved nothing; expected proj_identity_rewrite | semantic: rank-1 was dep_authcore; expected proj_identity_rewrite",
+    "semantic_correct": false,
+    "semantic_ranked": 18
+   },
+   "expected_answer": "direct",
+   "forbidden_subject_ids": [],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "What about the auth work?",
+     "score": {
+      "case_id": "H03_the_auth_work",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "What about the auth work?",
+     "score": {
+      "case_id": "H03_the_auth_work",
+      "leg": "deterministic_question",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [
+      "wg_auth_hardening",
+      "dp_identity_none",
+      "proj_auth_gateway_hardening",
+      "inc_atlas_gateway",
+      "svc_auth_gateway",
+      "wi_beacon_deleted",
+      "wi_borealis_wip",
+      "wi_ember_partial",
+      "wi_atlas_wip",
+      "wi_quarry_redacted"
+     ],
+     "cosine_order": [
+      "dep_authcore",
+      "pr_identity_882",
+      "wi_authcore_release_open",
+      "wu_authcore_release",
+      "wg_authcore_shared",
+      "svc_auth_gateway",
+      "proj_auth_gateway_hardening",
+      "wg_auth_hardening",
+      "lattice_touching_contributors",
+      "inc_atlas_gateway",
+      "wi_ember_partial",
+      "wi_beacon_deleted",
+      "rv_vertex_revoked",
+      "borealis_wip",
+      "atlas_wip",
+      "dp_identity_none",
+      "pr_ledger_990_merged",
+      "rv_vertex_cycles",
+      "lattice_active_contributors",
+      "proj_acr",
+      "wg_acr",
+      "wi_atlas_wip",
+      "pr_vertex_401_cycles",
+      "pr_ledger_990",
+      "wg_identity_rewrite",
+      "proj_identity_rewrite",
+      "wu_ledger_dual_write",
+      "oc_ledger_present",
+      "wi_quarry_redacted",
+      "repo_checkout",
+      "pr_identity_882_open",
+      "rv_atlas_queue",
+      "ci_identity_blocked",
+      "sh_ember_stalled",
+      "dp_ledger_prod",
+      "wi_borealis_wip",
+      "repo_ledger",
+      "dorado_outbound_reviews",
+      "proj_ledger_migration",
+      "repo_acr",
+      "repo_identity",
+      "wg_lattice_contributors",
+      "svc_ledger_api",
+      "hp_atlas",
+      "proj_beacon",
+      "wi_ledger_children",
+      "proj_payments_rewrite",
+      "tr_ledger_suite",
+      "sc_ledger_declared_complete",
+      "init_identity_modernization"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "wg_auth_hardening",
+      "dp_identity_none",
+      "inc_atlas_gateway",
+      "wi_authcore_release_open",
+      "wi_beacon_deleted",
+      "wi_ember_partial",
+      "wg_authcore_shared",
+      "wi_borealis_wip",
+      "wi_atlas_wip",
+      "wi_quarry_redacted",
+      "lattice_touching_contributors",
+      "rv_vertex_revoked",
+      "borealis_wip",
+      "atlas_wip",
+      "pr_ledger_990_merged",
+      "rv_vertex_cycles",
+      "lattice_active_contributors",
+      "wg_acr",
+      "pr_vertex_401_cycles",
+      "wg_identity_rewrite",
+      "oc_ledger_present",
+      "pr_identity_882_open",
+      "rv_atlas_queue",
+      "ci_identity_blocked",
+      "sh_ember_stalled",
+      "dp_ledger_prod",
+      "dorado_outbound_reviews",
+      "wg_lattice_contributors",
+      "hp_atlas",
+      "wi_ledger_children",
+      "tr_ledger_suite",
+      "sc_ledger_declared_complete"
+     ],
+     "prose_disclosures": [],
+     "query": "What about the auth work?",
+     "score": {
+      "case_id": "H03_the_auth_work",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['dep_authcore', 'pr_identity_882']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "16 stray candidates across 18 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "dep_authcore",
+       "init_identity_modernization",
+       "pr_identity_882",
+       "pr_ledger_990",
+       "proj_acr",
+       "proj_beacon",
+       "proj_ledger_migration",
+       "proj_payments_rewrite",
+       "repo_acr",
+       "repo_checkout",
+       "repo_identity",
+       "repo_ledger",
+       "svc_auth_gateway",
+       "svc_ledger_api",
+       "wu_authcore_release",
+       "wu_ledger_dual_write"
+      ],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "rank-1 was dep_authcore; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was dep_authcore; expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 ['dep_authcore', 'pr_identity_882', 'proj_auth_gateway_hardening']; expected proj_identity_rewrite"
+     },
+     "subjects": [
+      {
+       "canonical_id": "dep_authcore",
+       "display_label": "authcore",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 0,
+       "rrf_score": 1.0,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_identity_882",
+       "display_label": "identity#882 authcore 2.0 adoption",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.5,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_auth_gateway_hardening",
+       "display_label": "Auth Gateway Hardening",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "bm25",
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.47619047619047616,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_auth_gateway",
+       "display_label": "Auth Gateway",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "bm25",
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.3666666666666667,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_authcore_release",
+       "display_label": "authcore 2.0 release",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.25,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_acr",
+       "display_label": "Agent Context Runtime",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.05,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_ledger_990",
+       "display_label": "ledger#990 dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.041666666666666664,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_identity_rewrite",
+       "display_label": "Identity Platform Rewrite",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.038461538461538464,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_dual_write",
+       "display_label": "Ledger dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 0.037037037037037035,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_checkout",
+       "display_label": "helio/checkout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 9,
+       "rrf_score": 0.03333333333333333,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_ledger",
+       "display_label": "helio/ledger",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 10,
+       "rrf_score": 0.02702702702702703,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_ledger_migration",
+       "display_label": "Ledger Migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 11,
+       "rrf_score": 0.02564102564102564,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_acr",
+       "display_label": "helio/acr",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 12,
+       "rrf_score": 0.025,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_identity",
+       "display_label": "helio/identity",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 13,
+       "rrf_score": 0.024390243902439025,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_ledger_api",
+       "display_label": "Ledger API",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 14,
+       "rrf_score": 0.023255813953488372,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_beacon",
+       "display_label": "Beacon Ingest",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 15,
+       "rrf_score": 0.022222222222222223,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_payments_rewrite",
+       "display_label": "Payments Rewrite",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 16,
+       "rrf_score": 0.02127659574468085,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "init_identity_modernization",
+       "display_label": "Identity Modernization",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 17,
+       "rrf_score": 0.02,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [
+    "proj_identity_rewrite",
+    "proj_auth_gateway_hardening"
+   ],
+   "pinned_baseline_detail": "no authorized subject resolved from the question",
+   "pinned_baseline_disposition": "arm_refused",
+   "principal_id": "principal_helio_analyst",
+   "question": "What about the auth work?",
+   "question_family": "ambiguous_identity"
+  },
+  {
+   "case_id": "H04_pronoun_follow_up",
+   "committed_subject_id": "proj_identity_rewrite",
+   "delta": {
+    "baseline_correct": false,
+    "baseline_ranked": 0,
+    "classification": "neither_correct_semantic_ranked_anyway",
+    "detail": "baseline: resolved nothing; expected proj_identity_rewrite | semantic: rank-1 was team_atlas; expected proj_identity_rewrite",
+    "semantic_correct": false,
+    "semantic_ranked": 11
+   },
+   "expected_answer": "direct",
+   "forbidden_subject_ids": [],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "what's holding it up?",
+     "score": {
+      "case_id": "H04_pronoun_follow_up",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "what's holding it up?",
+     "score": {
+      "case_id": "H04_pronoun_follow_up",
+      "leg": "deterministic_question",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [
+      "team_atlas",
+      "repo_ledger",
+      "wi_atlas_wip",
+      "pr_ledger_990",
+      "wu_ledger_dual_write",
+      "pr_ledger_990_merged",
+      "pr_pulse_212_merged",
+      "wi_borealis_wip",
+      "atlas_wip",
+      "borealis_wip",
+      "pulse_open_controls",
+      "repo_beacon",
+      "inc_cinder_load",
+      "cl_borealis",
+      "repo_acr",
+      "rv_atlas_queue",
+      "dep_ratelimitd",
+      "repo_checkout",
+      "cl_atlas",
+      "wu_beacon_ingest",
+      "wi_beacon_demand",
+      "cinder_deficiencies",
+      "lattice_touching_contributors",
+      "ia_beacon_allocation",
+      "sh_tidal_thin",
+      "rv_borealis_normal",
+      "proj_beacon",
+      "ep_keyword_stuffed",
+      "wg_lattice_contributors",
+      "wg_ratelimitd_removed",
+      "wi_quarry_redacted",
+      "repo_identity",
+      "cc_lattice_active",
+      "pr_vertex_401_cycles",
+      "oc_ledger_present"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "wi_atlas_wip",
+      "pr_ledger_990_merged",
+      "pr_pulse_212_merged",
+      "wi_borealis_wip",
+      "atlas_wip",
+      "borealis_wip",
+      "pulse_open_controls",
+      "inc_cinder_load",
+      "cl_borealis",
+      "rv_atlas_queue",
+      "cl_atlas",
+      "wi_beacon_demand",
+      "cinder_deficiencies",
+      "lattice_touching_contributors",
+      "ia_beacon_allocation",
+      "sh_tidal_thin",
+      "rv_borealis_normal",
+      "ep_keyword_stuffed",
+      "wg_lattice_contributors",
+      "wg_ratelimitd_removed",
+      "wi_quarry_redacted",
+      "cc_lattice_active",
+      "pr_vertex_401_cycles",
+      "oc_ledger_present"
+     ],
+     "prose_disclosures": [],
+     "query": "what's holding it up?",
+     "score": {
+      "case_id": "H04_pronoun_follow_up",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_ledger_990', 'repo_ledger', 'team_atlas']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "11 stray candidates across 11 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "dep_ratelimitd",
+       "pr_ledger_990",
+       "proj_beacon",
+       "repo_acr",
+       "repo_beacon",
+       "repo_checkout",
+       "repo_identity",
+       "repo_ledger",
+       "team_atlas",
+       "wu_beacon_ingest",
+       "wu_ledger_dual_write"
+      ],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "rank-1 was team_atlas; expected proj_identity_rewrite",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was team_atlas; expected proj_identity_rewrite",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 ['team_atlas', 'repo_ledger', 'pr_ledger_990']; expected proj_identity_rewrite"
+     },
+     "subjects": [
+      {
+       "canonical_id": "team_atlas",
+       "display_label": "Atlas",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 0,
+       "rrf_score": 1.0,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_ledger",
+       "display_label": "helio/ledger",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.5,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_ledger_990",
+       "display_label": "ledger#990 dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.25,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_dual_write",
+       "display_label": "Ledger dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.2,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_beacon",
+       "display_label": "helio/beacon",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.08333333333333333,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_acr",
+       "display_label": "helio/acr",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.06666666666666667,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "dep_ratelimitd",
+       "display_label": "ratelimitd",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.058823529411764705,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_checkout",
+       "display_label": "helio/checkout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.05555555555555555,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_beacon_ingest",
+       "display_label": "Beacon ingest throughput",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 0.05,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_beacon",
+       "display_label": "Beacon Ingest",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 9,
+       "rrf_score": 0.037037037037037035,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_identity",
+       "display_label": "helio/identity",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 10,
+       "rrf_score": 0.03125,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [
+    "proj_identity_rewrite"
+   ],
+   "pinned_baseline_detail": "no authorized subject resolved from the question",
+   "pinned_baseline_disposition": "arm_refused",
+   "principal_id": "principal_helio_analyst",
+   "question": "what's holding it up?",
+   "question_family": "colloquial_follow_up"
+  },
+  {
+   "case_id": "H05_the_other_project_we_discussed",
+   "committed_subject_id": null,
+   "delta": {
+    "baseline_correct": false,
+    "baseline_ranked": 0,
+    "classification": "neither_correct_semantic_ranked_anyway",
+    "detail": "baseline: resolved nothing; the case has two real candidates | semantic: the top-3 clarification set contains ['pf_platform', 'pr_pulse_212'], which the case does not permit as candidates",
+    "semantic_correct": false,
+    "semantic_ranked": 10
+   },
+   "expected_answer": "clarified",
+   "forbidden_subject_ids": [],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "What about the other project we discussed?",
+     "score": {
+      "case_id": "H05_the_other_project_we_discussed",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; the case has two real candidates",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "What about the other project we discussed?",
+     "score": {
+      "case_id": "H05_the_other_project_we_discussed",
+      "leg": "deterministic_question",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; the case has two real candidates",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [
+      "wi_beacon_deleted",
+      "rv_vertex_revoked",
+      "wi_borealis_wip",
+      "wi_atlas_wip",
+      "rv_vertex_cycles",
+      "rv_atlas_queue",
+      "atlas_wip",
+      "borealis_wip",
+      "wi_ember_partial",
+      "pf_platform",
+      "wi_quarry_redacted",
+      "solstice_completions",
+      "meridian_completions",
+      "atlas_completed",
+      "lattice_completions",
+      "beacon_completions",
+      "ember_completed",
+      "borealis_completed",
+      "sh_ember_stalled",
+      "lattice_touching_contributors",
+      "pr_ledger_990_merged",
+      "rv_borealis_normal",
+      "pr_pulse_212_merged",
+      "pr_vertex_401_cycles",
+      "ia_beacon_allocation",
+      "doc_false_dependency_claim",
+      "sc_ledger_declared_complete",
+      "wg_identity_rewrite",
+      "proj_identity_rewrite",
+      "ia_atlas_mix",
+      "pr_pulse_212",
+      "proj_beacon",
+      "ia_cinder_displaced",
+      "wg_lattice_contributors",
+      "sc_pulse_declared_complete",
+      "proj_ledger_migration",
+      "cc_quarry_activity",
+      "repo_ledger",
+      "proj_meridian",
+      "cl_borealis",
+      "lattice_active_contributors",
+      "proj_acr",
+      "wg_acr",
+      "pr_ledger_990",
+      "cc_lattice_active",
+      "wu_ledger_dual_write",
+      "tr_ledger_suite",
+      "ep_keyword_stuffed",
+      "dorado_outbound_reviews",
+      "ia_meridian_allocation"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "wi_beacon_deleted",
+      "rv_vertex_revoked",
+      "wi_borealis_wip",
+      "wi_atlas_wip",
+      "rv_vertex_cycles",
+      "rv_atlas_queue",
+      "atlas_wip",
+      "borealis_wip",
+      "wi_ember_partial",
+      "wi_quarry_redacted",
+      "solstice_completions",
+      "meridian_completions",
+      "atlas_completed",
+      "lattice_completions",
+      "beacon_completions",
+      "ember_completed",
+      "borealis_completed",
+      "sh_ember_stalled",
+      "lattice_touching_contributors",
+      "pr_ledger_990_merged",
+      "rv_borealis_normal",
+      "pr_pulse_212_merged",
+      "pr_vertex_401_cycles",
+      "ia_beacon_allocation",
+      "doc_false_dependency_claim",
+      "sc_ledger_declared_complete",
+      "wg_identity_rewrite",
+      "ia_atlas_mix",
+      "ia_cinder_displaced",
+      "wg_lattice_contributors",
+      "sc_pulse_declared_complete",
+      "cc_quarry_activity",
+      "cl_borealis",
+      "lattice_active_contributors",
+      "wg_acr",
+      "cc_lattice_active",
+      "tr_ledger_suite",
+      "ep_keyword_stuffed",
+      "dorado_outbound_reviews",
+      "ia_meridian_allocation"
+     ],
+     "prose_disclosures": [],
+     "query": "What about the other project we discussed?",
+     "score": {
+      "case_id": "H05_the_other_project_we_discussed",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 10 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pf_platform', 'pr_pulse_212']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "9 stray candidates across 10 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "pf_platform",
+       "pr_ledger_990",
+       "pr_pulse_212",
+       "proj_acr",
+       "proj_beacon",
+       "proj_ledger_migration",
+       "proj_meridian",
+       "repo_ledger",
+       "wu_ledger_dual_write"
+      ],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "the top-3 clarification set contains ['pf_platform', 'pr_pulse_212'], which the case does not permit as candidates",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [
+      {
+       "canonical_id": "pf_platform",
+       "display_label": "Platform Portfolio",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 0,
+       "rrf_score": 0.1,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_identity_rewrite",
+       "display_label": "Identity Platform Rewrite",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.034482758620689655,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_pulse_212",
+       "display_label": "pulse#212 analytics rollout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.03225806451612903,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_beacon",
+       "display_label": "Beacon Ingest",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.03125,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_ledger_migration",
+       "display_label": "Ledger Migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.027777777777777776,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_ledger",
+       "display_label": "helio/ledger",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.02631578947368421,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_meridian",
+       "display_label": "Meridian Docs",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.02564102564102564,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_acr",
+       "display_label": "Agent Context Runtime",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.023809523809523808,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_ledger_990",
+       "display_label": "ledger#990 dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 0.022727272727272728,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_dual_write",
+       "display_label": "Ledger dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 9,
+       "rrf_score": 0.021739130434782608,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [
+    "proj_identity_rewrite",
+    "proj_auth_gateway_hardening"
+   ],
+   "pinned_baseline_detail": "no authorized subject resolved from the question",
+   "pinned_baseline_disposition": "arm_refused",
+   "principal_id": "principal_helio_analyst",
+   "question": "What about the other project we discussed?",
+   "question_family": "colloquial_follow_up"
+  },
+  {
+   "case_id": "H06_prior_attempt_reference",
+   "committed_subject_id": "proj_vertex",
+   "delta": {
+    "baseline_correct": false,
+    "baseline_ranked": 0,
+    "classification": "neither_correct_semantic_ranked_anyway",
+    "detail": "baseline: resolved nothing; expected proj_vertex | semantic: rank-1 was wu_ledger_cutover; expected proj_vertex",
+    "semantic_correct": false,
+    "semantic_ranked": 10
+   },
+   "expected_answer": "direct",
+   "forbidden_subject_ids": [],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "What happened with the project that kept cycling in review?",
+     "score": {
+      "case_id": "H06_prior_attempt_reference",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_vertex",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_vertex",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_vertex"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "What happened with the project that kept cycling in review?",
+     "score": {
+      "case_id": "H06_prior_attempt_reference",
+      "leg": "deterministic_question",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; expected proj_vertex",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_vertex",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 []; expected proj_vertex"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [
+      "rv_vertex_cycles",
+      "wi_frost_outlier",
+      "rv_atlas_queue",
+      "rv_borealis_normal",
+      "rv_dorado_outbound",
+      "rv_vertex_revoked"
+     ],
+     "cosine_order": [
+      "rv_vertex_cycles",
+      "rv_vertex_revoked",
+      "rv_atlas_queue",
+      "rv_borealis_normal",
+      "dorado_outbound_reviews",
+      "sc_payments_rewrite_cancelled",
+      "vertex_review_cycles",
+      "sc_ledger_declared_complete",
+      "wi_beacon_deleted",
+      "dorado_review_wait",
+      "borealis_review_wait",
+      "atlas_review_wait",
+      "tr_ledger_suite",
+      "wu_ledger_cutover",
+      "atlas_wip",
+      "borealis_wip",
+      "pr_vertex_401_cycles",
+      "pr_pulse_212",
+      "pr_ledger_990_merged",
+      "sc_acr_still_open",
+      "proj_ledger_migration",
+      "wg_identity_rewrite",
+      "proj_identity_rewrite",
+      "sc_pulse_declared_complete",
+      "wu_ledger_backfill",
+      "wi_ledger_backfill_open",
+      "lattice_completions",
+      "meridian_completions",
+      "solstice_completions",
+      "atlas_completed",
+      "ember_completed",
+      "beacon_completions",
+      "borealis_completed",
+      "dp_ledger_prod",
+      "wg_payments_rewrite_superseded",
+      "repo_checkout",
+      "wi_ledger_children",
+      "proj_payments_rewrite",
+      "wu_ledger_dual_write",
+      "pr_ledger_990",
+      "oc_ledger_present",
+      "wu_ledger_schema",
+      "dp_identity_none",
+      "cc_quarry_activity",
+      "rv_dorado_outbound",
+      "frost_cycle_p90",
+      "doc_injected_runbook",
+      "inc_atlas_gateway",
+      "wg_ratelimitd_removed",
+      "lattice_touching_contributors"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "rv_vertex_cycles",
+      "rv_atlas_queue",
+      "rv_vertex_revoked",
+      "wi_frost_outlier",
+      "rv_borealis_normal",
+      "rv_dorado_outbound",
+      "dorado_outbound_reviews",
+      "sc_payments_rewrite_cancelled",
+      "vertex_review_cycles",
+      "sc_ledger_declared_complete",
+      "wi_beacon_deleted",
+      "dorado_review_wait",
+      "borealis_review_wait",
+      "atlas_review_wait",
+      "tr_ledger_suite",
+      "atlas_wip",
+      "borealis_wip",
+      "pr_vertex_401_cycles",
+      "pr_ledger_990_merged",
+      "sc_acr_still_open",
+      "wg_identity_rewrite",
+      "sc_pulse_declared_complete",
+      "wi_ledger_backfill_open",
+      "lattice_completions",
+      "meridian_completions",
+      "solstice_completions",
+      "atlas_completed",
+      "ember_completed",
+      "beacon_completions",
+      "borealis_completed",
+      "dp_ledger_prod",
+      "wg_payments_rewrite_superseded",
+      "wi_ledger_children",
+      "oc_ledger_present",
+      "dp_identity_none",
+      "cc_quarry_activity",
+      "frost_cycle_p90",
+      "doc_injected_runbook",
+      "inc_atlas_gateway",
+      "wg_ratelimitd_removed",
+      "lattice_touching_contributors"
+     ],
+     "prose_disclosures": [],
+     "query": "What happened with the project that kept cycling in review?",
+     "score": {
+      "case_id": "H06_prior_attempt_reference",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "not_applicable",
+      "must_not_commit_detail": "the case expects a commitment",
+      "no_forbidden_subject": "not_applicable",
+      "no_forbidden_subject_detail": "the case forbids no subject",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_pulse_212', 'proj_ledger_migration', 'wu_ledger_cutover']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "10 stray candidates across 10 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "pr_ledger_990",
+       "pr_pulse_212",
+       "proj_identity_rewrite",
+       "proj_ledger_migration",
+       "proj_payments_rewrite",
+       "repo_checkout",
+       "wu_ledger_backfill",
+       "wu_ledger_cutover",
+       "wu_ledger_dual_write",
+       "wu_ledger_schema"
+      ],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "rank-1 was wu_ledger_cutover; expected proj_vertex",
+      "subject_top_1": "fail",
+      "subject_top_1_detail": "rank-1 was wu_ledger_cutover; expected proj_vertex",
+      "subject_top_3": "fail",
+      "subject_top_3_detail": "top-3 ['wu_ledger_cutover', 'pr_pulse_212', 'proj_ledger_migration']; expected proj_vertex"
+     },
+     "subjects": [
+      {
+       "canonical_id": "wu_ledger_cutover",
+       "display_label": "Ledger cutover",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 0,
+       "rrf_score": 0.07142857142857142,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_pulse_212",
+       "display_label": "pulse#212 analytics rollout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.05555555555555555,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_ledger_migration",
+       "display_label": "Ledger Migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.047619047619047616,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_identity_rewrite",
+       "display_label": "Identity Platform Rewrite",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.043478260869565216,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_backfill",
+       "display_label": "Ledger historical backfill",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.04,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_checkout",
+       "display_label": "helio/checkout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.027777777777777776,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_payments_rewrite",
+       "display_label": "Payments Rewrite",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.02631578947368421,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_dual_write",
+       "display_label": "Ledger dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.02564102564102564,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_ledger_990",
+       "display_label": "ledger#990 dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 0.025,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_schema",
+       "display_label": "Ledger schema migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 9,
+       "rrf_score": 0.023809523809523808,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [
+    "proj_vertex"
+   ],
+   "pinned_baseline_detail": "no authorized subject resolved from the question",
+   "pinned_baseline_disposition": "arm_refused",
+   "principal_id": "principal_helio_analyst",
+   "question": "What happened with the project that kept cycling in review?",
+   "question_family": "colloquial_follow_up"
+  },
+  {
+   "case_id": "H07_unresolved_needs_candidates",
+   "committed_subject_id": null,
+   "delta": {
+    "baseline_correct": false,
+    "baseline_ranked": 0,
+    "classification": "neither_correct_semantic_ranked_anyway",
+    "detail": "baseline: resolved nothing; the case has two real candidates | semantic: ranked forbidden subjects ['proj_solstice', 'proj_vertex']",
+    "semantic_correct": false,
+    "semantic_ranked": 18
+   },
+   "expected_answer": "clarified",
+   "forbidden_subject_ids": [
+    "proj_vertex",
+    "proj_solstice"
+   ],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "how's the payments work going",
+     "score": {
+      "case_id": "H07_unresolved_needs_candidates",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "pass",
+      "no_forbidden_subject_detail": "no forbidden subject ranked",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; the case has two real candidates",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "how's the payments work going",
+     "score": {
+      "case_id": "H07_unresolved_needs_candidates",
+      "leg": "deterministic_question",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "pass",
+      "no_forbidden_subject_detail": "no forbidden subject ranked",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "resolved nothing; the case has two real candidates",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [
+      "wg_payments_rewrite_superseded",
+      "sc_payments_rewrite_cancelled",
+      "proj_payments_rewrite",
+      "proj_zenith",
+      "wg_zenith",
+      "wi_beacon_deleted",
+      "wi_borealis_wip",
+      "wi_ember_partial",
+      "wi_atlas_wip",
+      "wi_quarry_redacted"
+     ],
+     "cosine_order": [
+      "proj_zenith",
+      "wg_zenith",
+      "proj_payments_rewrite",
+      "sc_payments_rewrite_cancelled",
+      "wg_payments_rewrite_superseded",
+      "pr_vertex_401",
+      "proj_solstice",
+      "rv_vertex_cycles",
+      "atlas_wip",
+      "borealis_wip",
+      "pr_pulse_212",
+      "pr_vertex_401_cycles",
+      "svc_checkout",
+      "svc_pulse_api",
+      "repo_checkout",
+      "dp_pulse_prod",
+      "beacon_completions",
+      "borealis_completed",
+      "ember_completed",
+      "atlas_completed",
+      "solstice_completions",
+      "lattice_completions",
+      "meridian_completions",
+      "wu_ledger_cutover",
+      "ia_cinder_displaced",
+      "proj_ledger_migration",
+      "rv_vertex_revoked",
+      "wi_beacon_demand",
+      "sh_solstice_no_allocation",
+      "svc_ledger_api",
+      "proj_tidal",
+      "wi_ember_partial",
+      "dp_ledger_prod",
+      "sc_ledger_declared_complete",
+      "wi_ledger_children",
+      "sc_pulse_declared_complete",
+      "ia_beacon_allocation",
+      "repo_ledger",
+      "issue_vertex_tax_rounding",
+      "wu_beacon_ingest",
+      "wu_ledger_schema",
+      "pr_pulse_212_merged",
+      "oc_ledger_present",
+      "rv_atlas_queue",
+      "pulse_deployments",
+      "proj_vertex",
+      "proj_beacon",
+      "wi_solstice_demand",
+      "doc_injected_runbook",
+      "atlas_review_wait"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "wg_payments_rewrite_superseded",
+      "sc_payments_rewrite_cancelled",
+      "wg_zenith",
+      "wi_beacon_deleted",
+      "wi_ember_partial",
+      "wi_borealis_wip",
+      "rv_vertex_cycles",
+      "wi_atlas_wip",
+      "atlas_wip",
+      "wi_quarry_redacted",
+      "borealis_wip",
+      "pr_vertex_401_cycles",
+      "dp_pulse_prod",
+      "beacon_completions",
+      "borealis_completed",
+      "ember_completed",
+      "atlas_completed",
+      "solstice_completions",
+      "lattice_completions",
+      "meridian_completions",
+      "ia_cinder_displaced",
+      "rv_vertex_revoked",
+      "wi_beacon_demand",
+      "sh_solstice_no_allocation",
+      "dp_ledger_prod",
+      "sc_ledger_declared_complete",
+      "wi_ledger_children",
+      "sc_pulse_declared_complete",
+      "ia_beacon_allocation",
+      "pr_pulse_212_merged",
+      "oc_ledger_present",
+      "rv_atlas_queue",
+      "pulse_deployments",
+      "wi_solstice_demand",
+      "doc_injected_runbook",
+      "atlas_review_wait"
+     ],
+     "prose_disclosures": [],
+     "query": "how's the payments work going",
+     "score": {
+      "case_id": "H07_unresolved_needs_candidates",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 18 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "fail",
+      "no_forbidden_subject_detail": "ranked forbidden subjects ['proj_solstice', 'proj_vertex']",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_vertex_401']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "16 stray candidates across 18 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "issue_vertex_tax_rounding",
+       "pr_pulse_212",
+       "pr_vertex_401",
+       "proj_beacon",
+       "proj_ledger_migration",
+       "proj_solstice",
+       "proj_tidal",
+       "proj_vertex",
+       "repo_checkout",
+       "repo_ledger",
+       "svc_checkout",
+       "svc_ledger_api",
+       "svc_pulse_api",
+       "wu_beacon_ingest",
+       "wu_ledger_cutover",
+       "wu_ledger_schema"
+      ],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "ranked forbidden subjects ['proj_solstice', 'proj_vertex']",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [
+      {
+       "canonical_id": "proj_zenith",
+       "display_label": "Zenith Payments",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "bm25",
+        "cosine_similarity"
+       ],
+       "rank": 0,
+       "rrf_score": 1.25,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_payments_rewrite",
+       "display_label": "Payments Rewrite",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "bm25",
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.6666666666666666,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_vertex_401",
+       "display_label": "checkout#401 tax rounding",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.16666666666666666,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_solstice",
+       "display_label": "Solstice Billing",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.14285714285714285,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_pulse_212",
+       "display_label": "pulse#212 analytics rollout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.09090909090909091,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_checkout",
+       "display_label": "Checkout Service",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.07692307692307693,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_pulse_api",
+       "display_label": "Pulse API",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.07142857142857142,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_checkout",
+       "display_label": "helio/checkout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.06666666666666667,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_cutover",
+       "display_label": "Ledger cutover",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 0.041666666666666664,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_ledger_migration",
+       "display_label": "Ledger Migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 9,
+       "rrf_score": 0.038461538461538464,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_ledger_api",
+       "display_label": "Ledger API",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 10,
+       "rrf_score": 0.03333333333333333,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_tidal",
+       "display_label": "Tidal Notifications",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 11,
+       "rrf_score": 0.03225806451612903,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_ledger",
+       "display_label": "helio/ledger",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 12,
+       "rrf_score": 0.02631578947368421,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "issue_vertex_tax_rounding",
+       "display_label": "Vertex tax rounding",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 13,
+       "rrf_score": 0.02564102564102564,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_beacon_ingest",
+       "display_label": "Beacon ingest throughput",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 14,
+       "rrf_score": 0.025,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_schema",
+       "display_label": "Ledger schema migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 15,
+       "rrf_score": 0.024390243902439025,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_vertex",
+       "display_label": "Vertex Checkout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 16,
+       "rrf_score": 0.021739130434782608,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_beacon",
+       "display_label": "Beacon Ingest",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 17,
+       "rrf_score": 0.02127659574468085,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [
+    "proj_payments_rewrite",
+    "proj_zenith"
+   ],
+   "pinned_baseline_detail": "no authorized subject resolved from the question",
+   "pinned_baseline_disposition": "arm_refused",
+   "principal_id": "principal_helio_analyst",
+   "question": "how's the payments work going",
+   "question_family": "clarification_and_no_match"
+  },
+  {
+   "case_id": "H08_no_match_must_not_widen",
+   "committed_subject_id": null,
+   "delta": {
+    "baseline_correct": true,
+    "baseline_ranked": 0,
+    "classification": "deterministic_only_correct",
+    "detail": "baseline: nothing was ranked, which is the only correct resolution | semantic: the case names a subject that does not exist; the leg ranked 20 candidates anyway, led by repo_beacon",
+    "semantic_correct": false,
+    "semantic_ranked": 20
+   },
+   "expected_answer": "unavailable",
+   "forbidden_subject_ids": [
+    "proj_identity_rewrite",
+    "proj_acr",
+    "proj_quarry"
+   ],
+   "legs": [
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_mentions",
+     "mentions": [
+      "Halcyon"
+     ],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "How is Halcyon doing?",
+     "score": {
+      "case_id": "H08_no_match_must_not_widen",
+      "leg": "deterministic_mentions",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "pass",
+      "no_forbidden_subject_detail": "no forbidden subject ranked",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "nothing was ranked, which is the only correct resolution",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [],
+     "leg": "deterministic_question",
+     "mentions": [],
+     "observation_hits": [],
+     "prose_disclosures": [],
+     "query": "How is Halcyon doing?",
+     "score": {
+      "case_id": "H08_no_match_must_not_widen",
+      "leg": "deterministic_question",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "pass",
+      "no_forbidden_subject_detail": "no forbidden subject ranked",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "nothing was ranked, which is the only correct resolution",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [],
+     "withheld_canonical_ids": []
+    },
+    {
+     "authorization_filtered_count": 0,
+     "bm25_order": [],
+     "cosine_order": [
+      "repo_beacon",
+      "ep_keyword_stuffed",
+      "repo_ledger",
+      "repo_acr",
+      "hp_atlas",
+      "rv_borealis_normal",
+      "pr_pulse_212_merged",
+      "repo_checkout",
+      "repo_identity",
+      "proj_beacon",
+      "wi_borealis_wip",
+      "wi_beacon_demand",
+      "wu_ledger_backfill",
+      "wi_ledger_backfill_open",
+      "pr_ledger_990_merged",
+      "wi_beacon_deleted",
+      "ia_beacon_allocation",
+      "wg_zenith",
+      "proj_zenith",
+      "proj_solstice",
+      "wu_beacon_ingest",
+      "sh_solstice_no_allocation",
+      "di_cinder_open",
+      "repo_pulse",
+      "dp_identity_none",
+      "pr_pulse_212",
+      "pr_identity_882_open",
+      "wu_ledger_schema",
+      "rv_atlas_queue",
+      "wu_ledger_dual_write",
+      "wu_ledger_cutover",
+      "wg_lattice_contributors",
+      "frost_cycle_p90",
+      "cl_borealis",
+      "rv_vertex_revoked",
+      "oc_ledger_present",
+      "sc_ledger_declared_complete",
+      "rv_vertex_cycles",
+      "team_borealis",
+      "pr_vertex_401_cycles",
+      "sh_tidal_thin",
+      "dp_ledger_prod",
+      "rv_dorado_outbound",
+      "tr_ledger_suite",
+      "wi_solstice_demand",
+      "pr_ledger_990",
+      "svc_ledger_api",
+      "proj_meridian",
+      "proj_ledger_migration",
+      "sc_pulse_declared_complete"
+     ],
+     "leg": "semantic_hybrid",
+     "mentions": [],
+     "observation_hits": [
+      "ep_keyword_stuffed",
+      "hp_atlas",
+      "rv_borealis_normal",
+      "pr_pulse_212_merged",
+      "wi_borealis_wip",
+      "wi_beacon_demand",
+      "wi_ledger_backfill_open",
+      "pr_ledger_990_merged",
+      "wi_beacon_deleted",
+      "ia_beacon_allocation",
+      "wg_zenith",
+      "sh_solstice_no_allocation",
+      "di_cinder_open",
+      "dp_identity_none",
+      "pr_identity_882_open",
+      "rv_atlas_queue",
+      "wg_lattice_contributors",
+      "frost_cycle_p90",
+      "cl_borealis",
+      "rv_vertex_revoked",
+      "oc_ledger_present",
+      "sc_ledger_declared_complete",
+      "rv_vertex_cycles",
+      "pr_vertex_401_cycles",
+      "sh_tidal_thin",
+      "dp_ledger_prod",
+      "rv_dorado_outbound",
+      "tr_ledger_suite",
+      "wi_solstice_demand",
+      "sc_pulse_declared_complete"
+     ],
+     "prose_disclosures": [],
+     "query": "How is Halcyon doing?",
+     "score": {
+      "case_id": "H08_no_match_must_not_widen",
+      "leg": "semantic_hybrid",
+      "must_not_commit": "pass",
+      "must_not_commit_detail": "ranked 20 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "pass",
+      "no_forbidden_subject_detail": "no forbidden subject ranked",
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['repo_acr', 'repo_beacon', 'repo_ledger']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "20 stray candidates across 20 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "pr_ledger_990",
+       "pr_pulse_212",
+       "proj_beacon",
+       "proj_ledger_migration",
+       "proj_meridian",
+       "proj_solstice",
+       "proj_zenith",
+       "repo_acr",
+       "repo_beacon",
+       "repo_checkout",
+       "repo_identity",
+       "repo_ledger",
+       "repo_pulse",
+       "svc_ledger_api",
+       "team_borealis",
+       "wu_beacon_ingest",
+       "wu_ledger_backfill",
+       "wu_ledger_cutover",
+       "wu_ledger_dual_write",
+       "wu_ledger_schema"
+      ],
+      "subject_resolution_correct": false,
+      "subject_resolution_detail": "the case names a subject that does not exist; the leg ranked 20 candidates anyway, led by repo_beacon",
+      "subject_top_1": "not_applicable",
+      "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
+      "subject_top_3": "not_applicable",
+      "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
+     },
+     "subjects": [
+      {
+       "canonical_id": "repo_beacon",
+       "display_label": "helio/beacon",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 0,
+       "rrf_score": 1.0,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_ledger",
+       "display_label": "helio/ledger",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 1,
+       "rrf_score": 0.3333333333333333,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_acr",
+       "display_label": "helio/acr",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 2,
+       "rrf_score": 0.25,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_checkout",
+       "display_label": "helio/checkout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 3,
+       "rrf_score": 0.125,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_identity",
+       "display_label": "helio/identity",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 4,
+       "rrf_score": 0.1111111111111111,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_beacon",
+       "display_label": "Beacon Ingest",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 5,
+       "rrf_score": 0.1,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_backfill",
+       "display_label": "Ledger historical backfill",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 6,
+       "rrf_score": 0.07692307692307693,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_zenith",
+       "display_label": "Zenith Payments",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 7,
+       "rrf_score": 0.05263157894736842,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_solstice",
+       "display_label": "Solstice Billing",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 0.05,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_beacon_ingest",
+       "display_label": "Beacon ingest throughput",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 9,
+       "rrf_score": 0.047619047619047616,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "repo_pulse",
+       "display_label": "helio/pulse",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 10,
+       "rrf_score": 0.041666666666666664,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_pulse_212",
+       "display_label": "pulse#212 analytics rollout",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 11,
+       "rrf_score": 0.038461538461538464,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_schema",
+       "display_label": "Ledger schema migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 12,
+       "rrf_score": 0.03571428571428571,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_dual_write",
+       "display_label": "Ledger dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 13,
+       "rrf_score": 0.03333333333333333,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "wu_ledger_cutover",
+       "display_label": "Ledger cutover",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 14,
+       "rrf_score": 0.03225806451612903,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "team_borealis",
+       "display_label": "Borealis",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 15,
+       "rrf_score": 0.02564102564102564,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "pr_ledger_990",
+       "display_label": "ledger#990 dual-write teardown",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 16,
+       "rrf_score": 0.021739130434782608,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_ledger_api",
+       "display_label": "Ledger API",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 17,
+       "rrf_score": 0.02127659574468085,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_meridian",
+       "display_label": "Meridian Docs",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 18,
+       "rrf_score": 0.020833333333333332,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_ledger_migration",
+       "display_label": "Ledger Migration",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "cosine_similarity"
+       ],
+       "rank": 19,
+       "rrf_score": 0.02040816326530612,
+       "signal": "fuzzy_label"
+      }
+     ],
+     "withheld_canonical_ids": []
+    }
+   ],
+   "permitted_candidate_ids": [],
+   "pinned_baseline_detail": "no authorized subject resolved from the question",
+   "pinned_baseline_disposition": "arm_refused",
+   "principal_id": "principal_helio_analyst",
+   "question": "How is Halcyon doing?",
+   "question_family": "clarification_and_no_match"
+  }
+ ],
+ "embedded_text_surface": {
+  "alias_count": 8,
+  "edge_count": 72,
+  "edge_embedded_field": "EntityEdge.fact (== '<source_id> <relationship> <target_id>')",
+  "fulltext_indexed_fields": [
+   "name",
+   "summary",
+   "group_id"
+  ],
+  "node_count": 154,
+  "node_embedded_field": "EntityNode.name (== GraphNode.display_label)",
+  "not_embedded": [
+   "GraphNode.canonical_id",
+   "GraphNode.aliases[].value (alias, acronym, previous_name, provider_identifier)",
+   "GraphNode.attributes[*]",
+   "EntityNode.summary (always empty by the arm's no-prose rule)"
+  ]
+ },
+ "schema_version": "chaos_3647_semantic_leg_results.v1",
+ "scope_notes": [
+  "This measures SUBJECT RESOLUTION only. No packet is assembled, no driver is synthesised and no evidence is cited, so nothing here supports or refutes a claim about answer quality.",
+  "The CHAOS-3619 deterministic run remains the pinned baseline. This run adds a leg; it does not replace, edit or rescore that artifact.",
+  "The semantic leg receives the RAW QUESTION and the deterministic baseline receives PRODUCTION-EXTRACTED MENTIONS, because those are the inputs each mechanism is built for. The deterministic_question leg exists to price that asymmetry: it runs the baseline matcher over the raw question, so a reader can see how much of any delta is retrieval and how much is the mention extractor returning nothing.",
+  "Node vectors are embeddings of the DISPLAY LABEL. Aliases, acronyms and previous names are node attributes and are embedded by nothing, so a semantic leg cannot resolve an alias by similarity however good the model is. See embedded_text_surface.",
+  "The eight corpus ambiguity questions withhold nothing on any leg, because none of them is near the restricted project. The authorization_probes section exists because a clean audit obtained that way is not evidence the filter works."
+ ],
+ "summary": {
+  "any_prose_disclosure": false,
+  "any_unauthorized_entity_ranked": false,
+  "authorization_probe_verdicts": {
+   "cross_tenant_near_duplicate": "pass",
+   "restricted_exact_label": "pass",
+   "restricted_topical": "pass",
+   "unrestricted_control": "pass"
+  },
+  "authorization_probes_ineffective": [],
+  "authorization_probes_run": 4,
+  "cases_measured": 8,
+  "delta_classification_case_ids": {
+   "both_correct": [
+    "H01_acronym_resolution"
+   ],
+   "deterministic_only_correct": [
+    "H02_old_and_current_name",
+    "H08_no_match_must_not_widen"
+   ],
+   "neither_correct_semantic_ranked_anyway": [
+    "H03_the_auth_work",
+    "H04_pronoun_follow_up",
+    "H05_the_other_project_we_discussed",
+    "H06_prior_attempt_reference",
+    "H07_unresolved_needs_candidates"
+   ]
+  },
+  "delta_classification_counts": {
+   "both_correct": 1,
+   "deterministic_only_correct": 2,
+   "neither_correct_semantic_ranked_anyway": 5
+  },
+  "prose_disclosures_by_leg": {},
+  "subject_resolution_correct_by_leg": {
+   "deterministic_mentions": [
+    "H01_acronym_resolution",
+    "H02_old_and_current_name",
+    "H08_no_match_must_not_widen"
+   ],
+   "deterministic_question": [
+    "H08_no_match_must_not_widen"
+   ],
+   "semantic_hybrid": [
+    "H01_acronym_resolution"
+   ]
+  }
+ }
+}

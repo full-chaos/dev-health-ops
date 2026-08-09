@@ -117,6 +117,29 @@ class GraphArmStore:
     def embedder(self) -> EmbeddingBackend:
         return self._embedder
 
+    @property
+    def driver(self) -> Any:
+        """The Graphiti driver, for read paths that issue their own queries.
+
+        CHAOS-3647. Exposed rather than left as a private attribute the
+        retrieval leg reaches through, because a caller that writes
+        ``store._driver`` has silently taken on the store's whole invariant
+        set — most importantly that the driver is bound to *this*
+        organization's partition. Reading it here keeps the derivation
+        visible: the driver a caller gets is the one :meth:`for_org`
+        constructed with the server-derived partition as its ``database``,
+        and there is still no way to obtain one for a partition the caller
+        named.
+
+        It does **not** make the partition optional at query time. Graphiti's
+        search primitives filter on ``group_id`` independently of which
+        keyspace the driver is bound to, so a caller must still pass
+        :attr:`partition` as the group filter; ``semantic_retrieval``
+        re-asserts it on every returned node for exactly that reason.
+        """
+
+        return self._driver
+
     @classmethod
     def for_org(
         cls,

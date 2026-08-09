@@ -169,6 +169,28 @@ CONDITIONAL_KEEP_ENV_NAMES: dict[str, str] = {
     # alone yields the loud skip, which names the sentinel.
     "CONTEXT_FABRIC_GRAPH_STORE_URI": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
     "CONTEXT_FABRIC_GRAPH_STORE_PASSWORD": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
+    # CHAOS-3647: the semantic retrieval leg needs a REAL embedding model, and
+    # the credential it needs is one of the two the repo already conventions
+    # on (``llm/credentials.py``: LLM_API_KEY first, then OPENAI_API_KEY).
+    #
+    # Pollutant, and more sharply than the store URI: an ambient key does not
+    # merely reach a local container, it spends money against a third party
+    # from a tier that is supposed to touch nothing. Scrubbing it by default
+    # stays right.
+    #
+    # Requirement: tests/context_fabric/test_chaos_3647_live_semantic.py
+    # cannot measure anything without it. It does not fall back to
+    # DeterministicEmbedder — a run on hash vectors would look semantic and
+    # score like noise, which is worse than not running — so an unconditional
+    # scrub turns that lane into a permanent skip.
+    #
+    # Sentinel is CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE, the same one the store
+    # URI uses, and deliberately so: this leg needs BOTH a live store and a
+    # live model, there is no configuration in which it wants one without the
+    # other, and a second sentinel would be a second thing to forget. Setting
+    # the key alone still yields the loud skip that names the sentinel.
+    "LLM_API_KEY": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
+    "OPENAI_API_KEY": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
 }
 
 # ---------------------------------------------------------------------------

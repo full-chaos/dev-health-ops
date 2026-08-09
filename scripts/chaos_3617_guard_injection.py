@@ -1059,6 +1059,30 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="relationship-direction-ignored-blocking",
+        defect=(
+            "candidate roles are read from traversal order instead of the "
+            "edge's canonical orientation, so seeding a blocker reports the "
+            "thing it blocks as the PRINCIPAL DRIVER of its own blocker -- "
+            "causality inverted, at the highest standing the contract offers"
+        ),
+        path=SRC / "drivers.py",
+        anchor=(
+            "    if step.direction is RelationshipDirection.FORWARD:\n"
+            "        return step.from_canonical_id, step.to_canonical_id\n"
+            "    return step.to_canonical_id, step.from_canonical_id"
+        ),
+        replacement="    return step.from_canonical_id, step.to_canonical_id",
+        # Both seeding directions. The defect survived 60 killed mutations
+        # because every test seeded one END of the edge; a mutation checked
+        # from that same end would have survived too.
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestOrientationIsReadFromDirectionNotTraversalOrder",
+        ),
+        expect_failure="causality is inverted",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

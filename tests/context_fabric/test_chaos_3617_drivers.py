@@ -188,6 +188,121 @@ class TestPrincipalStandingIsEarned:
 # --------------------------------------------------------------------------
 
 
+class TestOrientationIsReadFromDirectionNotTraversalOrder:
+    """The seeding-direction sweep. The suite's largest blind spot, closed.
+
+    Every structural driver test seeded the *blocked* end of a directed
+    edge, so no test and none of eight mutations ever traversed one in
+    reverse — and the arm asserted, at PRINCIPAL standing with lineage and
+    canonical evidence behind it, that a blocked project was the driver of
+    its own blocker.
+
+    ``PathStep`` separates traversal order from canonical orientation
+    precisely so this is detectable. The rules now read ``direction``; these
+    tests seed BOTH ends of every directed family so a regression cannot
+    hide on the side nobody looks at.
+    """
+
+    @pytest.mark.parametrize(
+        ("blocked", "blocker"),
+        [("proj_identity_rewrite", "wu_authcore_release")],
+    )
+    def test_a_blocker_is_never_a_driver_of_the_thing_it_blocks(
+        self, helio, blocked, blocker
+    ) -> None:
+        """Seeded from the BLOCKER end: the blocked thing is not a cause.
+
+        This is the exact reproduction. Before the fix it returned
+        ``drv_block_proj_identity_rewrite`` at ``PRINCIPAL_DRIVER``.
+        """
+
+        from_blocker = _by_id(_findings(helio, blocker, world.PRINCIPAL_ANALYST))
+        inverted = [name for name in from_blocker if name == f"drv_block_{blocked}"]
+        assert not inverted, (
+            f"{blocked} was reported as a driver of its own blocker "
+            f"{blocker}; causality is inverted"
+        )
+
+    def test_the_same_edge_still_yields_the_driver_from_the_blocked_end(
+        self, helio
+    ) -> None:
+        """The control, and the half that must not regress while fixing the other.
+
+        A rule that refused both directions would pass the test above while
+        destroying the capability.
+        """
+
+        from_blocked = _by_id(
+            _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
+        )
+        assert (
+            from_blocked["drv_block_wu_authcore_release"].standing
+            is DriverStanding.PRINCIPAL_DRIVER
+        )
+
+    def test_a_parent_is_never_the_open_child_of_its_own_child(self) -> None:
+        """The same flaw in the child rule, on both orientations.
+
+        ``parent_of`` and ``contributes_to`` each declare which end is the
+        larger unit. Taking "the end that is not the subject" made a parent
+        the child of its own child whenever the walk arrived from below.
+        """
+
+        projection, grant = _probe_world(
+            relationships=(
+                ("wu_one", RelationshipType.CONTRIBUTES_TO, "proj_subject", ("obs_c",)),
+            ),
+            observations=(("obs_c", "wu_one"),),
+            subject_status="complete",
+        )
+
+        # Seeded from the PARENT: the open child is found, as it should be.
+        from_parent = _by_id(_probe_findings(projection, grant, "proj_subject"))
+        assert "drv_open_wu_one" in from_parent
+
+        # Seeded from the CHILD: the parent must not become an open child of
+        # its own child. Before the fix, "the end that is not the subject"
+        # made exactly that finding.
+        from_child = _by_id(_probe_findings(projection, grant, "wu_one"))
+        leaked = sorted(name for name in from_child if name.startswith("drv_open_"))
+        assert not leaked, leaked
+
+    def test_every_asserted_driver_agrees_with_canonical_orientation(
+        self, helio
+    ) -> None:
+        """The sweep. Seed every authorized subject, check every assertion.
+
+        For each asserted structural driver, the subject must be the
+        canonical SOURCE of a blocking edge whose target is the named cause
+        — checked against the projection's own edges, which are stored in
+        canonical orientation and never in traversal order.
+        """
+
+        projection = helio
+        canonical = {
+            (edge.source_canonical_id, edge.relationship, edge.target_canonical_id)
+            for edge in projection.edges
+        }
+        checked = 0
+        for principal in (world.PRINCIPAL_ANALYST, world.PRINCIPAL_COMPLIANCE):
+            grant = adapter.authorized_entity_ids_for(principal)
+            for subject in sorted(grant):
+                for item in _findings(helio, subject, principal):
+                    if not item.is_asserted or not item.driver_id.startswith(
+                        "drv_block_"
+                    ):
+                        continue
+                    checked += 1
+                    assert any(
+                        (subject, relationship, item.cause_id) in canonical
+                        for relationship in (
+                            RelationshipType.BLOCKED_BY,
+                            RelationshipType.DEPENDS_ON,
+                        )
+                    ), (subject, item.driver_id, item.cause_id)
+        assert checked, "no asserted blocking driver was produced; vacuous"
+
+
 class TestSymptomsAreNeverDrivers:
     def test_a_status_change_is_classified_as_a_symptom(self, helio) -> None:
         found = _by_id(

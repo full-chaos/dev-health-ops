@@ -61,10 +61,16 @@ from dev_health_ops.api.dev.investigation_contract import (
     DriverExclusionReason,
     DriverRole,
     DriverStanding,
+    RelationshipDirection,
     RelationshipType,
 )
 
-from .readback import DiscoveredObservation, DiscoveredPath, InvestigationReadout
+from .readback import (
+    DiscoveredObservation,
+    DiscoveredPath,
+    InvestigationReadout,
+    PathStep,
+)
 from .vocabulary import GraphEntityKind, GraphObservationKind
 
 __all__ = [
@@ -511,6 +517,30 @@ def _classify(
     return finding(DriverStanding.CONTRIBUTING_DRIVER)
 
 
+def _canonical_endpoints(step: PathStep) -> tuple[str, str]:
+    """The edge's ``(source, target)`` in its CANONICAL orientation.
+
+    ``PathStep`` deliberately separates traversal order from orientation:
+    ``from``/``to`` are where the walk came from and arrived, while
+    ``direction`` says whether that followed the relationship's declared
+    reading or ran against it. Reading the endpoints without the direction
+    collapses the two — which is precisely the "a relationship is reversed"
+    fault the split exists to make detectable.
+
+    Collapsing them here was a real defect, not a hypothetical: seeding
+    ``wu_authcore_release`` (the blocker) made the arm report
+    ``proj_identity_rewrite`` — the thing it blocks — as the PRINCIPAL DRIVER
+    of its own blocker. Causality inverted, at the highest standing the
+    contract offers, with lineage and canonical evidence behind it. Every
+    structural driver test seeded the blocked subject, so the whole suite and
+    eight mutations never traversed a ``blocked_by`` edge in reverse.
+    """
+
+    if step.direction is RelationshipDirection.FORWARD:
+        return step.from_canonical_id, step.to_canonical_id
+    return step.to_canonical_id, step.from_canonical_id
+
+
 def _blocking_candidates(
     context: _Context, readout: InvestigationReadout
 ) -> list[DriverFinding]:
@@ -522,9 +552,14 @@ def _blocking_candidates(
             category = _BLOCKING_RELATIONSHIPS.get(step.relationship)
             if category is None:
                 continue
-            if step.from_canonical_id != context.subject_id:
+            # Canonical orientation, never traversal order. For
+            # ``X blocked_by Y`` the contract's declared reading is
+            # source=X (the blocked), target=Y (the blocker) -- so the
+            # subject is only a candidate's dependent when it is the
+            # canonical SOURCE, whichever way the walk happened to arrive.
+            dependent_id, cause_id = _canonical_endpoints(step)
+            if dependent_id != context.subject_id:
                 continue
-            cause_id = step.to_canonical_id
             if not step.is_current_at(context.as_of):
                 # Deliberately NOT skipped. A dependency that closed before
                 # the window is a candidate the arm considered and rejected,
@@ -605,7 +640,16 @@ def _open_child_candidates(
         for step in path.steps:
             if step.relationship not in _CHILD_RELATIONSHIPS:
                 continue
-            ends = (step.from_canonical_id, step.to_canonical_id)
+            # Same orientation rule. ``child contributes_to parent`` and
+            # ``parent parent_of child`` both declare which end is which, and
+            # taking "the end that is not the subject" silently made a parent
+            # the child of its own child on a reverse traversal.
+            source_id, target_id = _canonical_endpoints(step)
+            if step.relationship is RelationshipType.PARENT_OF:
+                parent_id, child_id = source_id, target_id
+            else:
+                child_id, parent_id = source_id, target_id
+            ends = (source_id, target_id)
             if context.subject_id not in ends:
                 # The step has to touch the SUBJECT. Without this, any
                 # parent_of edge anywhere on any discovered path produced a
@@ -613,7 +657,12 @@ def _open_child_candidates(
                 # ``proj_ledger_migration`` because both appeared somewhere
                 # on the same walk. Adjacency is what "child of" means.
                 continue
-            child = next(end for end in ends if end != context.subject_id)
+            if parent_id != context.subject_id:
+                # The subject has to be the PARENT for this to be its open
+                # child. Being the child of an open parent is not the same
+                # finding and must not borrow this one's rationale.
+                continue
+            child = child_id
             if not _is_declared_open(context, child):
                 continue
             child_paths = _paths_between(readout, context.subject_id, child)

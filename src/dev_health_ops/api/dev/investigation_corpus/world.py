@@ -1678,6 +1678,20 @@ WORLD_RELATIONSHIPS: tuple[WorldRelationship, ...] = (
     _rel("beacon_pf", PROJ_BEACON, _R.BELONGS_TO_PORTFOLIO, PF_PLATFORM, WORLD_EPOCH),
     _rel("vertex_pf", PROJ_VERTEX, _R.BELONGS_TO_PORTFOLIO, PF_GROWTH, WORLD_EPOCH),
     _rel("zenith_pf", PROJ_ZENITH, _R.BELONGS_TO_PORTFOLIO, PF_GROWTH, WORLD_EPOCH),
+    _rel(
+        "payments_rewrite_pf",
+        PROJ_PAYMENTS_REWRITE,
+        _R.BELONGS_TO_PORTFOLIO,
+        PF_GROWTH,
+        WORLD_EPOCH,
+        evidence=("wg_payments_rewrite_superseded",),
+        note=(
+            "The cancelled predecessor and its successor reach each other "
+            "only through shared portfolio membership. That is the whole "
+            "lineage available for the supersession, and stating it here "
+            "keeps the S07 driver path-backed rather than asserted."
+        ),
+    ),
     _rel("tidal_pf", PROJ_TIDAL, _R.BELONGS_TO_PORTFOLIO, PF_GROWTH, WORLD_EPOCH),
     _rel("solstice_pf", PROJ_SOLSTICE, _R.BELONGS_TO_PORTFOLIO, PF_GROWTH, WORLD_EPOCH),
     # -- ownership ----------------------------------------------------------

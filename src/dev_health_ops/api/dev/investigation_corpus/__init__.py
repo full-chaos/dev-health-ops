@@ -36,6 +36,7 @@ precisely because the contract cannot discharge them:
 
 from __future__ import annotations
 
+from .authorization import AuthorizationAudit, audit_authorization, entity_sightings
 from .cases import (
     ALL_CASE_IDS,
     CASE_REGISTRY,
@@ -47,6 +48,34 @@ from .cases import (
     authored_cases,
     validate_case_registry,
 )
+from .coverage import (
+    CellStatus,
+    CoverageCell,
+    coverage_matrix,
+    dispositions_table,
+    render_dispositions,
+    render_matrix,
+    validate_coverage,
+)
+from .evaluate import (
+    CaseEvaluation,
+    DimensionResult,
+    Verdict,
+    evaluate_case,
+    evaluate_payload,
+)
+from .oracles import (
+    CASE_ORACLES,
+    CaseOracle,
+    DriverExpectation,
+    ForbiddenEvidence,
+    ForbiddenReason,
+    PathExpectation,
+    oracle_for,
+    required_evidence_handles,
+    validate_oracles,
+)
+from .reference import reference_packet
 from .world import (
     AS_OF_JUL_15,
     AS_OF_JUN_15,
@@ -90,6 +119,31 @@ from .world import (
 
 __all__ = [
     "ALL_CASE_IDS",
+    "CASE_ORACLES",
+    "AuthorizationAudit",
+    "CaseEvaluation",
+    "CaseOracle",
+    "CellStatus",
+    "CoverageCell",
+    "DimensionResult",
+    "DriverExpectation",
+    "ForbiddenEvidence",
+    "ForbiddenReason",
+    "PathExpectation",
+    "Verdict",
+    "audit_authorization",
+    "coverage_matrix",
+    "dispositions_table",
+    "entity_sightings",
+    "evaluate_case",
+    "evaluate_payload",
+    "oracle_for",
+    "reference_packet",
+    "render_dispositions",
+    "render_matrix",
+    "required_evidence_handles",
+    "validate_coverage",
+    "validate_oracles",
     "AS_OF_JUL_15",
     "AS_OF_JUN_15",
     "CASE_REGISTRY",

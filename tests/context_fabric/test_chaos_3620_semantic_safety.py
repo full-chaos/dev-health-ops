@@ -37,6 +37,9 @@ from dev_health_ops.api.dev.investigation_contract.vocabulary import (
     ASSERTED_DRIVER_STANDINGS,
 )
 from dev_health_ops.api.dev.investigation_corpus import world
+from dev_health_ops.api.dev.investigation_corpus.authorization import (
+    entity_sightings,
+)
 from dev_health_ops.context_fabric.graph_arm.drivers import (
     MEASUREMENT_ONLY_CATEGORIES,
 )
@@ -514,6 +517,93 @@ class TestTheTelemetryIsContentSafe:
         assert (
             record.status is shadow.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED
         ), "a Helio packet was recorded against a Lumen run"
+
+
+class TestSeamAuthorityIsNotAuthorization:
+    """Two different dimensions that look identical in a red column.
+
+    The seam refuses a packet whose cited evidence is not in the native
+    frame's canonical set. That refusal is about **authority** — whether a
+    canonical service admitted the evidence — not about **authorization** —
+    whether the caller may see it. The two produce the same visible outcome
+    (a rejected packet) and mean opposite things about safety.
+
+    The distinction is load-bearing rather than pedantic. Once the graph arm
+    cites source-issued world handles, the seam can reject a packet citing
+    *authentic* evidence the graph legitimately discovered and canonical
+    services never admitted to the frame. That is a measured architectural
+    fact — the seam contract has no admission path for graph-discovered
+    evidence — and counting it toward the zero-unauthorized-leakage gate
+    would report an architecture boundary as a security failure, which is
+    how a real leak later gets dismissed as "one of those".
+
+    Asserted here so nobody folds the columns together, and so the trial's
+    seam verdict and oracle evaluation stay two independent readings.
+    """
+
+    def test_a_bypass_rejection_says_nothing_about_the_callers_grant(self) -> None:
+        """The same packet: refused by the seam, clean to the oracle.
+
+        Both readings are taken on one packet, which is the only way to show
+        they are independent. If a bypass rejection implied an authorization
+        problem, the entity-sighting audit would have something to report —
+        and it has nothing.
+        """
+
+        investigation = spine.investigate("proj_identity_rewrite", with_drivers=True)
+        record = shadow.InvestigationShadow(enabled=True).evaluate(
+            payload=json.loads(investigation.packet.model_dump_json()),
+            run_id=spine.RUN_ID,
+            organization_id=world.ORG_HELIO,
+            canonical_evidence=(),
+        )
+        assert (
+            record.status is shadow.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED
+        ), f"the seam did not reject on authority: {record.status}"
+
+        visible = world.PRINCIPALS[world.PRINCIPAL_ANALYST].visible_entity_ids
+        disclosed = sorted(
+            entity_id
+            for entity_id in entity_sightings(investigation.packet)
+            if entity_id in world.ENTITIES_BY_ID and entity_id not in visible
+        )
+        assert not disclosed, (
+            "the seam-rejected packet ALSO discloses unauthorized entities: "
+            f"{disclosed}. The two dimensions have stopped being independent "
+            "and this test can no longer separate them"
+        )
+
+    def test_the_seam_reports_authority_under_its_own_status_name(self) -> None:
+        """The status is not called anything authorization-shaped.
+
+        A reader scanning trial output should not be able to mistake the
+        column. ``canonical_bypass_rejected`` names the admission boundary;
+        no seam status names authorization at all, because the seam does not
+        evaluate it.
+        """
+
+        statuses = {status.value for status in shadow.InvestigationShadowStatus}
+        assert "canonical_bypass_rejected" in statuses
+        assert not [
+            status
+            for status in statuses
+            if "authoriz" in status or "permission" in status
+        ], (
+            "a seam status now names authorization, so a seam verdict can be "
+            f"read as an authorization verdict: {sorted(statuses)}"
+        )
+
+    def test_the_seam_record_carries_no_authorization_verdict_field(self) -> None:
+        """Nothing in the emitted record invites the conflation either."""
+
+        payload = shadow.shadow_record_payload(_recorded())
+        assert not [
+            field for field in payload if "authoriz" in field or "permission" in field
+        ], (
+            "the shadow record now carries an authorization-shaped field; "
+            "the trial's seam column and oracle column must stay separate "
+            f"readings: {sorted(payload)}"
+        )
 
 
 class TestTheObservabilityGapsAreNamed:

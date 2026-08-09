@@ -220,6 +220,130 @@ uv run python -c "import sys; sys.path.insert(0, '.'); \
 from tests.context_fabric.chaos_3620_dispositions import render; print(render())"
 ```
 
+## Prompt injection: what is actually holding
+
+The corpus's injected documents never reach a packet — and that result is
+weaker than it looks, because **every corpus document is unapproved**. It
+measures a property of the corpus, not of the arm.
+
+The case that decides the question is one the corpus cannot produce, so the
+suite builds it: an approved document carrying an injection. Its payload
+still never reaches a packet — but **not because approval works**.
+`projection.approved_documents` has **zero consumers** in `src/`: it is
+written and never read. The structured path never reads document bodies at
+all.
+
+That makes containment strong now and fragile later. The moment an extraction
+pass exists, approval becomes the *only* gate, and the unapproved-by-accident
+property that currently masks everything disappears. A structural test goes
+red the instant anything reads the approved set, which is exactly when the
+approval gate stops being decorative and needs a proof of its own.
+
+## Seam authority is not authorization
+
+The shadow seam refuses a packet whose cited evidence is not in the native
+frame's canonical set. That refusal is about **authority** — whether a
+canonical service admitted the evidence — not **authorization** — whether the
+caller may see it. Both produce a rejected packet and mean opposite things
+about safety.
+
+Once the graph arm cites source-issued world handles, the seam can reject a
+packet citing *authentic* evidence the graph legitimately discovered and
+canonical services never admitted to the frame. That is a measured
+architectural fact — the seam contract has no admission path for
+graph-discovered evidence — and it **does not count toward the
+zero-unauthorized-leakage gate**. Counting it there would report an
+architecture boundary as a security failure, which is how a real leak later
+gets dismissed as "one of those".
+
+The suite asserts the separation on a single packet: refused by the seam,
+and clean to the entity-sighting audit at the same time. The trial reports
+seam verdict and oracle evaluation as two independent columns; anything built
+against the seam mirrors that.
+
+## Inherited CHAOS-3617 invariants, and whether they transfer
+
+Where a 3617 proof ran only on the synthetic `alpha`/`beta` fixtures — whose
+authorized set is a hand-written tuple — "proven" does not automatically
+transfer to the corpus world under real per-principal grants. Every 3617
+result this lane leans on instead of re-proving carries an explicit
+disposition in `INHERITED_INVARIANTS`, machine-checked like everything else.
+
+| Invariant | Transfer |
+| --- | --- |
+| authorized traversal never routes through an unauthorized entity | `re_proven` |
+| cross-tenant near-duplicates stay distinct and unreachable | `re_proven` |
+| budget truncation is bounded and disclosed with a per-flag reason | `re_proven` |
+| the watermark's freshness state reaches every consumer surface | `re_proven` |
+| no caller-supplied partition; the partition is server-derived | `world_independent` |
+| the arm registers no router, task, tool or telemetry surface | `world_independent` |
+| a semantic match claim requires an attested semantic embedder | **`synthetic_only`** |
+
+The last one is the honest exception. It is **not exercised on the corpus
+world**, and the reason is structural: the corpus path runs the
+`DeterministicEmbedder`, `ProjectionGraphReader` attests no embedder, and
+every corpus subject resolves by `EXACT_CANONICAL_ID`. No semantic claim is
+ever made, so the guard that refuses one is inert on this path. A test
+observes both halves of that on a real readout, so if a later revision
+resolves corpus subjects by similarity the disposition goes red rather than
+staying quietly stale.
+
+## The cross-runtime differential (D1) — spec of record
+
+Deferred until CHAOS-3619's runner merges; axes A, B and C land as one
+package. This is the approved design, recorded here so the spec is not a
+message.
+
+**Two of the five runtimes are negative legs.** ACR and acr-mcp carry no
+graph surface today. The correct differential for them asserts that
+graph-derived material is **absent** *and* that the corresponding native
+material is **present** — otherwise two empty result sets compare equal and
+report agreement, which is a green light meaning "neither runtime returned
+anything".
+
+**Three real axes.** A: `ProjectionGraphReader` vs `LiveGraphReader` over the
+same batch (backend representation). B: native vs graph packet over the same
+case (product) — needs the runner. C: packet → shadow record → frame facts
+(presentation).
+
+**Derive the comparison contract; never hand-list it.** Walk
+`AskDevInvestigationPacket.model_fields` recursively and require every leaf
+field to be classified `MUST_MATCH` / `MAY_DIFFER(reason)` / `DERIVED`, with a
+totality test whose failure **names the field path** so classification is a
+one-line fix rather than an investigation. A hand-written list of compared
+fields is how a differential ends up covering three of them.
+
+`MUST_MATCH`: committed subject ids; cohort member and exclusion ids; driver
+ids, standings, roles, categories, assertion bases; lineage path endpoints and
+`(source, relationship, direction, target)` hop triples; evidence **entity**
+ids; authorization-filtered counts; outcome.
+
+`MAY_DIFFER`, recorded: `packet_id`, `run_id`, `produced_at`, `path_id`
+numbering. Evidence **handle values** differ today because the signer is
+run-scoped — but CHAOS-3627 switches corpus-originated evidence to
+source-issued world handles, so handles are **scheduled for promotion to
+`MUST_MATCH`** in the same changeset that builds axis B (which is post-3627 by
+construction).
+
+**Every `MAY_DIFFER` that exists because of a missing capability must key on
+the declared capability, never on reader identity.** `LiveGraphReader`
+declares `observation_attachment_available=False`, so driver exclusion reasons
+differ. Allowlisting "exclusion reasons may differ between readers" would
+silently excuse real standing drift forever afterwards. Keying on
+`readout.observation_attachment_available` makes the allowance evaporate the
+moment the capability flips — and H3 is already implemented on the 3619
+branch, so by axis-B time attachment will be `True` and that allowance should
+never fire. If it does, that is drift.
+
+**Compare model objects, not a JSON round-trip** (a round-trip collapses ints
+to floats and equates large integers, and the packet carries measurement
+values). **Build every case from the real producer**, never hand-authored
+fixtures. **Keep an acceptance set** of known defects the comparator must keep
+rediscovering — a reversed hop, a cohort member present in one arm only, a
+driver standing downgraded, an evidence entity id dropped, a committed subject
+swapped for the corpus's near-duplicate decoy. If one stops being found, the
+change broke what made the tool worth building.
+
 ## What this lane deliberately did not do
 
 * **No cross-runtime differential.** The differential leg needs CHAOS-3619's

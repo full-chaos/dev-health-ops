@@ -69,6 +69,44 @@ def _subject_seeds() -> tuple[str, ...]:
     )
 
 
+def _native_packet(**overrides):
+    """One packet from the REAL native producer.
+
+    Built through CHAOS-3618's own payload fixture rather than a
+    hand-assembled input, so the per-site claims below are about the arm the
+    trial will run and not about a shape this module invented. The coupling
+    to a sibling test module's helper is deliberate: the alternative is a
+    second, divergent payload builder, and a divergent one is how a
+    filtered-count claim ends up true of nothing that ships.
+    """
+
+    from dev_health_ops.context_fabric.native_arm import projection as native
+    from tests.context_fabric import test_chaos_3618_projection as native_fixture
+
+    return native.project_native_investigation(
+        native_fixture._payload(**overrides)
+    ).packet
+
+
+def _native_packet_with_unauthorized_evidence():
+    """A native run whose evidence names an entity the run cannot see.
+
+    ``_restrict_evidence_to_authorized`` drops by ``evidence.entity_id``, so
+    the plant is an evidence ref about an entity that is not the committed
+    subject and not in the authorized set the run derives.
+    """
+
+    from tests.context_fabric import test_chaos_3618_projection as native_fixture
+
+    handle = native_fixture._evidence_handle("evidence-unauthorized")
+    return _native_packet(
+        evidence=(
+            *native_fixture._payload().evidence,
+            native_fixture._evidence("proj-not-authorized", handle),
+        )
+    )
+
+
 def _entities_disclosed(packet, principal_id: str) -> list[str]:
     """Canonical world entities in the packet that ``principal_id`` cannot see.
 
@@ -781,6 +819,109 @@ class TestTheAuthorizationFilteredCountIsPartlyReal:
         assert PacketLimitationKind.AUTHORIZATION_FILTERED not in kinds, (
             "a run that withheld nothing still claimed authorization "
             "filtering, so the disclosure carries no information"
+        )
+
+    def test_the_native_arm_reports_a_TRUTHFUL_zero_for_related_context(self) -> None:
+        """Not every zero is a gap, and calling them all gaps is its own error.
+
+        The native arm's ``related_context`` is built with ``entities=()``
+        and ``paths=()``: it performs no traversal at all. A zero
+        filtered-count there is the truth — nothing could have been filtered
+        out of a traversal that never happened. This is the opposite of the
+        graph arm's zero, which sits on a run that demonstrably filtered one
+        entity.
+
+        Observed by running the real native producer rather than read off
+        the source, because "this zero is truthful" is precisely the kind of
+        claim a source read gets wrong.
+        """
+
+        packet = _native_packet()
+        assert not packet.related_context.entities, (
+            "the native arm now emits related entities, so a zero "
+            "filtered-count there is no longer self-evidently truthful"
+        )
+        assert not packet.related_context.paths, (
+            "the native arm now emits lineage paths, so its filtered-count "
+            "zero needs the same scrutiny as the graph arm's"
+        )
+        assert packet.related_context.authorization_filtered_count == 0
+
+    def test_the_native_subject_count_is_caller_supplied_and_honest_when_absent(
+        self,
+    ) -> None:
+        """A declared default, not a silent one — and it discloses.
+
+        ``NativeProjectionInput.authorization_filtered_count`` defaults to
+        zero and the field's own comment says an unknown count is reported as
+        zero rather than guessed. The half that matters is that a supplied
+        count is carried AND disclosed as a limitation, so the default is a
+        real "we did not count" rather than a claim that nothing was
+        filtered.
+        """
+
+        absent = _native_packet()
+        assert absent.subject_discovery.authorization_filtered_count == 0
+        assert PacketLimitationKind.AUTHORIZATION_FILTERED not in {
+            limitation.kind for limitation in absent.evidence_coverage.limitations
+        }, "the native arm claimed authorization filtering it was never told about"
+
+        supplied = _native_packet(authorization_filtered_count=3)
+        assert supplied.subject_discovery.authorization_filtered_count == 3, (
+            "a caller-supplied filtered count did not reach the native packet"
+        )
+        assert PacketLimitationKind.AUTHORIZATION_FILTERED in {
+            limitation.kind for limitation in supplied.evidence_coverage.limitations
+        }, (
+            "the native arm carried a filtered count without disclosing that "
+            "the answer was narrowed"
+        )
+
+    def test_the_native_cohort_zero_is_an_UNMEASURED_site_not_a_truthful_one(
+        self,
+    ) -> None:
+        """The one native site that is a real gap.
+
+        ``_comparison_cohort`` emits ``authorization_filtered_count=0`` as a
+        literal (``native_arm/projection.py:783``) while returning members,
+        and the builder applies no authorization filter of its own. So the
+        zero means "no filter ran", not "the filter removed nothing" — and
+        those are indistinguishable to a consumer.
+
+        Pinned with a member present, because a zero beside an empty cohort
+        would be truthful for the same reason the related-context zero is.
+        """
+
+        packet = _native_packet()
+        assert packet.comparison_cohort.members, (
+            "the native cohort is empty, so its zero is truthful and this "
+            "pin measures nothing"
+        )
+        assert packet.comparison_cohort.authorization_filtered_count == 0, (
+            "the native cohort now reports a filtered count -- the "
+            "CHAOS-3620 per-site filtered-count record must be updated"
+        )
+
+    def test_the_native_evidence_count_is_real_and_can_be_non_zero(self) -> None:
+        """The native site that genuinely measures.
+
+        ``_restrict_evidence_to_authorized`` drops evidence whose entity is
+        outside the authorized set and returns the count it dropped. Driven
+        with an entity the run is not authorized for, so the non-zero is
+        observed rather than inferred from the function's shape.
+        """
+
+        packet = _native_packet()
+        assert packet.evidence_coverage.authorization_filtered_count == 0, (
+            "the baseline native run already filters evidence, so a non-zero "
+            "below would not be attributable to this test's plant"
+        )
+
+        restricted = _native_packet_with_unauthorized_evidence()
+        assert restricted.evidence_coverage.authorization_filtered_count >= 1, (
+            "evidence outside the authorized set was not dropped and counted "
+            "by the native arm; the count is "
+            f"{restricted.evidence_coverage.authorization_filtered_count}"
         )
 
     def test_the_two_hardcoded_zeros_are_recorded_as_a_gap_not_a_result(self) -> None:

@@ -35,10 +35,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 __all__ = [
+    "INHERITED_INVARIANTS",
     "ISSUE_BULLETS",
     "REQUIREMENTS",
+    "InheritedInvariant",
     "Requirement",
     "Status",
+    "Transfer",
     "render",
 ]
 
@@ -414,12 +417,24 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "X1",
         Status.PROVEN,
         f"{_ADV}::TestPromptInjectionNeverReachesAConsumer::"
-        "test_no_document_in_the_world_is_approved_for_extraction",
-        f"{_ADV}::TestPromptInjectionNeverReachesAConsumer::"
         "test_the_injected_instruction_text_appears_nowhere_in_a_packet",
         f"{_ADV}::TestPromptInjectionNeverReachesAConsumer::"
         "test_an_injected_document_is_refused_even_when_its_trust_says_otherwise",
+        f"{_ADV}::TestTheLoadBearingInjectionCase::"
+        "test_its_payload_still_never_reaches_a_packet",
+        f"{_ADV}::TestTheLoadBearingInjectionCase::"
+        "test_because_nothing_reads_the_approved_set_at_all",
         notes=(
+            "PROVEN, but read the reason before relying on it. The "
+            "corpus-only result is weak: every corpus document is unapproved, "
+            "so it measures the corpus rather than the arm. The load-bearing "
+            "case -- a poisoned document that IS approved -- is built by the "
+            "suite, and its payload still never reaches a packet. NOT because "
+            "approval works: projection.approved_documents has ZERO consumers "
+            "in src/, so containment today is 'no extraction pass exists'. "
+            "Approval is a gate on a pass nobody built, and it becomes the "
+            "only gate the moment one is. A structural test goes red when "
+            "anything reads the approved set.",
             "Episodes are covered only insofar as the corpus models the "
             "adversarial one as an evidence record; the arm does not ingest "
             "WORLD_EPISODES as episodes today.",
@@ -763,6 +778,154 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "test_the_shadow_record_carries_no_backend_vocabulary_either",
     ),
 )
+
+
+class Transfer(StrEnum):
+    """Whether a CHAOS-3617 result carries to the corpus world under true grants.
+
+    The orchestrator's caveat, made checkable: where a 3617 proof ran only on
+    the synthetic ``alpha``/``beta`` fixtures — whose authorized set is a
+    hand-written tuple — "proven" does not automatically transfer to the
+    corpus world under real per-principal grants. This lane relies on several
+    3617 invariants instead of re-proving them, so each reliance carries a
+    disposition rather than an assumption.
+    """
+
+    #: Re-proved on the corpus world by this lane. The strongest disposition.
+    RE_PROVEN = "re_proven"
+    #: Structural — a property of the arm's API surface, its imports or its
+    #: declared query set, with no dependence on which world is loaded. A
+    #: transfer question does not arise.
+    WORLD_INDEPENDENT = "world_independent"
+    #: Proved on the synthetic fixtures and NOT exercised on the corpus,
+    #: with a stated reason why the corpus cannot reach it. Relied on with
+    #: that limitation visible.
+    SYNTHETIC_ONLY = "synthetic_only"
+
+
+@dataclass(frozen=True)
+class InheritedInvariant:
+    invariant: str
+    transfer: Transfer
+    #: A CHAOS-3617 test that established it, or a CHAOS-3620 test that
+    #: re-established it on the corpus. Resolved like every other node id.
+    evidence: tuple[str, ...]
+    reason: str = ""
+
+
+#: Every CHAOS-3617 result this lane leans on instead of re-proving from
+#: scratch. Short by design: if it is not here, this lane proved it itself.
+INHERITED_INVARIANTS: tuple[InheritedInvariant, ...] = (
+    InheritedInvariant(
+        "authorized traversal never routes through an unauthorized entity",
+        Transfer.RE_PROVEN,
+        (
+            f"{_AUTHZ}::TestPathsNeverMixAuthorizedAndUnauthorizedEntities::"
+            "test_every_hop_endpoint_in_every_emitted_path_is_inside_the_grant",
+        ),
+        reason=(
+            "Re-proved on the corpus world under the analyst's true grant, "
+            "which is the case the synthetic fixtures cannot express: their "
+            "restricted entity is excluded by a hand-written tuple, the "
+            "corpus's is excluded by a per-principal grant while sharing the "
+            "caller's tenant."
+        ),
+    ),
+    InheritedInvariant(
+        "cross-tenant near-duplicates stay distinct and unreachable",
+        Transfer.RE_PROVEN,
+        (
+            f"{_ADV}::TestAnAliasCannotRedirectASubject::"
+            "test_a_shared_acronym_across_tenants_never_crosses_the_partition",
+        ),
+        reason=(
+            "Re-proved with the corpus's own cross-tenant collision: the "
+            "acronym ACR resolves in both Helio and Lumen, and a Helio search "
+            "returns only the Helio project."
+        ),
+    ),
+    InheritedInvariant(
+        "budget truncation is bounded and disclosed with a per-flag reason",
+        Transfer.RE_PROVEN,
+        (
+            f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
+            "test_a_path_budget_that_bites_is_reported_with_its_own_reason",
+            f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
+            "test_the_packet_carries_the_truncation_forward",
+        ),
+        reason=(
+            "Re-proved on the corpus world with a lowered path budget, so the "
+            "disclosure is observed on a graph dense enough to truncate "
+            "rather than on a fixture sized to fit."
+        ),
+    ),
+    InheritedInvariant(
+        "the watermark's freshness state reaches every consumer surface",
+        Transfer.RE_PROVEN,
+        (
+            f"{_ADV}::TestAStaleIndexIsDisclosedEverywhere::"
+            "test_every_lineage_path_reports_the_stale_source_state",
+            f"{_ADV}::TestAStaleIndexIsDisclosedEverywhere::"
+            "test_a_current_index_makes_no_staleness_claim",
+        ),
+        reason=(
+            "Re-proved on the corpus world in both directions, including the "
+            "negative control: an unconditional staleness disclosure would "
+            "carry no information."
+        ),
+    ),
+    InheritedInvariant(
+        "no caller-supplied partition, and the partition is server-derived",
+        Transfer.WORLD_INDEPENDENT,
+        (
+            f"{_P3617}::TestNoPartitionParameterExists::"
+            "test_no_public_callable_accepts_a_partition",
+            f"{_SEM}::TestNoGraphNativeSurfaceLeaves::"
+            "test_the_storage_partition_name_never_appears_in_the_packet",
+        ),
+        reason=(
+            "The 3617 half inspects the arm's public callables' signatures, "
+            "which no world can change. This lane adds the emitted-output "
+            "half on the corpus: the derived partition string reaches no "
+            "packet."
+        ),
+    ),
+    InheritedInvariant(
+        "the arm registers no router, task, tool or telemetry surface",
+        Transfer.WORLD_INDEPENDENT,
+        (
+            f"{_C3617}::TestNoProductionCoupling::"
+            "test_the_arm_exposes_no_router_task_or_tool_registration",
+            f"{_C3617}::TestNoProductionCoupling::"
+            "test_no_declared_query_writes_or_maintains",
+        ),
+        reason=(
+            "Import-graph and declared-query-set properties. Which world is "
+            "loaded cannot add a route or a write."
+        ),
+    ),
+    InheritedInvariant(
+        "a semantic match claim requires an attested semantic embedder",
+        Transfer.SYNTHETIC_ONLY,
+        (
+            "tests/context_fabric/test_chaos_3617_semantic_claims.py::"
+            "TestSemanticClaimsAreRefusedUnderANonSemanticEmbedder::"
+            "test_an_embedding_derived_match_is_refused",
+        ),
+        reason=(
+            "NOT exercised on the corpus world, and the reason is structural: "
+            "the corpus path runs the DeterministicEmbedder, "
+            "ProjectionGraphReader attests no embedder "
+            "(readout.embedder_model_id is None), and every corpus subject "
+            "resolves by EXACT_CANONICAL_ID. No semantic claim is ever made, "
+            "so the guard that refuses one is inert on this path. Relied on "
+            "as a 3617 result with that limitation stated: if a later "
+            "revision resolves corpus subjects by similarity, the transfer "
+            "question becomes live and this entry must be re-derived."
+        ),
+    ),
+)
+
 
 #: Statuses that must carry a stated reason. ``PROVEN`` is the only status
 #: that speaks for itself; everything else is a claim about why something was

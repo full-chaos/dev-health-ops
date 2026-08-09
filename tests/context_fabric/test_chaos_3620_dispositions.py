@@ -25,11 +25,13 @@ import pytest
 
 from tests.context_fabric.chaos_3620_dispositions import (
     _BLOCKER_PATTERN,
+    INHERITED_INVARIANTS,
     ISSUE_BULLETS,
     NEEDS_BLOCKER,
     NEEDS_REASON,
     REQUIREMENTS,
     Status,
+    Transfer,
     render,
 )
 
@@ -245,6 +247,103 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
         assert defects == {"P1", "P6", "S5"}, (
             f"the recorded defect set changed to {sorted(defects)}; update "
             "the CHAOS-3620 findings record and the lane report together"
+        )
+
+
+class TestInheritedInvariantsCarryATransferDisposition:
+    """ "Proven by CHAOS-3617" is not automatically proven here.
+
+    Where a 3617 proof ran only on the synthetic fixtures — whose authorized
+    set is a hand-written tuple — the result does not transfer to the corpus
+    world under real per-principal grants without saying so. Every 3617
+    result this lane leans on instead of re-proving therefore carries an
+    explicit disposition, and the one that is genuinely synthetic-only says
+    why the corpus cannot reach it.
+    """
+
+    def test_the_register_is_not_empty(self) -> None:
+        assert INHERITED_INVARIANTS, (
+            "no inherited invariant is registered, which would mean this "
+            "lane re-proved everything — check before believing it"
+        )
+
+    @pytest.mark.parametrize(
+        "inherited", INHERITED_INVARIANTS, ids=lambda item: item.transfer.value
+    )
+    def test_every_inherited_invariant_names_evidence_that_resolves(
+        self, inherited
+    ) -> None:
+        broken = []
+        for node_id in inherited.evidence:
+            ok, why = _resolve(node_id)
+            if not ok:
+                broken.append((node_id, why))
+        assert not broken, (
+            f"{inherited.invariant!r} cites evidence that does not exist: {broken}"
+        )
+
+    def test_every_inherited_invariant_states_its_reason(self) -> None:
+        thin = [
+            (inherited.invariant, len(inherited.reason))
+            for inherited in INHERITED_INVARIANTS
+            if len(inherited.reason) < 100
+        ]
+        assert not thin, (
+            "these inherited invariants assert a transfer disposition "
+            f"without justifying it: {thin}"
+        )
+
+    def test_a_synthetic_only_disposition_explains_why_the_corpus_cannot_reach_it(
+        self,
+    ) -> None:
+        """The one that would otherwise be a shrug.
+
+        ``synthetic_only`` is the disposition a reader must be able to argue
+        with, so its reason has to name the mechanism that makes the corpus
+        path inert — not merely assert that it is.
+        """
+
+        synthetic = [
+            inherited
+            for inherited in INHERITED_INVARIANTS
+            if inherited.transfer is Transfer.SYNTHETIC_ONLY
+        ]
+        assert synthetic, (
+            "no invariant is recorded synthetic-only; if that is genuinely "
+            "true it is a strong claim and should be checked, not assumed"
+        )
+        for inherited in synthetic:
+            assert "NOT exercised" in inherited.reason, (
+                f"{inherited.invariant!r} is synthetic-only without saying so plainly"
+            )
+
+    def test_the_synthetic_only_claim_is_true_of_the_corpus_path_today(self) -> None:
+        """The disposition, checked against the arm rather than believed.
+
+        The attestation guard is recorded synthetic-only because the corpus
+        path never makes a semantic claim. That is an observable property of
+        a real corpus readout, so it is observed: no attested embedder, and
+        every committed subject resolved by exact identifier.
+        """
+
+        from tests.context_fabric import chaos_3620_spine as spine
+
+        readout = spine.readout_for(("proj_acr",))
+        assert readout.embedder_model_id is None, (
+            "the corpus readout now attests an embedder, so the semantic "
+            "claim path is live on this world and the synthetic-only "
+            "disposition is stale"
+        )
+        packet = spine.packet_from(readout)
+        signals = {
+            str(signal.signal)
+            for candidate in packet.subject_discovery.candidates
+            for signal in candidate.match_signals
+        }
+        assert signals <= {"exact_canonical_id"}, (
+            "a corpus subject now resolves by something other than an exact "
+            f"identifier ({sorted(signals)}), so semantic-claim guards are "
+            "reachable on this world and must be re-proved here"
         )
 
 

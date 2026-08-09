@@ -82,6 +82,7 @@ from .vocabulary import (
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
     SOURCE_EVIDENCE_STATE_ATTRIBUTE,
+    WITHHELD_LABEL,
     AliasKind,
     GraphEntityKind,
     GraphObservationKind,
@@ -475,34 +476,32 @@ _INSTRUCTION_SHAPED = re.compile(
 )
 
 
-def _reject_instruction_shaped(where: str, field: str, value: str) -> None:
-    """Refuse a source value that instructs rather than names.
+def withheld_if_instruction_shaped(value: str) -> str:
+    """The label to emit for ``value``: itself, or the withheld literal.
 
-    Refused, never rewritten. Sanitizing in place -- stripping the imperative
-    and keeping the rest -- is the repair-what-should-be-refused shape this
-    epic has rejected repeatedly: it produces a value no source supplied,
-    presented as though a source had, and the next payload phrased around the
-    filter passes silently.
+    **Withhold the value, keep the record.** The first implementation of
+    CHAOS-3637 refused the record and that was wrong: titles are
+    attacker-controlled, so dropping the record on detection lets an attacker
+    poison the title of their own incriminating observation and erase it from
+    every packet with a clean audit. Denial-of-evidence is the dual of
+    injection, and refusing the record converts one into the other.
 
-    Refused at ingestion rather than at emission because the record is still
-    in scope here, so the error names the observation a human can go and look
-    at instead of naming a packet.
+    The distinction that was missed, kept here because it is easy to lose:
+    refuse-don't-sanitize protects against ACCEPTING attacker text; it does
+    not decide whether to KEEP attacker-influenced data. Different question,
+    opposite answer.
+
+    Not sanitize-in-place either. Nothing is repaired and no part of the
+    source's value is kept: the field is replaced wholesale by
+    :data:`~.vocabulary.WITHHELD_LABEL`, a bare literal, and the substitution
+    is visible on the wire rather than silent.
     """
 
-    match = _INSTRUCTION_SHAPED.search(value)
-    if match is None:
-        return
-    raise ProjectionError(
-        f"{where} {field} is instruction-shaped ({match.group(0)!r}): it "
-        "addresses a reader rather than naming a thing, and this value is "
-        "copied verbatim into a packet field Ask Dev synthesis reads. "
-        "Refused, not repaired -- a rewritten value is one no source supplied"
-    )
+    return WITHHELD_LABEL if _INSTRUCTION_SHAPED.search(value) else value
 
 
 def _validate_label(where: str, label: str) -> None:
     _reject_control_characters(where, "label", label)
-    _reject_instruction_shaped(where, "label", label)
     if not label.strip():
         raise ProjectionError(f"{where} has an empty display label")
     if len(label) > MAX_ATTRIBUTE_CHARS:
@@ -567,7 +566,7 @@ def _entity_node(record: EntityRecord, partition: str) -> GraphNode:
         entity_kind=record.kind,
         observation_kind=None,
         canonical_id=record.canonical_id,
-        display_label=record.display_label,
+        display_label=withheld_if_instruction_shaped(record.display_label),
         source_class=record.source_class,
         observed_at=record.observed_at,
         aliases=record.aliases,
@@ -614,7 +613,7 @@ def _observation_node(record: ObservationRecord, partition: str) -> GraphNode:
         entity_kind=None,
         observation_kind=record.kind,
         canonical_id=record.canonical_id,
-        display_label=record.title,
+        display_label=withheld_if_instruction_shaped(record.title),
         source_class=record.source_class,
         observed_at=record.observed_at,
         attributes=attributes,

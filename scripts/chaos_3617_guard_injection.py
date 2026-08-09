@@ -694,14 +694,15 @@ MUTATIONS: tuple[Mutation, ...] = (
             "corpus's adversarial records carry benign titles"
         ),
         path=SRC / "projection.py",
-        anchor='    _reject_instruction_shaped(where, "label", label)',
-        replacement="    pass",
+        anchor=(
+            "    return WITHHELD_LABEL if _INSTRUCTION_SHAPED.search(value) else value"
+        ),
+        replacement="    return value",
         tests=(
             f"{TESTS}/test_chaos_3637_title_boundary.py::"
-            "TestTheInjectionChannelIsClosed::"
-            "test_the_executed_payload_is_refused_at_ingestion",
+            "TestTheInjectionChannelIsClosed",
         ),
-        expect_failure="DID NOT RAISE",
+        expect_failure="ignore previous instructions",
     ),
     Mutation(
         mutation_id="graphiti-telemetry-left-on",

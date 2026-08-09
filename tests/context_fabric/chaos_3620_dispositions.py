@@ -194,7 +194,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     # ---- authorization -------------------------------------------------
     _req(
         "A1",
-        Status.PROVEN,
+        Status.UNMEASURED,
         f"{_A3617}::TestTenantIsolation::"
         "test_an_identical_canonical_id_in_two_tenants_is_two_distinct_nodes",
         f"{_A3617}::TestTenantIsolation::"
@@ -203,6 +203,21 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "test_evidence_carries_repository_scope_through_to_the_packet",
         f"{_ADV}::TestAnAliasCannotRedirectASubject::"
         "test_a_shared_acronym_across_tenants_never_crosses_the_partition",
+        reason=(
+            "SPLIT RESULT, downgraded because half the bullet is untested. "
+            "The cross-TENANT half is proven and re-proven on the corpus "
+            "world: identical canonical ids stay distinct nodes, the "
+            "near-duplicate project is unreachable across the partition, and "
+            "the acronym ACR -- which resolves in BOTH tenants -- returns "
+            "only the Helio project to a Helio caller. The cross-REPOSITORY "
+            "half is NOT CONSTRUCTIBLE on this corpus: all six repositories "
+            "carry distinct labels (helio/identity, helio/ledger, "
+            "helio/pulse, helio/acr, helio/checkout, helio/beacon) and the "
+            "world plants no repository near-duplicate at all, so there is "
+            "nothing to confuse. Recorded as unmeasured rather than proven "
+            "because a reader of PROVEN would reasonably believe both halves "
+            "were exercised."
+        ),
     ),
     _req(
         "A2",
@@ -212,7 +227,15 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
         "test_a_packet_built_before_revocation_is_caught_by_the_audit_after_it",
         f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
+        "test_the_SAME_principal_losing_a_grant_mid_session_loses_the_entity",
+        f"{_AUTHZ}::TestAuthorizationIsCurrentAfterRevocation::"
         "test_the_readout_records_the_grant_it_actually_used",
+        notes=(
+            "The first version modelled revocation as a principal SWAP, "
+            "which only shows that different callers see different things -- "
+            "a stale grant cached against a principal identity would survive "
+            "it. A same-principal grant transition was added after review.",
+        ),
     ),
     _req(
         "A3",
@@ -286,7 +309,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "A9",
         Status.NOT_ACCEPTED,
         f"{_AUTHZ}::TestTheRestrictedProjectNeverReachesAConsumer::"
-        "test_no_packet_the_analyst_can_produce_discloses_any_unauthorized_entity",
+        "test_no_packet_the_analyst_can_produce_discloses_anything_restricted",
         f"{_AUTHZ}::TestTheIndependentOracleCannotYetScoreThisArm::"
         "test_the_audit_can_therefore_never_be_clean_for_this_arm",
         blocker="CHAOS-3627",
@@ -406,11 +429,24 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "P7",
-        Status.PROVEN,
+        Status.UNMEASURED,
         f"{_PROV}::TestMultiSourceFactsRetainOnlyAuthorizedProvenance::"
         "test_evidence_indexed_for_the_analyst_is_only_about_entities_they_see",
         f"{_PROV}::TestMultiSourceFactsRetainOnlyAuthorizedProvenance::"
         "test_a_subject_whose_evidence_is_partly_restricted_still_gets_an_answer",
+        reason=(
+            "NOT CONSTRUCTIBLE on this corpus, and that is a fact about the "
+            "world rather than about the arm. What IS proven: indexed "
+            "evidence only ever supports entities the caller can see, and a "
+            "subject with a restricted NEIGHBOUR still receives a partial "
+            "answer rather than a wholesale refusal. What is not: a single "
+            "fact supported by several sources where SOME of those sources "
+            "are restricted. The corpus has 19 entities with evidence from "
+            "more than one source class, and none of them has partly-"
+            "restricted evidence -- restriction is per-entity in this world, "
+            "so all of an entity's evidence shares its visibility. "
+            "Establishing the bullet needs a world that can express the case."
+        ),
     ),
     # ---- adversarial ---------------------------------------------------
     _req(
@@ -424,6 +460,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "test_its_payload_still_never_reaches_a_packet",
         f"{_ADV}::TestTheLoadBearingInjectionCase::"
         "test_because_nothing_reads_the_approved_set_at_all",
+        f"{_ADV}::TestTheLoadBearingInjectionCase::"
+        "test_the_EPISODE_channel_carries_no_injection_because_none_is_ingested",
         notes=(
             "PROVEN, but read the reason before relying on it. The "
             "corpus-only result is weak: every corpus document is unapproved, "
@@ -475,11 +513,24 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "X5",
-        Status.PROVEN,
+        Status.UNMEASURED,
         f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
         "test_shorter_lineage_is_cited_before_longer_lineage",
         f"{_ADV}::TestKeywordStuffedBaitCannotBeRetrieved::"
         "test_the_bait_never_supports_an_asserted_driver",
+        reason=(
+            "DOWNGRADED after review: the cited tests are adjacent to the "
+            "requirement and do not establish it. Citation ORDERING is "
+            "proven -- per-entity path citations are emitted shortest-first, "
+            "so a long path cannot take a short path's slot -- and the "
+            "keyword-stuffed bait is proven not to support any asserted "
+            "driver. Neither shows that repeated LOW-QUALITY paths exist in "
+            "sufficient number to hit the per-entity citation cap and "
+            "displace a required short path, which is what the bullet asks. "
+            "The corpus does not plant such a flood, so establishing this "
+            "needs a probe world built for it. Recorded unmeasured rather "
+            "than proven by adjacency."
+        ),
     ),
     _req(
         "X6",
@@ -556,7 +607,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         "S1",
         Status.PROVEN,
         f"{_SEM}::TestNoCanonicalTruthIsCreated::"
-        "test_no_staffing_or_capacity_claim_is_ever_asserted",
+        "test_no_staffing_or_capacity_claim_is_ever_ASSERTED",
         f"{_SEM}::TestNoCanonicalTruthIsCreated::"
         "test_no_measurement_only_category_reaches_asserted_standing",
         f"{_SEM}::TestNoCanonicalTruthIsCreated::"
@@ -672,9 +723,21 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "O3",
-        Status.PROVEN,
+        Status.UNMEASURED,
         f"{_SEM}::TestTheTelemetryIsContentSafe::"
         "test_the_record_carries_latency_versions_outcome_and_counts",
+        reason=(
+            "PARTIAL, downgraded after review. The shadow record's "
+            "frame_facts carry four bounded counts -- cohort_members, "
+            "lineage_paths, principal_drivers, missing_sources -- each "
+            "asserted present and numeric. The bullet also names CANDIDATE "
+            "and RESULT counts, and neither reaches the record: the "
+            "candidate count exists on the packet "
+            "(subject_discovery.candidates) and is not forwarded, and there "
+            "is no result-count field at all. An operator cannot see how "
+            "many candidates a run considered. PROVEN here would have "
+            "claimed four of six signals as all six."
+        ),
     ),
     _req(
         "O4",

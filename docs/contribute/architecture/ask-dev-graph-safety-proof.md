@@ -78,10 +78,20 @@ Linear blocker.
 
 | Status | Count | Meaning |
 | --- | --- | --- |
-| `proven` | 33 | Holds, and the named tests are what establish it. |
+| `proven` | 29 | Holds, and the named tests are what establish it. |
 | `defect` | 3 | Violated by merged code; the named tests pin current behaviour. |
 | `not_accepted` | 2 | Blocked on another issue; never scored as a pass. |
-| `unmeasured` | 6 | Not measured, with a stated reason rather than a proxy. |
+| `unmeasured` | 10 | Not measured, with a stated reason rather than a proxy. |
+
+Four of those ten were `proven` before adversarial review, and were
+downgraded rather than defended. `A1` (the cross-*repository* half is not
+constructible — the corpus plants no repository near-duplicate), `X5`
+(citation ordering is proven; displacement by a flood of low-quality paths is
+not), `O3` (four of the six named counts reach telemetry; candidate and
+result counts do not) and `P7` (no corpus entity has partly-restricted
+multi-source evidence, so the case cannot be built here). Each downgrade
+names what *is* established, so the work is not lost — only the claim is
+corrected.
 
 The ledger is machine-checked by
 `tests/context_fabric/test_chaos_3620_dispositions.py`: every named test is
@@ -122,13 +132,15 @@ The packet's `conflicts` tuple is an empty literal
 either. Acceptance is blocked on CHAOS-3612. The frozen contract *does* carry
 the field, so CHAOS-3612 is the only blocker — asserted rather than assumed.
 
-## Four defects in merged code
+## Three defects in merged code
 
 None were fixed in this lane; all are pinned so they cannot close silently.
+**A9 is deliberately not in this table** — it is `not_accepted`, not a
+defect, and listing it here contradicted the ledger until adversarial review
+caught it.
 
 | ID | Requirement | What is wrong |
 | --- | --- | --- |
-| A9 | zero unauthorized result leakage | Three id vocabularies disagree, so the owning oracle is unusable. `packet_builder.py:836`, `:890-892`, `:828` vs `world.py:158`. |
 | P6 | withdrawn sources disappear from packets | REVOKED and DELETED evidence reaches the emitted packet. Nothing in `context_fabric` reads evidence state; the adapter carries it as a display attribute (`corpus_adapter.py:218`) and no branch reads it back. |
 | P1 | every driver **or relationship** closes to evidence | Drivers close, and the check is shown rejecting an arm-shaped bad response. Relationships never close: `_lineage_path` emits `evidence_ref_ids=()` as a literal (`packet_builder.py:632`). |
 | S5 | current versus historical stays explicit | A relationship that ended two months before the trial instant is emitted with `relevance = current`. `relevance` is a literal at eight sites in `packet_builder.py` (542, 618, 630, 751, 799, 868, 935, 982) and nothing computes it. |

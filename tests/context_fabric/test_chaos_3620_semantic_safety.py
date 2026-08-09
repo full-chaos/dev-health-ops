@@ -24,6 +24,7 @@ record table.
 from __future__ import annotations
 
 import json
+from functools import cache
 
 import pytest
 
@@ -66,29 +67,46 @@ BANNED_BACKEND_TOKENS = (
 )
 
 
-def _every_authorized_project() -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            item
-            for item in world.PRINCIPALS[world.PRINCIPAL_ANALYST].visible_entity_ids
-            if item.startswith("proj_")
-        )
-    )
+#: Same denial-of-packet exemption the authorization sweep carries, and for
+#: the same reason: ``team_atlas`` cannot produce a driver-bearing packet at
+#: all (CHAOS-3634). Driver DISCOVERY still runs for it — only packet
+#: emission is refused — so the finding sweep below loses nothing, which is
+#: why it uses ``discover_drivers`` output rather than packets.
+PACKET_UNCONSTRUCTIBLE_WITH_DRIVERS = {"team_atlas"}
 
 
+def _every_authorized_subject() -> tuple[str, ...]:
+    """**Every** entity the analyst may see, not just the projects.
+
+    Adversarial review found this narrowed to ``proj_*`` — 13 of 47 — while
+    the class docstrings claimed sweeps over "the whole authorized world".
+    Teams, repositories, services, work units and the rest all produce
+    findings, and a "the arm never does X" claim that skipped three quarters
+    of its subjects was supporting a much smaller statement than it made.
+    """
+
+    return tuple(sorted(world.PRINCIPALS[world.PRINCIPAL_ANALYST].visible_entity_ids))
+
+
+@cache
 def _all_findings():
     """Every finding the arm produces anywhere in the authorized world.
 
     Swept rather than sampled because the claims below are all of the form
     "the arm never does X", and a sample can only ever support "the arm did
     not do X here".
+
+    Built from ``discover_drivers`` rather than from packets so the one seed
+    whose PACKET cannot be constructed still contributes its findings — the
+    semantic claims are about what the arm is willing to assert, and a
+    contract refusal downstream does not unmake an assertion.
     """
 
-    return [
+    return tuple(
         (seed, finding)
-        for seed in _every_authorized_project()
-        for finding in spine.investigate(seed, with_drivers=True).findings
-    ]
+        for seed in _every_authorized_subject()
+        for finding in spine.findings_for(seed)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -107,24 +125,60 @@ class TestNoCanonicalTruthIsCreated:
             "vacuous"
         )
 
-    def test_no_staffing_or_capacity_claim_is_ever_asserted(self) -> None:
-        """The strongest of the semantic bans, and the arm's answer is total.
+    def test_no_staffing_or_capacity_claim_is_ever_ASSERTED(self) -> None:
+        """The ban, stated as what is actually true.
 
-        ``CAPACITY_OR_STAFFING`` is a measurement-only category
-        (``drivers.py:114-121``): a structural rule may not produce one at
-        all, and a measurement-derived finding is capped below asserted
-        standing. Across the whole authorized world the arm produces *no*
-        finding of that category in any standing.
+        The first version of this test claimed the arm produces *no*
+        capacity/staffing finding at all, in any standing. That was false and
+        only looked true because the sweep covered 13 of 47 subjects.
+        Widening it found ``drv_metric_atlas_load`` on ``team_atlas``
+        immediately.
+
+        The safety property survives — and via a better mechanism than the
+        one originally described. The finding exists, is derived from a cited
+        canonical measurement, and is capped at ``CONTEXTUAL_CORRELATE`` /
+        ``CANDIDATE_ONLY``: it can be shown to a reader as context and can
+        never be attributed as a cause. What must never happen is a capacity
+        claim reaching *asserted* standing, and that is what is checked.
         """
 
-        offenders = [
-            (seed, finding.driver_id, str(finding.standing))
+        capacity = [
+            (seed, finding)
             for seed, finding in _all_findings()
             if finding.category is DriverCategory.CAPACITY_OR_STAFFING
         ]
-        assert not offenders, (
-            f"the arm produced capacity/staffing findings: {offenders}"
+        assert capacity, (
+            "the corpus no longer produces any capacity/staffing finding, so "
+            "this ban is vacuous — check the sweep before believing it"
         )
+        offenders = [
+            (seed, finding.driver_id, str(finding.standing))
+            for seed, finding in capacity
+            if finding.standing in ASSERTED_DRIVER_STANDINGS
+        ]
+        assert not offenders, (
+            f"a capacity/staffing finding reached asserted standing: {offenders}"
+        )
+
+    def test_an_unqualified_capacity_finding_cannot_be_EMITTED_at_all(self) -> None:
+        """The second, independent refusal — and a denial-of-packet.
+
+        Beyond the standing cap, the frozen contract refuses a
+        capacity/staffing driver carrying no ``staffing_qualification``: "a
+        staffing claim that says nothing about its denominator is an
+        unsupported claim". On ``team_atlas`` that refusal aborts packet
+        construction entirely.
+
+        Recorded as its own disposition rather than absorbed as a skip. It is
+        a real safety refusal working, *and* a denial of service for that
+        subject — CHAOS-3634 owns making the arm qualify the finding instead
+        of losing the packet. Both halves are true and a reader needs both.
+        """
+
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="staffing_qualification"):
+            spine.investigate("team_atlas", with_drivers=True)
 
     def test_no_measurement_only_category_reaches_asserted_standing(self) -> None:
         """The general rule the staffing ban is one instance of."""
@@ -306,11 +360,36 @@ class TestSymptomsAreNotPromotedWithoutLineage:
         )
 
     def test_at_most_one_principal_driver_per_investigation(self) -> None:
-        for seed in _every_authorized_project():
+        for seed in _every_authorized_subject():
+            if seed in PACKET_UNCONSTRUCTIBLE_WITH_DRIVERS:
+                # Not a gap in this claim: the promotion rule is checked on
+                # the FINDINGS for this seed below, and its packet is refused
+                # for an unrelated reason (CHAOS-3634).
+                continue
             packet = spine.investigate(seed, with_drivers=True).packet
             assert len(packet.driver_analysis.principal_driver_ids) <= 1, (
                 f"{seed} names {len(packet.driver_analysis.principal_driver_ids)} "
                 "principal drivers; the frozen contract admits at most one"
+            )
+
+    def test_at_most_one_principal_driver_even_where_no_packet_can_be_built(
+        self,
+    ) -> None:
+        """The promotion rule read off the findings, so no subject is skipped.
+
+        Covers the seed whose packet cannot be constructed — otherwise the
+        contract refusal would silently exempt it from a rule that is about
+        driver discovery, not about emission.
+        """
+
+        for seed in _every_authorized_subject():
+            principals = [
+                finding.driver_id
+                for finding in spine.findings_for(seed)
+                if finding.standing is DriverStanding.PRINCIPAL_DRIVER
+            ]
+            assert len(principals) <= 1, (
+                f"{seed} produced {len(principals)} principal drivers: {principals}"
             )
 
     def test_a_principal_driver_is_produced_somewhere(self) -> None:

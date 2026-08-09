@@ -288,6 +288,49 @@ class TestTheLoadBearingInjectionCase:
             "the approved document's identifier reached the packet"
         )
 
+    def test_the_EPISODE_channel_carries_no_injection_because_none_is_ingested(
+        self,
+    ) -> None:
+        """The issue names documents *and episodes*; only documents were tested.
+
+        Adversarial review was right that the episode half was unproven — and
+        the reason is not that it is unsafe but that the channel does not
+        exist: ``corpus_batch`` builds entities, relationships, observations
+        and documents, and never reads ``WORLD_EPISODES``. No episode text of
+        any kind enters the arm, injected or otherwise.
+
+        Asserted from both ends: the corpus DOES carry an adversarial
+        episode, and none of the ingested material is derived from any
+        episode's body. If a later revision ingests episodes, this goes red
+        and the injection guarantee has to be re-earned on the new channel.
+        """
+
+        adversarial_episodes = [
+            episode for episode in world.WORLD_EPISODES if episode.is_adversarial
+        ]
+        assert adversarial_episodes, (
+            "the corpus no longer plants an adversarial episode, so this "
+            "channel claim is untested"
+        )
+
+        batch = adapter.corpus_batch(world.ORG_HELIO)
+        ingested_ids = {
+            *(record.canonical_id for record in batch.entities),
+            *(record.canonical_id for record in batch.observations),
+            *(record.canonical_id for record in batch.documents),
+        }
+        episode_ids = {episode.episode_id for episode in world.WORLD_EPISODES}
+        assert not (ingested_ids & episode_ids), (
+            "episodes are now ingested by the arm, so the injection "
+            f"guarantee must be re-proved on that channel: {sorted(ingested_ids & episode_ids)}"
+        )
+
+        summaries = "\n".join(episode.summary for episode in world.WORLD_EPISODES)
+        bodies = "\n".join(record.body for record in batch.documents)
+        assert summaries not in bodies, (
+            "episode prose reached an ingested document body"
+        )
+
     def test_because_nothing_reads_the_approved_set_at_all(self) -> None:
         """The reason, asserted rather than assumed — and the residual.
 
@@ -315,9 +358,11 @@ class TestTheLoadBearingInjectionCase:
         assert not readers, (
             "something now reads projection.approved_documents: "
             f"{readers}. Untrusted document text is reachable by an "
-            "extraction pass, so approval has become the load-bearing gate "
-            "and needs a proof of its own -- the CHAOS-3620 injection record "
-            "must be updated"
+            "extraction pass, so approval has become the load-bearing gate. "
+            "CHAOS-3632 is the instruction: the approval-enforcement proof "
+            "must be built BEFORE the extraction pass ships. Do not delete "
+            "this test -- read the ticket, then replace it with that proof "
+            "-- the CHAOS-3620 injection record must be updated"
         )
 
 

@@ -27,6 +27,7 @@ scored here as a pass.
 from __future__ import annotations
 
 import dataclasses
+from functools import cache
 
 import pytest
 
@@ -49,6 +50,23 @@ from tests.context_fabric import chaos_3620_spine as spine
 #: about. Chosen by what the arm actually produces rather than by hand: a
 #: provenance sweep over subjects with no drivers is a sweep over nothing.
 DRIVER_BEARING_SEEDS = ("proj_identity_rewrite", "proj_pulse", "proj_meridian")
+
+
+@cache
+def _every_finding():
+    """Every driver finding the analyst can produce, over the WHOLE grant.
+
+    Read from ``discover_drivers`` rather than from packets so no subject is
+    lost to a downstream emission refusal, and swept over all 47 grant
+    members rather than the three driver-bearing seeds — a "no finding
+    anywhere does X" claim cannot rest on three subjects.
+    """
+
+    return tuple(
+        (seed, finding)
+        for seed in sorted(world.PRINCIPALS[world.PRINCIPAL_ANALYST].visible_entity_ids)
+        for finding in spine.findings_for(seed)
+    )
 
 
 def _asserted(packet):
@@ -307,22 +325,60 @@ class TestCanonicalIdsAndDirectionSurviveEmission:
 
 
 class TestTheThreeKindsOfClaimStayDistinguishable:
-    @pytest.mark.parametrize("seed", DRIVER_BEARING_SEEDS)
-    def test_no_structural_finding_claims_to_be_measured(self, seed: str) -> None:
+    def test_no_structural_finding_claims_to_be_measured(self) -> None:
         """A structural driver is a claim about shape, never about a number.
 
-        ``AssertionBasis.MEASURED`` is reachable only on the cited-measurement
-        path (``drivers.py:936``). A structural finding wearing it would be
-        the arm presenting a graph traversal as a canonical measurement.
+        The first version of this test only checked that a MEASURED candidate
+        carried *some* evidence — which a structural finding relabelled
+        MEASURED would satisfy, since structural findings cite evidence too.
+        Adversarial review pointed out it could not reject anything.
+
+        The real invariant is about the MECHANISM: ``AssertionBasis.MEASURED``
+        is reachable only on the cited-measurement path (``drivers.py:936``),
+        so a finding whose mechanism is ``STRUCTURAL`` must never carry it.
+        Swept over every authorized subject rather than three, because "no
+        structural finding anywhere" is the claim being made.
         """
 
-        packet = spine.investigate(seed, with_drivers=True).packet
-        for candidate in packet.driver_analysis.candidates:
-            if candidate.assertion_basis is AssertionBasis.MEASURED:
-                assert candidate.supporting_evidence_ids, (
-                    f"{candidate.driver_id} claims a MEASURED basis with no "
-                    "evidence behind it"
-                )
+        from dev_health_ops.context_fabric.graph_arm.drivers import StandingMechanism
+
+        structural = [
+            (seed, finding)
+            for seed, finding in _every_finding()
+            if finding.mechanism is StandingMechanism.STRUCTURAL
+        ]
+        assert structural, (
+            "no structural finding exists anywhere in the authorized world, "
+            "so this ban is vacuous"
+        )
+        offenders = [
+            (seed, finding.driver_id)
+            for seed, finding in structural
+            if finding.assertion_basis is AssertionBasis.MEASURED
+        ]
+        assert not offenders, (
+            "a structural finding claims a MEASURED assertion basis, which "
+            f"presents a graph traversal as a canonical measurement: {offenders}"
+        )
+
+    def test_and_a_MEASURED_basis_only_ever_comes_from_a_cited_measurement(
+        self,
+    ) -> None:
+        """The same invariant from the other side, so neither direction is
+        satisfied by the arm simply never using the basis."""
+
+        from dev_health_ops.context_fabric.graph_arm.drivers import StandingMechanism
+
+        measured = [
+            (seed, finding)
+            for seed, finding in _every_finding()
+            if finding.assertion_basis is AssertionBasis.MEASURED
+        ]
+        for seed, finding in measured:
+            assert finding.mechanism is StandingMechanism.CITED_MEASUREMENT, (
+                f"{seed}/{finding.driver_id} carries a MEASURED basis from "
+                f"mechanism {finding.mechanism}"
+            )
 
     def test_a_measurement_finding_can_never_be_asserted_as_a_driver(self) -> None:
         """The ceiling that keeps a number from becoming a cause.

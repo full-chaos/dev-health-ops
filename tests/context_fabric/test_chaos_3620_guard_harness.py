@@ -193,6 +193,42 @@ class TestEveryMutationDeclaresACheckableReason:
     def test_the_table_is_not_empty(self, harness) -> None:
         assert harness.MUTATIONS, "the mutation table is empty"
 
+    def test_the_mutation_SET_is_pinned_by_name(self, harness) -> None:
+        """ "Not empty" is not a coverage claim.
+
+        Adversarial review pointed out that the runner reports
+        ``selected/selected``, so deleting fourteen mutations would still
+        print ``GUARD PROOF PASSED: 1/1`` and every static check here would
+        accept a one-entry table. The recorded result "15/15 killed" would
+        then be true and meaningless.
+
+        Pinned by exact id set rather than by count: a count pins how many,
+        and the thing worth pinning is WHICH. Adding a mutation is a
+        one-line, deliberate edit here; silently losing one is impossible.
+        """
+
+        assert {mutation.mutation_id for mutation in harness.MUTATIONS} == {
+            "unauthorized-seed-investigated",
+            "emitter-trusts-the-traversal",
+            "candidate-withheld-after-ranking",
+            "cohort-peer-authorization-dropped",
+            "cohort-anchor-authorization-dropped",
+            "injected-document-approved-for-extraction",
+            "untrusted-record-vouches-for-an-attribution",
+            "ended-relationship-still-drives",
+            "driver-cites-evidence-the-packet-lacks",
+            "reversed-hop-accepted-by-the-contract",
+            "stale-index-reported-as-current",
+            "truncation-without-a-reason-accepted",
+            "path-citations-unordered",
+            "shadow-accepts-non-canonical-evidence",
+            "shadow-accepts-another-organizations-packet",
+        }, (
+            "the guard-injection mutation set changed. Update this pin "
+            "deliberately and re-run the harness; a mutation that disappears "
+            "silently takes its guard's proof with it"
+        )
+
     def test_no_mutation_declares_an_empty_expected_failure(self, harness) -> None:
         for mutation in harness.MUTATIONS:
             assert mutation.expect_failure.strip(), mutation.mutation_id

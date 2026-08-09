@@ -55,18 +55,32 @@ def _analyst_grant() -> frozenset[str]:
     return adapter.authorized_entity_ids_for(world.PRINCIPAL_ANALYST)
 
 
-def _subject_seeds() -> tuple[str, ...]:
-    """Every project and team the analyst may see, as an investigation seed.
+#: Seeds whose driver-bearing packet cannot be constructed at all today.
+#: ``team_atlas`` produces a capacity driver with no staffing qualification,
+#: which the frozen contract refuses — a denial-of-packet recorded as
+#: CHAOS-3634 and owned by the fix lane. Named here rather than skipped
+#: silently: ``test_the_only_unconstructible_seed_is_the_one_we_named``
+#: keeps the exemption honest, and a second unconstructible seed appearing
+#: is a finding rather than a quiet gap in the sweep.
+UNCONSTRUCTIBLE_WITH_DRIVERS = {"team_atlas"}
 
-    Sorted and derived from the grant rather than listed, so a corpus that
-    grows a subject is swept without anyone remembering to add it here. A
-    hand-written seed list is how a leak-sweep silently stops covering the
-    entity that later leaks.
+
+def _subject_seeds() -> tuple[str, ...]:
+    """**Every** entity the analyst may see, as an investigation seed.
+
+    Adversarial review found the first version of this function narrowed to
+    ``proj_*`` and ``team_*``: 19 of the grant's 47 members. Repositories,
+    work units, issues, services, dependencies, portfolios, initiatives and
+    pull requests — every one of them a legal subject kind on the frozen
+    contract — went unswept, while the module claimed a measured
+    zero-leakage result. The claim was right and its scope was not, which is
+    the more dangerous of the two ways to be wrong.
+
+    Derived from the grant and never listed, so a corpus that grows a
+    subject is swept without anyone remembering to come back here.
     """
 
-    return tuple(
-        sorted(item for item in _analyst_grant() if item.startswith(("proj_", "team_")))
-    )
+    return tuple(sorted(_analyst_grant()))
 
 
 def _native_packet(**overrides):
@@ -107,15 +121,19 @@ def _native_packet_with_unauthorized_evidence():
     )
 
 
-def _entities_disclosed(packet, principal_id: str) -> list[str]:
-    """Canonical world entities in the packet that ``principal_id`` cannot see.
+def _entities_disclosed_SUPERSEDED(packet, principal_id: str) -> list[str]:
+    """The disclosure check this module used to have. **Kept only as RED evidence.**
 
-    Deliberately narrowed to ids the world actually knows. The full audit
-    also reports the arm's observation ids as "fabricated entities" — a
-    vocabulary artifact pinned in ``TestTheIndependentOracleCannotYetScoreThisArm``
-    — and folding that noise in here would make a real disclosure
-    indistinguishable from a naming mismatch, which is precisely the failure
-    mode this lane exists to prevent.
+    It filtered ``entity_sightings`` to ids the world knows as *entities*,
+    which silently discarded two whole disclosure channels: observation and
+    evidence identifiers (an indexed item's ``entity_id`` carries an evidence
+    slug, not an entity id) and every prose field. Adversarial review proved
+    both reachable.
+
+    Retained, unused by any claim, so
+    ``TestTheDisclosureWalkerCatchesWhatTheOldCheckMissed`` can demonstrate
+    the miss against the same inputs rather than assert it. Deleting it would
+    leave the fix's justification as prose.
     """
 
     visible = world.PRINCIPALS[principal_id].visible_entity_ids
@@ -123,6 +141,27 @@ def _entities_disclosed(packet, principal_id: str) -> list[str]:
         entity_id
         for entity_id in entity_sightings(packet)
         if entity_id in KNOWN_ENTITY_IDS and entity_id not in visible
+    )
+
+
+def _forge(packet, **evidence_updates):
+    """One indexed evidence entry, altered. The arm-shaped disclosure plant.
+
+    Nothing about the packet's shape changes — it still validates — so the
+    only thing under test is whether the disclosure check reads the field.
+    """
+
+    index = packet.evidence_coverage.evidence_index
+    first = index[0]
+    forged_entry = first.model_copy(
+        update={"evidence": first.evidence.model_copy(update=evidence_updates)}
+    )
+    return packet.model_copy(
+        update={
+            "evidence_coverage": packet.evidence_coverage.model_copy(
+                update={"evidence_index": (forged_entry, *index[1:])}
+            )
+        }
     )
 
 
@@ -199,17 +238,98 @@ class TestTheRestrictedProjectNeverReachesAConsumer:
         )
 
     @pytest.mark.parametrize("seed", _subject_seeds())
-    def test_no_packet_the_analyst_can_produce_discloses_any_unauthorized_entity(
-        self, seed: str
+    @pytest.mark.parametrize("with_drivers", (False, True))
+    def test_no_packet_the_analyst_can_produce_discloses_anything_restricted(
+        self, seed: str, with_drivers: bool
     ) -> None:
-        """The general claim the restricted project is only one instance of."""
+        """The general claim, over the WHOLE grant and both packet shapes.
 
-        investigation = spine.investigate(seed)
-        disclosed = _entities_disclosed(investigation.packet, world.PRINCIPAL_ANALYST)
-        assert not disclosed, (
-            f"a packet seeded at {seed} disclosed entities outside the "
-            f"caller's grant: {disclosed}"
+        Every one of the 47 entities the analyst may see, investigated with
+        and without driver discovery, checked by the full disclosure walker —
+        restricted entity ids, restricted evidence slugs, and restricted
+        display labels, each matched as a whole token.
+
+        The earlier version of this test swept 19 seeds and read one channel.
+        Both narrowings were found by review, and neither was visible from
+        the result: it was green then and it is green now.
+        """
+
+        if with_drivers and seed in UNCONSTRUCTIBLE_WITH_DRIVERS:
+            pytest.skip(
+                f"{seed} cannot produce a driver-bearing packet at all "
+                "(CHAOS-3634: a capacity driver with no staffing "
+                "qualification is refused by the frozen contract). Pinned by "
+                "test_the_only_unconstructible_seed_is_the_one_we_named so "
+                "this exemption cannot widen silently."
+            )
+
+        investigation = spine.investigate(seed, with_drivers=with_drivers)
+        found = spine.disclosures(investigation.packet, world.PRINCIPAL_ANALYST)
+        assert not found, (
+            f"a packet seeded at {seed} (drivers={with_drivers}) disclosed "
+            f"restricted material: {found}"
         )
+
+    def test_the_only_unconstructible_seed_is_the_one_we_named(self) -> None:
+        """A skip is a hole in the sweep unless it is pinned.
+
+        The exemption above is the one place this sweep does not measure. If
+        a second seed becomes unconstructible, the sweep would quietly cover
+        less while still reporting green — so the exemption set is asserted
+        to be exactly what it claims, by running every seed and collecting
+        the failures.
+        """
+
+        unconstructible = set()
+        for seed in _subject_seeds():
+            try:
+                spine.investigate(seed, with_drivers=True)
+            except Exception:  # noqa: BLE001 - any refusal counts
+                unconstructible.add(seed)
+        assert unconstructible == UNCONSTRUCTIBLE_WITH_DRIVERS, (
+            "the set of seeds that cannot produce a driver-bearing packet "
+            f"changed to {sorted(unconstructible)}; the sweep's exemption "
+            "list must be updated and the new entry ticketed"
+        )
+
+    @pytest.mark.parametrize(
+        "principal", (world.PRINCIPAL_COMPLIANCE, world.PRINCIPAL_LUMEN)
+    )
+    def test_no_packet_ANY_principal_can_produce_discloses_anything_restricted(
+        self, principal: str
+    ) -> None:
+        """The other two principals, swept the same way.
+
+        The compliance principal has a wider grant and the Lumen principal
+        lives in the other tenant — so "restricted" means something different
+        for each, and the walker derives it per principal rather than
+        assuming the analyst's view.
+
+        The Lumen sweep is what caught the walker's own false positive: the
+        label ``Ember`` matched inside the JSON key ``"members"`` on four
+        clean packets before whole-token matching landed.
+        """
+
+        projection = (
+            spine.lumen_projection()
+            if principal == world.PRINCIPAL_LUMEN
+            else spine.helio_projection()
+        )
+        leaks: dict[str, list[str]] = {}
+        for seed in sorted(world.PRINCIPALS[principal].visible_entity_ids):
+            for with_drivers in (False, True):
+                if with_drivers and seed in UNCONSTRUCTIBLE_WITH_DRIVERS:
+                    continue
+                investigation = spine.investigate(
+                    seed,
+                    principal=principal,
+                    projection=projection,
+                    with_drivers=with_drivers,
+                )
+                found = spine.disclosures(investigation.packet, principal)
+                if found:
+                    leaks[f"{seed}/drivers={with_drivers}"] = found
+        assert not leaks, f"{principal} received restricted material: {leaks}"
 
     def test_seeding_the_investigation_AT_the_restricted_project_returns_nothing(
         self,
@@ -248,6 +368,96 @@ class TestTheRestrictedProjectNeverReachesAConsumer:
             "granted it, so the analyst's clean result is structural and not "
             "an authorization decision"
         )
+
+
+class TestTheDisclosureWalkerCatchesWhatTheOldCheckMissed:
+    """RED-first evidence for the fix, against the same inputs.
+
+    Adversarial review found the previous disclosure check blind to two
+    channels. Both counterexamples are executed here, and each is checked
+    twice: the superseded helper reports nothing, the walker names it. A fix
+    whose justification is only prose is a fix nobody can audit.
+
+    Both plants are arm-shaped — one field of one real indexed evidence
+    entry, on a packet the arm really produced, still contract-valid.
+    """
+
+    def test_a_restricted_evidence_slug_riding_an_entity_id_field(self) -> None:
+        """Channel one: identifiers that are not entity ids.
+
+        ``wi_quarry_redacted`` is real corpus evidence whose subject is the
+        restricted project. It is not in ``ENTITIES_BY_ID``, so the old
+        check — which filtered to known entity ids — discarded it while
+        ``entity_sightings`` reported it plainly.
+        """
+
+        clean = spine.investigate("team_cinder").packet
+        forged = _forge(clean, entity_id="wi_quarry_redacted")
+
+        assert "wi_quarry_redacted" in entity_sightings(forged), (
+            "the plant did not reach the packet, so neither check is being exercised"
+        )
+        assert not _entities_disclosed_SUPERSEDED(forged, world.PRINCIPAL_ANALYST), (
+            "the superseded check now catches this, which would mean the "
+            "recorded RED evidence no longer demonstrates the miss"
+        )
+        assert spine.disclosures(forged, world.PRINCIPAL_ANALYST) == [
+            "evidence_slug:wi_quarry_redacted"
+        ], "the walker did not name the restricted evidence slug"
+
+    def test_a_restricted_display_LABEL_carried_in_prose(self) -> None:
+        """Channel two: names, not identifiers.
+
+        A packet that never mentions ``proj_quarry`` but does say "Quarry
+        Compliance" has disclosed it to any human reading the answer. No
+        identifier-based check can see this.
+        """
+
+        clean = spine.investigate("team_cinder").packet
+        forged = _forge(clean, display_label="Quarry Compliance rollout notes")
+
+        assert not _entities_disclosed_SUPERSEDED(forged, world.PRINCIPAL_ANALYST), (
+            "the superseded check now catches the prose channel"
+        )
+        assert spine.disclosures(forged, world.PRINCIPAL_ANALYST) == [
+            "label:Quarry Compliance"
+        ], "the walker did not name the restricted label"
+
+    def test_the_walker_is_silent_on_the_unforged_packet(self) -> None:
+        """The control. A walker that reported something on every packet
+        would pass both tests above and mean nothing."""
+
+        clean = spine.investigate("team_cinder").packet
+        assert spine.disclosures(clean, world.PRINCIPAL_ANALYST) == []
+
+    def test_an_ambiguous_label_is_excluded_and_recorded_not_matched(self) -> None:
+        """Why the walker cannot simply match every restricted name.
+
+        The corpus's cross-tenant near-duplicate gives ``lumen_proj_acr`` the
+        label "Agent Context Runtime" — identical to the Helio project the
+        analyst is entitled to read about. Matching it would report a
+        disclosure on every legitimate ACR packet. The exclusion is carried
+        on the material rather than applied silently, so it is auditable.
+        """
+
+        material = spine.restricted_material(world.PRINCIPAL_ANALYST)
+        assert "Agent Context Runtime" in material.ambiguous_labels, (
+            "the cross-tenant label collision is no longer recorded as "
+            "ambiguous; the walker will false-positive on every ACR packet"
+        )
+        assert "Agent Context Runtime" not in material.labels
+        assert "Quarry Compliance" in material.labels, (
+            "the restricted project's own label was excluded as ambiguous, "
+            "which would make the prose channel unmeasured"
+        )
+
+    def test_the_material_covers_all_three_channels(self) -> None:
+        """Anti-vacuity: an empty channel silently measures nothing."""
+
+        material = spine.restricted_material(world.PRINCIPAL_ANALYST)
+        assert material.entity_ids, "no restricted entity ids"
+        assert material.evidence_slugs, "no restricted evidence slugs"
+        assert material.labels, "no matchable restricted labels"
 
 
 class TestAGrantDerivedFromTenancyLeaksIt:
@@ -361,6 +571,51 @@ class TestAuthorizationIsCurrentAfterRevocation:
             "a packet produced under a grant that has since been revoked "
             "audited clean against the narrowed grant, so revocation has no "
             "effect on material already emitted"
+        )
+
+    def test_the_SAME_principal_losing_a_grant_mid_session_loses_the_entity(
+        self,
+    ) -> None:
+        """Revocation as a grant transition, not a principal swap.
+
+        Adversarial review was right that the tests above model revocation by
+        switching from the compliance principal to the analyst — two
+        principals, two grants, no transition. That exercises "different
+        callers see different things", which is a weaker property: a stale
+        grant cached against a principal identity would survive it.
+
+        Here one principal's grant is narrowed between two investigations, so
+        the transition itself is what changes. The arm holds no grant cache —
+        ``neighbourhood`` takes the authorized set per call — and this is
+        what proves it rather than assuming it from the signature.
+        """
+
+        principal = world.PRINCIPAL_COMPLIANCE
+        before = adapter.authorized_entity_ids_for(principal)
+        assert world.PROJ_QUARRY in before, (
+            "the principal used for the transition cannot see the restricted "
+            "project to begin with, so there is nothing to revoke"
+        )
+
+        wide = spine.investigate(
+            "team_cinder", principal=principal, authorized_entity_ids=before
+        )
+        assert world.PROJ_QUARRY in entity_sightings(wide.packet), (
+            "the pre-revocation investigation did not contain the entity, so "
+            "its later absence is not a revocation result"
+        )
+
+        after = before - {world.PROJ_QUARRY}
+        narrowed = spine.investigate(
+            "team_cinder", principal=principal, authorized_entity_ids=after
+        )
+        assert world.PROJ_QUARRY not in entity_sightings(narrowed.packet), (
+            "the SAME principal still receives the entity after its grant was "
+            "narrowed; a grant transition is not taking effect"
+        )
+        assert not spine.disclosures(narrowed.packet, world.PRINCIPAL_ANALYST), (
+            "the post-revocation packet still discloses restricted material "
+            "through some channel"
         )
 
     def test_the_readout_records_the_grant_it_actually_used(self) -> None:

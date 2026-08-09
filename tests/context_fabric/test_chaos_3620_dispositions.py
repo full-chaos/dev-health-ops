@@ -18,6 +18,7 @@ id, so neither can be quietly upgraded to a pass.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -352,8 +353,16 @@ class TestTheArchitecturePageAgreesWithTheLedger:
 
     The page is what a decision-owner reads. If the ledger's counts move and
     the page does not, the page becomes the most confidently wrong artifact
-    in the changeset — so both directions are checked here rather than
-    reviewed by eye.
+    in the changeset.
+
+    The first version of this class claimed to check "both directions" and
+    checked one: ledger → page. Adversarial review pointed out that a page
+    row the ledger never produced — a stale status count, an extra defect —
+    stayed green, and that is exactly the drift direction that matters,
+    because it is the page a human trusts. Both legs are now real, and the
+    page→ledger leg is the one that caught a live contradiction: A9 was
+    listed in the page's defect table while the ledger records it
+    ``not_accepted``.
     """
 
     PAGE = (
@@ -396,6 +405,81 @@ class TestTheArchitecturePageAgreesWithTheLedger:
             assert f"| {requirement.requirement_id} |" in page, (
                 f"the page's defect table omits {requirement.requirement_id}"
             )
+
+    # ---- page -> ledger: the leg that was missing -----------------------
+
+    def _page_defect_rows(self) -> set[str]:
+        """Requirement ids the page's defect table claims, parsed from it.
+
+        Anchored on the table's own heading so an unrelated table elsewhere
+        on the page cannot contribute rows — and so deleting the heading
+        fails loudly instead of silently emptying the comparison.
+        """
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        marker = "defects in merged code"
+        assert marker in page, (
+            "the page no longer has a defect-table heading, so the "
+            "page-to-ledger comparison would compare against nothing"
+        )
+        section = page[page.index(marker) :]
+        section = section.split("\n## ", 1)[0]
+        return {
+            row.split("|")[1].strip()
+            for row in section.splitlines()
+            if row.startswith("| ") and "---" not in row and not row.startswith("| ID ")
+        }
+
+    def test_the_page_claims_NO_defect_the_ledger_does_not_record(self) -> None:
+        """The direction that was never checked.
+
+        A page listing a requirement as a defect that the ledger records
+        otherwise is a contradiction a reader resolves in the page's favour,
+        because the page is what they are reading. This caught A9 sitting in
+        the defect table while the ledger had it ``not_accepted``.
+        """
+
+        ledger_defects = {
+            requirement.requirement_id
+            for requirement in REQUIREMENTS
+            if requirement.status is Status.DEFECT
+        }
+        page_defects = self._page_defect_rows()
+        assert page_defects == ledger_defects, (
+            "the page's defect table and the ledger disagree; page has "
+            f"{sorted(page_defects - ledger_defects)} extra, missing "
+            f"{sorted(ledger_defects - page_defects)}"
+        )
+
+    def test_the_page_claims_no_status_count_the_ledger_does_not_produce(
+        self,
+    ) -> None:
+        """Every status row on the page must be one the ledger actually has.
+
+        A stale row left behind after a status moves — "2 not_accepted" when
+        there are now three — reads as current. Parsed from the page rather
+        than assumed.
+        """
+
+        from collections import Counter
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        counts = Counter(requirement.status.value for requirement in REQUIREMENTS)
+        rows = dict(re.findall(r"\|\s*`(\w+)`\s*\|\s*(\d+)\s*\|", page))
+        assert rows, "no status-count rows found on the page"
+        for status, claimed in rows.items():
+            assert status in counts, (
+                f"the page claims a `{status}` row that the ledger does not "
+                f"produce; ledger statuses are {sorted(counts)}"
+            )
+            assert int(claimed) == counts[status], (
+                f"the page says {claimed} `{status}` requirements; the ledger "
+                f"has {counts[status]}"
+            )
+        assert set(rows) == set(counts), (
+            "the page omits status rows the ledger produces: "
+            f"{sorted(set(counts) - set(rows))}"
+        )
 
 
 class TestTheRenderedReportIsUsable:

@@ -37,6 +37,7 @@ reads ``world`` through the arm's adapter exactly as the arm does.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import cache
@@ -72,6 +73,10 @@ from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 
 __all__ = [
     "PRODUCED_AT",
+    "RestrictedMaterial",
+    "disclosures",
+    "findings_for",
+    "restricted_material",
     "RUN_ID",
     "SIGNING_SECRET",
     "Investigation",
@@ -279,6 +284,196 @@ def investigate(
         findings=findings,
         drivers_requested=with_drivers,
     )
+
+
+@dataclass(frozen=True)
+class RestrictedMaterial:
+    """Everything a principal must not see, in every form it could appear as.
+
+    The frozen oracle's ``entity_sightings`` walks *canonical entity ids* in
+    the packet sections it knows about. That is the right scope for a
+    contract-neutral oracle and it is not the whole disclosure surface. Two
+    channels sit outside it, and adversarial review proved both reachable:
+
+    * **observation identifiers.** ``evidence.entity_id`` on an indexed item
+      carries an evidence slug, not an entity id. A restricted slug —
+      ``wi_quarry_redacted``, whose subject the analyst cannot see — reaches
+      the packet, appears in ``entity_sightings``, and is invisible to any
+      check that filters by "is this a known entity id".
+    * **prose.** ``display_label``, driver summaries, inclusion reasons,
+      limitation details and matched text all carry human-readable names. A
+      packet that never names ``proj_quarry`` but does say "Quarry
+      Compliance" has disclosed it.
+
+    Ids are matched exactly; labels are matched as substrings, and a label
+    that also occurs inside anything the caller may legitimately see is
+    **excluded and recorded** rather than matched. Without that exclusion the
+    check false-positives immediately: the corpus's cross-tenant
+    near-duplicate gives ``lumen_proj_acr`` the label "Agent Context
+    Runtime", identical to the Helio project the analyst is entitled to read
+    about.
+    """
+
+    principal_id: str
+    #: Canonical entity ids the principal cannot see.
+    entity_ids: frozenset[str]
+    #: Evidence slugs whose subject the principal cannot see.
+    evidence_slugs: frozenset[str]
+    #: Human-readable names that are safe to substring-match.
+    labels: frozenset[str]
+    #: Names that WOULD be restricted but also occur in material the caller
+    #: may see, so matching them would report a false disclosure. Carried so
+    #: the exclusion is auditable instead of silent.
+    ambiguous_labels: frozenset[str]
+
+
+def restricted_material(principal_id: str) -> RestrictedMaterial:
+    """What ``principal_id`` must not see, derived from the world's grants."""
+
+    visible = world.PRINCIPALS[principal_id].visible_entity_ids
+
+    entity_ids = frozenset(
+        entity_id for entity_id in world.ENTITIES_BY_ID if entity_id not in visible
+    )
+    evidence_slugs = frozenset(
+        slug
+        for slug, record in world.EVIDENCE_BY_SLUG.items()
+        if record.entity_id not in visible
+    )
+
+    # Everything the caller may legitimately read, as one casefolded corpus.
+    # A restricted name occurring anywhere in here cannot be distinguished
+    # from a permitted mention of a permitted thing.
+    permitted_text = "\n".join(
+        text.casefold()
+        for text in (
+            *(world.ENTITIES_BY_ID[entity_id].display_label for entity_id in visible),
+            *(
+                alias.text
+                for entity_id in visible
+                for alias in world.ENTITIES_BY_ID[entity_id].aliases
+            ),
+            *(
+                record.display_label
+                for slug, record in world.EVIDENCE_BY_SLUG.items()
+                if slug not in evidence_slugs
+            ),
+        )
+        if text
+    )
+
+    candidates = {
+        *(world.ENTITIES_BY_ID[entity_id].display_label for entity_id in entity_ids),
+        *(world.EVIDENCE_BY_SLUG[slug].display_label for slug in evidence_slugs),
+    }
+    labels: set[str] = set()
+    ambiguous: set[str] = set()
+    for label in candidates:
+        if not label:
+            continue
+        (ambiguous if label.casefold() in permitted_text else labels).add(label)
+
+    return RestrictedMaterial(
+        principal_id=principal_id,
+        entity_ids=entity_ids,
+        evidence_slugs=evidence_slugs,
+        labels=frozenset(labels),
+        ambiguous_labels=frozenset(ambiguous),
+    )
+
+
+#: Identifier characters. A token is a disclosure only when it appears
+#: WHOLE. Two false positives this rules out, both found by running the
+#: sweep rather than by reasoning about it:
+#:
+#: * ``proj_quarry`` inside a hypothetical ``proj_quarry_archive`` is a
+#:   different entity;
+#: * the label ``Ember`` — a team the Lumen principal cannot see — occurs
+#:   inside the JSON key ``"members"`` in every packet, so a plain substring
+#:   search reported a disclosure on four clean Lumen packets.
+#:
+#: The second one is why labels get the same treatment as ids. A check that
+#: cries wolf on its own serialization format is a check people learn to
+#: ignore, which is worse than not having it.
+_TOKEN_BOUNDARY = re.compile(r"[A-Za-z0-9_-]")
+
+
+def _contains_token(haystack: str, token: str) -> bool:
+    """Whether ``token`` occurs in ``haystack`` as a whole token, case-insensitively."""
+
+    folded_haystack = haystack.casefold()
+    folded_token = token.casefold()
+    start = 0
+    while True:
+        index = folded_haystack.find(folded_token, start)
+        if index < 0:
+            return False
+        before = folded_haystack[index - 1] if index else ""
+        after_index = index + len(folded_token)
+        after = (
+            folded_haystack[after_index] if after_index < len(folded_haystack) else ""
+        )
+        if not _TOKEN_BOUNDARY.match(before or " ") and not _TOKEN_BOUNDARY.match(
+            after or " "
+        ):
+            return True
+        start = index + 1
+
+
+def disclosures(packet, principal_id: str = world.PRINCIPAL_ANALYST) -> list[str]:
+    """Every restricted identifier or name anywhere in the emitted packet.
+
+    Searched over the packet's own JSON rendering — which is what a consumer
+    receives — rather than over a chosen list of fields. A field list is how
+    a disclosure walker silently stops covering the field that later leaks;
+    adversarial review found exactly that in this suite's first version,
+    where the check filtered to canonical entity ids and a restricted
+    evidence slug rode through untouched.
+
+    Returns sorted ``"<channel>:<token>"`` strings so a failure names both
+    what leaked and how it was carried.
+    """
+
+    material = restricted_material(principal_id)
+    rendered = packet.model_dump_json()
+
+    found = [
+        f"entity_id:{entity_id}"
+        for entity_id in sorted(material.entity_ids)
+        if _contains_token(rendered, entity_id)
+    ]
+    found += [
+        f"evidence_slug:{slug}"
+        for slug in sorted(material.evidence_slugs)
+        if _contains_token(rendered, slug)
+    ]
+    found += [
+        f"label:{label}"
+        for label in sorted(material.labels)
+        if _contains_token(rendered, label)
+    ]
+    return sorted(found)
+
+
+@cache
+def findings_for(
+    seed: str,
+    principal: str = world.PRINCIPAL_ANALYST,
+) -> tuple[DriverFinding, ...]:
+    """Driver findings for one subject, without emitting a packet.
+
+    Separated from :func:`investigate` because the two can disagree: driver
+    *discovery* succeeds for every corpus subject, while packet *emission*
+    is refused for at least one (a capacity driver carrying no staffing
+    qualification is rejected by the frozen contract — CHAOS-3634). A
+    semantic claim about what the arm is willing to assert must not lose a
+    subject to a downstream emission refusal, or the sweep quietly shrinks
+    on exactly the subject that produced the awkward finding.
+    """
+
+    readout = readout_for((seed,), principal=principal)
+    discovered, _truncated = discover_drivers(readout, seed, as_of=world.TRIAL_NOW)
+    return tuple(discovered)
 
 
 def lineage_path_for(path):

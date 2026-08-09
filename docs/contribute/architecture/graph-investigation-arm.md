@@ -194,12 +194,46 @@ over stored labels is honest lexical work that needs no model; banning it
 would push a future implementation toward mislabelling its own mechanism to
 get past the check.
 
+**`semantic=False` was necessary and was not sufficient.** `embedder` is an
+*argument* to `build_packet`. `GraphArmStore` embeds at write time with
+whatever embedder it was constructed with, and the packet is built later with
+an unrelated object — so asking "does this embedder carry semantics" answered
+a different question from the one that matters: *were the vectors this
+readout was searched over produced by something semantic?* Adversarial review
+turned that gap into three reproductions, and the fix is that the embedder's
+identity travels with the **projection** rather than with the call:
+
+- `to_graphiti_nodes` records the writing embedder's `model_id` on every node
+  (`cf_projection_embedder`), and `LiveGraphReader` reads it back once per
+  partition into `readout.embedder_model_id`. A semantic claim now needs
+  **both** a semantic embedder and a partition attesting the vectors came
+  from it;
+- `CloudEmbedder()` with no API key used to report `semantic=True`. It
+  refuses to *embed* without a key — but the guard never asks it to embed, it
+  reads the flag — so a bare, unusable instance unlocked semantic claims.
+  `semantic` is keyed on the key;
+- a partition attesting **two** embedders raises rather than reading back
+  whichever won: a mixture is not one projection.
+
+A readout that attests nothing — the in-memory reader, which walks a
+projection holding no vectors at all, or a partition written before the
+attestation existed — still builds a packet and still stamps the only
+embedder anyone offered. What it cannot do is carry a semantic match. That
+costs no capability the arm has: `discovery._SIGNAL_MECHANISM` is exact and
+lexical throughout, so the arm produces no semantic mechanism today and the
+guard is a seam being held honest rather than a capability being restricted.
+
 **The embedder is part of the projection's identity.** A store embedded with
 one model is not the same projection as a store embedded with another, so the
 embedder's `model_id` is folded into the emitted `projection_version` — the
 frozen contract has no separate field for it, and that is where it belongs
 anyway: a version that called those two runs the same would make
-incomparable results look comparable.
+incomparable results look comparable. Because the stamp is derived from an
+argument, a caller whose embedder disagrees with the partition's attestation
+is refused (`EmbedderProvenanceMismatchError`) rather than silently
+restamped: "I meant the other partition" and "I meant the other embedder" are
+the caller's to resolve, and guessing would make a recorded run's provenance
+depend on which one the builder picked.
 
 **Embedding cost is bounded pre-flight.** `max_embedding_calls` is checked
 before the first call, against the node+edge count the writer already knows,
@@ -462,6 +496,15 @@ interval. Both matter for driver work and neither was free:
   reading silence as "expired" would erase most of a real graph — but never
   the reverse.
 
+The readout also carries two **declarations about the reader itself**, which
+are deliberately not traversal results: `observation_attachment_available`
+(can this reader say what a record is about?) and `embedder_model_id` (what
+does the store attest produced its vectors?). Both are excluded from the
+differential oracle with written reasons — the two readers are *supposed* to
+differ, and demanding agreement would demand that the live reader lie about
+what it can do — and both are instead asserted directly against what that
+reader actually returns, on the live store.
+
 The attribute list is closed and declared rather than "whatever properties
 the node has", because the live reader names its Cypher columns. Generating
 those columns from the declared list was tried and **reverted inside the same
@@ -493,6 +536,34 @@ relevant; canonical services determine what is measurable", so
 mix) are refused by name rather than approximated from graph shape — a test
 asserts no structural rule ever emits one, which is a claim that can fail
 today rather than a promise.
+
+**Only a record about a linkage may vouch for it.** Support is scoped to the
+asserting *edge* rather than to the cause entity — a canonical record on a
+neighbouring edge must not vouch for a fabricated one — and scoping alone
+turned out not to be enough. An edge that merely **cites** a canonical record
+about neither of its endpoints inherited that record's trust, which put the
+corpus's planted false dependency back at principal standing. Trust says a
+record's own content can be relied on; it says nothing about an edge that
+names it. So the cited records are split by what each may establish:
+
+- **vouching** — trusted and about an endpoint. Only these make a linkage
+  canonically asserted;
+- **corroborating** — trusted and about a third entity. They ride along with
+  a linkage something else vouched for and establish nothing alone. Kept
+  rather than dropped because the corpus has real ones: the identity
+  rewrite's blocker cites a CI run recorded against `repo_identity`, and
+  deleting genuine evidence would trade a false claim for a false absence;
+- **untrusted** and **withheld**, as before.
+
+`LiveGraphReader` cannot recover observation attachment, so it cannot say
+what any record is about. That capability is **declared on the readout**
+(`observation_attachment_available`) rather than inferred from whether
+attachments happen to be present — inferring it would make the endpoint rule
+a silent no-op on exactly the reader that cannot perform it, which is the
+original defect with a smaller blast radius. `discover_drivers` attributes
+nothing on such a readout and says so in the exclusion's own words; it does
+**not** report the support as withheld, which would be an authorization claim
+about the caller's grant that nothing supports.
 
 **`blocked_by` and `depends_on` are treated asymmetrically on purpose.**
 `blocked_by` *is* the provider asserting that something blocks, so the far end

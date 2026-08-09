@@ -808,6 +808,85 @@ class TestTruncationIsDisclosedNotSilent:
             "a truncated traversal carries no truncation limitation"
         )
 
+    def test_a_flood_of_low_quality_paths_cannot_displace_the_required_one(
+        self,
+    ) -> None:
+        """X5, built rather than downgraded.
+
+        The corpus does not plant a flood, so the world is constructed: one
+        subject, one target reachable by a single explanatory **one-hop**
+        path, and fourteen filler projects each offering a longer route to
+        the same target. That is 28 competing paths against a per-entity
+        citation cap of 10 — the displacement pressure the bullet describes,
+        and more than enough to push the required path out.
+
+        It does not get pushed out, because the cap is applied *after*
+        ordering by ``(length, path_id)`` (``packet_builder.py:734-740``).
+        The one-hop path is cited first and the flood fills the remainder.
+
+        The fault shape is planted separately and observed:
+        ``test_the_flood_DOES_displace_when_ordering_is_disabled`` records
+        what happens with the ordering removed, and the guard-injection
+        mutation ``path-citations-unordered`` runs it against the real
+        emitter. Without that pair this test would only show that a
+        particular world happens to come out right.
+        """
+
+        packet = _flood_packet()
+        target = next(
+            entity
+            for entity in packet.related_context.entities
+            if entity.entity_id == _FLOOD_TARGET
+        )
+        length_by_id = {
+            path.path_id: len(path.hops) for path in packet.related_context.paths
+        }
+        cited = [(pid, length_by_id[pid]) for pid in target.supporting_path_ids]
+
+        assert len(cited) >= _FLOOD_CITATION_CAP, (
+            f"the flood produced only {len(cited)} citations, so the cap "
+            "never bit and no displacement pressure was applied"
+        )
+        assert any(length == 1 for _, length in cited), (
+            "the required one-hop path was displaced from the citation set "
+            f"by longer low-quality paths: {cited}"
+        )
+        assert cited[0][1] == 1, (
+            f"the required one-hop path is cited but not first: {cited}"
+        )
+
+    def test_the_flood_world_really_applies_displacement_pressure(self) -> None:
+        """Anti-vacuity: a flood that fits under the cap displaces nothing."""
+
+        packet = _flood_packet()
+        # Paths that TOUCH the target, which is what a citation is built
+        # from — not paths that terminate there. Counting terminals said 3
+        # and would have declared the flood too small while 28 routes were
+        # contending for the same ten slots.
+        touching = [
+            path
+            for path in packet.related_context.paths
+            if any(
+                _FLOOD_TARGET in (hop.source_entity_id, hop.target_entity_id)
+                for hop in path.hops
+            )
+        ]
+        assert len(touching) > _FLOOD_CITATION_CAP, (
+            f"only {len(touching)} paths touch the target; the citation cap "
+            f"of {_FLOOD_CITATION_CAP} cannot bite and the test above is "
+            "vacuous"
+        )
+
+        target = next(
+            entity
+            for entity in packet.related_context.entities
+            if entity.entity_id == _FLOOD_TARGET
+        )
+        assert len(target.supporting_path_ids) == _FLOOD_CITATION_CAP, (
+            "the citation set is not at the cap, so nothing was displaced "
+            f"and nothing was defended: {len(target.supporting_path_ids)}"
+        )
+
     def test_shorter_lineage_is_cited_before_longer_lineage(self) -> None:
         """Why a flood of long low-quality paths cannot displace a short one.
 
@@ -847,6 +926,116 @@ class TestTruncationIsDisclosedNotSilent:
                 within_budget=True,
                 truncation_reason=TruncationReason.PATH_BUDGET,
             )
+
+
+#: The flood world's target, and the contract's per-entity citation cap
+#: (``packet_builder.py:146``). Named so the anti-vacuity check can assert
+#: the flood is genuinely larger than the cap rather than assuming it.
+_FLOOD_TARGET = "pf_flood_target"
+_FLOOD_CITATION_CAP = 10
+
+#: Filler projects, each offering a longer route to the same target. Fourteen
+#: gives 28 competing paths against a cap of 10 — comfortably more pressure
+#: than the cap can absorb, so a failure to displace is a property of the
+#: ordering rather than of the flood being too small.
+_FLOOD_FILLERS = 14
+
+
+def _flood_world():
+    """One short required path, drowned in longer ones. Built, not planted.
+
+    The frozen corpus does not contain a flood and must not grow one, so the
+    adversarial world lives here. Everything about it is deliberate: the
+    required path is ONE hop (unambiguously the explanatory route), the
+    fillers are real entities with real allowlisted relationships, and the
+    competing routes all terminate at the same entity so they contend for
+    the same citation slots.
+    """
+
+    def entity(canonical_id: str, kind: GraphEntityKind, label: str) -> EntityRecord:
+        return EntityRecord(
+            org_id=_FLOOD_ORG,
+            kind=kind,
+            canonical_id=canonical_id,
+            display_label=label,
+            source_class=SourceClass.WORK_GRAPH,
+            observed_at=_PROBE_AT,
+            attributes={"corpus_state": "active"},
+        )
+
+    def relationship(
+        source: str,
+        source_kind: GraphEntityKind,
+        kind: RelationshipType,
+        target: str,
+        target_kind: GraphEntityKind,
+    ) -> RelationshipRecord:
+        return RelationshipRecord(
+            org_id=_FLOOD_ORG,
+            source=CanonicalRef(kind=source_kind, canonical_id=source),
+            relationship=kind,
+            target=CanonicalRef(kind=target_kind, canonical_id=target),
+            source_class=SourceClass.WORK_GRAPH,
+            observed_at=_PROBE_AT,
+        )
+
+    entities = [
+        entity("proj_flood_subject", GraphEntityKind.PROJECT, "Flood subject"),
+        entity(_FLOOD_TARGET, GraphEntityKind.PORTFOLIO, "Flood target portfolio"),
+    ]
+    relationships = [
+        relationship(
+            "proj_flood_subject",
+            GraphEntityKind.PROJECT,
+            RelationshipType.BELONGS_TO_PORTFOLIO,
+            _FLOOD_TARGET,
+            GraphEntityKind.PORTFOLIO,
+        )
+    ]
+    for index in range(_FLOOD_FILLERS):
+        filler = f"proj_flood_filler_{index:02d}"
+        entities.append(entity(filler, GraphEntityKind.PROJECT, f"Filler {index}"))
+        relationships.append(
+            relationship(
+                "proj_flood_subject",
+                GraphEntityKind.PROJECT,
+                RelationshipType.SHARES_DEPENDENCY_WITH,
+                filler,
+                GraphEntityKind.PROJECT,
+            )
+        )
+        relationships.append(
+            relationship(
+                filler,
+                GraphEntityKind.PROJECT,
+                RelationshipType.BELONGS_TO_PORTFOLIO,
+                _FLOOD_TARGET,
+                GraphEntityKind.PORTFOLIO,
+            )
+        )
+    return build_projection(
+        IngestionBatch(
+            org_id=_FLOOD_ORG,
+            entities=tuple(entities),
+            relationships=tuple(relationships),
+        )
+    )
+
+
+def _flood_packet():
+    projection = _flood_world()
+    readout = spine.readout_for(
+        ("proj_flood_subject",),
+        projection=projection,
+        authorized_entity_ids=frozenset(
+            node.canonical_id for node in projection.entity_nodes()
+        ),
+        max_hops=3,
+    )
+    return spine.packet_from(readout)
+
+
+_FLOOD_ORG = "org_3620_flood"
 
 
 def _tight_budgets() -> TrialBudgets:

@@ -1371,6 +1371,62 @@ class TestTheIndependentOracleCannotYetScoreThisArm:
             f"shape a leak takes: {sorted(non_entities - set(world.EVIDENCE_BY_SLUG))[:5]}"
         )
 
+    def test_every_evidence_attribution_the_oracle_reads_is_unsound(self) -> None:
+        """SCOPE PIN for this lane's zero-leakage claim. Measured, not inherited.
+
+        ``entity_sightings`` treats ``evidence_index[].evidence.entity_id`` as
+        a **sighting of an entity** (``authorization.py:190``). The arm puts
+        the observation's own canonical id there (``packet_builder.py:828``),
+        which for corpus-originated evidence is an evidence *slug* — never
+        the entity the world says that evidence is *about*.
+
+        The #1617 verifier measured this at 40% of graph-arm entries. On this
+        suite's packets it is **100% of slug-bearing entries** (785 of 785
+        across the analyst's whole grant; the remaining 532 carry measurement
+        keys, which are not corpus slugs at all). The difference matters and
+        is recorded rather than smoothed over: this is not "some attributions
+        are wrong", it is "the field means something different from what the
+        oracle reads it as, every time". Same root cause as CHAOS-3627's third
+        vocabulary mismatch, measured from the sighting side.
+
+        **Why this scopes the headline.** The dangerous direction is masking:
+        evidence genuinely about a restricted entity is attributed to its own
+        slug, so a sighting-based check files it under "not a known entity"
+        rather than "unauthorized disclosure". This lane's full-packet walker
+        widens the channels read — and cannot correct an attribution. Only the
+        arm fix can.
+
+        So the claim this lane makes is precisely: **zero canonical-id
+        leakage, measured over sightings whose evidence attributions are
+        known-unsound pre-CHAOS-3627; to be re-derived post-fix.** This test
+        flips red at the same rebase that flips the pins above, which is what
+        forces the re-derivation rather than letting the caveat decay into a
+        footnote nobody re-checks.
+        """
+
+        sound = unsound = 0
+        for seed in _subject_seeds():
+            packet = spine.investigate(seed).packet
+            for entry in packet.evidence_coverage.evidence_index:
+                record = world.EVIDENCE_BY_SLUG.get(entry.evidence.entity_id)
+                if record is None:
+                    continue  # measurement keys: a different vocabulary again
+                if entry.evidence.entity_id == record.entity_id:
+                    sound += 1
+                else:
+                    unsound += 1
+
+        assert unsound, (
+            "no evidence entry misattributes any more -- the CHAOS-3620 "
+            "mis-attribution scope note must be updated and the zero-leakage "
+            "claim RE-DERIVED against sound attributions"
+        )
+        assert sound == 0, (
+            f"{sound} evidence entries now attribute soundly while {unsound} "
+            "do not. A partial fix means the claim's scope changed; re-derive "
+            "it and update the CHAOS-3620 mis-attribution note"
+        )
+
     def test_the_audit_can_therefore_never_be_clean_for_this_arm(self) -> None:
         """The bottom line, stated where it cannot be missed.
 

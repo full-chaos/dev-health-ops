@@ -341,9 +341,11 @@ MUTATIONS: tuple[Mutation, ...] = (
         replacement="            set(touched[canonical_id]), key=lambda pid: (-path_length[pid], pid)",
         tests=(
             f"{_ADVERSARIAL}::TestTruncationIsDisclosedNotSilent::"
+            "test_a_flood_of_low_quality_paths_cannot_displace_the_required_one",
+            f"{_ADVERSARIAL}::TestTruncationIsDisclosedNotSilent::"
             "test_shorter_lineage_is_cited_before_longer_lineage",
         ),
-        expect_failure="cites lineage out of length order",
+        expect_failure="was displaced from the citation set",
     ),
     Mutation(
         mutation_id="shadow-accepts-non-canonical-evidence",

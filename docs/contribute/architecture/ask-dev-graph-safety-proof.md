@@ -78,20 +78,24 @@ Linear blocker.
 
 | Status | Count | Meaning |
 | --- | --- | --- |
-| `proven` | 28 | Holds, and the named tests are what establish it. |
+| `proven` | 29 | Holds, and the named tests are what establish it. |
 | `defect` | 4 | Violated by merged code; the named tests pin current behaviour. |
 | `not_accepted` | 2 | Blocked on another issue; never scored as a pass. |
-| `unmeasured` | 10 | Not measured, with a stated reason rather than a proxy. |
+| `unmeasured` | 9 | Not measured, with a stated reason rather than a proxy. |
 
-Four of those ten were `proven` before adversarial review, and were
-downgraded rather than defended. `A1` (the cross-*repository* half is not
-constructible — the corpus plants no repository near-duplicate), `X5`
-(citation ordering is proven; displacement by a flood of low-quality paths is
-not), `O3` (four of the six named counts reach telemetry; candidate and
-result counts do not) and `P7` (no corpus entity has partly-restricted
-multi-source evidence, so the case cannot be built here). Each downgrade
-names what *is* established, so the work is not lost — only the claim is
-corrected.
+Three of those nine were `proven` before adversarial review and were
+downgraded rather than defended: `A1` (the cross-*repository* half is not
+constructible — the corpus plants no repository near-duplicate), `O3` (four
+of the six named counts reach telemetry; candidate and result counts do not)
+and `P7` (no corpus entity has partly-restricted multi-source evidence, so
+the case cannot be built here). Each downgrade names what *is* established,
+so the work is not lost — only the claim is corrected.
+
+`X5` went the other way. It was downgraded on the same pass, then **built**
+on the orchestrator's ruling that the ADR cannot leave a core bullet open:
+a flood world of 28 competing paths against a citation cap of 10, with the
+fault shape planted — disabling the ordering displaces the required one-hop
+path entirely, all ten slots taken by three-hop routes.
 
 The ledger is machine-checked by
 `tests/context_fabric/test_chaos_3620_dispositions.py`: every named test is
@@ -215,6 +219,21 @@ uv run python scripts/chaos_3620_guard_injection.py --only ID  # one
 ```
 
 Expect `GUARD PROOF PASSED: 15/15 guards observed failing`, about 2m35s.
+
+**If you also run the CHAOS-3617 harness, arm the live store first.** The
+3627 lane found that `scripts/chaos_3617_guard_injection.py` needs
+
+```bash
+export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
+export CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1
+```
+
+or its projection-flag mutation **SURVIVES via skip** — the tests that would
+have caught it skip themselves for want of a store, the harness sees green,
+and reports a guard as proven that was never exercised. The 3620 harness has
+no live-store mutations and is unaffected, but the two are usually run
+together and a survived-by-skip result is exactly the unearned green both
+harnesses exist to prevent.
 
 **Run it single-process, and never during the standing gate.** It edits files
 under `src/` and restores them; the unit tier runs under pytest-xdist with

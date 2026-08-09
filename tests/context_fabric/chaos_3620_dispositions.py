@@ -549,13 +549,35 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "X5",
-        Status.UNMEASURED,
+        Status.PROVEN,
+        f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
+        "test_a_flood_of_low_quality_paths_cannot_displace_the_required_one",
+        f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
+        "test_the_flood_world_really_applies_displacement_pressure",
         f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
         "test_shorter_lineage_is_cited_before_longer_lineage",
         f"{_ADV}::TestKeywordStuffedBaitCannotBeRetrieved::"
         "test_the_bait_never_supports_an_asserted_driver",
+        notes=(
+            "UPGRADED from unmeasured after the orchestrator ruled it a core "
+            "bullet the ADR cannot leave open. The displacement world is "
+            "BUILT in this suite -- the frozen corpus plants no flood and "
+            "must not grow one: one subject, one target reachable by a single "
+            "one-hop explanatory path, and fourteen filler projects offering "
+            "longer routes to the same target. That is 28 competing paths "
+            "against a per-entity citation cap of 10.",
+            "The required one-hop path survives, and the FAULT SHAPE is "
+            "planted rather than argued: guard-injection mutation "
+            "path-citations-unordered reverses the ordering key on the real "
+            "emitter and the required path is displaced entirely -- all ten "
+            "slots taken by three-hop routes. Ordering is what makes the cap "
+            "safe; without it the cap keeps whatever was enumerated first.",
+            "The earlier downgrade reason is retained below for the record.",
+        ),
         reason=(
-            "DOWNGRADED after review: the cited tests are adjacent to the "
+            "SUPERSEDED downgrade reason, kept as the record of what was "
+            "true before the flood world was built: the cited tests were "
+            "adjacent to the "
             "requirement and do not establish it. Citation ORDERING is "
             "proven -- per-entity path citations are emitted shortest-first, "
             "so a long path cannot take a short path's slot -- and the "

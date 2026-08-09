@@ -39,7 +39,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import ValidationError
 
@@ -53,6 +53,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "INVESTIGATION_SHADOW_FLAG",
+    "FinishedRunContext",
+    "InvestigationPacketProducer",
     "InvestigationShadow",
     "InvestigationShadowRecord",
     "InvestigationShadowStatus",
@@ -71,6 +73,52 @@ def shadow_enabled(environ: Mapping[str, str]) -> bool:
     """Whether the shadow seam is switched on for this process."""
 
     return environ.get(INVESTIGATION_SHADOW_FLAG) == "1"
+
+
+@dataclass(frozen=True, slots=True)
+class FinishedRunContext:
+    """What an arm is given to build a packet from: one completed run.
+
+    Arm-neutral by shape as well as by name -- every field is a server-owned
+    artefact of the run the orchestrator just finished, and there is nothing
+    here that only one arm could use. The orchestrator hands this to
+    whatever producer it was configured with and never imports an arm.
+
+    ``canonical_evidence`` is the load-bearing field, and it is populated
+    from the run's own frame -- which the server built from what the
+    evidence service returned. **It must never be populated from the packet
+    an arm produced.** ``canonical_bypass_offenders`` digests each cited
+    record against this sequence, so feeding an arm's own evidence back in
+    would compare a value to itself: a check that cannot fail, wearing the
+    appearance of one. See ``test_canonical_evidence_comes_from_the_run_not
+    _the_packet``.
+    """
+
+    run_id: str
+    organization_id: str
+    frame: Any
+    investigation_result: Any
+    interpretation: Any
+    ledger: Any
+    subject_set: Any
+    committed_subject: Any
+    window_start: Any
+    window_end: Any
+    canonical_evidence: tuple[DevEvidenceRefV2, ...]
+
+
+class InvestigationPacketProducer(Protocol):
+    """One trial arm, seen from the orchestrator.
+
+    Returns a packet payload, or ``None`` when the arm has nothing to emit
+    for this run. Returning ``None`` is a normal outcome, not a failure --
+    the native arm reports several kinds of run as unprojectable by design.
+    """
+
+    def build_packet(
+        self, run: FinishedRunContext
+    ) -> Mapping[str, Any] | None:  # pragma: no cover - protocol
+        ...
 
 
 class InvestigationShadowStatus(StrEnum):

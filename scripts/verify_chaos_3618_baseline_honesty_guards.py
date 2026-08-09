@@ -694,6 +694,98 @@ proj._TRIAL_ALLOWLIST = frozenset(SourceClass)
 """,
     ),
     GuardCase(
+        case_id="canonical_evidence_taken_from_the_packet",
+        stake=(
+            "the seam handed the arm's OWN packet evidence as canonical, so "
+            "the digest compares a value to itself -- every H4 guarantee "
+            "becomes a check that cannot fail while looking like one"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_canonical_evidence_comes_from_the_run_not_the_packet"
+        ),
+        expected_failure="GUARD canonical_evidence_is_the_frames_own",
+        forbidden_failure=("TypeError",),
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+_real = DevOrchestrator._run_investigation_shadow
+
+
+async def _run_investigation_shadow(
+    self, *, run_id, org_id, frame, investigation_result, preflight_result
+):
+    shadow = self._investigation_shadow
+    producer = self._investigation_packet_producer
+    if shadow is None or producer is None or not shadow.enabled:
+        return None
+    context = seam.FinishedRunContext(
+        run_id=run_id,
+        organization_id=org_id,
+        frame=frame,
+        investigation_result=investigation_result,
+        interpretation=None,
+        ledger=None,
+        subject_set=None,
+        committed_subject=None,
+        window_start=None,
+        window_end=None,
+        canonical_evidence=(),
+    )
+    payload = producer.build_packet(context)
+    if payload is None:
+        return None
+    # The defect: canonical evidence sourced FROM THE PACKET.
+    cited = tuple(
+        DevEvidenceRefV2.model_validate(entry["evidence"])
+        for entry in payload["evidence_coverage"]["evidence_index"]
+    )
+    record = shadow.evaluate(
+        payload=payload,
+        run_id=run_id,
+        organization_id=org_id,
+        canonical_evidence=cited,
+    )
+    await self._recorder.record_investigation_shadow(record)
+    return None
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
+        case_id="shadow_fault_reaches_the_run",
+        stake=(
+            "a failing arm failing the run it shadows -- the single thing a "
+            "shadow seam must never do"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_an_always_raising_producer_leaves_the_run_byte_identical"
+        ),
+        expected_failure="RuntimeError",
+        plant="""
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+
+async def _run_investigation_shadow(
+    self, *, run_id, org_id, frame, investigation_result, preflight_result
+):
+    # Containment removed: the producer's exception escapes into the run.
+    shadow = self._investigation_shadow
+    producer = self._investigation_packet_producer
+    if shadow is None or producer is None or not shadow.enabled:
+        return None
+    producer.build_packet(None)
+    return None
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
         case_id="unattributed_comparison_record",
         stake=(
             "a persisted comparison record that cannot say which arm produced "

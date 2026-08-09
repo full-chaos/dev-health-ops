@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Mapping
@@ -15,12 +16,15 @@ from .contracts_v2.intent import DevQuestionIntent
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.result import DevInvestigationResult, DevSourceObservation
 from .contracts_v2.subject import DevResolutionEntry, DevSubjectSet
+from .investigation_shadow import InvestigationShadowRecord
 from .orchestrator import RunState
 from .persistence.service import DevPersistenceService
 from .prompts import PROMPT_VERSION
 from .qua_shadow import QUAShadowMentionAssessment, QUAShadowRecord
 from .scope_service import AuthorizedEntity
 from .tool_registry import TOOL_CONTRACT_VERSION, ToolExecution
+
+logger = logging.getLogger(__name__)
 
 
 def _entity_json(entity: AuthorizedEntity) -> dict[str, Any]:
@@ -278,6 +282,33 @@ class PersistenceRunRecorder:
                 if authorizing_mention_id is not None
                 else None
             ),
+        )
+
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        """Persist one CHAOS-3618 shadow comparison record.
+
+        CHAOS-3618 PR 2 lands the seam and its call site; the durable table
+        arrives with the trial that reads it. Logging rather than dropping
+        silently keeps a flag-on run auditable in the meantime -- a seam
+        that ran and recorded nothing anywhere would be indistinguishable
+        from a seam that never ran, which is the exact distinction
+        SKIPPED_DISABLED exists to preserve one layer up.
+        """
+
+        logger.info(
+            "ask_dev.investigation_shadow.record",
+            extra={
+                "run_id": record.run_id,
+                "status": record.status.value,
+                "arm_id": record.arm_id,
+                "packet_schema_version": record.packet_schema_version,
+                "projection_version": record.projection_version,
+                "outcome": record.outcome,
+                "evidence_handle_count": len(record.evidence_handles),
+                "latency_ms": record.latency_ms,
+            },
         )
 
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:

@@ -105,6 +105,12 @@ from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
+from .investigation_shadow import (
+    FinishedRunContext,
+    InvestigationPacketProducer,
+    InvestigationShadow,
+    InvestigationShadowRecord,
+)
 from .no_match_terminal import (
     attested_strings,
     disclose_scope_widening,
@@ -684,6 +690,12 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        """Persist one CHAOS-3618 shadow comparison record."""
+        ...
+
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
         """Persist one CHAOS-3389 QUA shadow evaluation.
 
@@ -775,6 +787,11 @@ class NullRunRecorder:
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
+
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        return None
 
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
         del record
@@ -926,6 +943,8 @@ class DevOrchestrator:
         plan_executor: PlanExecutor | None = None,
         narrative_provider: narrative_fallback.NarrativeProvider | None = None,
         qua_shadow: QuestionUnderstandingShadow | None = None,
+        investigation_shadow: InvestigationShadow | None = None,
+        investigation_packet_producer: InvestigationPacketProducer | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -961,6 +980,13 @@ class DevOrchestrator:
         # structural argument that even when set, this can never affect any
         # live decision.
         self._qua_shadow = qua_shadow
+        # CHAOS-3618 PR 2. ``None`` is the flag-off path for BOTH halves, and
+        # they are separate on purpose: the seam is arm-neutral machinery,
+        # the producer is one arm. The orchestrator never imports an arm --
+        # it calls whatever producer it was handed, so wiring the graph arm
+        # later changes production_runtime.py and nothing here.
+        self._investigation_shadow = investigation_shadow
+        self._investigation_packet_producer = investigation_packet_producer
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -1031,6 +1057,13 @@ class DevOrchestrator:
         #: the same reason ``investigation_result`` is one: ``finish()`` has
         #: ~35 call sites and none of them should have to remember this.
         qua_subject_disclosure: tuple[str, str] | None = None
+        # Bound up front because ``finish()`` closes over it: a run that
+        # terminates before preflight executes (a pre-cancelled request, a
+        # scope resolution that blows the wall clock) still reaches
+        # ``finish()``, and reading an unassigned free variable there is a
+        # NameError inside the terminal path -- which is exactly the class
+        # of failure the shadow seam must never introduce.
+        preflight_result: SubjectPreflightResult | None = None
         selected_event_sink = event_sink or self._event_sink
         # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
         # by the CHAOS-3295 plan-execution block below when a plan actually
@@ -1677,6 +1710,21 @@ class DevOrchestrator:
                             narrative_failure_code = (
                                 failure_code.value if failure_code is not None else None
                             )
+                    # CHAOS-3618 PR 2: runs strictly AFTER the frame (and any
+                    # narrative) is persisted, and its record is a local
+                    # nothing below reads -- the structural half of "flipping
+                    # the flag changes zero live-path behavior", exactly as
+                    # the CHAOS-3389 QUA seam is built. The RED test proves
+                    # the other half: OrchestratorResult is byte-identical
+                    # with the seam on vs off, against a producer that always
+                    # raises.
+                    await self._run_investigation_shadow(
+                        run_id=run_id,
+                        org_id=org_id,
+                        frame=frame,
+                        investigation_result=investigation_result,
+                        preflight_result=preflight_result,
+                    )
             await self._recorder.terminal(
                 state=state,
                 answer=answer,
@@ -1784,7 +1832,7 @@ class DevOrchestrator:
             # named subject against the authorized catalog *before* the first
             # model round, so no evidence-bearing tool can execute without an
             # exact committed subject. Zero provider tokens are spent here.
-            preflight_result: SubjectPreflightResult | None = None
+            preflight_result = None
             allowed_tools: frozenset[ToolID] = frozenset(ToolID)
             if self._preflight is not None:
                 if cancellation.is_set():
@@ -3649,6 +3697,84 @@ class DevOrchestrator:
                 RunState.FAILED,
                 error=error("internal_error", "The request could not be completed."),
             )
+
+    async def _run_investigation_shadow(
+        self,
+        *,
+        run_id: str,
+        org_id: str,
+        frame: DevAnswerFrame,
+        investigation_result: DevInvestigationResult | None,
+        preflight_result: SubjectPreflightResult | None,
+    ) -> None:
+        """Build one arm's packet and hand it to the shared seam.
+
+        Returns ``None`` always, and swallows every exception. A shadow-mode
+        bug must never fail, roll back, or alter the run it shadows, and the
+        seam's own containment is not relied on here -- a producer is
+        third-party code from this method's point of view.
+        """
+
+        shadow = self._investigation_shadow
+        producer = self._investigation_packet_producer
+        if shadow is None or producer is None or not shadow.enabled:
+            return None
+        try:
+            context = FinishedRunContext(
+                run_id=run_id,
+                organization_id=org_id,
+                frame=frame,
+                investigation_result=investigation_result,
+                interpretation=(
+                    preflight_result.interpretation if preflight_result else None
+                ),
+                ledger=preflight_result.ledger if preflight_result else None,
+                subject_set=preflight_result.subject_set if preflight_result else None,
+                committed_subject=(
+                    preflight_result.committed_resolution if preflight_result else None
+                ),
+                window_start=None,
+                window_end=None,
+                # THE load-bearing line of this method. Canonical evidence
+                # comes from the SERVER-OWNED FRAME, which the server built
+                # from what the evidence service returned -- never from the
+                # packet the producer is about to build. Feeding an arm's own
+                # evidence back in would make the seam's digest compare a
+                # value to itself: a check that cannot fail while wearing the
+                # appearance of one.
+                canonical_evidence=tuple(frame.evidence),
+            )
+            payload = producer.build_packet(context)
+            if payload is None:
+                # A normal outcome. The native arm reports several kinds of
+                # run as unprojectable by design, and that is a measurement.
+                return None
+            record = shadow.evaluate(
+                payload=payload,
+                run_id=run_id,
+                organization_id=org_id,
+                canonical_evidence=context.canonical_evidence,
+            )
+        except Exception as shadow_fault:
+            logger.exception(
+                "ask_dev.orchestrator.investigation_shadow_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(shadow_fault).__name__,
+                },
+            )
+            return None
+        try:
+            await self._recorder.record_investigation_shadow(record)
+        except Exception as write_fault:
+            logger.exception(
+                "ask_dev.orchestrator.investigation_shadow_write_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(write_fault).__name__,
+                },
+            )
+        return None
 
     async def _resolve_with_cancellation(
         self,

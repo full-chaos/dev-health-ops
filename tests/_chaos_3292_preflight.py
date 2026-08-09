@@ -393,6 +393,7 @@ class Recorder:
         self.terminals: list[RunState] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
+        self.investigation_shadow_records: list[Any] = []
         self.resolutions: list[Any] = []
         #: CHAOS-3533: the ``authorizing_mention_id`` passed alongside each
         #: recorded frame -- ``None`` for every terminal that made no
@@ -459,6 +460,9 @@ class Recorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         """No-op here; CHAOS-3295's InvestigationRecorder subclass captures this."""
         del result
+
+    async def record_investigation_shadow(self, record: Any) -> None:
+        self.investigation_shadow_records.append(record)
 
     async def record_qua_shadow(self, record: Any) -> None:
         self.qua_shadow_records.append(record)
@@ -596,6 +600,8 @@ async def run_preflight_orchestrator(
         recording_registry
     ),
     qua_shadow: Any = None,
+    investigation_shadow: Any = None,
+    investigation_packet_producer: Any = None,
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
@@ -662,6 +668,8 @@ async def run_preflight_orchestrator(
         plan_registry=plan_registry,
         plan_executor=plan_executor,
         qua_shadow=qua_shadow,
+        investigation_shadow=investigation_shadow,
+        investigation_packet_producer=investigation_packet_producer,
     )
     result = await orchestrator.run(
         request=request,

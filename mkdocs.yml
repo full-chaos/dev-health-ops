@@ -248,6 +248,7 @@ nav:
           - Ask Dev investigation corpus: contribute/architecture/ask-dev-investigation-corpus.md
           - Graph-assisted investigation arm: contribute/architecture/graph-investigation-arm.md
           - Ask Dev native baseline: contribute/architecture/ask-dev-native-baseline.md
+          - Graph-assisted investigation safety proof: contribute/architecture/ask-dev-graph-safety-proof.md
       - Develop and test:
           - contribute/development/index.md
           - Commands: contribute/development/commands.md

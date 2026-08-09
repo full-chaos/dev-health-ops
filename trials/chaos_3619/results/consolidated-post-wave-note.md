@@ -193,6 +193,42 @@ the frozen records, which still reconcile. The defect is that the tool CHAOS-361
 analysis depends on can no longer be pointed at the current tree. **Not fixed here** — this lane
 changes no code. Filed as **CHAOS-3656** under CHAOS-3614.
 
+### Addendum, 2026-08-09 — CHAOS-3656 repairs the finding above
+
+**This addendum is additive; nothing above it is edited.** The finding above was true when
+CHAOS-3655 measured it and stays true as a description of that state. It no longer describes
+current `main`.
+
+`trials/chaos_3619/refusal_causes.decompose()` is now mechanism-aware
+(`trials.chaos_3619.refusal_causes`, CHAOS-3656): each case is recomputed through whichever entry
+mode its `comparison_shape` actually took in `trials.chaos_3619.sweep._run_graph` — the SEEDED
+mode (`graph_leg.discover_subjects`) for every shape but `discovered_cohort`, and the SUBJECTLESS
+COHORT mode (`graph_leg.discover_cohort_for`, CHAOS-3645/#1623) for it — instead of always
+recomputing through the seeded mode regardless of shape.
+
+`decompose(consolidated-post-wave.records.json, "leg_b_job_held_constant")` now **succeeds**. The
+13 CHAOS-3645 cases contribute no `RefusalCause` at all on this tip — they are `scored`, not
+refused — and only `T07_going_sideways_open_question` remains a refusal, carrying the new
+`no_cohort_family_support` category (its family has no subjectless entry by design, so it refuses
+under both mechanisms).
+
+`DIVERGENCE_LEDGER` gained one additive entry, cited `CHAOS-3645` / `#1623`, `from_category
+no_mention_extracted -> to_category cohort_resolved_post_3645`, naming the same 13 case ids this
+note's per-ticket attribution table already lists above. It exists so
+`trial-results.records.json` and `post-3648-remeasure.records.json` — both frozen before
+CHAOS-3645 landed, both recording these 13 cases as `arm_refused` with no mention extracted —
+keep decomposing without raising: their pinned refusal and the live mechanism's resolution are
+both true, and the ledger entry is the citation that keeps them apart rather than either editing
+the pin or silently crediting it with a mechanism it never ran. `trial-results.records.json`'s own
+decomposition is unchanged at 26 total refusals for Leg B; what changed is which category 14 of
+them carry (see `tests/context_fabric/test_chaos_3619_refusal_causes.py`,
+`TestTheCohortModeIsDecomposedSeparately`).
+
+No `.records.json` file was regenerated or edited. See
+`tests/context_fabric/test_chaos_3655_consolidated_artifact.py::TestTheRecordedFindingStaysTrueOrTheNoteGetsUpdated::test_the_refusal_decomposition_now_describes_this_tip`
+and `tests/context_fabric/test_chaos_3619_refusal_causes.py` for the executable form of both
+paragraphs above.
+
 ## Reproducing this
 
 ```

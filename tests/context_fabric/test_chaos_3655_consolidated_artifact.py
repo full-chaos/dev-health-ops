@@ -604,24 +604,40 @@ class TestTheMustBeZeroColumn:
 
 
 class TestTheRecordedFindingStaysTrueOrTheNoteGetsUpdated:
-    def test_the_refusal_decomposition_cannot_describe_this_tip(self) -> None:
-        """CHAOS-3655's finding, held as an executable statement.
+    def test_the_refusal_decomposition_now_describes_this_tip(self) -> None:
+        """CHAOS-3655's finding, repaired by CHAOS-3656 -- held as an
+        executable statement in the other direction.
 
-        `decompose` reconciles recorded dispositions against a live recomputation
-        of subject discovery. The 13 CHAOS-3645 cases score through SUBJECTLESS
-        cohort discovery, so the recomputation still finds no seeds while the
-        records say `scored`, and no ledger entry covers that mechanism.
+        `decompose` used to reconcile every recorded disposition against a
+        recomputation that only knew the SEEDED discovery mechanism. The 13
+        CHAOS-3645 cases score through SUBJECTLESS cohort discovery instead,
+        so that recomputation always found empty seeds while the records said
+        `scored`, and no ledger entry covered the mechanism gap -- CHAOS-3655
+        found the tool blind to the tip it was supposed to describe.
 
-        If this test starts failing, the tool was repaired -- good news that must
-        be reflected in `consolidated-post-wave-note.md` rather than left to make
-        the note quietly wrong.
+        CHAOS-3656 makes the recomputation mechanism-aware: it now follows
+        the SAME shape-based fork `trials.chaos_3619.sweep` does, and
+        `DIVERGENCE_LEDGER` carries a CHAOS-3645 entry for the historical
+        pins that predate the mechanism. This tip decomposes cleanly, and the
+        13 cohort cases contribute no `RefusalCause` at all -- they are
+        scored, not refused. `consolidated-post-wave-note.md` is updated
+        alongside this test rather than left to read as a still-open gap.
         """
 
-        from trials.chaos_3619.refusal_causes import decompose
+        from trials.chaos_3619.refusal_causes import counts, decompose
 
-        with pytest.raises(RuntimeError) as raised:
-            decompose(_CONSOLIDATED, _LEG_B)
-        assert "no longer reproduces the recorded sweep" in str(raised.value)
+        causes = decompose(_CONSOLIDATED, _LEG_B)
+        by_cause = counts(causes)
+        assert "cohort_resolved_post_3645" not in by_cause, (
+            "a scored consolidated-tip cohort case must not need the "
+            "historical-pin ledger entry to decompose; that entry exists for "
+            "records frozen before CHAOS-3645, not for this tip"
+        )
+        cohort_shaped = [c for c in causes if c.comparison_shape == "discovered_cohort"]
+        assert len(cohort_shaped) == 1, (
+            "only T07 (no subjectless entry for its family) should still "
+            "refuse on this tip; the other 13 CHAOS-3645 cases score"
+        )
 
     def test_it_still_describes_the_frozen_run(self) -> None:
         """The other half of the finding: the tool is not simply broken.

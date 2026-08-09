@@ -132,6 +132,7 @@ __all__ = [
     "JobContext",
     "PacketTooLargeError",
     "SubjectMatchFinding",
+    "AuthorizationWithheldEvidenceError",
     "UnsupportedMatchMechanismError",
     "TrialContext",
     "UnsupportedComparisonShapeError",
@@ -193,6 +194,22 @@ class SubjectMatchFinding:
     matched_text: str
     source_class: SourceClass
     mechanism: MatchMechanism
+
+
+class AuthorizationWithheldEvidenceError(PermissionError):
+    """A driver rests on evidence this caller may not be shown.
+
+    Distinct from the inconsistency raise beside it, and the distinction is
+    the whole point (fix round 2, verifier N1). Evidence removed because the
+    record it names is about an entity outside the caller's grant is the
+    authorization filter working; evidence nothing observed is discovery and
+    emission disagreeing. Collapsing the two turned a narrower grant into a
+    dead packet, and a caller reading the old message would have gone looking
+    for a bug that was not there.
+
+    A ``PermissionError`` rather than a ``ValueError`` so a caller can route
+    it the way it routes every other authorization refusal in this arm.
+    """
 
 
 class UnsupportedMatchMechanismError(RuntimeError):
@@ -502,6 +519,7 @@ def _driver_candidate(
     finding: DriverFinding,
     handle_by_observation: Mapping[str, str],
     known_subject_ids: Container[str],
+    filtered_ids: Container[str],
 ) -> DriverCandidate:
     """One structural finding, as the frozen contract's driver candidate.
 
@@ -521,10 +539,34 @@ def _driver_candidate(
     def handles(ids: Sequence[str], role: str) -> tuple[str, ...]:
         missing = sorted(set(ids) - set(handle_by_observation))
         if missing:
-            raise ValueError(
-                f"driver {finding.driver_id} cites {role} evidence this "
-                f"packet never indexed: {missing}. Discovery and emission "
-                "disagree about what the run observed"
+            # CHAOS-3627 fix round 2, verifier N1. Two very different things
+            # were reaching this one raise, and only one of them is an
+            # internal inconsistency.
+            #
+            # An id the AUTHORIZATION FILTER removed -- because the record it
+            # names is about an entity outside this caller's grant -- is the
+            # arm working correctly on a partial grant. Raising there turned a
+            # narrower grant into a dead packet: discovery legitimately saw a
+            # record that emission legitimately may not present.
+            #
+            # An id NOTHING observed is still the inconsistency this guard
+            # exists for, and still raises. The distinction is drawn from the
+            # drop set the evidence pass already recorded; nothing new is
+            # reconciled and no discovery-side change is implied.
+            withheld = sorted(item for item in missing if item in filtered_ids)
+            unobserved = sorted(item for item in missing if item not in filtered_ids)
+            if unobserved:
+                raise ValueError(
+                    f"driver {finding.driver_id} cites {role} evidence this "
+                    f"packet never indexed: {unobserved}. Discovery and "
+                    "emission disagree about what the run observed"
+                )
+            raise AuthorizationWithheldEvidenceError(
+                f"driver {finding.driver_id} rests on {role} evidence this "
+                f"caller may not be shown: {withheld}. The records are about "
+                "entities outside the grant, so the driver cannot be asserted "
+                "to this caller -- which is the authorization filter working, "
+                "not an inconsistency"
             )
         return tuple(handle_by_observation[item] for item in ids)
 
@@ -570,6 +612,10 @@ class _EvidenceGroup:
     """
 
     observation_id: str
+    #: The canonical id of the RECORD this group's handle was issued for.
+    #: What the join compares against, so a citation that names a different
+    #: record cannot union its subjects in (fix round 2).
+    source_id: str
     record: EvidenceRecord
     source_class: SourceClass
     supports: list[str]
@@ -1009,13 +1055,15 @@ def build_packet(
     candidate_ids = {item.canonical_id for item in candidates}
 
     indexable: list[tuple[DiscoveredObservation, tuple[str, ...]]] = []
-    #: Observations whose source record is about an entity outside the
-    #: caller's authorized set. Counted rather than silently dropped -- an
-    #: unexplained gap in evidence coverage is the fault this whole lane
-    #: keeps finding -- and disclosed through the evidence section's own
-    #: authorization counter, because "the caller's grant does not cover the
-    #: entity this record is about" is exactly what that number reports.
-    unattributable: list[str] = []
+    #: The source RECORDS whose entity is outside the caller's authorized
+    #: set, by record id -- not the observations that cite them.
+    #:
+    #: A set, and the unit is the point (fix round 2, codex medium 2). An
+    #: evidence entry represents a record, so counting per dropped
+    #: OBSERVATION reported 2 for two citations of one unauthorized record
+    #: while exactly one entry went missing. A disclosure whose unit differs
+    #: from the thing it is disclosing about is a number a reader cannot use.
+    unattributable: set[str] = set()
     for observation in readout.observations:
         # Named distinctly from the cohort guard's ``outside``: the
         # guard-injection harness anchors on source lines, and a second
@@ -1055,7 +1103,11 @@ def build_packet(
         # the caller may not see.
         declared_entity = observation.attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
         if declared_entity is not None and declared_entity not in authorized_lookup:
-            unattributable.append(observation.canonical_id)
+            unattributable.add(
+                observation.attributes.get(
+                    SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
+                )
+            )
             continue
         indexable.append((observation, supports))
 
@@ -1089,6 +1141,9 @@ def build_packet(
             )
         evidence_groups[handle] = _EvidenceGroup(
             observation_id=observation.canonical_id,
+            source_id=observation.attributes.get(
+                SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
+            ),
             record=record,
             source_class=observation.source_class,
             supports=list(supports),
@@ -1100,6 +1155,31 @@ def build_packet(
             continue
         handle = observation.attributes[SOURCE_EVIDENCE_HANDLE_ATTRIBUTE]
         group = evidence_groups.get(handle)
+        if group is not None and (
+            observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE) != group.source_id
+        ):
+            # CHAOS-3627 fix round 2, codex BLOCKING = verifier N2. The join
+            # was keyed on the HANDLE alone, so any observation carrying an
+            # existing handle joined that record's group and unioned its
+            # subjects in -- whatever record it actually named. The bound
+            # "extra subjects arrive only from observations naming THIS
+            # record" was therefore pinned by what the fixtures happen to do,
+            # not enforced where the union happens.
+            #
+            # Refused rather than dropped, matching the pairing posture
+            # everywhere else in this file: a source that issued one handle
+            # for two different records is telling the arm something
+            # contradictory, and quietly believing half of it is how the
+            # contradiction reaches a consumer.
+            raise ValueError(
+                f"observation {observation.canonical_id!r} cites handle "
+                f"{handle} but names record "
+                f"{observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE)!r}; "
+                f"that handle was issued for {group.source_id!r}. One handle "
+                "names one record, and merging a citation of a different "
+                "record into it would widen that record's support with "
+                "subjects it has nothing to do with"
+            )
         if group is None:
             # The record this observation cites was not reached by this
             # traversal -- it can be about an entity no path arrived at. The
@@ -1110,6 +1190,9 @@ def build_packet(
             # what ``test_chaos_3627_arm_vocabulary`` calls input symmetry.
             evidence_groups[handle] = _EvidenceGroup(
                 observation_id=observation.canonical_id,
+                source_id=observation.attributes.get(
+                    SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
+                ),
                 record=_evidence_record(observation, supports, source_state),
                 source_class=observation.source_class,
                 supports=list(supports),
@@ -1302,7 +1385,9 @@ def build_packet(
             )
         )
     filtered_total = (
-        readout.authorization_filtered_count + cohort_authorization_filtered
+        readout.authorization_filtered_count
+        + cohort_authorization_filtered
+        + len(unattributable)
     )
     if filtered_total:
         limitations.append(
@@ -1423,7 +1508,9 @@ def build_packet(
         | known_entity_ids
     )
     driver_candidates = tuple(
-        _driver_candidate(finding, handle_by_observation, known_subject_ids)
+        _driver_candidate(
+            finding, handle_by_observation, known_subject_ids, unattributable
+        )
         for finding in drivers or ()
     )
     # Evidence entries now name the drivers that cite them. Without this the

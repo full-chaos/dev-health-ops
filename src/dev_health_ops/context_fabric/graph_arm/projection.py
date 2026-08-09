@@ -611,7 +611,26 @@ def build_projection(
             )
         node = _observation_node(observation, partition)
         if observation.canonical_id in observation_index:
-            continue
+            # CHAOS-3627 fix round 2, codex medium 3. This used to ``continue``
+            # -- silently keeping the first record and discarding the second.
+            # Refuse-don't-sanitize applies to identifiers exactly as it does
+            # to values: a batch asserting two different records under one
+            # canonical id is telling the arm something contradictory, and
+            # picking one is the arm inventing an answer.
+            #
+            # It also became load-bearing. The fallback mint now discriminates
+            # records BY canonical id, so its collision-freedom rests on this
+            # index being injective. A silent discard here would let two
+            # distinct same-kind records share an id, lose one before the mint
+            # ever saw it, and leave the duplicate-handle refusal unable to
+            # protect the case it exists for.
+            raise ProjectionError(
+                f"observation {observation.canonical_id!r} is declared twice "
+                "in one batch. A canonical id names one record; keeping the "
+                "first and discarding the second would drop a record no "
+                "reader could then know existed, and the arm's own evidence "
+                "mint identifies records by this id"
+            )
         missing = [
             subject.canonical_id
             for subject in observation.subjects

@@ -454,7 +454,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **83** guards the arm relies on, the harness disables
+For each of the **87** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -819,6 +819,18 @@ duplicate-handle refusal kills the whole packet on a legitimate handle-less
 world. The platform fix is CHAOS-3633; this is the arm-side containment, and
 its cost is that a minted handle is verified by re-deriving it through the
 same function rather than by `signer.verify` on the emitted ref.
+
+**The two indexes refuse differently, and both now refuse.** The projection
+builds an entity index keyed by `(kind, canonical_id)` and an observation
+index keyed by `canonical_id`. The observation index used to *keep the first
+record and silently discard the second* under a repeated id. That became
+load-bearing when the fallback mint started discriminating records by
+canonical id — the discard loses one of two distinct records before the mint
+can see the collision, leaving the duplicate-handle refusal unable to protect
+the case it exists for. Both indexes now refuse a repeat, because
+refuse-don't-sanitize applies to identifiers exactly as it does to values: a
+batch asserting two different records under one id is contradicting itself,
+and picking one is the arm inventing the answer.
 
 **Residual, stated because a reader would otherwise assume otherwise.**
 Ingestion checks a carried handle's *grammar* and the *completeness* of the

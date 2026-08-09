@@ -475,6 +475,96 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="already issued for",
     ),
     Mutation(
+        mutation_id="merge-join-keyed-on-the-handle-alone",
+        defect=(
+            "an observation carrying an existing handle joins that record's "
+            "group whatever record it actually names, so its subjects widen "
+            "a record's support with entities it has nothing to do with. "
+            "Codex round 2 graded this BLOCKING and the verifier reproduced "
+            "it at runtime: round 1's bound was pinned by what the fixtures "
+            "happen to do, and the JOIN never checked"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        if group is not None and (\n"
+            "            observation.attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE) "
+            "!= group.source_id\n"
+            "        ):"
+        ),
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheMergeBoundIsEnforcedAtTheJoin::"
+            "test_a_citation_naming_a_different_record_is_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="withheld-evidence-reads-as-an-inconsistency",
+        defect=(
+            "evidence the authorization filter removed and evidence nothing "
+            "ever observed raise the same error, so a narrower grant produces "
+            "a dead packet and the message sends a reader looking for a bug "
+            "that is not there. Verifier round 2, N1 -- the cheap form: the "
+            "distinction is drawn from the drop set the evidence pass already "
+            "recorded, with no reconciliation inside discover_drivers"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="            if unobserved:",
+        replacement="            if missing:",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheWithheldEvidenceRefusalIsDistinguishable",
+        ),
+        expect_failure="never indexed",
+    ),
+    Mutation(
+        mutation_id="withheld-record-count-is-per-observation",
+        defect=(
+            "the authorization-filtered evidence count is incremented per "
+            "dropped OBSERVATION while an evidence entry represents a RECORD, "
+            "so two citations of one withheld record report 2 for one missing "
+            "entry -- a disclosure whose unit differs from the thing it "
+            "discloses about. Codex round 2, medium 2"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "            unattributable.add(\n"
+            "                observation.attributes.get(\n"
+            "                    SOURCE_EVIDENCE_ID_ATTRIBUTE, "
+            "observation.canonical_id\n"
+            "                )\n"
+            "            )"
+        ),
+        replacement="            unattributable.add(observation.canonical_id)",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheFilteredCountIsPerRecord::"
+            "test_two_citations_of_one_withheld_record_count_once",
+        ),
+        expect_failure="the count is per observation, not per record",
+    ),
+    Mutation(
+        mutation_id="duplicate-observation-id-silently-discarded",
+        defect=(
+            "a batch declaring two different records under one canonical id "
+            "keeps the first and drops the second without a word. Refuse-"
+            "don't-sanitize applies to identifiers too, and this became "
+            "load-bearing when the fallback mint started discriminating "
+            "records BY canonical id: the silent discard loses one record "
+            "before the mint sees it, so the duplicate-handle refusal cannot "
+            "protect the case it exists for. Codex round 2, medium 3"
+        ),
+        path=SRC / "projection.py",
+        anchor="        if observation.canonical_id in observation_index:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestADuplicateObservationIdIsRefused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
         mutation_id="graphiti-telemetry-left-on",
         defect=(
             "the trial phones one organization's structure home to a "

@@ -101,9 +101,10 @@ def _read(projection, seed: str, *, authorized=None, max_hops: int = 2):
     )
 
 
-def _packet(readout, signer):
+def _packet(readout, signer, *, drivers=None):
     return build_packet(
         readout=readout,
+        drivers=drivers,
         job=JobContext(
             job_id="job_chaos_3627",
             question_family=QuestionFamilyID.PROJECT_STATUS_DRIVERS,
@@ -663,6 +664,312 @@ class TestTheMergeBoundIsPinned:
             record = world.EVIDENCE_BY_HANDLE.get(entry.evidence.evidence_ref_id)
             if record is not None:
                 assert entry.evidence.entity_id == record.entity_id
+
+
+class TestTheMergeBoundIsEnforcedAtTheJoin:
+    """Fix round 2, codex BLOCKING = verifier N2.
+
+    Round 1 pinned the bound with a test that read what the fixtures happen to
+    do. The JOIN itself was keyed on the handle alone, so any observation
+    carrying an existing handle joined that record's group and unioned its
+    subjects in — whatever record it actually named. A pin over current data
+    is not an enforced invariant; this is the difference, and it is why the
+    round-1 test survived a defect it was written to prevent.
+    """
+
+    def test_a_citation_naming_a_different_record_is_refused(
+        self, helio, signer
+    ) -> None:
+        readout = _read(helio, world.TEAM_CINDER)
+        citing = next(
+            observation
+            for observation in readout.observations
+            if observation.attributes.get("source_evidence_id")
+            not in (None, observation.canonical_id)
+        )
+        target = next(
+            observation
+            for observation in readout.observations
+            if observation.attributes.get("source_evidence_id")
+            == observation.canonical_id
+            and observation.attributes.get("source_evidence_handle")
+            != citing.attributes.get("source_evidence_handle")
+        )
+
+        # The attack shape: keep this observation's own declared record id,
+        # but point its handle at a DIFFERENT record's group.
+        inconsistent = dataclasses.replace(
+            citing,
+            attributes={
+                **citing.attributes,
+                "source_evidence_handle": target.attributes["source_evidence_handle"],
+            },
+        )
+        tampered = dataclasses.replace(
+            readout,
+            observations=tuple(
+                inconsistent if item is citing else item
+                for item in readout.observations
+            ),
+        )
+
+        with pytest.raises(ValueError, match="but names record"):
+            _packet(tampered, signer)
+
+    def test_a_consistent_citation_still_joins(self, helio, signer) -> None:
+        """The other end. A guard that refused every merge would satisfy the
+        test above and silently end the measurement-to-record link the corpus
+        actually asserts.
+        """
+
+        packet = _packet(_read(helio, world.TEAM_CINDER), signer)
+        merged = [
+            entry
+            for entry in packet.evidence_coverage.evidence_index
+            if len(entry.supports_entity_ids) > 1
+        ]
+
+        assert merged, "nothing merged; the join is refusing everything"
+
+
+class TestTheWithheldEvidenceRefusalIsDistinguishable:
+    """Fix round 2, verifier N1 — cheap form only.
+
+    A driver citing evidence the AUTHORIZATION filter removed is the arm
+    working on a partial grant; a driver citing evidence nothing observed is
+    discovery and emission disagreeing. One raise served both, so a narrower
+    grant produced a dead packet and the message sent a reader looking for a
+    bug that was not there.
+
+    Deliberately NOT reconciled inside ``discover_drivers`` — that is the
+    larger engineering the convergence line forbids, and this distinction
+    reads the drop set the evidence pass already recorded.
+    """
+
+    def test_evidence_nothing_observed_still_raises_the_inconsistency(
+        self, helio, signer
+    ) -> None:
+        from dev_health_ops.context_fabric.graph_arm.drivers import discover_drivers
+
+        readout = _read(helio, "proj_identity_rewrite")
+        findings, _ = discover_drivers(
+            readout, "proj_identity_rewrite", as_of=world.TRIAL_NOW
+        )
+        honest = next(item for item in findings if item.evidence_ids)
+        invented = dataclasses.replace(honest, evidence_ids=("obs_no_run_ever_saw",))
+
+        with pytest.raises(ValueError, match="never indexed"):
+            _packet(readout, signer, drivers=(invented,))
+
+    def test_evidence_the_grant_withheld_raises_the_authorization_refusal(
+        self, helio, signer
+    ) -> None:
+        """The branch the guard exists for, actually driven.
+
+        Written after the guard-injection harness reported this mutation
+        SURVIVED. The first version of this class asserted the inconsistency
+        branch (which the mutation leaves intact) and the exception TYPE via
+        ``issubclass`` (which never builds a packet), so two tests about a
+        distinction reached neither side of it. A test that cannot observe the
+        guard running is not coverage, whatever it is named.
+
+        The setup drives the real path: a record whose entity is outside the
+        grant is dropped by the evidence pass, and a driver citing an
+        observation of that record must be refused as an AUTHORIZATION
+        matter -- not reported as discovery and emission disagreeing.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.drivers import discover_drivers
+        from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+            AuthorizationWithheldEvidenceError,
+        )
+
+        readout = _read(helio, "proj_identity_rewrite")
+        findings, _ = discover_drivers(
+            readout, "proj_identity_rewrite", as_of=world.TRIAL_NOW
+        )
+        honest = next(item for item in findings if item.evidence_ids)
+        cited = honest.evidence_ids[0]
+
+        # Put the record that observation names outside the grant, so the
+        # evidence pass drops it and the driver's citation has no handle.
+        withheld = dataclasses.replace(
+            readout,
+            observations=tuple(
+                dataclasses.replace(
+                    item,
+                    attributes={
+                        **item.attributes,
+                        "source_evidence_entity_id": world.PROJ_QUARRY,
+                    },
+                )
+                if item.canonical_id == cited
+                else item
+                for item in readout.observations
+            ),
+        )
+
+        with pytest.raises(
+            AuthorizationWithheldEvidenceError, match="may not be shown"
+        ):
+            _packet(withheld, signer, drivers=(honest,))
+
+    def test_the_authorization_refusal_is_not_an_inconsistency(self) -> None:
+        """Routable at the type, not only readable in the message.
+
+        A caller routes an authorization refusal differently from an internal
+        inconsistency; a message-only difference is one a caller cannot act
+        on. Kept alongside the behavioural test above rather than instead of
+        it -- on its own it passed while the guard was disabled.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+            AuthorizationWithheldEvidenceError,
+        )
+
+        assert issubclass(AuthorizationWithheldEvidenceError, PermissionError)
+        assert not issubclass(AuthorizationWithheldEvidenceError, ValueError)
+
+
+class TestTheFilteredCountIsPerRecord:
+    """Fix round 2, codex medium 2.
+
+    An evidence entry represents a RECORD, so counting per dropped
+    OBSERVATION reported 2 for two citations of one unauthorized record while
+    exactly one entry went missing. A disclosure whose unit differs from the
+    thing it discloses about is a number a reader cannot use.
+    """
+
+    def test_two_citations_of_one_withheld_record_count_once(
+        self, helio, signer
+    ) -> None:
+        readout = _read(helio, world.TEAM_CINDER)
+        citing = next(
+            observation
+            for observation in readout.observations
+            if observation.attributes.get("source_evidence_id")
+            not in (None, observation.canonical_id)
+        )
+        # Two observations, one record, and that record's entity put outside
+        # the grant so both are dropped.
+        outside = dataclasses.replace(
+            citing,
+            attributes={
+                **citing.attributes,
+                "source_evidence_entity_id": world.PROJ_QUARRY,
+            },
+        )
+        second = dataclasses.replace(outside, canonical_id="second_citation")
+        tampered = dataclasses.replace(
+            readout,
+            observations=tuple(
+                [outside if item is citing else item for item in readout.observations]
+                + [second]
+            ),
+        )
+
+        packet = _packet(tampered, signer)
+
+        assert packet.evidence_coverage.authorization_filtered_count == 1, (
+            "the count is per observation, not per record"
+        )
+
+    def test_the_withheld_records_reach_the_global_limitation(
+        self, helio, signer
+    ) -> None:
+        """A count nobody reads is not a disclosure.
+
+        The evidence section carried it; the packet-level authorization
+        limitation did not, so a reader of the limitations list saw a smaller
+        number than the packet had actually withheld.
+        """
+
+        from dev_health_ops.api.dev.investigation_contract import (
+            PacketLimitationKind,
+        )
+
+        readout = _read(helio, world.TEAM_CINDER)
+        citing = next(
+            observation
+            for observation in readout.observations
+            if observation.attributes.get("source_evidence_id")
+            not in (None, observation.canonical_id)
+        )
+        tampered = dataclasses.replace(
+            readout,
+            authorization_filtered_count=0,
+            observations=tuple(
+                dataclasses.replace(
+                    item,
+                    attributes={
+                        **item.attributes,
+                        "source_evidence_entity_id": world.PROJ_QUARRY,
+                    },
+                )
+                if item is citing
+                else item
+                for item in readout.observations
+            ),
+        )
+
+        packet = _packet(tampered, signer)
+        authorization = [
+            item
+            for item in packet.evidence_coverage.limitations
+            if item.kind is PacketLimitationKind.AUTHORIZATION_FILTERED
+        ]
+
+        assert authorization, (
+            "a record was withheld and the limitations list does not say so"
+        )
+
+
+class TestADuplicateObservationIdIsRefused:
+    """Fix round 2, codex medium 3.
+
+    The projection used to keep the first record under a repeated canonical
+    id and silently discard the second. Refuse-don't-sanitize applies to
+    identifiers exactly as it does to values — and this became load-bearing
+    when the fallback mint started discriminating records BY canonical id:
+    a silent discard would drop one of two distinct records before the mint
+    ever saw it, leaving the duplicate-handle refusal unable to protect the
+    case it exists for.
+    """
+
+    def test_two_records_under_one_canonical_id_are_refused(self) -> None:
+        batch = IngestionBatch(
+            org_id=world.ORG_HELIO,
+            entities=(
+                EntityRecord(
+                    org_id=world.ORG_HELIO,
+                    kind=GraphEntityKind.PROJECT,
+                    canonical_id="proj_dup_probe",
+                    display_label="Duplicate probe",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=world.WINDOW_END,
+                ),
+            ),
+            observations=tuple(
+                ObservationRecord(
+                    org_id=world.ORG_HELIO,
+                    kind=GraphObservationKind.DECISION,
+                    canonical_id="dec_dup_probe",
+                    title=title,
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=world.WINDOW_END,
+                    subjects=(
+                        CanonicalRef(
+                            kind=GraphEntityKind.PROJECT,
+                            canonical_id="proj_dup_probe",
+                        ),
+                    ),
+                )
+                for title in ("first decision", "a genuinely different decision")
+            ),
+        )
+
+        with pytest.raises(ProjectionError, match="declared twice"):
+            build_projection(batch)
 
 
 class TestTheInternalInvariantsSurviveTheNarrowing:

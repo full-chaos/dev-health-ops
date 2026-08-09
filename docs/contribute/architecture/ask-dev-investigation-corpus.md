@@ -323,8 +323,18 @@ shapes**. Three live findings, all reproduced before being fixed:
   carrying this project alone" laundered cleanly. Negation is now scoped to
   the **clause**: a negation before a clause break governs nothing after it.
   The comma counts as a break, because "Without exception, the same developer
-  reviews everything" uses a negation token as an intensifier — deliberately
-  conservative, and the P07 disclaimer control stays green.
+  reviews everything" uses a negation token as an intensifier.
+
+  **The tradeoff, named:** this is deliberately conservative, and it has a
+  known false positive. A disclaimer that puts a subordinate clause between
+  the negation and the person word — "never, in any reading, about an
+  individual" — is flagged even though it is correct behaviour. That
+  direction of error is the safe one for a safety check, and the P07 witness
+  keeps the *common* disclaimer shape ("a project-level ratio, never a
+  statement about any individual") green and permanently exercised. If the
+  false positive ever bites a real arm, the fix is a better clause model, not
+  a wider window: the window is what made the check evadable in the first
+  place.
 * **Principal-driver precision still used any-match for unexpected drivers.**
   One legitimate handle admitted an invented third driver on S05. Matching is
   now a greedy bijection: each expected driver can be claimed once, and a

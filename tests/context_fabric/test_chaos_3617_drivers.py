@@ -34,7 +34,11 @@ from dev_health_ops.api.dev.investigation_contract import (
     DriverExclusionReason,
     DriverRole,
     DriverStanding,
+    InvestigationOutcome,
     RelationshipType,
+)
+from dev_health_ops.api.dev.investigation_contract.vocabulary import (
+    SUPPORTED_OUTCOMES,
 )
 from dev_health_ops.api.dev.investigation_corpus import world
 from dev_health_ops.context_fabric.graph_arm import build_projection
@@ -712,3 +716,194 @@ def _probe_findings(projection, grant, subject: str, *, max_hops: int = 2):
         )
     )
     return discover_drivers(readout, subject, as_of=_PROBE_NOW)[0]
+
+
+class TestTheFirstSupportedPacket:
+    """The arm's first non-``unsupported`` outcome, and what must back it.
+
+    A supported outcome is a claim about a *specific driver's* standing, not
+    a value in an enum field. An assertion on the outcome alone would pass
+    under driver substitution — swap the driver that earned it for any other
+    and the enum is unchanged — so every test here names the driver, its
+    standing, its mechanism and the evidence it rests on.
+    """
+
+    def test_the_packet_reaches_a_supported_outcome(self, helio, signer) -> None:
+        packet = _packet(helio, "proj_identity_rewrite", signer)
+        assert packet.outcome in SUPPORTED_OUTCOMES
+
+    def test_the_supported_outcome_names_the_driver_that_earned_it(
+        self, helio, signer
+    ) -> None:
+        """Driver substitution must not leave this test green."""
+
+        packet = _packet(helio, "proj_identity_rewrite", signer)
+        assert packet.driver_analysis.principal_driver_ids == (
+            "drv_block_wu_authcore_release",
+        )
+        principal = next(
+            item
+            for item in packet.driver_analysis.candidates
+            if item.driver_id == "drv_block_wu_authcore_release"
+        )
+        assert principal.standing is DriverStanding.PRINCIPAL_DRIVER
+        assert principal.role is DriverRole.DRIVER
+        assert principal.category is DriverCategory.EXTERNAL_BLOCKER
+        assert principal.affected_subject_ids == ("proj_identity_rewrite",)
+
+    def test_the_earning_driver_rests_on_lineage_and_real_evidence(
+        self, helio, signer
+    ) -> None:
+        """Standing is what the contract says it is, checked on the wire.
+
+        Handles rather than raw observation ids, and every one of them
+        present in the packet's own evidence index — a cited handle the
+        index does not carry is an unresolvable reference presented as
+        evidence.
+        """
+
+        packet = _packet(helio, "proj_identity_rewrite", signer)
+        principal = next(
+            item
+            for item in packet.driver_analysis.candidates
+            if item.driver_id == "drv_block_wu_authcore_release"
+        )
+        assert principal.supporting_path_ids
+        assert principal.supporting_evidence_ids
+        indexed = {
+            entry.evidence.evidence_ref_id
+            for entry in packet.evidence_coverage.evidence_index
+        }
+        assert set(principal.supporting_evidence_ids) <= indexed
+
+    def test_the_standing_was_earned_structurally_not_by_measurement(
+        self, helio
+    ) -> None:
+        """Which mechanism earned it, so CHAOS-3619 can split per family.
+
+        A supported outcome reached by citing a canonical measurement is a
+        different answer to the trial's question than one reached from the
+        graph alone. Until the measurement commit lands, every mechanism must
+        read ``structural`` — and this is the assertion that would fail if a
+        finding started claiming otherwise.
+        """
+
+        findings = _by_id(
+            _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
+        )
+        earner = findings["drv_block_wu_authcore_release"]
+        assert earner.standing is DriverStanding.PRINCIPAL_DRIVER
+        assert earner.mechanism == StandingMechanism.STRUCTURAL
+
+    def test_a_packet_with_no_drivers_is_still_unsupported(self, helio, signer) -> None:
+        """The control. Otherwise "supported" could be the constant.
+
+        Same builder, same world, same subject — drivers withheld. If this
+        also came back supported, the outcome would not be derived from
+        anything.
+        """
+
+        packet = _packet(helio, "proj_identity_rewrite", signer, drivers=())
+        assert packet.driver_analysis.candidates == ()
+        assert packet.outcome is InvestigationOutcome.UNSUPPORTED
+
+    def test_a_subject_whose_only_candidate_is_excluded_is_unsupported(
+        self, helio, signer
+    ) -> None:
+        """``proj_meridian``'s only candidate is the planted false claim.
+
+        Excluded for untrusted support, so the packet asserts no judgment —
+        which is the honest answer and the one the whole poisoned-linkage
+        case exists to produce.
+        """
+
+        packet = _packet(helio, "proj_meridian", signer)
+        assert packet.driver_analysis.candidates
+        assert packet.driver_analysis.principal_driver_ids == ()
+        assert packet.outcome is InvestigationOutcome.UNSUPPORTED
+
+
+class TestEvidenceTranslationFailsLoudly:
+    def test_a_driver_citing_unindexed_evidence_is_refused(self, helio, signer) -> None:
+        """Discovery and emission must agree about what the run observed.
+
+        An earlier version dropped an unknown id silently. The harness
+        disabled that filter and every test still passed — SURVIVED — which
+        showed the branch was unreachable in every world under test and so
+        was dead code wearing the appearance of a safety net.
+
+        Raising is reachable, and this constructs the reach: a finding built
+        by discovery, then given one evidence id the packet never indexed.
+        Silently dropping it would emit a driver with less support than it
+        was built from, which is a weaker claim presented as the same one.
+        """
+
+        from dataclasses import replace
+
+        findings = _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
+        honest = next(
+            item
+            for item in findings
+            if item.driver_id == "drv_block_wu_authcore_release"
+        )
+        assert honest.evidence_ids, "the finding carries no evidence; vacuous"
+
+        # The control: unmodified, it emits.
+        assert _packet(helio, "proj_identity_rewrite", signer, drivers=(honest,))
+
+        tampered = replace(
+            honest, evidence_ids=(*honest.evidence_ids, "obs_never_indexed")
+        )
+        with pytest.raises(ValueError, match="never indexed"):
+            _packet(helio, "proj_identity_rewrite", signer, drivers=(tampered,))
+
+
+def _packet(projection, subject: str, signer, *, drivers=None):
+    from dev_health_ops.api.dev.investigation_contract import (
+        ComparisonShape,
+        QuestionFamilyID,
+    )
+    from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+        JobContext,
+        TrialContext,
+        build_packet,
+    )
+    from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
+
+    grant = adapter.authorized_entity_ids_for(world.PRINCIPAL_ANALYST)
+    readout = asyncio.run(
+        ProjectionGraphReader(projection).neighbourhood(
+            org_id=world.ORG_HELIO,
+            seed_canonical_ids=[subject],
+            authorized_entity_ids=sorted(grant),
+            max_hops=2,
+        )
+    )
+    findings = (
+        discover_drivers(readout, subject, as_of=world.TRIAL_NOW)[0]
+        if drivers is None
+        else drivers
+    )
+    return build_packet(
+        readout=readout,
+        job=JobContext(
+            job_id="job_drivers",
+            question_family=QuestionFamilyID("project_status_drivers"),
+            job_statement="Why is this subject not finished?",
+            comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+            window_start=world.AS_OF_JUL_15,
+            window_end=world.TRIAL_NOW,
+        ),
+        watermark=IndexWatermark(
+            indexed_through=world.TRIAL_NOW,
+            projected_at=world.TRIAL_NOW,
+            records_indexed=1,
+        ),
+        signer=signer,
+        trial=TrialContext(
+            run_id="4f9a2c1e-1111-4222-8333-444455556666",
+            corpus_version=adapter.CORPUS_VERSION,
+        ),
+        produced_at=_PROBE_NOW,
+        drivers=findings,
+    )

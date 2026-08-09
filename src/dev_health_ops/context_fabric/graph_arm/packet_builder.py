@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -64,6 +64,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     ComparisonShape,
     DriverAnalysis,
     DriverCandidate,
+    DriverStanding,
     EvidenceCoverage,
     HistoricalComparability,
     InvestigationEvidenceEntry,
@@ -104,6 +105,7 @@ from .backend import (
 )
 from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .cohort import CohortCandidate, CohortProposal
+from .drivers import DriverFinding
 from .projection import PROJECTION_VERSION
 from .readback import QUERY_VERSION, DiscoveredPath, InvestigationReadout
 from .vocabulary import GraphEntityKind, entity_kind_to_subject_kind
@@ -344,6 +346,64 @@ def derive_outcome(
     return InvestigationOutcome.SUPPORTED
 
 
+def _driver_candidate(
+    finding: DriverFinding,
+    handle_by_observation: Mapping[str, str],
+    known_subject_ids: Container[str],
+) -> DriverCandidate:
+    """One structural finding, as the frozen contract's driver candidate.
+
+    Evidence is translated from canonical observation ids to the handles
+    this run minted, and an id with no handle **raises**.
+
+    The first version dropped such ids silently. That branch turned out to be
+    unreachable in every world under test — the guard-injection harness
+    disabled it and every test still passed, reporting SURVIVED — which made
+    it dead code wearing the appearance of a safety net. Raising is both
+    reachable and correct: a finding citing evidence this packet does not
+    carry is an internal inconsistency between discovery and emission, and
+    the honest response is to fail rather than to quietly emit a driver with
+    less support than it was built from.
+    """
+
+    def handles(ids: Sequence[str], role: str) -> tuple[str, ...]:
+        missing = sorted(set(ids) - set(handle_by_observation))
+        if missing:
+            raise ValueError(
+                f"driver {finding.driver_id} cites {role} evidence this "
+                f"packet never indexed: {missing}. Discovery and emission "
+                "disagree about what the run observed"
+            )
+        return tuple(handle_by_observation[item] for item in ids)
+
+    supporting = handles(finding.evidence_ids, "supporting")
+    conflicting = handles(finding.conflicting_evidence_ids, "conflicting")
+    affected = tuple(
+        item for item in (finding.subject_id,) if item in known_subject_ids
+    ) or (finding.subject_id,)
+    return DriverCandidate(
+        driver_id=finding.driver_id,
+        category=finding.category,
+        # Arm-authored, and the compose guard knows it: this pair is the one
+        # ``(constructor, field)`` entry on the collision list, because
+        # ``EntityNode.summary`` two modules away must stay an empty literal.
+        # Composed from canonical identifiers and a fixed clause only --
+        # never from a source-supplied label.
+        summary=f"{finding.summary_subject} {finding.summary_detail}",
+        affected_subject_ids=affected,
+        role=finding.role,
+        standing=finding.standing,
+        assertion_basis=finding.assertion_basis,
+        confidence_qualifier=finding.confidence_qualifier,
+        supporting_path_ids=finding.path_ids[:20],
+        supporting_evidence_ids=supporting[:25],
+        conflicting_evidence_ids=conflicting[:25],
+        conflict_note=finding.conflict_detail if conflicting else None,
+        relevance=RelevanceState.CURRENT,
+        exclusion_reason=finding.exclusion_reason,
+    )
+
+
 def _packet_id(run_id: str, job_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cf-graph-arm/{run_id}/{job_id}"))
 
@@ -446,6 +506,8 @@ def build_packet(
     embedder: EmbeddingBackend | None = None,
     subject_matches: Sequence[SubjectMatchFinding] | None = None,
     cohort: CohortProposal | None = None,
+    drivers: Sequence[DriverFinding] | None = None,
+    drivers_truncated: bool = False,
     budgets: TrialBudgets = DEFAULT_BUDGETS,
     staleness_tolerance: timedelta = DEFAULT_STALENESS_TOLERANCE,
 ) -> AskDevInvestigationPacket:
@@ -600,6 +662,12 @@ def build_packet(
     # ---- evidence ------------------------------------------------------
     evidence_entries: list[InvestigationEvidenceEntry] = []
     authorized_observation_ids: list[str] = []
+    #: canonical observation id -> the handle this run minted for it.
+    #: Drivers cite handles, never raw ids: the frozen contract checks
+    #: that every cited handle is in the evidence index, and an id that
+    #: never became a handle is evidence the packet does not actually
+    #: carry.
+    handle_by_observation: dict[str, str] = {}
     for observation in readout.observations:
         supports = tuple(
             subject
@@ -624,6 +692,7 @@ def build_packet(
         )
         handle = signer.issue(readout.org_id, record)
         authorized_observation_ids.append(observation.canonical_id)
+        handle_by_observation[observation.canonical_id] = handle
         evidence_entries.append(
             InvestigationEvidenceEntry(
                 evidence={
@@ -930,12 +999,33 @@ def build_packet(
             readout.entities_truncation_reason or readout.paths_truncation_reason
         ),
     )
+    # Everything a driver may say it affects: the contract checks that a
+    # driver's affected subjects were declared somewhere in the packet.
+    known_subject_ids = (
+        {candidate.canonical_id for candidate in candidates}
+        | {member.canonical_id for member in cohort_members}
+        | known_entity_ids
+    )
+    driver_candidates = tuple(
+        _driver_candidate(finding, handle_by_observation, known_subject_ids)
+        for finding in drivers or ()
+    )
     driver_analysis = DriverAnalysis(
         schema_version="ask_dev_driver_analysis.v1",
-        candidates=(),
-        principal_driver_ids=(),
-        candidates_truncated=False,
-        truncation_reason=None,
+        candidates=driver_candidates,
+        principal_driver_ids=tuple(
+            candidate.driver_id
+            for candidate in driver_candidates
+            if candidate.standing is DriverStanding.PRINCIPAL_DRIVER
+        ),
+        candidates_truncated=drivers_truncated,
+        truncation_reason=(
+            # No driver-specific reason exists in the frozen vocabulary;
+            # the bound that bites is the candidate NODE budget, and
+            # naming a reason the contract does not have would be worse
+            # than naming the one that is actually true.
+            TruncationReason.NODE_BUDGET if drivers_truncated else None
+        ),
     )
     evidence_coverage = EvidenceCoverage(
         schema_version="ask_dev_evidence_coverage.v1",

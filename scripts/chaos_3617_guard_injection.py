@@ -904,6 +904,63 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="assert",
     ),
     Mutation(
+        mutation_id="a-different-driver-is-promoted",
+        defect=(
+            "the driver credited with the supported outcome is not the one "
+            "that earned it -- an outcome assertion on the enum alone stays "
+            "green under exactly this substitution"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    winner = ordered[0].driver_id",
+        replacement="    winner = ordered[-1].driver_id",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestPrincipalStandingIsEarned::"
+            "test_principal_standing_is_withheld_when_two_candidates_tie",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="excluded-drivers-listed-as-principal",
+        defect=(
+            "the packet's principal list names candidates that never held "
+            "principal standing, so an excluded candidate is presented as "
+            "the judgment"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="            if candidate.standing is DriverStanding.PRINCIPAL_DRIVER",
+        replacement="            if candidate.standing is not None",
+        tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestTheFirstSupportedPacket",),
+        expect_failure="principal_driver_ids must be exactly",
+    ),
+    Mutation(
+        mutation_id="driver-cites-evidence-the-packet-never-indexed",
+        defect=(
+            "a driver cites an observation the packet does not carry, so "
+            "discovery and emission disagree about what the run observed and "
+            "the driver is emitted with less support than it was built from"
+        ),
+        path=SRC / "packet_builder.py",
+        # Restores the ORIGINAL silent-drop behaviour rather than merely
+        # blanking the check: with ``missing = []`` the code goes on to a raw
+        # dict lookup and dies with a bare ``KeyError``, which blocks the
+        # packet but proves nothing about the guard -- the guard's value is
+        # an attributable refusal, and the fault it prevents is the driver
+        # being emitted with less support than it was built from.
+        anchor=(
+            "        missing = sorted(set(ids) - set(handle_by_observation))\n"
+            "        if missing:"
+        ),
+        replacement=(
+            "        ids = [item for item in ids if item in handle_by_observation]\n"
+            "        missing = []\n"
+            "        if missing:"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::TestEvidenceTranslationFailsLoudly",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

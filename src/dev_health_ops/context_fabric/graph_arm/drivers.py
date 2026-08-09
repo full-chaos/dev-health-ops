@@ -321,6 +321,7 @@ def _classify(
     category: DriverCategory,
     role: DriverRole,
     summary_detail: str,
+    summary_subject: str | None = None,
     paths: Sequence[DiscoveredPath],
     support: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
 ) -> DriverFinding:
@@ -368,7 +369,7 @@ def _classify(
             role=role,
             standing=standing,
             mechanism=StandingMechanism.STRUCTURAL,
-            summary_subject=cause_id,
+            summary_subject=summary_subject or cause_id,
             summary_detail=summary_detail,
             path_ids=path_ids,
             evidence_ids=trusted,
@@ -471,10 +472,14 @@ def _blocking_candidates(
                 # It passed for the wrong reason, and would have come back the
                 # moment the corpus gave that dependency a status.
                 continue
+            # Phrased from the CAUSE's side, because ``summary_subject`` is
+            # the cause. The first draft read "<cause> is blocked by this,
+            # which is not complete", which states the opposite of what the
+            # edge says -- a sentence a reader would act on, inverted.
             detail = (
-                "is blocked by this, which is not complete"
+                "is a declared blocker of the subject"
                 if step.relationship is RelationshipType.BLOCKED_BY
-                else "depends on this, which is not complete"
+                else "is a dependency of the subject and is not complete"
             )
             blocking_paths = _paths_between(readout, context.subject_id, cause_id)
             findings.append(
@@ -562,6 +567,7 @@ def _symptom_candidates(
                 context,
                 driver_id=f"drv_symptom_{observation.canonical_id}",
                 cause_id=context.subject_id,
+                summary_subject=observation.canonical_id,
                 category=DriverCategory.QUALITY_OR_DEFECT,
                 role=DriverRole.SYMPTOM,
                 summary_detail="was observed on the subject as an effect",

@@ -40,16 +40,25 @@ product feature, and nothing about it is on a user-visible path.
 | Alias / acronym / renamed-entity candidate search | Yes — by lookup, never retrieval |
 | Semantic retrieval | Seam + guard in place; search not yet |
 | Cohort construction | Peer shapes yes; exhaustive shapes still refused |
-| Driver synthesis | Structural yes; measurement-shaped not yet |
+| Driver synthesis | Structural yes — reaches a supported outcome |
 | Approved-unstructured extraction | Boundary in place, extraction not yet |
 
-Because it synthesizes no drivers, `build_packet` **never** emits a supported
-outcome. A packet with no asserted driver is, by the frozen contract's own
+The outcome is **derived from what was produced**, never passed in. A packet
+with no asserted driver is, by the frozen contract's own
 `validate_supported_outcome_asserts_a_judgment`, a redirect rather than an
-answer; claiming `supported` for one would be exactly the
-"dashboard redirect without a direct judgment" fault mode. The outcome is
-derived from what was produced, not passed in, so the arm cannot over-claim
-even by accident.
+answer — so for as long as the arm synthesized no drivers it could only emit
+`unsupported`, and it did.
+
+With structural drivers it now emits `supported_with_gaps` for
+`proj_identity_rewrite`, credited to `drv_block_wu_authcore_release`, and the
+packet revalidates through the canonical validator. Two things keep that
+honest. The outcome is still derived rather than asserted, so a run that
+finds nothing still says so — a control test builds the *same packet* with
+drivers withheld and gets `unsupported` back. And the outcome tests name
+**which** driver earned it, its standing, its category and its mechanism: a
+supported outcome is a claim about a specific driver, and an assertion on the
+enum alone stays green under driver substitution. A mutation that promotes a
+different driver has to fail those tests, and does.
 
 ## Hard boundaries
 
@@ -410,7 +419,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **52** guards the arm relies on, the harness disables
+For each of the **55** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it

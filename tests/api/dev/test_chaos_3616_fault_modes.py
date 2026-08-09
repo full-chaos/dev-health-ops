@@ -866,8 +866,7 @@ def test_backend_vocabulary_in_a_free_text_field_is_caught() -> None:
 
     def mutate(payload: dict[str, Any]) -> None:
         payload["driver_analysis"]["candidates"][0]["summary"] = (
-            "Traversal found this via a Cypher MATCH ( ) over the Neo4j "
-            "projection."
+            "Traversal found this via a Cypher MATCH ( ) over the Neo4j projection."
         )
 
     _assert_caught(

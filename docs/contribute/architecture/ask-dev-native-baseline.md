@@ -284,6 +284,11 @@ Four values are load-bearing at that call site:
   packet the producer is about to build. The seam digests every cited record
   against this sequence, so sourcing it from the packet would compare a value
   to itself — a check that cannot fail while wearing the appearance of one.
+  This is asserted at **both** hops, because they are genuinely different
+  claims: on the context the producer is handed, and on the argument
+  `InvestigationShadow.evaluate` actually receives. A plant that left the
+  context correct and passed the packet's own records to `evaluate` made
+  every guarantee vacuous while the context-level test still passed.
 - **The bounded window comes from the run's own scope decision**
   (`investigation_shadow.run_window`), the same `DevScopeResolution` the
   terminal publishes on the wire. `None` when the run ended before scope

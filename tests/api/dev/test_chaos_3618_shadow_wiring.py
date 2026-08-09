@@ -224,6 +224,68 @@ async def test_canonical_evidence_comes_from_the_run_not_the_packet() -> None:
     )
 
 
+async def test_the_seam_is_evaluated_against_the_frames_evidence() -> None:
+    """The same constraint, asserted where it is actually enforced.
+
+    The test above observes the context the PRODUCER was handed. That is
+    one hop short of the defect: ``canonical_bypass_offenders`` digests
+    against whatever ``InvestigationShadow.evaluate`` was passed, and
+    nothing in this suite observed that argument. Proven, not assumed --
+    a plant that left the context correct and passed the packet's own
+    records to ``evaluate`` made the run's every H4 guarantee vacuous and
+    the test above still PASSED.
+
+    Today the wiring passes ``context.canonical_evidence`` straight
+    through, so the two are the same sequence. That sameness is precisely
+    the assumption this test refuses to keep making on the suite's behalf.
+    """
+
+    frame = _frame_with_evidence()
+    shadow = _RecordingShadow()
+    orchestrator = _bare_orchestrator(
+        investigation_shadow=shadow,
+        investigation_packet_producer=_RecordingProducer(_packet_payload()),
+    )
+    await orchestrator._run_investigation_shadow(
+        run_id="run-provenance-seam",
+        org_id=ORG_ID,
+        frame=frame,
+        investigation_result=None,
+        preflight_result=None,
+        scope_resolution=None,
+    )
+    assert frame.evidence, "fixture must carry evidence or this proves nothing"
+    [evaluated] = shadow.evaluated_canonical_evidence
+    assert evaluated == tuple(frame.evidence), (
+        "GUARD seam_evaluates_against_the_frames_evidence"
+    )
+    packet_digests = {
+        seam._evidence_digest(DevEvidenceRefV2.model_validate(entry["evidence"]))
+        for entry in _packet_payload()["evidence_coverage"]["evidence_index"]
+    }
+    assert {seam._evidence_digest(ref) for ref in evaluated} != packet_digests, (
+        "GUARD seam_never_evaluates_a_packet_against_itself"
+    )
+
+
+class _RecordingShadow(seam.InvestigationShadow):
+    """A REAL seam that also records what it was asked to compare against.
+
+    Subclasses rather than fakes: a double would prove the wiring calls
+    *something*, not that the real validation ran on the real sequence.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(enabled=True)
+        self.evaluated_canonical_evidence: list[tuple[Any, ...]] = []
+
+    def evaluate(
+        self, *, canonical_evidence: Any, **kwargs: Any
+    ) -> seam.InvestigationShadowRecord:
+        self.evaluated_canonical_evidence.append(tuple(canonical_evidence))
+        return super().evaluate(canonical_evidence=canonical_evidence, **kwargs)
+
+
 async def test_the_context_is_scoped_to_the_run_it_describes() -> None:
     producer = _RecordingProducer(_packet_payload())
     output = await _run(

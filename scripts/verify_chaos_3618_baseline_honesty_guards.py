@@ -763,6 +763,85 @@ DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
 """,
     ),
     GuardCase(
+        case_id="seam_evaluated_against_the_packets_own_evidence",
+        stake=(
+            "the SEAM handed the packet's own records as canonical while the "
+            "producer's context stayed correct -- the digest compares a value "
+            "to itself and every H4 guarantee is vacuous, with nothing in the "
+            "suite looking at the argument that made it so"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_the_seam_is_evaluated_against_the_frames_evidence"
+        ),
+        expected_failure="GUARD seam_evaluates_against_the_frames_evidence",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        # This plant is the reason the case exists. Run against
+        # ``test_canonical_evidence_comes_from_the_run_not_the_packet`` --
+        # the test that names this exact constraint -- it PASSES: that test
+        # observes the context the PRODUCER was handed, and this defect is
+        # one hop further on. The neighbouring case
+        # ``canonical_evidence_taken_from_the_packet`` was killed only
+        # because its plant ALSO emptied the context, which is an incidental
+        # kill, not a kill on the named defect.
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+
+async def _run_investigation_shadow(
+    self,
+    *,
+    run_id,
+    org_id,
+    frame,
+    investigation_result,
+    preflight_result,
+    scope_resolution,
+):
+    shadow = self._investigation_shadow
+    producer = self._investigation_packet_producer
+    if shadow is None or producer is None or not shadow.enabled:
+        return None
+    window = seam.run_window(scope_resolution)
+    context = seam.FinishedRunContext(
+        run_id=run_id,
+        organization_id=org_id,
+        frame=frame,
+        investigation_result=investigation_result,
+        interpretation=None,
+        ledger=None,
+        subject_set=None,
+        committed_subject=None,
+        window_start=window[0] if window else None,
+        window_end=window[1] if window else None,
+        # CORRECT, deliberately: the frame's own evidence. Every assertion
+        # about the context still holds under this plant.
+        canonical_evidence=tuple(frame.evidence),
+    )
+    payload = producer.build_packet(context)
+    if payload is None:
+        return None
+    cited = tuple(
+        DevEvidenceRefV2.model_validate(entry["evidence"])
+        for entry in payload["evidence_coverage"]["evidence_index"]
+    )
+    # THE DEFECT, and the only one: the seam compares the packet to itself.
+    record = shadow.evaluate(
+        payload=payload,
+        run_id=run_id,
+        organization_id=org_id,
+        canonical_evidence=cited,
+    )
+    await self._recorder.record_investigation_shadow(record)
+    return None
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
         case_id="shadow_fault_reaches_the_run",
         stake=(
             "a failing arm failing the run it shadows -- the single thing a "

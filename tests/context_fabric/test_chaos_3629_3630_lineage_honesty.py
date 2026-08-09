@@ -87,9 +87,10 @@ def _read(projection, seed: str, *, max_hops: int = 2):
     )
 
 
-def _packet(readout, signer):
+def _packet(readout, signer, *, drivers=None):
     return build_packet(
         readout=readout,
+        drivers=drivers,
         job=JobContext(
             job_id="job_chaos_3629",
             question_family=QuestionFamilyID.PROJECT_STATUS_DRIVERS,
@@ -261,3 +262,62 @@ class TestLineagePathsCloseToEvidence:
         for path in packet.related_context.paths:
             if path.path_id in evidence_free:
                 assert path.evidence_ref_ids == ()
+
+
+class TestRelationshipClosureIsEnforcedLikeDriverClosure:
+    """The half of the provenance claim that was unenforceable.
+
+    Drivers have always had to close to evidence
+    (``_assert_support_is_closed``). The relationships they rest on could not,
+    because ``LineagePath.evidence_ref_ids`` was a constant — so "every
+    material driver or relationship closes to authorized canonical evidence"
+    was enforced for one of the two nouns in that sentence.
+
+    Scoped to paths an ASSERTED driver leans on. About half the corpus's edges
+    carry no evidence slugs, and a path nobody builds a judgment from owes
+    nobody a citation; demanding otherwise would refuse honest lineage.
+    """
+
+    def _honest(self, helio):
+        from dev_health_ops.context_fabric.graph_arm.drivers import discover_drivers
+
+        readout = _read(helio, "proj_identity_rewrite")
+        findings, _ = discover_drivers(
+            readout, "proj_identity_rewrite", as_of=world.TRIAL_NOW
+        )
+        asserted = [item for item in findings if item.path_ids and item.evidence_ids]
+        assert asserted, "no asserted driver to work from; vacuous"
+        return readout, asserted[0]
+
+    def test_an_asserted_driver_on_an_evidence_free_path_is_refused(
+        self, helio, signer
+    ) -> None:
+        from dataclasses import replace
+
+        readout, honest = self._honest(helio)
+        evidence_free = [
+            path.path_id
+            for path in readout.paths
+            if not any(step.observation_ids for step in path.steps)
+        ]
+        assert evidence_free, "no evidence-free path to plant; vacuous"
+
+        planted = replace(honest, path_ids=(evidence_free[0],))
+        with pytest.raises(ValueError, match="close to no evidence"):
+            _packet(readout, signer, drivers=(planted,))
+
+    def test_the_same_driver_on_its_own_evidenced_path_still_builds(
+        self, helio, signer
+    ) -> None:
+        """The other end of the pair.
+
+        Without it, a guard that refused every asserted driver would satisfy
+        the test above — and the arm would emit no judgments at all while
+        looking rigorous.
+        """
+
+        readout, honest = self._honest(helio)
+
+        packet = _packet(readout, signer, drivers=(honest,))
+
+        assert packet.driver_analysis.candidates

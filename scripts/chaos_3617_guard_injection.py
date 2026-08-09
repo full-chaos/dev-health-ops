@@ -465,6 +465,65 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
         expect_failure="DID NOT RAISE",
     ),
+    # ---- CHAOS-3629 / CHAOS-3630: the lineage emitter stops declaring ----
+    Mutation(
+        mutation_id="relevance-hardcoded-current-again",
+        defect=(
+            "an expired relationship is emitted as a live one. The corpus "
+            "plants dep_pulse_ratelimitd closed two months before TRIAL_NOW "
+            "for exactly this, PathStep.is_current_at already returns False "
+            "for it, and the emitter used to discard that and declare CURRENT "
+            "at all eight construction sites -- so CHAOS-3619's "
+            "current_relevance dimension was scoring a constant"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if step.is_current_at(as_of):",
+        replacement="    if True:",
+        tests=(
+            f"{TESTS}/test_chaos_3629_3630_lineage_honesty.py::"
+            "TestRelevanceIsDerivedNotDeclared",
+        ),
+        expect_failure="RelevanceState.HISTORICAL_ONLY",
+    ),
+    Mutation(
+        mutation_id="path-evidence-dropped-again",
+        defect=(
+            "lineage paths stop carrying the evidence their own edges name, "
+            "so no relationship in any packet closes to evidence while every "
+            "driver does -- half the provenance claim, silently absent, which "
+            "is what a constant field looks like from outside"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="            if handle is not None and handle not in evidence:",
+        replacement="            if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3629_3630_lineage_honesty.py::"
+            "TestLineagePathsCloseToEvidence",
+        ),
+        expect_failure="no path cites evidence",
+    ),
+    Mutation(
+        mutation_id="driver-rests-on-a-path-that-cites-nothing",
+        defect=(
+            "an asserted driver leans on lineage that closes to no evidence "
+            "at all, so the mechanism it names rests on the arm's assertion "
+            "alone. Driver-closure was enforced and relationship-closure was "
+            "not, because the field it would have checked was a literal"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "        elif all(\n"
+            "            item in evidence_free_paths for item in "
+            "driver.supporting_path_ids\n"
+            "        ):"
+        ),
+        replacement="        elif False:",
+        tests=(
+            f"{TESTS}/test_chaos_3629_3630_lineage_honesty.py::"
+            "TestRelationshipClosureIsEnforcedLikeDriverClosure",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
     Mutation(
         mutation_id="observation-subjects-narrowed-instead-of-refused",
         defect=(

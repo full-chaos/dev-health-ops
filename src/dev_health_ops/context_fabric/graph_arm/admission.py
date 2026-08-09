@@ -70,10 +70,21 @@ def evidence_admission_enabled(environ: Mapping[str, str] | None = None) -> bool
     than this package's older bare-``os.getenv`` style, because a trial
     harness has to be able to turn this on for one run without mutating the
     process it shares with everything else.
+
+    The body is written in the native arm's EXACT shape -- rebind ``environ``,
+    then ``environ.get(CONST)`` -- and not the tidier
+    ``source = os.environ if environ is None else environ``. The env-isolation
+    scrub list is DERIVED by an AST scan that matches a ``.get`` whose
+    receiver unparses to ``os``, ``os.environ`` or ``environ``
+    (``tests/_env_isolation.py:429``). A local called ``source`` unparses to
+    ``source``, the scan misses the read, and the name silently drops out of
+    the scrub list -- observed as a CI failure, which is the only reason this
+    comment exists.
     """
 
-    source = os.environ if environ is None else environ
-    return source.get(EVIDENCE_ADMISSION_FLAG) == "1"
+    if environ is None:
+        environ = os.environ
+    return environ.get(EVIDENCE_ADMISSION_FLAG) == "1"
 
 
 def candidate_locator(observation: DiscoveredObservation) -> str:

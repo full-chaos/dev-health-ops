@@ -1,9 +1,9 @@
 site_name: Dev Health documentation
 site_description: Task-oriented Dev Health documentation with the Full Chaos visual identity.
 site_url: https://docs.fullchaos.dev
-repo_name: Full Chaos / Dev Health
-repo_url: https://github.com/full-chaos/dev-health-ops
-edit_uri: edit/main/docs/
+# repo_name: Full Chaos / Dev Health
+# repo_url: https://github.com/full-chaos/dev-health-ops
+# edit_uri: edit/main/docs/
 
 docs_dir: docs
 site_dir: .build/docs

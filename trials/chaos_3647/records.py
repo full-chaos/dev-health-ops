@@ -153,6 +153,10 @@ class SemanticTrialRecords:
 
     schema_version: str = SEMANTIC_TRIAL_SCHEMA_VERSION
     binding: dict[str, Any] = field(default_factory=dict)
+    #: Evidence that BM25 was live before anything was measured. A run
+    #: without this block is a run whose hybrid leg may have been cosine-only
+    #: — which happened once, silently, and is why the field exists.
+    fulltext_readiness: dict[str, Any] = field(default_factory=dict)
     embedded_text_surface: dict[str, Any] = field(default_factory=dict)
     cases: tuple[CaseRecord, ...] = ()
     authorization_probes: tuple[dict[str, Any], ...] = ()

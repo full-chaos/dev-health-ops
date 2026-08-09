@@ -27,9 +27,11 @@ from dev_health_ops.context_fabric.graph_arm.backend import (
 )
 from dev_health_ops.context_fabric.graph_arm.semantic_retrieval import (
     CrossPartitionRetrievalError,
+    FulltextIndexNotReadyError,
     NonSemanticEmbedderError,
     RetrievalMethod,
     retrieve_candidates,
+    wait_for_fulltext_index,
 )
 from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
 
@@ -401,3 +403,84 @@ class TestNonSubjectNodes:
                 store=_FakeStore(object(), _PARTITION, _SemanticEmbedder()),
                 authorized_entity_ids=frozenset({"proj_alpha"}),
             )
+
+
+class TestTheFulltextReadinessGate:
+    """The guard for the failure this trial actually shipped once.
+
+    A recorded CHAOS-3647 run had ``bm25_order == []`` on all eight cases:
+    FalkorDB's full-text index had not populated after the bulk write, the
+    "hybrid" leg was cosine-only in every row, and nothing failed. The delta
+    classifications happened to survive; one case's rank-1 did not.
+    """
+
+    async def test_an_unpopulated_index_raises_rather_than_returning_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install(monkeypatch, bm25=[], cosine=[])
+        with pytest.raises(FulltextIndexNotReadyError) as excinfo:
+            await wait_for_fulltext_index(
+                _FakeStore(object(), _PARTITION, _SemanticEmbedder()),
+                probe_query="Identity Platform Rewrite",
+                expected_canonical_id="proj_identity_rewrite",
+                attempts=2,
+                delay_seconds=0.0,
+            )
+        assert "proj_identity_rewrite" in str(excinfo.value)
+        assert "cosine-only" in str(excinfo.value)
+
+    async def test_a_non_empty_index_that_lacks_the_probe_still_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The positive control is the point.
+
+        "The index returned something" is satisfied by a stale index a
+        previous run left behind. Only "the index returned the node I just
+        wrote" distinguishes a populated index from an old one.
+        """
+
+        _install(monkeypatch, bm25=[_node("u_other", "proj_other", "Other")], cosine=[])
+        with pytest.raises(FulltextIndexNotReadyError):
+            await wait_for_fulltext_index(
+                _FakeStore(object(), _PARTITION, _SemanticEmbedder()),
+                probe_query="Identity Platform Rewrite",
+                expected_canonical_id="proj_identity_rewrite",
+                attempts=2,
+                delay_seconds=0.0,
+            )
+
+    async def test_a_populated_index_reports_ready(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control. A gate that never opens is not a gate."""
+
+        _install(
+            monkeypatch,
+            bm25=[_node("u1", "proj_identity_rewrite", "Identity Platform Rewrite")],
+            cosine=[],
+        )
+        readiness = await wait_for_fulltext_index(
+            _FakeStore(object(), _PARTITION, _SemanticEmbedder()),
+            probe_query="Identity Platform Rewrite",
+            expected_canonical_id="proj_identity_rewrite",
+            attempts=2,
+            delay_seconds=0.0,
+        )
+        assert readiness.ready
+        assert readiness.attempts_used == 1
+
+    async def test_the_probe_is_scoped_to_the_stores_own_partition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A neighbouring tenant's populated index must not satisfy this."""
+
+        calls = _install(monkeypatch, bm25=[], cosine=[])
+        with pytest.raises(FulltextIndexNotReadyError):
+            await wait_for_fulltext_index(
+                _FakeStore(object(), _PARTITION, _SemanticEmbedder()),
+                probe_query="anything",
+                expected_canonical_id="proj_identity_rewrite",
+                attempts=1,
+                delay_seconds=0.0,
+            )
+        assert calls["bm25_group_ids"] == [_PARTITION]

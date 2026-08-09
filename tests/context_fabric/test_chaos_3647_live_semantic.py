@@ -34,6 +34,9 @@ from dev_health_ops.api.dev.investigation_corpus import world
 from dev_health_ops.context_fabric.graph_arm import corpus_adapter as adapter
 from dev_health_ops.context_fabric.graph_arm.backend import CloudEmbedder
 from dev_health_ops.context_fabric.graph_arm.projection import build_projection
+from dev_health_ops.context_fabric.graph_arm.semantic_retrieval import (
+    wait_for_fulltext_index,
+)
 from dev_health_ops.context_fabric.graph_arm.store import GraphArmStore
 from trials.chaos_3647.legs import LegId, resolve_deterministic, resolve_semantic
 from trials.chaos_3647.probes import PROBES, run_probe
@@ -106,6 +109,20 @@ async def semantic_world():
             await store.purge_org()
             await store.build_indices()
             await store.write_projection(projection)
+        # BM25 must be live before any test reads a hybrid result. Without
+        # this the suite's "the leg runs against the real thing" assertion
+        # passes on a cosine-only result — which is exactly what one recorded
+        # trial run did, silently.
+        await wait_for_fulltext_index(
+            helio_store,
+            probe_query=world.ENTITIES_BY_ID[world.PROJ_IDENTITY_REWRITE].display_label,
+            expected_canonical_id=world.PROJ_IDENTITY_REWRITE,
+        )
+        await wait_for_fulltext_index(
+            lumen_store,
+            probe_query=world.ENTITIES_BY_ID[world.LUMEN_PROJ_ACR].display_label,
+            expected_canonical_id=world.LUMEN_PROJ_ACR,
+        )
         yield helio_store, lumen_store, helio, embedder
     finally:
         for store in (helio_store, lumen_store):
@@ -226,6 +243,11 @@ class TestTheSemanticLegRunsAgainstTheRealThing:
             "leg thinks they are"
         )
         assert resolution.cosine_order, "the cosine primitive returned nothing"
+        assert resolution.bm25_order, (
+            "the BM25 primitive returned nothing, so this 'hybrid' result is "
+            "cosine-only. A recorded run of this trial looked exactly like "
+            "this in all eight cases and nothing failed"
+        )
         assert all(
             subject.mechanism in {"embedding_similarity", "lexical_fuzzy"}
             for subject in resolution.subjects

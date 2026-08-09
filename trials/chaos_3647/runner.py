@@ -48,6 +48,9 @@ from dev_health_ops.context_fabric.graph_arm.flags import (
     trial_store_config,
 )
 from dev_health_ops.context_fabric.graph_arm.projection import build_projection
+from dev_health_ops.context_fabric.graph_arm.semantic_retrieval import (
+    wait_for_fulltext_index,
+)
 from dev_health_ops.context_fabric.graph_arm.store import GraphArmStore
 from trials.chaos_3619.binding import RunClass, collect_binding
 
@@ -258,6 +261,18 @@ async def run() -> SemanticTrialRecords:
             await store.build_indices()
             await store.write_projection(projection)
 
+        # The BM25 half of the hybrid leg must be live before anything is
+        # measured. An earlier recorded run of this trial queried too soon
+        # and produced `bm25_order == []` on all eight cases — a cosine-only
+        # result under a hybrid heading, with nothing in the file to say so.
+        # The probe is a positive control: a label whose correct answer is
+        # known, checked for that answer rather than for a non-empty result.
+        readiness = await wait_for_fulltext_index(
+            helio_store,
+            probe_query=world.ENTITIES_BY_ID[world.PROJ_IDENTITY_REWRITE].display_label,
+            expected_canonical_id=world.PROJ_IDENTITY_REWRITE,
+        )
+
         for case in _ambiguity_cases():
             oracle = oracle_for(case.case_id)
             case_authorized = adapter.authorized_entity_ids_for(case.principal_id)
@@ -361,6 +376,7 @@ async def run() -> SemanticTrialRecords:
     )
     return SemanticTrialRecords(
         binding=asdict(binding),
+        fulltext_readiness=asdict(readiness),
         embedded_text_surface=asdict(_embedded_text_surface(helio)),
         cases=tuple(cases),
         authorization_probes=tuple(probe_records),

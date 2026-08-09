@@ -25,6 +25,13 @@ mistake this module could make. The check is on ``embedder.semantic``, which
 :class:`~.backend.CloudEmbedder` keys on the API key rather than on the class,
 so an unusable instance is refused too.
 
+**A hybrid leg whose BM25 half is dark must fail, not quietly become a
+cosine leg.** FalkorDB's full-text index populates after the bulk write, and
+a recorded run of this trial queried it too early: ``bm25_order`` was empty
+on all eight cases, the leg was cosine-only under a heading that said hybrid,
+and nothing failed. :func:`wait_for_fulltext_index` is the positive control
+that closes that, and it raises rather than warning.
+
 **Per-candidate mechanism is derived from what actually surfaced it.**
 Hybrid retrieval fuses two result sets, and a node that only BM25 found was
 found lexically. Labelling it ``EMBEDDING_SIMILARITY`` because the *leg* is
@@ -79,12 +86,15 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "DEFAULT_SEMANTIC_LIMIT",
     "CrossPartitionRetrievalError",
+    "FulltextIndexNotReadyError",
+    "FulltextReadiness",
     "RetrievalMethod",
     "RetrievalStore",
     "SemanticCandidate",
     "SemanticRetrieval",
     "NonSemanticEmbedderError",
     "retrieve_candidates",
+    "wait_for_fulltext_index",
 ]
 
 #: How many candidates a semantic leg returns. Matches
@@ -230,6 +240,81 @@ class SemanticRetrieval:
 def _attribute(node: Any, key: str) -> Any:
     attributes = getattr(node, "attributes", None) or {}
     return attributes.get(key)
+
+
+@dataclass(frozen=True, slots=True)
+class FulltextReadiness:
+    """Evidence that the BM25 half of a hybrid leg is actually live."""
+
+    probe_query: str
+    expected_canonical_id: str
+    attempts_used: int
+    ready: bool
+
+
+class FulltextIndexNotReadyError(RuntimeError):
+    """The full-text index never populated, so BM25 would measure nothing.
+
+    Raised rather than warned, and this is the most important refusal in this
+    module after :class:`NonSemanticEmbedderError`.
+
+    **Observed, not hypothetical.** A recorded CHAOS-3647 run had
+    ``bm25_order == []`` on all eight cases: FalkorDB's full-text index had
+    not populated after the bulk write, so a leg labelled *hybrid* was
+    cosine-only in every row and nothing failed. The delta classifications
+    happened to survive; one case's rank-1 did not. A measurement that did
+    not happen has to fail loudly, so this is the failure.
+    """
+
+
+async def wait_for_fulltext_index(
+    store: RetrievalStore,
+    *,
+    probe_query: str,
+    expected_canonical_id: str,
+    attempts: int = 30,
+    delay_seconds: float = 0.5,
+) -> FulltextReadiness:
+    """Block until BM25 can find a node the caller knows is there.
+
+    The probe is a **positive control**: a query whose correct answer the
+    caller already knows, checked for *that answer* rather than for a
+    non-empty result. "The index returned something" is satisfied by a stale
+    index left by a previous run; "the index returned the node I just wrote"
+    is not.
+
+    Raises :class:`FulltextIndexNotReadyError` on timeout. There is no warn
+    mode and no falsy return for the failure case: a caller able to ignore
+    this would produce exactly the run it exists to prevent.
+    """
+
+    import asyncio
+
+    search_utils = graphiti_module("search.search_utils")
+    empty_filter = graphiti_module("search.search_filters").SearchFilters()
+    for attempt in range(1, attempts + 1):
+        nodes = await search_utils.node_fulltext_search(
+            store.driver, probe_query, empty_filter, [store.partition], 25
+        )
+        if any(
+            _attribute(node, _CANONICAL_ID_ATTRIBUTE) == expected_canonical_id
+            for node in nodes
+        ):
+            return FulltextReadiness(
+                probe_query=probe_query,
+                expected_canonical_id=expected_canonical_id,
+                attempts_used=attempt,
+                ready=True,
+            )
+        await asyncio.sleep(delay_seconds)
+
+    raise FulltextIndexNotReadyError(
+        f"after {attempts} attempts over {attempts * delay_seconds:.1f}s, "
+        f"full-text search for {probe_query!r} in partition "
+        f"{store.partition!r} never returned {expected_canonical_id!r}. The "
+        "BM25 half of a hybrid leg would contribute nothing, and the run "
+        "would record a cosine-only result under a hybrid heading"
+    )
 
 
 async def retrieve_candidates(

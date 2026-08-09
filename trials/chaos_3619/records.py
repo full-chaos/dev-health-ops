@@ -50,6 +50,7 @@ from .dispositions import CaseDisposition, is_measured
 __all__ = [
     "VOID_FILENAME_MARKER",
     "ArmResult",
+    "InterpretationDisposition",
     "CaseRecord",
     "DimensionOutcome",
     "TrialRecordSet",
@@ -73,6 +74,37 @@ class DimensionOutcome:
     dimension_id: str
     verdict: str
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class InterpretationDisposition:
+    """What the production interpreter made of one question.
+
+    Measurement, not tuning. 34 of the 39 authored corpus questions fall
+    below ``FALLBACK_CONFIDENCE_FLOOR`` to ``BOUNDED_INVESTIGATION``, which
+    ``NATIVE_QUESTION_FAMILY`` deliberately does not map -- so the native arm
+    reports them unprojectable. Recording the outcome per case is what turns
+    that from a caveat attached to every number into an attributable fact
+    about each one.
+
+    ``below_fallback_floor`` is stored rather than re-derived by a reader
+    from ``confidence``: the floor is a module constant that can move, and a
+    record that made a reader recompute the comparison would silently change
+    meaning when it did.
+    """
+
+    intent_id: str
+    confidence: float
+    below_fallback_floor: bool
+    fallback_floor: float
+    #: The family the native capability table derives, or ``None`` when the
+    #: intent has no mapping -- which is the unprojectable case.
+    derived_question_family: str | None
+    #: True when a classifier WOULD have been consulted in a build that wired
+    #: one. Always false in this trial: production wires none, and neither
+    #: does the trial. Recorded so the zero-model claim is visible per row
+    #: rather than resting on a paragraph elsewhere.
+    classifier_consulted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +137,17 @@ class ArmResult:
     #: NOT_COMPARABLE row. Required for those dispositions: an unattributed
     #: limitation is indistinguishable from an untested one.
     limitation_owner: str = ""
+    #: What the production interpreter made of this question, on the native
+    #: leg. Recorded per case rather than summarised, so a reader can
+    #: decompose any graph-versus-native gap into "native never recognised
+    #: the question" and "native recognised it and still lacked the evidence
+    #: or lineage". Without it the confound conditions every figure and
+    #: explains none. ``None`` on the graph arm, which does not run the
+    #: interpreter for intent.
+    interpretation: InterpretationDisposition | None = None
+    #: Set on Leg B native rows. A Leg B native figure quoted without it
+    #: misrepresents the baseline as stronger than what ships.
+    figure_label: str = ""
 
     def __post_init__(self) -> None:
         disposition = CaseDisposition(self.disposition)
@@ -145,6 +188,10 @@ class CaseRecord:
     principal_id: str
     organization_id: str
     declared_dimension_ids: tuple[str, ...]
+    #: Which leg produced this row. Carried per case rather than only on the
+    #: record set, because the report renders legs as separate sections and a
+    #: row that lost its leg is a row nobody can place.
+    leg: str = ""
     arms: tuple[ArmResult, ...] = ()
 
     def by_arm(self) -> dict[str, ArmResult]:

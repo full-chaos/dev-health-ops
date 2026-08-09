@@ -30,8 +30,95 @@ from typing import Any
 
 from .binding import RunClass
 from .dispositions import CaseDisposition
+from .legs import LEG_B_NATIVE_LABEL, LegId, reading_rule
 
-__all__ = ["render_report"]
+__all__ = ["confound_section", "render_report"]
+
+#: Families where an intent-recognition miss is a RESULT rather than a
+#: confound, because resolving the reference is the capability under trial.
+#:
+#: The distinction is the ADR's, not a presentational choice: on the
+#: ambiguity families, "the thing we used to call Northstar" is precisely
+#: what the graph's alias and previous-name capability exists to resolve, so
+#: the native arm failing there is a measured product difference. On the
+#: other families an unrecognised intent is a pure recognition gap that a
+#: better classifier could close with no graph involved, and reading it as
+#: evidence for a graph would be adopting a dependency to fix a parser.
+_AMBIGUITY_FAMILIES = frozenset(
+    {
+        "ambiguous_identity",
+        "colloquial_follow_up",
+        "clarification_and_no_match",
+    }
+)
+
+
+def confound_section(payload: dict[str, Any]) -> list[str]:
+    """The interpretation confound, per family and in both directions.
+
+    Rendered from the per-case interpretation dispositions in the records
+    rather than from a remembered figure, so the prose cannot outlive the
+    measurement it describes.
+    """
+
+    below: dict[str, int] = defaultdict(int)
+    total: dict[str, int] = defaultdict(int)
+    unmapped: dict[str, int] = defaultdict(int)
+    for case in payload["cases"]:
+        if case.get("leg") != LegId.AS_DEPLOYED.value:
+            continue
+        family = case["question_family"]
+        total[family] += 1
+        for arm in case["arms"]:
+            disposition = arm.get("interpretation")
+            if not disposition:
+                continue
+            if disposition.get("below_fallback_floor"):
+                below[family] += 1
+            if disposition.get("derived_question_family") is None:
+                unmapped[family] += 1
+
+    lines = [
+        "## The question-interpretation confound",
+        "",
+        "Stated in both directions, because either alone is misleading.",
+        "",
+        "* It is **not a starved baseline.** Production wires no classifier "
+        "either, so the native arm in this trial behaves exactly as the "
+        "deployed one does.",
+        "* It **is a hard limit** on what the native arm can do with most "
+        "corpus questions, and any per-family reading of the native column "
+        "has to be read against this table rather than as a "
+        "graph-versus-native difference alone.",
+        "",
+        "**The counterfactual, named honestly.** The constrained-model "
+        "fallback seam EXISTS in production code and is deliberately unwired "
+        "(`production_runtime.py:2468`). Leg A therefore measures "
+        "graph-versus-native **as deployed**, and native-with-classifier is "
+        "UNMEASURED NATIVE HEADROOM in that leg. Leg B measures an upper "
+        "bound on that headroom by supplying the classification perfectly. "
+        "The classifier was NOT wired for this trial: doing so would break "
+        "deployed parity and re-import the model-tier substitution the "
+        "correction plan bans.",
+        "",
+        "| family | cases (Leg A) | below fallback floor | no native family "
+        "-> unprojectable | miss is |",
+        "|---|---|---|---|---|",
+    ]
+    for family in sorted(total):
+        kind = (
+            "a RESULT (reference resolution is the capability under trial)"
+            if family in _AMBIGUITY_FAMILIES
+            else "a CONFOUND (a recognition gap a classifier could close "
+            "without any graph)"
+        )
+        lines.append(
+            f"| `{family}` | {total[family]} | {below.get(family, 0)} | "
+            f"{unmapped.get(family, 0)} | {kind} |"
+        )
+    lines.append("")
+    return lines
+
 
 #: What one matrix cell can say. Deliberately short and deliberately
 #: distinct: a reader scanning a wide table separates these by shape.
@@ -209,29 +296,66 @@ def render_report(payload: dict[str, Any]) -> str:
     lines.extend(_disposition_table(payload, arms))
     lines.append("")
 
+    lines.append("## How to read the two legs")
+    lines.append("")
+    lines.append(reading_rule())
+    lines.append("")
+
+    lines.extend(confound_section(payload))
+
     lines.append("## Per question family x per evaluation dimension")
     lines.append("")
     lines.append(
-        "One table per arm. There is deliberately no combined table and no "
-        "total: a single figure would hide an arm that improves ambiguity "
-        "while harming driver precision, which is the specific outcome the "
-        "correction addendum requires to stay visible."
+        "One table per arm, per leg. There is deliberately no combined table "
+        "and no total: a single figure would hide an arm that improves "
+        "ambiguity while harming driver precision, which is the specific "
+        "outcome the correction addendum requires to stay visible. The legs "
+        "are never aggregated together."
     )
     lines.append("")
     lines.append(f"Legend: {_LEGEND}")
     lines.append("")
 
-    for arm_id in arms:
-        matrix, families, dimensions = _family_dimension_matrix(payload, arm_id)
-        lines.append(f"### Arm `{arm_id}`")
+    legs_present = [
+        leg
+        for leg in (LegId.AS_DEPLOYED.value, LegId.JOB_HELD_CONSTANT.value)
+        if any(case.get("leg") == leg for case in payload["cases"])
+    ]
+    for leg in legs_present:
+        leg_payload = {
+            **payload,
+            "cases": [c for c in payload["cases"] if c.get("leg") == leg],
+        }
+        lines.append(f"### Leg `{leg}`")
         lines.append("")
-        header = "| family | " + " | ".join(dimensions) + " |"
-        lines.append(header)
-        lines.append("|---" * (len(dimensions) + 1) + "|")
-        for family in families:
-            cells = [_cell(matrix.get((family, d), {})) for d in dimensions]
-            lines.append(f"| `{family}` | " + " | ".join(cells) + " |")
-        lines.append("")
+        if leg == LegId.JOB_HELD_CONSTANT.value:
+            lines.append(
+                f"> Every native figure in this leg is **{LEG_B_NATIVE_LABEL}**. "
+                "The native arm here receives a question-family classification "
+                "it cannot derive, so these are an upper bound on what a "
+                "perfect classifier could deliver -- not a forecast, and not "
+                "the product's behaviour."
+            )
+            lines.append("")
+        for arm_id in arms:
+            matrix, families, dimensions = _family_dimension_matrix(leg_payload, arm_id)
+            if not families:
+                continue
+            label = (
+                f" — {LEG_B_NATIVE_LABEL}"
+                if leg == LegId.JOB_HELD_CONSTANT.value and arm_id == "native"
+                else ""
+            )
+            lines.append(f"#### Arm `{arm_id}`{label}")
+            lines.append("")
+            lines.append("| family | " + " | ".join(dimensions) + " |")
+            lines.append("|---" * (len(dimensions) + 1) + "|")
+            for family in families:
+                cells = [_cell(matrix.get((family, d), {})) for d in dimensions]
+                lines.append(f"| `{family}` | " + " | ".join(cells) + " |")
+            lines.append("")
+
+    lines.extend(_safety_column_callout(payload))
 
     non_authored = payload.get("non_authored", ())
     lines.append("## Cases the corpus itself does not score")
@@ -255,3 +379,60 @@ def render_report(payload: dict[str, Any]) -> str:
     lines.append("")
 
     return "\n".join(lines) + "\n"
+
+
+def _safety_column_callout(payload: dict[str, Any]) -> list[str]:
+    """Why Leg A's native safety column must not be read as clean.
+
+    All nine adversarial-safety cases go unmeasured for the native arm in
+    Leg A -- the interpreter does not recognise them, so the arm reports them
+    unprojectable and never emits a packet to be scored. An unmeasured safety
+    column and a clean safety column look identical in a sparse matrix, and
+    the difference is the whole point of the safety family.
+    """
+
+    unmeasured: dict[str, list[str]] = defaultdict(list)
+    measured: dict[str, list[str]] = defaultdict(list)
+    for case in payload["cases"]:
+        if case.get("corpus_family") != "adversarial_safety":
+            continue
+        leg = case.get("leg", "")
+        for arm in case["arms"]:
+            if arm["arm_id"] != "native":
+                continue
+            bucket = (
+                measured
+                if arm["disposition"] == CaseDisposition.SCORED.value
+                else unmeasured
+            )
+            bucket[leg].append(case["case_id"])
+
+    lines = ["## Safety column: unmeasured is not clean", ""]
+    if not unmeasured and not measured:
+        lines.append("No adversarial-safety cases in this record set.")
+        lines.append("")
+        return lines
+    lines.append(
+        "An unmeasured safety cell and a passing safety cell look alike in a "
+        "sparse matrix. They are not alike, and this is where that "
+        "distinction is spelled out for the native arm."
+    )
+    lines.append("")
+    lines.append("| leg | native adversarial-safety scored | unmeasured |")
+    lines.append("|---|---|---|")
+    for leg in sorted(set(unmeasured) | set(measured)):
+        lines.append(
+            f"| `{leg}` | {len(measured.get(leg, []))} | "
+            f"{len(unmeasured.get(leg, []))} |"
+        )
+    lines.append("")
+    for leg, case_ids in sorted(unmeasured.items()):
+        lines.append(
+            f"Unmeasured for native in `{leg}`: "
+            + ", ".join(f"`{cid}`" for cid in sorted(case_ids))
+            + ". These produced no packet, so nothing about their safety "
+            "behaviour was observed. **Do not read this leg's native safety "
+            "column as clean.**"
+        )
+        lines.append("")
+    return lines

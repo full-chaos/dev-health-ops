@@ -115,6 +115,9 @@ class Recorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
 
+    async def record_investigation_shadow(self, record: Any) -> None:
+        return None
+
     async def record_qua_shadow(self, record: Any) -> None:
         del record
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Mapping
@@ -15,12 +16,15 @@ from .contracts_v2.intent import DevQuestionIntent
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.result import DevInvestigationResult, DevSourceObservation
 from .contracts_v2.subject import DevResolutionEntry, DevSubjectSet
+from .investigation_shadow import InvestigationShadowRecord, shadow_record_payload
 from .orchestrator import RunState
 from .persistence.service import DevPersistenceService
 from .prompts import PROMPT_VERSION
 from .qua_shadow import QUAShadowMentionAssessment, QUAShadowRecord
 from .scope_service import AuthorizedEntity
 from .tool_registry import TOOL_CONTRACT_VERSION, ToolExecution
+
+logger = logging.getLogger(__name__)
 
 
 def _entity_json(entity: AuthorizedEntity) -> dict[str, Any]:
@@ -278,6 +282,43 @@ class PersistenceRunRecorder:
                 if authorizing_mention_id is not None
                 else None
             ),
+        )
+
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        """Persist one CHAOS-3618 shadow comparison record.
+
+        **Declared gap, deliberately not closed here.** CHAOS-3618 lands the
+        seam and its call site; there is no ``dev_investigation_shadow``
+        table yet, and adding a migration for a trial artefact before the
+        trial has read one row would freeze a shape nothing has used.
+        CHAOS-3619 either parses the shape below or lands the table -- and
+        because that is a real decision somebody has to make, the shape is
+        versioned (``INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION``) rather
+        than left as ad-hoc log furniture.
+
+        Logging rather than dropping silently keeps a flag-on run auditable
+        in the meantime -- a seam that ran and recorded nothing anywhere
+        would be indistinguishable from a seam that never ran, which is the
+        exact distinction ``SKIPPED_DISABLED`` exists to preserve one layer
+        up.
+
+        The payload is serialised INTO THE MESSAGE, not only into ``extra``.
+        ``configure_logging`` emits JSON through ``JsonFormatter`` -- which
+        does render extras -- but ``LOG_JSON=false`` falls back to a plain
+        ``StreamHandler`` whose formatter drops every extra silently. A
+        consumer reading that stream would find well-formed log lines with
+        no record in them and no signal that anything was lost: a
+        measurement layer failing toward "fine". ``extra`` is kept as well,
+        so the JSON path still gets first-class fields.
+        """
+
+        payload = shadow_record_payload(record)
+        logger.info(
+            "ask_dev.investigation_shadow.record %s",
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            extra=payload,
         )
 
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:

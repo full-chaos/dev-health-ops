@@ -694,6 +694,191 @@ proj._TRIAL_ALLOWLIST = frozenset(SourceClass)
 """,
     ),
     GuardCase(
+        case_id="canonical_evidence_taken_from_the_packet",
+        stake=(
+            "the seam handed the arm's OWN packet evidence as canonical, so "
+            "the digest compares a value to itself -- every H4 guarantee "
+            "becomes a check that cannot fail while looking like one"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_canonical_evidence_comes_from_the_run_not_the_packet"
+        ),
+        expected_failure="GUARD canonical_evidence_is_the_frames_own",
+        forbidden_failure=("TypeError",),
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+_real = DevOrchestrator._run_investigation_shadow
+
+
+async def _run_investigation_shadow(
+    self,
+    *,
+    run_id,
+    org_id,
+    frame,
+    investigation_result,
+    preflight_result,
+    scope_resolution,
+):
+    shadow = self._investigation_shadow
+    producer = self._investigation_packet_producer
+    if shadow is None or producer is None or not shadow.enabled:
+        return None
+    context = seam.FinishedRunContext(
+        run_id=run_id,
+        organization_id=org_id,
+        frame=frame,
+        investigation_result=investigation_result,
+        interpretation=None,
+        ledger=None,
+        subject_set=None,
+        committed_subject=None,
+        window_start=None,
+        window_end=None,
+        canonical_evidence=(),
+    )
+    payload = producer.build_packet(context)
+    if payload is None:
+        return None
+    # The defect: canonical evidence sourced FROM THE PACKET.
+    cited = tuple(
+        DevEvidenceRefV2.model_validate(entry["evidence"])
+        for entry in payload["evidence_coverage"]["evidence_index"]
+    )
+    record = shadow.evaluate(
+        payload=payload,
+        run_id=run_id,
+        organization_id=org_id,
+        canonical_evidence=cited,
+    )
+    await self._recorder.record_investigation_shadow(record)
+    return None
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
+        case_id="seam_evaluated_against_the_packets_own_evidence",
+        stake=(
+            "the SEAM handed the packet's own records as canonical while the "
+            "producer's context stayed correct -- the digest compares a value "
+            "to itself and every H4 guarantee is vacuous, with nothing in the "
+            "suite looking at the argument that made it so"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_the_seam_is_evaluated_against_the_frames_evidence"
+        ),
+        expected_failure="GUARD seam_evaluates_against_the_frames_evidence",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        # This plant is the reason the case exists. Run against
+        # ``test_canonical_evidence_comes_from_the_run_not_the_packet`` --
+        # the test that names this exact constraint -- it PASSES: that test
+        # observes the context the PRODUCER was handed, and this defect is
+        # one hop further on. The neighbouring case
+        # ``canonical_evidence_taken_from_the_packet`` was killed only
+        # because its plant ALSO emptied the context, which is an incidental
+        # kill, not a kill on the named defect.
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+from dev_health_ops.api.dev.contracts_v2.embedded import DevEvidenceRefV2
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+
+async def _run_investigation_shadow(
+    self,
+    *,
+    run_id,
+    org_id,
+    frame,
+    investigation_result,
+    preflight_result,
+    scope_resolution,
+):
+    shadow = self._investigation_shadow
+    producer = self._investigation_packet_producer
+    if shadow is None or producer is None or not shadow.enabled:
+        return None
+    window = seam.run_window(scope_resolution)
+    context = seam.FinishedRunContext(
+        run_id=run_id,
+        organization_id=org_id,
+        frame=frame,
+        investigation_result=investigation_result,
+        interpretation=None,
+        ledger=None,
+        subject_set=None,
+        committed_subject=None,
+        window_start=window[0] if window else None,
+        window_end=window[1] if window else None,
+        # CORRECT, deliberately: the frame's own evidence. Every assertion
+        # about the context still holds under this plant.
+        canonical_evidence=tuple(frame.evidence),
+    )
+    payload = producer.build_packet(context)
+    if payload is None:
+        return None
+    cited = tuple(
+        DevEvidenceRefV2.model_validate(entry["evidence"])
+        for entry in payload["evidence_coverage"]["evidence_index"]
+    )
+    # THE DEFECT, and the only one: the seam compares the packet to itself.
+    record = shadow.evaluate(
+        payload=payload,
+        run_id=run_id,
+        organization_id=org_id,
+        canonical_evidence=cited,
+    )
+    await self._recorder.record_investigation_shadow(record)
+    return None
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
+        case_id="shadow_fault_reaches_the_run",
+        stake=(
+            "a failing arm failing the run it shadows -- the single thing a "
+            "shadow seam must never do"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_an_always_raising_producer_leaves_the_run_byte_identical"
+        ),
+        expected_failure="RuntimeError",
+        plant="""
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+
+async def _run_investigation_shadow(
+    self,
+    *,
+    run_id,
+    org_id,
+    frame,
+    investigation_result,
+    preflight_result,
+    scope_resolution,
+):
+    # Containment removed: the producer's exception escapes into the run.
+    shadow = self._investigation_shadow
+    producer = self._investigation_packet_producer
+    if shadow is None or producer is None or not shadow.enabled:
+        return None
+    producer.build_packet(None)
+    return None
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
         case_id="unattributed_comparison_record",
         stake=(
             "a persisted comparison record that cannot say which arm produced "
@@ -713,6 +898,224 @@ def _post_init(self):
 
 
 seam.InvestigationShadowRecord.__post_init__ = _post_init
+""",
+    ),
+    # ----------------------------------------------------------------------
+    # CHAOS-3618 PR 2: the native arm connected to the seam.
+    # ----------------------------------------------------------------------
+    # ----------------------------------------------------------------------
+    # From the codex review of PR 2: what the seam was NOT seeing.
+    # ----------------------------------------------------------------------
+    GuardCase(
+        case_id="preflight_terminated_runs_never_reach_the_seam",
+        stake=(
+            "an entire class of finished run missing from the trial's "
+            "denominator -- and the class where a graph arm is most expected "
+            "to win, so the bias runs toward the arm under test"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_a_preflight_terminated_run_still_reaches_the_seam"
+        ),
+        expected_failure="GUARD every_persisted_frame_reaches_the_seam",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev.orchestrator import DevOrchestrator
+
+_real = DevOrchestrator._run_investigation_shadow
+
+
+async def _run_investigation_shadow(self, *, preflight_result, **kwargs):
+    # The pre-review position, expressed as a predicate: a run whose frame
+    # came from the preflight TERMINATE branch is skipped. That branch is
+    # exactly what `if not frame_already_recorded` used to exclude.
+    if preflight_result is not None and preflight_result.answer is not None:
+        return None
+    return await _real(self, preflight_result=preflight_result, **kwargs)
+
+
+DevOrchestrator._run_investigation_shadow = _run_investigation_shadow
+""",
+    ),
+    GuardCase(
+        case_id="unprojectable_runs_are_not_recorded",
+        stake=(
+            "a run its arm could not express leaving no trace, so the trial "
+            "cannot distinguish it from a seam that never ran"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_a_run_whose_arm_cannot_project_it_is_still_recorded"
+        ),
+        expected_failure="GUARD an_unprojectable_run_is_recorded",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+# The pre-review behaviour: a gap record is never constructible, so the
+# orchestrator's `producer_gap` branch produces nothing to record.
+def _producer_gap(cls, *, run_id, latency_ms):
+    raise RuntimeError("no gap record exists")
+
+
+seam.InvestigationShadowRecord.producer_gap = classmethod(_producer_gap)
+""",
+    ),
+    # NOTE: there is deliberately NO case here for "the shadow record must
+    # follow the terminal write". That property is enforced by the POSITION
+    # of a statement inside ``finish()``, and no sitecustomize plant can
+    # reorder inline statements — every plant I could write would prove
+    # something adjacent instead, which is the failure mode this whole
+    # harness exists to prevent. Its RED evidence was taken the honest way,
+    # by moving the call back above ``terminal()`` in the working tree,
+    # observing
+    # ``test_the_record_is_written_after_the_terminal_state`` fail on its
+    # own declared assertion, and restoring with the restore VERIFIED by
+    # ``git diff --quiet`` rather than assumed. Recorded here so the absence
+    # of a case is a stated decision, not an oversight.
+    GuardCase(
+        case_id="window_taken_from_nowhere",
+        stake=(
+            "a packet whose bounded time context is not the window the run's "
+            "queries used -- every temporal claim in it dated to nothing"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_the_projected_window_is_the_runs_own_scope_window"
+        ),
+        expected_failure="GUARD window_is_the_runs_own",
+        # The producer contains its own faults, so a plant that merely broke
+        # would surface as "no packet" and read like the guard firing.
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev import orchestrator as orch
+
+# Patched on the ORCHESTRATOR's imported name only. The test computes its
+# expectation from `investigation_shadow.run_window`, which stays pristine
+# -- otherwise both sides of the comparison would move together and the
+# case would prove nothing.
+orch.run_window = lambda resolution: None
+""",
+    ),
+    GuardCase(
+        case_id="committed_subject_is_not_a_canonical_ref",
+        stake=(
+            "the arm handed the scope a subject was committed AS instead of the "
+            "subject -- every real run dies inside the projection and is "
+            "reported as a defect in the baseline"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_the_committed_subject_is_a_canonical_entity_ref"
+        ),
+        expected_failure="GUARD committed_subject_is_a_canonical_ref",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.api.dev import orchestrator as orch
+
+# Exactly the inherited wiring, restored: a DevScopeResolution where the
+# projection reads `.entity_id` off a DevEntityRefV2.
+orch._committed_subject_ref = (
+    lambda preflight_result: preflight_result.committed_resolution
+    if preflight_result is not None
+    else None
+)
+""",
+    ),
+    GuardCase(
+        case_id="run_ids_compared_across_spaces",
+        stake=(
+            "the finished-run envelope check comparing a correlation key to a "
+            "minted handle -- unsatisfiable for every real run"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_native_producer.py::"
+            "test_the_same_context_unmodified_does_project"
+        ),
+        # The projection's OWN assertion text, not a downstream rejection.
+        expected_failure="which is not the minted handle for",
+        forbidden_failure=("TypeError", "PLANT-FAILED"),
+        plant="""
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+# Identity instead of the executor's mint: the two ids are compared
+# directly again, which is the pre-CHAOS-3618-PR-2 behaviour.
+proj.investigation_result_run_handle = lambda run_id: run_id
+""",
+    ),
+    GuardCase(
+        case_id="record_payload_drops_a_field",
+        stake=(
+            "a comparison record that parses cleanly while missing a field the "
+            "trial needs -- indistinguishable from a field that was empty"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_the_record_payload_carries_every_recorded_field"
+        ),
+        expected_failure="GUARD record_payload_covers_every_field",
+        forbidden_failure=("PLANT-FAILED",),
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+_HAND_LISTED = (
+    "run_id",
+    "status",
+    "arm_id",
+    "packet_schema_version",
+    "projection_version",
+    "packet_id",
+    "outcome",
+    "evidence_handles",
+    "latency_ms",
+    # `detail` and `frame_facts` quietly absent -- the exact shape a
+    # hand-maintained list drifts into.
+)
+
+
+def _payload(record):
+    payload = {"schema_version": seam.INVESTIGATION_SHADOW_RECORD_SCHEMA_VERSION}
+    for name in _HAND_LISTED:
+        value = getattr(record, name)
+        payload[name] = list(value) if isinstance(value, tuple) else value
+    return payload
+
+
+seam.shadow_record_payload = _payload
+""",
+    ),
+    GuardCase(
+        case_id="record_lives_only_in_log_extra",
+        stake=(
+            "the whole comparison artefact vanishing under LOG_JSON=false while "
+            "the log stream still looks healthy"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_shadow_wiring.py::"
+            "test_the_recorder_writes_the_record_into_the_log_message"
+        ),
+        expected_failure="GUARD record_survives_a_formatter_that_drops_extra",
+        # JSONDecodeError means the test blew up parsing an empty payload
+        # instead of failing its own assertion -- which is what it DID until
+        # the codex review, while still printing the GUARD string in the
+        # failing source line and being credited for it.
+        forbidden_failure=("PLANT-FAILED", "JSONDecodeError"),
+        plant="""
+from dev_health_ops.api.dev import orchestrator_persistence as persistence
+
+
+async def _record_investigation_shadow(self, record):
+    # The pre-PR-2 shape: structured fields only, which a plain formatter
+    # discards without a word.
+    persistence.logger.info(
+        "ask_dev.investigation_shadow.record",
+        extra=persistence.shadow_record_payload(record),
+    )
+
+
+persistence.PersistenceRunRecorder.record_investigation_shadow = (
+    _record_investigation_shadow
+)
 """,
     ),
 )
@@ -755,14 +1158,55 @@ def _base_env() -> dict[str, str]:
     return env
 
 
+def failure_region(output: str) -> str:
+    """The part of a pytest run that says why it FAILED.
+
+    The whole reason this function exists: ``expected_failure`` used to be
+    matched against the entire output, and pytest echoes SOURCE. So a
+    ``GUARD`` token could be credited from anywhere -- a passing assertion
+    above the real failure, a docstring, even a comment. The independent
+    verifier demonstrated exactly that: an unearned kill, credited from an
+    echoed line, in a harness whose entire purpose is refusing unearned
+    kills. 15 of the 31 cases were structurally exposed to it.
+
+    Two line shapes carry the real verdict and neither can be produced by
+    echoed source:
+
+    * ``E   ...`` -- pytest's assertion-detail lines, which is where the
+      failing assertion's own message lands;
+    * ``FAILED <nodeid> - <message>`` -- the short-summary line.
+
+    Everything else is context. Matching only here is what makes "the test
+    failed for the reason this case claims" a measurement rather than a
+    coincidence.
+    """
+
+    lines = [
+        line
+        for line in output.splitlines()
+        if line.startswith("E ") or line.startswith("FAILED ")
+    ]
+    return "\n".join(lines)
+
+
 def _verify(case: GuardCase, *, verbose: bool) -> str | None:
     """Return an error string, or ``None`` when the guard behaved as claimed."""
 
     baseline = _run_pytest(case.test, plant_dir=None)
     if baseline.returncode != 0:
+        # STDERR too, and that is not tidiness. The codex review ran every
+        # case in an environment with no usable temp directory: pytest died
+        # on stderr with FileNotFoundError, this branch reported only
+        # stdout, and all six cases came back with the same generic "the
+        # named test does not pass" -- indistinguishable from six genuinely
+        # broken pristine tests. A harness that cannot tell an environment
+        # failure from the thing it measures is a measurement layer failing
+        # toward a confident wrong answer.
         return (
             f"{case.case_id}: the named test does not pass against the pristine "
-            f"tree, so the plant would prove nothing\n{baseline.stdout[-2000:]}"
+            f"tree, so the plant would prove nothing\n"
+            f"--- stdout ---\n{baseline.stdout[-2000:]}\n"
+            f"--- stderr ---\n{baseline.stderr[-2000:]}"
         )
 
     workspace = Path(tempfile.mkdtemp(prefix=f"chaos3618-{case.case_id}-"))
@@ -809,23 +1253,38 @@ def _verify(case: GuardCase, *, verbose: bool) -> str | None:
     # review found: two plants were reported KILLED while the failure came
     # from the contract validator downstream, so the projection's own
     # assertion was never reached and was never proven load-bearing.
+    #
+    # Both checks below read the FAILURE REGION, not the whole output, and
+    # that is the second half of the same hole. pytest echoes source, so a
+    # token matched anywhere could be credited from a PASSING assertion
+    # above the real failure, or from a docstring, or from a comment. The
+    # independent verifier demonstrated an unearned kill through exactly
+    # that path, with 15 of these cases structurally exposed -- an
+    # echo-credited kill in the harness whose whole job is refusing
+    # unearned kills. Symmetrically applied: a forbidden token echoed from
+    # source used to REJECT a case that had genuinely fired, which cost a
+    # round to diagnose and forced an awkward workaround in a test comment.
+    region = failure_region(output)
     for forbidden in case.forbidden_failure:
-        if forbidden in output:
+        if forbidden in region:
             return (
                 f"{case.case_id}: the test failed, but on {forbidden!r} -- not "
                 f"the named assertion {case.expected_failure!r}. A "
                 "producer-side guard proved by a downstream rejection is "
                 "proving somebody else's invariant.\n"
                 f"  stake: {case.stake}\n"
-                f"  output tail: {output[-800:]}"
+                f"  failure region: {region[-800:]}"
             )
-    if case.expected_failure not in output:
+    if case.expected_failure not in region:
         return (
             f"{case.case_id}: the test failed, but {case.expected_failure!r} "
-            "never appeared in the output, so the failure is not the one this "
-            "case claims to prove.\n"
+            "never appeared in the FAILURE region, so the failure is not the "
+            "one this case claims to prove. (It may well appear elsewhere in "
+            "the output -- pytest echoes source -- which is precisely what "
+            "this check refuses to credit.)\n"
             f"  stake: {case.stake}\n"
-            f"  output tail: {output[-800:]}"
+            f"  failure region: {region[-800:] or '<empty>'}\n"
+            f"  output tail: {output[-600:]}"
         )
     if verbose:
         print(output[-1500:])
@@ -847,13 +1306,28 @@ def main() -> int:
             return 2
 
     failures: list[str] = []
+    unmeasured = 0
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.case_id} ... ", end="", flush=True)
         error = _verify(case, verbose=args.verbose)
         if error is None:
             print("guard observed failing")
         else:
-            print("NOT LOAD-BEARING")
+            # A case that never got measured is not a case that failed, and
+            # the two demand different responses: "not load-bearing" sends a
+            # reader to delete a guard, "unmeasured" sends them to fix their
+            # environment or their plant. The per-case message always said
+            # which; only this label conflated them, and a label is what
+            # most readers act on.
+            measured = not (
+                "the PLANT could not run" in error
+                or "does not pass against the pristine tree" in error
+            )
+            if measured:
+                print("NOT LOAD-BEARING")
+            else:
+                print("UNMEASURED")
+                unmeasured += 1
             failures.append(error)
 
     print()
@@ -861,8 +1335,14 @@ def main() -> int:
         for failure in failures:
             print(failure, file=sys.stderr)
             print(file=sys.stderr)
+        not_load_bearing = len(failures) - unmeasured
+        parts = []
+        if not_load_bearing:
+            parts.append(f"{not_load_bearing} not load-bearing")
+        if unmeasured:
+            parts.append(f"{unmeasured} UNMEASURED (never proved anything)")
         print(
-            f"{len(failures)} of {len(cases)} guards are not load-bearing.",
+            f"{len(failures)} of {len(cases)} guards failed: {', '.join(parts)}.",
             file=sys.stderr,
         )
         return 1

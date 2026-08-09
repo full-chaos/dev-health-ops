@@ -105,6 +105,13 @@ from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
+from .investigation_shadow import (
+    FinishedRunContext,
+    InvestigationPacketProducer,
+    InvestigationShadow,
+    InvestigationShadowRecord,
+    run_window,
+)
 from .no_match_terminal import (
     attested_strings,
     disclose_scope_widening,
@@ -246,6 +253,46 @@ def _project_scope_from_ref(
         comparison_range=base_scope.comparison_range,
         surface_context=None,
     )
+
+
+def _committed_subject_ref(
+    preflight_result: SubjectPreflightResult | None,
+) -> DevEntityRefV2 | None:
+    """The one subject preflight committed, as a canonical v2 entity ref.
+
+    CHAOS-3618 PR 2 originally handed the shadow seam
+    ``preflight_result.committed_resolution`` here, which is a
+    ``DevScopeResolution``. ``FinishedRunContext.committed_subject`` is
+    typed ``Any`` -- the seam must not couple to any one arm's view of a
+    run -- so nothing caught it, and the native projection reads
+    ``.entity_id`` off this value: every run with a committed subject would
+    have died on ``AttributeError`` inside the arm and been filed as a
+    ``PROJECTION_FAULT``, i.e. as a defect in the baseline rather than in
+    its wiring. Pinned by ``test_the_committed_subject_is_a_canonical_
+    entity_ref``.
+
+    ``committed_resolution`` is still the gate, because it is non-``None``
+    exactly when one *distinct* subject was committed. The ref itself comes
+    from the ledger, which is where a committed ``DevEntityRefV2`` actually
+    lives (``DevResolutionEntry.committed_entity_ref``, non-``None`` only
+    for an ``EXACT_MATCH``). Anything other than exactly one distinct
+    committed ref returns ``None`` rather than picking one: an arm told the
+    wrong subject was committed would attribute the whole packet to it.
+    """
+
+    if preflight_result is None or preflight_result.committed_resolution is None:
+        return None
+    ledger = preflight_result.ledger
+    if ledger is None:
+        return None
+    committed = {
+        entry.committed_entity_ref.entity_id: entry.committed_entity_ref
+        for entry in ledger.latest_by_mention().values()
+        if entry.committed_entity_ref is not None
+    }
+    if len(committed) != 1:
+        return None
+    return next(iter(committed.values()))
 
 
 def _named_entity_phrases(text: str) -> frozenset[str]:
@@ -684,6 +731,12 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        """Persist one CHAOS-3618 shadow comparison record."""
+        ...
+
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
         """Persist one CHAOS-3389 QUA shadow evaluation.
 
@@ -775,6 +828,11 @@ class NullRunRecorder:
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
+
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        return None
 
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
         del record
@@ -926,6 +984,8 @@ class DevOrchestrator:
         plan_executor: PlanExecutor | None = None,
         narrative_provider: narrative_fallback.NarrativeProvider | None = None,
         qua_shadow: QuestionUnderstandingShadow | None = None,
+        investigation_shadow: InvestigationShadow | None = None,
+        investigation_packet_producer: InvestigationPacketProducer | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -961,6 +1021,13 @@ class DevOrchestrator:
         # structural argument that even when set, this can never affect any
         # live decision.
         self._qua_shadow = qua_shadow
+        # CHAOS-3618 PR 2. ``None`` is the flag-off path for BOTH halves, and
+        # they are separate on purpose: the seam is arm-neutral machinery,
+        # the producer is one arm. The orchestrator never imports an arm --
+        # it calls whatever producer it was handed, so wiring the graph arm
+        # later changes production_runtime.py and nothing here.
+        self._investigation_shadow = investigation_shadow
+        self._investigation_packet_producer = investigation_packet_producer
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -1025,12 +1092,30 @@ class DevOrchestrator:
         # ambiguous "Atlas" and a not-found "Nightfall" both published
         # `inherited`, with zero candidates.
         preflight_terminal_resolution: DevScopeResolution | None = None
+        # CHAOS-3618 PR 2, codex review: the frame this run actually
+        # PERSISTED, or ``None`` when it persisted none.
+        #
+        # Set from both places a frame is written -- ``finish()``'s own
+        # compatibility frame and the preflight TERMINATE branch's richer
+        # one -- because the shadow seam must see every finished run, and
+        # those two branches are exactly what it used to see only half of.
+        # Set only on the success side of each write: a dropped frame means
+        # a run with no server-owned evidence to hand an arm, and inventing
+        # one would be the same class of dishonesty as inventing a window.
+        persisted_frame: DevAnswerFrame | None = None
         #: CHAOS-3525: ``(user's span, authorized entity label)`` for a subject
         #: committed from a QUA proposal -- set at the promotion seam, read by
         #: ``finish()``'s closure. A free variable rather than a parameter for
         #: the same reason ``investigation_result`` is one: ``finish()`` has
         #: ~35 call sites and none of them should have to remember this.
         qua_subject_disclosure: tuple[str, str] | None = None
+        # Bound up front because ``finish()`` closes over it: a run that
+        # terminates before preflight executes (a pre-cancelled request, a
+        # scope resolution that blows the wall clock) still reaches
+        # ``finish()``, and reading an unassigned free variable there is a
+        # NameError inside the terminal path -- which is exactly the class
+        # of failure the shadow seam must never introduce.
+        preflight_result: SubjectPreflightResult | None = None
         selected_event_sink = event_sink or self._event_sink
         # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
         # by the CHAOS-3295 plan-execution block below when a plan actually
@@ -1115,9 +1200,26 @@ class DevOrchestrator:
             grounding_validation_status: str | None = None,
             extra_attested: tuple[str, ...] = (),
         ) -> OrchestratorResult:
-            nonlocal terminal_written
+            nonlocal terminal_written, persisted_frame
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+
+            def terminal_resolution() -> DevScopeResolution | None:
+                """The scope decision THIS terminal reports, from one place.
+
+                Read lazily, so it sees ``answer`` after the disclosure
+                rewrites below rather than before. Two callers need it --
+                the ``OrchestratorResult`` this run publishes, and the
+                CHAOS-3618 shadow seam's bounded window -- and they must not
+                be able to disagree: an arm handed a window derived from a
+                different scope decision than the one the run published
+                would be projecting a run that never happened.
+                """
+
+                if answer is not None:
+                    return answer.resolved_scope
+                return published_resolution()
+
             # CHAOS-3497 part 2: disclose a widening in PROSE, not only in
             # `dev_scope_resolution.v1.fallbacks`.
             #
@@ -1677,6 +1779,10 @@ class DevOrchestrator:
                             narrative_failure_code = (
                                 failure_code.value if failure_code is not None else None
                             )
+                    # CHAOS-3618 PR 2: this frame reached storage, so it is
+                    # what an arm may be shown. The seam itself now runs
+                    # below, after terminal() -- see the call site.
+                    persisted_frame = frame
             await self._recorder.terminal(
                 state=state,
                 answer=answer,
@@ -1704,6 +1810,64 @@ class DevOrchestrator:
             events.append(event)
             if selected_event_sink is not None:
                 await selected_event_sink(event)
+            # CHAOS-3618 PR 2. Position moved here by the codex review, and
+            # the move is the fix for three separate findings:
+            #
+            # 1. It used to sit inside ``if not frame_already_recorded``, so
+            #    the preflight TERMINATE path -- which records its own,
+            #    richer frame -- never reached the seam AT ALL. Reproduced:
+            #    a run terminating on an unresolved name recorded 1 frame, 0
+            #    producer calls and 0 shadow records. That is the trial's
+            #    denominator quietly losing a whole class of run, and the
+            #    WORST class to lose: ambiguous-subject runs are precisely
+            #    where a graph arm is supposed to beat this baseline.
+            # 2. It used to sit BEFORE ``terminal()``, so a record could
+            #    describe a run that never terminalized -- and because the
+            #    outer handler retries ``finish()`` when the terminal write
+            #    fails, the retry emitted a SECOND record for the same run.
+            #    Log-only persistence has no dedup key to repair that with.
+            # 3. It added an await point between the frame and the terminal
+            #    write, widening the window in which a cancellation lands
+            #    before the run terminalizes. Below ``terminal_written``,
+            #    that window is gone: the run is already durable.
+            #
+            # Its record remains a local nothing reads, which is still the
+            # structural half of "flipping the flag changes zero live-path
+            # behavior"; the inertness tests prove the other half.
+            #
+            # DECLARED GAP -- CHAOS-3625. ``build_packet`` is SYNCHRONOUS
+            # (PR 1's frozen Protocol), so a slow or blocking producer stalls
+            # the event loop here and the run's remaining wall-clock budget is
+            # not re-checked after it.
+            #
+            # Be precise about what this position does and does not buy,
+            # because the two are easy to conflate: sitting below
+            # ``terminal()`` protects DURABILITY -- the run is already
+            # written, so a slow producer can no longer delay or lose it. It
+            # does NOT protect TAIL LATENCY: ``finish()`` awaits this before
+            # returning, so a blocking producer still delays the caller's
+            # response. Streamed output ordering is unaffected either way,
+            # since the terminal event reaches the sink above.
+            #
+            # Not fixed here on purpose: the honest fixes are an async
+            # Protocol or a post-producer budget check, and that Protocol is
+            # the interface the graph arm is already being built against.
+            # CHAOS-3619's trial infrastructure needs a runner-level timeout
+            # regardless, and owns this.
+            if persisted_frame is not None:
+                await self._run_investigation_shadow(
+                    run_id=run_id,
+                    org_id=org_id,
+                    frame=persisted_frame,
+                    investigation_result=investigation_result,
+                    preflight_result=preflight_result,
+                    # The run's OWN scope decision, and therefore its own
+                    # bounded window -- the same value this terminal
+                    # published on the wire. Reading the window off anything
+                    # else (``request.scope``, a clock) would hand an arm a
+                    # time context the run's queries never used.
+                    scope_resolution=terminal_resolution(),
+                )
             return OrchestratorResult(
                 run_id=run_id,
                 state=state,
@@ -1722,11 +1886,11 @@ class DevOrchestrator:
                 #
                 # On a no-answer terminal it is ``published_resolution()``
                 # below -- the resolution this run actually executed under.
-                scope_resolution=(
-                    answer.resolved_scope
-                    if answer is not None
-                    else published_resolution()
-                ),
+                #
+                # CHAOS-3618 PR 2 moved the expression itself into
+                # ``terminal_resolution()`` so the shadow seam's bounded
+                # window is derived from THIS value and cannot drift from it.
+                scope_resolution=terminal_resolution(),
             )
 
         def error(code: str, message: str, *, retryable: bool = False) -> DevError:
@@ -1784,7 +1948,7 @@ class DevOrchestrator:
             # named subject against the authorized catalog *before* the first
             # model round, so no evidence-bearing tool can execute without an
             # exact committed subject. Zero provider tokens are spent here.
-            preflight_result: SubjectPreflightResult | None = None
+            preflight_result = None
             allowed_tools: frozenset[ToolID] = frozenset(ToolID)
             if self._preflight is not None:
                 if cancellation.is_set():
@@ -2373,6 +2537,9 @@ class DevOrchestrator:
                             ),
                         )
                     except Exception:
+                        # (the CHAOS-3618 assignment below is deliberately
+                        # NOT in this handler: a dropped frame is not a
+                        # persisted one)
                         # A database-layer failure here (constraint
                         # violation, dropped connection) marks the
                         # recorder's session rollback-only; the terminal()
@@ -2397,6 +2564,13 @@ class DevOrchestrator:
                             preflight_outcome=preflight_result.diagnostic,
                             legacy_guard_reason=None,
                         )
+                    else:
+                        # CHAOS-3618 PR 2, codex review: the frame landed, so
+                        # the seam may see this run. ``else`` rather than a
+                        # line after the try: the handler above reaches here
+                        # too, and a run whose frame was rolled back must not
+                        # be handed to an arm as though it had one.
+                        persisted_frame = preflight_result.answer.frame
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=preflight_error,
@@ -3649,6 +3823,124 @@ class DevOrchestrator:
                 RunState.FAILED,
                 error=error("internal_error", "The request could not be completed."),
             )
+
+    async def _run_investigation_shadow(
+        self,
+        *,
+        run_id: str,
+        org_id: str,
+        frame: DevAnswerFrame,
+        investigation_result: DevInvestigationResult | None,
+        preflight_result: SubjectPreflightResult | None,
+        scope_resolution: DevScopeResolution | None,
+    ) -> None:
+        """Build one arm's packet and hand it to the shared seam.
+
+        Returns ``None`` always, and swallows every exception. A shadow-mode
+        bug must never fail, roll back, or alter the run it shadows, and the
+        seam's own containment is not relied on here -- a producer is
+        third-party code from this method's point of view.
+        """
+
+        shadow = self._investigation_shadow
+        producer = self._investigation_packet_producer
+        if shadow is None or producer is None or not shadow.enabled:
+            return None
+        try:
+            # ``None`` when the run ended before scope resolution completed.
+            # Passed through as ``None`` rather than substituted, because a
+            # window is the packet's bounded time context and an arm that
+            # accepted a manufactured one would date every claim in it to a
+            # query nothing ran. Refusing is the arm's job, not this
+            # method's -- see ``run_window``.
+            window = run_window(scope_resolution)
+            context = FinishedRunContext(
+                run_id=run_id,
+                organization_id=org_id,
+                frame=frame,
+                investigation_result=investigation_result,
+                interpretation=(
+                    preflight_result.interpretation if preflight_result else None
+                ),
+                ledger=preflight_result.ledger if preflight_result else None,
+                subject_set=preflight_result.subject_set if preflight_result else None,
+                committed_subject=_committed_subject_ref(preflight_result),
+                window_start=window[0] if window else None,
+                window_end=window[1] if window else None,
+                # THE load-bearing line of this method. Canonical evidence
+                # comes from the SERVER-OWNED FRAME, which the server built
+                # from what the evidence service returned -- never from the
+                # packet the producer is about to build. Feeding an arm's own
+                # evidence back in would make the seam's digest compare a
+                # value to itself: a check that cannot fail while wearing the
+                # appearance of one.
+                canonical_evidence=tuple(frame.evidence),
+            )
+            started = time.monotonic()
+            payload = producer.build_packet(context)
+            if payload is None:
+                # A normal outcome -- the native arm reports several kinds
+                # of run as unprojectable by design -- but a RECORDED one.
+                #
+                # This used to `return None`, so a run the arm could not
+                # express left no trace and was indistinguishable from a run
+                # the seam never saw. Those are the runs the trial most
+                # needs to count: "how often can the baseline express its
+                # own run" is one of the numbers the comparison turns on.
+                #
+                # (An earlier version of this comment justified the change
+                # by contrast with SKIPPED_DISABLED. The independent
+                # verifier caught that SKIPPED_DISABLED is unreachable from
+                # the production wiring -- the guard above returns first,
+                # and the factory only ever builds an enabled seam -- so the
+                # contrast described a state that never occurs. The defect
+                # was real without it.)
+                #
+                # The REASON stays in the arm's own log line, because the
+                # reason is the arm's vocabulary and this seam must not
+                # learn to speak it.
+                record = InvestigationShadowRecord.producer_gap(
+                    run_id=run_id,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+            else:
+                record = shadow.evaluate(
+                    payload=payload,
+                    run_id=run_id,
+                    organization_id=org_id,
+                    canonical_evidence=context.canonical_evidence,
+                )
+        except Exception as shadow_fault:
+            logger.exception(
+                "ask_dev.orchestrator.investigation_shadow_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(shadow_fault).__name__,
+                },
+            )
+            return None
+        try:
+            await self._recorder.record_investigation_shadow(record)
+        except Exception as write_fault:
+            # ``Exception``, deliberately NOT ``BaseException``. The codex
+            # review found that ``asyncio.CancelledError`` escapes here, and
+            # it is right that it does: swallowing a cancellation would make
+            # the seam the one thing in this file that refuses to be
+            # cancelled, and a "shadow" that outlives its run is worse than
+            # one that loses a record. What made it a DEFECT was the call's
+            # old position -- before ``terminal()``, where an escaping
+            # cancellation took the terminal write with it. Below
+            # ``terminal_written`` the run is already durable, so a
+            # cancellation here loses this record and nothing else, which is
+            # exactly the trade a shadow seam should make.
+            logger.exception(
+                "ask_dev.orchestrator.investigation_shadow_write_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(write_fault).__name__,
+                },
+            )
+        return None
 
     async def _resolve_with_cancellation(
         self,

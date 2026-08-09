@@ -70,6 +70,9 @@ from dev_health_ops.api.dev.investigation_contract import (
     UnresolvedMention,
     UnresolvedMentionReason,
 )
+from dev_health_ops.api.dev.investigation_plans.executor import (
+    investigation_result_run_handle,
+)
 from dev_health_ops.api.dev.question_interpreter import InterpretedQuestion
 from dev_health_ops.context_fabric.native_arm import capabilities as caps
 from dev_health_ops.context_fabric.native_arm import projection as proj
@@ -231,7 +234,13 @@ def _investigation_result(
         result_id=_handle("result"),
         plan_id="deficiency.operational.v1",
         plan_version="deficiency.operational.v1.0",
-        run_id=_handle("run"),
+        # Minted by the PRODUCTION helper, not re-derived: the plan
+        # executor stamps a ServerHandle minted from the orchestrator's
+        # correlation key, and a fixture that set the correlation key
+        # here instead described a run that cannot exist (CHAOS-3618
+        # PR 2 -- the envelope check compared the two spaces directly and
+        # was therefore unsatisfiable against every real run).
+        run_id=investigation_result_run_handle(_handle("run")),
         subject_entity_id="proj-1",
         observations=(
             DevSourceObservation(
@@ -863,7 +872,7 @@ def test_a_dimension_needs_content_that_actually_measured_it() -> None:
         result_id=_handle("result-empty"),
         plan_id="status.entity.v2",
         plan_version="status.entity.v2.0",
-        run_id=_handle("run"),
+        run_id=investigation_result_run_handle(_handle("run")),
         subject_entity_id="proj-1",
         observations=(observation,),
         completed_steps=("status_snapshot",),
@@ -907,7 +916,7 @@ def test_a_result_from_another_run_is_refused() -> None:
     """
 
     foreign = _investigation_result().model_copy(
-        update={"run_id": _handle("some-other-run")}
+        update={"run_id": investigation_result_run_handle(_handle("some-other-run"))}
     )
     with pytest.raises(ValueError, match="belongs to run"):
         _payload(investigation_result=foreign)

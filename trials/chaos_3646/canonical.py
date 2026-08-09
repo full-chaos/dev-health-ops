@@ -62,6 +62,7 @@ __all__ = [
     "CorpusEvidenceSigner",
     "CorpusScopeAuthorizer",
     "corpus_evidence_service",
+    "record_for",
 ]
 
 #: Stamped on every admitted ref. Names the world and its version, so a
@@ -89,22 +90,32 @@ _KIND_BY_WORLD_KIND = {
 class CorpusEvidenceSigner(EvidenceReferenceSigner):
     """The world's mint, wearing the platform signer's interface.
 
-    ``issue`` returns ``world.evidence_handle(slug)`` for a record the corpus
-    resolver produced, and remembers the identity it issued over. ``verify``
-    then answers the question the HMAC answers -- "was this handle issued for
-    exactly this identity, in this org" -- by comparing the remembered
-    payload rather than by recomputing a key it cannot hold.
+    ``issue`` returns ``world.evidence_handle(slug)``: the corpus's sole mint
+    (``world.py:158``, which documents why the corpus cannot key the platform
+    HMAC), and the mint the FROZEN authorization oracle audits cited handles
+    against.
 
-    Not a weakening of verification: the payload compared is
-    ``EvidenceReferenceSigner._payload``'s own bytes, so a ref whose identity
-    fields were altered after minting fails here exactly as it would fail an
-    HMAC check. What is lost is only the ability to verify a handle this
-    process did not issue, which no admission round needs.
+    **Stateless, and that is load-bearing rather than tidy.** The admission
+    path mints BEFORE it authorizes, so a refused candidate is minted and then
+    thrown away. The whole design rests on that mint leaving no residue --
+    otherwise a refusal would still have created something, somewhere, that a
+    later caller could present. The production ``EvidenceReferenceSigner`` has
+    that property for free (``issue`` is a pure HMAC over
+    ``_payload``; no persistence, no registry). An earlier version of THIS
+    class did not: it cached every issued payload in a dict so ``verify``
+    could compare against it, which meant every refused candidate left a
+    verifiable handle behind in the trial harness. That is exactly the residue
+    the property forbids, so the cache is gone.
+
+    ``verify`` is now a pure function of the world instead. The handle names
+    the record (``world.EVIDENCE_BY_HANDLE``), the record determines the
+    identity through the SAME construction the resolver uses
+    (:func:`record_for`), and the comparison is
+    ``EvidenceReferenceSigner._payload``'s own bytes. A ref whose identity
+    fields were altered after minting therefore fails here exactly as it would
+    fail an HMAC check -- and unlike the cached version, it fails whether or
+    not this process happened to mint it.
     """
-
-    def __init__(self, secret: str | bytes) -> None:
-        super().__init__(secret)
-        self._issued: dict[str, bytes] = {}
 
     def issue(self, org_id: str, record: EvidenceRecord) -> str:
         slug = record.internal_path
@@ -114,13 +125,53 @@ class CorpusEvidenceSigner(EvidenceReferenceSigner):
                 "which the resolver must carry on EvidenceRecord.internal_path; "
                 f"got {record!r}"
             )
-        handle = world.evidence_handle(slug)
-        self._issued[handle] = self._payload(org_id, record)
-        return handle
+        return world.evidence_handle(slug)
 
     def verify(self, org_id: str, evidence: SignedIdentity) -> bool:
-        expected = self._issued.get(evidence.evidence_ref_id)
-        return expected is not None and expected == self._payload(org_id, evidence)
+        record = world.EVIDENCE_BY_HANDLE.get(evidence.evidence_ref_id)
+        if record is None or record.tenant_id != org_id:
+            return False
+        return self._payload(org_id, record_for(record)) == self._payload(
+            org_id, evidence
+        )
+
+
+def record_for(
+    evidence: world.WorldEvidence, source_system: str = ARM_SOURCE_SYSTEM
+) -> EvidenceRecord:
+    """The canonical ``EvidenceRecord`` for one world record.
+
+    One construction, called by the resolver when it resolves and by the
+    signer when it verifies. Two copies would be a differential-oracle problem
+    in miniature: verification would be comparing against a second opinion
+    about what the world holds, and the day the two drifted, ``verify`` would
+    start rejecting refs the resolver had just produced.
+    """
+
+    return EvidenceRecord(
+        source_system=source_system,
+        source_version=CORPUS_SOURCE_VERSION,
+        # Every field comes from the WORLD's record, never from the candidate.
+        # That is the whole point of resolution: the arm said where to look,
+        # and the source said what is there.
+        entity_type=evidence.source_class.value,
+        entity_id=evidence.entity_id,
+        display_label=evidence.display_label,
+        observed_at=evidence.observed_at.astimezone(UTC),
+        freshness=FreshnessState.FRESH,
+        provenance=f"canonical record admitted from {evidence.source_class.value}",
+        confidence=1.0,
+        repository_ids=(),
+        raw_excerpt=evidence.citation_text,
+        # The world's own trust level, carried as a flag rather than as a
+        # refusal. ``_to_ref`` already stamps ``untrusted_content`` on every
+        # ref; this says the SOURCE also considers the content unverified,
+        # which is a different claim.
+        uncertain=evidence.trust is not world.TrustLevel.CANONICAL,
+        # Carries the slug to the mint. Not emitted on the ref:
+        # ``_safe_link`` ignores a path that does not start with "/".
+        internal_path=evidence.slug,
+    )
 
 
 @dataclass(frozen=True)
@@ -215,30 +266,7 @@ class CorpusCandidateResolver:
             return None
         if evidence.state is not world.EvidenceState.ACTIVE:
             return None
-        return EvidenceRecord(
-            source_system=self.source_system,
-            source_version=CORPUS_SOURCE_VERSION,
-            # Every field below comes from the WORLD's record, never from the
-            # candidate. That is the whole point of resolution: the arm said
-            # where to look, and the source said what is there.
-            entity_type=evidence.source_class.value,
-            entity_id=evidence.entity_id,
-            display_label=evidence.display_label,
-            observed_at=evidence.observed_at.astimezone(UTC),
-            freshness=FreshnessState.FRESH,
-            provenance=f"canonical record admitted from {evidence.source_class.value}",
-            confidence=1.0,
-            repository_ids=(),
-            raw_excerpt=evidence.citation_text,
-            # The world's own trust level, carried as a flag rather than as a
-            # refusal. ``_to_ref`` already stamps ``untrusted_content`` on
-            # every ref; this says the SOURCE also considers the content
-            # unverified, which is a different claim.
-            uncertain=evidence.trust is not world.TrustLevel.CANONICAL,
-            # Carries the slug to the mint. Not emitted on the ref:
-            # ``_safe_link`` ignores a path that does not start with "/".
-            internal_path=evidence.slug,
-        )
+        return record_for(evidence, self.source_system)
 
 
 class _AlwaysEntitled:

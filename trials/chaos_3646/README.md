@@ -121,18 +121,41 @@ not a graph-versus-native difference: both arms run the same extraction.
 2. **Not evidence about real sources.** The resolver reads the CHAOS-3616
    world. No `native_evidence` ClickHouse adapter is exercised, so nothing
    here says how a real source resolves a locator.
-3. **Not evidence about the platform mint.** `world.evidence_handle(slug)` is
-   the corpus's sole mint and the frozen authorization oracle audits against
-   it, so the trial's service signs with the world's mint rather than the
-   platform HMAC. Property of the corpus (`world.py:158` documents why),
-   not of the admission path.
+3. **Not evidence about the platform mint — and it is the CHAOS-3633 story,
+   not a separate one.** `world.evidence_handle(slug)` is the corpus's sole
+   mint and the frozen authorization oracle audits cited handles against it,
+   so the trial's service signs with the world's mint rather than the platform
+   HMAC. `world.py:158` documents the substitution and why the corpus cannot
+   key the platform HMAC.
+
+   The reason it cannot is CHAOS-3633: `EvidenceReferenceSigner._payload`
+   identifies a record by `(org, source_system, source_version, entity_type,
+   entity_id, repositories)`, and `entity_id` on the wire is the entity the
+   evidence is *about*, so two distinct records of one kind about one entity
+   mint the same handle. Three places in this tree already work around that
+   single defect — the arm signs over the record's canonical id
+   (`packet_builder._mint_handle`), the corpus derives its handle from the
+   slug (`world.py:158`), and this lane's `EvidenceCandidate.locator` keeps
+   the source's record identity separate from the entity. Same story, three
+   costumes. When CHAOS-3633 lands, the corpus mint stops being a
+   substitution; the admission path needs no change, because it never depends
+   on *which* mint the service holds, only that the service holds it.
 4. **Not deployed subject extraction.** Production `extract_mentions` only
    recognises a name adjacent to a kind noun, which reaches zero of these
    cases. The sweep adds an untyped capitalized-span backstop, clearly marked
    in `sweep.py`, which is NOT production code and is not claimed as any
    arm's capability. Every one of the 17 reached cases is a case the deployed
    extraction would not reach.
-5. **Not a rendered-prose measurement.** The frozen
+5. **Not a comparison with the native arm, in any direction.** There is no
+   native column here and there must not be one. The CHAOS-3619 trial's
+   native scored column is produced by `FakePlanExecutorRuntime` — the test
+   double the orchestrator harness supplies — so it describes a canned status
+   result rather than production data, and it covers one case. Every score in
+   this artifact is a **graph final answer measured against the frozen
+   oracles**, never against native. A reader who sets these numbers beside
+   the trial's native column is comparing an oracle verdict with a fake
+   runtime's output.
+6. **Not a rendered-prose measurement.** The frozen
    `answer_usefulness_beyond_dashboard` oracle scores PACKET fields
    (`driver_analysis.candidates[].standing`, `.summary`,
    `evidence_coverage.evidence_index`). What changed is that those packets now

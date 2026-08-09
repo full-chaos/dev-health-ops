@@ -223,6 +223,61 @@ def corpus_batch(tenant_id: str) -> IngestionBatch:
             )
         )
 
+    # ---- canonical measurements ------------------------------------------
+    #
+    # Ingested as observations so the number lives INSIDE the trial
+    # partition: authorized like everything else, deletable with the
+    # keyspace, and citable through the same evidence handle. A measurement
+    # read from outside the graph at query time would escape all three.
+    #
+    # Every field is carried VERBATIM. The arm's job with a canonical
+    # service's number is to cite it, and a value this adapter rounded,
+    # scaled or summarised would be the arm measuring rather than citing --
+    # the exact fault the correction exists to prevent.
+    for measurement in sorted(
+        world.WORLD_MEASUREMENTS, key=lambda item: item.measurement_key
+    ):
+        if measurement.tenant_id != tenant_id or measurement.entity_id not in known:
+            continue
+        subject = world.ENTITIES_BY_ID[measurement.entity_id]
+        measured: dict[str, str | int | float | bool | None] = {
+            "measurement_metric": measurement.metric,
+            "measurement_value": measurement.value,
+            "measurement_unit": measurement.unit,
+            "measurement_basis": str(measurement.basis),
+            "measurement_evidence_slug": measurement.evidence_slug,
+        }
+        if measurement.cohort_median is not None:
+            measured["measurement_cohort_median"] = measurement.cohort_median
+        observations.append(
+            ObservationRecord(
+                org_id=tenant_id,
+                kind=GraphObservationKind.MEASUREMENT,
+                canonical_id=measurement.measurement_key,
+                title=measurement.metric,
+                source_class=measurement.source_class,
+                observed_at=measurement.window_end,
+                subjects=(
+                    CanonicalRef(
+                        kind=GraphEntityKind(str(subject.kind)),
+                        canonical_id=measurement.entity_id,
+                    ),
+                ),
+                attributes={
+                    **measured,
+                    # A measurement inherits the trust of the service that
+                    # produced it. Stated rather than defaulted, because the
+                    # driver module refuses to attribute on a record whose
+                    # trust it cannot read.
+                    "corpus_trust": (
+                        "canonical"
+                        if str(measurement.basis) == "canonical_service"
+                        else "provider_asserted"
+                    ),
+                },
+            )
+        )
+
     documents: list[UnstructuredDocumentRecord] = []
     for document in sorted(world.WORLD_DOCUMENTS, key=lambda item: item.document_id):
         if document.tenant_id != tenant_id or document.about_entity_id not in known:

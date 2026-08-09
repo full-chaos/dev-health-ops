@@ -961,6 +961,104 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_failure="DID NOT RAISE",
     ),
     Mutation(
+        mutation_id="arm-derives-a-number-from-two-measurements",
+        defect=(
+            "the arm computes a ratio from a measurement and its cohort "
+            "median, putting a number no canonical service produced into a "
+            "packet under that service's authority"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return left > right if metric in HIGHER_IS_WORSE else left < right",
+        replacement=(
+            "    ratio = left / right if right else left\n"
+            "    return ratio > 1.0 if metric in HIGHER_IS_WORSE else ratio < 1.0"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheArmPerformsNoArithmetic",
+        ),
+        expect_failure="derives a number",
+    ),
+    Mutation(
+        mutation_id="cohort-direction-inferred-instead-of-declared",
+        defect=(
+            "one comparison rule governs every metric, so completed_items "
+            "and work_in_progress are reported in opposite directions and "
+            "one of them is exactly backwards"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    return left > right if metric in HIGHER_IS_WORSE else left < right",
+        replacement="    return left > right",
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::"
+            "TestTheArmPerformsNoArithmetic::"
+            "test_comparison_is_not_arithmetic_and_is_still_allowed",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="person-counting-metric-becomes-a-driver",
+        defect=(
+            "a count of people becomes the subject of a driver, which is one "
+            "inference away from naming them and is the person-level "
+            "attribution the contract bans outright"
+        ),
+        path=SRC / "drivers.py",
+        anchor="        if metric is None or metric in PERSON_COUNTING_METRICS:",
+        replacement="        if metric is None:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::"
+            "TestNoPersonLevelClaimIsEverBuilt",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
+        mutation_id="uncomparable-measurement-silently-dropped",
+        defect=(
+            "a number with no cohort comparison disappears instead of being "
+            "disclosed, so a reader cannot tell the arm had the measurement "
+            "and still could not answer"
+        ),
+        path=SRC / "drivers.py",
+        anchor="        if median is None:",
+        replacement="        if median is None:\n            continue\n        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheQualifiedCapacityCase",
+        ),
+        expect_failure="KeyError",
+    ),
+    Mutation(
+        mutation_id="cited-measurement-promoted-to-a-judgment",
+        defect=(
+            "a number being high is presented as a cause, so the judgment "
+            "stops coming from the graph and starts coming from a metric "
+            "threshold -- the measuring-something-adjacent fault"
+        ),
+        path=SRC / "drivers.py",
+        # Compound on purpose. Flipping the role ALONE is not enough, and
+        # that is a property worth recording rather than a mutation worth
+        # fixing: a cited measurement carries no lineage, so the pathless
+        # rule refuses it even when it is mislabelled a driver. Both have to
+        # go before the fault appears, which is what defence in depth means
+        # when it is real.
+        anchor=(
+            "                paths=(),\n"
+            "                support=support,\n"
+            "                mechanism=StandingMechanism.CITED_MEASUREMENT,\n"
+            "                assertion_basis=AssertionBasis.MEASURED,"
+        ),
+        replacement=(
+            "                paths=readout.paths,\n"
+            "                support=support,\n"
+            "                mechanism=StandingMechanism.STRUCTURAL,\n"
+            "                assertion_basis=AssertionBasis.MEASURED,"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheStrugglingTeamCase::"
+            "test_a_cited_measurement_never_becomes_the_judgment",
+        ),
+        expect_failure="assert",
+    ),
+    Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",
         defect=(
             "a live-store measurement that did not happen reads as coverage "

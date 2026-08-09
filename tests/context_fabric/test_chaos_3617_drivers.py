@@ -562,12 +562,17 @@ class TestWhatTheStructuralRulesCannotProduce:
     def test_every_candidate_is_path_born(self, helio) -> None:
         """Why ``NO_SUPPORTING_PATH`` is unconstructable here.
 
-        Every candidate the structural rules produce derives from a step on
-        a discovered path, so a driver without lineage cannot be built —
-        which is a positive property of the graph arm and precisely what an
-        arm without a graph cannot say about its own output. Asserted rather
-        than described: a future rule that invented a candidate from
-        somewhere else would fail here.
+        Every finding that can be ASSERTED derives from a step on a
+        discovered path, so a driver without lineage cannot be built — a
+        positive property of the graph arm and precisely what an arm without
+        a graph cannot say about its own output.
+
+        Scoped to asserted standing rather than to every candidate, because
+        two kinds of finding legitimately carry no lineage and neither makes
+        a causal claim: a symptom is an effect observed on the subject, and
+        a cited measurement is a canonical number, not a mechanism. Both are
+        capped at ``CANDIDATE_ONLY``, so neither can become the judgment —
+        which is what makes narrowing the sweep safe rather than convenient.
         """
 
         checked = 0
@@ -575,17 +580,35 @@ class TestWhatTheStructuralRulesCannotProduce:
             grant = adapter.authorized_entity_ids_for(principal)
             for subject in sorted(grant):
                 for item in _findings(helio, subject, principal):
-                    if item.role is DriverRole.SYMPTOM:
-                        # A symptom makes no causal claim, so it carries no
-                        # lineage by design and is not what this is about.
+                    if not item.is_asserted:
                         continue
                     checked += 1
                     assert item.path_ids, (subject, item.driver_id)
+                    assert item.mechanism == StandingMechanism.STRUCTURAL
                     assert (
                         item.exclusion_reason
                         is not DriverExclusionReason.NO_SUPPORTING_PATH
                     )
-        assert checked, "no attribution candidate was produced; this was vacuous"
+        assert checked, "no asserted finding was produced; this was vacuous"
+
+    def test_nothing_without_lineage_can_ever_be_asserted(self, helio) -> None:
+        """The other half, and the reason the narrowing above is not a hole.
+
+        If a pathless finding could reach asserted standing, scoping the
+        sweep to asserted findings would have hidden exactly the case it
+        exists to catch.
+        """
+
+        seen = 0
+        for principal in (world.PRINCIPAL_ANALYST, world.PRINCIPAL_COMPLIANCE):
+            grant = adapter.authorized_entity_ids_for(principal)
+            for subject in sorted(grant):
+                for item in _findings(helio, subject, principal):
+                    if item.path_ids:
+                        continue
+                    seen += 1
+                    assert not item.is_asserted, (subject, item.driver_id)
+        assert seen, "no pathless finding exists at all; this was vacuous"
 
     def test_no_structural_rule_emits_a_measurement_only_category(self, helio) -> None:
         """The scope declaration, as a claim that can fail today.
@@ -603,13 +626,19 @@ class TestWhatTheStructuralRulesCannotProduce:
             grant = adapter.authorized_entity_ids_for(principal)
             for subject in sorted(grant):
                 for item in _findings(helio, subject, principal):
+                    if item.mechanism != StandingMechanism.STRUCTURAL:
+                        # A CITED measurement may hold one of these
+                        # categories — that is the whole point of citing it.
+                        # What must never happen is a STRUCTURAL rule
+                        # approximating a number from graph shape.
+                        continue
                     seen += 1
                     assert item.category not in MEASUREMENT_ONLY_CATEGORIES, (
                         subject,
                         item.driver_id,
                         item.category,
                     )
-        assert seen, "no finding was produced at all; this sweep was vacuous"
+        assert seen, "no structural finding was produced; this sweep was vacuous"
 
     def test_every_finding_declares_the_structural_mechanism(self, helio) -> None:
         """So CHAOS-3619 can tell structure from cited measurement per family.

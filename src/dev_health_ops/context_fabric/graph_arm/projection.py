@@ -125,6 +125,15 @@ READBACK_ATTRIBUTE_KEYS: tuple[str, ...] = (
     "corpus_state",
     "corpus_trust",
     "declared_status",
+    # A canonical measurement, carried verbatim. The arm cites these; it
+    # never computes, aggregates or derives a number from them, and
+    # ``test_chaos_3617_measurements`` enforces that structurally.
+    "measurement_basis",
+    "measurement_cohort_median",
+    "measurement_evidence_slug",
+    "measurement_metric",
+    "measurement_unit",
+    "measurement_value",
     "superseded_by",
 )
 

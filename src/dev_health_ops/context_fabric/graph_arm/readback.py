@@ -786,6 +786,12 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_attr_corpus_state AS attr_corpus_state,
        n.cf_attr_corpus_trust AS attr_corpus_trust,
        n.cf_attr_declared_status AS attr_declared_status,
+       n.cf_attr_measurement_basis AS attr_measurement_basis,
+       n.cf_attr_measurement_cohort_median AS attr_measurement_cohort_median,
+       n.cf_attr_measurement_evidence_slug AS attr_measurement_evidence_slug,
+       n.cf_attr_measurement_metric AS attr_measurement_metric,
+       n.cf_attr_measurement_unit AS attr_measurement_unit,
+       n.cf_attr_measurement_value AS attr_measurement_value,
        n.cf_attr_superseded_by AS attr_superseded_by
 """
 
@@ -812,6 +818,12 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_attr_corpus_state AS attr_corpus_state,
        n.cf_attr_corpus_trust AS attr_corpus_trust,
        n.cf_attr_declared_status AS attr_declared_status,
+       n.cf_attr_measurement_basis AS attr_measurement_basis,
+       n.cf_attr_measurement_cohort_median AS attr_measurement_cohort_median,
+       n.cf_attr_measurement_evidence_slug AS attr_measurement_evidence_slug,
+       n.cf_attr_measurement_metric AS attr_measurement_metric,
+       n.cf_attr_measurement_unit AS attr_measurement_unit,
+       n.cf_attr_measurement_value AS attr_measurement_value,
        n.cf_attr_superseded_by AS attr_superseded_by
 """
 

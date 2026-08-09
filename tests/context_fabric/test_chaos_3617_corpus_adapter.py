@@ -229,11 +229,25 @@ class TestEvidenceIdentityComesFromTheWorld:
         "the arm cited something nobody can resolve".
         """
 
-        observations = {
-            node.canonical_id for node in helio_projection.observation_nodes()
-        }
-        assert observations
-        assert observations <= set(world.EVIDENCE_BY_SLUG)
+        evidence_backed: set[str] = set()
+        measurement_backed: set[str] = set()
+        for node in helio_projection.observation_nodes():
+            slug = node.attributes.get("measurement_evidence_slug")
+            if slug is None:
+                evidence_backed.add(node.canonical_id)
+            else:
+                # A measurement's own identity is its measurement key, which
+                # is NOT an evidence slug. Narrowing this guard rather than
+                # dropping it: the arm still invents no evidence identity,
+                # because the measurement names the corpus slug that backs
+                # it and that slug must be real.
+                measurement_backed.add(str(slug))
+        assert evidence_backed
+        assert measurement_backed, (
+            "no measurement was ingested, so the narrowed branch is vacuous"
+        )
+        assert evidence_backed <= set(world.EVIDENCE_BY_SLUG)
+        assert measurement_backed <= set(world.EVIDENCE_BY_SLUG)
 
     def test_the_world_mint_is_the_only_source_of_handles(self) -> None:
         for slug in sorted(world.EVIDENCE_BY_SLUG)[:5]:

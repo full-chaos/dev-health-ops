@@ -41,6 +41,7 @@ product feature, and nothing about it is on a user-visible path.
 | Semantic retrieval | Seam + guard in place; search not yet |
 | Cohort construction | Peer shapes yes; exhaustive shapes still refused |
 | Driver synthesis | Structural yes — reaches a supported outcome |
+| Canonical measurements | Cited, never computed |
 | Approved-unstructured extraction | Boundary in place, extraction not yet |
 
 The outcome is **derived from what was produced**, never passed in. A packet
@@ -419,7 +420,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **55** guards the arm relies on, the harness disables
+For each of the **60** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -554,6 +555,70 @@ wrong leaked identifier passed while its guard was disabled, and the
 adjacency guard turned out to be redundant with the status rule on every
 corpus shape — so its case is now constructed, isolating adjacency as the
 only thing rejecting the candidate.
+
+## Canonical measurements: cited, never computed
+
+Struggling-teams and capacity are the families the real questions live in, so
+leaving them out would have handed the ADR a **scope artifact dressed as a
+capability result** — a softer rerun of the failure the correction exists to
+fix. Measurements are in scope, in exactly one shape.
+
+The arm ingests each `WORLD_MEASUREMENT` as an observation inside the trial
+partition — authorized, deletable with the keyspace, citable through the same
+evidence handle — carrying the value, unit, cohort median and originating
+evidence slug **verbatim**. It reads two numbers a canonical service already
+produced and compares them. It never adds, scales, divides or averages
+anything: `31 against a cohort median of 14` cites two canonical numbers,
+while `2.2× the median` would invent a third, and that third number is the
+arm measuring.
+
+That is enforced structurally rather than by inspecting outputs.
+`TestTheArmPerformsNoArithmetic` bans every deriving operator outright in the
+two modules a measurement passes through, so a derivation cannot be
+reintroduced through a local variable either. A name-based scan was tried
+first and fired on the hash embedder's vector normalisation while still
+missing anything assigned to a local — scope plus operator is both narrower
+and stronger.
+
+**A cited measurement is capped at `CANDIDATE_ONLY` and can never become the
+judgment.** A number being high is a correlate, not a cause. This is the
+sharpest form of "the graph determines what is relevant; canonical services
+determine what is measurable": measurements enrich the packet, and the
+judgment still has to come from structure. `StandingMechanism` keeps the two
+tellable apart so CHAOS-3619 can report per family.
+
+Three corpus cases pin the behaviour:
+
+| Case | Result |
+| --- | --- |
+| `team_atlas` | five metrics cited with a `MEASURED` basis, each with its own handle |
+| `proj_solstice` | demand measurable, no cohort comparison → `INSUFFICIENT_MEASUREMENT`, disclosed rather than dropped |
+| `proj_tidal` | no measurement at all → nothing asserted in either direction |
+
+`proj_tidal` is a **positive control**, not a gap: the confidence machinery is
+only trustworthy if it produces silence where there is no evidence either way.
+
+`proj_lattice` carries the person-level trap — eleven contributors ever, two
+in window, with the corpus stating outright that the raw roster is the
+misleading number. Aggregate counts are ingested and readable, because
+dropping them would hide from a reader that the two differ by nine; what the
+arm never builds is a driver *about* a count of people, since a claim whose
+subject is a headcount is one inference away from naming them. The filter is
+proved in isolation: the test gives a person metric a category so the person
+filter is the only thing left refusing it.
+
+### Two guards that turned out to be defence in depth
+
+Both were caught by the harness reporting SURVIVED, and neither is claimed as
+proven on its own:
+
+- the person-metric filter overlaps the category map, which also rejects
+  those metrics — so its test now patches a category in to isolate it;
+- the `CONTEXTUAL_CORRELATE` role overlaps the lineage rule. A cited
+  measurement carries no path, so a mislabelled one is refused for having no
+  lineage even before its role is read. Both had to be disabled together
+  before the fault appeared, which is what defence in depth looks like when
+  it is real.
 
 ## Comparison cohorts, and the refusal that did not open
 

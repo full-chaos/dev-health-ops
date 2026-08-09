@@ -7,11 +7,20 @@ relevant — is the trial's live question.
 
 **What a graph is entitled to assert.** The contract's governing rule is
 "the graph determines what is relevant; canonical services determine what is
-measurable". So every finding here is *structural*: a subject is blocked by
-an open unit, a parent is declared complete while a child is not, an
-operational control is open. None of it is a number, none of it is an
-average, and the categories that would need one are refused by name rather
-than approximated.
+measurable", and this module splits along exactly that line.
+
+*Structural* findings — blocked by an open unit, a parent declared complete
+while a child is not — are the graph's own and are the only findings that can
+reach **asserted** standing. None of them is a number.
+
+*Cited measurement* findings carry a canonical service's number verbatim,
+with its own evidence handle, and are capped at ``CANDIDATE_ONLY``. The arm
+never computes, aggregates, averages or derives a value: it reads the
+measurement and its cohort median, compares them, and cites both unchanged.
+A number being high is a correlate, not a cause — so a measurement enriches
+the packet and never becomes the judgment. ``StandingMechanism`` keeps the
+two tellable apart, because "the graph alone was enough" and "a canonical
+number was needed" are different answers to the trial's question.
 
 **Symptom versus driver is decided before standing, not after.** A cause
 acts *on* the subject; a symptom is an effect *of* something. In a directed
@@ -23,13 +32,19 @@ unsupported attribution to reach an answer, and
 ``CONTEXTUAL_CORRELATE`` is the honest third option for something that is
 merely present.
 
-**Exclusions are the result, not the leftovers.** Every one of the frozen
-contract's six exclusion reasons is reachable here and each is earned by a
-real shape in the world: a historical edge, a linkage asserted only by
-untrusted content, a candidate with no path, evidence outside the caller's
-grant, a symptom whose cause is also a candidate, and a category the graph
-cannot measure. "Why is X not the answer" is a question the packet exists to
-answer, and an absence answers nothing.
+**Exclusions are the result, not the leftovers.** "Why is X not the answer"
+is a question the packet exists to answer, and an absence answers nothing.
+Five of the frozen contract's six reasons are produced here: a historical
+edge (``NOT_CURRENTLY_RELEVANT``), a linkage asserted only by untrusted
+content (``EVIDENCE_CONFLICT_UNRESOLVED``), evidence outside the caller's
+grant (``UNAUTHORIZED_EVIDENCE``), a symptom whose cause is also a candidate
+(``SYMPTOM_OF_ANOTHER_CANDIDATE``), and a measurement with nothing to compare
+it against (``INSUFFICIENT_MEASUREMENT``).
+
+``NO_SUPPORTING_PATH`` is not produced, and that is a positive property
+rather than a gap: every finding that can be asserted is derived from a step
+on a discovered path, so a driver without lineage is unconstructable — which
+is exactly what an arm without a graph cannot say about its own output.
 """
 
 from __future__ import annotations
@@ -87,11 +102,9 @@ TRUSTED_ATTRIBUTION_LEVELS: frozenset[str] = frozenset(
 #: adjacent to the question, which is the fault the whole correction exists
 #: to avoid.
 #:
-#: Nothing here produces a candidate in one of these categories yet, so this
-#: is currently a *declaration of scope* rather than a live filter. It
-#: becomes load-bearing in the measurement commit; the test that pins it
-#: asserts the structural rules never emit one, which is a claim that can
-#: fail today.
+#: A live filter, and one that is mechanism-aware: citing a canonical
+#: measurement is precisely what earns these categories, so the refusal
+#: applies only to a STRUCTURAL rule reaching for one without a number.
 MEASUREMENT_ONLY_CATEGORIES: frozenset[DriverCategory] = frozenset(
     {
         DriverCategory.DELIVERY_PRESSURE,
@@ -110,6 +123,58 @@ _BLOCKING_RELATIONSHIPS: Mapping[RelationshipType, DriverCategory] = {
 #: Relationships whose far end is REMAINING WORK under the subject.
 _CHILD_RELATIONSHIPS: frozenset[RelationshipType] = frozenset(
     {RelationshipType.PARENT_OF, RelationshipType.CONTRIBUTES_TO}
+)
+
+#: Metric -> the driver category a citation of it may support.
+#:
+#: Deliberately partial. A metric with no entry here is ingested, readable
+#: and citable by a human reading the packet, but the arm will not build a
+#: driver from it — because "which category does this number belong to" is a
+#: product judgment, and inferring one from a metric name is how a review
+#: statistic silently becomes a capacity claim.
+MEASUREMENT_CATEGORY: Mapping[str, DriverCategory] = {
+    "completed_items": DriverCategory.DELIVERY_PRESSURE,
+    "cycle_time_median_days": DriverCategory.DELIVERY_PRESSURE,
+    "cycle_time_p90_days": DriverCategory.DELIVERY_PRESSURE,
+    "incidents": DriverCategory.OPERATIONAL_PRESSURE,
+    "interruption_load_percentile": DriverCategory.CAPACITY_OR_STAFFING,
+    "ktlo_share": DriverCategory.INVESTMENT_MIX,
+    "median_review_wait_days": DriverCategory.REVIEW_PRESSURE,
+    "open_deficiencies": DriverCategory.QUALITY_OR_DEFECT,
+    "outbound_review_share": DriverCategory.REVIEW_PRESSURE,
+    "review_cycles_max": DriverCategory.REVIEW_PRESSURE,
+    "work_in_progress": DriverCategory.DELIVERY_PRESSURE,
+}
+
+#: Metrics where a HIGHER number is the worse one. Stated per metric rather
+#: than inferred, because ``completed_items`` and ``work_in_progress`` move
+#: in opposite directions and a single rule would get one of them backwards
+#: — silently, and in a field a reader acts on.
+HIGHER_IS_WORSE: frozenset[str] = frozenset(
+    {
+        "cycle_time_median_days",
+        "cycle_time_p90_days",
+        "incidents",
+        "interruption_load_percentile",
+        "ktlo_share",
+        "median_review_wait_days",
+        "open_deficiencies",
+        "outbound_review_share",
+        "review_cycles_max",
+        "work_in_progress",
+    }
+)
+
+#: Metrics that count PEOPLE. Citable as aggregates and nothing more.
+#:
+#: The contract bans person-level ranking outright, and the corpus plants the
+#: trap directly: ``proj_lattice`` has eleven contributors ever and two in
+#: window, and its own note says the raw roster is the misleading number.
+#: An aggregate count names nobody, so citing it is legitimate; what must
+#: never happen is a driver *about* the count, because "eleven people touched
+#: this" is one inference away from naming them.
+PERSON_COUNTING_METRICS: frozenset[str] = frozenset(
+    {"contributors_ever", "contributors_in_window"}
 )
 
 #: Observation kinds that are effects rather than causes. An incident on the
@@ -324,6 +389,9 @@ def _classify(
     summary_subject: str | None = None,
     paths: Sequence[DiscoveredPath],
     support: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    mechanism: str = StandingMechanism.STRUCTURAL,
+    assertion_basis: AssertionBasis = AssertionBasis.SOURCE_ASSERTED,
+    forced_exclusion: DriverExclusionReason | None = None,
 ) -> DriverFinding:
     """Decide one candidate's standing and, if excluded, why.
 
@@ -368,7 +436,8 @@ def _classify(
             category=category,
             role=role,
             standing=standing,
-            mechanism=StandingMechanism.STRUCTURAL,
+            mechanism=mechanism,
+            assertion_basis=assertion_basis,
             summary_subject=summary_subject or cause_id,
             summary_detail=summary_detail,
             path_ids=path_ids,
@@ -377,10 +446,28 @@ def _classify(
             **overrides,  # type: ignore[arg-type]
         )
 
-    if category in MEASUREMENT_ONLY_CATEGORIES:
+    if (
+        category in MEASUREMENT_ONLY_CATEGORIES
+        and mechanism != StandingMechanism.CITED_MEASUREMENT
+    ):
+        # A category that is a statement about a number, reached WITHOUT a
+        # number. This is the boundary: citing a canonical measurement is
+        # exactly what earns these categories, and the refusal applies only
+        # to a structural rule trying to approximate one from graph shape.
+        #
+        # Without the mechanism condition the check fired on the citation
+        # too, which excluded every measurement-backed finding for
+        # "insufficient measurement" while the measurement sat right there
+        # in the packet — a refusal whose stated reason was the opposite of
+        # what was true.
         return finding(
             DriverStanding.EXCLUDED, DriverExclusionReason.INSUFFICIENT_MEASUREMENT
         )
+    if forced_exclusion is not None and trusted:
+        # A reason the RULE already decided, applied only once the
+        # record backing it is trustworthy -- an untrusted measurement
+        # is refused for its trust before its comparability.
+        return finding(DriverStanding.EXCLUDED, forced_exclusion)
     if not trusted and withheld:
         # Everything that would have supported this is outside the caller's
         # grant. Reported as its own reason rather than folded into
@@ -583,6 +670,109 @@ def _symptom_candidates(
     return findings
 
 
+def _measurement_candidates(
+    context: _Context, readout: InvestigationReadout
+) -> list[DriverFinding]:
+    """Drivers built by CITING a canonical service's number.
+
+    The arm reads two numbers a canonical service already produced — the
+    measurement and its cohort median — and compares them. It does not
+    compute, aggregate, average, scale or difference anything: no number
+    reaches the packet that a canonical service did not mint, and
+    ``test_chaos_3617_measurements`` enforces that by scanning this module
+    for arithmetic on measurement values rather than by asserting it here.
+
+    A comparison is not a derivation. "31 against a cohort median of 14"
+    cites both numbers; "2.2x the median" would invent a third, and that
+    third number is the arm measuring.
+    """
+
+    findings: list[DriverFinding] = []
+    for observation in readout.observations:
+        if observation.kind is not GraphObservationKind.MEASUREMENT:
+            continue
+        if context.subject_id not in observation.subject_canonical_ids:
+            continue
+        metric = observation.attributes.get("measurement_metric")
+        if metric is None or metric in PERSON_COUNTING_METRICS:
+            # Person-counting metrics are ingested and citable, but the arm
+            # builds no driver ABOUT them: a claim whose subject is a count
+            # of people is one inference away from naming them.
+            continue
+        category = MEASUREMENT_CATEGORY.get(metric)
+        if category is None:
+            continue
+
+        driver_id = f"drv_metric_{observation.canonical_id}"
+        support = _observation_support(context, observation.canonical_id)
+        median = observation.attributes.get("measurement_cohort_median")
+        if median is None:
+            # A number with nothing to compare it against cannot say
+            # "elevated". Reported as a considered-and-rejected candidate
+            # rather than dropped, because "you have the number and still
+            # cannot answer" is the honest state and the reader needs it.
+            findings.append(
+                _classify(
+                    context,
+                    driver_id=driver_id,
+                    cause_id=context.subject_id,
+                    summary_subject=observation.canonical_id,
+                    category=category,
+                    role=DriverRole.CONTEXTUAL_CORRELATE,
+                    summary_detail=(
+                        "was measured but has no cohort comparison, so it "
+                        "cannot say whether the value is unusual"
+                    ),
+                    paths=(),
+                    support=support,
+                    mechanism=StandingMechanism.CITED_MEASUREMENT,
+                    forced_exclusion=(DriverExclusionReason.INSUFFICIENT_MEASUREMENT),
+                )
+            )
+            continue
+
+        value = observation.attributes.get("measurement_value")
+        if value is None or not _is_outlying(str(value), str(median), str(metric)):
+            continue
+        findings.append(
+            _classify(
+                context,
+                driver_id=driver_id,
+                cause_id=context.subject_id,
+                summary_subject=observation.canonical_id,
+                category=category,
+                role=DriverRole.CONTEXTUAL_CORRELATE,
+                summary_detail=(
+                    "sits outside its cohort comparison; both numbers come "
+                    "from a canonical service and are cited unchanged"
+                ),
+                paths=(),
+                support=support,
+                mechanism=StandingMechanism.CITED_MEASUREMENT,
+                assertion_basis=AssertionBasis.MEASURED,
+            )
+        )
+    return findings
+
+
+def _is_outlying(value: str, median: str, metric: str) -> bool:
+    """Whether the cited value sits on the worse side of its cohort median.
+
+    A pure comparison of two canonical numbers. Direction is looked up per
+    metric, never inferred: ``completed_items`` being *below* its median is
+    the bad case and ``work_in_progress`` being *above* its is, so one rule
+    for both would report one of them exactly backwards.
+    """
+
+    try:
+        left, right = float(value), float(median)
+    except ValueError:
+        # A non-numeric measurement is not comparable, and guessing is worse
+        # than declining: the caller treats False as "nothing to say".
+        return False
+    return left > right if metric in HIGHER_IS_WORSE else left < right
+
+
 def _promote(findings: Sequence[DriverFinding]) -> list[DriverFinding]:
     """Give principal standing to at most one finding, and only if earned.
 
@@ -695,6 +885,7 @@ def discover_drivers(
         _blocking_candidates(context, readout)
         + _open_child_candidates(context, readout)
         + _symptom_candidates(context, readout)
+        + _measurement_candidates(context, readout)
     )
     # Deduplicate by driver_id, keeping the first: the same blocker can be
     # reached by several paths, and reporting it twice would make one cause

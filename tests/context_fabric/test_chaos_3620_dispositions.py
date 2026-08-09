@@ -26,6 +26,7 @@ import pytest
 
 from tests.context_fabric.chaos_3620_dispositions import (
     _BLOCKER_PATTERN,
+    GATE_STATUS_TOKENS,
     INHERITED_INVARIANTS,
     ISSUE_BULLETS,
     NEEDS_BLOCKER,
@@ -33,10 +34,18 @@ from tests.context_fabric.chaos_3620_dispositions import (
     REQUIREMENTS,
     Status,
     Transfer,
+    gate_status_block,
     render,
 )
+from tests.context_fabric.chaos_3620_spine import _contains_token as _whole_token
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: Checksum of the transcribed CHAOS-3620 requirement text. Pins BOTH sides
+#: of the totality check so a bullet and its entry cannot be deleted
+#: together. The transcription is verified against Linear by the
+#: orchestrator at merge time -- nothing here can do that.
+_ISSUE_BULLETS_DIGEST = "de67b3605f2ff81f"
 
 
 def _resolve(node_id: str) -> tuple[bool, str]:
@@ -178,6 +187,59 @@ class TestNoStatusIsAssertedWithoutItsExcuse:
             if requirement.status is Status.PROVEN and requirement.blocker
         ]
         assert not confused, confused
+
+    def test_a_proven_entry_carries_no_REASON_either(self) -> None:
+        """The missing half of the invariant above, and it had already bitten.
+
+        ``reason`` exists to explain a downgrade. A ``proven`` entry carrying
+        one means a stale excuse survived an upgrade — which is exactly what
+        happened to X5: it was downgraded, then built and upgraded, and its
+        old "recorded unmeasured rather than proven by adjacency" text stayed
+        behind. The ledger then simultaneously claimed the requirement was
+        proven and explained why it was not.
+
+        Scope belongs in ``notes``; ``reason`` is reserved for statuses that
+        owe an excuse. That separation is what makes this checkable.
+        """
+
+        contradictory = [
+            requirement.requirement_id
+            for requirement in REQUIREMENTS
+            if requirement.status is Status.PROVEN and requirement.reason
+        ]
+        assert not contradictory, (
+            "these entries are marked proven while still carrying a reason "
+            f"explaining why they are not: {contradictory}. Move scope into "
+            "notes and delete the stale downgrade text"
+        )
+
+    def test_the_issue_bullet_list_cannot_shrink_symmetrically(self) -> None:
+        """Totality is vacuous if both sides can be deleted together.
+
+        ``test_every_issue_bullet_has_exactly_one_entry`` compares the ledger
+        against ``ISSUE_BULLETS`` — so deleting a bullet AND its entry passes.
+        The count and a checksum of the transcribed text pin both sides.
+
+        NOTE FOR THE MERGE CHECK: the transcription itself is verified
+        against Linear by the orchestrator at merge time. Nothing in this
+        repository can check that the text matches the issue; this only
+        ensures it has not changed since it was transcribed and reviewed.
+        """
+
+        import hashlib
+
+        assert len(ISSUE_BULLETS) == 44, (
+            f"the issue bullet list is now {len(ISSUE_BULLETS)} entries, not "
+            "44. If CHAOS-3620 genuinely changed, update this pin and say so "
+            "in the PR; if not, a requirement has been dropped"
+        )
+        digest = hashlib.sha256(
+            "␟".join(f"{k}␞{v}" for k, v in ISSUE_BULLETS).encode()
+        ).hexdigest()[:16]
+        assert digest == _ISSUE_BULLETS_DIGEST, (
+            "the transcribed requirement text changed. Re-verify it against "
+            f"the Linear issue, then update the digest to {digest}"
+        )
 
     def test_every_defect_entry_cites_source_coordinates(self) -> None:
         """A defect without file:line is an opinion.
@@ -469,6 +531,67 @@ class TestTheArchitecturePageAgreesWithTheLedger:
         "all hard safety gates are green",
         "no defects were found",
     )
+
+    def test_the_pages_gate_status_sentence_is_DERIVED_from_the_ledger(
+        self,
+    ) -> None:
+        """The structural end of the paraphrase problem.
+
+        Three rounds of forbidding green-sounding phrasings only moved the
+        attack: an exact-sentence check was bypassed by adding a second
+        sentence, and a five-phrase blocklist by paraphrasing. The class of
+        problem does not close by lengthening a list, so it is closed by
+        removing the authorship: the page must contain
+        ``gate_status_block()`` **verbatim**, generated from the ledger's own
+        statuses. There is nothing left to paraphrase, because the page does
+        not get to write this sentence.
+
+        This is the merge-gating check of the three, and it is deliberately
+        the last word on the subject — the descent stops here.
+        """
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        expected = gate_status_block()
+        assert expected in page, (
+            "the page does not carry the ledger-derived gate-status sentence "
+            f"verbatim. Expected:\n\n{expected}\n\nRegenerate it with "
+            "`gate_status_block()` rather than editing the page's wording"
+        )
+
+    def test_no_OTHER_line_pairs_a_gate_word_with_a_clean_result_word(
+        self,
+    ) -> None:
+        """One whole-token scan, everywhere, comments included.
+
+        The companion to the derived sentence: gate status may be asserted in
+        exactly one place, so anywhere else that pairs a gate word with a
+        clean-result word is a second, unauthorised claim — whether it sits
+        in prose, a table, an HTML comment or a collapsed block.
+
+        Whole-token matched, because a substring scan on ``gate`` hits
+        ``mitigate``/``delegate`` and a check that cries wolf is one people
+        learn to ignore — the same lesson the disclosure walker's ``Ember``
+        false positive taught.
+        """
+
+        page = self.PAGE.read_text(encoding="utf-8")
+        derived = gate_status_block()
+        clean_words = ("green", "passed", "passes", "satisfied", "clear")
+        offenders = []
+        for number, line in enumerate(page.splitlines(), start=1):
+            if line.strip() and line.strip() in derived:
+                continue
+            folded = line.casefold()
+            has_gate = any(_whole_token(folded, token) for token in GATE_STATUS_TOKENS)
+            if not has_gate:
+                continue
+            hit = [word for word in clean_words if _whole_token(folded, word)]
+            if hit:
+                offenders.append((number, hit, line.strip()[:90]))
+        assert not offenders, (
+            "gate status is asserted outside the derived sentence; the page "
+            f"may state it in exactly one place: {offenders}"
+        )
 
     def test_the_page_cannot_claim_a_clean_result_while_the_ledger_disagrees(
         self,

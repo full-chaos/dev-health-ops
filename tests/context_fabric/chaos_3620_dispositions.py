@@ -594,22 +594,18 @@ REQUIREMENTS: tuple[Requirement, ...] = (
             "emitter and the required path is displaced entirely -- all ten "
             "slots taken by three-hop routes. Ordering is what makes the cap "
             "safe; without it the cap keeps whatever was enumerated first.",
-            "The earlier downgrade reason is retained below for the record.",
-        ),
-        reason=(
-            "SUPERSEDED downgrade reason, kept as the record of what was "
-            "true before the flood world was built: the cited tests were "
-            "adjacent to the "
-            "requirement and do not establish it. Citation ORDERING is "
-            "proven -- per-entity path citations are emitted shortest-first, "
-            "so a long path cannot take a short path's slot -- and the "
-            "keyword-stuffed bait is proven not to support any asserted "
-            "driver. Neither shows that repeated LOW-QUALITY paths exist in "
-            "sufficient number to hit the per-entity citation cap and "
-            "displace a required short path, which is what the bullet asks. "
-            "The corpus does not plant such a flood, so establishing this "
-            "needs a probe world built for it. Recorded unmeasured rather "
-            "than proven by adjacency."
+            "SCOPE, from round-2 review: review asked for the required path "
+            "to be enumerated LAST and for a pid-only mutation, so that "
+            "'shortest' and 'first-enumerated' could be told apart. Measured, "
+            "that fault shape is NOT REACHABLE on this arm -- traversal is "
+            "breadth-first, so path ids are assigned in non-decreasing length "
+            "order and pid is a proxy for length; a pid-only ordering keeps "
+            "the required path anyway, and registering the required edge last "
+            "does not move its id because discovery order assigns ids. What "
+            "defends the path is BFS discovery order, with the length-ordered "
+            "cap as belt-and-braces; both are pinned, and the reachable fault "
+            "-- ordering REVERSAL -- is planted and displaces the path "
+            "entirely.",
         ),
     ),
     _req(
@@ -1082,6 +1078,38 @@ NEEDS_REASON = frozenset({Status.DEFECT, Status.NOT_ACCEPTED, Status.UNMEASURED}
 NEEDS_BLOCKER = frozenset({Status.NOT_ACCEPTED})
 
 _BLOCKER_PATTERN = re.compile(r"^CHAOS-\d+$")
+
+
+#: The page's gate-status block, DERIVED from the ledger rather than written
+#: beside it. Round-2 review gated merge on this: a page whose tables are
+#: correct and whose headline says the opposite is worse than no page, and
+#: three rounds of forbidding paraphrases only moved the attack. Deriving the
+#: sentence ends the descent — there is nothing to paraphrase, because the
+#: page must contain this exact text and the test compares it verbatim.
+def gate_status_block() -> str:
+    """The one authorised statement of gate status, generated from status."""
+
+    unproven = [item for item in REQUIREMENTS if item.status is not Status.PROVEN]
+    if not unproven:
+        return (
+            "**The hard gate is green.** Every CHAOS-3620 requirement is "
+            "proven; no requirement is blocked, defective or unmeasured."
+        )
+    counts: dict[str, int] = {}
+    for item in unproven:
+        counts[item.status.value] = counts.get(item.status.value, 0) + 1
+    detail = ", ".join(f"{counts[key]} {key}" for key in sorted(counts))
+    return (
+        "**The hard gate is not green.** "
+        f"{len(unproven)} of {len(REQUIREMENTS)} CHAOS-3620 requirements are "
+        f"not proven ({detail})."
+    )
+
+
+#: Gate-status words that may appear ONLY inside the derived block above.
+#: One whole-token scan over the whole page — comments included — rather
+#: than a growing list of forbidden phrasings.
+GATE_STATUS_TOKENS = ("gate", "gates")
 
 
 def render() -> str:

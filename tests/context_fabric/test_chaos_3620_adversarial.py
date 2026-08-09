@@ -824,12 +824,24 @@ class TestTruncationIsDisclosedNotSilent:
         ordering by ``(length, path_id)`` (``packet_builder.py:734-740``).
         The one-hop path is cited first and the flood fills the remainder.
 
-        The fault shape is planted separately and observed:
-        ``test_the_flood_DOES_displace_when_ordering_is_disabled`` records
-        what happens with the ordering removed, and the guard-injection
-        mutation ``path-citations-unordered`` runs it against the real
-        emitter. Without that pair this test would only show that a
-        particular world happens to come out right.
+        **What actually defends it, stated precisely after review.** Round-2
+        review asked for the required path to be enumerated LAST so that
+        "shortest" and "first-enumerated" could be told apart, and for a
+        ``pid``-only mutation to plant the keep-first-enumerated fault. Both
+        were attempted and **the fault shape is not reachable on this arm**:
+        traversal is breadth-first, so path ids are assigned in
+        non-decreasing length order (pinned by
+        ``test_path_ids_are_assigned_in_non_decreasing_length_order``).
+        ``pid`` is therefore a *proxy* for length — a pid-only ordering keeps
+        the required path anyway, measured. Registering the required edge
+        last does not move its id either, because discovery order, not
+        registration order, assigns ids.
+
+        So the honest statement is that displacement is prevented by **BFS
+        discovery order, with the length-ordered cap as belt-and-braces over
+        it** — and the guard that IS reachable is ordering *reversal*, which
+        the ``path-citations-unordered`` mutation plants and which displaces
+        the required path entirely.
         """
 
         packet = _flood_packet()
@@ -885,6 +897,70 @@ class TestTruncationIsDisclosedNotSilent:
         assert len(target.supporting_path_ids) == _FLOOD_CITATION_CAP, (
             "the citation set is not at the cap, so nothing was displaced "
             f"and nothing was defended: {len(target.supporting_path_ids)}"
+        )
+
+    def test_path_ids_are_assigned_in_non_decreasing_length_order(self) -> None:
+        """The property that actually defends the required path.
+
+        Traversal is breadth-first, so a path discovered earlier is never
+        longer than one discovered later. That makes ``path_id`` a proxy for
+        length and is the real reason the required path survives the cap —
+        the explicit ``(length, path_id)`` sort is belt-and-braces over it.
+
+        Pinned because the whole X5 claim rests on it. If traversal ever
+        stopped being breadth-first, ordering by id would stop preserving
+        short paths and the keep-first-enumerated fault would become
+        reachable for the first time — at which point the mutation review
+        asked for becomes worth writing.
+        """
+
+        packet = _flood_packet()
+        by_id = sorted(
+            (path.path_id, len(path.hops)) for path in packet.related_context.paths
+        )
+        lengths = [length for _, length in by_id]
+        assert lengths == sorted(lengths), (
+            "path ids are no longer assigned in non-decreasing length order, "
+            "so id ordering no longer preserves short paths: "
+            f"{by_id[:8]}"
+        )
+
+    def test_the_keep_first_enumerated_fault_is_not_reachable_on_this_arm(
+        self,
+    ) -> None:
+        """Recorded because review prescribed a mutation that cannot fire.
+
+        Review asked for a ``key=lambda pid: pid`` mutation to plant
+        "keep whatever was enumerated first". Measured against the real
+        emitter, that ordering keeps the required path anyway — because of
+        the BFS property above — so the mutation would report SURVIVED and a
+        reader would reasonably conclude the guard was weak, when in fact the
+        fault it names cannot occur.
+
+        Asserted from the world rather than from the emitter: the required
+        path holds the lowest id among the paths touching the target, so any
+        ordering that prefers low ids keeps it. This goes red if the world is
+        ever rebuilt such that the required path is not first-discovered, at
+        which point the pid-only mutation becomes meaningful.
+        """
+
+        packet = _flood_packet()
+        touching = [
+            path
+            for path in packet.related_context.paths
+            if any(
+                _FLOOD_TARGET in (hop.source_entity_id, hop.target_entity_id)
+                for hop in path.hops
+            )
+        ]
+        required = [path for path in touching if len(path.hops) == 1]
+        assert len(required) == 1, (
+            f"expected exactly one required one-hop path, found {len(required)}"
+        )
+        assert required[0].path_id == min(path.path_id for path in touching), (
+            "the required path is no longer the lowest-id path touching the "
+            "target, so a pid-only ordering could now displace it and the "
+            "mutation review asked for has become writable"
         )
 
     def test_shorter_lineage_is_cited_before_longer_lineage(self) -> None:
@@ -983,15 +1059,19 @@ def _flood_world():
         entity("proj_flood_subject", GraphEntityKind.PROJECT, "Flood subject"),
         entity(_FLOOD_TARGET, GraphEntityKind.PORTFOLIO, "Flood target portfolio"),
     ]
-    relationships = [
-        relationship(
-            "proj_flood_subject",
-            GraphEntityKind.PROJECT,
-            RelationshipType.BELONGS_TO_PORTFOLIO,
-            _FLOOD_TARGET,
-            GraphEntityKind.PORTFOLIO,
-        )
-    ]
+    relationships = []
+    # THE FILLERS ARE REGISTERED FIRST, deliberately.
+    #
+    # The first version put the required edge first, which made the required
+    # path both the SHORTEST and the FIRST-ENUMERATED. Adversarial review
+    # showed that made the whole world unable to distinguish which property
+    # was defending it: ordering by ``pid`` alone — the exact fault the
+    # mutation's own text names, "keep whatever was enumerated first" —
+    # SURVIVED, because the required path had the lowest id too.
+    #
+    # Registering the fillers first gives the required path the HIGHEST id,
+    # so length is now the only thing that can keep it. A pid-only ordering
+    # puts it dead last and the cap drops it.
     for index in range(_FLOOD_FILLERS):
         filler = f"proj_flood_filler_{index:02d}"
         entities.append(entity(filler, GraphEntityKind.PROJECT, f"Filler {index}"))
@@ -1013,6 +1093,15 @@ def _flood_world():
                 GraphEntityKind.PORTFOLIO,
             )
         )
+    relationships.append(
+        relationship(
+            "proj_flood_subject",
+            GraphEntityKind.PROJECT,
+            RelationshipType.BELONGS_TO_PORTFOLIO,
+            _FLOOD_TARGET,
+            GraphEntityKind.PORTFOLIO,
+        )
+    )
     return build_projection(
         IngestionBatch(
             org_id=_FLOOD_ORG,

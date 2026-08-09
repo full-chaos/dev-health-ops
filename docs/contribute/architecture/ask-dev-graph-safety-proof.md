@@ -25,10 +25,14 @@ observable. This page records what was proved, on what, and what could not
 be proved. Its headline is not a pass.
 {: .fc-page-lede }
 
-**The hard gate is not green.** Zero unauthorized leakage is measured and it
-holds; the oracle that owns the measurement cannot yet run on this arm. Four
-of the issue's requirements are violated by merged code. Both facts are
-recorded as assertions rather than prose, so neither can close quietly.
+**The hard gate is not green.** 16 of 44 CHAOS-3620 requirements are not proven (4 defect, 2 not_accepted, 10 unmeasured).
+
+That sentence is **generated from the ledger**, not written beside it — the
+one place gate status is stated, so a correct table under a wrong headline is
+not expressible. Zero unauthorized leakage is measured and it holds; the
+oracle that owns the measurement cannot yet run on this arm. Requirements
+violated by merged code are listed below. Both facts are recorded as
+assertions rather than prose, so neither can close quietly.
 
 ## What is new here: the composition
 
@@ -135,7 +139,7 @@ packet, because three id vocabularies do not overlap:
 
 This is the CHAOS-3612 defect shape — two id vocabularies that never overlap,
 making an expectation unsatisfiable by every possible arm — recurring in the
-authorization dimension. A gate whose oracle cannot pass is not a green gate.
+authorization dimension. A release check whose oracle cannot return a clean verdict cannot be signed off.
 
 ### P4 — conflicts retain both source assertions (blocked by CHAOS-3612)
 

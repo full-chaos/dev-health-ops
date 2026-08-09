@@ -1064,6 +1064,17 @@ def build_packet(
     #: while exactly one entry went missing. A disclosure whose unit differs
     #: from the thing it is disclosing about is a number a reader cannot use.
     unattributable: set[str] = set()
+    #: The same drops, keyed by OBSERVATION id rather than by record id.
+    #:
+    #: Two sets because the two consumers ask different questions, and round 2
+    #: shipped one set answering both -- which is the defect both reviewers
+    #: blocked on. The COUNT discloses records, because an evidence entry
+    #: represents a record. The DRIVER check resolves observation ids, because
+    #: a driver cites observations. A single set silently answered the driver
+    #: check in the wrong unit, so every CITING observation (source_evidence_id
+    #: != canonical_id) fell through to "nothing observed this" and raised the
+    #: inconsistency error where the authorization refusal was due.
+    withheld_observation_ids: set[str] = set()
     for observation in readout.observations:
         # Named distinctly from the cohort guard's ``outside``: the
         # guard-injection harness anchors on source lines, and a second
@@ -1108,6 +1119,7 @@ def build_packet(
                     SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
                 )
             )
+            withheld_observation_ids.add(observation.canonical_id)
             continue
         indexable.append((observation, supports))
 
@@ -1509,7 +1521,7 @@ def build_packet(
     )
     driver_candidates = tuple(
         _driver_candidate(
-            finding, handle_by_observation, known_subject_ids, unattributable
+            finding, handle_by_observation, known_subject_ids, withheld_observation_ids
         )
         for finding in drivers or ()
     )

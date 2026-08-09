@@ -820,17 +820,22 @@ world. The platform fix is CHAOS-3633; this is the arm-side containment, and
 its cost is that a minted handle is verified by re-deriving it through the
 same function rather than by `signer.verify` on the emitted ref.
 
-**The two indexes refuse differently, and both now refuse.** The projection
-builds an entity index keyed by `(kind, canonical_id)` and an observation
-index keyed by `canonical_id`. The observation index used to *keep the first
-record and silently discard the second* under a repeated id. That became
-load-bearing when the fallback mint started discriminating records by
-canonical id — the discard loses one of two distinct records before the mint
-can see the collision, leaving the duplicate-handle refusal unable to protect
-the case it exists for. Both indexes now refuse a repeat, because
-refuse-don't-sanitize applies to identifiers exactly as it does to values: a
-batch asserting two different records under one id is contradicting itself,
-and picking one is the arm inventing the answer.
+**The two indexes behave differently, and only one of them refuses.** The
+projection builds an entity index keyed by `(kind, canonical_id)` and an
+observation index keyed by `canonical_id`.
+
+The **observation** index refuses a repeat. It used to *keep the first record
+and silently discard the second*, and that became load-bearing when the
+fallback mint started discriminating records by canonical id — the discard
+loses one of two distinct records before the mint can see the collision,
+leaving the duplicate-handle refusal unable to protect the case it exists for.
+Refuse-don't-sanitize applies to identifiers exactly as it does to values.
+
+The **entity** index still `continue`s past a duplicate rather than refusing.
+That is stated rather than left to be discovered: an earlier revision of this
+note claimed both indexes refuse, which was an overclaim a reviewer caught.
+Whether the entity index should refuse too is recorded on CHAOS-3627 and is
+not changed here.
 
 **Residual, stated because a reader would otherwise assume otherwise.**
 Ingestion checks a carried handle's *grammar* and the *completeness* of the

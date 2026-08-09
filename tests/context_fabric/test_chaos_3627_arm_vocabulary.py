@@ -814,6 +814,66 @@ class TestTheWithheldEvidenceRefusalIsDistinguishable:
         ):
             _packet(withheld, signer, drivers=(honest,))
 
+    def test_a_withheld_CITING_observation_also_raises_the_authorization_refusal(
+        self, helio, signer
+    ) -> None:
+        """The path production actually takes, which the first test missed.
+
+        Both reviewers blocked on this. Round 2 recorded the drop set by
+        RECORD id while a driver cites OBSERVATION ids, so the membership test
+        could only ever match a self-describing observation -- and my guard
+        test used a seed where the cited observation happens to be one. The
+        test reached a branch of the distinction and not the path production
+        takes: input symmetry, not mutation discipline, and a different
+        failure from the three before it.
+
+        ``cinder_deficiencies`` declares ``di_cinder_open`` as its record, so
+        it is a CITING observation. Reproduced independently by codex, the
+        verifier and this lane before the fix, all landing on this same pair.
+        """
+
+        from dev_health_ops.context_fabric.graph_arm.drivers import discover_drivers
+        from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+            AuthorizationWithheldEvidenceError,
+        )
+
+        readout = _read(helio, world.TEAM_CINDER)
+        citing = next(
+            observation
+            for observation in readout.observations
+            if observation.attributes.get("source_evidence_id")
+            not in (None, observation.canonical_id)
+        )
+        assert citing.canonical_id != citing.attributes["source_evidence_id"], (
+            "this observation is self-describing; the citing path is untested"
+        )
+
+        withheld = dataclasses.replace(
+            readout,
+            observations=tuple(
+                dataclasses.replace(
+                    item,
+                    attributes={
+                        **item.attributes,
+                        "source_evidence_entity_id": world.PROJ_QUARRY,
+                    },
+                )
+                if item.canonical_id == citing.canonical_id
+                else item
+                for item in readout.observations
+            ),
+        )
+        findings, _ = discover_drivers(
+            readout, world.TEAM_CINDER, as_of=world.TRIAL_NOW
+        )
+        honest = next(item for item in findings if item.evidence_ids)
+        driver = dataclasses.replace(honest, evidence_ids=(citing.canonical_id,))
+
+        with pytest.raises(
+            AuthorizationWithheldEvidenceError, match="may not be shown"
+        ):
+            _packet(withheld, signer, drivers=(driver,))
+
     def test_the_authorization_refusal_is_not_an_inconsistency(self) -> None:
         """Routable at the type, not only readable in the message.
 

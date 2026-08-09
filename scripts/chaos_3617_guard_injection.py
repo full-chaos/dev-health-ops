@@ -510,8 +510,15 @@ MUTATIONS: tuple[Mutation, ...] = (
             "recorded, with no reconciliation inside discover_drivers"
         ),
         path=SRC / "packet_builder.py",
-        anchor="            if unobserved:",
-        replacement="            if missing:",
+        anchor=(
+            "            withheld = sorted(item for item in missing "
+            "if item in filtered_ids)\n"
+            "            unobserved = sorted(item for item in missing "
+            "if item not in filtered_ids)"
+        ),
+        replacement=(
+            "            withheld = []\n            unobserved = list(missing)"
+        ),
         tests=(
             f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
             "TestTheWithheldEvidenceRefusalIsDistinguishable",

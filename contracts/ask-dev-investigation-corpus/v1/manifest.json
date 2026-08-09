@@ -4,16 +4,28 @@
     "note": "ZERO_UNAUTHORIZED_RESULTS is scored against world/principals.json, not against the packet's own authorized_entity_ids. The contract proves internal consistency with that declaration; only the world can prove the declaration is true.",
     "producer_declaration_is_not_evidence": true
   },
+  "collection_artifacts": {
+    "documents": "world/documents.json",
+    "entities": "world/entities.json",
+    "episodes": "world/episodes.json",
+    "evidence_records": "world/evidence.json",
+    "measurements": "world/measurements.json",
+    "principals": "world/principals.json",
+    "relationships": "world/relationships.json",
+    "source_feeds": "world/source_manifest.json"
+  },
   "compatibility": "internal-trial-artifact-not-client-served",
   "corpus_version": "ask_dev_investigation_corpus.v1",
   "counts": {
     "cases_authored": 38,
     "cases_total": 40,
+    "documents": 3,
     "entities": 50,
     "episodes": 3,
     "evidence_records": 68,
     "measurements": 39,
     "oracles": 38,
+    "principals": 2,
     "relationships": 73,
     "required_topics": 40,
     "source_feeds": 16
@@ -33,7 +45,7 @@
     },
     {
       "path": "examples/reference_digests.json",
-      "sha256": "ac4fd82dcd408faa365f44d5754e1e49701d4b79f8fb8acac84666c9368a04c2"
+      "sha256": "263c4f7bde5b8390e8d9c49a1413f70c34624672fec117eae7bcced258f64607"
     },
     {
       "path": "registries/cases.json",
@@ -49,15 +61,27 @@
     },
     {
       "path": "registries/oracles.json",
-      "sha256": "4e4aa15302a233deb0f46bbbf8f4a1fe95864bd4c425f58162110a1ebc5dd198"
+      "sha256": "065dbdb75a945217467ceed2f1750e6c1a90eb195126ae3d3214f637e6eb7454"
+    },
+    {
+      "path": "world/documents.json",
+      "sha256": "b3f47acd5a8749227caa57c9952685a3e92d22d622a45ee992682c4035d9f7c4"
     },
     {
       "path": "world/entities.json",
-      "sha256": "807f508dad9f51ffaf1fbd0a6c3b8203d22e44228cca445c02a04d4457879ace"
+      "sha256": "6623a4a366e740f555297f618e5ac2d83e98a0004d24b1bc3ceec90f85e733a1"
+    },
+    {
+      "path": "world/episodes.json",
+      "sha256": "a921e9b8b5228a5ab2b153c7ebf08f3a8cab16df3b6cca9a481eff6fa6122dfb"
     },
     {
       "path": "world/evidence.json",
       "sha256": "ad8076570d8494cd490e2f60d7ec6f1739aca72dec752874055825dee1fbe315"
+    },
+    {
+      "path": "world/measurements.json",
+      "sha256": "c30246d5425f1c705cb27fccc8cd8d3dff752a53b2c1ad4cd668f18186f5a8ec"
     },
     {
       "path": "world/principals.json",

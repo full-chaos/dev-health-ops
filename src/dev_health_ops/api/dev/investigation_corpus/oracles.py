@@ -330,10 +330,14 @@ _ORACLES: tuple[CaseOracle, ...] = (
                 _ROLE.DRIVER,
                 _STAND.PRINCIPAL_DRIVER,
                 (world.TEAM_ATLAS,),
-                ("rv_atlas_queue", "wi_atlas_wip"),
+                ("rv_atlas_queue",),
                 (_PATH_IPR_OWNED,),
                 "A 9.4-day median review wait against a cohort median of 1.8 "
-                "is what keeps 31 items in progress against 9 completions.",
+                "is what keeps 31 items in progress against 9 completions. "
+                "Evidenced by the review queue alone, deliberately: the WIP "
+                "figure is the symptom this driver produces, and a driver "
+                "sharing its symptom's evidence makes the two "
+                "indistinguishable to any scorer.",
             ),
         ),
         expected_non_drivers=(
@@ -428,11 +432,13 @@ _ORACLES: tuple[CaseOracle, ...] = (
                 _ROLE.DRIVER,
                 _STAND.PRINCIPAL_DRIVER,
                 (world.TEAM_CINDER,),
-                ("inc_cinder_load", "ia_cinder_displaced", "di_cinder_open"),
+                ("ia_cinder_displaced", "di_cinder_open"),
                 (_PATH_CINDER_PULSE,),
-                "Seventeen incidents against a cohort median of three, and "
-                "new-value share collapsed to 12%. The incident load is the "
-                "mechanism; the investment mix is the displacement it caused.",
+                "New-value share collapsed to 12% against a cohort median of "
+                "44, with nine open operational deficiencies behind it. The "
+                "incident count is required evidence for the case and belongs "
+                "to the symptom candidate, not to this driver -- sharing it "
+                "would make the two indistinguishable.",
             ),
         ),
         expected_non_drivers=(
@@ -2131,6 +2137,37 @@ def _check_expectations_are_jointly_satisfiable(oracle: CaseOracle) -> None:
             )
 
 
+def _check_driver_evidence_is_unambiguous(oracle: CaseOracle) -> None:
+    """Expected principal and non-driver evidence sets must not overlap.
+
+    The precision and symptom-versus-driver scorers identify a packet driver
+    by which expected driver's evidence it leans on. If a principal driver and
+    the symptom it produces cite the same record, that identification is
+    undecidable -- and the honest reading is that the corpus has not decided
+    either. Atlas's review backlog citing the WIP figure it causes, and
+    Cinder's investment displacement citing the incident count it follows from,
+    were both real instances of this, found when the scorer was tightened.
+    """
+
+    principal: dict[str, str] = {}
+    for driver in oracle.expected_principal_drivers:
+        for slug in driver.supporting_evidence_slugs:
+            principal[slug] = driver.driver_key
+    for driver in oracle.expected_non_drivers:
+        clashes = sorted(
+            f"{slug} (also {principal[slug]})"
+            for slug in driver.supporting_evidence_slugs
+            if slug in principal
+        )
+        if clashes:
+            raise RuntimeError(
+                f"oracle {oracle.case_id}: non-driver {driver.driver_key} "
+                f"shares evidence with an expected principal driver: {clashes}. "
+                "A driver and the symptom it produces cannot rest on the same "
+                "record, or no scorer can tell which of them a packet meant."
+            )
+
+
 def _check_answer_shape(oracle: CaseOracle) -> None:
     case = CASE_REGISTRY[oracle.case_id]
     if oracle.expected_answer is not case.expected_answer:
@@ -2182,6 +2219,7 @@ def validate_oracles() -> None:
         _check_entities_and_paths(oracle)
         _check_drivers(oracle)
         _check_expectations_are_jointly_satisfiable(oracle)
+        _check_driver_evidence_is_unambiguous(oracle)
         _check_answer_shape(oracle)
 
 

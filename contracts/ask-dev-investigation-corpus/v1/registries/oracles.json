@@ -29,13 +29,12 @@
           ],
           "category": "review_pressure",
           "driver_key": "atlas_review_backlog",
-          "rationale": "A 9.4-day median review wait against a cohort median of 1.8 is what keeps 31 items in progress against 9 completions.",
+          "rationale": "A 9.4-day median review wait against a cohort median of 1.8 is what keeps 31 items in progress against 9 completions. Evidenced by the review queue alone, deliberately: the WIP figure is the symptom this driver produces, and a driver sharing its symptom's evidence makes the two indistinguishable to any scorer.",
           "relevance": "current",
           "role": "driver",
           "standing": "principal_driver",
           "supporting_evidence_slugs": [
-            "rv_atlas_queue",
-            "wi_atlas_wip"
+            "rv_atlas_queue"
           ],
           "supporting_paths": [
             "proj_identity_rewrite-[owned_by_team]->team_atlas"
@@ -214,12 +213,11 @@
           ],
           "category": "operational_pressure",
           "driver_key": "cinder_operational_displacement",
-          "rationale": "Seventeen incidents against a cohort median of three, and new-value share collapsed to 12%. The incident load is the mechanism; the investment mix is the displacement it caused.",
+          "rationale": "New-value share collapsed to 12% against a cohort median of 44, with nine open operational deficiencies behind it. The incident count is required evidence for the case and belongs to the symptom candidate, not to this driver -- sharing it would make the two indistinguishable.",
           "relevance": "current",
           "role": "driver",
           "standing": "principal_driver",
           "supporting_evidence_slugs": [
-            "inc_cinder_load",
             "ia_cinder_displaced",
             "di_cinder_open"
           ],

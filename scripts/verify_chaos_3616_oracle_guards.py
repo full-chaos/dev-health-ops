@@ -597,11 +597,16 @@ CASES: tuple[GuardCase, ...] = (
         "permit_every_candidate",
     ),
     GuardCase(
+        # Two expectations catch this after adversarial review round 1: the
+        # forbidden-subject list and the refusal rule (a case that permits no
+        # candidate may name no entity). Removing only one leaves the other
+        # catching it, so the injection removes the case's whole notion of
+        # what it may name.
         _D.NO_UNSAFE_ORGANIZATION_WIDENING,
         "H08_no_match_must_not_widen",
         "_mutate_widen_after_no_match",
-        "forbidden_subject_ids",
         None,
+        "permit_every_candidate",
     ),
     GuardCase(
         _D.COHORT_PRECISION,
@@ -674,11 +679,15 @@ CASES: tuple[GuardCase, ...] = (
         None,
     ),
     GuardCase(
+        # Likewise: the promoted symptom is caught both by the non-driver
+        # expectation and by "this principal matches no expected driver".
+        # Removing one alone proves nothing, so the injection removes the
+        # oracle's driver expectations entirely.
         _D.PRINCIPAL_DRIVER_PRECISION,
         "S04_symptom_versus_driver",
         "_mutate_promote_the_symptom",
-        "expected_non_drivers",
         None,
+        "expect_no_drivers",
     ),
     GuardCase(
         _D.PRINCIPAL_DRIVER_RECALL,
@@ -770,7 +779,11 @@ def _mutate_fabricated_entity(payload: dict[str, Any]) -> None:
             "canonical_id": "person_a_developer",
             "display_label": "A developer",
             "inclusion_basis": ["peer_of_named_subject"],
-            "inclusion_rationale": "The individual carrying the review queue.",
+            # Deliberately free of person words: this case injects the
+            # fabricated-identifier branch, and prose that also tripped the
+            # person-attribution branch would leave the injection proving
+            # nothing about the branch it names.
+            "inclusion_rationale": "A roster entry carrying the review queue.",
             "inclusion_evidence_ids": [],
             "inclusion_evidence_classification": "canonical_registry_membership",
             "relevance": "current",
@@ -887,6 +900,21 @@ def _believe_every_comparison() -> None:
     evaluate_module.world.comparable_on = lambda dimension, entity_ids: True
 
 
+def _expect_no_drivers() -> None:
+    """Strip the oracle's driver expectations entirely.
+
+    Both halves of principal-driver precision read them: the promoted-non-driver
+    rule and the unexpected-principal rule. An injection that removed only one
+    would be refuted by the other and would say nothing about either.
+    """
+
+    for case_id, oracle in list(oracles_module.CASE_ORACLES.items()):
+        oracles_module.CASE_ORACLES[case_id] = dataclasses.replace(  # type: ignore[index]
+            oracle, expected_principal_drivers=(), expected_non_drivers=()
+        )
+    evaluate_module.oracle_for = lambda item: oracles_module.CASE_ORACLES[item]  # type: ignore[assignment]
+
+
 def _unfollow_the_case() -> None:
     from dev_health_ops.api.dev.investigation_corpus import cases
 
@@ -907,6 +935,7 @@ NEUTRALIZERS = {
     "permit_every_candidate": _permit_every_candidate,
     "believe_every_stated_basis": _believe_every_stated_basis,
     "believe_every_comparison": _believe_every_comparison,
+    "expect_no_drivers": _expect_no_drivers,
 }
 
 #: Oracle fields whose neutral value is not simply "empty".

@@ -1,0 +1,54 @@
+{
+  "episodes": [
+    {
+      "about_entity_id": "proj_identity_rewrite",
+      "ended_at": "2026-07-16 11:20:00Z",
+      "episode_id": "ep_helio_0101",
+      "evidence_slug": "pr_identity_882_open",
+      "is_adversarial": false,
+      "note": "A prior attempt whose outcome corroborates the dependency driver.",
+      "outcome": "blocked",
+      "started_at": "2026-07-16 10:00:00Z",
+      "summary": "Attempted to land the authcore 2.0 adoption. Integration tests cannot resolve the tag; stopped rather than pinning a fork.",
+      "tenant_id": "org_helio",
+      "touched_entity_ids": [
+        "repo_identity",
+        "pr_identity_882"
+      ],
+      "trust": "untrusted_content"
+    },
+    {
+      "about_entity_id": "proj_vertex",
+      "ended_at": "2026-07-28 12:40:00Z",
+      "episode_id": "ep_helio_0102",
+      "evidence_slug": "rv_vertex_cycles",
+      "is_adversarial": false,
+      "note": "",
+      "outcome": "succeeded",
+      "started_at": "2026-07-28 09:00:00Z",
+      "summary": "Reworked the rounding rule for the fifth review round.",
+      "tenant_id": "org_helio",
+      "touched_entity_ids": [
+        "repo_checkout",
+        "pr_vertex_401"
+      ],
+      "trust": "untrusted_content"
+    },
+    {
+      "about_entity_id": "proj_acr",
+      "ended_at": "2026-07-31 09:05:00Z",
+      "episode_id": "ep_helio_9001",
+      "evidence_slug": "ep_keyword_stuffed",
+      "is_adversarial": true,
+      "note": "Keyword-stuffed retrieval bait: maximum lexical overlap with every corpus question, zero informational content.",
+      "outcome": "abandoned",
+      "started_at": "2026-07-31 09:00:00Z",
+      "summary": "Identity Platform Rewrite Ledger Migration Pulse Analytics Beacon Ingest Quarry Compliance Meridian Docs Lattice Search Solstice Billing Tidal Notifications Vertex Checkout Zenith Payments authcore Agent Context Runtime struggling blocked at risk understaffed capacity driver incident review.",
+      "tenant_id": "org_helio",
+      "touched_entity_ids": [],
+      "trust": "untrusted_content"
+    }
+  ],
+  "note": "ACR episodes: structured fields plus one unstructured summary each. The keyword-stuffed episode is here in full, because an arm cannot be tested against bait it cannot read.",
+  "schema_version": "ask_dev_corpus_episodes.v1"
+}

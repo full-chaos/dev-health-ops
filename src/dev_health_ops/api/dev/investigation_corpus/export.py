@@ -45,6 +45,7 @@ from .world import (
     TRIAL_NOW,
     WINDOW_END,
     WINDOW_START,
+    WORLD_DOCUMENTS,
     WORLD_ENTITIES,
     WORLD_EPISODES,
     WORLD_EPOCH,
@@ -120,6 +121,11 @@ def _world_artifacts() -> dict[str, Any]:
                         {"text": alias.text, "signal": alias.signal.value}
                         for alias in entity.aliases
                     ],
+                    "observed_at": _iso(entity.observed_at),
+                    "valid_from": _iso(entity.valid_from)
+                    if entity.valid_from
+                    else None,
+                    "valid_to": _iso(entity.valid_to) if entity.valid_to else None,
                     "note": entity.note,
                 }
                 for entity in WORLD_ENTITIES
@@ -168,6 +174,81 @@ def _world_artifacts() -> dict[str, Any]:
                     "is_citable": record.is_citable,
                 }
                 for record in WORLD_EVIDENCE
+            ],
+        },
+        "world/measurements.json": {
+            "schema_version": "ask_dev_corpus_measurements.v1",
+            "note": (
+                "The canonical-service numbers every driver expectation is "
+                "grounded in. Omitting these from the artifact tree left an "
+                "artifact-only consumer unable to reproduce any staffing or "
+                "capacity fact the Python oracle scores."
+            ),
+            "measurements": [
+                {
+                    "measurement_key": item.measurement_key,
+                    "tenant_id": item.tenant_id,
+                    "entity_id": item.entity_id,
+                    "source_class": item.source_class.value,
+                    "metric": item.metric,
+                    "value": item.value,
+                    "unit": item.unit,
+                    "window_start": _iso(item.window_start),
+                    "window_end": _iso(item.window_end),
+                    "basis": item.basis.value,
+                    "evidence_slug": item.evidence_slug,
+                    "cohort_median": item.cohort_median,
+                    "note": item.note,
+                }
+                for item in WORLD_MEASUREMENTS
+            ],
+        },
+        "world/documents.json": {
+            "schema_version": "ask_dev_corpus_documents.v1",
+            "note": (
+                "The only prose in the world, bodies included -- the "
+                "prompt-injection case cannot be reproduced from an artifact "
+                "tree that omits the text being injected."
+            ),
+            "documents": [
+                {
+                    "document_id": document.document_id,
+                    "tenant_id": document.tenant_id,
+                    "title": document.title,
+                    "body": document.body,
+                    "about_entity_id": document.about_entity_id,
+                    "evidence_slug": document.evidence_slug,
+                    "observed_at": _iso(document.observed_at),
+                    "trust": document.trust.value,
+                    "contains_injection": document.contains_injection,
+                    "note": document.note,
+                }
+                for document in WORLD_DOCUMENTS
+            ],
+        },
+        "world/episodes.json": {
+            "schema_version": "ask_dev_corpus_episodes.v1",
+            "note": (
+                "ACR episodes: structured fields plus one unstructured "
+                "summary each. The keyword-stuffed episode is here in full, "
+                "because an arm cannot be tested against bait it cannot read."
+            ),
+            "episodes": [
+                {
+                    "episode_id": episode.episode_id,
+                    "tenant_id": episode.tenant_id,
+                    "about_entity_id": episode.about_entity_id,
+                    "outcome": episode.outcome,
+                    "started_at": _iso(episode.started_at),
+                    "ended_at": _iso(episode.ended_at),
+                    "touched_entity_ids": list(episode.touched_entity_ids),
+                    "summary": episode.summary,
+                    "evidence_slug": episode.evidence_slug,
+                    "trust": episode.trust.value,
+                    "is_adversarial": episode.is_adversarial,
+                    "note": episode.note,
+                }
+                for episode in WORLD_EPISODES
             ],
         },
         "world/principals.json": {
@@ -380,7 +461,7 @@ def expected_artifacts() -> dict[str, str]:
     }.items():
         artifacts[path] = _json(payload)
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema_version": "ask_dev_investigation_corpus_manifest.v1",
         "corpus_version": CORPUS_VERSION,
         "compatibility": "internal-trial-artifact-not-client-served",
@@ -402,7 +483,9 @@ def expected_artifacts() -> dict[str, str]:
             "evidence_records": len(WORLD_EVIDENCE),
             "measurements": len(WORLD_MEASUREMENTS),
             "episodes": len(WORLD_EPISODES),
+            "documents": len(WORLD_DOCUMENTS),
             "source_feeds": len(SOURCE_MANIFEST),
+            "principals": len(PRINCIPALS),
             "cases_total": len(ALL_CASE_IDS),
             "cases_authored": len(authored_cases()),
             "oracles": len(CASE_ORACLES),
@@ -431,11 +514,44 @@ def expected_artifacts() -> dict[str, str]:
                 "the declaration is true."
             ),
         },
+        # Every counted collection names the artifact that carries it.
+        # Adversarial review round 1 found the manifest reporting 39
+        # measurements and 3 episodes that the artifact tree did not contain,
+        # so an artifact-only arm would have run against a world missing every
+        # staffing fact and both adversarial prose sources.
+        "collection_artifacts": {
+            "entities": "world/entities.json",
+            "relationships": "world/relationships.json",
+            "evidence_records": "world/evidence.json",
+            "measurements": "world/measurements.json",
+            "documents": "world/documents.json",
+            "episodes": "world/episodes.json",
+            "source_feeds": "world/source_manifest.json",
+            "principals": "world/principals.json",
+        },
         "files": [
             {"path": path, "sha256": _sha256(contents)}
             for path, contents in sorted(artifacts.items())
         ],
     }
+    counted = set(manifest["counts"]) - {
+        "cases_total",
+        "cases_authored",
+        "oracles",
+        "required_topics",
+    }
+    unexported = sorted(counted - set(manifest["collection_artifacts"]))
+    if unexported:
+        raise RuntimeError(
+            f"the manifest counts collections it does not export: {unexported}. "
+            "A count without an artifact is a world an artifact-only consumer "
+            "cannot reproduce."
+        )
+    for collection, path in manifest["collection_artifacts"].items():
+        if path not in artifacts:
+            raise RuntimeError(
+                f"collection {collection} names artifact {path}, which is not written"
+            )
     artifacts["manifest.json"] = _json(manifest)
     return artifacts
 

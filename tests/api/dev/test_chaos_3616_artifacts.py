@@ -16,6 +16,7 @@ breaks the CHAOS-3615 freeze rather than this one.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from dev_health_ops.api.dev.investigation_contract.export import (
     ARTIFACT_ROOT as CONTRACT_ROOT,
@@ -119,3 +120,79 @@ def test_no_corpus_file_landed_in_the_contract_tree() -> None:
         if path.is_file()
     )
     assert not strays, f"corpus artifacts inside the frozen contract root: {strays}"
+
+
+def test_every_counted_world_collection_has_an_artifact() -> None:
+    """Adversarial review round 1, finding 6.
+
+    The manifest reported 39 measurements, 3 documents and 3 episodes that the
+    artifact tree did not contain, so an artifact-only arm would have run
+    against a world missing every staffing fact and both adversarial prose
+    sources -- while the Python oracle scored it against the full one. A count
+    with no artifact behind it is a reproducibility claim that is false.
+    """
+
+    import json
+
+    manifest: dict[str, Any] = json.loads(
+        (ARTIFACT_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    registry_only = {"cases_total", "cases_authored", "oracles", "required_topics"}
+    counted = set(manifest["counts"]) - registry_only
+    mapped = set(manifest["collection_artifacts"])
+    assert counted == mapped, (
+        f"counted-but-unexported: {sorted(counted - mapped)}; "
+        f"exported-but-uncounted: {sorted(mapped - counted)}"
+    )
+    for collection, path in manifest["collection_artifacts"].items():
+        assert (ARTIFACT_ROOT / path).exists(), f"{collection} -> {path} is missing"
+
+
+def test_the_exported_collections_carry_the_counted_number_of_records() -> None:
+    """A file that exists but is empty would satisfy the parity test alone."""
+
+    import json
+
+    manifest: dict[str, Any] = json.loads(
+        (ARTIFACT_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    key_by_collection = {
+        "entities": "entities",
+        "relationships": "relationships",
+        "evidence_records": "evidence",
+        "measurements": "measurements",
+        "documents": "documents",
+        "episodes": "episodes",
+        "principals": "principals",
+        "source_feeds": "feeds",
+    }
+    for collection, path in manifest["collection_artifacts"].items():
+        payload = json.loads((ARTIFACT_ROOT / path).read_text(encoding="utf-8"))
+        records = payload[key_by_collection[collection]]
+        assert len(records) == manifest["counts"][collection], (
+            f"{collection}: manifest says {manifest['counts'][collection]}, "
+            f"{path} carries {len(records)}"
+        )
+
+
+def test_the_prose_sources_are_exported_in_full() -> None:
+    """The injection and the bait cannot be tested against if they are absent."""
+
+    import json
+
+    documents = json.loads(
+        (ARTIFACT_ROOT / "world" / "documents.json").read_text(encoding="utf-8")
+    )["documents"]
+    injected = [item for item in documents if item["contains_injection"]]
+    assert injected, "no injected document in the artifact tree"
+    assert "ignore your previous instructions" in injected[0]["body"].casefold()
+
+    episodes = json.loads(
+        (ARTIFACT_ROOT / "world" / "episodes.json").read_text(encoding="utf-8")
+    )["episodes"]
+    bait = [item for item in episodes if item["is_adversarial"]]
+    assert bait, "no adversarial episode in the artifact tree"
+    assert len(bait[0]["summary"]) > 100, (
+        "the keyword-stuffed summary was truncated in export, so an "
+        "artifact-only arm cannot be baited by it"
+    )

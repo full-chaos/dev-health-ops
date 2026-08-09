@@ -7,9 +7,12 @@
       "entity_id": "pf_platform",
       "kind": "portfolio",
       "note": "Holds the identity, ledger and runtime work.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -18,9 +21,12 @@
       "entity_id": "pf_growth",
       "kind": "portfolio",
       "note": "Holds checkout, payments and notifications.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [
@@ -34,9 +40,12 @@
       "entity_id": "init_identity_modernization",
       "kind": "initiative",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [
@@ -50,9 +59,12 @@
       "entity_id": "team_atlas",
       "kind": "team",
       "note": "The clearly struggling team: delivery, review and operational pressure all corroborate each other.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -61,9 +73,12 @@
       "entity_id": "team_borealis",
       "kind": "team",
       "note": "High WIP with no corroborating strain: throughput and review age are both at the cohort median.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -72,9 +87,12 @@
       "entity_id": "team_cinder",
       "kind": "team",
       "note": "Operational load has displaced feature investment.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -83,9 +101,12 @@
       "entity_id": "team_dorado",
       "kind": "team",
       "note": "Reviews for three other teams' repositories; its pressure is only visible by traversing outward, never in its own metrics.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -94,9 +115,12 @@
       "entity_id": "team_ember",
       "kind": "team",
       "note": "Its provider feeds stalled in June; the data is incomplete, not the team.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -105,9 +129,12 @@
       "entity_id": "team_frost",
       "kind": "team",
       "note": "Healthy on every axis except one noisy metric: a single long-running spike in cycle time from one outlier work item.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [
@@ -133,9 +160,12 @@
       "entity_id": "proj_identity_rewrite",
       "kind": "project",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [
@@ -149,9 +179,12 @@
       "entity_id": "proj_auth_gateway_hardening",
       "kind": "project",
       "note": "The near-miss for 'the auth work'. A fuzzy label match on 'auth' reaches it; only the alias registry distinguishes the two.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [
@@ -165,9 +198,12 @@
       "entity_id": "proj_acr",
       "kind": "project",
       "note": "Subject of 'Why is ACR still not finished?'.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -176,9 +212,12 @@
       "entity_id": "proj_ledger_migration",
       "kind": "project",
       "note": "Declared complete while one of its three children is still open: the declared-versus-child-completion divergence.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -187,9 +226,12 @@
       "entity_id": "proj_pulse",
       "kind": "project",
       "note": "Implementation complete and deployed, but the operational readiness controls are open: release-incomplete, not implementation-incomplete.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -198,9 +240,12 @@
       "entity_id": "proj_beacon",
       "kind": "project",
       "note": "Demand exceeds the owning team's observed delivery capacity.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -209,9 +254,12 @@
       "entity_id": "proj_quarry",
       "kind": "project",
       "note": "RESTRICTED. Inside the primary tenant but outside the analyst principal's visible set, so an unauthorized result is same-tenant and cannot be caught by a tenant check alone.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -220,9 +268,12 @@
       "entity_id": "proj_meridian",
       "kind": "project",
       "note": "Genuinely lightly loaded relative to its demand.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -231,9 +282,12 @@
       "entity_id": "proj_lattice",
       "kind": "project",
       "note": "Eleven contributors touched it; two are active. Raw contributor count is the misleading number.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -242,9 +296,12 @@
       "entity_id": "proj_solstice",
       "kind": "project",
       "note": "No allocation feed at all, yet demand-versus-delivery is still measurable: the qualified-capacity case.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -253,9 +310,12 @@
       "entity_id": "proj_tidal",
       "kind": "project",
       "note": "Neither allocation nor sufficient delivery signal. A staffing conclusion here has no evidence in either direction.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -264,9 +324,12 @@
       "entity_id": "proj_vertex",
       "kind": "project",
       "note": "The project that kept cycling in review.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -275,9 +338,12 @@
       "entity_id": "proj_zenith",
       "kind": "project",
       "note": "The successor that replaced the Payments Rewrite.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -286,9 +352,12 @@
       "entity_id": "proj_payments_rewrite",
       "kind": "project",
       "note": "'What happened to the payments rewrite?' must resolve HERE and disclose the supersession -- not silently answer about Zenith.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "superseded",
       "superseded_by": "proj_zenith",
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": "2026-06-30 00:00:00Z"
     },
     {
       "aliases": [],
@@ -297,9 +366,12 @@
       "entity_id": "svc_auth_gateway",
       "kind": "service",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -308,9 +380,12 @@
       "entity_id": "svc_ledger_api",
       "kind": "service",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -319,9 +394,12 @@
       "entity_id": "svc_pulse_api",
       "kind": "service",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -330,9 +408,12 @@
       "entity_id": "svc_checkout",
       "kind": "service",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -341,9 +422,12 @@
       "entity_id": "repo_identity",
       "kind": "repository",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -352,9 +436,12 @@
       "entity_id": "repo_ledger",
       "kind": "repository",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -363,9 +450,12 @@
       "entity_id": "repo_pulse",
       "kind": "repository",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -374,9 +464,12 @@
       "entity_id": "repo_acr",
       "kind": "repository",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -385,9 +478,12 @@
       "entity_id": "repo_checkout",
       "kind": "repository",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -396,9 +492,12 @@
       "entity_id": "repo_beacon",
       "kind": "repository",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -407,9 +506,12 @@
       "entity_id": "dep_authcore",
       "kind": "dependency",
       "note": "The shared dependency. Three projects sit behind its unreleased 2.0; none of their own metrics shows why.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -418,9 +520,12 @@
       "entity_id": "dep_ratelimitd",
       "kind": "dependency",
       "note": "Removed from the Pulse dependency set in June. Historical only -- the decoy for current relevance.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -429,9 +534,12 @@
       "entity_id": "wu_ledger_cutover",
       "kind": "work_unit",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -440,9 +548,12 @@
       "entity_id": "wu_ledger_schema",
       "kind": "work_unit",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -451,9 +562,12 @@
       "entity_id": "wu_ledger_backfill",
       "kind": "work_unit",
       "note": "The open child under a parent declared complete.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -462,9 +576,12 @@
       "entity_id": "wu_ledger_dual_write",
       "kind": "work_unit",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -473,9 +590,12 @@
       "entity_id": "wu_authcore_release",
       "kind": "work_unit",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -484,9 +604,12 @@
       "entity_id": "wu_pulse_runbook",
       "kind": "work_unit",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -495,9 +618,12 @@
       "entity_id": "wu_beacon_ingest",
       "kind": "work_unit",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -506,9 +632,12 @@
       "entity_id": "issue_acr_span_decl",
       "kind": "issue",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -517,9 +646,12 @@
       "entity_id": "issue_vertex_tax_rounding",
       "kind": "issue",
       "note": "",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -528,9 +660,12 @@
       "entity_id": "pr_identity_882",
       "kind": "pull_request",
       "note": "",
+      "observed_at": "2026-07-14 09:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -539,9 +674,12 @@
       "entity_id": "pr_vertex_401",
       "kind": "pull_request",
       "note": "Six review cycles; the colloquial 'kept cycling in review'.",
+      "observed_at": "2026-06-30 09:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -550,9 +688,12 @@
       "entity_id": "pr_pulse_212",
       "kind": "pull_request",
       "note": "",
+      "observed_at": "2026-07-02 09:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -561,9 +702,12 @@
       "entity_id": "pr_ledger_990",
       "kind": "pull_request",
       "note": "",
+      "observed_at": "2026-07-20 09:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_helio"
+      "tenant_id": "org_helio",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [],
@@ -572,9 +716,12 @@
       "entity_id": "lumen_team_core",
       "kind": "team",
       "note": "Cross-tenant. Never visible to a Helio principal.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_lumen"
+      "tenant_id": "org_lumen",
+      "valid_from": null,
+      "valid_to": null
     },
     {
       "aliases": [
@@ -588,9 +735,12 @@
       "entity_id": "lumen_proj_acr",
       "kind": "project",
       "note": "The cross-tenant near-duplicate: identical display label and identical acronym to Helio's ACR, and declared COMPLETE where Helio's is not -- so leaking it changes the answer, not just the citation.",
+      "observed_at": "2026-04-01 00:00:00Z",
       "state": "active",
       "superseded_by": null,
-      "tenant_id": "org_lumen"
+      "tenant_id": "org_lumen",
+      "valid_from": null,
+      "valid_to": null
     }
   ],
   "schema_version": "ask_dev_corpus_entities.v1"

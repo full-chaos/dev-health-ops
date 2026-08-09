@@ -77,11 +77,18 @@ class AuthorizationAudit:
     unauthorized_evidence_handles: tuple[str, ...] = ()
     #: Cited handles whose world record is revoked, redacted or deleted.
     withdrawn_evidence_handles: tuple[str, ...] = ()
+    #: Set when the packet claims an organization the principal does not
+    #: belong to. Adversarial review round 1: a clean Helio witness relabelled
+    #: ``org_lumen`` stayed contract-valid, authorization-clean and
+    #: dimension-clean, because the audit compared entity ids and never the
+    #: tenant those ids were attributed to.
+    tenant_mismatch: str = ""
 
     @property
     def is_clean(self) -> bool:
         return not (
-            self.false_authorization_claims
+            self.tenant_mismatch
+            or self.false_authorization_claims
             or self.unauthorized_disclosures
             or self.fabricated_entities
             or self.fabricated_evidence_handles
@@ -117,6 +124,8 @@ class AuthorizationAudit:
             )
         if self.withdrawn_evidence_handles:
             parts.append(f"handles-withdrawn={sorted(self.withdrawn_evidence_handles)}")
+        if self.tenant_mismatch:
+            parts.append(f"tenant-mismatch={self.tenant_mismatch}")
         return "; ".join(parts)
 
 
@@ -231,8 +240,16 @@ def audit_authorization(
     oracle into a no-op on precisely the inputs it exists to judge.
     """
 
-    visible = world.authorized_entity_ids(principal_id)
+    principal = world.PRINCIPALS[principal_id]
+    visible = principal.visible_entity_ids
     known = set(world.ENTITIES_BY_ID)
+
+    tenant_mismatch = ""
+    if packet.organization_id != principal.tenant_id:
+        tenant_mismatch = (
+            f"packet claims {packet.organization_id}; principal "
+            f"{principal_id} belongs to {principal.tenant_id}"
+        )
 
     declared = set(packet.related_context.authorized_entity_ids)
     false_claims = tuple(sorted(declared - visible))
@@ -264,6 +281,7 @@ def audit_authorization(
     return AuthorizationAudit(
         case_id=case_id,
         principal_id=principal_id,
+        tenant_mismatch=tenant_mismatch,
         false_authorization_claims=false_claims,
         unauthorized_disclosures=tuple(unauthorized),
         fabricated_entities=tuple(fabricated),

@@ -2,7 +2,7 @@
   "digests": [
     {
       "case_id": "T01_clearly_struggling_team",
-      "sha256": "31c8bf2e5576219cdd04d8ba8ecd719bffad3945e4011caee344f7aecc171132"
+      "sha256": "82f039770a67dd781e0cd2b499bde373042f51ea405bfd0ba41167b71befbdd6"
     },
     {
       "case_id": "T02_high_wip_without_struggle",
@@ -10,7 +10,7 @@
     },
     {
       "case_id": "T03_operational_displaces_feature",
-      "sha256": "363eecadd58f31eea62af5bd87f7bb6ce43e4e7d38e13796bc9263e011b52ca9"
+      "sha256": "4eb41c16922a1f3140dea18065c6278e7d5901928de195bc32558e6c20d951ef"
     },
     {
       "case_id": "T04_review_pressure_across_projects",

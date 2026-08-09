@@ -245,6 +245,64 @@ iteration on the critical path of the CHAOS-3615 freeze.
   cannot fail. The reason is recorded in `UNINJECTED` in the injection script
   and asserted by `test_chaos_3616_coverage_matrix.py`.
 
+## What adversarial review broke
+
+An independent adversarial review of the first complete version found **six
+confirmed false-pass paths**, all reproduced by execution before anything was
+changed. They are recorded here rather than quietly fixed, because five of the
+six are the same failure shape and a reader deciding how far to trust this
+package should see how far it did *not* go on the first attempt.
+
+| Finding | What passed cleanly before the fix |
+| --- | --- |
+| `permitted_outcomes` never read | A09's outcome changed from `no_match` to `unsupported`: contract-valid, zero failures |
+| Widening measured over two sections only | A refusal packet attaching a real path and related entity: clean |
+| Person safety keyed on fabricated ids | A one-member cohort of the **real** `team_cinder`, rationale "a single developer…": clean |
+| Driver identity tested by subset | A promoted symptom padded with **one** legitimate citation: clean |
+| Tenant never audited | A Helio witness relabelled `org_lumen`: clean |
+| Artifacts omitted three collections | Manifest counted 39 measurements and 3 episodes the tree did not contain |
+
+Four of these were **expectation fields the oracles declared and no scorer
+read** — `permitted_outcomes`, the tenant on `Principal`, and the full entity
+surface. The corpus knew the right answer and never asked the question.
+
+The fixes, in order:
+
+* **Outcome is a precondition, not a dimension.** `CaseEvaluation.is_clean`
+  is now the single pass condition — contract-valid, an outcome the case
+  permits, and no dimension failure. `failures()` stays strictly per-dimension
+  so the trial's reporting shape is unchanged, and no aggregate score is
+  introduced.
+* **Widening is measured over every entity a consumer can see**, via
+  `entity_sightings`. A case that permits no candidate and requires no related
+  entity is a refusal, and a refusal packet that names anything fails.
+* **Person-level safety has three routes closed**: a fabricated identifier, a
+  cohort on a refusal case, and person-attributing free text. The prose check
+  is negation-aware, because "a project-level ratio, never a statement about
+  any individual" is what a *correct* answer says — P07's witness says exactly
+  that, and keeps the negation path exercised rather than reworded away.
+* **Driver identity is by intersection, not subset.** A principal driver that
+  leans on an expected non-driver's evidence at all is that non-driver
+  promoted, however much else it cites; and a principal matching no expected
+  driver fails too. `_check_driver_evidence_is_unambiguous` keeps the two
+  evidence sets disjoint so the rule is decidable — which immediately exposed
+  two oracles where a driver cited the symptom it produces (Atlas's review
+  backlog citing its own WIP figure, Cinder's investment displacement citing
+  its incident count). Both were re-modelled, not exempted.
+* **The authorization audit reads the tenant**, comparing
+  `packet.organization_id` against the principal's own.
+* **Every counted world collection has an artifact**, enforced in the exporter
+  and asserted by tests that check both the file's existence and its record
+  count. The injected document body and the keyword-stuffed episode summary
+  are exported in full: an artifact-only arm cannot be tested against bait it
+  cannot read.
+
+Each of the six has a regression test built from the reviewer's own
+reproduction. Three guard-injection cases had to be retargeted afterwards —
+not because the guards weakened, but because the strengthened scorers now
+catch those defects by more than one route, and an injection that removes one
+route proves nothing while the other still fires.
+
 ## An audit that changed the design
 
 Two dimensions were, on first implementation, **unfailable** --

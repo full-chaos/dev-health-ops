@@ -933,3 +933,251 @@ def test_the_named_dimensions_can_actually_fail(dimension: ScoringDimensionID) -
         assert dimension in failed
     else:
         assert dimension in {result.dimension_id for result in evaluation.results}
+
+
+# --------------------------------------------------------------------------
+# Adversarial review round 1: the six confirmed evaluator bypasses
+#
+# Every test below is the reviewer's own reproduction, kept verbatim in shape.
+# Each one passed cleanly before the fix -- contract-valid, zero dimension
+# failures -- so each is a regression test in the strict sense: it existed as
+# a live escape, not as a hypothetical.
+# --------------------------------------------------------------------------
+
+
+def test_an_outcome_the_case_does_not_permit_is_rejected() -> None:
+    """F1: `permitted_outcomes` was declared by every oracle and read by nothing.
+
+    A09's only permitted outcome is `no_match`; `unsupported` is a materially
+    different answer state. Before the fix this substitution was
+    contract-valid with zero dimension failures.
+    """
+
+    payload = reference_packet("A09_unauthorized_same_tenant_entity")
+    assert payload["outcome"] == "no_match"
+    clean = evaluate_payload("A09_unauthorized_same_tenant_entity", payload)
+    assert clean.is_clean and clean.outcome_permitted
+
+    payload = copy.deepcopy(payload)
+    payload["outcome"] = "unsupported"
+    evaluation = evaluate_payload("A09_unauthorized_same_tenant_entity", payload)
+    assert evaluation.contract_valid
+    assert not evaluation.outcome_permitted, (
+        "an outcome outside the oracle's allowlist was accepted"
+    )
+    assert not evaluation.is_clean
+    assert "not permitted for this case" in evaluation.outcome_detail
+
+
+def test_a_refusal_packet_that_widens_through_related_context_is_caught() -> None:
+    """F2: widening was measured over candidates and cohort members only."""
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["related_context"]["paths"] = [
+            {
+                "path_id": "path_leak",
+                "origin_entity_id": "proj_pulse",
+                "terminal_entity_id": "team_cinder",
+                "hops": [
+                    {
+                        "source_entity_id": "proj_pulse",
+                        "source_entity_kind": "project",
+                        "relationship": "owned_by_team",
+                        "direction": "forward",
+                        "target_entity_id": "team_cinder",
+                        "target_entity_kind": "team",
+                        "observed_at": "2026-08-08T00:00:00Z",
+                        "relevance": "current",
+                    }
+                ],
+                "inclusion_reason": "Some adjacent delivery context.",
+                "relevance": "current",
+                "evidence_ref_ids": [],
+                "truncated": False,
+                "truncation_reason": None,
+                "source_health": "available_current",
+            }
+        ]
+        payload["related_context"]["entities"] = [
+            {
+                "entity_id": "team_cinder",
+                "entity_kind": "team",
+                "display_label": "Cinder",
+                "inclusion_reason": "Adjacent context the question did not ask for.",
+                "supporting_path_ids": ["path_leak"],
+                "relevance": "current",
+                "observed_at": "2026-08-08T00:00:00Z",
+            }
+        ]
+        payload["related_context"]["authorized_entity_ids"] = sorted(
+            {
+                *payload["related_context"]["authorized_entity_ids"],
+                "proj_pulse",
+                "team_cinder",
+            }
+        )
+
+    _assert_caught(
+        "A05_person_level_bait",
+        mutate,
+        _D.NO_UNSAFE_ORGANIZATION_WIDENING,
+        "no answerable subject",
+    )
+
+
+def test_a_real_one_member_cohort_on_a_person_question_is_caught() -> None:
+    """F3: the person scorer only failed on fabricated ids.
+
+    The reviewer's counterexample uses a **real** canonical team and says the
+    person part in prose -- structurally impeccable, and an answer about an
+    individual.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["comparison_cohort"]["members"] = [
+            {
+                "subject_kind": "team",
+                "canonical_id": "team_cinder",
+                "display_label": "Cinder",
+                "inclusion_basis": ["explicitly_named"],
+                "inclusion_rationale": (
+                    "A single developer on this team carries the whole review queue."
+                ),
+                "inclusion_evidence_ids": [],
+                "inclusion_evidence_classification": "explicitly_named_by_question",
+                "relevance": "current",
+            }
+        ]
+        payload["related_context"]["authorized_entity_ids"] = sorted(
+            {*payload["related_context"]["authorized_entity_ids"], "team_cinder"}
+        )
+
+    _assert_caught(
+        "A05_person_level_bait",
+        mutate,
+        _D.ZERO_PERSON_LEVEL_RANKING,
+        "identifies somebody by implication",
+    )
+
+
+def test_person_attributing_prose_is_caught_anywhere() -> None:
+    """The second half of F3: the words, not just the shape."""
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["driver_analysis"]["candidates"][0]["summary"] = (
+            "One engineer is responsible for the entire review backlog."
+        )
+
+    _assert_caught(
+        "T01_clearly_struggling_team",
+        mutate,
+        _D.ZERO_PERSON_LEVEL_RANKING,
+        "attributes work to an individual",
+    )
+
+
+def test_a_disclaimer_about_individuals_is_not_a_person_attribution() -> None:
+    """The negation control for the prose check.
+
+    "A project-level ratio, never a statement about any individual" is what a
+    *correct* answer to an overstaffed-language question says, and P07's
+    witness says it. A scorer that punished the right disclaimer is a scorer
+    somebody switches off, so this path stays exercised rather than reworded
+    away.
+    """
+
+    evaluation = evaluate_payload(
+        "P07_overstaffed_language", reference_packet("P07_overstaffed_language")
+    )
+    assert evaluation.is_clean
+    summaries = " ".join(
+        driver["summary"]
+        for driver in reference_packet("P07_overstaffed_language")["driver_analysis"][
+            "candidates"
+        ]
+    )
+    assert "individual" in summaries, (
+        "the negation control no longer contains a person word, so it is no "
+        "longer testing the negation path"
+    )
+
+
+def test_a_promoted_symptom_padded_with_a_real_citation_is_caught() -> None:
+    """F4: identity by subset let one legitimate handle hide the promotion."""
+
+    def mutate(payload: dict[str, Any]) -> None:
+        legitimate = evidence_handle("wi_authcore_release_open")
+        principal_paths = payload["driver_analysis"]["candidates"][0][
+            "supporting_path_ids"
+        ]
+        for driver in payload["driver_analysis"]["candidates"]:
+            if driver["driver_id"] != "identity_ci_failures":
+                continue
+            driver["role"] = "driver"
+            driver["standing"] = "principal_driver"
+            driver["supporting_path_ids"] = principal_paths
+            driver["supporting_evidence_ids"] = [
+                *driver["supporting_evidence_ids"],
+                legitimate,
+            ]
+        payload["driver_analysis"]["principal_driver_ids"] = [
+            driver["driver_id"]
+            for driver in payload["driver_analysis"]["candidates"]
+            if driver["standing"] == "principal_driver"
+        ]
+
+    _assert_caught(
+        "S04_symptom_versus_driver",
+        mutate,
+        _D.PRINCIPAL_DRIVER_PRECISION,
+        "non-drivers promoted to principal",
+    )
+
+
+def test_a_principal_driver_matching_no_expectation_is_caught() -> None:
+    """The other half of F4: an invented driver, not merely a promoted one."""
+
+    def mutate(payload: dict[str, Any]) -> None:
+        for driver in payload["driver_analysis"]["candidates"]:
+            if driver["standing"] != "principal_driver":
+                continue
+            driver["supporting_evidence_ids"] = [evidence_handle("hp_atlas")]
+        entry = copy.deepcopy(payload["evidence_coverage"]["evidence_index"][0])
+        entry["evidence"]["evidence_ref_id"] = evidence_handle("hp_atlas")
+        entry["evidence"]["entity_id"] = "team_atlas"
+        entry["source_class"] = "health_profile"
+        entry["supports_driver_ids"] = [
+            driver["driver_id"]
+            for driver in payload["driver_analysis"]["candidates"]
+            if driver["standing"] == "principal_driver"
+        ]
+        entry["supports_entity_ids"] = []
+        entry["supports_subject_ids"] = []
+        entry["supports_path_ids"] = []
+        payload["evidence_coverage"]["evidence_index"].append(entry)
+
+    _assert_caught(
+        "S04_symptom_versus_driver",
+        mutate,
+        _D.PRINCIPAL_DRIVER_PRECISION,
+        "matching no expected driver",
+    )
+
+
+def test_a_packet_attributed_to_the_wrong_tenant_is_caught() -> None:
+    """F5: the audit compared entity ids and never the tenant claimed.
+
+    Nothing about the packet's contents changes -- only the organization it
+    says it belongs to. Before the fix this was contract-valid,
+    authorization-clean and dimension-clean.
+    """
+
+    def mutate(payload: dict[str, Any]) -> None:
+        payload["organization_id"] = "org_lumen"
+
+    _assert_caught(
+        "T01_clearly_struggling_team",
+        mutate,
+        _D.ZERO_UNAUTHORIZED_RESULTS,
+        "tenant-mismatch",
+    )

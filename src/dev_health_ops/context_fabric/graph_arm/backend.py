@@ -173,12 +173,15 @@ class EmbeddingBackend(Protocol):
     """
 
     @property
-    def model_id(self) -> str: ...
+    def model_id(self) -> str:
+        """The exact model this embedder speaks for, for trial artifacts."""
 
     @property
-    def semantic(self) -> bool: ...
+    def semantic(self) -> bool:
+        """Whether the vectors carry meaning. See the class docstring."""
 
-    async def create(self, input_data: Any) -> list[float]: ...
+    async def create(self, input_data: Any) -> list[float]:
+        """Embed one input."""
 
 
 @dataclass(frozen=True, slots=True)

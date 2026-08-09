@@ -138,3 +138,58 @@ def test_the_store_uri_is_a_conditional_keep_gated_on_the_require_flag() -> None
     assert (
         "GRAPHITI_TELEMETRY_ENABLED" not in _env_isolation.CONDITIONAL_KEEP_ENV_NAMES
     ), "telemetry is forced off in code; no lane may re-enable it"
+
+
+def test_the_harness_summary_pattern_cannot_backtrack_exponentially() -> None:
+    """CodeQL py/redos, blocked on #1612 — regression guard.
+
+    The original pattern made the separator optional inside the repeated
+    group (``(?:\\d+ \\w+(?:, )?)+``), so ``\\d+ \\w+`` could match with or
+    without a trailing ``", "`` and the engine had exponentially many ways to
+    split a near-miss before failing. Measured on the exact adversarial shape
+    CodeQL named, the old pattern quadrupled per two extra repetitions
+    (0.0019s → 0.0077s → 0.0308s → 0.1221s at n=14,16,18,20); the fixed one
+    stays at ~3µs. At n=40 the old pattern would not finish in a human
+    lifetime.
+
+    The bound below is deliberately enormous relative to the ~microseconds
+    this actually takes. A timing assertion with a tight bound would be a
+    flake; one with a six-order-of-magnitude margin is a genuine catch for
+    the only failure mode that matters here, and cannot fire on a slow
+    machine.
+    """
+
+    import importlib.util
+    import sys
+    import time
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_chaos_3617_guard_injection",
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "chaos_3617_guard_injection.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: the harness defines dataclasses, and
+    # ``dataclasses`` resolves annotations via ``sys.modules[cls.__module__]``
+    # while the class body executes. An unregistered module makes that lookup
+    # return None and the import dies inside the stdlib, which reads as a
+    # mysterious AttributeError rather than "you skipped a step".
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        _SUMMARY = module._SUMMARY
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    probe = "0 " + "000 " * 40
+    started = time.perf_counter()
+    assert _SUMMARY.search(probe) is None
+    assert time.perf_counter() - started < 1.0
+
+    # ...and it still matches what it exists to match.
+    assert _SUMMARY.search("13724 passed, 268 skipped, 1 xfailed in 154.82s")
+    assert _SUMMARY.search("1 failed, 42 warnings in 1.24s")
+    assert _SUMMARY.search("208 passed in 5.40s")

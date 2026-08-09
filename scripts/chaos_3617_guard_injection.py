@@ -473,7 +473,17 @@ def _run_tests(node_ids: tuple[str, ...]) -> tuple[int, str]:
     return result.returncode, result.stdout + result.stderr
 
 
-_SUMMARY = re.compile(r"^(?:\d+ \w+(?:, )?)+ in [\d.]+s$", re.MULTILINE)
+#: pytest's summary line, e.g. ``2 failed, 13 passed in 1.24s``.
+#:
+#: Written with the separator INSIDE the repeated group rather than as an
+#: optional suffix. The earlier form -- ``(?:\d+ \w+(?:, )?)+`` -- made the
+#: comma optional, so ``\d+ \w+`` could match with or without a trailing
+#: separator and the engine had exponentially many ways to split an input
+#: like ``"0 " + "000 " * n`` before failing. That is a real ReDoS on a
+#: pattern fed with subprocess output, and CodeQL was right to block on it.
+#: With the separator mandatory between repetitions there is exactly one way
+#: to parse any candidate, so backtracking is linear.
+_SUMMARY = re.compile(r"^\d+ \w+(?:, \d+ \w+)* in [\d.]+s$", re.MULTILINE)
 
 
 def _summary_line(output: str) -> str:

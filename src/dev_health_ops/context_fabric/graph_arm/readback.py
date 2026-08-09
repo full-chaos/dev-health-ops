@@ -253,7 +253,8 @@ class GraphReader(Protocol):
         authorized_entity_ids: Sequence[str],
         max_hops: int = 3,
         budgets: TrialBudgets = DEFAULT_BUDGETS,
-    ) -> InvestigationReadout: ...
+    ) -> InvestigationReadout:
+        """Walk outward from the seeds, bounded and authorized."""
 
 
 # --------------------------------------------------------------------------

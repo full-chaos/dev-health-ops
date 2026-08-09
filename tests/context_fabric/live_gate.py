@@ -110,6 +110,12 @@ def require_live_store() -> TrialStoreConfig:
             f"required and did not happen: {status.missing}"
         )
     pytest.skip(message)
+    # Unreachable: both branches above raise. Spelled out because the
+    # function otherwise has one path that returns a config and one that
+    # falls off the end returning None -- a shape a reader (and CodeQL)
+    # cannot distinguish from a real missing return, and this function's
+    # whole job is that it never quietly yields "no store".
+    raise AssertionError("pytest.skip always raises")
 
 
 def require_flag_state() -> None:

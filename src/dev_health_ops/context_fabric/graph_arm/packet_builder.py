@@ -984,19 +984,31 @@ def build_packet(
                 ),
             )
         )
-    if (
-        readout.entities_truncated
-        or readout.paths_truncated
-        or readout.evidence_truncated
-        or citations_capped
-        or cohort_truncated
-    ):
+    # Every bound that can bite, in one condition. ``drivers_truncated`` was
+    # the one omitted: it reached ``DriverAnalysis.candidates_truncated`` and
+    # nothing else, so a driver bound produced a packet the frozen contract
+    # refused outright -- "truncated results but no TRUNCATED_TRAVERSAL
+    # limitation is disclosed" -- and a caller who dropped the flag to get
+    # past that exception would have presented a capped candidate set as the
+    # complete one. Adding a bound here without adding it to ``gaps`` below
+    # would move the same defect rather than close it, so the two lists are
+    # deliberately identical and a test asserts they stay so.
+    truncation_bounds = (
+        readout.entities_truncated,
+        readout.paths_truncated,
+        readout.evidence_truncated,
+        citations_capped,
+        cohort_truncated,
+        drivers_truncated,
+    )
+    if any(truncation_bounds):
         limitations.append(
             PacketLimitation(
                 kind=PacketLimitationKind.TRUNCATED_TRAVERSAL,
                 detail=(
-                    "traversal, path citation or cohort construction stopped "
-                    "at a configured bound; the result is partial"
+                    "traversal, path citation, cohort construction or driver "
+                    "candidate discovery stopped at a configured bound; the "
+                    "result is partial"
                 ),
             )
         )
@@ -1182,14 +1194,15 @@ def build_packet(
         outcome=derive_outcome(
             driver_analysis.candidates,
             evidence_coverage.evidence_index,
+            # The SAME bounds the limitation above discloses, plus the two
+            # degradations that are not truncations. A bound that discloses a
+            # limitation but does not weaken the outcome would let a partial
+            # investigation reach a fully SUPPORTED verdict while the
+            # limitation nobody reads sits beside it.
             gaps=bool(
                 missing
                 or source_state is SourceRequirementState.AVAILABLE_STALE
-                or readout.entities_truncated
-                or readout.paths_truncated
-                or readout.evidence_truncated
-                or citations_capped
-                or cohort_truncated
+                or any(truncation_bounds)
             ),
         ),
         analytical_job=analytical_job,

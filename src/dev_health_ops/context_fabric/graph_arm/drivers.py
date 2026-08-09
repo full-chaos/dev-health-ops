@@ -898,7 +898,6 @@ def discover_drivers(
     subject_id: str,
     *,
     as_of: datetime,
-    entity_attributes: Mapping[str, Mapping[str, str]] | None = None,
     max_candidates: int = 50,
 ) -> tuple[tuple[DriverFinding, ...], bool]:
     """Every candidate cause for ``subject_id``, classified and ranked.
@@ -907,17 +906,26 @@ def discover_drivers(
     standing, including excluded ones: the packet carries them so a reader
     can see what was considered and rejected.
 
-    ``entity_attributes`` supplies declared status per entity. Defaulted from
-    the readout's own entities, so a caller cannot quietly supply a different
-    status than the one the traversal read.
+    **Declared status comes from the readout and from nowhere else.** There
+    used to be an ``entity_attributes`` parameter here, documented as
+    something a caller could not use to supply a different status than the
+    traversal read — while the code did
+    ``attributes.setdefault(id, {}).update(extra)``, which overrode exactly
+    that. Adversarial review reproduced it: passing
+    ``{"wu_authcore_release": {"declared_status": "complete"}}`` removed the
+    corpus's principal driver, because a caller could declare the blocker
+    finished. The docstring was worse than the behaviour, since a reader
+    trusts it.
+
+    The parameter is gone rather than guarded: nothing in the arm, the tests
+    or the harness ever passed it, and an absent channel cannot be widened by
+    a later refactor the way a validated one can.
+    ``TestDeclaredStatusComesOnlyFromTheReadout`` asserts it stays absent.
     """
 
     attributes = {
         entity.canonical_id: dict(entity.attributes) for entity in readout.entities
     }
-    for canonical_id, extra in (entity_attributes or {}).items():
-        attributes.setdefault(canonical_id, {}).update(extra)
-
     observations = {item.canonical_id: item for item in readout.observations}
     context = _Context(
         subject_id=subject_id,

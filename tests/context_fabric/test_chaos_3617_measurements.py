@@ -82,21 +82,55 @@ class TestTheArmPerformsNoArithmetic:
     exercise free to derive whatever it liked, and a derived number is
     indistinguishable from a cited one once it is in the packet.
 
-    Scoped to the two modules that handle canonical numbers rather than
+    Scoped to the modules a canonical number passes through rather than
     matched by variable name. A name-based scan was tried first and fired on
     the hash embedder's vector normalisation in ``backend.py`` — arithmetic
     that has nothing to do with measurements — while still missing anything
     assigned to a local first. Scope plus operator is both narrower and
     stronger.
+
+    **Two kinds of number, and the distinction is the guard.** Adversarial
+    review found the scan covering ``corpus_adapter.py`` and ``drivers.py``
+    while ``packet_builder.py`` — which assembles the packet — computed
+    ``filtered_total = readout.authorization_filtered_count +
+    cohort_authorization_filtered`` straight into a limitation string. Simply
+    widening the scan would have banned that too, and it should not be
+    banned:
+
+    * a **canonical analytical measurement** is a claim about the
+      organization — a cycle time, a review wait, a work-in-progress count.
+      The arm may cite one verbatim and may never derive one. That is the
+      whole correction: a number the arm computed carries a canonical
+      service's authority without its evidence.
+    * **operational metadata about the run itself** — how many results the
+      authorization filter removed, how many candidates a bound dropped, what
+      rank something came back at — is the arm describing its own behaviour.
+      Deriving it is not merely allowed, it is required: the alternative is a
+      packet that cannot say what it left out.
+
+    So arithmetic is banned everywhere in these modules *except at named
+    sites*, and :data:`OPERATIONAL_ARITHMETIC` is that list. A named site with
+    a stated reason can be argued with in review; a quiet module-level
+    exception cannot, because nobody sees it.
     """
 
-    #: The modules a canonical measurement passes through.
-    MEASUREMENT_MODULES = ("corpus_adapter.py", "drivers.py")
+    #: Every module a canonical measurement, or a packet carrying one, passes
+    #: through. ``packet_builder.py`` is here because a number reaching the
+    #: packet is a number reaching a consumer, whichever module minted it.
+    MEASUREMENT_MODULES = ("corpus_adapter.py", "drivers.py", "packet_builder.py")
 
-    #: Operators that can produce a NEW number from existing ones. ``+`` is
-    #: absent because it is also list concatenation, which these modules use
-    #: legitimately; it is checked separately and by name below.
-    DERIVING_OPS = (ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)
+    #: Operators that can produce a NEW value from existing ones. ``Add`` is
+    #: included: list concatenation uses it too, which is why the allowlist
+    #: below names sites rather than operators.
+    DERIVING_OPS = (
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+    )
 
     #: Names that identify a canonical measurement specifically. Bare
     #: ``value`` is deliberately absent — it appears all over the arm for
@@ -105,41 +139,141 @@ class TestTheArmPerformsNoArithmetic:
         {"measurement_value", "measurement_cohort_median", "cohort_median"}
     )
 
+    #: ``(module, exact expression, why it is operational)``. The expression
+    #: is matched verbatim against ``ast.unparse``, so a site that changes
+    #: shape stops being permitted and has to be argued for again.
+    #:
+    #: Every entry here is either set algebra over identifiers — which yields
+    #: a set, not a number — or a count of what the run itself did. None of
+    #: them touches a measurement value, and a test below asserts that rather
+    #: than trusting these sentences.
+    OPERATIONAL_ARITHMETIC: tuple[tuple[str, str, str], ...] = (
+        (
+            "drivers.py",
+            "_blocking_candidates(context, readout) + "
+            "_open_child_candidates(context, readout) + "
+            "_symptom_candidates(context, readout) + "
+            "_measurement_candidates(context, readout)",
+            "list concatenation of the four rule outputs; no operand is a number",
+        ),
+        (
+            "packet_builder.py",
+            "readout.authorization_filtered_count + cohort_authorization_filtered",
+            "counts how many results the caller's own grant removed, from the "
+            "traversal and the cohort; bookkeeping about this run, and the "
+            "packet cannot disclose what it withheld without it",
+        ),
+        (
+            "packet_builder.py",
+            "set(ids) - set(handle_by_observation)",
+            "set difference over evidence identifiers; yields the ids with no "
+            "handle, not a number",
+        ),
+        (
+            "packet_builder.py",
+            "({member.canonical_id for member in cohort.members} | "
+            "{exclusion.canonical_id for exclusion in cohort.exclusions}) - "
+            "set(readout.authorized_entity_ids)",
+            "set difference over canonical ids; yields the cohort entries "
+            "outside the authorized set",
+        ),
+        (
+            "packet_builder.py",
+            "set(family.required_source_classes) - set(observed_classes)",
+            "set difference over source classes; yields the ones this run "
+            "never observed",
+        ),
+    )
+
     def _binops(self):
+        """Every arithmetic site, counted once.
+
+        Only *outermost* BinOps are yielded: ``a + b + c`` is one site, and
+        walking every nested node would make the allowlist enumerate an
+        expression's internal shape instead of naming the site.
+        """
+
         for name in self.MEASUREMENT_MODULES:
             tree = ast.parse((_ARM_ROOT / name).read_text())
+            nested = {
+                id(operand)
+                for node in ast.walk(tree)
+                if isinstance(node, ast.BinOp)
+                for operand in (node.left, node.right)
+            }
             for node in ast.walk(tree):
-                if isinstance(node, ast.BinOp):
+                if isinstance(node, ast.BinOp) and id(node) not in nested:
                     yield name, node
 
-    def test_no_deriving_operator_appears_in_the_measurement_modules(self) -> None:
+    def _unnamed_arithmetic(self):
+        permitted = {
+            (module, expression)
+            for module, expression, _ in self.OPERATIONAL_ARITHMETIC
+        }
+        return [
+            f"{name}: {ast.unparse(node)[:110]}"
+            for name, node in self._binops()
+            if isinstance(node.op, self.DERIVING_OPS)
+            and (name, ast.unparse(node)) not in permitted
+        ]
+
+    def test_every_arithmetic_site_is_named_on_the_operational_allowlist(self) -> None:
         """Citing is reading. Deriving is measuring, and measuring is theirs.
 
         ``31 against a cohort median of 14`` cites two canonical numbers.
         ``2.2x the median`` invents a third, and that third number is the arm
         measuring — the fault the whole correction exists to prevent, in its
-        smallest possible form. Banning the operators outright in these two
-        modules means it cannot be reintroduced through a local variable
-        either.
+        smallest possible form. An unnamed operator anywhere in these modules
+        fails here, so it cannot be reintroduced through a local variable, a
+        helper, or a module the scan used not to read.
         """
+
+        offenders = self._unnamed_arithmetic()
+        assert not offenders, (
+            "a module that handles canonical measurements derives a number at "
+            "a site the operational allowlist does not name. Either it is "
+            "bookkeeping about the run, in which case add it to "
+            "OPERATIONAL_ARITHMETIC with the reason, or it is an analytical "
+            f"derivation and must not exist: {offenders}"
+        )
+
+    def test_no_allowlisted_site_touches_a_measurement(self) -> None:
+        """The rule that stops the allowlist becoming the way around the ban.
+
+        An entry may describe itself as operational in prose and still read a
+        canonical number. This checks the expression rather than the sentence.
+        """
+
+        assert self.OPERATIONAL_ARITHMETIC, "an empty allowlist makes this vacuous"
+        for module, expression, reason in self.OPERATIONAL_ARITHMETIC:
+            assert reason.strip(), (module, expression)
+            offending = sorted(
+                name for name in self.MEASUREMENT_NAMES if name in expression
+            )
+            assert not offending, (module, expression, offending)
+
+    def test_no_allowlist_entry_is_stale(self) -> None:
+        """A permission for code that no longer exists is drift, not safety.
+
+        Left in place it would silently pre-authorise whatever later happened
+        to take the same shape at that site.
+        """
+
+        found = {(name, ast.unparse(node)) for name, node in self._binops()}
+        stale = [
+            (module, expression)
+            for module, expression, _ in self.OPERATIONAL_ARITHMETIC
+            if (module, expression) not in found
+        ]
+        assert not stale, stale
+
+    def test_no_measurement_value_is_summed(self) -> None:
+        """The measurement-name rule, which no allowlist entry can waive."""
 
         offenders = [
             f"{name}: {ast.unparse(node)[:70]}"
             for name, node in self._binops()
             if isinstance(node.op, self.DERIVING_OPS)
-        ]
-        assert not offenders, (
-            f"a module that handles canonical measurements derives a number: "
-            f"{offenders}"
-        )
-
-    def test_no_measurement_value_is_summed(self) -> None:
-        """``+`` is allowed for list concatenation and nothing else here."""
-
-        offenders = [
-            f"{name}: {ast.unparse(node)[:70]}"
-            for name, node in self._binops()
-            if isinstance(node.op, ast.Add)
             and any(item in ast.unparse(node) for item in self.MEASUREMENT_NAMES)
         ]
         assert not offenders, offenders
@@ -166,11 +300,12 @@ class TestTheArmPerformsNoArithmetic:
         assert derived and summed
 
     def test_the_scan_actually_reads_those_modules(self) -> None:
-        """A path typo would make both assertions above pass over nothing."""
+        """A path typo would make every assertion above pass over nothing."""
 
         for name in self.MEASUREMENT_MODULES:
             assert (_ARM_ROOT / name).is_file(), name
-        assert list(self._binops()), "no BinOp found at all; the walk is broken"
+        seen = {name for name, _ in self._binops()}
+        assert seen == set(self.MEASUREMENT_MODULES), seen
 
     def test_comparison_is_not_arithmetic_and_is_still_allowed(self) -> None:
         """The boundary, stated so the guard is not read as banning too much.

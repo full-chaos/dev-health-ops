@@ -205,4 +205,4 @@ class TestEveryMutationDeclaresACheckableReason:
             for mutation in harness.MUTATIONS
             if mutation.expect_failure == "assert"
         ]
-        assert len(bare) <= 36, sorted(bare)
+        assert len(bare) <= 35, sorted(bare)

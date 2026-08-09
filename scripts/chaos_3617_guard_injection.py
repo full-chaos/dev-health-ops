@@ -804,7 +804,10 @@ MUTATIONS: tuple[Mutation, ...] = (
             "                continue"
         ),
         tests=(f"{TESTS}/test_chaos_3617_drivers.py::TestPoisonedLinkageIsRefused",),
-        expect_failure="assert",
+        # The specific canonical record that must not vouch for the fabricated
+        # edge. A bare ``assert`` here would be satisfied by either of this
+        # class's other two tests going red for any reason at all.
+        expect_failure="wg_authcore_shared",
     ),
     Mutation(
         mutation_id="untrusted-record-defaults-to-canonical",
@@ -1097,6 +1100,80 @@ MUTATIONS: tuple[Mutation, ...] = (
             "TestAssertedSupportMustBeTheDriversOwn",
         ),
         expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="packet-assembly-derives-an-unnamed-number",
+        defect=(
+            "the no-arithmetic proof stops at the two discovery modules while "
+            "packet ASSEMBLY derives a number straight into the packet -- the "
+            "blind spot adversarial review found, with the derivation landing "
+            "in a limitation string a consumer reads"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="    if filtered_total:",
+        replacement=(
+            "    filtered_share = filtered_total / max(len(related_entities), 1)\n"
+            "    if filtered_total or filtered_share:"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_measurements.py::TestTheArmPerformsNoArithmetic",
+        ),
+        expect_failure="the operational allowlist does not name",
+    ),
+    Mutation(
+        mutation_id="caller-can-supply-entity-status",
+        defect=(
+            "a caller-supplied attribute channel reappears on discovery, "
+            "through which a caller can declare the corpus's blocker complete "
+            "and delete the arm's own principal driver"
+        ),
+        path=SRC / "drivers.py",
+        anchor="    as_of: datetime,\n    max_candidates: int = 50,",
+        replacement=(
+            "    as_of: datetime,\n"
+            "    entity_attributes: Mapping[str, Mapping[str, str]] | None = None,\n"
+            "    max_candidates: int = 50,"
+        ),
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestDeclaredStatusComesOnlyFromTheReadout",
+        ),
+        expect_failure="entity_attributes",
+    ),
+    Mutation(
+        mutation_id="driver-truncation-not-disclosed",
+        defect=(
+            "the driver candidate bound fires and the packet discloses no "
+            "TRUNCATED_TRAVERSAL limitation, so the frozen contract refuses "
+            "the packet outright -- and the only way past that refusal is for "
+            "a caller to drop the flag, which presents a capped candidate set "
+            "as the complete one"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        cohort_truncated,\n        drivers_truncated,\n    )",
+        replacement="        cohort_truncated,\n    )",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestATruncatedCandidateSetIsDisclosed",
+        ),
+        expect_failure="no TRUNCATED_TRAVERSAL limitation is disclosed",
+    ),
+    Mutation(
+        mutation_id="driver-truncation-discloses-but-does-not-weaken",
+        defect=(
+            "a bound that discloses a limitation without weakening the "
+            "outcome lets a partial investigation reach a fully SUPPORTED "
+            "verdict with the limitation nobody reads sitting beside it"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="                or any(truncation_bounds)",
+        replacement="                or False",
+        tests=(
+            f"{TESTS}/test_chaos_3617_drivers.py::"
+            "TestATruncatedCandidateSetIsDisclosed::"
+            "test_a_truncated_candidate_set_cannot_reach_an_ungapped_outcome",
+        ),
+        expect_failure="InvestigationOutcome.SUPPORTED_WITH_GAPS",
     ),
     Mutation(
         mutation_id="live-gate-skips-when-a-run-was-required",

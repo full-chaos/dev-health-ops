@@ -35,6 +35,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     DriverRole,
     DriverStanding,
     InvestigationOutcome,
+    PacketLimitationKind,
     RelationshipType,
 )
 from dev_health_ops.api.dev.investigation_contract.vocabulary import (
@@ -70,9 +71,9 @@ def helio():
     return build_projection(adapter.corpus_batch(world.ORG_HELIO))
 
 
-def _findings(projection, subject: str, principal: str, *, max_hops: int = 2):
+def _readout(projection, subject: str, principal: str, *, max_hops: int = 2):
     grant = adapter.authorized_entity_ids_for(principal)
-    readout = asyncio.run(
+    return asyncio.run(
         ProjectionGraphReader(projection).neighbourhood(
             org_id=projection.org_id,
             seed_canonical_ids=[subject],
@@ -80,6 +81,10 @@ def _findings(projection, subject: str, principal: str, *, max_hops: int = 2):
             max_hops=max_hops,
         )
     )
+
+
+def _findings(projection, subject: str, principal: str, *, max_hops: int = 2):
+    readout = _readout(projection, subject, principal, max_hops=max_hops)
     return discover_drivers(readout, subject, as_of=world.TRIAL_NOW)[0]
 
 
@@ -409,19 +414,22 @@ class TestPoisonedLinkageIsRefused:
         neighbourhood and only the edge distinguishes them.
         """
 
-        meridian = _by_id(_findings(helio, "proj_meridian", world.PRINCIPAL_ANALYST))
-        identity = _by_id(
-            _findings(helio, "proj_identity_rewrite", world.PRINCIPAL_ANALYST)
+        readout = _readout(helio, "proj_meridian", world.PRINCIPAL_ANALYST)
+        meridian = _by_id(
+            discover_drivers(readout, "proj_meridian", as_of=world.TRIAL_NOW)[0]
         )
-        # The canonical record exists in the world and supports a real edge...
-        assert (
-            any(
-                "wg_authcore_shared" in item.evidence_ids
-                or "wg_authcore_shared" in item.conflicting_evidence_ids
-                for item in identity.values()
-            )
-            or True
-        )  # presence elsewhere is incidental; the claim is below
+        # The canonical record is REACHED and TRUSTED in this very readout --
+        # it asserts ``proj_identity_rewrite depends_on dep_authcore``, a real
+        # edge in the same neighbourhood. Asserted rather than waved past: an
+        # earlier version wrote ``any(...) or True``, which could not tell
+        # "the scoping refused it" from "the record was never there", and
+        # would have stayed green if the corpus stopped carrying it at all.
+        visible = {item.canonical_id: item for item in readout.observations}
+        assert "wg_authcore_shared" in visible, (
+            "the canonical record is not even in the readout, so its absence "
+            "below is not the scoping refusing it"
+        )
+        assert visible["wg_authcore_shared"].attributes["corpus_trust"] == "canonical"
         # ...and it must NOT appear as support for the fabricated one.
         assert (
             "wg_authcore_shared" not in meridian["drv_block_dep_authcore"].evidence_ids
@@ -583,6 +591,115 @@ class TestTrustHasNoDefault:
 # --------------------------------------------------------------------------
 # Currency, authorization, and what cannot be built at all
 # --------------------------------------------------------------------------
+
+
+class TestDeclaredStatusComesOnlyFromTheReadout:
+    """The status the rules read is the traversal's, and there is no other.
+
+    ``discover_drivers`` used to take ``entity_attributes``, documented as
+    something a caller could not use to supply a different status than the
+    traversal read — while doing ``setdefault(id, {}).update(extra)``, which
+    overrode it. Adversarial review reproduced the consequence on the corpus:
+    declaring the blocker ``complete`` deleted the principal driver, so a
+    caller could delete the arm's own judgment by asserting a status the graph
+    never held.
+
+    Checked in two ways on purpose. The behavioural half proves declared
+    status decides anything at all — without it, "no override channel" would
+    hold trivially for an arm that ignored status. The structural half proves
+    the channel is *absent* rather than validated, because an absent parameter
+    cannot be widened by a later refactor.
+    """
+
+    #: Parameter names through which a caller could inject entity state.
+    #: Every spelling, not just the one that existed: the rule is about the
+    #: capability, and renaming it must not be a way around it.
+    _ATTRIBUTE_PARAMETERS = frozenset(
+        {
+            "attributes",
+            "entity_attributes",
+            "declared_status",
+            "declared_statuses",
+            "entity_status",
+            "statuses",
+            "overrides",
+            "extra_attributes",
+        }
+    )
+
+    def _blocker_findings(self, blocker_status: str):
+        projection, grant = _probe_world(
+            relationships=(
+                ("proj_subject", RelationshipType.BLOCKED_BY, "wu_one", ("obs_one",)),
+            ),
+            observations=(("obs_one", "wu_one"),),
+            statuses={"wu_one": blocker_status},
+        )
+        return _by_id(_probe_findings(projection, grant, "proj_subject"))
+
+    def test_the_status_the_graph_holds_decides_the_finding(self) -> None:
+        """The anti-vacuity half, both directions."""
+
+        assert (
+            self._blocker_findings("in_progress")["drv_block_wu_one"].standing
+            is DriverStanding.PRINCIPAL_DRIVER
+        )
+        assert "drv_block_wu_one" not in self._blocker_findings("complete")
+
+    def test_discovery_exposes_no_channel_for_supplying_status(self) -> None:
+        """The reproduction, as a property rather than as a case.
+
+        A test that merely passed ``entity_attributes`` and expected a raise
+        would keep the channel alive and prove only that today's guard fires.
+        """
+
+        import inspect
+
+        parameters = set(inspect.signature(discover_drivers).parameters)
+        assert not parameters & self._ATTRIBUTE_PARAMETERS, sorted(
+            parameters & self._ATTRIBUTE_PARAMETERS
+        )
+        # Anti-vacuity: the signature really was read, and the parameters the
+        # function IS supposed to take are still there.
+        assert {"readout", "subject_id", "as_of", "max_candidates"} <= parameters
+
+    def test_the_removed_keyword_is_refused_at_the_call(self) -> None:
+        """The runtime half. A signature check alone would miss ``**kwargs``."""
+
+        projection, grant = _probe_world(
+            relationships=(
+                ("proj_subject", RelationshipType.BLOCKED_BY, "wu_one", ("obs_one",)),
+            ),
+            observations=(("obs_one", "wu_one"),),
+        )
+        readout = _probe_readout(projection, grant, "proj_subject")
+        with pytest.raises(TypeError, match="entity_attributes"):
+            discover_drivers(
+                readout,
+                "proj_subject",
+                as_of=_PROBE_NOW,
+                # The keyword the defect travelled through. mypy rejects it
+                # too, which is the point -- the ignore is what lets the
+                # RUNTIME refusal be observed rather than assumed.
+                entity_attributes={  # type: ignore[call-arg]
+                    "wu_one": {"declared_status": "complete"}
+                },
+            )
+
+    def test_the_docstring_no_longer_claims_a_guarantee_it_lacks(self) -> None:
+        """The half that was worse than the behaviour.
+
+        The old text told a reader that callers could not supply a different
+        status, which is the sentence a reviewer would have trusted instead of
+        reading the two lines below it.
+        """
+
+        assert discover_drivers.__doc__ is not None
+        # Whitespace-normalised: the sentences under test wrap, and a test
+        # that broke on a re-wrap would be edited away rather than fixed.
+        prose = " ".join(discover_drivers.__doc__.split())
+        assert "cannot quietly supply a different status" not in prose
+        assert "comes from the readout and from nowhere else" in prose
 
 
 class TestCurrency:
@@ -789,6 +906,8 @@ def _probe_world(
     observations,
     trust: str | None = "canonical",
     subject_status: str = "in_progress",
+    status_observations=(),
+    statuses=None,
 ):
     """A minimal hand-shaped world, built through the REAL projection.
 
@@ -797,13 +916,17 @@ def _probe_world(
     over an edge the arm can never actually hold.
     """
 
+    declared = {"proj_subject": subject_status, **(statuses or {})}
     entities = [
-        ("proj_subject", GraphEntityKind.PROJECT, subject_status),
-        ("wu_one", GraphEntityKind.WORK_UNIT, "in_progress"),
-        ("wu_two", GraphEntityKind.WORK_UNIT, "in_progress"),
-        ("wu_restricted", GraphEntityKind.WORK_UNIT, "in_progress"),
-        ("dep_two", GraphEntityKind.DEPENDENCY, "in_progress"),
-        ("proj_other", GraphEntityKind.PROJECT, "in_progress"),
+        (name, kind, declared.get(name, "in_progress"))
+        for name, kind in (
+            ("proj_subject", GraphEntityKind.PROJECT),
+            ("wu_one", GraphEntityKind.WORK_UNIT),
+            ("wu_two", GraphEntityKind.WORK_UNIT),
+            ("wu_restricted", GraphEntityKind.WORK_UNIT),
+            ("dep_two", GraphEntityKind.DEPENDENCY),
+            ("proj_other", GraphEntityKind.PROJECT),
+        )
     ]
     kinds = {name: kind for name, kind, _ in entities}
     batch = IngestionBatch(
@@ -844,14 +967,30 @@ def _probe_world(
                 attributes=({"corpus_trust": trust} if trust is not None else {}),
             )
             for name, about in observations
+        )
+        # A second source class, so a probe world can satisfy a question
+        # family's required set and be judged on its own bounds rather than
+        # on a MISSING_SOURCE gap it was always going to have.
+        + tuple(
+            ObservationRecord(
+                org_id=_PROBE_ORG,
+                kind=GraphObservationKind.STATUS_CHANGE,
+                canonical_id=name,
+                title=name.replace("_", " ").title(),
+                source_class=SourceClass.STATUS_CHANGE,
+                observed_at=_PROBE_NOW,
+                subjects=(CanonicalRef(kind=kinds[about], canonical_id=about),),
+                attributes=({"corpus_trust": trust} if trust is not None else {}),
+            )
+            for name, about in status_observations
         ),
     )
     projection = build_projection(batch)
     return projection, tuple(sorted(kinds))
 
 
-def _probe_findings(projection, grant, subject: str, *, max_hops: int = 2):
-    readout = asyncio.run(
+def _probe_readout(projection, grant, subject: str, *, max_hops: int = 2):
+    return asyncio.run(
         ProjectionGraphReader(projection).neighbourhood(
             org_id=_PROBE_ORG,
             seed_canonical_ids=[subject],
@@ -859,7 +998,149 @@ def _probe_findings(projection, grant, subject: str, *, max_hops: int = 2):
             max_hops=max_hops,
         )
     )
+
+
+def _probe_findings(projection, grant, subject: str, *, max_hops: int = 2):
+    readout = _probe_readout(projection, grant, subject, max_hops=max_hops)
     return discover_drivers(readout, subject, as_of=_PROBE_NOW)[0]
+
+
+def _probe_packet(readout, signer, *, drivers, drivers_truncated: bool):
+    """A packet over the probe world, so a bound can be reached for real.
+
+    The corpus is dense enough that every readout it produces is already
+    truncated on entities and paths, which would disclose
+    ``TRUNCATED_TRAVERSAL`` for a reason that has nothing to do with the
+    driver bound. The probe world reads clean on every flag, so a limitation
+    appearing here can only have come from the driver bound.
+    """
+
+    from dev_health_ops.api.dev.investigation_contract import (
+        ComparisonShape,
+        QuestionFamilyID,
+    )
+    from dev_health_ops.context_fabric.graph_arm.packet_builder import (
+        JobContext,
+        TrialContext,
+        build_packet,
+    )
+    from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
+
+    return build_packet(
+        readout=readout,
+        job=JobContext(
+            job_id="job_probe",
+            # ``ambiguous_identity`` requires work_graph, work_item and
+            # status_change -- exactly what the probe world observes -- so no
+            # MISSING_SOURCE gap masks the bound under test. Under
+            # ``project_status_drivers`` (five required classes, two present)
+            # every probe packet is gapped whatever its bounds do, and the
+            # control below could not tell a driver bound from a thin world.
+            question_family=QuestionFamilyID("ambiguous_identity"),
+            job_statement="Why is this subject not finished?",
+            comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+            window_start=datetime(2026, 7, 15, tzinfo=UTC),
+            window_end=_PROBE_NOW,
+        ),
+        watermark=IndexWatermark(
+            indexed_through=_PROBE_NOW,
+            projected_at=_PROBE_NOW,
+            records_indexed=1,
+        ),
+        signer=signer,
+        trial=TrialContext(run_id="4f9a2c1e-1111-4222-8333-444455556666"),
+        produced_at=_PROBE_NOW,
+        drivers=drivers,
+        drivers_truncated=drivers_truncated,
+    )
+
+
+class TestATruncatedCandidateSetIsDisclosed:
+    """The driver bound is a bound like any other, and must disclose like one.
+
+    ``drivers_truncated`` reached ``DriverAnalysis.candidates_truncated`` and
+    nowhere else: not the ``TRUNCATED_TRAVERSAL`` limitation, not the outcome's
+    ``gaps``. The frozen contract refused the packet outright — "truncated
+    results but no TRUNCATED_TRAVERSAL limitation is disclosed" — so the only
+    way past it was for a caller to drop the flag, which turns a capped
+    candidate set into one presented as complete.
+
+    Every test here reaches the bound through ``discover_drivers(...,
+    max_candidates=1)`` rather than by passing the flag. Passing the flag
+    tests the plumbing; capping for real tests the bound.
+    """
+
+    @staticmethod
+    def _capped(signer, *, max_candidates: int):
+        projection, grant = _probe_world(
+            relationships=(
+                ("proj_subject", RelationshipType.BLOCKED_BY, "wu_one", ("obs_one",)),
+                ("proj_subject", RelationshipType.BLOCKED_BY, "wu_two", ("obs_two",)),
+            ),
+            observations=(("obs_one", "wu_one"), ("obs_two", "wu_two")),
+            status_observations=(("sc_subject", "proj_subject"),),
+        )
+        readout = _probe_readout(projection, grant, "proj_subject")
+        # Anti-vacuity: nothing else in this world is truncated, so any
+        # TRUNCATED_TRAVERSAL limitation below came from the driver bound.
+        assert not (
+            readout.entities_truncated
+            or readout.paths_truncated
+            or readout.evidence_truncated
+        )
+        findings, truncated = discover_drivers(
+            readout,
+            "proj_subject",
+            as_of=_PROBE_NOW,
+            max_candidates=max_candidates,
+        )
+        return _probe_packet(
+            readout, signer, drivers=findings, drivers_truncated=truncated
+        ), truncated
+
+    def test_a_real_candidate_cap_produces_a_valid_packet(self, signer) -> None:
+        """The reproduction. This raised before the flag was wired in."""
+
+        packet, truncated = self._capped(signer, max_candidates=1)
+        assert truncated, "the cap did not bite, so this proves nothing"
+        assert packet.driver_analysis.candidates_truncated is True
+        assert len(packet.driver_analysis.candidates) == 1
+
+    def test_the_truncated_candidate_set_discloses_a_limitation(self, signer) -> None:
+        """The disclosure the contract demands, from the driver bound alone."""
+
+        packet, _ = self._capped(signer, max_candidates=1)
+        assert PacketLimitationKind.TRUNCATED_TRAVERSAL in {
+            item.kind for item in packet.evidence_coverage.limitations
+        }
+
+    def test_a_truncated_candidate_set_cannot_reach_an_ungapped_outcome(
+        self, signer
+    ) -> None:
+        """A bound that discloses but does not weaken is half a disclosure.
+
+        ``SUPPORTED`` says the investigation was complete. A run that stopped
+        enumerating causes at a configured bound has not earned it, whatever
+        the limitation list says beside it.
+        """
+
+        packet, _ = self._capped(signer, max_candidates=1)
+        assert packet.outcome is InvestigationOutcome.SUPPORTED_WITH_GAPS
+
+    def test_the_uncapped_run_is_the_control(self, signer) -> None:
+        """Otherwise "always truncated" and "always gapped" would pass above.
+
+        Same world, same builder, a cap that does not bite: no driver
+        truncation, no limitation, and the outcome is fully supported.
+        """
+
+        packet, truncated = self._capped(signer, max_candidates=50)
+        assert truncated is False
+        assert packet.driver_analysis.candidates_truncated is False
+        assert PacketLimitationKind.TRUNCATED_TRAVERSAL not in {
+            item.kind for item in packet.evidence_coverage.limitations
+        }
+        assert packet.outcome is InvestigationOutcome.SUPPORTED
 
 
 class TestTheFirstSupportedPacket:

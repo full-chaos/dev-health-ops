@@ -433,3 +433,63 @@ services:
         condition: service_healthy
     ports:
       - "8800:8000"
+
+  # ---------------------------------------------------------------------------
+  # CHAOS-3617 — Context Fabric graph trial store. Profile-gated, default OFF.
+  # ---------------------------------------------------------------------------
+  # Isolated datastore for the shadow Graphiti investigation arm. Behind
+  # `profiles: [graph-trial]`, so a bare `docker compose up -d` creates none
+  # of it and this stack behaves exactly as it did before -- the same
+  # arrangement the repo-root compose.yml uses for the `go` profile.
+  #
+  #   docker compose --profile graph-trial up -d graph-trial-store
+  #   export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
+  #
+  # Why FalkorDB: of the backends graphiti-core 0.29.3 ships drivers for
+  # (Neo4j, FalkorDB, FalkorDB-lite, Kuzu, Neptune, Neo4j+OpenSearch), Kuzu
+  # -- the embedded option -- has no wheel for this repo's Python 3.14 and
+  # its sdist build fails; Neptune is a managed AWS service; Neo4j+OpenSearch
+  # is two servers. FalkorDB is one container and gives one graph keyspace
+  # per organization, which makes org deletion a keyspace drop rather than a
+  # traversal that could miss a node. Full write-up:
+  # docs/contribute/architecture/graph-investigation-arm.md
+  #
+  # Port 6389, NOT 6379: valkey above already owns 6379, and a trial store
+  # that silently shared a port with the production cache would be exactly
+  # the "isolated datastore" requirement violated at the first hop.
+  #
+  # The port is a literal, not a shell interpolation, and deliberately so:
+  # tests/acceptance/test_ask_dev_compose.py::
+  # test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots
+  # requires every interpolation in this file to be triaged into the
+  # acceptance launcher's unset/export/ASK_DEV_ buckets, because an
+  # ambient shell value
+  # (e.g. from a direnv-loaded .env) can otherwise silently reach the
+  # acceptance stack's interpolation. A trial-only store needs no ambient
+  # port configurability, so removing the interpolation removes the hazard
+  # rather than annotating around it. Need a different port on your machine?
+  # Use a compose override file.
+  #
+  # No named volume on purpose. The trial store holds only derived, rebuildable
+  # projection data and the issue requires deterministic cleanup; keeping it
+  # in the container's own writable layer means `down` genuinely removes it
+  # and there is no volume to forget. Rebuild by re-running the projection.
+  #
+  # GRAPHITI_TELEMETRY_ENABLED is also forced off in code
+  # (graph_arm.backend.require_graphiti); it is repeated here so a `docker
+  # compose exec` session cannot phone home either.
+  graph-trial-store:
+    image: falkordb/falkordb:v4.14.4
+    container_name: dev-health-ops-graph-trial-store
+    profiles: ["graph-trial"]
+    restart: unless-stopped
+    environment:
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+    ports:
+      - "6389:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

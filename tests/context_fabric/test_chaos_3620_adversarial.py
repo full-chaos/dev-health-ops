@@ -325,10 +325,26 @@ class TestTheLoadBearingInjectionCase:
             f"guarantee must be re-proved on that channel: {sorted(ingested_ids & episode_ids)}"
         )
 
-        summaries = "\n".join(episode.summary for episode in world.WORLD_EPISODES)
+        # PER EPISODE, not one concatenated string. Review found the
+        # concatenated form evadable: copying a single episode's summary into
+        # a document body under a different id would not appear in the joined
+        # text, so the check passed while one episode's prose had crossed.
         bodies = "\n".join(record.body for record in batch.documents)
-        assert summaries not in bodies, (
-            "episode prose reached an ingested document body"
+        titles = "\n".join(record.title for record in batch.documents)
+        observation_titles = "\n".join(record.title for record in batch.observations)
+        crossed = [
+            episode.episode_id
+            for episode in world.WORLD_EPISODES
+            if episode.summary
+            and (
+                episode.summary in bodies
+                or episode.summary in titles
+                or episode.summary in observation_titles
+            )
+        ]
+        assert not crossed, (
+            "these episodes' prose reached ingested material under another "
+            f"record's identity: {crossed}"
         )
 
     def test_the_TITLE_channel_carries_injected_text_straight_through(self) -> None:

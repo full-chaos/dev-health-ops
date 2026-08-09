@@ -519,11 +519,20 @@ class TestTheArchitecturePageAgreesWithTheLedger:
         )
         section = page[page.index(marker) :]
         section = section.split("\n## ", 1)[0]
-        return {
-            row.split("|")[1].strip()
-            for row in section.splitlines()
-            if row.startswith("| ") and "---" not in row and not row.startswith("| ID ")
-        }
+        # Any row starting with a pipe, not just "| ". Review found
+        # ``|Z9|fabricated defect|`` ignored entirely, so a fabricated row
+        # written without spaces was invisible to the comparison — the
+        # parser covered the rows it happened to expect.
+        rows = set()
+        for row in section.splitlines():
+            stripped = row.strip()
+            if not stripped.startswith("|") or "---" in stripped:
+                continue
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if not cells or cells[0] in {"", "ID"}:
+                continue
+            rows.add(cells[0])
+        return rows
 
     def test_the_page_claims_NO_defect_the_ledger_does_not_record(self) -> None:
         """The direction that was never checked.
@@ -697,7 +706,17 @@ class TestTheArchitecturePageAgreesWithTheLedger:
 
         page = self.PAGE.read_text(encoding="utf-8")
         counts = Counter(requirement.status.value for requirement in REQUIREMENTS)
-        rows = dict(re.findall(r"\|\s*`(\w+)`\s*\|\s*(\d+)\s*\|", page))
+        found = re.findall(r"\|\s*`(\w+)`\s*\|\s*(\d+)\s*\|", page)
+        # DUPLICATES ARE AN ERROR rather than something to collapse. ``dict``
+        # kept the LAST occurrence, so a stale row sitting above a corrected
+        # one was invisible while the page visibly contradicted itself.
+        seen = [status for status, _ in found]
+        duplicates = sorted({status for status in seen if seen.count(status) > 1})
+        assert not duplicates, (
+            f"the page states these statuses more than once: {duplicates}. A "
+            "stale row beside a corrected one is a visible contradiction"
+        )
+        rows = dict(found)
         assert rows, "no status-count rows found on the page"
         for status, claimed in rows.items():
             assert status in counts, (

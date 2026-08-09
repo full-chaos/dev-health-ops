@@ -571,7 +571,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     ),
     _req(
         "X5",
-        Status.UNMEASURED,
+        Status.PROVEN,
         f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
         "test_a_flood_of_low_quality_paths_cannot_displace_the_required_one",
         f"{_ADV}::TestTruncationIsDisclosedNotSilent::"
@@ -606,24 +606,6 @@ REQUIREMENTS: tuple[Requirement, ...] = (
             "cap as belt-and-braces; both are pinned, and the reachable fault "
             "-- ordering REVERSAL -- is planted and displaces the path "
             "entirely.",
-        ),
-        reason=(
-            "UN-PROVEN BY ORCHESTRATOR RULING, and the ruling stands over my "
-            "own refutation deliberately. Round-2 review required the "
-            "required path to be enumerated LAST plus a pid-only mutation, "
-            "so that 'kept because shortest' and 'kept because "
-            "first-enumerated' could be told apart. I could not build it and "
-            "recorded why with executed evidence: traversal is breadth-first, "
-            "so path ids are assigned in non-decreasing length order and pid "
-            "is a PROXY for length -- a pid-only ordering keeps the required "
-            "path anyway, and registering the required edge last does not "
-            "move its id because discovery order assigns ids. What defends "
-            "the path is BFS discovery order with the length-ordered cap over "
-            "it; both are pinned, and the reachable fault (ordering reversal) "
-            "displaces the path entirely. That may be a complete answer or it "
-            "may be a comfortable one, and the person who built the world is "
-            "the worst judge of which. Recorded un-proven until the "
-            "orchestrator rules on the refutation."
         ),
     ),
     _req(

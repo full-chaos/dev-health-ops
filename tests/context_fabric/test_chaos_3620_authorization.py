@@ -286,13 +286,31 @@ class TestTheRestrictedProjectNeverReachesAConsumer:
         the failures.
         """
 
-        unconstructible = set()
+        from pydantic import ValidationError
+
+        unconstructible: dict[str, str] = {}
+        unexpected: list[tuple[str, str]] = []
         for seed in _subject_seeds():
             try:
                 spine.investigate(seed, with_drivers=True)
-            except Exception:  # noqa: BLE001 - any refusal counts
-                unconstructible.add(seed)
-        assert unconstructible == UNCONSTRUCTIBLE_WITH_DRIVERS, (
+            except ValidationError as refusal:
+                # Only a CONTRACT refusal counts as the documented case, and
+                # only for the documented reason. Review found this catching
+                # bare Exception, so an unrelated emitter or walker crash for
+                # team_atlas would have been accepted as the same exemption
+                # and the sweep would have stayed green while covering less.
+                if "staffing_qualification" not in str(refusal):
+                    unexpected.append((seed, f"ValidationError: {refusal}"[:120]))
+                else:
+                    unconstructible[seed] = "staffing_qualification"
+            except Exception as failure:  # noqa: BLE001
+                unexpected.append((seed, f"{type(failure).__name__}: {failure}"[:120]))
+
+        assert not unexpected, (
+            "seeds failed for reasons other than the documented "
+            f"staffing-qualification refusal: {unexpected}"
+        )
+        assert set(unconstructible) == UNCONSTRUCTIBLE_WITH_DRIVERS, (
             "the set of seeds that cannot produce a driver-bearing packet "
             f"changed to {sorted(unconstructible)}; the sweep's exemption "
             "list must be updated and the new entry ticketed"
@@ -314,6 +332,16 @@ class TestTheRestrictedProjectNeverReachesAConsumer:
         The Lumen sweep is what caught the walker's own false positive: the
         label ``Ember`` matched inside the JSON key ``"members"`` on four
         clean packets before whole-token matching landed.
+
+        **The compliance leg measures something weaker, and says so.** Its
+        restricted set is ``{lumen_proj_acr, lumen_team_core}`` — entirely
+        cross-tenant, with nothing in the Helio partition it traverses. No
+        Helio traversal can reach those at any grant, so this leg
+        re-measures PARTITION ISOLATION (CHAOS-3617's ground) rather than the
+        grant. Kept because a partition-isolation regression would show up
+        here, scoped because calling it a grant test would overstate it.
+        ``test_each_grant_discriminating_leg_has_reachable_restricted_material``
+        is what stops another leg quietly becoming this one.
         """
 
         projection = (
@@ -555,6 +583,76 @@ class TestTheDisclosureWalkerCatchesWhatTheOldCheckMissed:
         assert material.entity_ids, "no restricted entity ids"
         assert material.evidence_slugs, "no restricted evidence slugs"
         assert material.labels, "no matchable restricted labels"
+
+
+class TestTheSweepLegsAreNotSecretlyVacuous:
+    """Which legs can actually fail, measured.
+
+    Found by asking "what would this test fail on?" rather than by reading
+    it: the compliance leg cannot fail at any grant, because everything it
+    is forbidden lives in another partition. A leg like that is not wrong —
+    it is just measuring something other than what its name suggests, and
+    the danger is another leg silently becoming one after a world change.
+    """
+
+    #: Measured, not assumed — and the measurement corrected me. I reported
+    #: Lumen as "the strong, genuinely discriminating leg" because its
+    #: restricted set is large (48 entities). Every one of them is
+    #: CROSS-TENANT: the Lumen analyst sees everything in its own tenant, so
+    #: like compliance it re-measures partition isolation. **Exactly one leg
+    #: is grant-discriminating** — the analyst, whose restricted set contains
+    #: the same-tenant proj_quarry the corpus exists to plant.
+    #:
+    #: Both other legs are kept: a partition-isolation regression shows up
+    #: there, and the Lumen leg is what caught the walker's Ember/"members"
+    #: false positive, which is a property of the WALKER rather than of any
+    #: grant. Only the naming was wrong.
+    GRANT_DISCRIMINATING = (world.PRINCIPAL_ANALYST,)
+    PARTITION_ISOLATION_ONLY = (world.PRINCIPAL_COMPLIANCE, world.PRINCIPAL_LUMEN)
+
+    @pytest.mark.parametrize("principal", GRANT_DISCRIMINATING)
+    def test_each_grant_discriminating_leg_has_reachable_restricted_material(
+        self, principal: str
+    ) -> None:
+        """A leg proves something about the grant only if what it forbids is
+        reachable in the partition it walks."""
+
+        material = spine.restricted_material(principal)
+        tenant = world.PRINCIPALS[principal].tenant_id
+        same_tenant_restricted = {
+            entity_id
+            for entity_id in material.entity_ids
+            if world.ENTITIES_BY_ID[entity_id].tenant_id == tenant
+        }
+        assert same_tenant_restricted, (
+            f"{principal} has no restricted entity inside its own tenant, so "
+            "nothing it is forbidden is reachable by its traversal and this "
+            "leg has become a partition-isolation test rather than a grant "
+            "test. Re-scope it or restore the same-tenant restriction"
+        )
+
+    @pytest.mark.parametrize("principal", PARTITION_ISOLATION_ONLY)
+    def test_the_other_legs_are_the_known_partition_isolation_ones(
+        self, principal: str
+    ) -> None:
+        """Pinned so the split above stays honest in both directions.
+
+        If either of these gains same-tenant restricted material it becomes
+        grant-discriminating and belongs in the other list — a strengthening
+        that should be noticed and moved deliberately, not absorbed.
+        """
+
+        material = spine.restricted_material(principal)
+        tenant = world.PRINCIPALS[principal].tenant_id
+        assert not {
+            entity_id
+            for entity_id in material.entity_ids
+            if world.ENTITIES_BY_ID[entity_id].tenant_id == tenant
+        }, (
+            f"{principal} now has same-tenant restricted material, so its leg "
+            "has become grant-discriminating and should move to "
+            "GRANT_DISCRIMINATING"
+        )
 
 
 class TestAGrantDerivedFromTenancyLeaksIt:
@@ -1153,11 +1251,21 @@ class TestEvidenceScopeConfusion:
     def test_the_production_expansion_path_is_gated_on_that_verification(
         self,
     ) -> None:
-        """The check above must be the one production actually consults.
+        """A SOURCE check, and its limit is stated rather than implied.
 
-        Otherwise this class proves a signer works while the consumer never
-        asks it. Asserted against the authorization gate's source so the
-        coupling is visible rather than assumed.
+        Review is right that this cannot catch a gate that computes
+        ``verify(...)`` and ignores the result — a static read sees the call,
+        not its use. It is kept because it catches the cheaper and likelier
+        regression (the call deleted outright), and because the alternative
+        is claiming coverage this suite does not own.
+
+        **Behavioural coverage of the expansion path belongs to
+        ``tests/api/dev/test_evidence_service.py``**, which exercises the
+        service rather than reading it. A5's ledger claim is scoped to what
+        this suite establishes — substitution is refused by the signer, and
+        the gate still calls it — with the behavioural proof credited to its
+        real owner, whose existence is asserted below so the credit cannot
+        dangle.
         """
 
         from dev_health_ops.api.dev import evidence_service
@@ -1171,6 +1279,18 @@ class TestEvidenceScopeConfusion:
         )
         assert "UNAUTHORIZED" in gate, (
             "the gate no longer collapses a failed verification to UNAUTHORIZED"
+        )
+        owner = (
+            Path(spine.__file__).resolve().parents[2]
+            / "tests"
+            / "api"
+            / "dev"
+            / "test_evidence_service.py"
+        )
+        assert owner.is_file(), (
+            "the production owner of this path's BEHAVIOURAL coverage "
+            f"({owner.name}) is gone; A5's ledger entry credits it and that "
+            "credit is now dangling"
         )
 
     def test_a_handle_minted_for_another_organization_does_not_verify(self) -> None:

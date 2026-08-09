@@ -74,6 +74,16 @@ class GuardCase(NamedTuple):
     plant: str
     #: Text that means the WRONG thing failed. A producer-side guard proved
     #: by a contract rejection is proving somebody else's invariant.
+    #:
+    #: **Mandatory behind a total-containment boundary.** ``expected_failure``
+    #: alone is blind there, and the independent verifier proved it: case 12's
+    #: plant declared the pre-H4 signature, so production died on
+    #: ``TypeError``, the shadow seam's own exception containment converted
+    #: that into a ``SEAM_FAULT`` record, the test failed for that reason, and
+    #: the harness credited a guard it had never exercised. Anything wrapped
+    #: in ``try/except`` can turn a broken plant into a plausible failure, so
+    #: every case planting into such a boundary must name the shapes that
+    #: mean "the plant broke" rather than "the guard fired".
     forbidden_failure: tuple[str, ...] = ()
 
 
@@ -417,11 +427,16 @@ proj._project = _project
             "test_a_packet_citing_uncoined_evidence_is_rejected"
         ),
         expected_failure="GUARD uncoined_evidence_is_rejected",
+        forbidden_failure=("TypeError",),
         plant="""
 from dev_health_ops.api.dev import investigation_shadow as seam
 
 
-def canonical_bypass_offenders(*, packet_evidence_handles, canonical_evidence):
+def canonical_bypass_offenders(*, packet_evidence, canonical_evidence):
+    # Current signature, guard neutralized. Declaring the PRE-H4 signature
+    # here made production die on TypeError, which the seam's containment
+    # converted into a SEAM_FAULT -- the test failed and the harness credited
+    # a guard it had never exercised.
     return ()
 
 
@@ -494,6 +509,7 @@ proj._versions = _versions
             "test_a_forged_evidence_payload_is_rejected_even_with_a_genuine_handle"
         ),
         expected_failure="GUARD forged_evidence_payload_is_rejected",
+        forbidden_failure=("TypeError",),
         plant="""
 from dev_health_ops.api.dev import investigation_shadow as seam
 
@@ -526,6 +542,7 @@ seam.canonical_bypass_offenders = canonical_bypass_offenders
             "test_a_disabled_seam_records_that_it_chose_to_do_nothing"
         ),
         expected_failure="GUARD disabled_seam_does_not_record_a_packet",
+        forbidden_failure=("TypeError",),
         plant="""
 from dev_health_ops.api.dev import investigation_shadow as seam
 
@@ -551,6 +568,7 @@ seam.InvestigationShadow.__init__ = __init__
             "test_the_seam_behaves_identically_for_both_arms"
         ),
         expected_failure="GUARD seam_treats_both_arms_alike",
+        forbidden_failure=("TypeError",),
         plant="""
 import dataclasses
 
@@ -575,6 +593,104 @@ def evaluate(self, *, payload, run_id, organization_id, canonical_evidence):
 
 
 seam.InvestigationShadow.evaluate = evaluate
+""",
+    ),
+    GuardCase(
+        case_id="packet_from_another_run_recorded",
+        stake=(
+            "a stale or misrouted packet filed under the run evaluating it, "
+            "becoming a comparison row for work it never described"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_investigation_shadow.py::"
+            "test_a_packet_from_another_run_is_rejected"
+        ),
+        expected_failure="GUARD packet_from_another_run_is_rejected",
+        forbidden_failure=("TypeError",),
+        plant="""
+from dev_health_ops.api.dev import investigation_shadow as seam
+
+_real = seam.InvestigationShadow.evaluate
+
+
+def evaluate(self, *, payload, run_id, organization_id, canonical_evidence):
+    # The pre-fix state: evaluate against the packet's own run, so the
+    # mismatch branch can never fire.
+    versions = payload.get("versions") if hasattr(payload, "get") else None
+    trial = versions.get("trial") if isinstance(versions, dict) else None
+    own = trial.get("run_id") if isinstance(trial, dict) else None
+    return _real(
+        self,
+        payload=payload,
+        run_id=own or run_id,
+        organization_id=organization_id,
+        canonical_evidence=canonical_evidence,
+    )
+
+
+seam.InvestigationShadow.evaluate = evaluate
+""",
+    ),
+    GuardCase(
+        case_id="unmeasured_source_health_credits_coverage",
+        stake=(
+            "an unavailable source with zero coverage crediting a cohort "
+            "with data-coverage comparability"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_projection.py::"
+            "test_an_unavailable_source_health_observation_measures_no_coverage"
+        ),
+        expected_failure="GUARD unmeasured_source_health_credits_no_coverage",
+        plant="""
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+# The pre-fix set: only not_measured counted as unmeasured.
+proj._UNMEASURED_SEMANTICS = frozenset({"not_measured"})
+""",
+    ),
+    GuardCase(
+        case_id="unknown_source_system_guessed",
+        stake=(
+            "an evidence ref from an unknown source system assigned a "
+            "plausible class -- smuggling a source past the allowlist"
+        ),
+        test=(
+            "tests/api/dev/test_chaos_3618_investigation_shadow.py::"
+            "test_the_evidence_source_class_map_returns_none_rather_than_guessing"
+        ),
+        expected_failure="GUARD unknown_source_system_is_not_guessed",
+        plant="""
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+_real = proj._evidence_source_class
+
+
+def _evidence_source_class(ref):
+    # Guess instead of refusing -- the smuggling the docstring names.
+    return _real(ref) or SourceClass.WORK_GRAPH
+
+
+proj._evidence_source_class = _evidence_source_class
+""",
+    ),
+    GuardCase(
+        case_id="trial_allowlist_widened",
+        stake=(
+            "an off-allowlist source class reaching the packet, where the "
+            "contract's own allowlist check should have rejected it"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_projection.py::"
+            "test_the_trial_allowlist_excludes_classes_the_contract_never_allowed"
+        ),
+        expected_failure="GUARD trial_allowlist_matches_the_contract",
+        plant="""
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+proj._TRIAL_ALLOWLIST = frozenset(SourceClass)
 """,
     ),
     GuardCase(

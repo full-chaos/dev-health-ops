@@ -911,3 +911,42 @@ def test_a_result_from_another_run_is_refused() -> None:
     )
     with pytest.raises(ValueError, match="belongs to run"):
         _payload(investigation_result=foreign)
+
+
+def test_the_trial_allowlist_excludes_classes_the_contract_never_allowed() -> None:
+    """A widened allowlist would smuggle an off-allowlist source onto the
+    packet, where ``validate_sources_are_allowlisted`` should have rejected
+    it. The set was passing silently with no test at all."""
+
+    from dev_health_ops.api.dev.investigation_contract import TRIAL_SOURCE_ALLOWLIST
+
+    assert proj._TRIAL_ALLOWLIST == frozenset(TRIAL_SOURCE_ALLOWLIST), (
+        "GUARD trial_allowlist_matches_the_contract"
+    )
+    assert SourceClass.TEMPORAL_CONTEXT not in proj._TRIAL_ALLOWLIST
+
+
+def test_an_unavailable_source_health_observation_measures_no_coverage() -> None:
+    """H1's defect one slot over: an unavailable source with zero coverage
+    credited a cohort with ``data_coverage`` comparability, against this
+    module's own "only when something was actually measured"."""
+
+    observation = DevSourceObservation(
+        schema_version="dev_source_observation.v1",
+        observation_id=_handle("obs-health"),
+        source_class=SourceClass.SOURCE_HEALTH,
+        adapter_id="data_health.v1",
+        requirement_level="mandatory",
+        observed_state=SourceRequirementState.UNAVAILABLE,
+        data_semantics="no_data",
+        subject_coverage=0.0,
+        usable_fact_count=0,
+        observed_at=_NOW,
+        query_version="data_health.v1",
+        limitation="the source is unconfigured",
+    )
+    result = _investigation_result().model_copy(update={"observations": (observation,)})
+    assert (
+        proj._supported_dimensions(_payload(investigation_result=result, evidence=()))
+        == ()
+    ), "GUARD unmeasured_source_health_credits_no_coverage"

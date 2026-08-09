@@ -216,6 +216,9 @@ because that posture is already proven in production.
   an evidence record. The seam is also tenant-scoped: a packet declaring a
   different organization is rejected rather than compared against another
   tenant's canonical material.
+- **Scoped to one run and one tenant.** A packet produced for a different
+  run, or declaring a different organization, is rejected rather than
+  compared against canonical material it does not belong to.
 - **Off means off.** A disabled seam records `skipped_disabled` rather than
   evaluating. Recorded, not silent — "the seam ran and chose to do nothing"
   and "the seam never ran" are different facts, and a trial that cannot tell
@@ -249,6 +252,14 @@ recorded as a *seam* fault — attributing the arm's inability to express its
 own run to the harness measuring it. A run with no governed result, a cohort
 too small to compare, and a packet the contract rejects are all measured
 outcomes with their own gap reasons.
+
+A crash in the projection reports as `projection_fault`, deliberately kept
+separate from `packet_rejected_by_contract`. The two answer different
+questions, and the trial reports one of them: "how often can the baseline
+express its run" is a statement about the *product*, so folding defects in
+this module into it inflates that number with our own bugs. Independent
+fuzzing produced ~20 crashes that all reported as contract rejections
+before the split.
 
 ## Flags
 

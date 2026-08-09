@@ -269,6 +269,28 @@ class InvestigationShadow:
             handles = tuple(ref.evidence_ref_id for ref in cited)
             versions = packet.versions
             trial = versions.trial
+            packet_run = trial.run_id if trial else None
+            if packet_run is not None and packet_run != run_id:
+                # Mirrors the organization branch. A packet produced for one
+                # run, evaluated against another run's canonical evidence,
+                # was previously RECORDED and filed under the evaluating run
+                # -- so a stale or misrouted packet became a comparison row
+                # attributed to work it never described.
+                return InvestigationShadowRecord(
+                    run_id=run_id,
+                    status=InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED,
+                    arm_id=trial.arm_id if trial else None,
+                    packet_schema_version=versions.packet_schema_version,
+                    projection_version=versions.projection_version,
+                    packet_id=packet.packet_id,
+                    outcome=packet.outcome.value,
+                    evidence_handles=handles,
+                    latency_ms=elapsed(),
+                    detail=(
+                        f"the packet was produced for run {packet_run}, not the "
+                        f"run it is being evaluated against"
+                    ),
+                )
             if packet.organization_id != organization_id:
                 # Canonical material is scoped to an organization. A packet
                 # claiming a different one cannot be checked against this

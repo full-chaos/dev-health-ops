@@ -25,6 +25,7 @@ one.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -102,6 +103,8 @@ from .capabilities import (
     classify_question_family,
     comparison_shape_for,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "NATIVE_ARM_ID",
@@ -189,7 +192,13 @@ _SLOT_SIGNAL_REQUIRED = frozenset({"pull_requests"})
 #: ``data_coverage`` has no content slot -- source health describes a
 #: SOURCE, not a subject fact -- so it is derived from the observation's own
 #: measurement state instead, and only when something was actually measured.
-_UNMEASURED_SEMANTICS = frozenset({"not_measured"})
+#:
+#: ``no_data`` belongs here as much as ``not_measured`` does. The set held
+#: only the latter, so an unavailable source with zero coverage still
+#: credited a cohort with ``data_coverage`` comparability -- H1's defect one
+#: slot over, and directly against this comment's own "only when something
+#: was actually measured".
+_UNMEASURED_SEMANTICS = frozenset({"not_measured", "no_data"})
 
 
 class NativeProjectionGapReason(StrEnum):
@@ -223,6 +232,14 @@ class NativeProjectionGapReason(StrEnum):
     #: the shadow seam's containment and disappear as a "seam fault",
     #: attributing the arm's failure to the harness.
     PACKET_REJECTED_BY_CONTRACT = "packet_rejected_by_contract"
+    #: The projection itself crashed. Kept SEPARATE from a contract
+    #: rejection because the two answer different questions and the trial
+    #: reports one of them: "how often can the baseline express its run" is
+    #: a statement about the PRODUCT, and folding arm crashes into it
+    #: inflates that number with defects in this module. The independent
+    #: verifier's fuzzing produced ~20 crashes that all reported as contract
+    #: rejections, which is exactly the contamination this split prevents.
+    PROJECTION_FAULT = "projection_fault"
 
 
 @dataclass(frozen=True, slots=True)
@@ -630,6 +647,14 @@ def _carries_slot_signal(slot: str, facts: Sequence[Any]) -> bool:
     if slot == "pull_requests":
         # review_load is about REVIEW, so a PR with no review state and no
         # requested changes is delivery evidence, not review evidence.
+        #
+        # NOTE (not a defect today, latent): ``review_state`` is an open
+        # ``OpaqueID``, and this trusts any non-null value. It is safe only
+        # because the producer maps a falsy provider value to ``None``. The
+        # same file that mints these facts also contains an
+        # ``ifNull(..., 'unknown')`` pattern, and if a review state ever
+        # arrives as the literal ``"unknown"`` this predicate would read it
+        # as review signal. Close the vocabulary before trusting non-null.
         return any(
             getattr(fact, "review_state", None) is not None
             or getattr(fact, "changes_requested", 0) > 0
@@ -1143,6 +1168,15 @@ def project_native_investigation(
     try:
         return _project(payload)
     except ValidationError as rejected:
+        logger.warning(
+            "context_fabric.native_arm.packet_rejected_by_contract",
+            extra={
+                "run_id": payload.run_id,
+                "organization_id": payload.org_id,
+                "error_count": rejected.error_count(),
+                "first_error": _first_error(rejected),
+            },
+        )
         return NativeProjectionOutcome(
             packet=None,
             gaps=(
@@ -1157,11 +1191,22 @@ def project_native_investigation(
             ),
         )
     except Exception as fault:
+        # A crash in THIS module, not a statement about the product. Logged
+        # at exception level with the traceback, because unlike a contract
+        # rejection there is nothing legitimate about it.
+        logger.exception(
+            "context_fabric.native_arm.projection_fault",
+            extra={
+                "run_id": payload.run_id,
+                "organization_id": payload.org_id,
+                "exception_type": type(fault).__name__,
+            },
+        )
         return NativeProjectionOutcome(
             packet=None,
             gaps=(
                 NativeProjectionGap(
-                    reason=NativeProjectionGapReason.PACKET_REJECTED_BY_CONTRACT,
+                    reason=NativeProjectionGapReason.PROJECTION_FAULT,
                     detail=(f"projection raised {type(fault).__name__}: {fault}")[
                         :2000
                     ],

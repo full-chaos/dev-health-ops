@@ -32,7 +32,24 @@ from dev_health_ops.api.dev.investigation_contract.fixtures import (
     positive_variant_fixtures,
 )
 
-_RUN = "run-3618"
+
+def _golden_run_id() -> str:
+    """The run the golden packet says it was produced for.
+
+    The seam now rejects a packet produced for a different run, so the
+    suite must evaluate each packet against its OWN run — using an
+    unrelated constant would make every test exercise the mismatch branch
+    instead of the behaviour it names.
+    """
+
+    variants = dict(positive_variant_fixtures()["ask_dev_investigation_packet.v1"])
+    trial = variants["trial_metadata_present"]["versions"]["trial"]
+    run_id = trial["run_id"]
+    assert isinstance(run_id, str)
+    return run_id
+
+
+_RUN = _golden_run_id()
 _ORG = "org_fullchaos"
 _OBSERVED_AT = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
 
@@ -505,3 +522,40 @@ def test_the_equivalence_check_can_actually_fail() -> None:
     )
     divergent = dataclasses.replace(native, outcome="something-else")
     assert _comparable(native) != _comparable(divergent)
+
+
+def test_a_packet_from_another_run_is_rejected() -> None:
+    """A packet evaluated against a different run's canonical evidence was
+    recorded and filed under the evaluating run, so a stale or misrouted
+    packet became a comparison row attributed to work it never described."""
+
+    payload = _packet_payload()
+    record = seam.InvestigationShadow(enabled=True).evaluate(
+        payload=payload,
+        run_id="run-B-entirely-different",
+        organization_id=_ORG,
+        canonical_evidence=_canonical(payload),
+    )
+    assert record.status is seam.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED, (
+        "GUARD packet_from_another_run_is_rejected"
+    )
+    assert record.detail is not None
+    assert "produced for run" in record.detail
+
+
+def test_the_evidence_source_class_map_returns_none_rather_than_guessing() -> None:
+    """Guessing a class puts a source on the packet the allowlist should
+    have rejected — the smuggling ``_evidence_source_class``'s own docstring
+    names. This was passing silently with no test at all."""
+
+    from dev_health_ops.context_fabric.native_arm import projection as proj
+
+    unknown = DevEvidenceRefV2.model_validate(
+        {
+            **_canonical(_packet_payload())[0].model_dump(mode="json"),
+            "source_system": "a_system_no_adapter_produces",
+        }
+    )
+    assert proj._evidence_source_class(unknown) is None, (
+        "GUARD unknown_source_system_is_not_guessed"
+    )

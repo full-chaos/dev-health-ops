@@ -9,7 +9,7 @@ Neo4j+OpenSearch is two servers. That leaves FalkorDB, which is also the
 better fit on its own merits: one container, and **one graph keyspace per
 organization**, which turns org deletion into a single keyspace drop rather
 than a traversal that could miss a node. See
-``docs/contribute/architecture/context-fabric-graph-arm.md`` for the full
+``docs/contribute/architecture/graph-investigation-arm.md`` for the full
 write-up.
 
 **Partition == keyspace == organization.** :func:`identity.partition_for_org`

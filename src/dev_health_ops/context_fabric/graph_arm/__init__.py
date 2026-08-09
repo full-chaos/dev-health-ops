@@ -26,7 +26,7 @@ ingested), :mod:`.identity` (how things are addressed and partitioned),
 authorized traversal), :mod:`.packet_builder` (the emitted contract).
 
 Architecture note, including the backend-choice justification:
-``docs/contribute/architecture/context-fabric-graph-arm.md``.
+``docs/contribute/architecture/graph-investigation-arm.md``.
 """
 
 from __future__ import annotations

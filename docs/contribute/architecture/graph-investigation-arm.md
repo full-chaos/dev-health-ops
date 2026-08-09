@@ -1,4 +1,22 @@
-# Context Fabric graph arm (CHAOS-3617)
+---
+page_id: con-graph-investigation-arm
+summary: The Graphiti-backed shadow investigation arm — structured-only ingestion, deterministic identity, the isolated FalkorDB trial store, and how the arm is verified.
+content_type: architecture
+owner: engineering
+source_of_truth:
+  - src/dev_health_ops/context_fabric/graph_arm/
+  - tests/context_fabric/
+  - scripts/chaos_3617_guard_injection.py
+  - compose.yml (profile graph-trial)
+applicability: current
+lifecycle: active
+---
+
+# Graph-assisted investigation arm (CHAOS-3617)
+
+<!-- The page slug avoids the string `context-fabric`: docs-data/ia's
+     validator reserves every URL containing it for the canonical top-level
+     marketing page at /context-fabric/. -->
 
 The Graphiti-backed **shadow investigation arm** for the corrected CHAOS-3614
 trial. It ingests canonical Dev Health and ACR structured records into an

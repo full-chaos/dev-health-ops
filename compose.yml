@@ -452,7 +452,7 @@ services:
   # is two servers. FalkorDB is one container and gives one graph keyspace
   # per organization, which makes org deletion a keyspace drop rather than a
   # traversal that could miss a node. Full write-up:
-  # docs/contribute/architecture/context-fabric-graph-arm.md
+  # docs/contribute/architecture/graph-investigation-arm.md
   #
   # Port 6389, NOT 6379: valkey above already owns 6379, and a trial store
   # that silently shared a port with the production cache would be exactly

@@ -494,7 +494,12 @@ def _check_orientation(record: RelationshipRecord) -> None:
 
 def _entity_node(record: EntityRecord, partition: str) -> GraphNode:
     where = f"entity {record.canonical_id!r}"
-    _reject_control_characters(where, "canonical_id", record.canonical_id)
+    # Separator-checked, not merely control-checked. CHAOS-3619 (H3) made an
+    # entity's canonical id a member of a joined multi-valued property for
+    # the first time (``cf_subject_canonical_ids``), so a comma in one now
+    # splits into two subjects on read -- an attachment no source supplied.
+    # The stronger check subsumes the control-character one.
+    _reject_separator_bytes(where, "canonical_id", record.canonical_id)
     _validate_label(where, record.display_label)
     _validate_attributes(where, record.attributes)
     for alias in record.aliases:
@@ -521,7 +526,10 @@ def _entity_node(record: EntityRecord, partition: str) -> GraphNode:
 
 def _observation_node(record: ObservationRecord, partition: str) -> GraphNode:
     where = f"observation {record.canonical_id!r}"
-    _reject_control_characters(where, "canonical_id", record.canonical_id)
+    # See ``_entity_node``: an observation's own canonical id is not itself
+    # joined, but it is addressed by the same identity machinery and a split
+    # id would break the uuid->canonical mapping the attachment read walks.
+    _reject_separator_bytes(where, "canonical_id", record.canonical_id)
     _validate_label(where, record.title)
     _validate_attributes(where, record.attributes)
     for repository_id in record.repository_ids:

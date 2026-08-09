@@ -60,7 +60,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     TruncationReason,
 )
 
-from .backend import parse_triple_fact
+from .backend import attachment_encoding_supported, parse_triple_fact
 from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .identity import assert_partition_matches_org
 from .projection import READBACK_ATTRIBUTE_KEYS, GraphProjection
@@ -260,16 +260,20 @@ class InvestigationReadout:
     #: observation is ABOUT. **Declared by the reader**, never inferred from
     #: whether attachments happen to be present.
     #:
-    #: The distinction is load-bearing rather than pedantic.
-    #: :class:`LiveGraphReader` cannot recover attachment today (see its
-    #: docstring), and a rule that skipped the "is this record about the
-    #: linkage" check whenever attachments were absent would become a silent
-    #: no-op on exactly the reader that cannot perform it -- the original
-    #: defect, live-only. Declaring the capability instead makes the gap a
-    #: visible, attributable state: ``discover_drivers`` refuses to attribute
-    #: on such a readout and says so in the exclusion's own words rather than
-    #: reporting the support as withheld, which would be an authorization
-    #: claim nothing supports.
+    #: The distinction is load-bearing rather than pedantic. A rule that
+    #: skipped the "is this record about the linkage" check whenever
+    #: attachments happened to be absent would become a silent no-op on
+    #: exactly the reader that cannot perform it. Declaring the capability
+    #: instead makes the gap a visible, attributable state:
+    #: ``discover_drivers`` refuses to attribute on such a readout and says
+    #: so in the exclusion's own words rather than reporting the support as
+    #: withheld, which would be an authorization claim nothing supports.
+    #:
+    #: CHAOS-3619 (H3) gave :class:`LiveGraphReader` the capability, and it
+    #: still DECLARES rather than assumes: the value is derived from the
+    #: encoding the partition itself attests, so a partition written before
+    #: the encoding existed, by a newer writer, or by two writers, all read
+    #: as unavailable. See :func:`_attests_attachment`.
     #:
     #: Defaults to ``True`` because a hand-built readout carries whatever
     #: attachments its author wrote; both real readers set it explicitly.
@@ -917,6 +921,7 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_source_class AS source_class,
        n.cf_observed_at AS observed_at,
        n.cf_repository_ids AS repository_ids,
+       n.cf_subject_canonical_ids AS subject_canonical_ids,
        n.outcome AS outcome,
        n.cf_attr_corpus_is_adversarial AS attr_corpus_is_adversarial,
        n.cf_attr_corpus_state AS attr_corpus_state,
@@ -958,6 +963,18 @@ WHERE n.group_id = $partition
 RETURN DISTINCT n.cf_projection_embedder AS embedder_model_id
 """
 
+#: What the STORE says about how it encoded observation attachment.
+#:
+#: Same shape and same reasoning as the embedder attestation above. The
+#: capability must be derived from the partition, because the alternative --
+#: a literal on the reader -- is a claim about every partition the reader
+#: will ever open, including ones written before the encoding existed.
+_ATTACHMENT_ENCODING_QUERY = """
+MATCH (n:Entity)
+WHERE n.group_id = $partition
+RETURN DISTINCT n.cf_attachment_encoding AS attachment_encoding
+"""
+
 
 #: Every Cypher statement the arm can issue, in one place.
 #:
@@ -975,6 +992,7 @@ READ_ONLY_QUERIES: tuple[str, ...] = (
     _OBSERVATION_QUERY,
     _EDGE_QUERY,
     _PROJECTION_EMBEDDER_QUERY,
+    _ATTACHMENT_ENCODING_QUERY,
     NODE_COUNT_QUERY,
 )
 
@@ -989,13 +1007,19 @@ class LiveGraphReader:
     containing prose is detected on read rather than silently presented as
     evidence.
 
-    Observation-to-entity attachment is not yet read back from the store —
-    ``add_nodes_and_edges_bulk`` writes entity edges only — so this reader
-    reports observations with an empty subject list and any packet built
-    from it declares its evidence coverage accordingly. Stated here rather
-    than papered over: the differential test asserts entity and path
-    equality and explicitly records that observation attachment is out of
-    its scope in this revision.
+    Observation-to-entity attachment IS read back, as of CHAOS-3619 (H3).
+    ``add_nodes_and_edges_bulk`` writes entity edges only, so attachment
+    travels as a joined canonical-id property on the observation node rather
+    than as an edge, and the capability is derived per partition from the
+    encoding the store attests (:func:`_attests_attachment`) rather than
+    asserted by this class.
+
+    Why it had to land before the CHAOS-3619 trial could measure anything:
+    :func:`_traverse` keeps an observation only when one of its subjects is
+    in the visited set, so an empty subject list dropped every observation
+    rather than merely unlabelling it. Measured on the CHAOS-3616 corpus, one
+    neighbourhood returned 39 attached observations through
+    :class:`ProjectionGraphReader` and 0 through this reader.
     """
 
     def __init__(self, store: Any) -> None:
@@ -1060,6 +1084,15 @@ class LiveGraphReader:
                     )
                 )
 
+        # Decided BEFORE the rows are built, because it decides whether the
+        # attachment column may be read at all. A reader that declared the
+        # capability absent and still populated subjects would be handing
+        # ``discover_drivers`` data it had just disclaimed -- the precise
+        # inconsistency the pre-H3 assertion forbade, arriving from the other
+        # side. Caught by this change's own negative control, which declared
+        # False and then found populated subjects.
+        attachment_available = await _attests_attachment(driver, partition)
+
         observations: list[DiscoveredObservation] = []
         for record in await _rows(driver, _OBSERVATION_QUERY, partition=partition):
             observations.append(
@@ -1069,7 +1102,15 @@ class LiveGraphReader:
                     title=record["title"],
                     source_class=SourceClass(record["source_class"]),
                     observed_at=_as_datetime(record["observed_at"]),
-                    subject_canonical_ids=(),
+                    subject_canonical_ids=tuple(
+                        item
+                        for item in (record.get("subject_canonical_ids") or "").split(
+                            ","
+                        )
+                        if item
+                    )
+                    if attachment_available
+                    else (),
                     repository_ids=tuple(
                         item
                         for item in (record["repository_ids"] or "").split(",")
@@ -1093,15 +1134,36 @@ class LiveGraphReader:
             authorized=frozenset(authorized_entity_ids),
             max_hops=max_hops,
             budgets=budgets,
-            # ``add_nodes_and_edges_bulk`` writes entity edges only, so this
-            # reader cannot recover which entities an observation was about.
-            # Declared rather than left to be inferred from the empty subject
-            # lists below: a consumer that inferred it would have to guess,
-            # and ``discover_drivers`` would silently stop checking exactly
-            # the thing it cannot check here.
-            observation_attachment_available=False,
+            # CHAOS-3619 (H3). Derived from what the partition attests, never
+            # declared as a literal. A literal is what this used to be, and
+            # replacing a hardcoded ``False`` with a hardcoded ``True`` would
+            # claim the capability over partitions written before the
+            # encoding existed -- making ``discover_drivers`` stop checking
+            # that a record is about the linkage it vouches for, silently.
+            observation_attachment_available=attachment_available,
             embedder_model_id=await _attested_embedder(driver, partition),
         )
+
+
+async def _attests_attachment(driver: Any, partition: str) -> bool:
+    """Whether this partition encoded observation attachment readably.
+
+    Returns ``False`` rather than raising on a mixed or unknown encoding.
+    That differs deliberately from :func:`_attested_embedder`, which raises:
+    a mixed embedder makes every semantic claim in the packet incomparable
+    and there is no safe reduced answer, whereas unreadable attachment has a
+    perfectly good reduced answer -- the arm attributes nothing, which is the
+    behaviour that shipped before this existed.
+    """
+
+    attested = {
+        str(record["attachment_encoding"])
+        for record in await _rows(
+            driver, _ATTACHMENT_ENCODING_QUERY, partition=partition
+        )
+        if record.get("attachment_encoding") is not None
+    }
+    return attachment_encoding_supported(attested)
 
 
 async def _attested_embedder(driver: Any, partition: str) -> str | None:

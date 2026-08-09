@@ -354,6 +354,20 @@ class TestReaderDifferential:
         from — so each declaration is asserted against what that reader
         actually returns, on the live store rather than on an assumption
         about it.
+
+        **Updated by CHAOS-3619 (H3): a deliberate contract change, not a
+        weakened test.** This previously asserted that the live reader
+        declares ``False`` and returns unattached records, because it could
+        not recover attachment — ``add_nodes_and_edges_bulk`` writes entity
+        edges only. It can now (attachment travels as a joined canonical-id
+        property), so the expectation keeps its shape and changes its value.
+        The claim under test is unchanged: *the declaration tracks the
+        capability*. The control proving it TRACKS rather than merely
+        happening to be right today lives in
+        ``test_chaos_3619_observation_attachment.py``::
+        ``test_an_unrecognised_encoding_makes_the_reader_decline_again``,
+        which writes a partition under an encoding this reader does not
+        understand and requires it to decline again.
         """
 
         store, projection = alpha_store
@@ -376,14 +390,20 @@ class TestReaderDifferential:
             "the reference claims attachment and returned an unattached record"
         )
 
-        assert live.observation_attachment_available is False, (
-            "the live reader claims it can recover observation attachment; it "
-            "cannot, and discover_drivers would stop checking that a record "
-            "is about the linkage it vouches for"
+        assert live.observation_attachment_available is True, (
+            "the live reader declares it cannot recover observation "
+            "attachment; since CHAOS-3619 it can, and declining would make "
+            "discover_drivers refuse every honest finding on a live readout"
         )
-        assert all(not item.subject_canonical_ids for item in live.observations), (
-            "the live reader declares it cannot recover attachment while "
-            "returning one; the declaration must track the capability"
+        assert live.observations, (
+            "the live reader returned no observations; before CHAOS-3619 an "
+            "empty subject list dropped every one of them in _traverse, and "
+            "that is the regression this asserts against"
+        )
+        assert all(item.subject_canonical_ids for item in live.observations), (
+            "the live reader declares it CAN recover attachment while "
+            "returning an unattached record; the declaration must track the "
+            "capability in both directions"
         )
 
     async def test_the_live_readout_attests_the_embedder_that_wrote_it(

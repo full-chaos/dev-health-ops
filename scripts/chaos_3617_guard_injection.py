@@ -1675,14 +1675,82 @@ MUTATIONS: tuple[Mutation, ...] = (
             "when it cannot, which turns the 'is this record about the "
             "linkage' rule into a silent no-op on the live path alone"
         ),
+        # UPDATED by CHAOS-3619 (H3), not retargeted and not deleted. The
+        # defect this mutation names is unchanged and still worth pinning;
+        # only the MECHANISM moved. Before H3 the declaration was the literal
+        # ``observation_attachment_available=False`` and the mutation flipped
+        # it to ``True``. That anchor no longer exists -- H3 replaced the
+        # literal with a per-partition derivation -- and the harness
+        # correctly reported this mutation as INVALID rather than KILLED when
+        # it drifted, which is exactly the anchor-drift failure the module
+        # docstring's rule 1 exists to surface. Verified by running it: the
+        # run printed "anchor not found verbatim" and exited non-zero.
+        #
+        # The successor mutation collapses the derivation back into the
+        # literal it used to be, so it plants the SAME defect against the new
+        # code. It is killed only by the negative control -- the normal path
+        # derives ``True`` anyway, so a partition with a recognised encoding
+        # cannot tell the two apart. That is the point: the kill proves the
+        # negative control is load-bearing rather than decorative.
         path=SRC / "readback.py",
-        anchor="            observation_attachment_available=False,",
+        anchor="            observation_attachment_available=attachment_available,",
         replacement="            observation_attachment_available=True,",
         tests=(
-            f"{TESTS}/test_chaos_3617_live_store.py::TestReaderDifferential::"
-            "test_each_reader_declares_the_attachment_capability_it_actually_has",
+            f"{TESTS}/test_chaos_3619_observation_attachment.py::"
+            "TestTheLiveReadRecoversTheAttachment::"
+            "test_an_unrecognised_encoding_makes_the_reader_decline_again",
         ),
-        expect_failure="claims it can recover observation attachment",
+        expect_failure="declaration is a constant, not a derivation",
+    ),
+    Mutation(
+        mutation_id="attachment-encoding-check-accepts-any-encoding",
+        defect=(
+            "the encoding check accepts anything a partition attests, so a "
+            "layout written by a newer or foreign writer is misparsed as "
+            "attachment instead of declined -- and a partition written by "
+            "two writers has drivers attributed from whichever half happened "
+            "to carry subjects"
+        ),
+        # CHAOS-3619 (H3). Deliberately anchored on the pure function rather
+        # than on the reader, and killed by tests that need no server: this
+        # is the one part of the attachment mechanism that must never be
+        # skippable. A live-only guard for it would go unmeasured in exactly
+        # the environments where the extra is absent.
+        path=SRC / "backend.py",
+        anchor="    return set(attested) == {ATTACHMENT_ENCODING}",
+        replacement="    return bool(attested)",
+        tests=(
+            f"{TESTS}/test_chaos_3619_observation_attachment.py::"
+            "TestTheDeclarationTracksTheAttestation",
+        ),
+        expect_failure="GUARD attachment_encoding_unknown",
+    ),
+    Mutation(
+        mutation_id="attachment-write-drops-the-subjects",
+        defect=(
+            "the writer records the encoding but not the subjects, so every "
+            "partition ATTESTS attachment while carrying none -- the reader "
+            "then declares the capability, _traverse drops every observation "
+            "for having no subject in the visited set, and the arm reports an "
+            "evidence-free investigation as a complete one"
+        ),
+        # CHAOS-3619 (H3). The nastiest of the three, because the declaration
+        # stays honest with respect to what the partition says: only the data
+        # is missing. Nothing in the encoding attestation can catch it, which
+        # is why the write is pinned separately from the declaration.
+        path=SRC / "backend.py",
+        anchor=(
+            "            if subjects:\n"
+            "                attributes[OBSERVATION_SUBJECTS_ATTRIBUTE] = "
+            '",".join(subjects)'
+        ),
+        replacement="            if False:\n                pass",
+        tests=(
+            f"{TESTS}/test_chaos_3619_observation_attachment.py::"
+            "TestTheWriteRecordsTheAttachment::"
+            "test_an_attached_observation_carries_its_subject_canonical_ids",
+        ),
+        expect_failure="stores no subject property",
     ),
     Mutation(
         mutation_id="packet-assembly-derives-an-unnamed-number",

@@ -59,6 +59,7 @@ __all__ = [
     "SOURCE_EVIDENCE_HANDLE_ATTRIBUTE",
     "SOURCE_EVIDENCE_ID_ATTRIBUTE",
     "SOURCE_EVIDENCE_STATE_ATTRIBUTE",
+    "WITHHELD_LABEL",
     "AliasKind",
     "GraphEntityKind",
     "GraphObservationKind",
@@ -148,6 +149,27 @@ CITABLE_EVIDENCE_STATES: frozenset[SourceEvidenceState] = frozenset(
 #: door rather than at packet validation, where the record that carried it is
 #: no longer in scope and the error names only the packet.
 EVIDENCE_HANDLE_PATTERN = r"ev1_[0-9a-f]{40}"
+
+#: What an emitted label says when the source's own label was withheld.
+#:
+#: CHAOS-3637. A BARE LITERAL, with nothing interpolated into it -- not the
+#: source's text, and not the record's canonical id either. Both are
+#: attacker-controlled: the id carrier was measured reaching the wire in this
+#: lane's own second-carrier check, so a label of the form "review <id>
+#: (withheld)" would hand back a share of the channel it exists to close.
+#:
+#: Byte-identical for every withheld value, which is the property that makes
+#: it safe and the one a test pins. It is also why the arm's compose guard
+#: (``test_chaos_3617_no_authored_text``) is satisfied without being widened:
+#: that guard permits a source copy or a literal and forbids composition, and
+#: this is a literal.
+#:
+#: The cost, stated where the value is defined: this tells a consumer THAT a
+#: value was withheld and never WHICH record or WHY. The frozen contract
+#: offers no surface for the rest -- ``untrusted_content`` defaults ``True``
+#: on every evidence ref so it carries no signal, and ``PacketLimitationKind``
+#: has no withheld-value member. The why lives in arm-side counts only.
+WITHHELD_LABEL = "[source label withheld: instruction-shaped]"
 
 
 class GraphEntityKind(StrEnum):

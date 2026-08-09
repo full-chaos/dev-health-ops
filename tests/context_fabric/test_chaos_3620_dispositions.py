@@ -326,9 +326,13 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
         }
         # FLIPPED by PR #1618: P1 (CHAOS-3630), P6 (CHAOS-3628) and S5
         # (CHAOS-3629) are fixed and their proving tests now assert the fixed
-        # behaviour. X1 (CHAOS-3637, title injection) remains a defect: its
-        # fix is parked in PR #1619, decoupled from the trial because the
-        # corpus carries no instruction-shaped titles.
+        # behaviour.
+        # NARROWED by PR #1619 (CHAOS-3637): X1's TITLE carrier is closed --
+        # an instruction-shaped label is withheld and the record kept -- but
+        # X1 stays a DEFECT, because the canonical-ID carrier is still open
+        # and was measured reaching the wire, and the detector is
+        # deliberately narrow. A bullet half closed is not closed; the reason
+        # and notes on the X1 row carry both residuals.
         assert defects == {"X1"}, (
             f"the recorded defect set changed to {sorted(defects)}; update "
             "the CHAOS-3620 findings record and the lane report together"

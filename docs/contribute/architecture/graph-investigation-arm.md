@@ -454,7 +454,7 @@ and one test in it always runs and records what the environment offered.
 uv run python scripts/chaos_3617_guard_injection.py
 ```
 
-For each of the **76** guards the arm relies on, the harness disables
+For each of the **80** guards the arm relies on, the harness disables
 **that guard alone** by
 an exact source substitution, runs the tests that claim to cover it, requires
 them to FAIL, restores, and requires them to PASS again. Three rules it
@@ -675,7 +675,7 @@ Three corpus cases pin the behaviour:
 
 | Case | Result |
 | --- | --- |
-| `team_atlas` | five metrics cited with a `MEASURED` basis, each with its own handle |
+| `team_atlas` | five metrics cited with a `MEASURED` basis, each through the handle the world issued for the record that evidences it (CHAOS-3627 — two metrics evidenced by one record cite one handle, because they are one piece of evidence) |
 | `proj_solstice` | demand measurable, no cohort comparison → `INSUFFICIENT_MEASUREMENT`, disclosed rather than dropped |
 | `proj_tidal` | no measurement at all → nothing asserted in either direction |
 
@@ -803,7 +803,12 @@ differential while changing the packet.
 ## Cross-repository ownership
 
 This arm lives entirely in `dev-health-ops`. It reads the CHAOS-3615 contract
-from `api/dev/investigation_contract/` and mints evidence handles with the
-platform's own `EvidenceReferenceSigner`, so a packet handle verifies against
-the service that issues it rather than against a parallel scheme. Nothing in
-`dev-health-acr` or `dev-health-web` changes, and no contract is duplicated.
+from `api/dev/investigation_contract/`. Evidence handles are **carried, not
+re-minted**: a record's handle is its identity, so where a source issues one
+the arm cites exactly that (CHAOS-3627 — re-signing it made every citation
+un-joinable to the record it names, and the CHAOS-3616 oracle reported all 31
+on the reproduction path as fabricated). Where a source issues none, the
+platform's own `EvidenceReferenceSigner` mints it, so that handle verifies
+against the service that issues it rather than against a parallel scheme.
+Nothing in `dev-health-acr` or `dev-health-web` changes, and no contract is
+duplicated.

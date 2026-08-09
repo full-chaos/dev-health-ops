@@ -280,19 +280,35 @@ class TestTheHardestNewsCannotBeQuietlyUpgraded:
             f"the conflict requirement names blocker {conflict.blocker!r}"
         )
 
-    def test_the_zero_leakage_gate_stays_NOT_ACCEPTED_on_CHAOS_3627(self) -> None:
+    def test_the_zero_leakage_gate_is_ACCEPTED_now_that_CHAOS_3627_landed(
+        self,
+    ) -> None:
+        """FLIPPED by CHAOS-3627 (PR #1617).
+
+        This pinned A9 at NOT_ACCEPTED with CHAOS-3627 named as its blocker,
+        because the oracle that owns the dimension could not return clean for
+        any graph-arm packet. It can now: the arm cites source-issued handles,
+        the declared set is entity vocabulary, and evidence attribution names
+        the entity the record is about. The gate is signed off on a measured
+        clean audit, not on the absence of a measurement.
+
+        The blocker must be EMPTY, not merely a different string -- a gate
+        that is accepted while still naming a blocker is the shape this
+        ledger's own reason/status guard exists to catch.
+        """
+
         gate = next(
             requirement
             for requirement in REQUIREMENTS
             if requirement.requirement_id == "A9"
         )
-        assert gate.status is Status.NOT_ACCEPTED, (
-            "the hard zero-leakage gate is marked accepted; it cannot be "
-            "until the oracle that owns the dimension can return clean for a "
-            "graph-arm packet (CHAOS-3627)"
+        assert gate.status is Status.PROVEN, (
+            "the hard zero-leakage gate is not accepted; CHAOS-3627 closed "
+            "the oracle-vocabulary blocker, so either the fix regressed or "
+            "the ledger was not flipped with it"
         )
-        assert gate.blocker == "CHAOS-3627", (
-            f"the zero-leakage gate names blocker {gate.blocker!r}"
+        assert not gate.blocker, (
+            f"the accepted zero-leakage gate still names blocker {gate.blocker!r}"
         )
 
     def test_the_four_known_defects_are_still_recorded_as_defects(self) -> None:

@@ -1166,6 +1166,50 @@ class TestCohortConstructionWithholdsAndCounts:
 # --------------------------------------------------------------------------
 
 
+def _reminted(signer, evidence):
+    """The same evidence ref, carrying a handle THIS arm minted.
+
+    CHAOS-3627 flip. Packet handles are source-issued now: the arm cites the
+    handle the world issued, and the corpus cannot key the platform HMAC, so
+    a carried handle verifies for no organization at all. That is a real
+    change to the security surface, not a test inconvenience -- the
+    consumer-side signature check simply does not apply to carried handles.
+
+    These substitution tests are about what the SIGNER does, so they are
+    re-pointed at handles the signer produced, and the change is stated in
+    their assertion messages rather than hidden.
+    """
+
+    return evidence.model_copy(
+        update={
+            "evidence_ref_id": signer.issue(
+                world.ORG_HELIO
+                if "lumen" not in evidence.entity_id
+                else world.ORG_LUMEN,
+                _record_for(evidence),
+            )
+        }
+    )
+
+
+def _record_for(evidence):
+    from dev_health_ops.api.dev.contracts import FreshnessState
+    from dev_health_ops.api.dev.evidence_service import EvidenceRecord
+
+    return EvidenceRecord(
+        source_system=evidence.source_system,
+        source_version=evidence.source_version,
+        entity_type=evidence.entity_type,
+        entity_id=evidence.entity_id,
+        display_label=evidence.display_label,
+        observed_at=evidence.observed_at,
+        freshness=FreshnessState(evidence.freshness),
+        provenance=evidence.provenance,
+        confidence=evidence.confidence,
+        repository_ids=tuple(evidence.repository_ids),
+    )
+
+
 class TestEvidenceScopeConfusion:
     def test_no_evidence_about_the_restricted_project_is_ever_indexed(self) -> None:
         """The corpus plants two: one active, one redacted.
@@ -1218,15 +1262,24 @@ class TestEvidenceScopeConfusion:
         """
 
         packet = spine.investigate("team_cinder").packet
-        first, second = (
-            packet.evidence_coverage.evidence_index[0].evidence,
-            packet.evidence_coverage.evidence_index[1].evidence,
-        )
         signer = spine.signer()
+        # Re-minted through the platform signer over each emitted ref, so the
+        # substitution check runs on handles the ARM owns. See the assertion
+        # message below for why the packet's own handles cannot be used.
+        first, second = (
+            _reminted(signer, packet.evidence_coverage.evidence_index[0].evidence),
+            _reminted(signer, packet.evidence_coverage.evidence_index[1].evidence),
+        )
 
         assert signer.verify(world.ORG_HELIO, first), (
-            "a handle this run minted does not verify, so every rejection "
-            "below would be indistinguishable from a broken signer"
+            "a handle the ARM MINTED does not verify, so every rejection "
+            "below would be indistinguishable from a broken signer. "
+            "CHAOS-3627 flip: packet handles are SOURCE-issued now and do "
+            "not verify by design (the corpus cannot key the platform HMAC), "
+            "so this check is re-pointed at a minted handle. The security "
+            "surface really did change -- a carried handle is not "
+            "signer-checkable at all -- and that is stated rather than "
+            "hidden by testing a handle that happens to verify."
         )
         assert signer.verify(world.ORG_HELIO, second)
 
@@ -1306,7 +1359,12 @@ class TestEvidenceScopeConfusion:
             principal=world.PRINCIPAL_LUMEN,
             projection=spine.lumen_projection(),
         )
-        entries = investigation.packet.evidence_coverage.evidence_index
+        entries = tuple(
+            entry.model_copy(
+                update={"evidence": _reminted(spine.signer(), entry.evidence)}
+            )
+            for entry in investigation.packet.evidence_coverage.evidence_index
+        )
         assert entries, (
             "the Lumen investigation produced no evidence, so no handle "
             "exists to substitute and this test measures nothing"
@@ -1315,7 +1373,9 @@ class TestEvidenceScopeConfusion:
         signer = spine.signer()
         assert signer.verify(world.ORG_LUMEN, entries[0].evidence), (
             "a handle does not verify for the organization it was minted "
-            "for, so verification cannot distinguish scopes at all"
+            "for, so verification cannot distinguish scopes at all. "
+            "CHAOS-3627 flip: minted handles only -- carried source handles "
+            "verify for no organization, by design."
         )
         assert not signer.verify(world.ORG_HELIO, entries[0].evidence), (
             f"handle {handle} minted for {world.ORG_LUMEN} also verifies for "
@@ -1554,180 +1614,65 @@ class TestTheAuthorizationFilteredCountIsPartlyReal:
 # --------------------------------------------------------------------------
 
 
-class TestTheIndependentOracleCannotYetScoreThisArm:
-    """Three disjoint id vocabularies, each fatal on its own.
+class TestTheIndependentOracleNowScoresThisArm:
+    """FLIPPED by CHAOS-3627 (PR #1617). Was: three disjoint id vocabularies,
+    each fatal on its own, recording that the independent oracle could not run
+    on a graph-arm packet at all.
 
-    The CHAOS-3612 defect shape — two id vocabularies that never overlap, so
-    an expectation is unsatisfiable by every possible arm — recurring in the
-    authorization dimension. Recorded here in full because a green suite that
-    omitted it would let a reader conclude the independent oracle had cleared
-    the arm, when it cannot currently run on it.
+    All three are closed and the flip is one-line per former pin:
+
+    * handles — the arm carried its own mint; it now cites the handle the
+      SOURCE issued, so a cited handle resolves in ``EVIDENCE_BY_HANDLE``;
+    * the declared set — carried observation ids and measurement keys, which
+      the oracle read as false authorization claims; it is entity ids only;
+    * evidence attribution — ``evidence.entity_id`` carried the observation's
+      own slug, which the oracle read as a fabricated entity; it carries the
+      entity the RECORD is about.
+
+    The audit is clean on the analyst/team_cinder path, which is the
+    reproduction this ledger recorded as impossible. The oracle is now
+    load-bearing on arm packets rather than structurally red, and the CHAOS-
+    3620 hard gate "zero unauthorized result leakage" is measurable.
     """
 
-    def test_the_arm_and_the_world_mint_different_handles_for_one_evidence_record(
-        self,
-    ) -> None:
+    def test_the_arm_cites_the_handle_the_world_issued(self) -> None:
         investigation = spine.investigate("team_cinder")
-        entries = [
-            entry
-            for entry in investigation.packet.evidence_coverage.evidence_index
-            if entry.evidence.entity_id in world.EVIDENCE_BY_SLUG
-        ]
-        assert entries, (
-            "no indexed evidence entry names a corpus slug, so the two mints "
-            "cannot be compared and this record is stale"
-        )
-        entry = entries[0]
-        assert entry.evidence.evidence_ref_id != world.evidence_handle(
-            entry.evidence.entity_id
-        ), (
-            "the arm and the world now mint the same handle -- the CHAOS-3620 "
-            "vocabulary-mismatch record must be updated"
-        )
-
-    def test_the_withdrawn_evidence_check_is_therefore_dead_on_an_arm_packet(
-        self,
-    ) -> None:
-        """The consequence that is not merely noise.
-
-        ``audit_authorization`` looks a cited handle up in
-        ``EVIDENCE_BY_HANDLE``; on a miss it records "fabricated" and
-        ``continue``s (``investigation_corpus/authorization.py:272-274``), so
-        the revoked/redacted/deleted check two lines below it
-        (``:278-279``) never executes for any graph-arm packet. CHAOS-3620's
-        requirement that withdrawn sources disappear from packets is
-        currently unmeasurable by the oracle that owns it.
-        """
-
-        investigation = spine.investigate("team_cinder")
-        audit = audit_authorization(investigation.packet, world.PRINCIPAL_ANALYST)
         cited = {
             entry.evidence.evidence_ref_id
             for entry in investigation.packet.evidence_coverage.evidence_index
         }
-        assert cited, "the packet cites no evidence, so nothing is being checked"
-        assert set(audit.fabricated_evidence_handles) >= cited, (
-            "some cited handle now resolves in the world's mint -- the "
-            "CHAOS-3620 dead-withdrawn-check record must be updated"
-        )
-        assert not audit.withdrawn_evidence_handles, (
-            "the withdrawn-evidence check produced a result on an arm packet, "
-            "which contradicts the recorded gap"
+
+        assert cited, "no evidence was indexed; this flip would be vacuous"
+        assert all(handle in world.EVIDENCE_BY_HANDLE for handle in cited), (
+            "a cited handle does not resolve in the world's mint; the "
+            "CHAOS-3627 fix has regressed"
         )
 
-    def test_the_declared_authorized_set_carries_ids_the_oracle_reads_as_entities(
-        self,
-    ) -> None:
+    def test_the_declared_authorized_set_is_entity_vocabulary(self) -> None:
         investigation = spine.investigate("team_cinder")
         declared = set(investigation.packet.related_context.authorized_entity_ids)
-        non_entities = declared - KNOWN_ENTITY_IDS
-        assert non_entities, (
-            "the declared authorized set now contains entity ids only -- the "
-            "CHAOS-3620 authorized-set-widening record must be updated"
-        )
-        assert non_entities <= set(world.EVIDENCE_BY_SLUG) | {
-            item.measurement_key for item in world.WORLD_MEASUREMENTS
-        }, (
-            "the declared set contains non-entity ids that are neither corpus "
-            "evidence slugs nor measurement keys. Set containment, not "
-            "intersection-nonempty: an intersection test passes while an "
-            "UNKNOWN id rides alongside a known one, which is exactly the "
-            f"shape a leak takes: {sorted(non_entities - set(world.EVIDENCE_BY_SLUG))[:5]}"
+
+        assert declared
+        assert declared <= set(world.ENTITIES_BY_ID), (
+            "the declared set carries ids the oracle reads as entities but "
+            "the world does not know; the CHAOS-3627 narrowing has regressed"
         )
 
-    def test_every_evidence_attribution_the_oracle_reads_is_unsound(self) -> None:
-        """SCOPE PIN for this lane's zero-leakage claim. Measured, not inherited.
+    def test_every_evidence_attribution_names_a_real_entity(self) -> None:
+        investigation = spine.investigate("team_cinder")
 
-        ``entity_sightings`` treats ``evidence_index[].evidence.entity_id`` as
-        a **sighting of an entity** (``authorization.py:190``). The arm puts
-        the observation's own canonical id there (``packet_builder.py:828``),
-        which for corpus-originated evidence is an evidence *slug* — never
-        the entity the world says that evidence is *about*.
+        for entry in investigation.packet.evidence_coverage.evidence_index:
+            assert entry.evidence.entity_id in world.ENTITIES_BY_ID, (
+                f"{entry.evidence.entity_id} is not a world entity; the "
+                "oracle would read it as a fabricated entity"
+            )
 
-        **WHICH CODE STATE THIS MEASURES, because two figures are in
-        circulation and they must not be averaged.** This branch is cut from
-        ``1ab76d955`` and contains **no** ``src/`` changes — in particular not
-        the #1617 vocabulary fix. Pre-fix, ``entity_id`` is an observation
-        slug or a measurement key on *every* slug-bearing entry, so **785 of
-        785 is the defect's definition, not a rate**: CHAOS-3627's third
-        vocabulary mismatch, seen from the sighting side.
-
-        The #1617 verifier's 115/291 (~40%) was measured **on the fixed
-        branch**, where ``entity_id`` is supposed to be an entity and the 40%
-        is the *residual* mis-attribution of un-reached records. One defect
-        family at two stages of repair, not two numbers for one defect.
-        Averaging them would describe a state that has never existed.
-
-        The 532 entries carrying measurement keys are a third vocabulary
-        again, consistent with CHAOS-3627's second mismatch and covered by
-        its declared-set fix.
-
-        **Re-derive after the rebase onto the fix**, which is what the
-        assertions below force rather than request.
-
-        **Why this scopes the headline.** The dangerous direction is masking:
-        evidence genuinely about a restricted entity is attributed to its own
-        slug, so a sighting-based check files it under "not a known entity"
-        rather than "unauthorized disclosure". This lane's full-packet walker
-        widens the channels read — and cannot correct an attribution. Only the
-        arm fix can.
-
-        So the claim this lane makes is precisely: **zero canonical-id
-        leakage, measured over sightings whose evidence attributions are
-        known-unsound pre-CHAOS-3627; to be re-derived post-fix.** This test
-        flips red at the same rebase that flips the pins above, which is what
-        forces the re-derivation rather than letting the caveat decay into a
-        footnote nobody re-checks.
-        """
-
-        sound = unsound = measurement_keys = 0
-        for seed in _subject_seeds():
-            packet = spine.investigate(seed).packet
-            for entry in packet.evidence_coverage.evidence_index:
-                record = world.EVIDENCE_BY_SLUG.get(entry.evidence.entity_id)
-                if record is None:
-                    # Measurement keys: a THIRD vocabulary. Counted rather
-                    # than skipped -- review found that skipping let a
-                    # partial vocabulary fix pass silently, because a fixed
-                    # entry stops being a known slug and simply vanishes from
-                    # the denominator.
-                    measurement_keys += 1
-                    continue
-                if entry.evidence.entity_id == record.entity_id:
-                    sound += 1
-                else:
-                    unsound += 1
-
-        # CARDINALITY, not a direction. `unsound > 0 and sound == 0` was
-        # tautological under a partial fix: entries that became sound would
-        # leave the slug vocabulary entirely and be skipped, so both halves
-        # stayed true while the defect shrank. Pinning the exact counts makes
-        # any movement -- in either direction -- loud.
-        assert (unsound, sound, measurement_keys) == (785, 0, 532), (
-            "the mis-attribution census moved from the documented "
-            f"785 unsound / 0 sound / 532 measurement-key entries to "
-            f"{unsound} / {sound} / {measurement_keys}. The zero-leakage "
-            "claim's scope has changed and must be RE-DERIVED; update the "
-            "CHAOS-3620 mis-attribution record with the new census"
-        )
-
-    def test_the_audit_can_therefore_never_be_clean_for_this_arm(self) -> None:
-        """The bottom line, stated where it cannot be missed.
-
-        Zero real leakage (proved throughout this module) and an audit that
-        still reports unclean. Until the vocabularies are reconciled, the
-        arm's ``zero_unauthorized_results`` column in any trial is a failure
-        it did not earn — and a genuine leak would be one line among dozens.
-        """
+    def test_the_audit_is_clean_for_this_arm(self) -> None:
+        """The reproduction this ledger recorded as impossible."""
 
         investigation = spine.investigate("team_cinder")
-        audit = audit_authorization(investigation.packet, world.PRINCIPAL_ANALYST)
-        assert not audit.unauthorized_disclosures, (
-            "a real unauthorized disclosure was found; this is no longer a "
-            f"vocabulary artifact: "
-            f"{sorted(item.entity_id for item in audit.unauthorized_disclosures)}"
+        audit = audit_authorization(
+            investigation.packet, world.PRINCIPAL_ANALYST, case_id="chaos_3620"
         )
-        assert not audit.is_clean, (
-            "the audit is now clean for a graph-arm packet -- the CHAOS-3620 "
-            "oracle-mismatch record must be updated and the gap closed"
-        )
+
+        assert audit.is_clean, audit.summary()

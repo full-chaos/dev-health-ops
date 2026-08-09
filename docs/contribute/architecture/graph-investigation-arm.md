@@ -265,9 +265,18 @@ derived, rebuildable projection data, so `down` genuinely removes it.
 
 ```bash
 export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
-export CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1     # a skipped live test now FAILS
+export CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1     # required: see below
 uv run pytest tests/context_fabric -q -p no:randomly
 ```
+
+**Both variables are required, and the second is not optional polish.**
+`CONTEXT_FABRIC_GRAPH_STORE_URI` is a *conditional keep* in
+`tests/_env_isolation.py` whose lane sentinel is
+`CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE`: the suite scrubs the URI unless the live
+lane has announced itself. Setting the URI alone therefore yields the loud
+skip rather than a live run — deliberately, so a URI that merely happened to
+be in someone's shell can never turn the unit tier into an unannounced live
+run that writes real projections.
 
 `CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1` is the load-bearing part. Every live
 test routes its availability decision through

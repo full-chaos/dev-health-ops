@@ -34,8 +34,12 @@ __all__ = ["LiveStoreStatus", "live_store_status", "require_live_store"]
 
 _COMPOSE_HINT = (
     "start it with `docker compose --profile graph-trial up -d "
-    "graph-trial-store` and export "
-    f"{TRIAL_STORE_URI_VAR}=falkor://127.0.0.1:6389"
+    f"graph-trial-store`, export {TRIAL_STORE_URI_VAR}=falkor://127.0.0.1:6389 "
+    f"AND set {REQUIRE_LIVE_FLAG}=1 -- the store URI is a conditional keep in "
+    "tests/_env_isolation.py whose lane sentinel is that flag, so the suite "
+    "scrubs the URI unless the live lane has announced itself. That is "
+    "deliberate: a URI that merely happened to be in your shell must never "
+    "turn into an unannounced live run"
 )
 
 

@@ -458,6 +458,18 @@ services:
   # that silently shared a port with the production cache would be exactly
   # the "isolated datastore" requirement violated at the first hop.
   #
+  # The port is a literal, not a shell interpolation, and deliberately so:
+  # tests/acceptance/test_ask_dev_compose.py::
+  # test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots
+  # requires every interpolation in this file to be triaged into the
+  # acceptance launcher's unset/export/ASK_DEV_ buckets, because an
+  # ambient shell value
+  # (e.g. from a direnv-loaded .env) can otherwise silently reach the
+  # acceptance stack's interpolation. A trial-only store needs no ambient
+  # port configurability, so removing the interpolation removes the hazard
+  # rather than annotating around it. Need a different port on your machine?
+  # Use a compose override file.
+  #
   # No named volume on purpose. The trial store holds only derived, rebuildable
   # projection data and the issue requires deterministic cleanup; keeping it
   # in the container's own writable layer means `down` genuinely removes it
@@ -474,7 +486,7 @@ services:
     environment:
       GRAPHITI_TELEMETRY_ENABLED: "false"
     ports:
-      - "${CONTEXT_FABRIC_GRAPH_STORE_PORT:-6389}:6379"
+      - "6389:6379"
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s

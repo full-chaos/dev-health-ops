@@ -90,3 +90,39 @@ def test_the_environments_actual_live_store_state_is_reported(record_property) -
         "available" if status.available else f"unavailable: {status.missing}",
     )
     assert status.available or status.missing
+
+
+def test_the_store_uri_is_a_conditional_keep_gated_on_the_require_flag() -> None:
+    """The suite scrubs the store URI unless the live lane announces itself.
+
+    Two things break if this wiring is ever dropped, and neither is visible
+    from a green suite:
+
+    * dropped from ``CONDITIONAL_KEEP_ENV_NAMES`` -> the URI is scrubbed
+      unconditionally, the live tests can never run again, and the only
+      symptom is a skip line nobody reads;
+    * moved to an unconditional keep -> a URI that merely happened to be in
+      someone's shell turns the unit tier into an unannounced live run that
+      writes real projections.
+
+    Asserted against the checked-in mapping rather than by observing a skip,
+    because the skip is what both failure modes look like.
+    """
+
+    from tests import _env_isolation
+
+    for name in (
+        "CONTEXT_FABRIC_GRAPH_STORE_URI",
+        "CONTEXT_FABRIC_GRAPH_STORE_PASSWORD",
+    ):
+        assert name in _env_isolation.SCRUB_ENV_NAMES, (
+            f"{name} must be scrubbed by default"
+        )
+        assert (
+            _env_isolation.CONDITIONAL_KEEP_ENV_NAMES.get(name) == REQUIRE_LIVE_FLAG
+        ), f"{name} must be kept only when {REQUIRE_LIVE_FLAG} announces the lane"
+
+    assert "GRAPHITI_TELEMETRY_ENABLED" in _env_isolation.SCRUB_ENV_NAMES
+    assert (
+        "GRAPHITI_TELEMETRY_ENABLED" not in _env_isolation.CONDITIONAL_KEEP_ENV_NAMES
+    ), "telemetry is forced off in code; no lane may re-enable it"

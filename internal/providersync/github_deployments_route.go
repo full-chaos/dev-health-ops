@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -237,6 +238,9 @@ func chooseDeploymentPullRequest(pulls []gitHubPullPayload, sha string) (*int, *
 
 func (row deploymentRow) validate(claim Claim) error {
 	if row.OrgID == "" || row.OrgID != claim.OrgID || row.RepoID == "" || len(row.RepoID) != 36 || row.DeploymentID == "" || row.DeployedAt == nil || row.LastSynced.IsZero() {
+		return providerfoundation.ErrInvalidScope
+	}
+	if row.PullRequestNumber != nil && uint64(*row.PullRequestNumber) > math.MaxUint32 {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil

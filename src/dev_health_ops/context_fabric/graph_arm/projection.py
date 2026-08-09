@@ -78,6 +78,7 @@ from .records import (
 )
 from .vocabulary import (
     EVIDENCE_HANDLE_PATTERN,
+    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
     AliasKind,
@@ -142,6 +143,7 @@ READBACK_ATTRIBUTE_KEYS: tuple[str, ...] = (
     # round trip is provenance the packet cannot cite: the builder mints its
     # own handle only where the source issued none, so a key that failed to
     # read back would silently restore the re-minting this fixed.
+    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
     "superseded_by",
@@ -385,8 +387,17 @@ def _validate_source_evidence(
 
     handle = attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
     source_id = attributes.get(SOURCE_EVIDENCE_ID_ATTRIBUTE)
-    if handle is None and source_id is None:
+    source_entity = attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
+    if handle is None and source_id is None and source_entity is None:
         return
+    if handle is not None and (not isinstance(source_entity, str) or not source_entity):
+        raise ProjectionError(
+            f"{where} carries a source-issued evidence handle with no "
+            f"{SOURCE_EVIDENCE_ENTITY_ATTRIBUTE}. The entry describing this "
+            "record must name the entity the RECORD is about, and the arm "
+            "will not re-derive that from whichever observation happens to "
+            "cite it"
+        )
     if handle is None or source_id is None:
         raise ProjectionError(
             f"{where} declares one half of the source evidence pair "

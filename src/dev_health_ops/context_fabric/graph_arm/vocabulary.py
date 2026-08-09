@@ -54,6 +54,7 @@ __all__ = [
     "ALL_GRAPH_OBSERVATION_KINDS",
     "EMITTABLE_ENTITY_KINDS",
     "EVIDENCE_HANDLE_PATTERN",
+    "SOURCE_EVIDENCE_ENTITY_ATTRIBUTE",
     "SOURCE_EVIDENCE_HANDLE_ATTRIBUTE",
     "SOURCE_EVIDENCE_ID_ATTRIBUTE",
     "AliasKind",
@@ -80,6 +81,24 @@ __all__ = [
 #: mints the handle exactly as it always did.
 SOURCE_EVIDENCE_HANDLE_ATTRIBUTE = "source_evidence_handle"
 SOURCE_EVIDENCE_ID_ATTRIBUTE = "source_evidence_id"
+
+#: The entity the source record the handle names is **about**.
+#:
+#: The third member of the pair, added in CHAOS-3627's fix round after both
+#: reviewers measured the same defect: an observation that CITES a record can
+#: be reached when the record itself is not, and the builder was describing
+#: the entry with the citing observation's subject while carrying the
+#: record's handle. 33 of 96 packets in the arm's own sweep -- 115 of 291 in
+#: the verifier's -- carried at least one entry whose ``entity_id``
+#: contradicted the world record its handle named, and the corpus oracle is
+#: structurally blind to it: it compares the handle's world record against
+#: the grant and the packet's entity against the world, never the two against
+#: each other.
+#:
+#: Carried rather than derived because the arm must not re-derive what a
+#: record is about -- that is the source's statement, and re-deriving it is
+#: the same class of mistake as re-minting the handle.
+SOURCE_EVIDENCE_ENTITY_ATTRIBUTE = "source_evidence_entity_id"
 
 #: The frozen contract's ``EvidenceHandle`` grammar: ``ev1_`` and 40 lowercase
 #: hex characters. Repeated here so an ingested handle can be refused at the

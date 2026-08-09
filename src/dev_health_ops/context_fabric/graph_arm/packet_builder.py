@@ -36,6 +36,7 @@ import os
 import uuid
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta
 
 from dev_health_ops.api.dev.contracts import FreshnessState
@@ -114,6 +115,7 @@ from .readback import (
     InvestigationReadout,
 )
 from .vocabulary import (
+    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
     GraphEntityKind,
@@ -618,25 +620,76 @@ def _evidence_record(
     sighting (``authorization.py:190``), so an observation slug there is a
     fabricated entity and forces the declared set to be widened to hide it.
 
-    Where a source names several subjects the first in the source's own
-    declared order is the subject of record, and ``supports_entity_ids``
-    continues to carry the full set. The world's own ``WorldEvidence`` is the
-    model for that rule: it names exactly one ``entity_id`` and lists nothing
-    else, so for every corpus record this reproduces the world's answer
-    exactly rather than approximating it.
+    Where the source declares what its record is about
+    (:data:`~.vocabulary.SOURCE_EVIDENCE_ENTITY_ATTRIBUTE`) that is the
+    answer, full stop. CHAOS-3627's fix round: the previous rule -- the first
+    subject of whichever observation the traversal happened to reach -- was
+    right whenever the record itself was reached and wrong whenever only a
+    citing observation was, which both reviewers measured at roughly a third
+    of packets. A citing observation's subject is what the CITATION is about;
+    it does not change what the RECORD is about.
+
+    Only where no source declares it does the arm fall back to the first
+    subject in the source's own declared order, with the full set carried in
+    ``supports_entity_ids``. That fallback exists for sources with no record
+    model at all, and the world's own ``WorldEvidence`` is the shape it
+    approximates: exactly one ``entity_id`` and nothing else.
     """
 
+    declared = observation.attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
     return EvidenceRecord(
         source_system="context_fabric_graph_arm",
         source_version=_SOURCE_CONTRACT_VERSION,
         entity_type=observation.kind.value,
-        entity_id=supports[0],
+        entity_id=declared if declared is not None else supports[0],
         display_label=observation.title,
         observed_at=observation.observed_at,
         freshness=_freshness(source_state),
         provenance="structured record projected into the trial graph",
         confidence=1.0,
         repository_ids=observation.repository_ids,
+    )
+
+
+def _mint_handle(
+    signer: EvidenceReferenceSigner,
+    org_id: str,
+    observation: DiscoveredObservation,
+    record: EvidenceRecord,
+) -> str:
+    """A handle for a record whose source issued none.
+
+    Minted through the platform's own ``EvidenceReferenceSigner`` -- not a
+    parallel scheme -- but over a record identified by its **canonical id**
+    rather than by the entity it is about.
+
+    That substitution is the arm-side fix for CHAOS-3633 and it is deliberate.
+    ``EvidenceReferenceSigner._payload`` identifies a record by ``(org,
+    source_system, source_version, entity_type, entity_id, repositories)``,
+    and ``entity_id`` on the wire is the entity the evidence is *about*. Two
+    distinct records of one kind about one entity therefore mint the SAME
+    handle, and since the frozen contract refuses a repeated handle in the
+    index, the second one killed the entire packet -- measured on a
+    legitimate handle-less world (the arm's own fixtures hold exactly such a
+    pair: ``dec_auth_1`` superseded by ``dec_auth_2``). A denial of service on
+    valid input, manufactured by the arm's own mint.
+
+    The platform fix belongs in ``evidence_service`` and is tracked as
+    CHAOS-3633; this arm must not reach into it. So the arm signs over the
+    record's identity, which is what the payload needed all along.
+
+    **The consequence, stated rather than buried**: the emitted evidence ref
+    no longer round-trips through ``signer.verify``, because the emitted
+    ``entity_id`` is the entity while the signed one is the record. Verifying
+    a minted handle means re-deriving it through this function -- which is
+    what ``test_chaos_3617_packet_contract`` now does. The property that
+    matters is unchanged: the handle comes from the evidence service's own
+    signing function, over this organization's key, and no scheme this arm
+    invented.
+    """
+
+    return signer.issue(
+        org_id, dataclasses_replace(record, entity_id=observation.canonical_id)
     )
 
 
@@ -956,6 +1009,13 @@ def build_packet(
     candidate_ids = {item.canonical_id for item in candidates}
 
     indexable: list[tuple[DiscoveredObservation, tuple[str, ...]]] = []
+    #: Observations whose source record is about an entity outside the
+    #: caller's authorized set. Counted rather than silently dropped -- an
+    #: unexplained gap in evidence coverage is the fault this whole lane
+    #: keeps finding -- and disclosed through the evidence section's own
+    #: authorization counter, because "the caller's grant does not cover the
+    #: entity this record is about" is exactly what that number reports.
+    unattributable: list[str] = []
     for observation in readout.observations:
         # Named distinctly from the cohort guard's ``outside``: the
         # guard-injection harness anchors on source lines, and a second
@@ -985,6 +1045,18 @@ def build_packet(
             # Unattached evidence displaces lineage. The contract refuses to
             # index it and so does this builder.
             continue
+        # The entry will be described by the entity the SOURCE RECORD is
+        # about, so that entity has to be one this caller may be told about.
+        # Naming it otherwise would put an unauthorized id in a field the
+        # contract checks against the declared set and the corpus oracle
+        # reads as an entity sighting. Dropping the entry is the only honest
+        # option left: the alternatives are naming the wrong entity, which is
+        # the defect this fix round exists to remove, or naming a right one
+        # the caller may not see.
+        declared_entity = observation.attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
+        if declared_entity is not None and declared_entity not in authorized_lookup:
+            unattributable.append(observation.canonical_id)
+            continue
         indexable.append((observation, supports))
 
     # Two passes, because an observation is sorted by its own canonical id
@@ -997,14 +1069,23 @@ def build_packet(
         record = _evidence_record(observation, supports, source_state)
         handle = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
         if handle is None:
-            handle = signer.issue(readout.org_id, record)
+            handle = _mint_handle(signer, readout.org_id, observation, record)
         if handle in evidence_groups:
+            # Only reachable for a genuinely repeated SOURCE-issued handle
+            # now: the arm's own mint discriminates by record identity (see
+            # ``_mint_handle``). Refusing beats merging here because two
+            # records the SOURCE gave one identity cannot be told apart by
+            # anything downstream, and presenting them as one piece of
+            # evidence would lose a record silently.
             raise ValueError(
                 f"observation {observation.canonical_id!r} carries a source "
                 f"evidence handle already issued for "
                 f"{evidence_groups[handle].observation_id!r}. One handle names "
                 "one record; merging two records under it would present them "
-                "to a consumer as the same evidence"
+                "to a consumer as the same evidence. The platform mint cannot "
+                "separate two same-kind records about one entity either -- "
+                "that is CHAOS-3633, and this arm works around it rather than "
+                "reproducing it"
             )
         evidence_groups[handle] = _EvidenceGroup(
             observation_id=observation.canonical_id,
@@ -1401,7 +1482,7 @@ def build_packet(
         conflicts=(),
         limitations=tuple(limitations),
         clarification_needs=(),
-        authorization_filtered_count=0,
+        authorization_filtered_count=len(unattributable),
         evidence_truncated=readout.evidence_truncated,
         truncation_reason=readout.evidence_truncation_reason,
     )

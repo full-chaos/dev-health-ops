@@ -22,6 +22,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from dev_health_ops.api.dev.contracts import FreshnessState
+from dev_health_ops.api.dev.evidence_service import EvidenceRecord
 from dev_health_ops.api.dev.investigation_contract import (
     INVESTIGATION_CONTRACT_MODELS,
     TRIAL_SOURCE_ALLOWLIST,
@@ -363,17 +365,47 @@ class TestEvidenceIdentity:
     def test_the_arm_mints_a_platform_handle_when_the_source_issues_none(
         self, alpha_projection, signer
     ) -> None:
-        """The fallback branch, observed rather than assumed.
+        r"""The fallback branch, observed rather than assumed.
 
-        Re-signing through the same ``EvidenceReferenceSigner`` the evidence
+        Re-deriving through the same ``EvidenceReferenceSigner`` the evidence
         service uses is the only check that means anything for a handle the
         arm mints: it proves the arm did not invent a parallel scheme.
+
+        Re-derived rather than ``signer.verify``\ ed, and the difference is
+        CHAOS-3627's fix round. The arm signs a minted handle over the
+        RECORD's canonical id while the emitted ``entity_id`` is the entity
+        the evidence is about, because the platform payload uses one field for
+        both and two same-kind records about one entity otherwise collide --
+        which killed whole packets on legitimate handle-less worlds
+        (CHAOS-3633). ``verify`` recomputes from the emitted fields and so
+        cannot see the substitution; this asserts the stronger thing, that the
+        handle is byte-identical to what the service's own signing function
+        produces for that record.
         """
 
-        packet = _packet(_unissued(alpha_projection, _UNISSUED), signer)
+        readout = _unissued(alpha_projection, _UNISSUED)
+        packet = _packet(readout, signer)
         entry = _entry_for(packet, _UNISSUED)
+        observation = next(
+            item for item in readout.observations if item.canonical_id == _UNISSUED
+        )
 
-        assert signer.verify(packet.organization_id, entry.evidence)
+        expected = signer.issue(
+            packet.organization_id,
+            EvidenceRecord(
+                source_system=entry.evidence.source_system,
+                source_version=entry.evidence.source_version,
+                entity_type=entry.evidence.entity_type,
+                entity_id=observation.canonical_id,
+                display_label=entry.evidence.display_label,
+                observed_at=entry.evidence.observed_at,
+                freshness=FreshnessState(entry.evidence.freshness),
+                provenance=entry.evidence.provenance,
+                confidence=entry.evidence.confidence,
+                repository_ids=tuple(entry.evidence.repository_ids),
+            ),
+        )
+        assert entry.evidence.evidence_ref_id == expected
 
     def test_a_minted_handle_for_another_organization_does_not_verify(
         self, alpha_projection, signer
@@ -386,10 +418,32 @@ class TestEvidenceIdentity:
         one.
         """
 
-        packet = _packet(_unissued(alpha_projection, _UNISSUED), signer)
+        readout = _unissued(alpha_projection, _UNISSUED)
+        packet = _packet(readout, signer)
         entry = _entry_for(packet, _UNISSUED)
+        observation = next(
+            item for item in readout.observations if item.canonical_id == _UNISSUED
+        )
 
-        assert not signer.verify("org_someone_else", entry.evidence)
+        def mint(org_id: str) -> str:
+            return signer.issue(
+                org_id,
+                EvidenceRecord(
+                    source_system=entry.evidence.source_system,
+                    source_version=entry.evidence.source_version,
+                    entity_type=entry.evidence.entity_type,
+                    entity_id=observation.canonical_id,
+                    display_label=entry.evidence.display_label,
+                    observed_at=entry.evidence.observed_at,
+                    freshness=FreshnessState(entry.evidence.freshness),
+                    provenance=entry.evidence.provenance,
+                    confidence=entry.evidence.confidence,
+                    repository_ids=tuple(entry.evidence.repository_ids),
+                ),
+            )
+
+        assert entry.evidence.evidence_ref_id == mint(packet.organization_id)
+        assert entry.evidence.evidence_ref_id != mint("org_someone_else")
 
     def test_every_indexed_item_supports_something_in_the_packet(self, packet) -> None:
         known = {entity.entity_id for entity in packet.related_context.entities}

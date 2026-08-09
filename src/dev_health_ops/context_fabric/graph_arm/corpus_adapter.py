@@ -61,6 +61,7 @@ from .records import (
     UnstructuredDocumentRecord,
 )
 from .vocabulary import (
+    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
     AliasKind,
@@ -248,6 +249,7 @@ def corpus_batch(tenant_id: str) -> IngestionBatch:
                     # the pair is its own slug.
                     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE: evidence.handle,
                     SOURCE_EVIDENCE_ID_ATTRIBUTE: slug,
+                    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE: evidence.entity_id,
                 },
             )
         )
@@ -296,6 +298,12 @@ def corpus_batch(tenant_id: str) -> IngestionBatch:
             # load), which is exactly the distinction the oracle reads.
             SOURCE_EVIDENCE_HANDLE_ATTRIBUTE: backing.handle,
             SOURCE_EVIDENCE_ID_ATTRIBUTE: measurement.evidence_slug,
+            # The entity the RECORD is about, which is routinely NOT the
+            # entity the measurement is about: an incident on a service backs
+            # a team's incident load. Describing the entry with the
+            # measurement's subject while carrying the record's handle is the
+            # mis-attribution both reviewers measured.
+            SOURCE_EVIDENCE_ENTITY_ATTRIBUTE: backing.entity_id,
         }
         if measurement.cohort_median is not None:
             measured["measurement_cohort_median"] = measurement.cohort_median

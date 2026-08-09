@@ -233,6 +233,15 @@ class TestEvidenceCitesTheHandleItWasIssued:
         assert not cited - minted, (
             f"handles the world never minted: {sorted(cited - minted)}"
         )
+        # Codex #5: set membership alone would accept a PERMUTATION of valid
+        # handles among same-tenant observations. Exact issued-for pairing is
+        # the property that matters, so it is what is asserted: each cited
+        # handle must be the one the world issued for the record the entry
+        # says it is about.
+        for entry in packet.evidence_coverage.evidence_index:
+            record = world.EVIDENCE_BY_HANDLE[entry.evidence.evidence_ref_id]
+            assert record.handle == world.evidence_handle(record.slug)
+            assert entry.evidence.entity_id == record.entity_id
 
     def test_no_entry_names_an_observation_as_the_entity_it_is_about(
         self, helio, signer
@@ -300,17 +309,25 @@ class TestEvidenceCitesTheHandleItWasIssued:
         ]
         assert len(matching) == 1
 
-    def test_a_citing_observation_alone_still_carries_the_source_handle(
+    def test_a_citing_observation_alone_still_names_the_records_own_entity(
         self, helio, signer
     ) -> None:
         """Input symmetry: seed the OTHER end of the same directed link.
 
         At one hop from ``proj_pulse`` the measurement is reached and the
         record it cites is not, because that record is about a service the
-        traversal never got to. The handle is still the world's -- the source
-        issued it, and the arm carries what it was issued -- while the entity
-        the entry is about falls back to the subject the citing observation
-        does name.
+        traversal never got to. The handle is still the world's, and so is the
+        entity the entry is about.
+
+        **This test previously asserted the opposite**, pinning
+        ``entity_id == "proj_pulse"`` -- the citing observation's subject --
+        as correct. Both reviewers of PR #1617 measured that as a defect and
+        the orchestrator overruled the pin: the arm's own sweep found 33 of 96
+        packets carrying at least one entry whose ``entity_id`` contradicted
+        the world record its handle named, and the corpus oracle is blind to
+        it because it compares the handle's record against the grant and the
+        packet's entity against the world, never the two against each other.
+        What a citation is about does not change what the record is about.
         """
 
         readout = _read(helio, "proj_pulse", max_hops=1)
@@ -325,7 +342,14 @@ class TestEvidenceCitesTheHandleItWasIssued:
         handle = world.EVIDENCE_BY_SLUG[_BACKING_RECORD].handle
         entry = _entry_by_handle(packet, handle)
 
-        assert entry.evidence.entity_id == "proj_pulse"
+        assert entry.evidence.entity_id == (
+            world.EVIDENCE_BY_SLUG[_BACKING_RECORD].entity_id
+        ), (
+            "the packet contradicts the world record its handle names: says "
+            f"{entry.evidence.entity_id}, record is about "
+            f"{world.EVIDENCE_BY_SLUG[_BACKING_RECORD].entity_id}"
+        )
+        assert entry.evidence.entity_id == _BACKING_SUBJECT
         assert audit_authorization(
             packet, world.PRINCIPAL_ANALYST, case_id="chaos_3627_symmetry"
         ).is_clean
@@ -400,7 +424,8 @@ class TestProvenanceIsRefusedRatherThanRepaired:
 
     def test_a_handle_with_no_record_id_is_refused(self) -> None:
         batch = self._observation(
-            source_evidence_handle=world.evidence_handle("rev_probe")
+            source_evidence_handle=world.evidence_handle("rev_probe"),
+            source_evidence_entity_id="proj_probe",
         )
         with pytest.raises(ProjectionError, match="one half of the source evidence"):
             build_projection(batch)
@@ -426,6 +451,7 @@ class TestProvenanceIsRefusedRatherThanRepaired:
         batch = self._observation(
             source_evidence_handle="EV1_NOT-THE-GRAMMAR",
             source_evidence_id="rev_probe",
+            source_evidence_entity_id="proj_probe",
         )
         with pytest.raises(ProjectionError, match="EvidenceHandle grammar"):
             build_projection(batch)
@@ -479,6 +505,166 @@ class TestProvenanceIsRefusedRatherThanRepaired:
             adapter.corpus_batch(world.ORG_HELIO)
 
 
+class TestTheFallbackMintDiscriminatesRecords:
+    """A handle-less source must not brick packet production.
+
+    CHAOS-3627 fix round, codex #3 / verifier F4. The platform mint identifies
+    a record by ``(org, source_system, source_version, entity_type, entity_id,
+    repositories)`` and ``entity_id`` is the ENTITY, so two same-kind records
+    about one entity minted the same handle — the contract refuses a repeated
+    index handle, and the arm's refusal then killed the whole packet. On a
+    legitimate world. The arm's own fixtures hold exactly such a pair on
+    purpose: ``dec_auth_1`` superseded by ``dec_auth_2``, both decisions about
+    ``proj_nightfall_migration``.
+
+    The previous collision test never reached this branch — it copied a
+    carried handle onto a second observation, which exercises duplicate SOURCE
+    provenance, not the fallback mint. Both are tested now, and they must stay
+    distinct: one is a refusal that is correct, the other was a defect.
+    """
+
+    def _handle_less(self, batch):
+        return dataclasses.replace(
+            batch,
+            observations=tuple(
+                dataclasses.replace(
+                    observation,
+                    attributes={
+                        key: value
+                        for key, value in observation.attributes.items()
+                        if not key.startswith("source_evidence_")
+                    },
+                )
+                for observation in batch.observations
+            ),
+        )
+
+    def test_a_handle_less_world_with_two_same_kind_records_still_builds(
+        self, signer
+    ) -> None:
+        from dev_health_ops.context_fabric.graph_arm import fixtures
+
+        batch = self._handle_less(fixtures.alpha_batch())
+        colliding = [
+            observation
+            for observation in batch.observations
+            if observation.kind is GraphObservationKind.DECISION
+        ]
+        assert len(colliding) >= 2, "no same-kind pair to collide; vacuous"
+        assert (
+            len({observation.subjects[0].canonical_id for observation in colliding})
+            == 1
+        ), "the pair is no longer about one entity; vacuous"
+
+        projection = build_projection(batch)
+        readout = asyncio.run(
+            ProjectionGraphReader(projection).neighbourhood(
+                org_id=fixtures.ALPHA_ORG,
+                seed_canonical_ids=["proj_nightfall_migration"],
+                authorized_entity_ids=fixtures.alpha_authorized_ids(),
+                max_hops=3,
+            )
+        )
+
+        packet = build_packet(
+            readout=readout,
+            job=JobContext(
+                job_id="job_chaos_3627_fallback",
+                question_family=QuestionFamilyID.PROJECT_STATUS_DRIVERS,
+                job_statement="What is the current state of this subject?",
+                comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+                window_start=fixtures.WINDOW_START,
+                window_end=fixtures.WINDOW_END,
+            ),
+            watermark=IndexWatermark(
+                indexed_through=fixtures.WINDOW_END,
+                projected_at=fixtures.WINDOW_END,
+                records_indexed=len(readout.entities),
+            ),
+            signer=signer,
+            trial=TrialContext(run_id=_RUN_ID),
+            produced_at=_PRODUCED_AT,
+        )
+
+        indexed = {
+            entry.evidence.evidence_ref_id
+            for entry in packet.evidence_coverage.evidence_index
+        }
+        assert len(indexed) == len(packet.evidence_coverage.evidence_index), (
+            "the fallback mint collided again"
+        )
+        assert len(indexed) >= len(colliding), (
+            "the colliding records did not both reach the index"
+        )
+
+
+class TestTheMergeBoundIsPinned:
+    """The measured bound on the merge, in place of the denial.
+
+    PR #1617 review: I claimed the shared-handle merge was "not a weakening".
+    That was asserted without measurement and is withdrawn. The verifier
+    measured what it actually admits — 9 of 19 handles merge, 3 gain a subject
+    beyond the record's own — and every one of those arrives through a link
+    the WORLD asserts: a measurement naming the record that evidences it.
+
+    So the bound is: an entry's ``supports_entity_ids`` may exceed the
+    record's own subjects only by the subjects of observations that name THIS
+    record as their source. Nothing else may join, and this pins it
+    structurally so any future widening goes red rather than being argued
+    about again.
+    """
+
+    def test_every_extra_subject_arrives_through_a_declared_source_link(
+        self, helio, signer
+    ) -> None:
+        readout = _read(helio, world.TEAM_CINDER)
+        packet = _packet(readout, signer)
+
+        by_source: dict[str, set[str]] = {}
+        own: dict[str, set[str]] = {}
+        for observation in readout.observations:
+            source_id = observation.attributes.get("source_evidence_id")
+            if source_id is None:
+                continue
+            target = own if source_id == observation.canonical_id else by_source
+            target.setdefault(source_id, set()).update(
+                observation.subject_canonical_ids
+            )
+
+        merged = 0
+        for entry in packet.evidence_coverage.evidence_index:
+            record = world.EVIDENCE_BY_HANDLE.get(entry.evidence.evidence_ref_id)
+            if record is None:
+                continue
+            permitted = own.get(record.slug, set()) | by_source.get(record.slug, set())
+            extra = set(entry.supports_entity_ids) - {record.entity_id}
+            if extra:
+                merged += 1
+            assert not extra - permitted, (
+                f"{record.slug} gained {sorted(extra - permitted)}, which no "
+                "observation declared this record as its source for"
+            )
+
+        assert merged, "no entry merged at all; this bound would be vacuous"
+
+    def test_the_entry_still_describes_the_record_not_the_citation(
+        self, helio, signer
+    ) -> None:
+        """What makes the merge visible rather than silent.
+
+        A merged entry names the record's own entity, so a reader can see that
+        the extra subjects are additions to it rather than a redefinition of
+        what the evidence is.
+        """
+
+        packet = _packet(_read(helio, world.TEAM_CINDER), signer)
+
+        for entry in packet.evidence_coverage.evidence_index:
+            record = world.EVIDENCE_BY_HANDLE.get(entry.evidence.evidence_ref_id)
+            if record is not None:
+                assert entry.evidence.entity_id == record.entity_id
+
+
 class TestTheInternalInvariantsSurviveTheNarrowing:
     """The narrowed field must not cost the arm a guard.
 
@@ -494,7 +680,12 @@ class TestTheInternalInvariantsSurviveTheNarrowing:
         tampered = dataclasses.replace(
             readout, authorized_entity_ids=(world.TEAM_CINDER,)
         )
-        with pytest.raises(PermissionError, match="not in the authorized entity set"):
+        # Matched on the PATH-shaped message, not the shared closing clause.
+        # Verifier F7: the evidence twin raises the same exception type ending
+        # in the same words, so the loose match was satisfied by either guard
+        # -- the identical hazard that made this test's sibling in
+        # test_chaos_3617_authorization.py report a SURVIVED mutation.
+        with pytest.raises(PermissionError, match=r"path p\d+ traverses"):
             _packet(tampered, signer)
 
     def test_an_observation_about_an_unauthorized_entity_is_refused(

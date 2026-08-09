@@ -299,28 +299,39 @@ MUTATIONS: tuple[Mutation, ...] = (
             "-- and no oracle -- can join the citation back to the record it "
             "names. This is the CHAOS-3627 defect in its original form: the "
             "CHAOS-3616 authorization oracle reported all 31 cited handles on "
-            "the analyst/team_cinder path as fabricated. NOTE where the "
-            "mutation dies, because it says something extra: re-minting is "
-            "not even self-consistent. The platform mint identifies a record "
-            "by (org, source_system, source_version, entity_type, entity_id, "
-            "repositories), and entity_id is the ENTITY the evidence is "
-            "about, so two corpus records of one kind about one entity mint "
-            "the same handle and the arm refuses rather than merging them"
+            "the analyst/team_cinder path as fabricated.\n"
+            "\n"
+            "DOUBLE DISABLE, and the reason is the point (fix round, verifier "
+            "F6). Disabling only the carry branch used to die in the SIBLING "
+            "collision guard, because two corpus records of one kind about "
+            "one entity re-mint to the same handle -- so the recorded RED "
+            "evidenced the sibling's message and said nothing about whether "
+            "the carry branch itself was covered. Both are disabled together "
+            "here, deliberately widening the mutation, so the expected reason "
+            "below is the OWNING guard's own message. This is the one place "
+            "in this harness where a mutation disables more than the guard "
+            "under test, and it is because a narrower one proved less."
         ),
         path=SRC / "packet_builder.py",
         anchor=(
             "        handle = observation.attributes.get("
             "SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)\n"
             "        if handle is None:\n"
-            "            handle = signer.issue(readout.org_id, record)\n"
+            "            handle = _mint_handle(signer, readout.org_id, "
+            "observation, record)\n"
+            "        if handle in evidence_groups:"
         ),
-        replacement="        handle = signer.issue(readout.org_id, record)\n",
+        replacement=(
+            "        handle = _mint_handle(signer, readout.org_id, "
+            "observation, record)\n"
+            "        if False:"
+        ),
         tests=(
             f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
             "TestEvidenceCitesTheHandleItWasIssued::"
             "test_every_corpus_originated_entry_carries_the_worlds_handle",
         ),
-        expect_failure="carries a source evidence handle already issued for",
+        expect_failure="handles the world never minted",
     ),
     Mutation(
         mutation_id="evidence-entity-is-the-observations-own-slug",
@@ -336,7 +347,7 @@ MUTATIONS: tuple[Mutation, ...] = (
             "mutation below"
         ),
         path=SRC / "packet_builder.py",
-        anchor="        entity_id=supports[0],",
+        anchor=("        entity_id=declared if declared is not None else supports[0],"),
         replacement="        entity_id=observation.canonical_id,",
         tests=(
             f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
@@ -397,6 +408,71 @@ MUTATIONS: tuple[Mutation, ...] = (
             "test_a_record_id_with_no_handle_is_refused",
         ),
         expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="observation-subjects-narrowed-instead-of-refused",
+        defect=(
+            "an observation about an entity outside the caller's grant is "
+            "quietly intersected away instead of refused, so a reader bug -- "
+            "or a second reader -- can hand the builder unauthorized material "
+            "and get back a packet that looks clean. Codex #4 on PR #1617: "
+            "this invariant moved INTO the arm when the declared set was "
+            "narrowed, and no mutation covered it, so the 80/80 result did "
+            "not establish that the newly internalised guard was killed"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        if unauthorized_subjects:",
+        replacement="        if False:",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheInternalInvariantsSurviveTheNarrowing::"
+            "test_an_observation_about_an_unauthorized_entity_is_refused",
+        ),
+        expect_failure="DID NOT RAISE",
+    ),
+    Mutation(
+        mutation_id="evidence-entry-describes-the-citation-not-the-record",
+        defect=(
+            "an evidence entry is described by whichever observation the "
+            "traversal happened to reach rather than by the record its handle "
+            "names, so the packet contradicts the world record it cites. "
+            "Measured at 33/96 packets by this lane and 115/291 by the "
+            "independent verifier, and invisible to the corpus oracle, which "
+            "compares the handle's record against the grant and the packet's "
+            "entity against the world but never the two against each other"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor="        entity_id=declared if declared is not None else supports[0],",
+        replacement="        entity_id=supports[0],",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestEvidenceCitesTheHandleItWasIssued::"
+            "test_a_citing_observation_alone_still_names_the_records_own_entity",
+        ),
+        expect_failure="contradicts the world record its handle names",
+    ),
+    Mutation(
+        mutation_id="fallback-mint-loses-record-identity",
+        defect=(
+            "the arm's own mint identifies a record by the entity it is about "
+            "rather than by the record, so two same-kind records about one "
+            "entity collide and the refusal kills the whole packet on a "
+            "legitimate handle-less world. The arm-side face of CHAOS-3633, "
+            "and a denial of service on valid input manufactured by the arm"
+        ),
+        path=SRC / "packet_builder.py",
+        anchor=(
+            "    return signer.issue(\n"
+            "        org_id, dataclasses_replace(record, "
+            "entity_id=observation.canonical_id)\n"
+            "    )"
+        ),
+        replacement="    return signer.issue(org_id, record)",
+        tests=(
+            f"{TESTS}/test_chaos_3627_arm_vocabulary.py::"
+            "TestTheFallbackMintDiscriminatesRecords",
+        ),
+        expect_failure="already issued for",
     ),
     Mutation(
         mutation_id="graphiti-telemetry-left-on",

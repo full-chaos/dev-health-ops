@@ -37,6 +37,7 @@ from .records import (
     UnstructuredDocumentRecord,
 )
 from .vocabulary import (
+    SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
     SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
     SOURCE_EVIDENCE_ID_ATTRIBUTE,
     AliasKind,
@@ -109,6 +110,10 @@ def _issued(
                     observation.canonical_id
                 ),
                 SOURCE_EVIDENCE_ID_ATTRIBUTE: observation.canonical_id,
+                # This world's records are about their own first subject.
+                SOURCE_EVIDENCE_ENTITY_ATTRIBUTE: (
+                    observation.subjects[0].canonical_id
+                ),
             },
         )
         for observation in observations

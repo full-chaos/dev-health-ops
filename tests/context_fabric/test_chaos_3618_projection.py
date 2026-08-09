@@ -58,10 +58,13 @@ from dev_health_ops.api.dev.investigation_contract import (
     INVESTIGATION_CONTRACT_MODELS,
     QUESTION_FAMILY_REGISTRY,
     ComparisonShape,
+    DriverStanding,
+    InvestigationEvidenceEntry,
     InvestigationOutcome,
     PacketLimitationKind,
     PacketSection,
     QuestionFamilyID,
+    RelevanceState,
     SubjectCommitmentState,
     SubjectDiscovery,
     UnresolvedMention,
@@ -544,17 +547,38 @@ def test_an_unresolved_reference_never_widens_into_a_substantive_answer() -> Non
 
 
 def test_evidence_outside_the_authorized_set_is_dropped_not_admitted() -> None:
-    """Widening the authorized set to fit the evidence would be a rubber stamp."""
+    """Widening the authorized set to fit the evidence would be a rubber stamp.
+
+    Calls the filter directly. Two earlier versions of this test went
+    through the whole projection and neither could prove the filter: first
+    the contract's ``validate_every_entity_is_authorized`` rejected the
+    packet, then (once the projection became total) the wrapper turned that
+    rejection into a gap and ``assert packet is not None`` fired. Both times
+    the plant "killed" the test without the filter ever running.
+    """
+
+    rogue = _evidence("proj-999", _evidence_handle("evidence-rogue"))
+    entry = InvestigationEvidenceEntry(
+        evidence=rogue,
+        source_class=SourceClass.WORK_ITEM,
+        supports_subject_ids=("proj-1",),
+        relevance=RelevanceState.CURRENT,
+    )
+    kept, filtered = proj._restrict_evidence_to_authorized(
+        (entry,), authorized=frozenset({"proj-1"})
+    )
+    assert kept == (), "GUARD unauthorized_evidence_is_dropped"
+    assert filtered == 1, "GUARD unauthorized_evidence_is_counted"
+
+
+def test_a_packet_with_dropped_evidence_still_validates() -> None:
+    """Defence in depth: the contract agrees with the producer."""
 
     packet = proj.project_native_investigation(
         _payload(evidence=(_evidence("proj-999", _evidence_handle("evidence-rogue")),))
     ).packet
     assert packet is not None
     _validate(packet)
-    indexed = {
-        entry.evidence.entity_id for entry in packet.evidence_coverage.evidence_index
-    }
-    assert "proj-999" not in indexed
 
 
 def test_a_driver_citing_an_unindexed_handle_is_not_asserted() -> None:
@@ -706,15 +730,8 @@ def test_an_unresolved_mention_blocks_driver_assertion_even_without_lineage_need
     }
 
 
-def test_may_assert_is_a_named_decision_not_a_downstream_consequence() -> None:
-    """Assert the DECISION, so a plant against it fails on this assertion.
-
-    The original suite only observed ``_may_assert`` through the final
-    packet, which meant removing it failed inside the contract validator —
-    proving the contract's invariant, not the projection's.
-    """
-
-    discovery_clean = SubjectDiscovery(
+def _discovery(*, unresolved: bool) -> SubjectDiscovery:
+    base = SubjectDiscovery(
         schema_version="ask_dev_subject_discovery.v1",
         candidates=(),
         unresolved_mentions=(),
@@ -722,7 +739,9 @@ def test_may_assert_is_a_named_decision_not_a_downstream_consequence() -> None:
         authorization_filtered_count=0,
         candidates_truncated=False,
     )
-    discovery_unresolved = discovery_clean.model_copy(
+    if not unresolved:
+        return base
+    return base.model_copy(
         update={
             "unresolved_mentions": (
                 UnresolvedMention(
@@ -733,27 +752,82 @@ def test_may_assert_is_a_named_decision_not_a_downstream_consequence() -> None:
             )
         }
     )
-    # Clarification family requires no related context.
-    assert (
-        proj._may_assert(
-            family=QuestionFamilyID.CLARIFICATION_AND_NO_MATCH,
-            discovery=discovery_clean,
-        )
-        is True
-    )
-    # ...but an unresolved mention still forbids assertion.
-    assert (
-        proj._may_assert(
-            family=QuestionFamilyID.CLARIFICATION_AND_NO_MATCH,
-            discovery=discovery_unresolved,
-        )
-        is False
-    )
-    # ...and a lineage-requiring family forbids it regardless.
+
+
+def test_a_lineage_requiring_family_forbids_assertion() -> None:
+    """Assert the DECISION, so a plant against it fails on this assertion.
+
+    The original suite observed ``_may_assert`` only through the final
+    packet, which meant removing it failed inside the contract validator —
+    proving the contract's invariant, not the projection's. One invariant
+    per test, so one plant cannot be satisfied by a different guard firing
+    first.
+    """
+
     assert (
         proj._may_assert(
             family=QuestionFamilyID.DECLARED_VERSUS_ACTUAL,
-            discovery=discovery_clean,
+            discovery=_discovery(unresolved=False),
         )
         is False
+    ), "GUARD lineage_family_forbids_assertion"
+
+
+def test_an_unresolved_mention_forbids_assertion_even_without_lineage_need() -> None:
+    """The clarification family needs no related context, so the family half
+    of the decision does not fire. The unresolved-mention half must."""
+
+    # Control: with everything resolved, this family DOES permit assertion,
+    # so the test below is not passing for an unrelated reason.
+    assert (
+        proj._may_assert(
+            family=QuestionFamilyID.CLARIFICATION_AND_NO_MATCH,
+            discovery=_discovery(unresolved=False),
+        )
+        is True
     )
+    assert (
+        proj._may_assert(
+            family=QuestionFamilyID.CLARIFICATION_AND_NO_MATCH,
+            discovery=_discovery(unresolved=True),
+        )
+        is False
+    ), "GUARD unresolved_mention_forbids_assertion"
+
+
+def test_driver_analysis_drops_evidence_handles_the_packet_never_indexed() -> None:
+    """Assert the DEMOTION directly, not the packet the contract would reject.
+
+    A driver resting on a handle nobody can dereference is an unsupported
+    attribution. The end-to-end test observes this through the final packet,
+    where the contract's own evidence-closure rule also fires — so a plant
+    removing this filter used to fail inside the validator and never reach
+    the projection's own behaviour. This calls ``_driver_analysis`` directly
+    with an empty indexed set, so the only thing that can fail is the filter.
+    """
+
+    unindexed = _evidence_handle("never-indexed")
+    limitations = proj._Limitations()
+    drivers = proj._driver_analysis(
+        _payload(
+            investigation_result=_investigation_result(
+                deficiency_findings=(
+                    _deficiency_finding(evidence_ref_ids=(unindexed,)),
+                )
+            )
+        ),
+        subject_ids=["proj-1"],
+        evidence_handles=frozenset(),
+        may_assert=True,
+        limitations=limitations,
+    )
+    cited = {
+        handle
+        for candidate in drivers.candidates
+        for handle in candidate.supporting_evidence_ids
+    }
+    assert unindexed not in cited, "GUARD unindexed_handle_never_supports_a_driver"
+    assert all(
+        candidate.standing is not DriverStanding.CONTRIBUTING_DRIVER
+        for candidate in drivers.candidates
+    ), "GUARD unindexed_handle_never_earns_contributing"

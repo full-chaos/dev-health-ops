@@ -177,7 +177,9 @@ def test_a_packet_citing_uncoined_evidence_is_rejected() -> None:
         run_id=_RUN,
         canonical_evidence=[],  # canonical services minted nothing
     )
-    assert record.status is seam.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED
+    assert record.status is seam.InvestigationShadowStatus.CANONICAL_BYPASS_REJECTED, (
+        "GUARD uncoined_evidence_is_rejected"
+    )
     assert record.detail is not None
     assert "never minted" in record.detail
 
@@ -312,7 +314,9 @@ def test_no_narrative_provider_is_reachable_from_the_seam() -> None:
 def test_a_recorded_evaluation_without_an_arm_is_unconstructable() -> None:
     """The invariant is enforced, not merely satisfied by today's callers."""
 
-    with pytest.raises(ValueError, match="must name the arm"):
+    with pytest.raises(
+        ValueError, match="must name the arm"
+    ):  # GUARD arm_attribution_required
         seam.InvestigationShadowRecord(
             run_id=_RUN,
             status=seam.InvestigationShadowStatus.RECORDED,

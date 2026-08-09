@@ -122,6 +122,7 @@ def test_available_relationship_has_an_expressible_endpoint_pair(
     """
 
     assert _has_fully_native_pair(relationship), (
+        "GUARD available_needs_expressible_endpoints: "
         f"{relationship.value} is marked available, but no declared endpoint pair "
         f"uses only native kinds ({sorted(kind.value for kind in _NATIVE_KINDS)})"
     )
@@ -145,6 +146,7 @@ def test_subject_kind_absent_is_only_blamed_when_it_is_actually_the_blocker(
     """
 
     assert not _has_fully_native_pair(relationship), (
+        "GUARD subject_kind_absent_must_be_the_real_blocker: "
         f"{relationship.value} is blamed on an absent subject kind, but "
         "at least one declared endpoint pair is fully expressible natively; "
         "the real blocker is something else"
@@ -255,9 +257,11 @@ def test_classify_question_family_cannot_see_the_question() -> None:
     """
 
     parameters = set(inspect.signature(caps.classify_question_family).parameters)
-    assert parameters == {"intent_id", "shape"}
+    assert parameters == {"intent_id", "shape"}, (
+        "GUARD classifier_cannot_see_the_question"
+    )
     forbidden = {"question", "text", "prompt", "utterance", "query", "mentions"}
-    assert not (parameters & forbidden)
+    assert not (parameters & forbidden), "GUARD classifier_cannot_see_the_question"
 
     shape_parameters = set(inspect.signature(caps.comparison_shape_for).parameters)
     assert not (shape_parameters & forbidden)
@@ -323,7 +327,7 @@ def test_an_unresolved_reference_is_what_separates_widening_from_portfolio_scope
             cardinality=Cardinality.ORGANIZATION_WIDE, has_unresolved_mentions=True
         )
         is ComparisonShape.ORGANIZATION_WIDE
-    )
+    ), "GUARD widening_is_distinguished_from_portfolio_scope"
 
 
 @pytest.mark.parametrize(

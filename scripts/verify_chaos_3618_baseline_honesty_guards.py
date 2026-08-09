@@ -58,9 +58,19 @@ class GuardCase(NamedTuple):
     stake: str
     #: ``pytest`` node id (may include a ``-k`` style parametrisation).
     test: str
+    #: The text the NAMED assertion must produce when the guard is removed.
+    #: Checked because an exit code alone cannot tell "the guard I removed
+    #: fired" from "something else broke". The CHAOS-3618 codex review found
+    #: exactly that: two plants were reported KILLED while the failure came
+    #: from the contract validator downstream and the projection's own
+    #: assertion was never reached.
+    expected_failure: str
     #: Python source written to a generated ``sitecustomize.py``. Runs at
     #: interpreter startup, before pytest collects anything.
     plant: str
+    #: Text that means the WRONG thing failed. A producer-side guard proved
+    #: by a contract rejection is proving somebody else's invariant.
+    forbidden_failure: tuple[str, ...] = ()
 
 
 CASES: tuple[GuardCase, ...] = (
@@ -74,6 +84,7 @@ CASES: tuple[GuardCase, ...] = (
             "tests/context_fabric/test_chaos_3618_capabilities.py::"
             "test_available_relationship_has_an_expressible_endpoint_pair"
         ),
+        expected_failure="GUARD available_needs_expressible_endpoints",
         plant="""
 import dataclasses
 from dev_health_ops.api.dev.investigation_contract import RelationshipType
@@ -99,6 +110,7 @@ caps.NATIVE_RELATIONSHIP_CAPABILITY = table
             "tests/context_fabric/test_chaos_3618_capabilities.py::"
             "test_subject_kind_absent_is_only_blamed_when_it_is_actually_the_blocker"
         ),
+        expected_failure="GUARD subject_kind_absent_must_be_the_real_blocker",
         plant="""
 import dataclasses
 from dev_health_ops.api.dev.investigation_contract import RelationshipType
@@ -122,6 +134,7 @@ caps.NATIVE_RELATIONSHIP_CAPABILITY = table
             "tests/context_fabric/test_chaos_3618_capabilities.py::"
             "test_classify_question_family_cannot_see_the_question"
         ),
+        expected_failure="GUARD classifier_cannot_see_the_question",
         plant="""
 from dev_health_ops.context_fabric.native_arm import capabilities as caps
 
@@ -145,6 +158,7 @@ caps.classify_question_family = classify_question_family
             "tests/context_fabric/test_chaos_3618_capabilities.py::"
             "test_an_unresolved_reference_is_what_separates_widening_from_portfolio_scope"
         ),
+        expected_failure="GUARD widening_is_distinguished_from_portfolio_scope",
         plant="""
 from dev_health_ops.api.dev.contracts_v2.base import Cardinality
 from dev_health_ops.api.dev.investigation_contract import ComparisonShape
@@ -172,6 +186,7 @@ caps.comparison_shape_for = comparison_shape_for
             "tests/context_fabric/test_chaos_3618_projection.py::"
             "test_evidence_outside_the_authorized_set_is_dropped_not_admitted"
         ),
+        expected_failure="GUARD unauthorized_evidence_is_dropped",
         plant="""
 from dev_health_ops.context_fabric.native_arm import projection as proj
 
@@ -191,25 +206,45 @@ proj._restrict_evidence_to_authorized = _restrict_evidence_to_authorized
         ),
         test=(
             "tests/context_fabric/test_chaos_3618_projection.py::"
-            "test_a_deficiency_finding_stops_at_candidate_only"
+            "test_a_lineage_requiring_family_forbids_assertion"
         ),
+        expected_failure="GUARD lineage_family_forbids_assertion",
+        forbidden_failure=("ValidationError",),
         plant="""
 from dev_health_ops.context_fabric.native_arm import projection as proj
 
-_real = proj._driver_analysis
+
+def _may_assert(*, family, discovery):
+    return True
 
 
-def _driver_analysis(payload, *, subject_ids, evidence_handles, may_assert, limitations):
-    return _real(
-        payload,
-        subject_ids=subject_ids,
-        evidence_handles=evidence_handles,
-        may_assert=True,
-        limitations=limitations,
-    )
+proj._may_assert = _may_assert
+""",
+    ),
+    GuardCase(
+        case_id="unresolved_mention_asserted_anyway",
+        stake=(
+            "a driver asserted for a question whose subject never resolved -- "
+            "explaining why a thing is in trouble without knowing what it is"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_projection.py::"
+            "test_an_unresolved_mention_forbids_assertion_even_without_lineage_need"
+        ),
+        expected_failure="GUARD unresolved_mention_forbids_assertion",
+        forbidden_failure=("ValidationError",),
+        plant="""
+from dev_health_ops.api.dev.investigation_contract import QUESTION_FAMILY_REGISTRY, PacketSection
+from dev_health_ops.context_fabric.native_arm import projection as proj
 
 
-proj._driver_analysis = _driver_analysis
+def _may_assert(*, family, discovery):
+    # The pre-fix logic: family only, blind to unresolved mentions.
+    required = QUESTION_FAMILY_REGISTRY[family].required_packet_sections
+    return PacketSection.RELATED_CONTEXT not in required
+
+
+proj._may_assert = _may_assert
 """,
     ),
     GuardCase(
@@ -220,8 +255,10 @@ proj._driver_analysis = _driver_analysis
         ),
         test=(
             "tests/context_fabric/test_chaos_3618_projection.py::"
-            "test_a_driver_citing_an_unindexed_handle_is_not_asserted"
+            "test_driver_analysis_drops_evidence_handles_the_packet_never_indexed"
         ),
+        expected_failure="GUARD unindexed_handle_never_supports_a_driver",
+        forbidden_failure=("ValidationError",),
         plant="""
 from dev_health_ops.context_fabric.native_arm import projection as proj
 
@@ -229,8 +266,7 @@ _real = proj._driver_analysis
 
 
 def _driver_analysis(payload, *, subject_ids, evidence_handles, may_assert, limitations):
-    # Pretend every cited handle was indexed, and let the family's own
-    # section requirement stop being the thing that demotes the driver.
+    # Treat every cited handle as indexed -- the filter removed.
     everything = frozenset(
         handle
         for observation in (
@@ -247,12 +283,45 @@ def _driver_analysis(payload, *, subject_ids, evidence_handles, may_assert, limi
         payload,
         subject_ids=subject_ids,
         evidence_handles=evidence_handles | everything,
-        may_assert=True,
+        may_assert=may_assert,
         limitations=limitations,
     )
 
 
 proj._driver_analysis = _driver_analysis
+""",
+    ),
+    GuardCase(
+        case_id="non_total_projection",
+        stake=(
+            "a projection that raises instead of returning -- the shadow seam's "
+            "containment would record the arm's failure as a seam fault"
+        ),
+        test=(
+            "tests/context_fabric/test_chaos_3618_projection.py::"
+            "test_an_empty_organization_wide_cohort_is_a_named_gap_not_a_crash"
+        ),
+        expected_failure="RuntimeError",
+        plant="""
+from dev_health_ops.context_fabric.native_arm import projection as proj
+
+_real = proj.project_native_investigation
+
+
+def project_native_investigation(payload):
+    # Remove the totality wrapper: let _project's exceptions escape.
+    return proj._project(payload)
+
+
+proj.project_native_investigation = project_native_investigation
+_orig_project = proj._project
+
+
+def _project(payload):
+    raise RuntimeError("planted non-total projection")
+
+
+proj._project = _project
 """,
     ),
     GuardCase(
@@ -265,6 +334,7 @@ proj._driver_analysis = _driver_analysis
             "tests/api/dev/test_chaos_3618_investigation_shadow.py::"
             "test_a_packet_citing_uncoined_evidence_is_rejected"
         ),
+        expected_failure="GUARD uncoined_evidence_is_rejected",
         plant="""
 from dev_health_ops.api.dev import investigation_shadow as seam
 
@@ -286,6 +356,7 @@ seam.canonical_bypass_offenders = canonical_bypass_offenders
             "tests/api/dev/test_chaos_3618_investigation_shadow.py::"
             "test_a_recorded_evaluation_without_an_arm_is_unconstructable"
         ),
+        expected_failure="DID NOT RAISE",
         plant="""
 from dev_health_ops.api.dev import investigation_shadow as seam
 
@@ -359,14 +430,38 @@ def _verify(case: GuardCase, *, verbose: bool) -> str | None:
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
+    output = planted.stdout + planted.stderr
     if planted.returncode == 0:
         return (
             f"{case.case_id}: removing the guard changed nothing -- the test "
             "still passes, so it is not the guard that keeps this honest\n"
             f"  stake: {case.stake}"
         )
+    # An exit code alone cannot distinguish "the guard I removed fired" from
+    # "something else broke". This is the exact hole the CHAOS-3618 codex
+    # review found: two plants were reported KILLED while the failure came
+    # from the contract validator downstream, so the projection's own
+    # assertion was never reached and was never proven load-bearing.
+    for forbidden in case.forbidden_failure:
+        if forbidden in output:
+            return (
+                f"{case.case_id}: the test failed, but on {forbidden!r} -- not "
+                f"the named assertion {case.expected_failure!r}. A "
+                "producer-side guard proved by a downstream rejection is "
+                "proving somebody else's invariant.\n"
+                f"  stake: {case.stake}\n"
+                f"  output tail: {output[-800:]}"
+            )
+    if case.expected_failure not in output:
+        return (
+            f"{case.case_id}: the test failed, but {case.expected_failure!r} "
+            "never appeared in the output, so the failure is not the one this "
+            "case claims to prove.\n"
+            f"  stake: {case.stake}\n"
+            f"  output tail: {output[-800:]}"
+        )
     if verbose:
-        print(planted.stdout[-1500:])
+        print(output[-1500:])
     return None
 
 

@@ -1025,7 +1025,7 @@
   ],
   "provenance": {
     "corpus_version": "ask_dev_investigation_corpus.v1",
-    "lane_commit": "666552db832a1ad43b4d5b32a18899caa8427c9d",
+    "lane_commit": "b2e8e906fd76fcd027fe96bf6a2399367f7b9568",
     "tree_clean": true
   },
   "schema_version": "chaos_3646_admission_records.v1"

@@ -171,8 +171,13 @@ class TestNoCanonicalTruthIsCreated:
 
         Recorded as its own disposition rather than absorbed as a skip. It is
         a real safety refusal working, *and* a denial of service for that
-        subject — CHAOS-3634 owns making the arm qualify the finding instead
-        of losing the packet. Both halves are true and a reader needs both.
+        subject. Both halves are true and a reader needs both.
+
+        **CHAOS-3634 is DESCOPED from the fix train — the abort stays.** The
+        ticket is the owner of record for the disposition, not a pending fix,
+        so this test is not waiting for anything: it pins a permanent
+        property of the current design. If the abort ever stops happening
+        that is a deliberate change and this goes red to say so.
         """
 
         from pydantic import ValidationError

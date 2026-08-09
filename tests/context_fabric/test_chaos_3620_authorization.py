@@ -57,13 +57,17 @@ def _analyst_grant() -> frozenset[str]:
     return adapter.authorized_entity_ids_for(world.PRINCIPAL_ANALYST)
 
 
-#: Seeds whose driver-bearing packet cannot be constructed at all today.
+#: Seeds whose driver-bearing packet cannot be constructed at all.
 #: ``team_atlas`` produces a capacity driver with no staffing qualification,
-#: which the frozen contract refuses — a denial-of-packet recorded as
-#: CHAOS-3634 and owned by the fix lane. Named here rather than skipped
-#: silently: ``test_the_only_unconstructible_seed_is_the_one_we_named``
-#: keeps the exemption honest, and a second unconstructible seed appearing
-#: is a finding rather than a quiet gap in the sweep.
+#: which the frozen contract refuses.
+#:
+#: **CHAOS-3634 is DESCOPED — the abort is the design, not a pending fix.**
+#: The ticket owns the disposition of record. This exemption is therefore
+#: permanent rather than temporary, which makes pinning it *more* important,
+#: not less: a permanent exemption is exactly the kind that quietly widens.
+#: ``test_the_only_unconstructible_seed_is_the_one_we_named`` keeps it
+#: honest, and a second unconstructible seed appearing is a finding rather
+#: than a quiet gap in the sweep.
 UNCONSTRUCTIBLE_WITH_DRIVERS = {"team_atlas"}
 
 

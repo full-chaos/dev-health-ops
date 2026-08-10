@@ -18,7 +18,20 @@
     "proj_vertex",
     "wu_pulse_runbook",
     "svc_auth_gateway",
-    "pr_vertex_401"
+    "pr_vertex_401",
+    "team_cinder",
+    "team_atlas",
+    "svc_pulse_api",
+    "svc_ledger_api",
+    "proj_pulse",
+    "proj_acr",
+    "repo_identity",
+    "team_ember",
+    "repo_pulse",
+    "team_dorado",
+    "pr_ledger_990",
+    "repo_ledger",
+    "proj_solstice"
    ],
    "target_entity_id": "proj_quarry",
    "target_is_restricted": true,
@@ -43,7 +56,26 @@
     "wu_ledger_cutover",
     "svc_checkout",
     "wu_beacon_ingest",
-    "pr_identity_882"
+    "pr_identity_882",
+    "team_atlas",
+    "team_borealis",
+    "team_ember",
+    "proj_beacon",
+    "team_cinder",
+    "svc_pulse_api",
+    "proj_pulse",
+    "pr_vertex_401",
+    "svc_ledger_api",
+    "proj_acr",
+    "team_dorado",
+    "repo_ledger",
+    "proj_ledger_migration",
+    "pr_ledger_990",
+    "proj_lattice",
+    "proj_solstice",
+    "svc_auth_gateway",
+    "repo_pulse",
+    "proj_meridian"
    ],
    "target_entity_id": "proj_quarry",
    "target_is_restricted": true,
@@ -56,7 +88,7 @@
    ]
   },
   {
-   "authorization_filtered_count": 0,
+   "authorization_filtered_count": 1,
    "detail": "the identical query ranked lumen_proj_acr in its own partition cf_trial_org_lumen and returned it nowhere in cf_trial_org_helio; the group filter is what removed it, and the presence check is what makes that a measurement rather than an empty result",
    "effective": true,
    "principal_id": "principal_helio_analyst",
@@ -78,7 +110,14 @@
     "pr_pulse_212",
     "issue_acr_span_decl",
     "proj_pulse",
-    "team_ember"
+    "team_ember",
+    "repo_identity",
+    "proj_lattice",
+    "proj_meridian",
+    "svc_ledger_api",
+    "team_borealis",
+    "svc_pulse_api",
+    "pr_vertex_401"
    ],
    "target_entity_id": "lumen_proj_acr",
    "target_is_restricted": true,
@@ -86,11 +125,13 @@
    "target_ranked": false,
    "target_retrieved": false,
    "verdict": "pass",
-   "withheld_canonical_ids": []
+   "withheld_canonical_ids": [
+    "proj_quarry"
+   ]
   },
   {
-   "authorization_filtered_count": 0,
-   "detail": "an authorized target was ranked and nothing was withheld, so the filter is not simply withholding everything",
+   "authorization_filtered_count": 1,
+   "detail": "the control target ranked cleanly; 1 other, genuinely restricted entities were incidentally retrieved by a wider candidate net and correctly withheld -- the filter working under a broader retrieval, not the control being over-filtered",
    "effective": true,
    "principal_id": "principal_helio_analyst",
    "probe_id": "unrestricted_control",
@@ -115,7 +156,12 @@
     "pf_growth",
     "proj_beacon",
     "repo_checkout",
-    "wu_ledger_dual_write"
+    "wu_ledger_dual_write",
+    "pr_vertex_401",
+    "svc_pulse_api",
+    "svc_ledger_api",
+    "team_atlas",
+    "dep_ratelimitd"
    ],
    "target_entity_id": "proj_identity_rewrite",
    "target_is_restricted": false,
@@ -123,13 +169,15 @@
    "target_ranked": true,
    "target_retrieved": true,
    "verdict": "pass",
-   "withheld_canonical_ids": []
+   "withheld_canonical_ids": [
+    "proj_quarry"
+   ]
   }
  ],
  "binding": {
-  "branch": "chaos-3647-semantic-leg",
-  "commit": "5c28c208f6a3be197610329b3407854ddd9bf937",
-  "contract_manifest_sha256": "b14307dbbbf5b5dd84d0b9b79648c7c6bdbf35bda7f56511dfcfc63f02a3cd38",
+  "branch": "embedded-surface-approval-gate",
+  "commit": "528b3fd0483bc02dbb9ce39038cf1a376cf60ade",
+  "contract_manifest_sha256": "c74d62e6f1c4e8829b55f74a7a5c72ccea800a694b3df435eff04196b8ad2c2e",
   "corpus_manifest_sha256": "f12a7dcef216c8fedc19538fba1d284bfdf6968461e718bbfcee2a4fea1bd0c4",
   "corpus_version": "ask_dev_investigation_corpus.v1",
   "dependency_versions": {
@@ -139,7 +187,7 @@
    "redis": "6.4.0"
   },
   "execution_mode": "producer_invoked_directly_seam_real_orchestrator_bypassed",
-  "feature_tip_commit": "4b6489f5eadc0fc9969b51f3156278d6bbee71ab",
+  "feature_tip_commit": "f3ac1d221b6959a982a4ba803d471988d0f14ed8",
   "graph_arm_id": "graph_assisted_shadow_arm",
   "graph_attachment_encoding": "canonical_ids.v1",
   "graph_embedder_model_id": "openai_text_embedding_3_small",
@@ -169,7 +217,7 @@
     "classification": "both_correct",
     "detail": "baseline: rank-1 was proj_identity_rewrite, as expected | semantic: rank-1 was proj_identity_rewrite, as expected",
     "semantic_correct": true,
-    "semantic_ranked": 8
+    "semantic_ranked": 4
    },
    "expected_answer": "direct",
    "forbidden_subject_ids": [],
@@ -261,17 +309,17 @@
       "borealis_wip",
       "doc_injected_runbook",
       "pr_pulse_212_merged",
-      "wg_identity_rewrite",
       "proj_identity_rewrite",
+      "wg_identity_rewrite",
       "oc_pulse_missing",
       "ci_pulse_green",
       "dep_ratelimitd",
       "ci_identity_blocked",
       "tr_pulse_suite",
       "wg_ratelimitd_removed",
+      "atlas_load",
       "frost_load",
       "borealis_load",
-      "atlas_load",
       "pr_ledger_990_merged",
       "pr_pulse_212",
       "rv_vertex_revoked",
@@ -321,9 +369,9 @@
       "ci_identity_blocked",
       "tr_pulse_suite",
       "wg_ratelimitd_removed",
+      "atlas_load",
       "frost_load",
       "borealis_load",
-      "atlas_load",
       "pr_ledger_990_merged",
       "rv_vertex_revoked",
       "dorado_outbound_reviews",
@@ -363,25 +411,21 @@
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
       "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['dep_ratelimitd', 'pr_pulse_212']",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['proj_acr', 'team_atlas']",
       "precision_over_all": "fail",
-      "precision_over_all_detail": "7 stray candidates across 8 ranked",
+      "precision_over_all_detail": "3 stray candidates across 4 ranked",
       "resolved": true,
       "stray_candidates": [
-       "dep_ratelimitd",
-       "issue_acr_span_decl",
-       "pf_platform",
-       "pr_identity_882",
-       "pr_pulse_212",
-       "svc_pulse_api",
-       "wu_beacon_ingest"
+       "proj_acr",
+       "team_atlas",
+       "team_borealis"
       ],
       "subject_resolution_correct": true,
       "subject_resolution_detail": "rank-1 was proj_identity_rewrite, as expected",
       "subject_top_1": "pass",
       "subject_top_1_detail": "rank-1 was proj_identity_rewrite; expected proj_identity_rewrite",
       "subject_top_3": "pass",
-      "subject_top_3_detail": "top-3 ['proj_identity_rewrite', 'dep_ratelimitd', 'pr_pulse_212']; expected proj_identity_rewrite"
+      "subject_top_3_detail": "top-3 ['proj_identity_rewrite', 'proj_acr', 'team_atlas']; expected proj_identity_rewrite"
      },
      "subjects": [
       {
@@ -392,84 +436,41 @@
         "cosine_similarity"
        ],
        "rank": 0,
-       "rrf_score": 0.14285714285714285,
+       "rrf_score": 0.16666666666666666,
        "signal": "fuzzy_label"
       },
       {
-       "canonical_id": "dep_ratelimitd",
-       "display_label": "ratelimitd",
+       "canonical_id": "proj_acr",
+       "display_label": "Agent Context Runtime",
+       "mechanism": "embedding_similarity",
+       "methods": [
+        "bm25",
+        "cosine_similarity"
+       ],
+       "rank": 8,
+       "rrf_score": 2.0,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "team_atlas",
+       "display_label": "Atlas",
        "mechanism": "embedding_similarity",
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 1,
-       "rrf_score": 0.1,
+       "rank": 9,
+       "rrf_score": 0.5,
        "signal": "fuzzy_label"
       },
       {
-       "canonical_id": "pr_pulse_212",
-       "display_label": "pulse#212 analytics rollout",
+       "canonical_id": "team_borealis",
+       "display_label": "Borealis",
        "mechanism": "embedding_similarity",
        "methods": [
         "cosine_similarity"
        ],
-       "rank": 2,
-       "rrf_score": 0.05555555555555555,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "issue_acr_span_decl",
-       "display_label": "ACR span declaration correction",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.034482758620689655,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "svc_pulse_api",
-       "display_label": "Pulse API",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.02857142857142857,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_identity_882",
-       "display_label": "identity#882 authcore 2.0 adoption",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.02631578947368421,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_beacon_ingest",
-       "display_label": "Beacon ingest throughput",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.024390243902439025,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pf_platform",
-       "display_label": "Platform Portfolio",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.022727272727272728,
+       "rank": 10,
+       "rrf_score": 0.3333333333333333,
        "signal": "fuzzy_label"
       }
      ],
@@ -495,7 +496,7 @@
     "classification": "deterministic_only_correct",
     "detail": "baseline: rank-1 was proj_identity_rewrite, as expected | semantic: rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
     "semantic_correct": false,
-    "semantic_ranked": 18
+    "semantic_ranked": 1
    },
    "expected_answer": "direct",
    "forbidden_subject_ids": [],
@@ -584,8 +585,8 @@
      ],
      "cosine_order": [
       "wi_borealis_wip",
-      "rv_borealis_normal",
       "team_borealis",
+      "rv_borealis_normal",
       "pr_pulse_212",
       "pr_pulse_212_merged",
       "repo_beacon",
@@ -680,28 +681,11 @@
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
       "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_pulse_212', 'team_borealis', 'wu_pulse_runbook']",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['wu_pulse_runbook']",
       "precision_over_all": "fail",
-      "precision_over_all_detail": "18 stray candidates across 18 ranked",
+      "precision_over_all_detail": "1 stray candidates across 1 ranked",
       "resolved": true,
       "stray_candidates": [
-       "dep_authcore",
-       "pr_identity_882",
-       "pr_ledger_990",
-       "pr_pulse_212",
-       "proj_beacon",
-       "proj_meridian",
-       "proj_solstice",
-       "repo_acr",
-       "repo_beacon",
-       "repo_checkout",
-       "repo_identity",
-       "repo_ledger",
-       "repo_pulse",
-       "team_atlas",
-       "team_borealis",
-       "wu_authcore_release",
-       "wu_beacon_ingest",
        "wu_pulse_runbook"
       ],
       "subject_resolution_correct": false,
@@ -709,7 +693,7 @@
       "subject_top_1": "fail",
       "subject_top_1_detail": "rank-1 was wu_pulse_runbook; expected proj_identity_rewrite",
       "subject_top_3": "fail",
-      "subject_top_3_detail": "top-3 ['wu_pulse_runbook', 'team_borealis', 'pr_pulse_212']; expected proj_identity_rewrite"
+      "subject_top_3_detail": "top-3 ['wu_pulse_runbook']; expected proj_identity_rewrite"
      },
      "subjects": [
       {
@@ -721,193 +705,6 @@
        ],
        "rank": 0,
        "rrf_score": 1.0,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "team_borealis",
-       "display_label": "Borealis",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 1,
-       "rrf_score": 0.3333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_pulse_212",
-       "display_label": "pulse#212 analytics rollout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 2,
-       "rrf_score": 0.25,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_beacon",
-       "display_label": "helio/beacon",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.16666666666666666,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_ledger",
-       "display_label": "helio/ledger",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.08333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_acr",
-       "display_label": "helio/acr",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.05555555555555555,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_authcore_release",
-       "display_label": "authcore 2.0 release",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.043478260869565216,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_identity",
-       "display_label": "helio/identity",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.041666666666666664,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_identity_882",
-       "display_label": "identity#882 authcore 2.0 adoption",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 8,
-       "rrf_score": 0.037037037037037035,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_solstice",
-       "display_label": "Solstice Billing",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 9,
-       "rrf_score": 0.034482758620689655,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_checkout",
-       "display_label": "helio/checkout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 10,
-       "rrf_score": 0.03125,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "dep_authcore",
-       "display_label": "authcore",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 11,
-       "rrf_score": 0.02702702702702703,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_pulse",
-       "display_label": "helio/pulse",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 12,
-       "rrf_score": 0.025,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_beacon",
-       "display_label": "Beacon Ingest",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 13,
-       "rrf_score": 0.023809523809523808,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "team_atlas",
-       "display_label": "Atlas",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 14,
-       "rrf_score": 0.023255813953488372,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_beacon_ingest",
-       "display_label": "Beacon ingest throughput",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 15,
-       "rrf_score": 0.022727272727272728,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_ledger_990",
-       "display_label": "ledger#990 dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 16,
-       "rrf_score": 0.022222222222222223,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_meridian",
-       "display_label": "Meridian Docs",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 17,
-       "rrf_score": 0.02040816326530612,
        "signal": "fuzzy_label"
       }
      ],
@@ -928,11 +725,11 @@
    "committed_subject_id": "proj_identity_rewrite",
    "delta": {
     "baseline_correct": false,
-    "baseline_ranked": 0,
-    "classification": "neither_correct_semantic_ranked_anyway",
-    "detail": "baseline: resolved nothing; expected proj_identity_rewrite | semantic: rank-1 was dep_authcore; expected proj_identity_rewrite",
+    "baseline_ranked": 3,
+    "classification": "neither_correct_both_ranked",
+    "detail": "baseline: rank-1 was proj_auth_gateway_hardening; expected proj_identity_rewrite | semantic: rank-1 was dep_authcore; expected proj_identity_rewrite",
     "semantic_correct": false,
-    "semantic_ranked": 18
+    "semantic_ranked": 1
    },
    "expected_answer": "direct",
    "forbidden_subject_ids": [],
@@ -942,7 +739,10 @@
      "bm25_order": [],
      "cosine_order": [],
      "leg": "deterministic_mentions",
-     "mentions": [],
+     "mentions": [
+      "auth work",
+      "auth"
+     ],
      "observation_hits": [],
      "prose_disclosures": [],
      "query": "What about the auth work?",
@@ -953,20 +753,50 @@
       "must_not_commit_detail": "the case expects a commitment",
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
-      "precision_at_3": "pass",
-      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
-      "precision_over_all": "pass",
-      "precision_over_all_detail": "no stray candidate across 0 ranked",
-      "resolved": false,
-      "stray_candidates": [],
+      "precision_at_3": "fail",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['svc_auth_gateway']",
+      "precision_over_all": "fail",
+      "precision_over_all_detail": "1 stray candidates across 3 ranked",
+      "resolved": true,
+      "stray_candidates": [
+       "svc_auth_gateway"
+      ],
       "subject_resolution_correct": false,
-      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
+      "subject_resolution_detail": "rank-1 was proj_auth_gateway_hardening; expected proj_identity_rewrite",
       "subject_top_1": "fail",
-      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
-      "subject_top_3": "fail",
-      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
+      "subject_top_1_detail": "rank-1 was proj_auth_gateway_hardening; expected proj_identity_rewrite",
+      "subject_top_3": "pass",
+      "subject_top_3_detail": "top-3 ['proj_auth_gateway_hardening', 'proj_identity_rewrite', 'svc_auth_gateway']; expected proj_identity_rewrite"
      },
-     "subjects": [],
+     "subjects": [
+      {
+       "canonical_id": "proj_auth_gateway_hardening",
+       "display_label": "Auth Gateway Hardening",
+       "mechanism": "lexical_fuzzy",
+       "methods": [],
+       "rank": 0,
+       "rrf_score": null,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_identity_rewrite",
+       "display_label": "Identity Platform Rewrite",
+       "mechanism": "lexical_fuzzy",
+       "methods": [],
+       "rank": 1,
+       "rrf_score": null,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "svc_auth_gateway",
+       "display_label": "Auth Gateway",
+       "mechanism": "lexical_fuzzy",
+       "methods": [],
+       "rank": 2,
+       "rrf_score": null,
+       "signal": "fuzzy_label"
+      }
+     ],
      "withheld_canonical_ids": []
     },
     {
@@ -1002,7 +832,7 @@
      "withheld_canonical_ids": []
     },
     {
-     "authorization_filtered_count": 0,
+     "authorization_filtered_count": 1,
      "bm25_order": [
       "wg_auth_hardening",
       "dp_identity_none",
@@ -1113,34 +943,19 @@
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
       "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['dep_authcore', 'pr_identity_882']",
+      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['dep_authcore']",
       "precision_over_all": "fail",
-      "precision_over_all_detail": "16 stray candidates across 18 ranked",
+      "precision_over_all_detail": "1 stray candidates across 1 ranked",
       "resolved": true,
       "stray_candidates": [
-       "dep_authcore",
-       "init_identity_modernization",
-       "pr_identity_882",
-       "pr_ledger_990",
-       "proj_acr",
-       "proj_beacon",
-       "proj_ledger_migration",
-       "proj_payments_rewrite",
-       "repo_acr",
-       "repo_checkout",
-       "repo_identity",
-       "repo_ledger",
-       "svc_auth_gateway",
-       "svc_ledger_api",
-       "wu_authcore_release",
-       "wu_ledger_dual_write"
+       "dep_authcore"
       ],
       "subject_resolution_correct": false,
       "subject_resolution_detail": "rank-1 was dep_authcore; expected proj_identity_rewrite",
       "subject_top_1": "fail",
       "subject_top_1_detail": "rank-1 was dep_authcore; expected proj_identity_rewrite",
       "subject_top_3": "fail",
-      "subject_top_3_detail": "top-3 ['dep_authcore', 'pr_identity_882', 'proj_auth_gateway_hardening']; expected proj_identity_rewrite"
+      "subject_top_3_detail": "top-3 ['dep_authcore']; expected proj_identity_rewrite"
      },
      "subjects": [
       {
@@ -1153,198 +968,11 @@
        "rank": 0,
        "rrf_score": 1.0,
        "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_identity_882",
-       "display_label": "identity#882 authcore 2.0 adoption",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 1,
-       "rrf_score": 0.5,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_auth_gateway_hardening",
-       "display_label": "Auth Gateway Hardening",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "bm25",
-        "cosine_similarity"
-       ],
-       "rank": 2,
-       "rrf_score": 0.4583333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "svc_auth_gateway",
-       "display_label": "Auth Gateway",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "bm25",
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.3666666666666667,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_authcore_release",
-       "display_label": "authcore 2.0 release",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.3333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_acr",
-       "display_label": "Agent Context Runtime",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.047619047619047616,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_ledger_990",
-       "display_label": "ledger#990 dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.041666666666666664,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_identity_rewrite",
-       "display_label": "Identity Platform Rewrite",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.038461538461538464,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_dual_write",
-       "display_label": "Ledger dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 8,
-       "rrf_score": 0.037037037037037035,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_checkout",
-       "display_label": "helio/checkout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 9,
-       "rrf_score": 0.03333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_ledger",
-       "display_label": "helio/ledger",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 10,
-       "rrf_score": 0.02702702702702703,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_ledger_migration",
-       "display_label": "Ledger Migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 11,
-       "rrf_score": 0.02564102564102564,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_acr",
-       "display_label": "helio/acr",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 12,
-       "rrf_score": 0.025,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_identity",
-       "display_label": "helio/identity",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 13,
-       "rrf_score": 0.024390243902439025,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "svc_ledger_api",
-       "display_label": "Ledger API",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 14,
-       "rrf_score": 0.023255813953488372,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_beacon",
-       "display_label": "Beacon Ingest",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 15,
-       "rrf_score": 0.022222222222222223,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_payments_rewrite",
-       "display_label": "Payments Rewrite",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 16,
-       "rrf_score": 0.02127659574468085,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "init_identity_modernization",
-       "display_label": "Identity Modernization",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 17,
-       "rrf_score": 0.02,
-       "signal": "fuzzy_label"
       }
      ],
-     "withheld_canonical_ids": []
+     "withheld_canonical_ids": [
+      "proj_quarry"
+     ]
     }
    ],
    "permitted_candidate_ids": [
@@ -1363,10 +991,10 @@
    "delta": {
     "baseline_correct": false,
     "baseline_ranked": 0,
-    "classification": "neither_correct_semantic_ranked_anyway",
-    "detail": "baseline: resolved nothing; expected proj_identity_rewrite | semantic: rank-1 was team_atlas; expected proj_identity_rewrite",
+    "classification": "neither_correct_neither_ranked",
+    "detail": "baseline: resolved nothing; expected proj_identity_rewrite | semantic: resolved nothing; expected proj_identity_rewrite",
     "semantic_correct": false,
-    "semantic_ranked": 11
+    "semantic_ranked": 0
    },
    "expected_answer": "direct",
    "forbidden_subject_ids": [],
@@ -1436,7 +1064,7 @@
      "withheld_canonical_ids": []
     },
     {
-     "authorization_filtered_count": 0,
+     "authorization_filtered_count": 1,
      "bm25_order": [],
      "cosine_order": [
       "team_atlas",
@@ -1512,155 +1140,23 @@
       "must_not_commit_detail": "the case expects a commitment",
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
-      "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_ledger_990', 'repo_ledger', 'team_atlas']",
-      "precision_over_all": "fail",
-      "precision_over_all_detail": "11 stray candidates across 11 ranked",
-      "resolved": true,
-      "stray_candidates": [
-       "dep_ratelimitd",
-       "pr_ledger_990",
-       "proj_beacon",
-       "repo_acr",
-       "repo_beacon",
-       "repo_checkout",
-       "repo_identity",
-       "repo_ledger",
-       "team_atlas",
-       "wu_beacon_ingest",
-       "wu_ledger_dual_write"
-      ],
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
       "subject_resolution_correct": false,
-      "subject_resolution_detail": "rank-1 was team_atlas; expected proj_identity_rewrite",
+      "subject_resolution_detail": "resolved nothing; expected proj_identity_rewrite",
       "subject_top_1": "fail",
-      "subject_top_1_detail": "rank-1 was team_atlas; expected proj_identity_rewrite",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_identity_rewrite",
       "subject_top_3": "fail",
-      "subject_top_3_detail": "top-3 ['team_atlas', 'repo_ledger', 'pr_ledger_990']; expected proj_identity_rewrite"
+      "subject_top_3_detail": "top-3 []; expected proj_identity_rewrite"
      },
-     "subjects": [
-      {
-       "canonical_id": "team_atlas",
-       "display_label": "Atlas",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 0,
-       "rrf_score": 1.0,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_ledger",
-       "display_label": "helio/ledger",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 1,
-       "rrf_score": 0.5,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_ledger_990",
-       "display_label": "ledger#990 dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 2,
-       "rrf_score": 0.25,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_dual_write",
-       "display_label": "Ledger dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.2,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_beacon",
-       "display_label": "helio/beacon",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.08333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_acr",
-       "display_label": "helio/acr",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.06666666666666667,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "dep_ratelimitd",
-       "display_label": "ratelimitd",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.058823529411764705,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_checkout",
-       "display_label": "helio/checkout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.05555555555555555,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_beacon_ingest",
-       "display_label": "Beacon ingest throughput",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 8,
-       "rrf_score": 0.05,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_beacon",
-       "display_label": "Beacon Ingest",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 9,
-       "rrf_score": 0.037037037037037035,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_identity",
-       "display_label": "helio/identity",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 10,
-       "rrf_score": 0.03125,
-       "signal": "fuzzy_label"
-      }
-     ],
-     "withheld_canonical_ids": []
+     "subjects": [],
+     "withheld_canonical_ids": [
+      "proj_quarry"
+     ]
     }
    ],
    "permitted_candidate_ids": [
@@ -1678,10 +1174,10 @@
    "delta": {
     "baseline_correct": false,
     "baseline_ranked": 0,
-    "classification": "neither_correct_semantic_ranked_anyway",
-    "detail": "baseline: resolved nothing; the case has two real candidates | semantic: the top-3 clarification set contains ['pf_platform', 'pr_pulse_212'], which the case does not permit as candidates",
+    "classification": "neither_correct_neither_ranked",
+    "detail": "baseline: resolved nothing; the case has two real candidates | semantic: resolved nothing; the case has two real candidates",
     "semantic_correct": false,
-    "semantic_ranked": 10
+    "semantic_ranked": 0
    },
    "expected_answer": "clarified",
    "forbidden_subject_ids": [],
@@ -1751,7 +1247,7 @@
      "withheld_canonical_ids": []
     },
     {
-     "authorization_filtered_count": 0,
+     "authorization_filtered_count": 1,
      "bm25_order": [],
      "cosine_order": [
       "wi_beacon_deleted",
@@ -1760,18 +1256,18 @@
       "wi_atlas_wip",
       "rv_vertex_cycles",
       "rv_atlas_queue",
-      "atlas_wip",
       "borealis_wip",
+      "atlas_wip",
       "wi_ember_partial",
       "pf_platform",
       "wi_quarry_redacted",
-      "ember_completed",
       "lattice_completions",
-      "borealis_completed",
       "atlas_completed",
+      "ember_completed",
+      "borealis_completed",
+      "solstice_completions",
       "beacon_completions",
       "meridian_completions",
-      "solstice_completions",
       "sh_ember_stalled",
       "lattice_touching_contributors",
       "pr_ledger_990_merged",
@@ -1795,8 +1291,8 @@
       "proj_meridian",
       "cl_borealis",
       "lattice_active_contributors",
-      "proj_acr",
       "wg_acr",
+      "proj_acr",
       "pr_ledger_990",
       "wu_ledger_dual_write",
       "cc_lattice_active",
@@ -1814,17 +1310,17 @@
       "wi_atlas_wip",
       "rv_vertex_cycles",
       "rv_atlas_queue",
-      "atlas_wip",
       "borealis_wip",
+      "atlas_wip",
       "wi_ember_partial",
       "wi_quarry_redacted",
-      "ember_completed",
       "lattice_completions",
-      "borealis_completed",
       "atlas_completed",
+      "ember_completed",
+      "borealis_completed",
+      "solstice_completions",
       "beacon_completions",
       "meridian_completions",
-      "solstice_completions",
       "sh_ember_stalled",
       "lattice_touching_contributors",
       "pr_ledger_990_merged",
@@ -1855,145 +1351,26 @@
       "case_id": "H05_the_other_project_we_discussed",
       "leg": "semantic_hybrid",
       "must_not_commit": "pass",
-      "must_not_commit_detail": "ranked 10 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
-      "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pf_platform', 'pr_pulse_212']",
-      "precision_over_all": "fail",
-      "precision_over_all_detail": "9 stray candidates across 10 ranked",
-      "resolved": true,
-      "stray_candidates": [
-       "pf_platform",
-       "pr_ledger_990",
-       "pr_pulse_212",
-       "proj_acr",
-       "proj_beacon",
-       "proj_ledger_migration",
-       "proj_meridian",
-       "repo_ledger",
-       "wu_ledger_dual_write"
-      ],
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
       "subject_resolution_correct": false,
-      "subject_resolution_detail": "the top-3 clarification set contains ['pf_platform', 'pr_pulse_212'], which the case does not permit as candidates",
+      "subject_resolution_detail": "resolved nothing; the case has two real candidates",
       "subject_top_1": "not_applicable",
       "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
       "subject_top_3": "not_applicable",
       "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
      },
-     "subjects": [
-      {
-       "canonical_id": "pf_platform",
-       "display_label": "Platform Portfolio",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 0,
-       "rrf_score": 0.1,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_identity_rewrite",
-       "display_label": "Identity Platform Rewrite",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 1,
-       "rrf_score": 0.03571428571428571,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_pulse_212",
-       "display_label": "pulse#212 analytics rollout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 2,
-       "rrf_score": 0.03225806451612903,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_beacon",
-       "display_label": "Beacon Ingest",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.03125,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_ledger_migration",
-       "display_label": "Ledger Migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.027777777777777776,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_ledger",
-       "display_label": "helio/ledger",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.02631578947368421,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_meridian",
-       "display_label": "Meridian Docs",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.02564102564102564,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_acr",
-       "display_label": "Agent Context Runtime",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.023809523809523808,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_ledger_990",
-       "display_label": "ledger#990 dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 8,
-       "rrf_score": 0.022727272727272728,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_dual_write",
-       "display_label": "Ledger dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 9,
-       "rrf_score": 0.022222222222222223,
-       "signal": "fuzzy_label"
-      }
-     ],
-     "withheld_canonical_ids": []
+     "subjects": [],
+     "withheld_canonical_ids": [
+      "proj_quarry"
+     ]
     }
    ],
    "permitted_candidate_ids": [
@@ -2012,10 +1389,10 @@
    "delta": {
     "baseline_correct": false,
     "baseline_ranked": 0,
-    "classification": "neither_correct_semantic_ranked_anyway",
-    "detail": "baseline: resolved nothing; expected proj_vertex | semantic: rank-1 was wu_ledger_cutover; expected proj_vertex",
+    "classification": "neither_correct_neither_ranked",
+    "detail": "baseline: resolved nothing; expected proj_vertex | semantic: resolved nothing; expected proj_vertex",
     "semantic_correct": false,
-    "semantic_ranked": 10
+    "semantic_ranked": 0
    },
    "expected_answer": "direct",
    "forbidden_subject_ids": [],
@@ -2085,7 +1462,7 @@
      "withheld_canonical_ids": []
     },
     {
-     "authorization_filtered_count": 0,
+     "authorization_filtered_count": 1,
      "bm25_order": [
       "rv_vertex_cycles",
       "wi_frost_outlier",
@@ -2104,13 +1481,13 @@
       "vertex_review_cycles",
       "sc_ledger_declared_complete",
       "wi_beacon_deleted",
-      "borealis_review_wait",
       "dorado_review_wait",
       "atlas_review_wait",
+      "borealis_review_wait",
       "tr_ledger_suite",
       "wu_ledger_cutover",
-      "borealis_wip",
       "atlas_wip",
+      "borealis_wip",
       "pr_vertex_401_cycles",
       "pr_pulse_212",
       "pr_ledger_990_merged",
@@ -2119,25 +1496,25 @@
       "proj_identity_rewrite",
       "wg_identity_rewrite",
       "sc_pulse_declared_complete",
-      "wu_ledger_backfill",
       "wi_ledger_backfill_open",
+      "wu_ledger_backfill",
       "ember_completed",
-      "beacon_completions",
       "borealis_completed",
-      "lattice_completions",
-      "atlas_completed",
-      "meridian_completions",
       "solstice_completions",
+      "atlas_completed",
+      "lattice_completions",
+      "beacon_completions",
+      "meridian_completions",
       "dp_ledger_prod",
       "wg_payments_rewrite_superseded",
       "repo_checkout",
       "wi_ledger_children",
       "proj_payments_rewrite",
       "wu_ledger_dual_write",
-      "dp_identity_none",
       "pr_ledger_990",
       "oc_ledger_present",
       "wu_ledger_schema",
+      "dp_identity_none",
       "cc_quarry_activity",
       "rv_dorado_outbound",
       "frost_cycle_p90",
@@ -2160,12 +1537,12 @@
       "vertex_review_cycles",
       "sc_ledger_declared_complete",
       "wi_beacon_deleted",
-      "borealis_review_wait",
       "dorado_review_wait",
       "atlas_review_wait",
+      "borealis_review_wait",
       "tr_ledger_suite",
-      "borealis_wip",
       "atlas_wip",
+      "borealis_wip",
       "pr_vertex_401_cycles",
       "pr_ledger_990_merged",
       "sc_acr_still_open",
@@ -2173,17 +1550,17 @@
       "sc_pulse_declared_complete",
       "wi_ledger_backfill_open",
       "ember_completed",
-      "beacon_completions",
       "borealis_completed",
-      "lattice_completions",
-      "atlas_completed",
-      "meridian_completions",
       "solstice_completions",
+      "atlas_completed",
+      "lattice_completions",
+      "beacon_completions",
+      "meridian_completions",
       "dp_ledger_prod",
       "wg_payments_rewrite_superseded",
       "wi_ledger_children",
-      "dp_identity_none",
       "oc_ledger_present",
+      "dp_identity_none",
       "cc_quarry_activity",
       "frost_cycle_p90",
       "doc_injected_runbook",
@@ -2200,143 +1577,23 @@
       "must_not_commit_detail": "the case expects a commitment",
       "no_forbidden_subject": "not_applicable",
       "no_forbidden_subject_detail": "the case forbids no subject",
-      "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_pulse_212', 'proj_ledger_migration', 'wu_ledger_cutover']",
-      "precision_over_all": "fail",
-      "precision_over_all_detail": "10 stray candidates across 10 ranked",
-      "resolved": true,
-      "stray_candidates": [
-       "pr_ledger_990",
-       "pr_pulse_212",
-       "proj_identity_rewrite",
-       "proj_ledger_migration",
-       "proj_payments_rewrite",
-       "repo_checkout",
-       "wu_ledger_backfill",
-       "wu_ledger_cutover",
-       "wu_ledger_dual_write",
-       "wu_ledger_schema"
-      ],
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
       "subject_resolution_correct": false,
-      "subject_resolution_detail": "rank-1 was wu_ledger_cutover; expected proj_vertex",
+      "subject_resolution_detail": "resolved nothing; expected proj_vertex",
       "subject_top_1": "fail",
-      "subject_top_1_detail": "rank-1 was wu_ledger_cutover; expected proj_vertex",
+      "subject_top_1_detail": "rank-1 was (nothing); expected proj_vertex",
       "subject_top_3": "fail",
-      "subject_top_3_detail": "top-3 ['wu_ledger_cutover', 'pr_pulse_212', 'proj_ledger_migration']; expected proj_vertex"
+      "subject_top_3_detail": "top-3 []; expected proj_vertex"
      },
-     "subjects": [
-      {
-       "canonical_id": "wu_ledger_cutover",
-       "display_label": "Ledger cutover",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 0,
-       "rrf_score": 0.07142857142857142,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_pulse_212",
-       "display_label": "pulse#212 analytics rollout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 1,
-       "rrf_score": 0.05555555555555555,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_ledger_migration",
-       "display_label": "Ledger Migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 2,
-       "rrf_score": 0.047619047619047616,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_identity_rewrite",
-       "display_label": "Identity Platform Rewrite",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.045454545454545456,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_backfill",
-       "display_label": "Ledger historical backfill",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.04,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_checkout",
-       "display_label": "helio/checkout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.027777777777777776,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_payments_rewrite",
-       "display_label": "Payments Rewrite",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.02631578947368421,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_dual_write",
-       "display_label": "Ledger dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.02564102564102564,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_ledger_990",
-       "display_label": "ledger#990 dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 8,
-       "rrf_score": 0.024390243902439025,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_schema",
-       "display_label": "Ledger schema migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 9,
-       "rrf_score": 0.023255813953488372,
-       "signal": "fuzzy_label"
-      }
-     ],
-     "withheld_canonical_ids": []
+     "subjects": [],
+     "withheld_canonical_ids": [
+      "proj_quarry"
+     ]
     }
    ],
    "permitted_candidate_ids": [
@@ -2352,12 +1609,12 @@
    "case_id": "H07_unresolved_needs_candidates",
    "committed_subject_id": null,
    "delta": {
-    "baseline_correct": false,
-    "baseline_ranked": 0,
-    "classification": "neither_correct_semantic_ranked_anyway",
-    "detail": "baseline: resolved nothing; the case has two real candidates | semantic: ranked forbidden subjects ['proj_solstice', 'proj_vertex']",
-    "semantic_correct": false,
-    "semantic_ranked": 18
+    "baseline_correct": true,
+    "baseline_ranked": 2,
+    "classification": "both_correct",
+    "detail": "baseline: offered ['proj_payments_rewrite', 'proj_zenith'] inside the top-3 horizon, all permitted, without committing | semantic: offered ['proj_zenith', 'proj_payments_rewrite'] inside the top-3 horizon, all permitted, without committing",
+    "semantic_correct": true,
+    "semantic_ranked": 2
    },
    "expected_answer": "clarified",
    "forbidden_subject_ids": [
@@ -2370,7 +1627,10 @@
      "bm25_order": [],
      "cosine_order": [],
      "leg": "deterministic_mentions",
-     "mentions": [],
+     "mentions": [
+      "payments work",
+      "payments"
+     ],
      "observation_hits": [],
      "prose_disclosures": [],
      "query": "how's the payments work going",
@@ -2378,23 +1638,42 @@
       "case_id": "H07_unresolved_needs_candidates",
       "leg": "deterministic_mentions",
       "must_not_commit": "pass",
-      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "must_not_commit_detail": "ranked 2 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
       "no_forbidden_subject": "pass",
       "no_forbidden_subject_detail": "no forbidden subject ranked",
       "precision_at_3": "pass",
       "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
       "precision_over_all": "pass",
-      "precision_over_all_detail": "no stray candidate across 0 ranked",
-      "resolved": false,
+      "precision_over_all_detail": "no stray candidate across 2 ranked",
+      "resolved": true,
       "stray_candidates": [],
-      "subject_resolution_correct": false,
-      "subject_resolution_detail": "resolved nothing; the case has two real candidates",
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "offered ['proj_payments_rewrite', 'proj_zenith'] inside the top-3 horizon, all permitted, without committing",
       "subject_top_1": "not_applicable",
       "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
       "subject_top_3": "not_applicable",
       "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
      },
-     "subjects": [],
+     "subjects": [
+      {
+       "canonical_id": "proj_payments_rewrite",
+       "display_label": "Payments Rewrite",
+       "mechanism": "lexical_fuzzy",
+       "methods": [],
+       "rank": 0,
+       "rrf_score": null,
+       "signal": "fuzzy_label"
+      },
+      {
+       "canonical_id": "proj_zenith",
+       "display_label": "Zenith Payments",
+       "mechanism": "lexical_fuzzy",
+       "methods": [],
+       "rank": 1,
+       "rrf_score": null,
+       "signal": "fuzzy_label"
+      }
+     ],
      "withheld_canonical_ids": []
     },
     {
@@ -2430,7 +1709,7 @@
      "withheld_canonical_ids": []
     },
     {
-     "authorization_filtered_count": 0,
+     "authorization_filtered_count": 1,
      "bm25_order": [
       "wg_payments_rewrite_superseded",
       "sc_payments_rewrite_cancelled",
@@ -2444,29 +1723,29 @@
       "wi_quarry_redacted"
      ],
      "cosine_order": [
-      "proj_zenith",
       "wg_zenith",
+      "proj_zenith",
       "proj_payments_rewrite",
       "sc_payments_rewrite_cancelled",
       "wg_payments_rewrite_superseded",
       "pr_vertex_401",
       "proj_solstice",
       "rv_vertex_cycles",
-      "borealis_wip",
       "atlas_wip",
+      "borealis_wip",
       "pr_pulse_212",
       "pr_vertex_401_cycles",
       "svc_checkout",
       "svc_pulse_api",
       "repo_checkout",
       "dp_pulse_prod",
-      "solstice_completions",
-      "meridian_completions",
-      "borealis_completed",
       "lattice_completions",
       "beacon_completions",
-      "atlas_completed",
+      "meridian_completions",
+      "borealis_completed",
       "ember_completed",
+      "solstice_completions",
+      "atlas_completed",
       "wu_ledger_cutover",
       "ia_cinder_displaced",
       "proj_ledger_migration",
@@ -2499,25 +1778,25 @@
      "mentions": [],
      "observation_hits": [
       "wg_payments_rewrite_superseded",
-      "sc_payments_rewrite_cancelled",
       "wg_zenith",
+      "sc_payments_rewrite_cancelled",
       "wi_beacon_deleted",
       "wi_ember_partial",
       "wi_borealis_wip",
       "rv_vertex_cycles",
       "wi_atlas_wip",
-      "borealis_wip",
-      "wi_quarry_redacted",
       "atlas_wip",
+      "wi_quarry_redacted",
+      "borealis_wip",
       "pr_vertex_401_cycles",
       "dp_pulse_prod",
-      "solstice_completions",
-      "meridian_completions",
-      "borealis_completed",
       "lattice_completions",
       "beacon_completions",
-      "atlas_completed",
+      "meridian_completions",
+      "borealis_completed",
       "ember_completed",
+      "solstice_completions",
+      "atlas_completed",
       "ia_cinder_displaced",
       "rv_vertex_revoked",
       "wi_beacon_demand",
@@ -2541,34 +1820,17 @@
       "case_id": "H07_unresolved_needs_candidates",
       "leg": "semantic_hybrid",
       "must_not_commit": "pass",
-      "must_not_commit_detail": "ranked 18 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
-      "no_forbidden_subject": "fail",
-      "no_forbidden_subject_detail": "ranked forbidden subjects ['proj_solstice', 'proj_vertex']",
-      "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['pr_vertex_401']",
-      "precision_over_all": "fail",
-      "precision_over_all_detail": "16 stray candidates across 18 ranked",
+      "must_not_commit_detail": "ranked 2 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "no_forbidden_subject": "pass",
+      "no_forbidden_subject_detail": "no forbidden subject ranked",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 2 ranked",
       "resolved": true,
-      "stray_candidates": [
-       "issue_vertex_tax_rounding",
-       "pr_pulse_212",
-       "pr_vertex_401",
-       "proj_beacon",
-       "proj_ledger_migration",
-       "proj_solstice",
-       "proj_tidal",
-       "proj_vertex",
-       "repo_checkout",
-       "repo_ledger",
-       "svc_checkout",
-       "svc_ledger_api",
-       "svc_pulse_api",
-       "wu_beacon_ingest",
-       "wu_ledger_cutover",
-       "wu_ledger_schema"
-      ],
-      "subject_resolution_correct": false,
-      "subject_resolution_detail": "ranked forbidden subjects ['proj_solstice', 'proj_vertex']",
+      "stray_candidates": [],
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "offered ['proj_zenith', 'proj_payments_rewrite'] inside the top-3 horizon, all permitted, without committing",
       "subject_top_1": "not_applicable",
       "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
       "subject_top_3": "not_applicable",
@@ -2584,7 +1846,7 @@
         "cosine_similarity"
        ],
        "rank": 0,
-       "rrf_score": 1.25,
+       "rrf_score": 0.75,
        "signal": "fuzzy_label"
       },
       {
@@ -2598,185 +1860,11 @@
        "rank": 1,
        "rrf_score": 0.6666666666666666,
        "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_vertex_401",
-       "display_label": "checkout#401 tax rounding",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 2,
-       "rrf_score": 0.16666666666666666,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_solstice",
-       "display_label": "Solstice Billing",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.14285714285714285,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_pulse_212",
-       "display_label": "pulse#212 analytics rollout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.09090909090909091,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "svc_checkout",
-       "display_label": "Checkout Service",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.07692307692307693,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "svc_pulse_api",
-       "display_label": "Pulse API",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.07142857142857142,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_checkout",
-       "display_label": "helio/checkout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.06666666666666667,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_cutover",
-       "display_label": "Ledger cutover",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 8,
-       "rrf_score": 0.041666666666666664,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_ledger_migration",
-       "display_label": "Ledger Migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 9,
-       "rrf_score": 0.038461538461538464,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "svc_ledger_api",
-       "display_label": "Ledger API",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 10,
-       "rrf_score": 0.03333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_tidal",
-       "display_label": "Tidal Notifications",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 11,
-       "rrf_score": 0.03225806451612903,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_ledger",
-       "display_label": "helio/ledger",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 12,
-       "rrf_score": 0.02631578947368421,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "issue_vertex_tax_rounding",
-       "display_label": "Vertex tax rounding",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 13,
-       "rrf_score": 0.02564102564102564,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_beacon_ingest",
-       "display_label": "Beacon ingest throughput",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 14,
-       "rrf_score": 0.025,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_schema",
-       "display_label": "Ledger schema migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 15,
-       "rrf_score": 0.024390243902439025,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_vertex",
-       "display_label": "Vertex Checkout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 16,
-       "rrf_score": 0.021739130434782608,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_beacon",
-       "display_label": "Beacon Ingest",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 17,
-       "rrf_score": 0.02127659574468085,
-       "signal": "fuzzy_label"
       }
      ],
-     "withheld_canonical_ids": []
+     "withheld_canonical_ids": [
+      "proj_quarry"
+     ]
     }
    ],
    "permitted_candidate_ids": [
@@ -2795,10 +1883,10 @@
    "delta": {
     "baseline_correct": true,
     "baseline_ranked": 0,
-    "classification": "deterministic_only_correct",
-    "detail": "baseline: nothing was ranked, which is the only correct resolution | semantic: the case names a subject that does not exist; the leg ranked 20 candidates anyway, led by repo_beacon",
-    "semantic_correct": false,
-    "semantic_ranked": 20
+    "classification": "both_correct",
+    "detail": "baseline: nothing was ranked, which is the only correct resolution | semantic: nothing was ranked, which is the only correct resolution",
+    "semantic_correct": true,
+    "semantic_ranked": 0
    },
    "expected_answer": "unavailable",
    "forbidden_subject_ids": [
@@ -2889,8 +1977,8 @@
       "proj_beacon",
       "wi_borealis_wip",
       "wi_beacon_demand",
-      "wu_ledger_backfill",
       "wi_ledger_backfill_open",
+      "wu_ledger_backfill",
       "pr_ledger_990_merged",
       "wi_beacon_deleted",
       "ia_beacon_allocation",
@@ -2968,265 +2056,23 @@
       "case_id": "H08_no_match_must_not_widen",
       "leg": "semantic_hybrid",
       "must_not_commit": "pass",
-      "must_not_commit_detail": "ranked 20 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
+      "must_not_commit_detail": "ranked 0 candidates; a single ranked candidate is a silent commitment where the case demands a clarification",
       "no_forbidden_subject": "pass",
       "no_forbidden_subject_detail": "no forbidden subject ranked",
-      "precision_at_3": "fail",
-      "precision_at_3_detail": "stray candidates inside the top-3 horizon ['repo_acr', 'repo_beacon', 'repo_ledger']",
-      "precision_over_all": "fail",
-      "precision_over_all_detail": "20 stray candidates across 20 ranked",
-      "resolved": true,
-      "stray_candidates": [
-       "pr_ledger_990",
-       "pr_pulse_212",
-       "proj_beacon",
-       "proj_ledger_migration",
-       "proj_meridian",
-       "proj_solstice",
-       "proj_zenith",
-       "repo_acr",
-       "repo_beacon",
-       "repo_checkout",
-       "repo_identity",
-       "repo_ledger",
-       "repo_pulse",
-       "svc_ledger_api",
-       "team_borealis",
-       "wu_beacon_ingest",
-       "wu_ledger_backfill",
-       "wu_ledger_cutover",
-       "wu_ledger_dual_write",
-       "wu_ledger_schema"
-      ],
-      "subject_resolution_correct": false,
-      "subject_resolution_detail": "the case names a subject that does not exist; the leg ranked 20 candidates anyway, led by repo_beacon",
+      "precision_at_3": "pass",
+      "precision_at_3_detail": "no stray candidate inside the top-3 horizon",
+      "precision_over_all": "pass",
+      "precision_over_all_detail": "no stray candidate across 0 ranked",
+      "resolved": false,
+      "stray_candidates": [],
+      "subject_resolution_correct": true,
+      "subject_resolution_detail": "nothing was ranked, which is the only correct resolution",
       "subject_top_1": "not_applicable",
       "subject_top_1_detail": "the case expects a clarification, so there is no committed subject to be rank-1",
       "subject_top_3": "not_applicable",
       "subject_top_3_detail": "the case expects a clarification, so there is no committed subject to be rank-1"
      },
-     "subjects": [
-      {
-       "canonical_id": "repo_beacon",
-       "display_label": "helio/beacon",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 0,
-       "rrf_score": 1.0,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_ledger",
-       "display_label": "helio/ledger",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 1,
-       "rrf_score": 0.3333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_acr",
-       "display_label": "helio/acr",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 2,
-       "rrf_score": 0.25,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_checkout",
-       "display_label": "helio/checkout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 3,
-       "rrf_score": 0.125,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_identity",
-       "display_label": "helio/identity",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 4,
-       "rrf_score": 0.1111111111111111,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_beacon",
-       "display_label": "Beacon Ingest",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 5,
-       "rrf_score": 0.1,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_backfill",
-       "display_label": "Ledger historical backfill",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 6,
-       "rrf_score": 0.07692307692307693,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_zenith",
-       "display_label": "Zenith Payments",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 7,
-       "rrf_score": 0.05263157894736842,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_solstice",
-       "display_label": "Solstice Billing",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 8,
-       "rrf_score": 0.05,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_beacon_ingest",
-       "display_label": "Beacon ingest throughput",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 9,
-       "rrf_score": 0.047619047619047616,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "repo_pulse",
-       "display_label": "helio/pulse",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 10,
-       "rrf_score": 0.041666666666666664,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_pulse_212",
-       "display_label": "pulse#212 analytics rollout",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 11,
-       "rrf_score": 0.038461538461538464,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_schema",
-       "display_label": "Ledger schema migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 12,
-       "rrf_score": 0.03571428571428571,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_dual_write",
-       "display_label": "Ledger dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 13,
-       "rrf_score": 0.03333333333333333,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "wu_ledger_cutover",
-       "display_label": "Ledger cutover",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 14,
-       "rrf_score": 0.03225806451612903,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "team_borealis",
-       "display_label": "Borealis",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 15,
-       "rrf_score": 0.02564102564102564,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "pr_ledger_990",
-       "display_label": "ledger#990 dual-write teardown",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 16,
-       "rrf_score": 0.021739130434782608,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "svc_ledger_api",
-       "display_label": "Ledger API",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 17,
-       "rrf_score": 0.02127659574468085,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_meridian",
-       "display_label": "Meridian Docs",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 18,
-       "rrf_score": 0.020833333333333332,
-       "signal": "fuzzy_label"
-      },
-      {
-       "canonical_id": "proj_ledger_migration",
-       "display_label": "Ledger Migration",
-       "mechanism": "embedding_similarity",
-       "methods": [
-        "cosine_similarity"
-       ],
-       "rank": 19,
-       "rrf_score": 0.02040816326530612,
-       "signal": "fuzzy_label"
-      }
-     ],
+     "subjects": [],
      "withheld_canonical_ids": []
     }
    ],
@@ -3284,37 +2130,43 @@
   "cases_measured": 8,
   "delta_classification_case_ids": {
    "both_correct": [
-    "H01_acronym_resolution"
-   ],
-   "deterministic_only_correct": [
-    "H02_old_and_current_name",
+    "H01_acronym_resolution",
+    "H07_unresolved_needs_candidates",
     "H08_no_match_must_not_widen"
    ],
-   "neither_correct_semantic_ranked_anyway": [
-    "H03_the_auth_work",
+   "deterministic_only_correct": [
+    "H02_old_and_current_name"
+   ],
+   "neither_correct_both_ranked": [
+    "H03_the_auth_work"
+   ],
+   "neither_correct_neither_ranked": [
     "H04_pronoun_follow_up",
     "H05_the_other_project_we_discussed",
-    "H06_prior_attempt_reference",
-    "H07_unresolved_needs_candidates"
+    "H06_prior_attempt_reference"
    ]
   },
   "delta_classification_counts": {
-   "both_correct": 1,
-   "deterministic_only_correct": 2,
-   "neither_correct_semantic_ranked_anyway": 5
+   "both_correct": 3,
+   "deterministic_only_correct": 1,
+   "neither_correct_both_ranked": 1,
+   "neither_correct_neither_ranked": 3
   },
   "prose_disclosures_by_leg": {},
   "subject_resolution_correct_by_leg": {
    "deterministic_mentions": [
     "H01_acronym_resolution",
     "H02_old_and_current_name",
+    "H07_unresolved_needs_candidates",
     "H08_no_match_must_not_widen"
    ],
    "deterministic_question": [
     "H08_no_match_must_not_widen"
    ],
    "semantic_hybrid": [
-    "H01_acronym_resolution"
+    "H01_acronym_resolution",
+    "H07_unresolved_needs_candidates",
+    "H08_no_match_must_not_widen"
    ]
   }
  }

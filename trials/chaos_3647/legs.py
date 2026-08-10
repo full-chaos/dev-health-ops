@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 from dev_health_ops.context_fabric.graph_arm.discovery import search_candidates
 from dev_health_ops.context_fabric.graph_arm.semantic_retrieval import (
+    assess_disposition,
     retrieve_candidates,
 )
 from trials.chaos_3619.graph_leg import mention_texts
@@ -122,6 +123,18 @@ class LegResolution:
     #: only. Recorded because an empty tuple here is the single most
     #: load-bearing fact in the whole comparison.
     mentions: tuple[str, ...] = ()
+    #: CHAOS-3666. The semantic leg's own ``SemanticDisposition`` (propose /
+    #: clarify / refuse), empty string on the deterministic legs, which
+    #: apply no disposition policy. ``subjects`` on the semantic leg is
+    #: already gated to what this disposition presents -- this field exists
+    #: so a reader of the trial artifact can see the POLICY DECISION that
+    #: produced ``subjects``, not just its result: a REFUSE (empty
+    #: ``subjects``) is a different finding from retrieval simply returning
+    #: nothing, and only this field distinguishes them.
+    disposition: str = ""
+    #: The disposition policy's own stated reason. Trial diagnostic, mirrors
+    #: ``SemanticDispositionResult.reason``.
+    disposition_reason: str = ""
 
     @property
     def resolved(self) -> bool:
@@ -244,6 +257,19 @@ async def resolve_semantic(
     empty mention tuple would guarantee an empty result and measure nothing.
     The cost of that choice is that the two legs no longer share an input,
     which is exactly what ``DETERMINISTIC_QUESTION`` exists to price.
+
+    **CHAOS-3666: reports what a caller would actually receive.**
+    ``retrieve_candidates`` alone returns every authorized candidate it
+    fused, unbounded and unfiltered by confidence -- exactly the raw ranking
+    ``semantic_retrieval.assess_disposition`` exists to gate before anything
+    downstream trusts it (see that function's own docstring: a nonexistent
+    entity or an unresolved reference produces a long, confident-looking
+    ranking with no lexical grounding underneath it). This leg calls it and
+    reports only ``disposition_result.presented`` as ``subjects`` -- empty on
+    REFUSE, one entry on PROPOSE, a bounded tied set on CLARIFY -- so
+    ``subjects`` here means the same thing it means on the deterministic
+    legs: what this leg would actually hand a consumer, not an internal
+    ranking a policy layer would filter before anyone saw it.
     """
 
     retrieval = await retrieve_candidates(
@@ -252,6 +278,7 @@ async def resolve_semantic(
         authorized_entity_ids=authorized_entity_ids,
         limit=limit,
     )
+    disposition_result = assess_disposition(retrieval)
     return LegResolution(
         leg=LegId.SEMANTIC_HYBRID,
         query=question,
@@ -265,11 +292,13 @@ async def resolve_semantic(
                 methods=tuple(sorted(method.value for method in candidate.methods)),
                 rrf_score=candidate.rrf_score,
             )
-            for candidate in retrieval.candidates
+            for candidate in disposition_result.presented
         ),
         authorization_filtered_count=retrieval.authorization_filtered_count,
         withheld_canonical_ids=retrieval.withheld_canonical_ids,
         bm25_order=retrieval.bm25_order,
         cosine_order=retrieval.cosine_order,
         observation_hits=retrieval.observation_hits,
+        disposition=disposition_result.disposition.value,
+        disposition_reason=disposition_result.reason,
     )

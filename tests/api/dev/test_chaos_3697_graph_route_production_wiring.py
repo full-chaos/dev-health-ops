@@ -1,45 +1,11 @@
-"""Issue 3697: the graph-assisted Ask Dev route is unreachable in
-production, and the runtime flag is never even the deciding factor.
+"""Regression coverage for the production graph-route composition root.
 
-``BoundedDevRuntime.run()`` (``runtime.py``) constructs the real
-``DevOrchestrator`` production actually serves. That constructor call
-passes none of ``graph_investigation_query``, ``evidence_service``, or
-``canonical_enrichment`` -- confirmed by grep over the whole ``src/`` tree:
-zero keyword-argument call sites for either of the first two anywhere, and
-the third does not exist as a parameter at all yet on this branch. So all
-three default to ``None`` on every real request, independent of the
-organization feature-policy gate, the runtime kill switch
-(``graph_routing_runtime_enabled()``), or anything an operator does.
-
-The routing gate at ``orchestrator.py``'s cohort-discovery branch reads:
-
-    and self._graph_investigation_query is not None
-    and self._evidence_service is not None
-    and graph_routing_runtime_enabled()
-
-Both identity checks are ``False`` in production, so the ``and``-chain
-short-circuits before ``graph_routing_runtime_enabled()`` is ever
-evaluated. Turning the runtime flag on today changes nothing.
-
-Concretely, in ``production_runtime.py``:
-
-* ``_assemble_production_runtime`` builds a real ``EvidenceService`` (see
-  its own ``evidence_service = EvidenceService(...)`` call) -- and then
-  never threads it into the ``BoundedDevRuntime`` it returns.
-  ``BoundedDevRuntime`` (``runtime.py``) has no field for it at all.
-* No code path anywhere in ``production_runtime.py`` constructs a
-  ``GraphInvestigationQuery`` in the first place.
-
-Existing coverage (``test_chaos_3502_graph_routing_seam.py``,
-``test_chaos_3502_graph_routing_branch.py``) never catches this: every one
-of those tests hand-constructs
-``DevOrchestrator(**kwargs, graph_investigation_query=..., evidence_service=...)``
-directly. That proves the constructor *accepts* the collaborators; it
-proves nothing about whether the real composition root ever *passes* one --
-which is exactly why this defect shipped invisibly. This file drives the
-real path instead: ``production_runtime.build_production_runtime()`` ->
-``BoundedDevRuntime.run()`` -> the real ``DevOrchestrator(...)`` call site
-in ``runtime.py`` -- and inspects what THAT call actually received.
+The defect was invisible to tests that hand-constructed ``DevOrchestrator``
+with graph collaborators. These tests instead drive the real path from
+``build_production_runtime()`` through ``BoundedDevRuntime.run()`` and inspect
+what that call site supplies. An enabled organization must receive all three
+shared collaborators; a policy-off organization must retain their ``None``
+state, and the independent runtime kill switch must still default off.
 """
 
 from __future__ import annotations
@@ -84,7 +50,9 @@ class _ConstructionObserved(Exception):
     the real runtime handed the real constructor."""
 
 
-async def _build_runtime(monkeypatch: pytest.MonkeyPatch) -> Any:
+async def _build_runtime(
+    monkeypatch: pytest.MonkeyPatch, *, wave_3_1_enabled: bool = True
+) -> Any:
     """The real production composition root
     (``production_runtime.build_production_runtime``), with only the
     provider resolution and the JWT secret stubbed -- the same seam
@@ -111,6 +79,11 @@ async def _build_runtime(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(
         production_runtime, "resolve_production_provider", resolve_provider
     )
+
+    async def resolve_wave_policy(_session: Any, _org_id: str) -> bool:
+        return wave_3_1_enabled
+
+    monkeypatch.setattr(production_runtime, "_wave_3_1_enabled", resolve_wave_policy)
     monkeypatch.setenv("JWT_SECRET_KEY", "test-evidence-signing-secret-32-bytes-long")
     return await production_runtime.build_production_runtime(
         cast(Any, object()),
@@ -162,12 +135,9 @@ async def _capture_orchestrator_construction(
     return captured
 
 
-#: The 14 keyword arguments runtime.py's DevOrchestrator(...) call site
-#: passes today (verified against the actual source at the top of this
-#: file's module docstring investigation). Used ONLY by the positive
-#: control below to prove the capturing harness genuinely observed a real
-#: construction -- never asserted against directly in the RED test itself,
-#: which only cares about the three that are ABSENT from this set.
+#: The 17 keyword arguments runtime.py's DevOrchestrator(...) call site
+#: passes. Used by the positive control below to prove the capturing harness
+#: genuinely observed the real construction seam.
 _KWARGS_RUNTIME_PY_ACTUALLY_PASSES = frozenset(
     {
         "provider",
@@ -184,6 +154,9 @@ _KWARGS_RUNTIME_PY_ACTUALLY_PASSES = frozenset(
         "qua_shadow",
         "investigation_shadow",
         "investigation_packet_producer",
+        "graph_investigation_query",
+        "evidence_service",
+        "canonical_enrichment",
     }
 )
 
@@ -192,23 +165,18 @@ _KWARGS_RUNTIME_PY_ACTUALLY_PASSES = frozenset(
 async def test_the_capturing_harness_genuinely_observes_a_real_construction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Positive control for the RED test below -- deliberately NOT xfail,
-    and MUST keep passing.
+    """Positive control for the wiring regression test below.
 
-    ``xfail`` swallows any failure the marked test raises, not only the one
-    it is meant to demonstrate. If the interception in
+    If the interception in
     ``_capture_orchestrator_construction`` ever silently stops working --
     the ``DevOrchestrator(...)`` call site moves, gets wrapped in a
     factory, the import binding changes, or the probe exception fires
-    before ``captured`` is populated -- the RED test still reports
-    ``XFAIL`` (an assertion failure inside ``pytest.raises`` also
-    satisfies it), which reads as "expected failure, all fine" while the
-    harness has quietly stopped observing anything about production wiring
-    at all. That is the exact failure shape this whole issue is about, one
-    layer up: a measurement that fails toward "fine" instead of loudly.
+    before ``captured`` is populated -- this test fails loudly instead of
+    letting the collaborator assertions claim coverage over an unobserved
+    construction.
 
     This test asserts the harness actually captured a construction: the
-    exact 14 keyword names ``runtime.py`` really passes today, populated
+    exact 17 keyword names ``runtime.py`` passes, populated
     with real values (not just present-but-empty) -- ``registry`` is a
     genuine ``AskDevToolRegistry``, and ``provider`` is the exact
     ``_FakeProvider`` instance this test's own stub handed to
@@ -226,15 +194,14 @@ async def test_the_capturing_harness_genuinely_observes_a_real_construction(
 
     assert captured, (
         "the capturing DevOrchestrator subclass never ran -- the "
-        "interception itself is broken, which would make the RED test "
-        "below meaningless (an XFAIL that observes nothing still reports "
-        "XFAIL)"
+        "interception itself is broken, which would make the wiring test "
+        "below meaningless"
     )
     assert set(captured) == _KWARGS_RUNTIME_PY_ACTUALLY_PASSES, (
         "runtime.py's DevOrchestrator(...) call site no longer passes the "
         "keyword set this harness was written against -- update "
         "_KWARGS_RUNTIME_PY_ACTUALLY_PASSES to match the real call site "
-        "before trusting the RED test's absence claim again"
+        "before trusting the wiring claim again"
     )
     assert captured["registry"] is not None
     assert type(captured["registry"]).__name__ == "AskDevToolRegistry"
@@ -246,41 +213,19 @@ async def test_the_capturing_harness_genuinely_observes_a_real_construction(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Issue 3697: the graph-assisted route is unreachable in production "
-        "-- BoundedDevRuntime.run() never wires graph_investigation_query, "
-        "evidence_service, or canonical_enrichment into DevOrchestrator. "
-        "Landing this test RED (rather than deferring it) is deliberate: it "
-        "must be visible on the feature branch as a known, tracked gap, not "
-        "silently absent. strict=True is load-bearing, not decorative -- it "
-        "flips this to a hard CI failure the instant any leg of the fix "
-        "lands without this marker being removed in the SAME change, so the "
-        "fix and the test that proves it can never drift apart silently."
-    ),
-)
 @pytest.mark.asyncio
-async def test_production_runtime_never_wires_the_graph_route_collaborators(
+async def test_production_runtime_wires_the_graph_route_collaborators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue 3697, RED (xfail-strict; see the marker above for why it is
-    landed failing rather than deferred). The cohort-discovery routing gate
+    """The cohort-discovery routing gate
     requires ``graph_investigation_query``, ``evidence_service``, AND (once
     wired) ``canonical_enrichment`` to all be non-``None`` before it even
     asks ``graph_routing_runtime_enabled()``. This asserts on the ACTUAL
     ``DevOrchestrator`` the production composition root builds -- not one
     this test built by hand -- so it fails for the same reason the route
     fails to activate in production, not for an unrelated mistake in the
-    test itself.
-
-    MUST currently fail: none of the three collaborators reach the
-    constructor today. ``.get()`` is used deliberately for
-    ``canonical_enrichment``, which is not even a ``DevOrchestrator``
-    parameter yet on this branch (concurrent, unrelated lane work) -- a
-    missing key reads as ``None`` here, same as an explicit ``None``, so
-    this test does not crash ahead of that landing and starts holding it to
-    the same bar the moment it does.
+    test itself. The helper explicitly enables the organization policy so
+    collaborator presence makes the runtime kill switch the deciding gate.
     """
 
     bounded_runtime = await _build_runtime(monkeypatch)
@@ -307,18 +252,40 @@ async def test_production_runtime_never_wires_the_graph_route_collaborators(
         "canonical_enrichment is not threaded from the production "
         "composition root into DevOrchestrator"
     )
+    assert (
+        captured["graph_investigation_query"]
+        is bounded_runtime.graph_investigation_query
+    )
+    assert captured["evidence_service"] is bounded_runtime.evidence_service
+    assert captured["canonical_enrichment"] is bounded_runtime.canonical_enrichment
+
+
+@pytest.mark.asyncio
+async def test_production_runtime_keeps_graph_collaborators_off_for_policy_off_org(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bounded_runtime = await _build_runtime(monkeypatch, wave_3_1_enabled=False)
+    try:
+        captured = await _capture_orchestrator_construction(
+            monkeypatch, bounded_runtime
+        )
+    finally:
+        await bounded_runtime.aclose()
+
+    assert captured["graph_investigation_query"] is None
+    assert captured["evidence_service"] is None
+    assert captured["canonical_enrichment"] is None
 
 
 def test_graph_routing_runtime_flag_defaults_off_in_a_production_shaped_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Companion to the RED test above -- NOT equivalent evidence, and this
-    one legitimately passes today. Two independent reasons it will keep
-    passing once the wiring gap above is fixed: (1) the runtime kill switch
+    """Companion to the wiring test above. Two independent reasons it
+    passes: (1) the runtime kill switch
     (``GRAPH_ROUTING_RUNTIME_FLAG``) already defaults off on its own,
     unrelated to whether the collaborators get wired; and (2) the routing
     gate is an ``and`` of collaborator-presence and this flag, so even
-    after the collaborators start reaching the constructor, an operator
+    after the collaborators reach the constructor, an operator
     still has to explicitly opt in for the route to activate. This guards
     against a fix that makes the route always-on instead of genuinely
     flag-controlled.

@@ -10,9 +10,12 @@ from typing import Literal
 from dev_health_ops.llm.agent.contracts import AgentLLMProvider
 
 from .answer_frames import narrative_fallback
+from .canonical_enrichment import CanonicalEnrichmentAccessor
 from .contracts import DevContractVersions, DevMessageRequest
 from .contracts_v2.base import QuestionIntentID
 from .contracts_v2.plan import DevInvestigationPlan
+from .evidence_service import EvidenceService
+from .graph_investigation_query import GraphInvestigationQuery
 from .investigation_plans import PlanExecutor
 from .investigation_shadow import InvestigationPacketProducer, InvestigationShadow
 from .orchestrator import (
@@ -81,6 +84,12 @@ class BoundedDevRuntime:
     #: the absence of an object rather than a branch inside one.
     investigation_shadow: InvestigationShadow | None = None
     investigation_packet_producer: InvestigationPacketProducer | None = None
+    #: Server-owned graph-assisted collaborators. Production constructs all
+    #: three once in its composition root; the runtime carries those exact
+    #: instances into each per-run orchestrator.
+    graph_investigation_query: GraphInvestigationQuery | None = None
+    evidence_service: EvidenceService | None = None
+    canonical_enrichment: CanonicalEnrichmentAccessor | None = None
 
     async def run(
         self,
@@ -112,6 +121,9 @@ class BoundedDevRuntime:
             qua_shadow=self.qua_shadow,
             investigation_shadow=self.investigation_shadow,
             investigation_packet_producer=self.investigation_packet_producer,
+            graph_investigation_query=self.graph_investigation_query,
+            evidence_service=self.evidence_service,
+            canonical_enrichment=self.canonical_enrichment,
         )
         return await orchestrator.run(
             request=request,

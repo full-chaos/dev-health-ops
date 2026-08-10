@@ -199,11 +199,13 @@ class TestGraphitiIsOptional:
 
 class TestNoProductionCoupling:
     def test_no_production_module_imports_the_arm_at_module_scope(self) -> None:
-        """One lazy registration point, and no others.
+        """Optional graph dependencies never load at production import time.
 
         ``derived_store_registry`` imports the arm inside a function so org
-        deletion can visit the trial store; that is the *only* reference the
-        production tree is allowed to hold.
+        deletion can visit the store. The approved Ask Dev composition root
+        likewise imports its query implementation only after organization
+        policy enables the graph route. Neither may become a module-scope
+        dependency of the default production runtime.
         """
 
         src = _REPO_ROOT / "src" / "dev_health_ops"

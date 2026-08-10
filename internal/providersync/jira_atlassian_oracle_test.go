@@ -61,7 +61,7 @@ func jiraAtlassianOracleCases() []oracleCase {
 				"org_id": "org-acme", "since": "2026-08-01T00:00:00Z", "until": "2026-08-10T00:00:00Z",
 				"project_key": "OPS", "fetch_worklogs": true, "fetch_board_sprints": false,
 				"graphql_fallback": true, "issue": jiraAtlassianOracleIssue("OPS-303"),
-				"worklogs": []any{map[string]any{"id": "wl-303", "author": map[string]any{"accountId": "account-303", "name": "GraphQL Worker"}, "started": "2026-08-03T10:00:00.123456Z", "timeSpentSeconds": 1200, "created": "2026-08-03T10:01:00.123456Z", "updated": "2026-08-03T10:02:00.123456Z"}},
+				"worklogs":      []any{map[string]any{"id": "wl-303", "author": map[string]any{"accountId": "account-303", "name": "GraphQL Worker"}, "started": "2026-08-03T10:00:00.123456Z", "timeSpentSeconds": 1200, "created": "2026-08-03T10:01:00.123456Z", "updated": "2026-08-03T10:02:00.123456Z"}},
 				"board_sprints": []any{}, "reference_sprints": []any{},
 			},
 		},
@@ -86,7 +86,7 @@ func buildJiraAtlassianOracleSurfaces(t *testing.T, input map[string]any) jiraAt
 	claim.DatasetOptions = map[string]any{
 		"fetch_worklogs": jiraBatchBool(input["fetch_worklogs"], false), "fetch_board_sprints": jiraBatchBool(input["fetch_board_sprints"], false),
 		"atlassian_gql_enabled": jiraBatchBool(input["graphql_fallback"], false),
-		"sprint_field": "customfield_10020",
+		"sprint_field":          "customfield_10020",
 	}
 	normalizedAt := jiraProducerBatchNormalizedAt()
 	issue := input["issue"].(map[string]any)

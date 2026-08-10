@@ -114,6 +114,7 @@ from .investigation_plans.wave_3_1_plans import (
 from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
+from .native_evidence_resolver import NativeEvidenceCandidateResolver
 from .native_status_change import ClickHouseStatusChangeSource
 from .native_team_workload import ClickHouseTeamWorkloadSource
 from .operational_deficiency_service import OperationalDeficiencyService
@@ -1604,6 +1605,15 @@ async def _assemble_production_runtime(
         signer=evidence_signer,
         native_adapters=native_evidence_adapters(clickhouse),
         acr_adapter=None,
+        # CHAOS-3675 PR 1/3: the first real (non-fixture) candidate
+        # resolver. Registering it does not, by itself, admit anything --
+        # nothing in production calls ``EvidenceService.admit`` yet (Lane
+        # B's routing work does); this only replaces the "no shipped
+        # construction passes a resolver" default the class docstring
+        # describes. Handles ``review``-kind candidates only today; every
+        # other ``GraphObservationKind`` still refuses as
+        # ``source_unconfigured`` until PR 2/3 and PR 3/3 land.
+        candidate_resolvers=(NativeEvidenceCandidateResolver(clickhouse),),
     )
     data_health_service = DataHealthService(
         entitlement=entitlement,

@@ -937,13 +937,16 @@ def _target_linear_normalize() -> None:
 
 
 def _target_linear_provider() -> None:
-    """Load the live Linear provider wrapper for provider-only helpers.
+    """Load the live Linear provider for an injected-client producer oracle.
 
-    The reference-dimension resolver lives in ``provider.py`` rather than the
-    pure normalizer.  Keep the provider module itself live while loading only
-    the dependency-free contracts needed to define its class; the oracle never
-    enters the HTTP client or ingestion method.
+    The oracle supplies a typed in-memory client, so no HTTP transport or
+    credential stack is needed. The provider's actual ``iter_ingest`` method,
+    its batch boundaries, and the real Linear normalizer still execute.
     """
+    _target_linear_normalize()
+    _load_source_module(
+        "dev_health_ops.providers.linear.normalize", _LINEAR_NORMALIZE_SOURCE
+    )
     _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
     _load_source_module("dev_health_ops.providers.base", _PROVIDERS_BASE_SOURCE)
     _load_source_module("dev_health_ops.providers.utils", _PROVIDERS_UTILS_SOURCE)

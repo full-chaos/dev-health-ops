@@ -1,0 +1,338 @@
+{
+  "schema_version": 1,
+  "name": "GitLab feature-flags effects provider parity (CHAOS-3702)",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "Effects-only coverage for the fixed GitLab ClickHouse sink: provider/dataset/destination guards, tenant scope, empty effects, lease fences, projections/append values, readback/version decisions, and migrated-schema provider/tenant fences. The current proof suite has no observable forged-provider row for the GitLab feature_flag or work_graph_edges validators, so those duplicate provider-row clauses and the duplicate event/edge pre-send sites are intentionally not declared as measured mutations; adding entries without a failing trigger would create false coverage. Registry, route, oracle, matrix, scheduler, transport, wiring, migration, and harness execution remain outside this plan.",
+  "mutations": [
+    {
+      "id": "E1-gitlab-wrapper-provider",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func (sink GitLabFeatureFlagsClickHouseEffects) shared() featureFlagsClickHouseEffects {\n\treturn featureFlagsClickHouseEffects{\n\t\tConn: sink.Conn, Lease: sink.Lease, Provider: \"gitlab\",\n\t}\n}",
+      "replace": "func (sink GitLabFeatureFlagsClickHouseEffects) shared() featureFlagsClickHouseEffects {\n\treturn featureFlagsClickHouseEffects{\n\t\tConn: sink.Conn, Lease: sink.Lease, Provider: \"launchdarkly\",\n\t}\n}",
+      "rationale": "the exported GitLab wrapper must pin the shared sink to GitLab before claim validation or persistence",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAcceptsLegitimateEmptyEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E2-gitlab-forbidden-link",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "return sink.Provider == \"launchdarkly\"",
+      "replace": "return true",
+      "rationale": "feature_flag_link is a LaunchDarkly-only destination and a GitLab effect must never be allowed to write it",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E3-write-provider-guard",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "claim.Provider != sink.Provider || claim.Dataset != \"feature-flags\" ||\n\t\t!sink.acceptsDestination(effect.Destination) {",
+      "replace": "false || claim.Dataset != \"feature-flags\" ||\n\t\t!sink.acceptsDestination(effect.Destination) {",
+      "rationale": "WriteEffect must reject a claim from another provider before decoding rows or preparing a ClickHouse batch",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsRejectProviderDatasetAndDestinationBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E4-write-dataset-guard",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "claim.Dataset != \"feature-flags\" ||\n\t\t!sink.acceptsDestination(effect.Destination) {",
+      "replace": "false ||\n\t\t!sink.acceptsDestination(effect.Destination) {",
+      "rationale": "WriteEffect must reject a different dataset even when the provider claim is GitLab",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsRejectProviderDatasetAndDestinationBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E5-write-destination-guard",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "!sink.acceptsDestination(effect.Destination) {",
+      "replace": "false {",
+      "rationale": "WriteEffect must reject a destination outside the GitLab feature_flag, feature_flag_event, and work_graph_edges contract",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsRejectProviderDatasetAndDestinationBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E6-inspect-provider-guard",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "claim.Provider != sink.Provider || claim.Dataset != \"feature-flags\" ||\n\t\t!sink.supportsReadback(effect.Destination) {",
+      "replace": "false || claim.Dataset != \"feature-flags\" ||\n\t\t!sink.supportsReadback(effect.Destination) {",
+      "rationale": "InspectEffect must reject readback for another provider before issuing a query",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsRejectProviderDatasetAndDestinationBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E7-inspect-dataset-guard",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "claim.Dataset != \"feature-flags\" ||\n\t\t!sink.supportsReadback(effect.Destination) {",
+      "replace": "false ||\n\t\t!sink.supportsReadback(effect.Destination) {",
+      "rationale": "InspectEffect must reject readback for a different dataset before issuing a query",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsRejectProviderDatasetAndDestinationBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E8-inspect-destination-support",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "return sink.Provider == \"gitlab\" && sink.acceptsDestination(destination)",
+      "replace": "return sink.Provider == \"gitlab\" && false",
+      "rationale": "GitLab readback must support each allowed feature-flag destination while continuing to reject feature_flag_link",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E9-flag-org-scope",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func validateFeatureFlagScope(\n\tclaim Claim,\n\trows []launchDarklyFlagRow,\n\tprovider string,\n) error {\n\tfor _, row := range rows {\n\t\tif row.OrgID != claim.OrgID || row.Provider != provider {",
+      "replace": "func validateFeatureFlagScope(\n\tclaim Claim,\n\trows []launchDarklyFlagRow,\n\tprovider string,\n) error {\n\tfor _, row := range rows {\n\t\tif false || row.Provider != provider {",
+      "rationale": "feature-flag rows must remain tenant-bound before either writes or readback queries",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsFenceTenantAndLeaseBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E10-event-org-scope",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func validateFeatureFlagEventScope(\n\tclaim Claim,\n\trows []launchDarklyEventRow,\n) error {\n\tfor _, row := range rows {\n\t\tif row.OrgID != claim.OrgID {",
+      "replace": "func validateFeatureFlagEventScope(\n\tclaim Claim,\n\trows []launchDarklyEventRow,\n) error {\n\tfor _, row := range rows {\n\t\tif row.OrgID != row.OrgID {",
+      "rationale": "feature-flag event rows must remain tenant-bound before event persistence or LaunchDarkly readback",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLaunchDarklyClickHouseEffectsRejectCrossTenantRowsBeforeIO$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E11-link-provider-scope",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func validateFeatureFlagLinkScope(\n\tclaim Claim,\n\trows []launchDarklyLinkRow,\n\tprovider string,\n) error {\n\tfor _, row := range rows {\n\t\tif row.OrgID != claim.OrgID || row.Provider != provider {",
+      "replace": "func validateFeatureFlagLinkScope(\n\tclaim Claim,\n\trows []launchDarklyLinkRow,\n\tprovider string,\n) error {\n\tfor _, row := range rows {\n\t\tif row.OrgID != claim.OrgID || false {",
+      "rationale": "LaunchDarkly link rows still require the fixed provider even though links are forbidden for GitLab",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLaunchDarklyClickHouseEffectsRejectCrossTenantRowsBeforeIO$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E12-edge-org-scope",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func validateFeatureFlagEdgeScope(\n\tclaim Claim,\n\trows []launchDarklyEdgeRow,\n\tprovider string,\n) error {\n\tfor _, row := range rows {\n\t\tif row.OrgID != claim.OrgID || row.Provider != provider {",
+      "replace": "func validateFeatureFlagEdgeScope(\n\tclaim Claim,\n\trows []launchDarklyEdgeRow,\n\tprovider string,\n) error {\n\tfor _, row := range rows {\n\t\tif false || row.Provider != provider {",
+      "rationale": "work-graph edge rows must remain tenant-bound before edge persistence or readback",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLaunchDarklyClickHouseEffectsRejectCrossTenantRowsBeforeIO$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E13-pre-prepare-lease",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\tswitch effect.Destination {",
+      "replace": "if err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn nil\n\t}\n\tswitch effect.Destination {",
+      "rationale": "the lease must be rechecked before decoding and preparing any destination batch",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsFenceTenantAndLeaseBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E14-pre-send-lease",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "\t\t\trow.LastSynced,\n\t\t); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn err\n\t}\n\treturn batch.Send()",
+      "replace": "\t\t\trow.LastSynced,\n\t\t); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\tif err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn nil\n\t}\n\treturn batch.Send()",
+      "rationale": "the flag batch must not be sent after the lease is lost between append and send",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsFenceTenantAndLeaseBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E15-pre-query-lease",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tswitch effect.Destination {",
+      "replace": "if err := sink.Lease.Assert(ctx); err != nil {\n\t\treturn EffectAbsent, nil\n\t}\n\tswitch effect.Destination {",
+      "rationale": "readback must stop at the lease fence before issuing a ClickHouse query",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsFenceTenantAndLeaseBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E16-write-empty-flag",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if err := validateFeatureFlagScope(claim, rows, sink.Provider); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif len(rows) == 0 && sink.Provider == \"gitlab\" {",
+      "replace": "if err := validateFeatureFlagScope(claim, rows, sink.Provider); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif false {",
+      "rationale": "a valid empty GitLab feature-flag effect is a successful no-op and must not require ClickHouse",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAcceptsLegitimateEmptyEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E17-write-empty-event",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if err := validateFeatureFlagEventScope(claim, rows); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif len(rows) == 0 && sink.Provider == \"gitlab\" {",
+      "replace": "if err := validateFeatureFlagEventScope(claim, rows); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif false {",
+      "rationale": "a valid empty GitLab feature-flag event effect is a successful no-op and must not require ClickHouse",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAcceptsLegitimateEmptyEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E18-write-empty-edge",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if err := validateFeatureFlagEdgeScope(claim, rows, sink.Provider); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif len(rows) == 0 && sink.Provider == \"gitlab\" {",
+      "replace": "if err := validateFeatureFlagEdgeScope(claim, rows, sink.Provider); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif false {",
+      "rationale": "a valid empty GitLab work-graph edge effect is a successful no-op and must not require ClickHouse",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAcceptsLegitimateEmptyEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E19-inspect-empty-event",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if len(expected) == 0 && sink.Provider == \"gitlab\" {\n\t\treturn EffectAbsent, nil\n\t}",
+      "replace": "if false {\n\t\treturn EffectAbsent, nil\n\t}",
+      "rationale": "GitLab empty event readback is an absent effect without a query, unlike the preserved LaunchDarkly legacy classification",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAcceptsLegitimateEmptyEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E21-inspect-empty-flag-clause",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func (sink featureFlagsClickHouseEffects) inspectFlags(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) (EffectInspection, error) {\n\texpected, err := decodeEffectRows[launchDarklyFlagRow](effect)\n\tif err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif err := validateFeatureFlagScope(claim, expected, sink.Provider); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(expected) == 0 {",
+      "replace": "func (sink featureFlagsClickHouseEffects) inspectFlags(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) (EffectInspection, error) {\n\texpected, err := decodeEffectRows[launchDarklyFlagRow](effect)\n\tif err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif err := validateFeatureFlagScope(claim, expected, sink.Provider); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif false {",
+      "rationale": "a GitLab empty feature-flag inspection must return absent before the nil-connection guard",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAcceptsLegitimateEmptyEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E22-inspect-empty-edge",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func (sink featureFlagsClickHouseEffects) inspectEdges(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) (EffectInspection, error) {\n\texpected, err := decodeEffectRows[launchDarklyEdgeRow](effect)\n\tif err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif err := validateFeatureFlagEdgeScope(claim, expected, sink.Provider); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif len(expected) == 0 {",
+      "replace": "func (sink featureFlagsClickHouseEffects) inspectEdges(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) (EffectInspection, error) {\n\texpected, err := decodeEffectRows[launchDarklyEdgeRow](effect)\n\tif err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif err := validateFeatureFlagEdgeScope(claim, expected, sink.Provider); err != nil {\n\t\treturn EffectConflict, err\n\t}\n\tif false {",
+      "rationale": "a GitLab empty work-graph edge inspection must return absent before the nil-connection guard",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAcceptsLegitimateEmptyEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E23-flag-append-values",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "row.Environment, row.FlagType, row.CreatedAt, row.ArchivedAt,\n\t\t\trow.LastSynced,",
+      "replace": "row.Environment, row.FlagType, row.CreatedAt, row.CreatedAt,\n\t\t\trow.LastSynced,",
+      "rationale": "feature_flag append order must preserve nullable archived_at separately from created_at",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsPreserveNullableStringAndTimeValues$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E24-event-append-values",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "row.ActorType, row.PrevState, row.NextState, row.EventAt,\n\t\t\trow.IngestedAt, row.SourceEventID, row.DedupeKey,",
+      "replace": "row.ActorType, row.PrevState, row.PrevState, row.EventAt,\n\t\t\trow.IngestedAt, row.SourceEventID, row.DedupeKey,",
+      "rationale": "feature_flag_event append order must preserve the distinct previous and next states",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E25-edge-append-values",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "float32(row.Confidence), row.Evidence, row.DiscoveredAt,\n\t\t\trow.LastSynced, row.EventAt, row.Day, row.OrgID,",
+      "replace": "float32(row.Confidence), row.Provenance, row.DiscoveredAt,\n\t\t\trow.LastSynced, row.EventAt, row.Day, row.OrgID,",
+      "rationale": "work_graph_edges append order must preserve evidence independently from provenance",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E26-edge-nullable-repo-append",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if row.RepoID != \"\" {",
+      "replace": "if row.RepoID == \"\" {",
+      "rationale": "an empty GitLab repository identifier must be appended as nullable nil, not as a non-null empty string",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsPreserveNullableStringAndTimeValues$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E27-flag-readback-projection",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "&actual.RepoID, &actual.Environment, &actual.FlagType, &actual.CreatedAt,",
+      "replace": "&actual.RepoID, &actual.FlagType, &actual.FlagType, &actual.CreatedAt,",
+      "rationale": "feature_flag readback scan destinations must match the migrated-schema SELECT projection",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E28-event-readback-projection",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "&actual.RepoID, &actual.ActorType, &actual.PrevState,\n\t\t\t&actual.NextState, &actual.EventAt,",
+      "replace": "&actual.RepoID, &actual.ActorType, &actual.NextState,\n\t\t\t&actual.NextState, &actual.EventAt,",
+      "rationale": "feature_flag_event readback scan destinations must preserve both state columns in projection order",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E29-edge-readback-projection",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "&actual.Provenance, &confidence, &actual.Evidence, &actual.DiscoveredAt,",
+      "replace": "&actual.Provenance, &confidence, &actual.Provenance, &actual.DiscoveredAt,",
+      "rationale": "work_graph_edges readback scan destinations must preserve evidence independently from provenance",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E30-edge-nullable-repo-projection",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "ifNull(toString(repo_id), '')",
+      "replace": "ifNull(toString(repo_id), 'mutated')",
+      "rationale": "a migrated nullable repo_id must map NULL to the empty comparison value rather than a forged non-empty identifier",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E31-datetime64-millisecond-quantization",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "return value.UTC().Truncate(time.Millisecond)",
+      "replace": "return value.UTC()",
+      "rationale": "DateTime64(3) readback must compare the stored millisecond representation, not provider sub-millisecond input",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E32-nullable-time-comparison",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "return featureFlagsStoredTime(*left).Equal(featureFlagsStoredTime(*right))",
+      "replace": "return false",
+      "rationale": "nullable created_at and archived_at values must participate in exact flag readback",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E33-flag-tenant-readback-fence",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND provider = ? AND project_key = ? AND flag_key = ?",
+      "replace": "WHERE org_id != ? AND provider = ? AND project_key = ? AND flag_key = ?",
+      "rationale": "feature_flag readback must retain the organization predicate so a foreign tenant row cannot satisfy a local effect",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E34-event-dedupe-readback-key",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND dedupe_key = ?",
+      "replace": "WHERE org_id = ? AND dedupe_key != ?",
+      "rationale": "feature_flag_event exact readback must query the claimed dedupe key rather than its complement",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E34a-flag-environment-readback-key",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "AND environment = ?`,\n\t\texpected.OrgID, expected.Provider, expected.ProjectKey, expected.FlagKey,\n\t\texpected.Environment,",
+      "replace": "AND environment != ?`,\n\t\texpected.OrgID, expected.Provider, expected.ProjectKey, expected.FlagKey,\n\t\texpected.Environment,",
+      "rationale": "feature_flag readback must select the expected environment after environment becomes part of the deployed row identity",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E35-edge-readback-key",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "WHERE org_id = ? AND source_type = ? AND source_id = ? AND edge_type = ?",
+      "replace": "WHERE org_id = ? AND source_type = ? AND source_id = ? AND edge_type != ?",
+      "rationale": "work_graph_edges exact readback must select the claimed edge identity and type",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E36-flag-version-after-conflict",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func compareFeatureFlagVersion(\n\texpected, actual launchDarklyFlagRow,\n\tfound bool,\n) EffectInspection {\n\tactualVersion := featureFlagsStoredTime(actual.LastSynced)\n\texpectedVersion := featureFlagsStoredTime(expected.LastSynced)\n\tif !found || actualVersion.IsZero() {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.Before(expectedVersion) {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.After(expectedVersion) {\n\t\treturn EffectConflict",
+      "replace": "func compareFeatureFlagVersion(\n\texpected, actual launchDarklyFlagRow,\n\tfound bool,\n) EffectInspection {\n\tactualVersion := featureFlagsStoredTime(actual.LastSynced)\n\texpectedVersion := featureFlagsStoredTime(expected.LastSynced)\n\tif !found || actualVersion.IsZero() {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.Before(expectedVersion) {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.After(expectedVersion) {\n\t\treturn EffectAbsent",
+      "rationale": "a stored feature flag newer than the claimed version is a conflict, not an absent effect",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E37-edge-version-after-conflict",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "func compareFeatureFlagEdgeVersion(\n\texpected, actual launchDarklyEdgeRow,\n\tfound bool,\n) EffectInspection {\n\tactualVersion := featureFlagsStoredTime(actual.LastSynced)\n\texpectedVersion := featureFlagsStoredTime(expected.LastSynced)\n\tif !found || actualVersion.IsZero() {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.Before(expectedVersion) {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.After(expectedVersion) {\n\t\treturn EffectConflict",
+      "replace": "func compareFeatureFlagEdgeVersion(\n\texpected, actual launchDarklyEdgeRow,\n\tfound bool,\n) EffectInspection {\n\tactualVersion := featureFlagsStoredTime(actual.LastSynced)\n\texpectedVersion := featureFlagsStoredTime(expected.LastSynced)\n\tif !found || actualVersion.IsZero() {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.Before(expectedVersion) {\n\t\treturn EffectAbsent\n\t}\n\tif actualVersion.After(expectedVersion) {\n\t\treturn EffectAbsent",
+      "rationale": "a stored work-graph edge newer than the claimed version is a conflict, not an absent effect",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E38-event-exact-comparison",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "if actual == storedExpected {",
+      "replace": "if true {",
+      "rationale": "feature_flag_event readback must compare every projected nullable/string/time field rather than accepting a divergent row",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E39-event-duplicate-exact",
+      "file": "internal/providersync/launchdarkly_effects_clickhouse.go",
+      "find": "case found > 0 && matched == found:",
+      "replace": "case found == 1 && matched == 1:",
+      "rationale": "replaying an identical plain-MergeTree event may leave multiple matching rows; all matches must remain Exact while any divergent row remains Conflict",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitLabFeatureFlagsEffectsAgainstMigratedSchema$/replayed_exact_event_remains_exact_after_MergeTree_duplicate$", "./internal/providersync/"]]
+    }
+  ]
+}

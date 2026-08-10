@@ -523,6 +523,9 @@ def _default_retention_options() -> list[Literal[0, 30]]:
 
 class DevCapabilities(ContractModel):
     schema_version: Literal["dev_capabilities.v1"]
+    backend_sha: Annotated[str, StringConstraints(pattern=r"[0-9a-f]{40}")] | None = (
+        None
+    )
     ask_dev: bool = False
     byo_llm: bool = False
     agent_context_runtime: bool = False

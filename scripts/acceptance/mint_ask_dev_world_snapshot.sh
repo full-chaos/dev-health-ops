@@ -41,7 +41,7 @@
 #   docker compose --project-name dev-health-ask-dev-acceptance \
 #     --project-directory <ops> -f <ops>/compose.yml \
 #     -f <ops>/tests/acceptance/compose.ask-dev.yml \
-#     --profile ask-dev-acceptance up -d --build --wait \
+#     --profile ask-dev-acceptance --profile graph-trial up -d --build --wait \
 #     postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api
 #
 # The artifact is written into the repo (tests/acceptance/world/
@@ -99,6 +99,7 @@ unset \
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ops_root="$(cd -- "${script_dir}/../.." && pwd)"
+python_bin="${ASK_DEV_ACCEPTANCE_PYTHON:-${ops_root}/.venv/bin/python}"
 project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}"
 world_dir="${ops_root}/tests/acceptance/world/ask-dev-world.v1"
 container_world_dir="/app/tests/acceptance/world/ask-dev-world.v1"
@@ -130,6 +131,7 @@ compose=(
   -f "${ops_root}/compose.yml"
   -f "${ops_root}/tests/acceptance/compose.ask-dev.yml"
   --profile ask-dev-acceptance
+  --profile graph-trial
 )
 
 if ! "${compose[@]}" ps --status running --services | grep -qx api; then
@@ -203,7 +205,8 @@ if [[ "${host_signature}" != "${container_signature}" ]]; then
   echo "mint:   docker compose --project-name dev-health-ask-dev-acceptance \\" >&2
   echo "mint:     --project-directory ${ops_root} -f ${ops_root}/compose.yml \\" >&2
   echo "mint:     -f ${ops_root}/tests/acceptance/compose.ask-dev.yml \\" >&2
-  echo "mint:     --profile ask-dev-acceptance up -d --build --wait api" >&2
+  echo "mint:     --profile ask-dev-acceptance --profile graph-trial \\" >&2
+  echo "mint:       up -d --build --wait api" >&2
   exit 70
 fi
 echo "mint: api container matches this checkout (${host_signature:0:12})"
@@ -267,7 +270,7 @@ echo "mint: proving the snapshot round trip is lossless"
 # API from the host, and includes a wrong-password negative control -- an API
 # that accepted anything would otherwise satisfy every positive check.
 echo "mint: proving the corpus contract principals can log in"
-"${ops_root}/.venv/bin/python" \
+"${python_bin}" \
   "${ops_root}/scripts/acceptance/assert_world_principals_can_log_in.py" \
   --api-url "http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}" \
   --manifest "${world_dir}/world.json"

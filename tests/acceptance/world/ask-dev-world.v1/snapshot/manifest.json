@@ -218,11 +218,11 @@
     },
     "source_content_hashes": [
       {
-        "content_hash": "276c910c748ef6107b56836b3252a240faa1510447b06894ad7f0be99659fccd",
+        "content_hash": "04ffa14ad8e4adc360dc6ac42ef7a63846aaa5cec8aa184925534e6e0ac9c387",
         "table": "ai_attribution"
       },
       {
-        "content_hash": "fbe44e1dc73c4368ff178f1cd2c8f57ec3a31348737d8262e7dae9aab4d798b0",
+        "content_hash": "a41f0c379b7e0a58aca0cf7274370569fcb318cf34af4c975acb679107b0d68b",
         "table": "ai_governance_coverage_daily"
       },
       {
@@ -230,7 +230,7 @@
         "table": "ai_impact_metrics_daily"
       },
       {
-        "content_hash": "c62d08b6479865fe3d73ba4315f58e722a171f0d4b2c9f75a4fe74619bf7bd02",
+        "content_hash": "30b07c7bffb5aa9da4a7b5e42c5c6ded88ca971d5ecc98a1b8a61884d6f33e9a",
         "table": "ai_policy_events"
       },
       {
@@ -238,15 +238,15 @@
         "table": "ai_tool_allowlist"
       },
       {
-        "content_hash": "a0ee9ddf1adf9c2cf83e48180d9fb8763f77c5ed37d1d3d5c750592217d9c639",
+        "content_hash": "c899df472ce225391c935d9b5ba1254e2a4d78ed46dec44e74473f7e9e08dce7",
         "table": "ai_workflow_artifact_edges"
       },
       {
-        "content_hash": "3af37f2bcc4d911311d3d48459cf3988eaf65a566d4f7b04c9b00533d96fe50f",
+        "content_hash": "519e2f4fc80f6aa766150ed8ec93203adee56bb0db5deabfa0fce58813206943",
         "table": "ai_workflow_issue_edges"
       },
       {
-        "content_hash": "a175515928e5e03c96e1b7f62282ed5cea75b60261bfe88775023a5a5f33a800",
+        "content_hash": "b5400a8506fd8282b264e1a3e3dfbc9f49703e27edaac1ff3521806e98704e33",
         "table": "ai_workflow_runs"
       },
       {
@@ -374,7 +374,7 @@
         "table": "git_pull_requests"
       },
       {
-        "content_hash": "e570e34c383320f66cc284d22a4883bdd46d765f34baf3f3614ec2065262e240",
+        "content_hash": "3a3beb49927e89b824727fc97581faa83d9041ec32d052d605cc140a8bda1fa5",
         "table": "ic_landscape_rolling_30d"
       },
       {
@@ -406,7 +406,7 @@
         "table": "jira_project_ops_team_links"
       },
       {
-        "content_hash": "2e7a358885a2f7f8c5dd65a58957bac05aeb096757052b49947db4ecd7f21668",
+        "content_hash": "3d8c5363aa8ff47c09003cf26da738763cef40b9bee475ae251c593496a1f6ec",
         "table": "llm_token_usage"
       },
       {
@@ -474,7 +474,7 @@
         "table": "project_declared_state_floor"
       },
       {
-        "content_hash": "1d0ef3fff4b234bda92b5a0d4ac931a8a208ed676dfa15269cb4c6b6f2c89eb7",
+        "content_hash": "77e116402fedc55a0ba9a70e31b4a52a275d88c788699fab358ab8ed8343d1f4",
         "table": "project_declared_state_history"
       },
       {
@@ -550,7 +550,7 @@
         "table": "team_sync_policies"
       },
       {
-        "content_hash": "25d3e1e7b1ebc0031cfac985750163800911916dad9a1f2f49cd20e0fb7e3877",
+        "content_hash": "dc5683b3efee902894ab5071265c7d5c026165940ce04229c1c489f06e817c33",
         "table": "teams"
       },
       {
@@ -566,7 +566,7 @@
         "table": "test_suite_results"
       },
       {
-        "content_hash": "9b253f273de2b1cd2bd7cd371173f39385d5b49c8a2d5d771ff753f1af16371a",
+        "content_hash": "43a7269f04eea9c4b2fde157eebbe47fafd4bcd97899242236fb8a558c78e979",
         "table": "testops_benchmark_insights"
       },
       {
@@ -586,7 +586,7 @@
         "table": "testops_metric_baselines"
       },
       {
-        "content_hash": "ef8e57fa3e7fb9abef3be1a667ae340050f47c8e9b8cd3ffdd271472016a268e",
+        "content_hash": "edff30647e687aed8651bc43b9ad98df096c54586e0dbf9bc867586a809659db",
         "table": "testops_metric_correlations"
       },
       {
@@ -614,15 +614,15 @@
         "table": "testops_test_metrics_daily"
       },
       {
-        "content_hash": "8601d57c2f4ad374fcd37b9f40eb30526227155b86c76a4bdfa03d3d3b66d01c",
+        "content_hash": "15947c830d4d72bbf89bfd0243382e4e556654edaa675bd2531e237c4ccc1647",
         "table": "user_metrics_daily"
       },
       {
-        "content_hash": "5b86d7307341e51ebfdb653fa88e9c03383a0cfb59de7d867dbe1b2be395ac10",
+        "content_hash": "1e61acf58a70b4f8ace6358cddac7d7ca4540938f05effa259f3487ce2cd63d2",
         "table": "work_graph_deployment_incident_edges"
       },
       {
-        "content_hash": "bfe8f8221ca6979d408183ef76ad33635c6961c322596772163c5837b97359ce",
+        "content_hash": "6727c6850e64c944e23b86b6def30b8de51640da933420ec735cbcd7c75b65ec",
         "table": "work_graph_edges"
       },
       {
@@ -634,11 +634,11 @@
         "table": "work_graph_pr_commit"
       },
       {
-        "content_hash": "1ac6b96b85fc9526a8ab93587a0452a068eea241804a5885e75be5fab4a38e54",
+        "content_hash": "90b2f20ca1e697d0a08971f183eeb1c04dbca6aa6ac052fc153ccd290b57162e",
         "table": "work_graph_pr_deployment_edges"
       },
       {
-        "content_hash": "80d49eefff11c15f523b85dc17070a8c17e1b32e6d3f756115162abcf2e1822c",
+        "content_hash": "cc3332eda1b8b8566691c913a922457c82ee6e0c1cbd277eb63c4e288e84c7a4",
         "table": "work_graph_pr_review_outcome_edges"
       },
       {
@@ -686,19 +686,19 @@
         "table": "work_items"
       },
       {
-        "content_hash": "8c0671ca888627516a7b1ffe84a4c9624745156d81a3b77fa3870ad2be20f300",
+        "content_hash": "c0c6db26166e9fc3b5f6b9fa19f84b16bb87f50e3fdd86de8d41b4342ecfeea5",
         "table": "work_unit_investment_quotes"
       },
       {
-        "content_hash": "e15dd2d23e06b4922de670f135672836388afb2bf6ab424b29db9b1e0164fb22",
+        "content_hash": "487a1c09211c64eb949c95beb719f9f21501899e47ac0cf6d2ece06f8bdb935d",
         "table": "work_unit_investments"
       },
       {
-        "content_hash": "f7d9ed281cbcdd4faa5b5c35427e6141cf4f3a20a3a620c076c5b2f7078a682b",
+        "content_hash": "717af5fdd920aaa52f20dee488f9d14e81effe0f1d1bc8b09320fb55206e831c",
         "table": "work_unit_membership"
       },
       {
-        "content_hash": "8c00624d911af00d281f7d992ec23a9382b2f31190f1774c7c25f40419e850c2",
+        "content_hash": "997297837ed089399b219447443f6e633b1cce12de76465249e01d143c274bef",
         "table": "work_unit_membership_runs"
       },
       {
@@ -706,11 +706,11 @@
         "table": "work_unit_membership_scoped_runs"
       },
       {
-        "content_hash": "07b99c37d908f0706e072c19fd040e670b4eeb31cb0938a7b0c87a078fdb2d10",
+        "content_hash": "b0d3dbbbf420390139ee54b6e30df1e7e7336bbe54ff8447dcf0a6dc5962f730",
         "table": "work_unit_repo_effort"
       },
       {
-        "content_hash": "1c99fbde42dcf149bf2dacd98e6f023657ce82040d738cfa1199e5e02ddd1811",
+        "content_hash": "babc63c7ea438bed2219087319958866e62788a9d87d3d3824cdfde0c1333b3b",
         "table": "worklogs"
       }
     ],
@@ -803,12 +803,12 @@
       "telemetry_signal_bucket": 7332,
       "test_case_results": 194937,
       "test_suite_results": 720,
-      "testops_benchmark_insights": 4578,
+      "testops_benchmark_insights": 4580,
       "testops_coverage_metrics_daily": 942,
       "testops_maturity_bands": 26376,
       "testops_metric_anomalies": 2447,
       "testops_metric_baselines": 26376,
-      "testops_metric_correlations": 868,
+      "testops_metric_correlations": 869,
       "testops_period_comparisons": 3105,
       "testops_pipeline_metrics_daily": 1812,
       "testops_pipeline_stability": 942,
@@ -846,13 +846,13 @@
         "file": "clickhouse/ai_attribution.native.gz",
         "raw_source_row_count": 302,
         "row_count": 302,
-        "sha256": "c7f617f9a60dfa667335b1f374ba531247f3b466185c6beb04d851f49b9e430a"
+        "sha256": "14dd0004ee031b75d7a1ff8b2527f69500adbdc620e997baff597da57d280668"
       },
       "ai_governance_coverage_daily": {
         "file": "clickhouse/ai_governance_coverage_daily.native.gz",
         "raw_source_row_count": 137,
         "row_count": 137,
-        "sha256": "1f3f4c499d1c3bb264b1dc411519028b31245239215db35bc6eeb6acc40b0ec8"
+        "sha256": "35ed433d2ff21b5b72cb1de15cb2b83826d150b28bcaf08665fdc54326c15aaf"
       },
       "ai_impact_metrics_daily": {
         "file": "clickhouse/ai_impact_metrics_daily.native.gz",
@@ -864,7 +864,7 @@
         "file": "clickhouse/ai_policy_events.native.gz",
         "raw_source_row_count": 2174,
         "row_count": 2174,
-        "sha256": "64f69175690e568cc1e647e534856debd6fa9aaf2f038d8f15010da3a94ce4d9"
+        "sha256": "9634fa73e9fe405a9816698e1b9d379655f78156b6cc7ceb4791dc56c4a17a37"
       },
       "ai_tool_allowlist": {
         "file": "clickhouse/ai_tool_allowlist.native.gz",
@@ -876,19 +876,19 @@
         "file": "clickhouse/ai_workflow_artifact_edges.native.gz",
         "raw_source_row_count": 315,
         "row_count": 315,
-        "sha256": "8fd0f4a07e9ed5dcc498010db604377553c25f2b4a948268754816f9f20e8aec"
+        "sha256": "45114f3df120bff3d059ec54330f89466ed351d63f4e8b7aaea2b917df402020"
       },
       "ai_workflow_issue_edges": {
         "file": "clickhouse/ai_workflow_issue_edges.native.gz",
         "raw_source_row_count": 210,
         "row_count": 210,
-        "sha256": "6653334e211042db36e1d77ff915843ba8e891970739e7e779f8c00e59254411"
+        "sha256": "0a42095533cfaede4666cdb931b907b566b97f93a73e94b9a3511a2bb393f897"
       },
       "ai_workflow_runs": {
         "file": "clickhouse/ai_workflow_runs.native.gz",
         "raw_source_row_count": 252,
         "row_count": 252,
-        "sha256": "8c712ea4524d7bb5ca55c950630d4a29aa6c543bd436c083835ca0ce3a6bc910"
+        "sha256": "4a973b3c206fdbac3860c65c6d2f32884cc8aeebb11afa14d64be28d738cc0be"
       },
       "ci_daily_rollup": {
         "file": "clickhouse/ci_daily_rollup.native.gz",
@@ -900,7 +900,7 @@
         "file": "clickhouse/ci_job_runs.native.gz",
         "raw_source_row_count": 1828,
         "row_count": 1828,
-        "sha256": "432224d403b42d56828601196d1e8ad88a935c43276926ae0fbeca0986bc5845"
+        "sha256": "e5476c4ae28fb2a1769b2b9b425de659624349925d114662da9fa04f983756ac"
       },
       "ci_pipeline_runs": {
         "file": "clickhouse/ci_pipeline_runs.native.gz",
@@ -912,25 +912,25 @@
         "file": "clickhouse/cicd_metrics_daily.native.gz",
         "raw_source_row_count": 942,
         "row_count": 942,
-        "sha256": "36c26bc43ab58c163bee0c02b83dda7ada28f7d6a229979f4f703fe446b7cae2"
+        "sha256": "0e0f7bf68b11af054b9df8c8d2bcf3dc6616bcd60c92d1844d121bb6ca8b7adb"
       },
       "commit_daily_rollup": {
         "file": "clickhouse/commit_daily_rollup.native.gz",
         "raw_source_row_count": 161,
         "row_count": 151,
-        "sha256": "940b874fd36313d79dc0a00a20c594f48299621cc5dabfa88a8a037bcbff2bec"
+        "sha256": "aaff1b46eb5012490f2331edfa76f9fe4a6105be03bb70985e3c913f2711e477"
       },
       "commit_metrics": {
         "file": "clickhouse/commit_metrics.native.gz",
         "raw_source_row_count": 2982,
         "row_count": 2982,
-        "sha256": "fdeec3f96a3b14682cdec43327c78cd6b7ea5bf9d43c15e4be6437c3517419c8"
+        "sha256": "83b63d3c7e1c9744cd02209e49cfbaa9c9047e1a9d88bd47aeed64a486fab6bb"
       },
       "compounding_risk_daily": {
         "file": "clickhouse/compounding_risk_daily.native.gz",
         "raw_source_row_count": 1059,
         "row_count": 1059,
-        "sha256": "b418e20ee48560464718567eec9e411d90f59a892ac9a8d5e4dd525fad68d931"
+        "sha256": "7ea669c8140cb5097eaf6075c6d5f6043a14ea914962f220b4c9379bc399c881"
       },
       "coverage_snapshots": {
         "file": "clickhouse/coverage_snapshots.native.gz",
@@ -942,13 +942,13 @@
         "file": "clickhouse/deploy_metrics_daily.native.gz",
         "raw_source_row_count": 777,
         "row_count": 777,
-        "sha256": "671c0c7525a7ea4f3c1891bd24fcb8f2ff3b7f99e99dbb83f19758e2a68b4a8e"
+        "sha256": "d0751126a9d48ff69f41e9427f7db944380fbe21d10c39a1bb4096f9d1473065"
       },
       "deployment_daily_rollup": {
         "file": "clickhouse/deployment_daily_rollup.native.gz",
         "raw_source_row_count": 140,
         "row_count": 133,
-        "sha256": "e1e7cc3fcc0e64837bf5cf5e4186b2e49c5820bc64006d5350c737d07afa2323"
+        "sha256": "17d04c465189fad0f542c8cdce1ae55ac410f68d544a226b7313ef27b11ed398"
       },
       "deployments": {
         "file": "clickhouse/deployments.native.gz",
@@ -960,13 +960,13 @@
         "file": "clickhouse/dora_metrics_daily.native.gz",
         "raw_source_row_count": 595,
         "row_count": 595,
-        "sha256": "a955f4b01e00c8ef1d9112edd8a7f5d21e6dd2251aa9d226900ee884271bcd58"
+        "sha256": "d98d472fdc125824f1249db1f1ece34d58b855e1022010e3884f660005786391"
       },
       "estimate_coverage_metrics_daily": {
         "file": "clickhouse/estimate_coverage_metrics_daily.native.gz",
         "raw_source_row_count": 822,
         "row_count": 822,
-        "sha256": "5401de5d7cf18c7176358e6961cf1615b045f52dbbd9d4631bd94c928534b909"
+        "sha256": "52e4c17ae5a47aa0a3df7f06bb681ca610eb43b8b8c6cdaf11e42e4afa3d4293"
       },
       "feature_flag": {
         "file": "clickhouse/feature_flag.native.gz",
@@ -978,7 +978,7 @@
         "file": "clickhouse/feature_flag_event.native.gz",
         "raw_source_row_count": 1050,
         "row_count": 1050,
-        "sha256": "6aadcbff0e5ce9995afbc2a211fd73b3fbab99de5e61522d7f2302ec07435e0a"
+        "sha256": "526ac7422cad5b3b714e57e1f0d8b3fbbb84e86a0caba7887ea002d53efe844e"
       },
       "feature_flag_link": {
         "file": "clickhouse/feature_flag_link.native.gz",
@@ -990,13 +990,13 @@
         "file": "clickhouse/file_complexity_snapshots.native.gz",
         "raw_source_row_count": 6191,
         "row_count": 6191,
-        "sha256": "b0bd55b48562149a7856b34999c6195032325d6fad03b5a1f06096bc73ae893d"
+        "sha256": "1010205b19c1cbc7c1f50cb843022e3b66a9da4574a8e86f2e8b0656fd8b642c"
       },
       "file_hotspot_daily": {
         "file": "clickhouse/file_hotspot_daily.native.gz",
         "raw_source_row_count": 44435,
         "row_count": 44435,
-        "sha256": "1a5797f695f4742f5c7ddcf7cb9679eb2e61119f78d1c13baa8625623b220c0c"
+        "sha256": "aab9433a8e4be975af3334dd90b44d2d1a08c788e8539dcda34ca8fee77201fe"
       },
       "file_metrics_daily": {
         "file": "clickhouse/file_metrics_daily.native.gz",
@@ -1008,7 +1008,7 @@
         "file": "clickhouse/git_blame.native.gz",
         "raw_source_row_count": 51089,
         "row_count": 51089,
-        "sha256": "5061b9f069c54a3b3741809633cb6df66a3d566158ed3de20141c42fe78a96f5"
+        "sha256": "ceb1421fb41bf61a12940af94187ef4c9e7849efc2452c31de9ac5711eb0969c"
       },
       "git_commit_stats": {
         "file": "clickhouse/git_commit_stats.native.gz",
@@ -1038,13 +1038,13 @@
         "file": "clickhouse/git_pull_requests.native.gz",
         "raw_source_row_count": 302,
         "row_count": 302,
-        "sha256": "ce47c30223a0ff54c6c41f0f56333dc3e5f4f6f3c117934f2a77eaef6a8e06fd"
+        "sha256": "c9d0be4bfd5471e3b4047b6e04a5c16fa887cf26f4fedc4615c3d4fd692a38d2"
       },
       "ic_landscape_rolling_30d": {
         "file": "clickhouse/ic_landscape_rolling_30d.native.gz",
         "raw_source_row_count": 2304,
         "row_count": 2304,
-        "sha256": "066c2b7bf295f785fbb7c1a61c0efa60b1b94d337627a33780cae72a74e2be68"
+        "sha256": "030c064f435432576fca65d562494822782b515d607f6fa16d7ad87258bcbbb8"
       },
       "incident_metrics_daily": {
         "file": "clickhouse/incident_metrics_daily.native.gz",
@@ -1062,13 +1062,13 @@
         "file": "clickhouse/investment_metrics_daily.native.gz",
         "raw_source_row_count": 2265,
         "row_count": 2265,
-        "sha256": "8d802dff80e2877dcdb6ee4e478f60aa0ab68b0466764ae387b284988a2eda3e"
+        "sha256": "e297355501b6b89334a645fda86c75cbf1b3e6a3a1018d926b86c9375c0d4348"
       },
       "llm_token_usage": {
         "file": "clickhouse/llm_token_usage.native.gz",
         "raw_source_row_count": 14,
         "row_count": 14,
-        "sha256": "1807512ba6aea9b941a006de79e152393e0f73db82b958705849104452f540d1"
+        "sha256": "e944fe7c84ab635cd4c8f47d5ed6cf14b4e0bf86eb41799924c209dbca894dc3"
       },
       "operational_incidents": {
         "file": "clickhouse/operational_incidents.native.gz",
@@ -1080,19 +1080,19 @@
         "file": "clickhouse/operational_service_repository_mappings.native.gz",
         "raw_source_row_count": 14,
         "row_count": 14,
-        "sha256": "b5450743b4bcf6a65e5e55708ff0daceca2fba93bb10faf26fb3b5670e7b6396"
+        "sha256": "09d6fae208b1e6249fec0caa7c503c2a229b40d7a4f0ac17f8f9721d542e41c0"
       },
       "operational_services": {
         "file": "clickhouse/operational_services.native.gz",
         "raw_source_row_count": 14,
         "row_count": 14,
-        "sha256": "8dbc7bcac7c7d89e0543714a2b73562e0badc209eee9d46adfcf5a4723ad40ae"
+        "sha256": "a1bd53b2b6c238670587e299d434dccdba0557366a5832827c14c41200c4bc06"
       },
       "project_declared_state_history": {
         "file": "clickhouse/project_declared_state_history.native.gz",
         "raw_source_row_count": 15,
         "row_count": 15,
-        "sha256": "658c67de06cca81cfc5f4933a97c78c8628ed08f6a8fbe0ea34d45faf725fd31"
+        "sha256": "a8040868f9d396e7a47ed55a30ec5462bdd2989f41719d176e7ca9146bc1eec2"
       },
       "projects": {
         "file": "clickhouse/projects.native.gz",
@@ -1104,19 +1104,19 @@
         "file": "clickhouse/release_impact_daily.native.gz",
         "raw_source_row_count": 386,
         "row_count": 386,
-        "sha256": "b7e0258018f700e65b764e5830e2b3f1b18ff4739795967a9143ba7f6187ec30"
+        "sha256": "1d46ec029e5f726a19a4144349efa87312783ddef00d0a2c99d1779141e0c6cc"
       },
       "repo_complexity_daily": {
         "file": "clickhouse/repo_complexity_daily.native.gz",
         "raw_source_row_count": 151,
         "row_count": 151,
-        "sha256": "b85611d7a182a71e7788e91a1e6268e58e67575bfbaf48b835c9b3f25b2249f9"
+        "sha256": "e787d76dbe546427d602f0d6cce3012f3015cb7c646b92a281e2d8f6d54196d6"
       },
       "repo_metrics_daily": {
         "file": "clickhouse/repo_metrics_daily.native.gz",
         "raw_source_row_count": 1059,
         "row_count": 1059,
-        "sha256": "5103fab6b2e5cfdfe18e41b9c870aec5e78e1ba7133ee547febe2e9b01f58cd5"
+        "sha256": "a937ac7a34b967c205e891641bd684b03e88b96ff2a38202ecd50c8e4d78fd9f"
       },
       "repos": {
         "file": "clickhouse/repos.native.gz",
@@ -1140,127 +1140,127 @@
         "file": "clickhouse/sprints.native.gz",
         "raw_source_row_count": 7,
         "row_count": 7,
-        "sha256": "58a37294bc045abd21867eaba7fd57aac4ae05e92b432c30b4658cc07621bba1"
+        "sha256": "e8e314f1cc3d9537cb3623ba557df29862679401c432f14154866c73ab2ac1c8"
       },
       "team_metrics_daily": {
         "file": "clickhouse/team_metrics_daily.native.gz",
         "raw_source_row_count": 388,
         "row_count": 388,
-        "sha256": "757180d57ca36dd2069b776bc977ad71f18f54062b464ef9004a9f8d40468464"
+        "sha256": "07d54d2eeef9de203b989e69a7787110edc2f38b920e8a74c1629b30d9182555"
       },
       "teams": {
         "file": "clickhouse/teams.native.gz",
         "raw_source_row_count": 16,
         "row_count": 10,
-        "sha256": "7bd882762a0fe17773c850c491dd5dcdf20a65fe78433f81800fdd0ca07afa7f"
+        "sha256": "ef9be839a238ebb9dbb9ac192339e9322a1e2da9edf04b905af0f4e5184cbaf4"
       },
       "telemetry_signal_bucket": {
         "file": "clickhouse/telemetry_signal_bucket.native.gz",
         "raw_source_row_count": 7332,
         "row_count": 7332,
-        "sha256": "94fa15460286d363bceebf2ad264cd5cb5402b59192a222e5acc010c509358d6"
+        "sha256": "aa02c60ea44761e3c9c78be9a6cf96905e3a94f77dda25f0bc9cae4892a3f96f"
       },
       "test_case_results": {
         "file": "clickhouse/test_case_results.native.gz",
         "raw_source_row_count": 194937,
         "row_count": 194937,
-        "sha256": "96d18d919044d19ea581c53650650d73dc6140bf1025a2f5868cf4d29f1f54e3"
+        "sha256": "79e66363f58df507d278abd62a01d71407a869f496a6bd0a4cc608743ce6510b"
       },
       "test_suite_results": {
         "file": "clickhouse/test_suite_results.native.gz",
         "raw_source_row_count": 720,
         "row_count": 720,
-        "sha256": "93613c97d7599f822ff699545e511e7bb49c338c2950339453c64440b983d233"
+        "sha256": "6bf727beb11c6747f5d16334da9186f03711a10d74c8469fe6009436028b0670"
       },
       "testops_benchmark_insights": {
         "file": "clickhouse/testops_benchmark_insights.native.gz",
-        "raw_source_row_count": 4578,
-        "row_count": 4578,
-        "sha256": "49c679f8843f06d2c03c092b62e674a7d078ae008eaa7ce08ae0a43d10afc5a2"
+        "raw_source_row_count": 4580,
+        "row_count": 4580,
+        "sha256": "199bc02065c8140d71b6149853cff6c8e0fe67537c63c06029b87abbde1e7deb"
       },
       "testops_coverage_metrics_daily": {
         "file": "clickhouse/testops_coverage_metrics_daily.native.gz",
         "raw_source_row_count": 942,
         "row_count": 942,
-        "sha256": "ec59d21fdd9b6a690a2303e2cf603f7a16614d3475b5c6eac42681790d1663bb"
+        "sha256": "5c47d47ae729c1ccbb4edb9a61e7ea468c5b6f3e984c7f5f222ec8fd05b59286"
       },
       "testops_maturity_bands": {
         "file": "clickhouse/testops_maturity_bands.native.gz",
         "raw_source_row_count": 26376,
         "row_count": 26376,
-        "sha256": "8983e98fb7f9cc3b6cc078eb28c36f53bb9967620175157c35548e642f684393"
+        "sha256": "97f873ba4de0db4076f0a4f77953b6a2fba4412f043f76d6eba7ad6acef21d1d"
       },
       "testops_metric_anomalies": {
         "file": "clickhouse/testops_metric_anomalies.native.gz",
         "raw_source_row_count": 2447,
         "row_count": 2447,
-        "sha256": "2a5f4f4c5e2d6204af2da260751911e46b060ea230ca4292162b25ba1450fe45"
+        "sha256": "a1a07c1160efe4a32a48f5cf35d9458dac9a1edcdf2ad5c3b52bf53c45c63417"
       },
       "testops_metric_baselines": {
         "file": "clickhouse/testops_metric_baselines.native.gz",
         "raw_source_row_count": 26376,
         "row_count": 26376,
-        "sha256": "a86c2fd71f8f96984880265ea08b28d82e6ea84e02cfed0b7795e7a873d2e262"
+        "sha256": "e565f67b87375be05fea4874a30008c012eb6bfb3bc75d6f6b6d07735bdf2882"
       },
       "testops_metric_correlations": {
         "file": "clickhouse/testops_metric_correlations.native.gz",
-        "raw_source_row_count": 868,
-        "row_count": 868,
-        "sha256": "4cc8c83e2cbb9b2ef113fc412b209a635c7a48132a211befad299cdd7f61b176"
+        "raw_source_row_count": 869,
+        "row_count": 869,
+        "sha256": "204b2a0fddda957976bf122bc17701ad308b5a2df5ef7fa655c0bb46e076cdeb"
       },
       "testops_period_comparisons": {
         "file": "clickhouse/testops_period_comparisons.native.gz",
         "raw_source_row_count": 3105,
         "row_count": 3105,
-        "sha256": "f9943c3549569811e04f723ad3bc1f9e7031fb51667da8a7f2478eeccc375d5a"
+        "sha256": "b7feacbea012496b9d026db3cdeb949522f6b21efbe959c7b3a4117d15907316"
       },
       "testops_pipeline_metrics_daily": {
         "file": "clickhouse/testops_pipeline_metrics_daily.native.gz",
         "raw_source_row_count": 1812,
         "row_count": 1812,
-        "sha256": "38f4348e5059ff5f9981284518abb026d9524fcfbe50b5a48f810527429759c4"
+        "sha256": "c079d61020cd99c77539525ce7807265c3cad4e162574f81d437c1fc80991ece"
       },
       "testops_pipeline_stability": {
         "file": "clickhouse/testops_pipeline_stability.native.gz",
         "raw_source_row_count": 942,
         "row_count": 942,
-        "sha256": "04aebfd0a04feabf68efdd97e71713a0f530b1f7f0092e56430698befa48993d"
+        "sha256": "afaec17be70463e4c26d3dac9c631b04698d444f72a49bb700573a36acc32c22"
       },
       "testops_quality_drag": {
         "file": "clickhouse/testops_quality_drag.native.gz",
         "raw_source_row_count": 942,
         "row_count": 942,
-        "sha256": "cdd863cee4bc2a46a08fa9d767f530178ea6ed28dbe61c4b50a5a7270301641d"
+        "sha256": "b897f95ffdc8cb653dc2dd2ddff0ea6f9f7603b7ab1598758357fb282b9f36de"
       },
       "testops_release_confidence": {
         "file": "clickhouse/testops_release_confidence.native.gz",
         "raw_source_row_count": 942,
         "row_count": 942,
-        "sha256": "2c1060e1cc6c5dfac38ec481b164f33613583f7573b3f3f298b9fe4495680de3"
+        "sha256": "9429a63fd03e7dc2aeb5c8d10549e433597aa299ca5368ef5de8e15f3f83ab37"
       },
       "testops_test_metrics_daily": {
         "file": "clickhouse/testops_test_metrics_daily.native.gz",
         "raw_source_row_count": 925,
         "row_count": 925,
-        "sha256": "3ce4ed51ced2a44b5c0bfebb9cbfda093c0ef880b5b6bc7bdccf5120161e3907"
+        "sha256": "5861c91feb5c320bd0c10da7f4e80ccf3999e9f1857d18f8be975b9710964bca"
       },
       "user_metrics_daily": {
         "file": "clickhouse/user_metrics_daily.native.gz",
         "raw_source_row_count": 9684,
         "row_count": 9684,
-        "sha256": "0dc433723f128746412574e849d8c59458be832a805fcc3ac65b4bcf0c5d5b84"
+        "sha256": "5e3f1a48a7c38ca791fcadcd3d6d15e02ffed2c0b93e80c54411672943b1a180"
       },
       "work_graph_deployment_incident_edges": {
         "file": "clickhouse/work_graph_deployment_incident_edges.native.gz",
         "raw_source_row_count": 100,
         "row_count": 88,
-        "sha256": "044ff695ee205ad5155a5544adc177cda74eaea4e1781e94b6bb472c9d5544b7"
+        "sha256": "c2c99ce74714f7031a3b650bb293c7cd85a2dec9d23e30d70f175b594c262ada"
       },
       "work_graph_edges": {
         "file": "clickhouse/work_graph_edges.native.gz",
         "raw_source_row_count": 2442,
         "row_count": 2442,
-        "sha256": "849943191a1554c44270ef5d52f10376de884c7416a9ae4cd82982e939a2627b"
+        "sha256": "c1a1c1cc5cf4dcb5fb3e3455b433a0862a40f4b4c063869eac67be5483690e70"
       },
       "work_graph_issue_pr": {
         "file": "clickhouse/work_graph_issue_pr.native.gz",
@@ -1278,13 +1278,13 @@
         "file": "clickhouse/work_graph_pr_deployment_edges.native.gz",
         "raw_source_row_count": 341,
         "row_count": 341,
-        "sha256": "79890e257e0bf6691b949149da6202d8e29eaab0c78b08b6843dac03a3ca961c"
+        "sha256": "09b2dac8623b54137e24399c1030b9513158369ad7ebe3074f4497895aa5648c"
       },
       "work_graph_pr_review_outcome_edges": {
         "file": "clickhouse/work_graph_pr_review_outcome_edges.native.gz",
         "raw_source_row_count": 660,
         "row_count": 660,
-        "sha256": "794e080212c9c927a1ff1cd868237113849675d151233c21a237a2efc04d5cce"
+        "sha256": "fd56047c7b960ba8ad176c4e8ebcd6ea2632866922bc0fef033028abf3f3b2f7"
       },
       "work_graph_projection_runs": {
         "file": "clickhouse/work_graph_projection_runs.native.gz",
@@ -1308,13 +1308,13 @@
         "file": "clickhouse/work_item_metrics_daily.native.gz",
         "raw_source_row_count": 800,
         "row_count": 800,
-        "sha256": "0954dce938dba917218143d844974bb51129ef0f40b4ee16a4d2d3771033565a"
+        "sha256": "a4fdc8452f2dc7ee1d518bd5c500aeadc7282e6cf0f5716b0cde58f8bebd7a69"
       },
       "work_item_state_durations_daily": {
         "file": "clickhouse/work_item_state_durations_daily.native.gz",
         "raw_source_row_count": 6786,
         "row_count": 6786,
-        "sha256": "7adecc80757d8d1c83b64c72be9f5dce33819e3d8aa6980280074a01f005a375"
+        "sha256": "052a2362f74a2a028549a9d916b2b6b8c76e93e74bf0d08f1bcd8a96c00985ca"
       },
       "work_item_team_attributions": {
         "file": "clickhouse/work_item_team_attributions.native.gz",
@@ -1332,54 +1332,54 @@
         "file": "clickhouse/work_item_user_metrics_daily.native.gz",
         "raw_source_row_count": 1250,
         "row_count": 1250,
-        "sha256": "acc8922ce03be9cb8741dd3de91262508b892100afcaff281e5c32c7620eb556"
+        "sha256": "a09795b08d9b1cdbb69784c123a3d87dc5affb6fd433dab0854ada7e8f7502da"
       },
       "work_items": {
         "file": "clickhouse/work_items.native.gz",
         "raw_source_row_count": 284,
         "row_count": 284,
-        "sha256": "54de7ad1cdefb304b2e8db4dce98ac8602ac78d5507b4e86fe7b7a78f9bfab61"
+        "sha256": "0971e1f0ab4aa5ca323fcd70e7b1eeb17b5fc258cf0323f33984ad9abae4bc8d"
       },
       "work_unit_investment_quotes": {
         "file": "clickhouse/work_unit_investment_quotes.native.gz",
         "raw_source_row_count": 29,
         "row_count": 29,
-        "sha256": "35ed59819d3ea3b20e5324ceed915e7d0d3a84f726628544f9055999f30bb0a1"
+        "sha256": "e65650cd988b6adec58116fefe368b49033a822fb111d3c2ad61b522098fcede"
       },
       "work_unit_investments": {
         "file": "clickhouse/work_unit_investments.native.gz",
         "raw_source_row_count": 378,
         "row_count": 378,
-        "sha256": "2b7a45ebd6d7a604ecb30f89692db094403840590d38ecb2135a69acdbeda597"
+        "sha256": "badfd9f54f1531e79cdeca6d9824b9fbb21804b6bb19b5e25f8337e58d6dbe2d"
       },
       "work_unit_membership": {
         "file": "clickhouse/work_unit_membership.native.gz",
         "raw_source_row_count": 888,
         "row_count": 888,
-        "sha256": "1661eaed38b85d942e1defc2cd7e924663fe9ad7933cb25f72d5ccc92f2e1fa5"
+        "sha256": "77db16977d66f3f4accfa46eb7edd06281d49f2af9be223cf042581c0e38933f"
       },
       "work_unit_membership_runs": {
         "file": "clickhouse/work_unit_membership_runs.native.gz",
         "raw_source_row_count": 14,
         "row_count": 14,
-        "sha256": "d1f62a023f15ac55104311c3063ee326cc6dcfeb761d60c33ff22dabda9045c2"
+        "sha256": "b62da3129f2198a98435e665877e98e42998bb259a93edc01353aa0b5df4ef22"
       },
       "work_unit_repo_effort": {
         "file": "clickhouse/work_unit_repo_effort.native.gz",
         "raw_source_row_count": 76,
         "row_count": 76,
-        "sha256": "bb2e80ae8d0e73f6faa6907134a12e48e57124c0ac4613948f4af66815a1bf8d"
+        "sha256": "ce0c792bc28cd12795c02771326a69704907ba65ad7e757f1673b617af20c775"
       },
       "worklogs": {
         "file": "clickhouse/worklogs.native.gz",
         "raw_source_row_count": 273,
         "row_count": 273,
-        "sha256": "57f62b93177406f8c738bf9e1769b711f74a885597053d9c968fae82e2214b98"
+        "sha256": "3e6182f67ffa9b337db3366c8e2866d834f0c59dfee8ab6d288ff3d6f35b79f8"
       }
     }
   },
   "master_seed": 3219000,
-  "minted_at": "2026-08-10T19:38:32.009308+00:00",
+  "minted_at": "2026-08-10T21:13:20.881841+00:00",
   "postgres": {
     "baseline_row_counts": {
       "alembic_version": 2,
@@ -1416,7 +1416,7 @@
       "external_ingest_sources": 0,
       "external_ingest_tokens": 0,
       "feature_bundles": 0,
-      "feature_flags": 32,
+      "feature_flags": 33,
       "fixed_schedule_occurrences": 0,
       "github_app_installations": 0,
       "health_rule_calibrations": 0,
@@ -1493,131 +1493,135 @@
         "ids": {
           "[\"agent_context_runtime\"]": {
             "__t__": "uuid",
-            "v": "17389f7f-ee70-4d7b-b875-a9e16ded41c4"
+            "v": "9238fe8a-6b16-49a1-9a09-2074446aea59"
           },
           "[\"api_access\"]": {
             "__t__": "uuid",
-            "v": "65e89b8f-7844-48f0-af98-cbb4930ccac6"
+            "v": "33efad8e-100b-4541-9d13-2a0376255e5c"
           },
           "[\"ask_dev\"]": {
             "__t__": "uuid",
-            "v": "9deb905c-261d-47c5-94d4-415d33935e15"
+            "v": "9a93323f-7df3-4049-aec4-73ef470fb1b1"
           },
           "[\"ask_dev_contextual_entrypoints\"]": {
             "__t__": "uuid",
-            "v": "9297dcf1-2ac0-4b24-9517-302e9805d508"
+            "v": "2e776a1a-9998-428c-80d7-30dd0ca66b7d"
+          },
+          "[\"ask_dev_graph_routing\"]": {
+            "__t__": "uuid",
+            "v": "95cba8c7-a187-4289-8124-2b6317c4095c"
           },
           "[\"ask_dev_wave_3_1\"]": {
             "__t__": "uuid",
-            "v": "e79f0c4e-9afd-48bf-a406-76df34c3e2da"
+            "v": "75a0ec70-0efd-4c3b-9709-873d723fb77f"
           },
           "[\"audit_log\"]": {
             "__t__": "uuid",
-            "v": "a77f6bea-ed9c-460a-9d73-caeebeaa5810"
+            "v": "91ef571c-1591-4498-9b98-ef11ececadf3"
           },
           "[\"basic_analytics\"]": {
             "__t__": "uuid",
-            "v": "2e12b6a9-f7c1-4181-b465-e038c1f6712a"
+            "v": "8c0bda53-8d24-48ee-93d1-87603bbd2aa8"
           },
           "[\"byo_llm\"]": {
             "__t__": "uuid",
-            "v": "a61b0495-0a17-46f7-af14-2e52f9fe2fed"
+            "v": "9b5bed2b-372d-4563-8ce2-b7dd02ad8339"
           },
           "[\"canonical_incident_ingestion\"]": {
             "__t__": "uuid",
-            "v": "b4d3f2e8-9caa-49f7-ae8c-5354bb634adf"
+            "v": "2efec3df-eeb7-440e-863e-900f8a1eaabf"
           },
           "[\"capacity_forecast\"]": {
             "__t__": "uuid",
-            "v": "2083d73b-0322-4ce6-a0a7-846f366f1d2a"
+            "v": "fd50a707-d915-42af-bccb-6403f430c0f1"
           },
           "[\"custom_branding\"]": {
             "__t__": "uuid",
-            "v": "9191566a-20b4-4ddc-989e-ac80ab444c21"
+            "v": "21e73dbc-1fc7-4c2c-9e03-5864ba203b2a"
           },
           "[\"custom_retention\"]": {
             "__t__": "uuid",
-            "v": "18e55cad-67fb-4455-a6fd-b770a6b674d4"
+            "v": "138441dd-8750-4196-8207-218bcc4c7509"
           },
           "[\"customer_push_ingest\"]": {
             "__t__": "uuid",
-            "v": "af7a6e2c-20a5-4134-bc73-42a11c5c1d8e"
+            "v": "3b479352-fcfa-4368-ad4d-e1d3deac34a1"
           },
           "[\"data_export\"]": {
             "__t__": "uuid",
-            "v": "9b4b20ad-f6f1-4850-bc37-e0db45a029c3"
+            "v": "99de05aa-06f6-45a6-ad45-005eef309735"
           },
           "[\"git_sync\"]": {
             "__t__": "uuid",
-            "v": "0cf37739-551d-4d02-a341-9768782e69ef"
+            "v": "3d55b842-4653-44c9-a9cc-db2e7c378226"
           },
           "[\"github_integration\"]": {
             "__t__": "uuid",
-            "v": "f60335da-6096-4bf5-aef4-56739ed92b74"
+            "v": "1a15f1e0-157f-4dcc-91b7-0d0992637e79"
           },
           "[\"gitlab_integration\"]": {
             "__t__": "uuid",
-            "v": "db414ff0-a12d-42dd-8d19-3dc9a70fca33"
+            "v": "f7652b4d-756c-45ad-aa34-753878a3b2b4"
           },
           "[\"investment_view\"]": {
             "__t__": "uuid",
-            "v": "590acff4-7e7f-4023-9d57-0d439cb76e62"
+            "v": "5d76facb-5943-45fc-b139-526ab52505db"
           },
           "[\"ip_allowlist\"]": {
             "__t__": "uuid",
-            "v": "7e88e3b0-c349-4c9d-af51-e1a8aa294e5c"
+            "v": "5771e1e7-21e1-45e4-bb23-eb9a0fec1164"
           },
           "[\"jira_integration\"]": {
             "__t__": "uuid",
-            "v": "2c3829a2-c218-4326-afe5-e4a0e8284921"
+            "v": "2ee2bcf3-1bc4-45c1-8646-4caab02360b8"
           },
           "[\"linear_integration\"]": {
             "__t__": "uuid",
-            "v": "8fc1c9af-aa17-492f-acd4-451d40a4fe7c"
+            "v": "25357b7b-4cae-4060-b940-c845e420eb15"
           },
           "[\"llm_categorization\"]": {
             "__t__": "uuid",
-            "v": "19035aab-1040-4385-b0f6-d518550890c9"
+            "v": "ea5f5622-1b03-43be-9709-d220aa326463"
           },
           "[\"multi_org\"]": {
             "__t__": "uuid",
-            "v": "e7800b8b-ba2a-4099-bf50-7a556073abcb"
+            "v": "d93e9f73-28aa-46f8-a646-366695a43cb9"
           },
           "[\"priority_support\"]": {
             "__t__": "uuid",
-            "v": "56b7d871-f7ed-4e95-b067-4e64966c5410"
+            "v": "8bfca3fa-d9a6-4e9e-b230-099902fad32e"
           },
           "[\"quadrant_analysis\"]": {
             "__t__": "uuid",
-            "v": "9822e876-fd60-4eef-9013-cf59588ca2b2"
+            "v": "0331753e-96d6-4319-89b3-9d2112b262b0"
           },
           "[\"scheduled_jobs\"]": {
             "__t__": "uuid",
-            "v": "46e58b4c-4433-4092-a5c2-675e0fe2b41b"
+            "v": "8d53e5d3-c1d7-48ad-9145-1523393b63ff"
           },
           "[\"sso_oidc\"]": {
             "__t__": "uuid",
-            "v": "9e87d0a5-f298-4e48-a4c2-a4f633ee5f48"
+            "v": "e0490dff-9aa9-40b2-94cf-8d7ae4ffac48"
           },
           "[\"sso_saml\"]": {
             "__t__": "uuid",
-            "v": "f10c15e1-308e-4287-b7af-1cb072df62dd"
+            "v": "1f60fbed-d0fc-4dd8-805f-5b84dfa9fa7c"
           },
           "[\"team_management\"]": {
             "__t__": "uuid",
-            "v": "5ac201a5-7979-498b-8240-1a9c34391df1"
+            "v": "7e7273f5-9206-445d-b399-4d9616c87848"
           },
           "[\"webhooks\"]": {
             "__t__": "uuid",
-            "v": "8f126b84-94f3-47d7-8c93-21b6f2fd016e"
+            "v": "7331fada-8696-4809-9040-4e85313f7d4d"
           },
           "[\"work_graph\"]": {
             "__t__": "uuid",
-            "v": "f520b639-02f6-4616-9c4e-f86cce906fe4"
+            "v": "553ab47e-a2a9-45cd-915a-e1511b8e99fe"
           },
           "[\"work_items_sync\"]": {
             "__t__": "uuid",
-            "v": "e1abae79-3aac-4330-9a2e-63f9ab2ab86b"
+            "v": "404a4410-388c-41cc-b0c8-ce566bd8f751"
           }
         },
         "natural_key": [
@@ -1629,7 +1633,7 @@
     "schema_fingerprint": {
       "alembic_heads": [
         "0066",
-        "0092"
+        "0093"
       ],
       "catalog_sha256": "f60a37177f49cb71ba388754c333d1aee7f430745ad6ced33dd3be1876d4a5b4"
     },
@@ -1668,7 +1672,7 @@
       "external_ingest_sources": 0,
       "external_ingest_tokens": 0,
       "feature_bundles": 0,
-      "feature_flags": 32,
+      "feature_flags": 33,
       "fixed_schedule_occurrences": 0,
       "github_app_installations": 0,
       "health_rule_calibrations": 0,
@@ -1836,7 +1840,7 @@
         ],
         "file": "postgres/memberships.json.gz",
         "row_count": 16,
-        "sha256": "abf39a90208120d61efdaa05054e3aa822f3b13dd1fb6b8e84b9c13b78d2dbaf"
+        "sha256": "563b1dccabe5f2a47100172863269f8bdff63c67105b70df5705d8d94760bf95"
       },
       "org_feature_overrides": {
         "columns": [
@@ -1854,7 +1858,7 @@
         ],
         "file": "postgres/org_feature_overrides.json.gz",
         "row_count": 9,
-        "sha256": "35fcba4fa75b2d317e685105eecead3cd76514073dae082e3dd642eeb398f8f6"
+        "sha256": "3d7b7de9b2730fe6ab9371c44440691d6cbf6e74c77e31edf9d3b5fee5ad9975"
       },
       "org_licenses": {
         "columns": [
@@ -1879,7 +1883,7 @@
         ],
         "file": "postgres/org_licenses.json.gz",
         "row_count": 3,
-        "sha256": "a623cb75cb4a2591cc8893e3b6cc7c0a6c45c51b3dc4e4854b6580b944d14617"
+        "sha256": "10bdc15922427f99e7bee048d30864aef1d839ba232242ef4db9807ac7303486"
       },
       "org_retention_policies": {
         "columns": [
@@ -1898,7 +1902,7 @@
         ],
         "file": "postgres/org_retention_policies.json.gz",
         "row_count": 3,
-        "sha256": "73f8f591090b93d478ca3a985ad63d9ebc45ca12db1b300753081a78a6bb2b64"
+        "sha256": "0c634791077c1b8489c349b00ad021aee4645d3a512aa915173da471c909fe44"
       },
       "organizations": {
         "columns": [
@@ -1917,7 +1921,7 @@
         ],
         "file": "postgres/organizations.json.gz",
         "row_count": 3,
-        "sha256": "2e2672ff4913a15e36fce7101a5857cb4853b8293dcc185a3f087dee21346c6f"
+        "sha256": "fbe795aed78dfccc0b46e92abdbcb8eb4614da562aca0b8f1a1337532ab78324"
       },
       "sync_configurations": {
         "columns": [
@@ -1941,7 +1945,7 @@
         ],
         "file": "postgres/sync_configurations.json.gz",
         "row_count": 8,
-        "sha256": "47feda18e773bd963e0aac50bfc65bc590731cb79406645fcbbdc258e273a720"
+        "sha256": "f36161aeb04de597295b63a846a43fa2ea06c6f0f923d78ba7713204021db920"
       },
       "users": {
         "columns": [
@@ -1963,14 +1967,14 @@
         ],
         "file": "postgres/users.json.gz",
         "row_count": 16,
-        "sha256": "3e768f40cbb5ed80e16c12bf38726b62e886cc794c4840db9056d233944aa959"
+        "sha256": "8609314dbec6cf4d43da153b415584b146662e076247c9d01029c42681d17939"
       }
     }
   },
   "schema_version": "ask_dev_world_snapshot.v1",
   "shelf_life_days": 28,
   "ttl_shelf_life_expiry": "2026-08-13T00:00:00+00:00",
-  "world_digest": "79addee201847482c17a4049fd3df5ff2ac914742bfa806a81d280db503d9219",
+  "world_digest": "2326e80ddab3f3f2cb02ae0e16ac2f5ac41bed4166e2f1e1dcac48b27f3e5e25",
   "world_manifest_contract": "fb9256ab9d2ffc8ae352cdad9403801dccad6639e7692190ab6f6930d4f4d2db",
   "world_schema_version": "ask_dev_world.v1"
 }

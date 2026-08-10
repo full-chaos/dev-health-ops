@@ -101,6 +101,7 @@ acceptance_acr_compose_file="${ops_root}/tests/acceptance/compose.ask-dev-acr.ym
 project_name="dev-health-ask-dev-acceptance"
 fixture_org_id="0a155cab-8833-42ac-a4ef-0d121725a7b0"
 oracle_file="${ops_root}/tests/acceptance/ask-dev-oracle.v1.json"
+graph_oracle_file="${ops_root}/tests/acceptance/ask-dev-graph-oracle.v1.json"
 # CHAOS-3219 D3: ACR (Agent Context Runtime) evidence-adapter services are
 # OFF by default -- arm with ASK_DEV_ACCEPTANCE_ACR=1. See
 # tests/acceptance/compose.ask-dev-acr.yml for the wiring rationale and the
@@ -123,6 +124,12 @@ read_oracle_field() {
     'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
     "${oracle_file}" "$1"
 }
+read_graph_oracle_field() {
+  "${ops_root}/.venv/bin/python" -c \
+    'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
+    "${graph_oracle_file}" "$1"
+}
+export DEV_HEALTH_BUILD_SHA="$(git -C "${ops_root}" rev-parse HEAD)"
 acceptance_question="$(read_oracle_field question)"
 expected_metric_id="$(read_oracle_field expected_metric_id)"
 expected_evidence_entity_fragment="$(read_oracle_field expected_evidence_entity_fragment)"
@@ -143,6 +150,7 @@ compose=(
   -f "${compose_file}"
   -f "${acceptance_compose_file}"
   --profile ask-dev-acceptance
+  --profile graph-trial
 )
 # CHAOS-3463: split in two. `world-restore` checks that every table it is
 # about to write is empty and then writes it; a running `worker`/`beat` fleet
@@ -151,7 +159,7 @@ compose=(
 # AFTER the restore -- it is still a required part of the stack, just not while
 # a state-based precondition is being evaluated. Codex adversarial review
 # (HIGH): the original single list started them before the restore.
-boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api)
+boot_services=(postgres pgbouncer clickhouse valkey graph-trial-store migrate ask-dev-scripted-openai api)
 jobs_services=(worker beat)
 log_services=(api ask-dev-scripted-openai worker beat web)
 
@@ -471,6 +479,31 @@ TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${web_root}/node_modules/.bin/playwright" test \
   -c "${wave4_config}"
+
+if [[ ! -f "${graph_oracle_file}" ]]; then
+  echo "W3_GRAPH_ACCEPTANCE=FAILED reason=oracle-absent path=${graph_oracle_file}" >&2
+  exit 1
+fi
+graph_question="$(read_graph_oracle_field graph_question)"
+graph_fallback_question="$(read_graph_oracle_field fallback_question)"
+graph_ambiguous_question="$(read_graph_oracle_field ambiguous_question)"
+graph_expected_state="$(read_graph_oracle_field expected_graph_state)"
+graph_expected_fallback_state="$(read_graph_oracle_field expected_fallback_state)"
+echo "W3_GRAPH_ACCEPTANCE=RUNNING backend_sha=${DEV_HEALTH_BUILD_SHA}"
+ASK_DEV_GRAPH_LIVE_ACCEPTANCE=1 \
+ASK_DEV_COMPOSE_WEB_READY=1 \
+ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_GRAPH_ACCEPTANCE_QUESTION="${graph_question}" \
+ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION="${graph_fallback_question}" \
+ASK_DEV_GRAPH_ACCEPTANCE_AMBIGUOUS_QUESTION="${graph_ambiguous_question}" \
+ASK_DEV_GRAPH_ACCEPTANCE_EXPECTED_GRAPH_STATE="${graph_expected_state}" \
+ASK_DEV_GRAPH_ACCEPTANCE_EXPECTED_FALLBACK_STATE="${graph_expected_fallback_state}" \
+ASK_DEV_GRAPH_ACCEPTANCE_BACKEND_SHA="${DEV_HEALTH_BUILD_SHA}" \
+PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${web_root}/node_modules/.bin/playwright" test \
+  -c "${web_root}/playwright.ask-dev-graph-acceptance.config.ts"
 
 # CHAOS-3219 Phase 5 (CI lane): keep the stack up for a caller that has more
 # to run against it -- specifically scripts/acceptance/run_wave4_corpus.sh,

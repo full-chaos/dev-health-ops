@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
@@ -69,6 +70,10 @@ from .contracts import (
 from .entitlement import (
     AskDevEntitlementDeniedError,
     CanonicalAskDevEntitlementAuthorizer,
+)
+from .graph_routing_policy import (
+    CanonicalGraphRoutingEntitlementAuthorizer,
+    GraphRoutingPolicyDeniedError,
 )
 from .no_match_terminal import redact_persisted_answer, redact_persisted_error
 from .orchestrator import OrchestratorEvent, OrchestratorResult, RunState
@@ -213,6 +218,7 @@ class DevCapabilityRuntime:
     ] = "missing_credentials"
     contextual_entrypoints: bool = False
     evidence_resolver: bool = True
+    graph_routing_enabled: bool = False
     safe_failure_reason: str | None = "No certified Ask Dev model is ready."
 
 
@@ -264,6 +270,11 @@ async def get_dev_capability_runtime(
         )
     try:
         evidence_ready = bool(os.getenv("JWT_SECRET_KEY"))
+        graph_routing_enabled = True
+        try:
+            await CanonicalGraphRoutingEntitlementAuthorizer(session).require(user.org_id)
+        except GraphRoutingPolicyDeniedError:
+            graph_routing_enabled = False
         return DevCapabilityRuntime(
             effective_provider_label=provider.provider_label,
             effective_model_label=provider.model_label,
@@ -271,6 +282,7 @@ async def get_dev_capability_runtime(
             readiness="ready" if evidence_ready else "degraded",
             contextual_entrypoints=True,
             evidence_resolver=evidence_ready,
+            graph_routing_enabled=graph_routing_enabled,
             safe_failure_reason=(
                 None if evidence_ready else "Ask Dev evidence signing is unavailable."
             ),
@@ -989,7 +1001,12 @@ async def capabilities(
     user: Annotated[AuthenticatedUser, Depends(_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     runtime: Annotated[DevCapabilityRuntime, Depends(get_dev_capability_runtime)],
+    response: Response,
 ) -> DevCapabilities:
+    build_sha = os.getenv("DEV_HEALTH_BUILD_SHA", "").strip()
+    runtime_sha = build_sha if re.fullmatch(r"[0-9a-f]{40}", build_sha) else None
+    if runtime_sha:
+        response.headers["x-backend-sha"] = build_sha
     org_id, _ = _owned_ids(user, None)
     ask_dev = await _feature_allowed(session, org_id, "ask_dev")
     contextual_entrypoints = await _feature_allowed(
@@ -1013,7 +1030,9 @@ async def capabilities(
     )
     return DevCapabilities(
         schema_version="dev_capabilities.v1",
+        backend_sha=runtime_sha,
         ask_dev=effective_ask_dev,
+        ask_dev_graph_routing=effective_ask_dev and runtime.graph_routing_enabled,
         byo_llm=byo_llm,
         agent_context_runtime=agent_context_runtime,
         can_read=effective_ask_dev and readiness == "ready",

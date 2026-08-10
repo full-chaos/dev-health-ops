@@ -486,6 +486,96 @@ async def test_capability_runtime_degrades_safely_when_resolution_fails(
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision", [True, False])
+async def test_capability_runtime_projects_graph_entitlement(
+    monkeypatch: pytest.MonkeyPatch, decision: bool
+) -> None:
+    class _Provider:
+        async def aclose(self) -> None:
+            return None
+
+    class _Resolution:
+        provider = _Provider()
+        provider_label = "Scripted OpenAI"
+        model_label = "ask-dev-scripted-v1"
+        source = type("Source", (), {"value": "platform"})()
+        qua_shadow_provider = None
+
+    async def resolve(_session, *, org_id: str):
+        assert org_id == "org_01"
+        return _Resolution()
+
+    class _Authorizer:
+        def __init__(self, _session):
+            pass
+
+        async def require(self, org_id: str) -> None:
+            assert org_id == "org_01"
+            if not decision:
+                raise dev_router_module.GraphRoutingPolicyDeniedError(
+                    FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED
+                )
+
+    monkeypatch.setattr(dev_router_module, "resolve_production_provider", resolve)
+    monkeypatch.setattr(
+        dev_router_module,
+        "CanonicalGraphRoutingEntitlementAuthorizer",
+        _Authorizer,
+    )
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt")
+    result = await dev_router_module.get_dev_capability_runtime(
+        AuthenticatedUser(
+            user_id="user_01", email="member@example.com", org_id="org_01", role="member"
+        ),
+        cast(AsyncSession, object()),
+    )
+    assert result.graph_routing_enabled is decision
+
+
+@pytest.mark.asyncio
+async def test_capability_runtime_graph_storage_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Provider:
+        async def aclose(self) -> None:
+            return None
+
+    class _Resolution:
+        provider = _Provider()
+        provider_label = "Scripted OpenAI"
+        model_label = "ask-dev-scripted-v1"
+        source = type("Source", (), {"value": "platform"})()
+        qua_shadow_provider = None
+
+    async def resolve(_session, *, org_id: str):
+        return _Resolution()
+
+    class _Authorizer:
+        def __init__(self, _session):
+            pass
+
+        async def require(self, _org_id: str) -> None:
+            raise dev_router_module.GraphRoutingPolicyDeniedError(
+                FeatureDecisionReason.STORAGE_ERROR
+            )
+
+    monkeypatch.setattr(dev_router_module, "resolve_production_provider", resolve)
+    monkeypatch.setattr(
+        dev_router_module,
+        "CanonicalGraphRoutingEntitlementAuthorizer",
+        _Authorizer,
+    )
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt")
+    result = await dev_router_module.get_dev_capability_runtime(
+        AuthenticatedUser(
+            user_id="user_01", email="member@example.com", org_id="org_01", role="member"
+        ),
+        cast(AsyncSession, object()),
+    )
+    assert result.graph_routing_enabled is False
+
+
 def _scope_payload(org_id: uuid.UUID) -> dict[str, object]:
     return {
         "schema_version": "dev_scope.v1",
@@ -687,6 +777,22 @@ async def test_dev_capabilities_and_conversation_lifecycle(dev_api_context):
     empty_list = await client.get("/api/v1/dev/conversations")
     assert empty_list.status_code == 200
     assert empty_list.json() == {"items": [], "next_cursor": None}
+
+
+@pytest.mark.asyncio
+async def test_capabilities_exposes_only_a_valid_runtime_build_sha(
+    dev_api_context,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("DEV_HEALTH_BUILD_SHA", "a" * 40)
+    response = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert response.headers["x-backend-sha"] == "a" * 40
+    assert response.json()["backend_sha"] == "a" * 40
+
+    monkeypatch.setenv("DEV_HEALTH_BUILD_SHA", "test-only-value")
+    response = await dev_api_context.client.get("/api/v1/dev/capabilities")
+    assert "x-backend-sha" not in response.headers
+    assert response.json()["backend_sha"] is None
 
 
 @pytest.mark.asyncio

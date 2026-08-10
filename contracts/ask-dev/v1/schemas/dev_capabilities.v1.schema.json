@@ -102,6 +102,19 @@
       "title": "Ask Dev Graph Routing",
       "type": "boolean"
     },
+    "backend_sha": {
+      "anyOf": [
+        {
+          "pattern": "[0-9a-f]{40}",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Backend Sha"
+    },
     "byo_llm": {
       "default": false,
       "title": "Byo Llm",

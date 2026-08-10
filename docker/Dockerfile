@@ -62,7 +62,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Receive the pretend version so setuptools-scm can produce a version string
 # in environments without a git history (e.g. Docker build in CI).
 ARG SETUPTOOLS_SCM_PRETEND_VERSION
+ARG DEV_HEALTH_BUILD_SHA
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
+ENV DEV_HEALTH_BUILD_SHA=${DEV_HEALTH_BUILD_SHA}
 
 COPY . .
 
@@ -107,6 +109,9 @@ USER 10001
 
 # ── API target ────────────────────────────────────────────────────────────────
 FROM runtime AS api
+
+ARG DEV_HEALTH_BUILD_SHA
+ENV DEV_HEALTH_BUILD_SHA=${DEV_HEALTH_BUILD_SHA}
 
 EXPOSE 8000
 

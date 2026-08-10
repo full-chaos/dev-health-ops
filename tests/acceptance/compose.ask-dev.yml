@@ -97,8 +97,15 @@ services:
       # trip it" reference point.
       ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX: "1000"
       ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD: "200000000"
+      # W3 graph acceptance is explicitly armed only in this overlay. The
+      # trial store is isolated from the production Valkey service and the
+      # read flag remains off in ordinary Compose deployments.
+      CONTEXT_FABRIC_GRAPH_READ_ENABLED: "1"
+      CONTEXT_FABRIC_GRAPH_STORE_URI: redis://graph-trial-store:6379
     depends_on:
       ask-dev-scripted-openai:
+        condition: service_healthy
+      graph-trial-store:
         condition: service_healthy
     networks:
       - default

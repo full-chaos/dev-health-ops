@@ -168,6 +168,8 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         # just that case, not this shared default.
         "ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX": "1000",
         "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD": "200000000",
+        "CONTEXT_FABRIC_GRAPH_READ_ENABLED": "1",
+        "CONTEXT_FABRIC_GRAPH_STORE_URI": "redis://graph-trial-store:6379",
         # CHAOS-3532: the QUA ladder, off by default and overridable from the
         # invoking shell. The DEFAULT is the load-bearing half -- an armed
         # corpus run that silently gained a QUA shadow evaluation would
@@ -235,6 +237,9 @@ def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     assert 'ASK_DEV_ACCEPTANCE_QUESTION="${acceptance_question}"' in launcher
     assert '"${web_root}/node_modules/.bin/playwright" test' in launcher
     assert "playwright.ask-dev-acceptance.config.ts" in launcher
+    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 3
+    assert "playwright.ask-dev-graph-acceptance.config.ts" in launcher
+    assert "graph-trial-store" in launcher
     assert "The deterministic acceptance provider grounded" not in launcher
     assert '"$@"' not in launcher
     assert "completed successfully" in launcher
@@ -414,6 +419,7 @@ class _FakeAcceptanceApi:
                 for key in (
                     "ask_dev",
                     "ask_dev_contextual_entrypoints",
+                    "ask_dev_graph_routing",
                 )
             ]
         if path.endswith("/feature-overrides") and method == "GET":
@@ -434,6 +440,7 @@ class _FakeAcceptanceApi:
         if path == "/api/v1/dev/capabilities":
             return {
                 "ask_dev": True,
+                "ask_dev_graph_routing": True,
                 "agent_context_runtime": False,
                 "can_read": True,
                 "can_manage": True,
@@ -458,6 +465,7 @@ def test_readiness_bootstrap_enables_all_features_and_proves_capabilities() -> N
     assert created_features == [
         "id-ask_dev",
         "id-ask_dev_contextual_entrypoints",
+        "id-ask_dev_graph_routing",
     ]
     assert api.calls[-2][1] == "/api/v1/admin/platform/ask-dev/readiness"
     assert api.calls[-1][1] == "/api/v1/dev/capabilities"
@@ -679,7 +687,7 @@ def test_launcher_boots_required_jobs_fleet_and_gates_acr_optionally() -> None:
     # up, are asserted -- a split that quietly dropped the fleet would leave
     # the "API+jobs" gate framing unmet.
     assert (
-        "boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api)"
+        "boot_services=(postgres pgbouncer clickhouse valkey graph-trial-store migrate ask-dev-scripted-openai api)"
         in launcher
     )
     assert "jobs_services=(worker beat)" in launcher
@@ -772,6 +780,7 @@ class _MultiOrgFakeAcceptanceApi(_FakeAcceptanceApi):
             )
             return {
                 "ask_dev": enabled,
+                "ask_dev_graph_routing": enabled,
                 "readiness": "ready" if enabled else "disabled",
             }
         if path.endswith("/feature-overrides") and method == "POST":
@@ -816,6 +825,7 @@ def test_provision_multi_org_fails_loud_if_disabled_org_leaks_entitlement() -> N
         result = original_request(method, path, payload)
         if path == "/api/v1/dev/capabilities" and isinstance(result, dict):
             result = {**result, "ask_dev": True, "readiness": "ready"}
+            result["ask_dev_graph_routing"] = True
         return result
 
     api.request = leaking_request  # type: ignore[method-assign]
@@ -1459,6 +1469,26 @@ def test_mint_script_supplies_the_interpolation_only_variables() -> None:
     assert "export BUGSINK_SECRET_KEY=" in mint
 
 
+def test_mint_script_enables_every_profile_required_by_the_acceptance_api() -> None:
+    """The W3 API depends on the isolated graph store in the graph-trial profile."""
+
+    mint = (
+        _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    ).read_text(encoding="utf-8")
+    assert "--profile ask-dev-acceptance" in mint
+    assert "--profile graph-trial" in mint
+
+
+def test_mint_script_allows_an_explicit_host_python_for_worktrees() -> None:
+    """A clean worktree may intentionally reuse another verified project venv."""
+
+    mint = (
+        _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    ).read_text(encoding="utf-8")
+    assert "ASK_DEV_ACCEPTANCE_PYTHON:-${ops_root}/.venv/bin/python" in mint
+    assert '"${python_bin}"' in mint
+
+
 def test_committed_world_digest_is_a_real_pin_not_a_placeholder() -> None:
     """A stub pin is worse than a missing one: it looks committed and it fails
     every acceptance boot.
@@ -1810,10 +1840,10 @@ def test_launcher_runs_the_wave4_access_matrix_with_its_own_arming_contract() ->
     assert 'ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}"' in launcher
     assert 'ASK_DEV_ACCEPTANCE_ACR="${acr_armed}"' in launcher
 
-    # Two SEPARATE invocations, not one with more env. Folding them together
+    # Three SEPARATE invocations, not one with more env. Folding them together
     # would couple the Phase 1 oracle to the access matrix so either could
     # take the other down.
-    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 2
+    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 3
 
     # Ordering: the matrix runs after web is up and after the Phase 1 spec,
     # so a Phase 1 regression is reported against Phase 1 rather than

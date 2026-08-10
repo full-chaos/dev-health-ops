@@ -153,6 +153,7 @@ services:
       target: api
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        DEV_HEALTH_BUILD_SHA: ${DEV_HEALTH_BUILD_SHA:-}
     container_name: dev-health-migrate
     restart: "no"
     entrypoint:
@@ -188,6 +189,7 @@ services:
       target: api
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        DEV_HEALTH_BUILD_SHA: ${DEV_HEALTH_BUILD_SHA:-}
     container_name: dev-health-api
     command: |
       --host 0.0.0.0 --port 8000 --reload

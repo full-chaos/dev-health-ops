@@ -64,11 +64,51 @@ from .contracts_v2.subject import DevSubjectMention
 from .investigation_contract import AskDevInvestigationPacket
 
 __all__ = [
+    "CohortDiscoveryFamily",
     "GraphInvestigationRequest",
     "GraphQueryOutcome",
     "GraphQueryResult",
     "GraphInvestigationQuery",
 ]
+
+
+class CohortDiscoveryFamily(StrEnum):
+    """The production-side classification signal for a ``DISCOVERED_COHORT``
+    question -- CHAOS-3689 design round (proposed/signed off on CHAOS-3660).
+
+    ``cohort_discovery.discover_cohort`` requires a ``QuestionFamilyID`` to
+    select its candidate-kind universe (``FAMILY_CANDIDATE_KINDS``) and
+    corroboration metric set (``FAMILY_PRESSURE_METRICS``, CHAOS-3667's
+    held-out gate) -- a single ``QuestionIntentID`` value cannot carry that.
+    This is production's OWN closed vocabulary for the signal, deliberately
+    not a reuse of the trial's ten-member ``QuestionFamilyID`` -- Lane A's
+    ``ProductionGraphInvestigationQuery`` maps each member here to a
+    ``QuestionFamilyID`` representative via its own closed, exhaustive
+    table (never a default branch).
+
+    Deliberately two members, not five. Of the five subjectless-capable
+    trial families, ``STRUGGLING_TEAMS`` and ``PRESSURE_SIGNALS`` are
+    structurally identical to ``discover_cohort`` -- same candidate kind
+    (``{TEAM}``), same seven-metric corroboration set, and for a
+    ``DISCOVERED_COHORT``/``ORGANIZATION_WIDE`` request both permit
+    ``(DISCOVERED_COHORT, PORTFOLIO_WIDE)`` -- so collapsing them here loses
+    no observable behavior; it recognizes a real equivalence class, not a
+    guess. ``PORTFOLIO_DEPENDENCY_RISK``/``DECLARED_VERSUS_ACTUAL`` have NO
+    lexical coverage in ``question_interpreter``'s ``cohort.discovery``
+    recognizer today -- adding anchors for them is a separate, future,
+    measured pass (explicitly out of this round's "no corpus tuning"
+    scope), not represented here. A question that would need one of those
+    two families classifies as ``None`` (unclassifiable) today, exactly
+    like any other question this recognizer doesn't yet cover.
+    """
+
+    #: STRUGGLING_TEAMS / PRESSURE_SIGNALS (equivalent for this call shape,
+    #: see class docstring). Team-kind candidates, pressure-metric
+    #: corroboration.
+    TEAM_PRESSURE = "team_pressure"
+    #: PROJECT_CAPACITY. Project-kind candidates, capacity-metric
+    #: corroboration.
+    PROJECT_CAPACITY = "project_capacity"
 
 
 class GraphQueryOutcome(StrEnum):
@@ -116,9 +156,10 @@ class GraphInvestigationRequest:
     run_id: str
     #: Production's own interpreted intent (now including
     #: ``QuestionIntentID.DISCOVERED_COHORT``, CHAOS-3652) and its cardinality.
-    #: The graph service classifies its own internal job/family from these
-    #: plus ``question_text`` -- production does not hand it a pre-classified
-    #: trial family.
+    #: For everything except cohort-family selection, the graph service
+    #: classifies its own internal job/shape from these two fields alone --
+    #: see ``cohort_discovery_family`` below for the one signal these two
+    #: cannot carry (CHAOS-3689).
     intent_id: QuestionIntentID
     cardinality: Cardinality
     #: Already-extracted mentions (resolved or not -- resolution status is
@@ -128,11 +169,13 @@ class GraphInvestigationRequest:
     #: ``DevQuestionIntent.validate_intent_invariants``).
     mentions: tuple[DevSubjectMention, ...]
     #: The bounded (<=8KiB per ``DevMessageRequestV2``), already-validated
-    #: question text. Needed for the graph service's own family/candidate
-    #: classification. Server-side/internal only -- never echoed back
+    #: question text. Server-side/internal only -- never echoed back
     #: verbatim into a packet field a consumer renders untrusted (mirrors
     #: the existing "no raw question text in logs/traces/labels" guardrail;
-    #: this is a same-process/internal call, not a log).
+    #: this is a same-process/internal call, not a log). Per the CHAOS-3660
+    #: determination, the query service does not inspect this to classify
+    #: (see ``mechanism_for``'s own docstring) -- it is carried for the
+    #: mechanism's own downstream matching needs, not for classification.
     question_text: str
     #: Supplied, never derived (see module docstring). The graph route must
     #: never return, rank, or count toward truncation any entity outside
@@ -150,6 +193,18 @@ class GraphInvestigationRequest:
     #: native-arm answer for the same run are bounded identically.
     window_start: datetime
     window_end: datetime
+    #: The one production-derived classification signal this seam carries
+    #: (CHAOS-3689/CHAOS-3660) -- present only because ``(intent_id,
+    #: cardinality)`` cannot select a ``discover_cohort`` candidate-kind/
+    #: metric-family pair by itself. Supplied by the orchestrator's own
+    #: interpreter-level classification
+    #: (``question_interpreter.classify_cohort_discovery_family``), never
+    #: derived here. There is no "unclassifiable" member on
+    #: ``CohortDiscoveryFamily`` -- the orchestrator never constructs a
+    #: request for a question it could not classify (see the routing
+    #: branch's own gate), so this field is never ambiguous by the time it
+    #: reaches this seam.
+    cohort_discovery_family: CohortDiscoveryFamily
     #: Absolute wall-clock deadline (CHAOS-3631). The query service must
     #: return ``GraphQueryOutcome.DEADLINE_EXCEEDED`` rather than block past
     #: this, under any internal retry/backoff it performs.

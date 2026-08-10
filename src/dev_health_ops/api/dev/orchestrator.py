@@ -104,6 +104,7 @@ from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
+from .evidence_service import EvidenceService
 from .graph_investigation_query import GraphInvestigationQuery
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
@@ -1014,6 +1015,7 @@ class DevOrchestrator:
         investigation_shadow: InvestigationShadow | None = None,
         investigation_packet_producer: InvestigationPacketProducer | None = None,
         graph_investigation_query: GraphInvestigationQuery | None = None,
+        evidence_service: EvidenceService | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -1070,6 +1072,16 @@ class DevOrchestrator:
         # ``graph_investigation_query.py`` and CHAOS-3502/CHAOS-3664 for the
         # canonical-admission bridge that finishes this seam.
         self._graph_investigation_query = graph_investigation_query
+        # CHAOS-3502 increment 2c: ``None`` is the flag-off path, same shape
+        # as ``graph_investigation_query`` immediately above -- ``run()``
+        # does not read this attribute yet. Landed ahead of the routing
+        # branch that will call ``evidence_service.admit()`` on packet-
+        # extracted candidates (``graph_evidence_admission.
+        # extract_evidence_candidates``, CHAOS-3680) so that branch's own
+        # design (CHAOS-3660, pending sign-off) can assume the collaborator
+        # already exists rather than bundling its construction with the
+        # first PR that actually calls it.
+        self._evidence_service = evidence_service
         self._composer = PromptComposer(registry)
 
     async def run(

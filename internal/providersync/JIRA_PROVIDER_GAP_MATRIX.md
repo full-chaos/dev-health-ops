@@ -37,7 +37,7 @@ the same persisted destinations.
 | Reopen/priority | Reopen events derive from terminal-to-nonterminal transitions; priority maps to service class. | Same derivation and mapping. | Direct row is covered by the semantic/route tests. |
 | Sprint/reference cache | Legacy producer collects issue sprint IDs, reuses Jira reference sprints, fetches missing sprints, and writes newly fetched references. | Fetches issue-linked sprints but does not enumerate boards or persist a reusable reference cache in this route. | Cache/reference and incomplete-watermark semantics are deferred to `CHAOS-3714`. |
 | Boards/sprints | `team_autoimport_jira.py` enumerates boards and board sprints; the Atlassian provider can optionally fetch board sprints. | No board enumeration or board-sprint path. | Deferred to the Jira Atlassian enrichment follow-up; issue-linked sprint rows are the only current Go surface. |
-| Worklogs | Atlassian provider optionally fetches worklogs through GraphQL with REST fallback under `JIRA_FETCH_WORKLOGS`; legacy batch has no worklog list. | No worklog producer/effect in this route. | Worklogs are not one of the 16 work-item matrix destinations, but are still provider behavior and remain intentionally deferred. |
+| Worklogs | Atlassian provider optionally fetches worklogs through GraphQL with REST fallback under `JIRA_FETCH_WORKLOGS`; legacy batch has no worklog list. | Typed worklog effect, identity parity, and GraphQL-attempt/REST-fallback observations are covered by the Atlassian route. | Worklogs are not one of the 16 work-item matrix destinations; durable completion payload records the typed fetch observations. |
 | Atlassian alternate path | `JiraProvider`'s Atlassian path emits canonical work items/transitions/reopens and optional worklogs/sprints, but currently returns empty dependencies and interactions. | This route models the legacy REST/JQL path only. | Must not be called provider-complete until Atlassian dependency/comment parity is resolved. |
 | JSM incidents | Separate native JSM path and `operational_incidents` destination. | Already native and route-ready. | Out of scope for this work-item continuation; do not modify incident handler/effects/readback. |
 
@@ -84,10 +84,10 @@ inspection, sink projection, skipped route, or status claim closes it.
   identity comparison is made authoritative.
 - `CHAOS-3714` owns sprint/reference cache reuse, optional incomplete markers,
   and recovery semantics.
-- Jira Atlassian worklogs, board enumeration, and Atlassian-path
-  dependency/interaction parity are intentionally deferred to a separate
-  follow-up. No registry, matrix, config, route switch, or deployment wiring
-  is changed here.
+- Board enumeration and Atlassian-path dependency/interaction parity remain
+  intentionally deferred to separate follow-ups. CHAOS-3720 closes only the
+  Atlassian worklog identity/fallback parity slice; no registry, matrix, config,
+  route switch, or deployment wiring is changed here.
 
 Therefore this branch is **partial provider parity preparation**, not Jira
 provider completion and not route readiness.

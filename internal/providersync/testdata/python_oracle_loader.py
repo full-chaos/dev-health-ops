@@ -110,6 +110,9 @@ _NORMALIZE_HELPERS_SOURCE = _source("dev_health_ops/providers/normalize_helpers.
 _DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
 _LINEAR_NORMALIZE_SOURCE = _source("dev_health_ops/providers/linear/normalize.py")
 _LINEAR_PROVIDER_SOURCE = _source("dev_health_ops/providers/linear/provider.py")
+_TEAM_AUTOIMPORT_LINEAR_SOURCE = _source(
+    "dev_health_ops/workers/team_autoimport_linear.py"
+)
 _PROVIDERS_BASE_SOURCE = _source("dev_health_ops/providers/base.py")
 _PROVIDERS_UTILS_SOURCE = _source("dev_health_ops/providers/utils.py")
 
@@ -954,6 +957,72 @@ def _target_linear_provider() -> None:
     )
 
 
+def _target_linear_team_autoimport() -> None:
+    """Load the live Linear reference-catalog producer's pure boundaries.
+
+    ``team_autoimport_linear`` owns the real team/member/project row
+    construction but imports the application sink and discovery services at
+    module load. Those collaborators are fixed stubs here because the oracle
+    invokes only ``_linear_project_records``; the value-producing normalizer
+    itself remains the checked-in production source.
+    """
+    for name in (
+        "dev_health_ops.api",
+        "dev_health_ops.api.services",
+        "dev_health_ops.api.services.configuration",
+    ):
+        _install_package(name)
+    _install_module("sqlalchemy", {})
+    _install_package("sqlalchemy.ext")
+    _install_module(
+        "sqlalchemy.ext.asyncio", {"AsyncSession": type("AsyncSession", (), {})}
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_identity_drift",
+        {"split_memberships_for_review": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_team_drift_projector",
+        {
+            "project_provider_team_rows": _unsupported_dependency,
+            "project_team_rows_with_store": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_discovery",
+        {"TeamDiscoveryService": type("TeamDiscoveryService", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_membership",
+        {"TeamMembershipService": type("TeamMembershipService", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.credentials.resolver",
+        {"linear_credentials_from_mapping": _unsupported_dependency},
+    )
+    _load_source_module("dev_health_ops.metrics.schemas", _METRICS_SCHEMAS_SOURCE)
+    _install_module(
+        "dev_health_ops.metrics.sinks.clickhouse",
+        {"ClickHouseMetricsSink": type("ClickHouseMetricsSink", (), {})},
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _install_module(
+        "dev_health_ops.providers.identity",
+        {"load_identity_resolver": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.providers.linear.client",
+        {
+            "LinearAuth": type("LinearAuth", (), {}),
+            "LinearClient": type("LinearClient", (), {}),
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers.linear.normalize",
+        {"linear_cycle_to_sprint": _unsupported_dependency},
+    )
+
+
 def _target_fetch_utils() -> None:
     _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
 
@@ -1047,6 +1116,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.linear.provider",
         _LINEAR_PROVIDER_SOURCE,
         _target_linear_provider,
+    ),
+    _TEAM_AUTOIMPORT_LINEAR_SOURCE: (
+        "dev_health_ops.workers.team_autoimport_linear",
+        _TEAM_AUTOIMPORT_LINEAR_SOURCE,
+        _target_linear_team_autoimport,
     ),
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",

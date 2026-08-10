@@ -116,16 +116,18 @@ type gitLabFilesTraceRow struct {
 }
 
 type gitLabFilesTraversalTrace struct {
-	ProducerRequests  []string                `json:"producer_requests"`
-	UsageRequestCount int                     `json:"usage_request_count"`
-	TreePaths         []string                `json:"tree_paths"`
-	Rows              []gitLabFilesTraceRow   `json:"rows"`
-	Incomplete        []GitLabFilesIncomplete `json:"incomplete"`
+	ProducerRequests      []string                `json:"producer_requests"`
+	RequestedContentPaths []string                `json:"requested_content_paths"`
+	UsageRequestCount     int                     `json:"usage_request_count"`
+	TreePaths             []string                `json:"tree_paths"`
+	Rows                  []gitLabFilesTraceRow   `json:"rows"`
+	Incomplete            []GitLabFilesIncomplete `json:"incomplete"`
 }
 
 type gitLabFilesTraceDoer struct {
 	t              *testing.T
 	requests       []*http.Request
+	contentPaths   []string
 	treePages      [][]map[string]any
 	nextPages      []string
 	commitRows     []map[string]any
@@ -165,6 +167,9 @@ func (doer *gitLabFilesTraceDoer) Do(request *http.Request) (*http.Response, err
 		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 			t := doer.t
 			t.Fatal(err)
+		}
+		if strings.Contains(input.Query, "rawSize") || strings.Contains(input.Query, "rawTextBlob") {
+			doer.contentPaths = append(doer.contentPaths, input.Variables.Paths...)
 		}
 		if doer.contentFailure && strings.Contains(input.Query, "rawTextBlob") {
 			status = http.StatusInternalServerError
@@ -280,6 +285,27 @@ func TestGenericOracleMatchesLivePythonForGitLabFilesContentFailure(t *testing.T
 	)
 }
 
+func TestGenericOracleMatchesLivePythonForGitLabFilesCaseSensitiveExtensions(t *testing.T) {
+	compareRowsAgainstPythonOracle(
+		t,
+		"gitlab/files/trace",
+		[]oracleCase{{ID: "case_sensitive_extensions", Input: map[string]any{
+			"repo_id":           "c7198fbc-1945-3717-05d8-eb78866b4e79",
+			"project_full_name": "Acme/API", "default_branch": "main",
+			"tree_pages": []any{[]any{
+				map[string]any{"path": "src/Main.GO", "type": "blob"},
+				map[string]any{"path": "src/mixed.Go", "type": "blob"},
+				map[string]any{"path": "src/main.go", "type": "blob"},
+			}},
+			"tree_next_pages": []any{},
+			"sizes":           map[string]any{"src/main.go": 15},
+			"contents":        map[string]any{"src/main.go": "package main\n"},
+		}}},
+		buildGitLabFilesTraversalTrace,
+		nil,
+	)
+}
+
 func buildGitLabFilesTraversalTrace(t *testing.T, input map[string]any) gitLabFilesTraversalTrace {
 	t.Helper()
 	treePages := make([][]map[string]any, 0)
@@ -321,11 +347,12 @@ func buildGitLabFilesTraversalTrace(t *testing.T, input map[string]any) gitLabFi
 		t.Fatalf("physical evidence=%+v requests=%d", batch.Evidence, len(doer.requests))
 	}
 	trace := gitLabFilesTraversalTrace{
-		ProducerRequests:  make([]string, 0, len(doer.requests)-1),
-		UsageRequestCount: batch.Evidence.Requests - 1,
-		TreePaths:         make([]string, 0),
-		Rows:              make([]gitLabFilesTraceRow, 0),
-		Incomplete:        make([]GitLabFilesIncomplete, 0),
+		ProducerRequests:      make([]string, 0, len(doer.requests)-1),
+		RequestedContentPaths: append([]string(nil), doer.contentPaths...),
+		UsageRequestCount:     batch.Evidence.Requests - 1,
+		TreePaths:             make([]string, 0),
+		Rows:                  make([]gitLabFilesTraceRow, 0),
+		Incomplete:            make([]GitLabFilesIncomplete, 0),
 	}
 	if raw, ok := batch.Result[gitLabFilesIncompleteResultKey]; ok {
 		var encoded []byte

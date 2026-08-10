@@ -560,6 +560,8 @@ func TestGitLabFileContentEligibilityMatchesComplexityScannerConfig(t *testing.T
 		want bool
 	}{
 		{path: "src/main.go", want: true},
+		{path: "src/Main.GO", want: false},
+		{path: "src/mixed.Go", want: false},
 		{path: "README.md", want: false},
 		{path: "tests/example.go", want: false},
 		{path: "migrations/001.go", want: false},

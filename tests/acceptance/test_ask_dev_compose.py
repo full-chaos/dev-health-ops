@@ -170,6 +170,12 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD": "200000000",
         "CONTEXT_FABRIC_GRAPH_READ_ENABLED": "1",
         "CONTEXT_FABRIC_GRAPH_STORE_URI": "redis://graph-trial-store:6379",
+        "CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED": "1",
+        "ASK_DEV_GRAPH_ROUTING_ENABLED": "1",
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM": "1",
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION": (
+            "Which teams are falling behind?"
+        ),
         # CHAOS-3532: the QUA ladder, off by default and overridable from the
         # invoking shell. The DEFAULT is the load-bearing half -- an armed
         # corpus run that silently gained a QUA shadow evaluation would
@@ -181,14 +187,13 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         "ASK_DEV_QUA_COMMIT_ENABLED": "${ASK_DEV_QUA_COMMIT_ENABLED:-0}",
     }
     assert api["networks"] == ["default", "ask-dev-acceptance"]
+    assert api["build"]["args"]["DEV_HEALTH_INSTALL_TARGET"] == ".[context-graph-trial]"
     assert api["depends_on"]["ask-dev-scripted-openai"] == {
         "condition": "service_healthy"
     }
-    # Host port is parameterized so this stack can coexist with the normal
-    # dev-health stack (which already publishes 18080). The default must
-    # stay 18080, and the bind must stay loopback-only -- a bare "PORT:8000"
-    # would expose the acceptance API on every interface.
-    assert api["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"]
+    # Docker allocates a free host port by default so concurrent local stacks
+    # cannot collide. The bind remains loopback-only.
+    assert api["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"]
 
 
 def test_web_is_compose_owned_and_points_only_at_the_ops_service() -> None:
@@ -209,13 +214,15 @@ def test_only_api_and_web_publish_host_ports() -> None:
         assert document["services"][service_name]["ports"] == []
     assert "ports" not in document["services"]["ask-dev-scripted-openai"]
     assert document["services"]["api"]["ports"] == [
-        "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"
+        "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"
     ]
     assert document["services"]["web"]["ports"] == ["127.0.0.1:3002:3000"]
 
 
 def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "ASK_DEV_ACCEPTANCE_API_PORT:-0" in launcher
+    assert '"${compose[@]}" port api 8000 --index 1' in launcher
     assert '"${1:-}" != "--web-root"' in launcher
     assert '"$#" -ne 2' in launcher
     assert "--profile ask-dev-acceptance" in launcher
@@ -290,6 +297,7 @@ def test_keep_stack_is_opt_in_and_skips_only_the_teardown() -> None:
     # And it must be an EQUALS-1 test. `!= "1"` inverts the flag: the default
     # path would then keep the stack and the CI path would tear it down.
     assert '"${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1"' in launcher
+    assert "ASK_DEV_ACCEPTANCE_API_URL=${acceptance_api_url}" in launcher
 
     keep_index = launcher.index("ASK_DEV_ACCEPTANCE_KEEP_STACK")
     playwright_index = launcher.index('"${web_root}/node_modules/.bin/playwright" test')
@@ -1356,6 +1364,16 @@ def test_boot_login_proof_and_mint_use_the_same_assertion_script() -> None:
     assert script in mint, "the mint lost the shared login assertion"
 
 
+def test_mint_discovers_the_running_api_port_instead_of_assuming_one() -> None:
+    mint = (_LAUNCHER.parent / "mint_ask_dev_world_snapshot.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "ASK_DEV_ACCEPTANCE_API_PORT:-0" in mint
+    assert '"${compose[@]}" port api 8000 --index 1' in mint
+    assert '--api-url "http://127.0.0.1:${mint_api_port}"' in mint
+    assert "18080" not in mint
+
+
 def test_launcher_restore_targets_the_databases_the_api_actually_serves() -> None:
     """The whole point of CHAOS-3463's B2: the world has to land in the
     ClickHouse `default` / Postgres `postgres` databases the acceptance API
@@ -1477,6 +1495,20 @@ def test_mint_script_enables_every_profile_required_by_the_acceptance_api() -> N
     ).read_text(encoding="utf-8")
     assert "--profile ask-dev-acceptance" in mint
     assert "--profile graph-trial" in mint
+
+    overlay = (_ROOT / "tests" / "acceptance" / "compose.ask-dev.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'ASK_DEV_GRAPH_ROUTING_ENABLED: "1"' in overlay
+    assert 'CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED: "1"' in overlay
+
+
+def test_launcher_seeds_real_graph_data_after_world_restore() -> None:
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    restore = launcher.index("dev-hops fixtures world-restore")
+    seed = launcher.index("scripts/acceptance/seed_ask_dev_graph_acceptance.py")
+    browser_gate = launcher.index("W3_GRAPH_ACCEPTANCE=RUNNING")
+    assert restore < seed < browser_gate
 
 
 def test_mint_script_allows_an_explicit_host_python_for_worktrees() -> None:

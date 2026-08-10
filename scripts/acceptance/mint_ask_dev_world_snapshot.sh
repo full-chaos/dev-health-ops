@@ -122,7 +122,7 @@ pg_serving="postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
 # exist only to let interpolation succeed.
 export ASK_DEV_WEB_CONTEXT="${ASK_DEV_WEB_CONTEXT:-${ops_root}}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
-export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18080}"
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-0}"
 
 compose=(
   docker compose
@@ -138,6 +138,11 @@ if ! "${compose[@]}" ps --status running --services | grep -qx api; then
   echo "mint: the acceptance stack's api service is not running." >&2
   echo "mint: bring the stack up with FRESH volumes first (see this script's header)." >&2
   exit 69
+fi
+mint_api_port="$("${compose[@]}" port api 8000 --index 1 | awk -F: '{print $NF}')"
+if [[ ! "${mint_api_port}" =~ ^[0-9]+$ ]] || [[ "${mint_api_port}" == "0" ]]; then
+  echo "mint: could not discover the acceptance API host port" >&2
+  exit 70
 fi
 
 # CHAOS-3544: refuse to mint unless the running api container is serving
@@ -272,7 +277,7 @@ echo "mint: proving the snapshot round trip is lossless"
 echo "mint: proving the corpus contract principals can log in"
 "${python_bin}" \
   "${ops_root}/scripts/acceptance/assert_world_principals_can_log_in.py" \
-  --api-url "http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}" \
+  --api-url "http://127.0.0.1:${mint_api_port}" \
   --manifest "${world_dir}/world.json"
 
 # Copy into a sibling directory and swap only once the replacement is

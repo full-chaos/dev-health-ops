@@ -70,8 +70,9 @@ COPY . .
 
 # Build and install into a prefix that we can copy into the runtime image.
 # Strip pip and setuptools (not needed at runtime).
+ARG DEV_HEALTH_INSTALL_TARGET="."
 RUN pip install --upgrade pip && \
-  pip install --no-cache-dir --prefix=/install . && \
+  pip install --no-cache-dir --prefix=/install "${DEV_HEALTH_INSTALL_TARGET}" && \
   rm -rf /install/lib/python3.14/site-packages/pip \
          /install/lib/python3.14/site-packages/pip-* \
          /install/lib/python3.14/site-packages/setuptools \

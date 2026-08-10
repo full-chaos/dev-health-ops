@@ -135,7 +135,11 @@ enterprise-sso = ["signxml>=3.0.0"]
 # is deliberately absent because it has no wheel for this repository's
 # Python and its sdist build fails (see the backend-choice note in
 # docs/contribute/architecture/context-fabric-graph-arm.md).
-context-graph-trial = ["graphiti-core[falkordb]==0.29.3"]
+context-graph-trial = [
+  "graphiti-core[falkordb]==0.29.3",
+  "falkordb==1.2.2",
+  "redis==6.4.0",
+]
 
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"

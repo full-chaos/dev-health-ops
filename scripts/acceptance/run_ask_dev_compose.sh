@@ -136,11 +136,10 @@ expected_evidence_entity_fragment="$(read_oracle_field expected_evidence_entity_
 expected_claim_kind="$(read_oracle_field expected_claim_kind)"
 
 export ASK_DEV_WEB_CONTEXT="${web_root}"
-# 18080 collides with the normal dev-health stack's ACR API, which means a
-# developer with that stack up cannot run acceptance at all. Overridable so
-# both can coexist; the default preserves existing behaviour exactly.
-export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18080}"
-acceptance_api_url="http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}"
+# Let Docker allocate a free loopback port by default. Local development runs
+# multiple Compose projects concurrently, so no fixed host port is safe.
+# Callers may still pin a port for reproducible CI or manual debugging.
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-0}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
 
 compose=(
@@ -204,6 +203,12 @@ trap report_failure EXIT
 # without touching a normal dev-health-ops Compose project.
 "${compose[@]}" down --volumes --remove-orphans
 "${compose[@]}" up -d --build --wait "${boot_services[@]}"
+acceptance_api_port="$("${compose[@]}" port api 8000 --index 1 | awk -F: '{print $NF}')"
+if [[ ! "${acceptance_api_port}" =~ ^[0-9]+$ ]] || [[ "${acceptance_api_port}" == "0" ]]; then
+  echo "Could not discover the acceptance API host port" >&2
+  exit 70
+fi
+acceptance_api_url="http://127.0.0.1:${acceptance_api_port}"
 
 # CHAOS-3572: refuse to proceed unless the api container we just booted is
 # serving THIS checkout. Runs immediately after boot and before anything --
@@ -246,6 +251,15 @@ container_source_guard_check "${ops_root}" "${compose[@]}"
   --sink clickhouse://ch:ch@clickhouse:8123/default \
   --postgres-uri postgresql+asyncpg://postgres:postgres@postgres:5432/postgres \
   --snapshot /app/tests/acceptance/world/ask-dev-world.v1/snapshot
+
+# W3 positive graph path. This is a real projection from the restored
+# world's canonical ClickHouse team metrics into the isolated trial store;
+# it does not inject an answer or an expected graph state. The seed fails
+# unless the source data itself contains a corroborated two-signal pressure
+# candidate, and the browser later proves that production routing consumes it.
+"${compose[@]}" exec -T api python \
+  /app/scripts/acceptance/seed_ask_dev_graph_acceptance.py \
+  --manifest /app/tests/acceptance/world/ask-dev-world.v1/world.json
 
 # CHAOS-3463 / Codex adversarial review round 3 (HIGH, confirmed): prove on
 # EVERY boot -- not only in the one-off mint -- that the world's principals can
@@ -492,6 +506,7 @@ graph_expected_fallback_state="$(read_graph_oracle_field expected_fallback_state
 echo "W3_GRAPH_ACCEPTANCE=RUNNING backend_sha=${DEV_HEALTH_BUILD_SHA}"
 ASK_DEV_GRAPH_LIVE_ACCEPTANCE=1 \
 ASK_DEV_COMPOSE_WEB_READY=1 \
+ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM=1 \
 ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
 ASK_DEV_GRAPH_ACCEPTANCE_QUESTION="${graph_question}" \
 ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION="${graph_fallback_question}" \
@@ -523,6 +538,7 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 if [[ "${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1" ]]; then
   trap - EXIT
   echo "Ask Dev Compose acceptance completed successfully; stack retained (ASK_DEV_ACCEPTANCE_KEEP_STACK=1)."
+  echo "ASK_DEV_ACCEPTANCE_API_URL=${acceptance_api_url}"
   # Deliberately NOT spelled with the same literal as the real teardown command
   # below. Adversarial review 2026-08-06 (HIGH): the first version of this hint
   # printed `down --volumes --remove-orphans` verbatim, which put a SECOND

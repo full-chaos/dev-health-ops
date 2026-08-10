@@ -44,6 +44,63 @@ from dev_health_ops.llm.agent.roles import (
 from dev_health_ops.llm.credentials import LLMCredentials
 
 
+class _GraphDelegateProbe:
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
+        self.questions.append(request.question_text)
+        return GraphQueryResult(
+            outcome=GraphQueryOutcome.DISABLED,
+            diagnostic="delegate reached",
+        )
+
+
+@pytest.mark.asyncio
+async def test_acceptance_graph_fallback_seam_induces_only_the_exact_question() -> None:
+    delegate = _GraphDelegateProbe()
+    query = production_runtime._AcceptanceGraphFallbackQuery(
+        delegate, "Which teams are falling behind?"
+    )
+    fallback_request = cast(
+        GraphInvestigationRequest,
+        type("Request", (), {"question_text": "Which teams are falling behind?"})(),
+    )
+    normal_request = cast(
+        GraphInvestigationRequest,
+        type("Request", (), {"question_text": "Which teams are struggling?"})(),
+    )
+
+    fallback = await query.investigate(fallback_request)
+    normal = await query.investigate(normal_request)
+
+    assert fallback.outcome is GraphQueryOutcome.UNAVAILABLE
+    assert delegate.questions == ["Which teams are struggling?"]
+    assert normal.outcome is GraphQueryOutcome.DISABLED
+
+
+def test_acceptance_graph_fallback_seam_requires_acceptance_and_explicit_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM", "1")
+    monkeypatch.setenv(
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION",
+        "Which teams are falling behind?",
+    )
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    assert production_runtime._acceptance_graph_fallback_question() is None
+
+    monkeypatch.setenv("ENVIRONMENT", "acceptance")
+    monkeypatch.setenv("ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM", "0")
+    assert production_runtime._acceptance_graph_fallback_question() is None
+
+    monkeypatch.setenv("ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM", "1")
+    assert (
+        production_runtime._acceptance_graph_fallback_question()
+        == "Which teams are falling behind?"
+    )
+
+
 class FakeProvider:
     def __init__(self) -> None:
         self.closed = False

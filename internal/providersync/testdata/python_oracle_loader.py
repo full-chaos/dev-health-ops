@@ -6,8 +6,8 @@ oracles must execute the production functions they compare, but importing a
 that require the full service dependency set (including SQLAlchemy).
 
 This loader therefore creates an isolated project namespace and executes only
-the five fixed oracle sources, plus three dependency-free support modules.  No
-caller-controlled module name or source path is ever imported.  The target
+the explicitly allowlisted oracle sources plus their dependency-free support
+modules.  No caller-controlled module name or source path is ever imported.  The target
 source itself remains live: editing a production function changes oracle output.
 """
 
@@ -104,6 +104,11 @@ _FEATURE_POLICY_SOURCE = _source("dev_health_ops/licensing/feature_policy.py")
 
 _STATUS_MAPPING_SOURCE = _source("dev_health_ops/providers/status_mapping.py")
 _WORK_ITEMS_MODEL_SOURCE = _source("dev_health_ops/models/work_items.py")
+_IDENTITY_SOURCE = _source("dev_health_ops/providers/identity.py")
+_NORMALIZE_COMMON_SOURCE = _source("dev_health_ops/providers/normalize_common.py")
+_NORMALIZE_HELPERS_SOURCE = _source("dev_health_ops/providers/normalize_helpers.py")
+_DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
+_LINEAR_NORMALIZE_SOURCE = _source("dev_health_ops/providers/linear/normalize.py")
 
 # The ClickHouse metrics sink package, for the direct work-item destination
 # projection oracle. Every one of these is a real production source; the list
@@ -901,6 +906,30 @@ def _target_status_mapping() -> None:
         )
 
 
+def _target_linear_normalize() -> None:
+    """Load the real Linear normalizer and its pure model dependencies.
+
+    This target intentionally omits the Linear HTTP client: the pair invokes
+    the production ``linear_issue_to_work_item`` boundary with the exact
+    GraphQL-shaped issue object produced by the provider query. Loading the
+    normalizer source through the fixed allowlist keeps the producer fresh
+    without pulling the application stack or replacing any value-producing
+    dependency with a hand-authored copy.
+    """
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_helpers", _NORMALIZE_HELPERS_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.identity", _IDENTITY_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.status_mapping", _STATUS_MAPPING_SOURCE
+    )
+
+
 def _target_fetch_utils() -> None:
     _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
 
@@ -984,6 +1013,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.status_mapping",
         _STATUS_MAPPING_SOURCE,
         _target_status_mapping,
+    ),
+    _LINEAR_NORMALIZE_SOURCE: (
+        "dev_health_ops.providers.linear.normalize",
+        _LINEAR_NORMALIZE_SOURCE,
+        _target_linear_normalize,
     ),
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",
@@ -1168,6 +1202,7 @@ def _install_namespace() -> None:
         "dev_health_ops.utils",
         "dev_health_ops.storage",
         "dev_health_ops.sync",
+        "dev_health_ops.utils",
         "dev_health_ops.workers",
     ):
         _install_package(name)

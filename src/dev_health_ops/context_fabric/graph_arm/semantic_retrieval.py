@@ -70,6 +70,7 @@ nobody has measured.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -83,6 +84,7 @@ from .backend import (
     MatchMechanism,
     graphiti_module,
 )
+from .discovery import CandidateMatch
 from .readback import _entities_by_canonical_id
 from .vocabulary import GraphEntityKind
 
@@ -94,6 +96,7 @@ __all__ = [
     "DEFAULT_MARGIN_RATIO",
     "DEFAULT_SEMANTIC_LIMIT",
     "DEFAULT_TIE_RATIO",
+    "ConversationalReferenceResult",
     "CrossPartitionRetrievalError",
     "FulltextIndexNotReadyError",
     "FulltextReadiness",
@@ -105,6 +108,7 @@ __all__ = [
     "SemanticRetrieval",
     "NonSemanticEmbedderError",
     "assess_disposition",
+    "resolve_conversational_reference",
     "retrieve_candidates",
     "wait_for_fulltext_index",
 ]
@@ -812,3 +816,230 @@ def _canonical_ids(nodes: Any) -> list[str]:
         if isinstance(canonical_id, str) and canonical_id:
             ids.append(canonical_id)
     return ids
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3666: conversation-context resolution for pronouns and prior-turn
+# references
+# ---------------------------------------------------------------------------
+
+#: The words a query built entirely from a conversational reference is made
+#: of: pronouns, demonstratives, and generic entity-KIND nouns that name a
+#: category without naming anything specific ("project", "team"). Closed and
+#: ordinary English vocabulary -- not tuned to any corpus's phrasing, and
+#: deliberately conservative: "the auth work" or "the payments project"
+#: still contains identifying content once these are stripped, and must
+#: fall through to exact/alias/fuzzy resolution rather than this leg.
+_DEICTIC_TOKENS = frozenset(
+    {
+        "it",
+        "its",
+        "that",
+        "this",
+        "them",
+        "those",
+        "these",
+        "one",
+        "ones",
+        "other",
+        "another",
+        "same",
+        "thing",
+        "things",
+        "project",
+        "team",
+    }
+)
+
+#: Question scaffolding stripped before checking whether what remains is
+#: purely deictic. Also closed, also ordinary vocabulary.
+_QUESTION_SCAFFOLD = frozenset(
+    {
+        "what",
+        "whats",
+        "why",
+        "how",
+        "when",
+        "where",
+        "who",
+        "is",
+        "are",
+        "was",
+        "were",
+        "did",
+        "does",
+        "do",
+        "the",
+        "a",
+        "an",
+        "of",
+        "with",
+        "about",
+        "on",
+        "up",
+        "s",
+        "status",
+        "state",
+        "happening",
+        "happened",
+        "happen",
+        "still",
+        "yet",
+        "going",
+        "doing",
+    }
+)
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _is_pure_conversational_reference(query: str) -> bool:
+    """Whether ``query`` names nothing but refers to something already
+    established in conversation.
+
+    Deliberately narrow: every token that survives stripping
+    :data:`_QUESTION_SCAFFOLD` must be in :data:`_DEICTIC_TOKENS`, or this
+    refuses. "What's holding it up?" leaves ``holding`` behind and is
+    refused here — CHAOS-3654's disposition policy is what handles a bare
+    pronoun with no referent at all; this function's job is the narrower
+    one of recognising a query that is confidently ONLY a reference, so a
+    single unambiguous prior subject may be proposed for it.
+    """
+
+    tokens = _WORD.findall(query.casefold())
+    residual = [token for token in tokens if token not in _QUESTION_SCAFFOLD]
+    return bool(residual) and all(token in _DEICTIC_TOKENS for token in residual)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationalReferenceResult:
+    """Whether a bare conversational reference resolved, and why (not).
+
+    ``candidate`` is ``None`` on every refusal path. This leg proposes at
+    most one subject and never a list: the whole point of a PURE pronoun
+    query is that it carries no content of its own to rank candidates by,
+    so an ambiguous prior context is a refusal here, not a clarification
+    with options — a caller wanting clarification candidates has the
+    semantic leg's own :func:`assess_disposition` for that.
+    """
+
+    candidate: CandidateMatch | None
+    reason: str
+
+
+async def resolve_conversational_reference(
+    query: str,
+    *,
+    store: RetrievalStore,
+    prior_subject_ids: Sequence[str],
+    authorized_entity_ids: Sequence[str] | frozenset[str],
+) -> ConversationalReferenceResult:
+    """Resolve a bare pronoun/deictic query to the prior turn's subject.
+
+    **What this is not.** Not retrieval, not embedding similarity, not a
+    read of conversation TEXT: ``prior_subject_ids`` is an explicit,
+    already-resolved list of canonical ids a caller (the conversation-state
+    owner, upstream of this arm) supplies. This function's only jobs are
+    (1) deciding whether ``query`` is confidently a bare reference and
+    nothing else, and (2) checking that exactly one authorized, currently-
+    real subject is available to resolve it to. Both are deterministic;
+    neither reads a vector.
+
+    **Why the signal is still gated as semantic.** The emitted candidate
+    carries :attr:`SubjectMatchSignal.CONVERSATIONAL_REFERENCE`, which
+    ``packet_builder._INHERENTLY_SEMANTIC_SIGNALS`` refuses under a
+    non-semantic embedder regardless of the mechanism that produced it.
+    That policy is honoured here rather than routed around: a pronoun
+    resolved with no corroborating content is exactly the kind of claim
+    this arm's Phase 2A safety posture reserves for a run that can actually
+    support a semantic capability, deterministic mechanism or not.
+
+    **Authorization is rechecked against the current grant, never trusted
+    from the prior turn.** A subject that was authorized last turn and is
+    not authorized now (a revoked grant, a organisation-scope change) must
+    not be resolved silently forward.
+
+    **Existence is reread from the store, never trusted from the caller.**
+    ``prior_subject_ids`` names what conversation state remembers; whether
+    that entity still exists, under what kind and label, is asked of the
+    store fresh — a deleted or renamed entity must not be resolved as if
+    nothing changed.
+    """
+
+    if not _is_pure_conversational_reference(query):
+        return ConversationalReferenceResult(
+            candidate=None,
+            reason=(
+                "the query carries content beyond a bare pronoun/deictic "
+                "reference; this leg only resolves a query that is "
+                "confidently nothing else"
+            ),
+        )
+
+    authorized = frozenset(authorized_entity_ids)
+    # De-duplicated, order-preserving, then authorization-filtered -- same
+    # posture as every other candidate set in this module: withheld before
+    # ranking, never silently absorbed into "no prior subject".
+    candidates = [
+        subject_id
+        for subject_id in dict.fromkeys(prior_subject_ids)
+        if subject_id in authorized
+    ]
+    if not prior_subject_ids:
+        return ConversationalReferenceResult(
+            candidate=None,
+            reason="no prior-turn subject is available to refer to",
+        )
+    if not candidates:
+        return ConversationalReferenceResult(
+            candidate=None,
+            reason=(
+                "every prior-turn subject is outside this caller's "
+                "currently authorized scope"
+            ),
+        )
+    if len(candidates) > 1:
+        return ConversationalReferenceResult(
+            candidate=None,
+            reason=(
+                f"{len(candidates)} prior-turn subjects are authorized and "
+                "equally plausible; a bare reference cannot choose between "
+                "them"
+            ),
+        )
+
+    subject_id = candidates[0]
+    rows = await _entities_by_canonical_id(store.driver, store.partition, (subject_id,))
+    if not rows:
+        return ConversationalReferenceResult(
+            candidate=None,
+            reason=(
+                "the prior-turn subject no longer exists in this "
+                "partition (deleted, revoked, or never real)"
+            ),
+        )
+    row = rows[0]
+    if row.kind is GraphEntityKind.ORGANIZATION:
+        return ConversationalReferenceResult(
+            candidate=None,
+            reason=(
+                "the prior-turn subject is the organization; the "
+                "organization is never a conversational referent"
+            ),
+        )
+    return ConversationalReferenceResult(
+        candidate=CandidateMatch(
+            canonical_id=row.canonical_id,
+            kind=row.kind,
+            display_label=row.display_label,
+            signal=SubjectMatchSignal.CONVERSATIONAL_REFERENCE,
+            # A deterministic lookup by an explicit prior-turn id -- not a
+            # fuzzy or embedding match. The SIGNAL is what carries the
+            # semantic-capability gate (see the module docstring above);
+            # the mechanism stays honest about what actually happened.
+            mechanism=MatchMechanism.EXACT_LOOKUP,
+            matched_text=row.display_label,
+            source_class=row.source_class,
+        ),
+        reason="resolved to the prior turn's single authorized, current subject",
+    )

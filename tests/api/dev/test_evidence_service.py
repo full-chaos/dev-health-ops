@@ -10,6 +10,8 @@ import pytest
 from dev_health_ops.api.dev.contracts import FreshnessState
 from dev_health_ops.api.dev.evidence_service import (
     MAX_EXPANSION_BYTES,
+    EvidenceAdmission,
+    EvidenceAdmissionResult,
     EvidenceAvailability,
     EvidenceCandidate,
     EvidenceRecord,
@@ -1086,5 +1088,101 @@ async def test_the_repository_only_check_is_observed_failing_when_short_circuite
     # record wrongly admitted -- proving
     # ``test_entity_less_record_without_repository_access_is_refused``
     # exercises a real check against the unmodified service.
+    assert only.evidence is not None
+    assert only.state is EvidenceAvailability.AVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_a_record_with_no_authorization_anchor_at_all_is_refused() -> None:
+    """A record marked ``no_authorizable_entity`` with EMPTY
+    ``repository_ids`` has no authorization anchor whatsoever:
+    ``_authorize_expansion``'s entity check and its repository check are
+    BOTH truthy-gated, so neither would run -- an unconditional admission
+    to any caller with a generally-valid resolution, not merely a
+    convenience. ``admit`` must refuse this combination outright rather
+    than trust every current and future resolver never to produce it."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_EntityLessResolver(marked=True, repository_ids=())],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.evidence is None
+    assert only.state is EvidenceAvailability.UNAUTHORIZED
+    assert only.warning == "no_authorization_anchor"
+
+
+@pytest.mark.asyncio
+async def test_the_no_anchor_guard_is_observed_failing_when_removed() -> None:
+    """Mutation-kill for the guard above: a service whose ``admit`` skips
+    straight to minting without the anchor check -- simulating the defect
+    the guard exists to catch -- wrongly admits the anchor-less record the
+    previous test correctly refuses."""
+
+    class _AnchorGuardSkippingService(EvidenceService):
+        async def admit(
+            self, *, org_id, permission_fingerprint, scope_request, candidates
+        ):
+            # Re-implements just enough of ``admit`` to demonstrate the
+            # ungated path, deliberately WITHOUT the no-anchor refusal --
+            # the same shape the real ``admit`` had before this guard was
+            # added.
+            admissions = []
+            for candidate in candidates:
+                resolver = self._resolvers.get(candidate.source_system)
+                assert resolver is not None
+                resolution = await self._authorizer.resolve(
+                    org_id, permission_fingerprint, scope_request
+                )
+                record = await resolver.resolve(
+                    org_id=org_id, scope=resolution, candidate=candidate
+                )
+                assert record is not None
+                valid_entity_ids = (
+                    () if record.no_authorizable_entity else (record.entity_id,)
+                )
+                ref = self._to_ref(org_id, record, valid_entity_ids=valid_entity_ids)
+                state, warning = await self._authorize_expansion(
+                    org_id, permission_fingerprint, scope_request, resolution, ref
+                )
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=state,
+                        evidence=ref
+                        if state is EvidenceAvailability.AVAILABLE
+                        else None,
+                        warning=warning,
+                    )
+                )
+            return EvidenceAdmissionResult(tuple(admissions))
+
+    service = _AnchorGuardSkippingService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_EntityLessResolver(marked=True, repository_ids=())],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    # This is the FAILURE the shim demonstrates: an anchor-less record,
+    # admitted unconditionally, because BOTH of _authorize_expansion's
+    # checks are truthy-gated and this shim never sees an empty-anchor
+    # record for what it is.
     assert only.evidence is not None
     assert only.state is EvidenceAvailability.AVAILABLE

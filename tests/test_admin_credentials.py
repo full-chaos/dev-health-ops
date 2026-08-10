@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from dev_health_ops.api.admin import get_session, router
 from dev_health_ops.api.admin.middleware import get_admin_org_id, require_admin
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.configuration import CredentialLookupOutcome
 
 admin_router_module = import_module("dev_health_ops.api.admin.routers.credentials")
 
@@ -311,7 +312,11 @@ async def test_test_connection_by_credential_id(client):
         ) as mock_test,
     ):
         svc = AsyncMock()
-        svc.get_decrypted_credentials_by_id.return_value = ({"token": "ghp_test"}, cred)
+        svc.get_decrypted_credentials_by_id_with_outcome.return_value = (
+            {"token": "ghp_test"},
+            cred,
+            CredentialLookupOutcome.OK,
+        )
         svc.get.return_value = cred
         mock_svc_cls.return_value = svc
         mock_test.return_value = (True, {"user": "test-user"})
@@ -326,17 +331,25 @@ async def test_test_connection_by_credential_id(client):
     data = resp.json()
     assert data["success"] is True
     assert data["details"] == {"user": "test-user"}
-    svc.get_decrypted_credentials_by_id.assert_awaited_once_with("cred-1")
+    svc.get_decrypted_credentials_by_id_with_outcome.assert_awaited_once_with("cred-1")
     svc.update_test_result.assert_awaited_once_with("github", True, None, "default")
 
 
 @pytest.mark.asyncio
 async def test_test_connection_by_credential_id_not_found(client):
+    """issue 3694 case 1: no row at all (or a different org's row --
+    indistinguishable by design). Stays 404, the cross-tenant
+    not-found-as-forbidden posture is unchanged."""
+
     with patch(
         "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
     ) as mock_svc_cls:
         svc = AsyncMock()
-        svc.get_decrypted_credentials_by_id.return_value = (None, None)
+        svc.get_decrypted_credentials_by_id_with_outcome.return_value = (
+            None,
+            None,
+            CredentialLookupOutcome.NOT_FOUND,
+        )
         mock_svc_cls.return_value = svc
 
         resp = await client.post(
@@ -347,6 +360,71 @@ async def test_test_connection_by_credential_id_not_found(client):
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Credential not found"
+
+
+@pytest.mark.asyncio
+async def test_test_connection_by_credential_id_no_payload_is_422(client):
+    """issue 3694 case 2: the row exists (within this org) but has no
+    stored credentials_encrypted payload. Distinct from case 1 -- this is
+    NOT "not found", it is "found but unusable" -- a reason-coded 422,
+    never a 404 (a 404 here would be a lie: the row genuinely exists)."""
+
+    cred = _mock_credential(provider="github", name="default")
+    with patch(
+        "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
+    ) as mock_svc_cls:
+        svc = AsyncMock()
+        svc.get_decrypted_credentials_by_id_with_outcome.return_value = (
+            None,
+            cred,
+            CredentialLookupOutcome.NO_PAYLOAD,
+        )
+        mock_svc_cls.return_value = svc
+
+        resp = await client.post(
+            "/api/v1/admin/credentials/test",
+            json={"provider": "github", "credential_id": "cred-1"},
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["reason_code"] == "credential_missing_payload"
+    # No secret material of any kind belongs in this response.
+    assert "token" not in str(detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_by_credential_id_decrypt_failed_is_422(client):
+    """issue 3694 case 3: the row exists with a payload, but decryption
+    failed (key-mismatch class). Distinct reason code from case 2 -- both
+    are "exists but unusable", but a caller diagnosing this needs to tell
+    "nothing was ever stored" apart from "something was stored and is now
+    unreadable"."""
+
+    cred = _mock_credential(provider="github", name="default")
+    with patch(
+        "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
+    ) as mock_svc_cls:
+        svc = AsyncMock()
+        svc.get_decrypted_credentials_by_id_with_outcome.return_value = (
+            None,
+            cred,
+            CredentialLookupOutcome.DECRYPT_FAILED,
+        )
+        mock_svc_cls.return_value = svc
+
+        resp = await client.post(
+            "/api/v1/admin/credentials/test",
+            json={"provider": "github", "credential_id": "cred-1"},
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["reason_code"] == "credential_unreadable"
+    assert detail["reason_code"] != "credential_missing_payload"
+    assert "token" not in str(detail).lower()
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,7 @@ import html
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from html.parser import HTMLParser
@@ -89,6 +89,13 @@ class EvidenceRecord:
     deleted: bool = False
     uncertain: bool = False
     conflicting: bool = False
+    #: CHAOS-3633. The source's own identity for this record, distinct from
+    #: ``entity_id`` -- see ``DevEvidenceRef.record_locator``. ``search``/
+    #: ``expand`` never set this. ``EvidenceService.admit`` overwrites it
+    #: unconditionally with the submitted candidate's own ``locator``
+    #: (never trusting a resolver to remember to set it): see ``admit``'s
+    #: docstring for why that is always correct for the admission path.
+    record_locator: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,6 +399,11 @@ class IdentityPayload(Protocol):
     def entity_id(self) -> str: ...
     @property
     def repository_ids(self) -> Sequence[str]: ...
+    #: CHAOS-3633. ``None`` for every identity that predates this field --
+    #: see ``DevEvidenceRef.record_locator`` for the collision this closes
+    #: and the backward-compatibility argument for the ``None`` default.
+    @property
+    def record_locator(self) -> str | None: ...
 
 
 class SignedIdentity(IdentityPayload, Protocol):
@@ -417,7 +429,7 @@ class EvidenceReferenceSigner:
     @staticmethod
     def _payload(org_id: str, evidence: IdentityPayload) -> bytes:
         repository_ids = sorted(evidence.repository_ids)
-        payload = {
+        payload: dict[str, object] = {
             "org": org_id,
             "source": evidence.source_system,
             "source_version": evidence.source_version,
@@ -425,6 +437,21 @@ class EvidenceReferenceSigner:
             "entity_id": evidence.entity_id,
             "repositories": repository_ids,
         }
+        # CHAOS-3633. Present only when set, so a payload with no locator
+        # (every native ``search``/``expand`` ref today, and every
+        # already-persisted ``dev_answer.v1`` reference) is byte-for-byte
+        # what this function produced before the field existed -- zero
+        # migration, every currently-issued handle keeps verifying.
+        #
+        # The key is a distinct, fixed, named JSON field -- never
+        # concatenated with ``entity_type``/``entity_id`` -- so
+        # ``(entity_type="a", record_locator="bc")`` and
+        # ``(entity_type="ab", record_locator="c")`` cannot collide the way
+        # naive string concatenation would
+        # (``test_adjacent_field_concatenation_cannot_collide_payloads``
+        # locks this).
+        if evidence.record_locator is not None:
+            payload["record_locator"] = evidence.record_locator
         return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
 
     def issue(self, org_id: str, record: EvidenceRecord) -> str:
@@ -679,6 +706,21 @@ class EvidenceService:
         refused by the existing code path rather than by a second one written
         here, and the emitted ref also stops claiming validity for entities
         that have nothing to do with it.
+
+        CHAOS-3633. ``record_locator`` on the minted ref is always the
+        submitted candidate's own ``locator`` -- overwritten unconditionally
+        after resolution, never left to whatever (if anything) the resolver
+        put on the ``EvidenceRecord`` it returned. That is safe, not merely
+        convenient: :class:`EvidenceCandidateResolver` -- see its docstring
+        -- answers exactly one question, "does the source have the record at
+        THIS locator", so a non-``None`` result is definitionally the record
+        for ``candidate.locator``. A resolver author cannot forget to make
+        two same-kind records about one entity mint distinct handles,
+        because this line does it regardless of what the resolver returns.
+        ``_minted_this_round`` below is the defense-in-depth backstop for
+        anything that could still defeat that -- a payload-encoding
+        regression, a future second minting path -- rather than the primary
+        mechanism.
         """
 
         await self._entitlement.require(org_id)
@@ -689,6 +731,12 @@ class EvidenceService:
             )
 
         admissions: list[EvidenceAdmission] = []
+        #: CHAOS-3633 non-vacuity backstop. Maps a minted ``evidence_ref_id``
+        #: to the locator that minted it THIS round. If a second,
+        #: DIFFERENT locator ever mints the identical handle, that is a
+        #: silent collision no matter its cause, and it is refused here
+        #: rather than returned as though it were a distinct, valid record.
+        _minted_this_round: dict[str, str] = {}
         for candidate in candidates:
             resolver = self._resolvers.get(candidate.source_system)
             if resolver is None:
@@ -738,14 +786,23 @@ class EvidenceService:
                 )
                 continue
             # Minted over the record the SOURCE returned, never over the
-            # candidate. A candidate that pointed at one record and got
-            # another back still yields a truthful handle, because the handle
-            # describes what the source actually had.
+            # candidate -- CONTENT always comes from ``record``, never
+            # ``candidate``. A candidate that pointed at one record and got
+            # another back still yields a truthful handle, because the
+            # handle describes what the source actually had.
+            #
+            # ``record_locator`` is the one exception, and it is an
+            # ADDRESS, not content: ``candidate.locator`` -- see class
+            # docstring -- is undisputedly the discovery layer's identity
+            # for the record it asked about, and ``resolver.resolve``
+            # already confirmed a genuine record exists at exactly that
+            # locator (see ``admit``'s own docstring, CHAOS-3633).
             #
             # ``valid_entity_ids`` is the record's OWN entity -- see the
             # docstring. That single-element set is what turns the existing
             # containment check in ``_authorize_expansion`` from a tautology
             # into the admission path's entity authorization.
+            record = replace(record, record_locator=candidate.locator)
             ref = self._to_ref(org_id, record, valid_entity_ids=(record.entity_id,))
             state, warning = await self._authorize_expansion(
                 org_id,
@@ -759,6 +816,17 @@ class EvidenceService:
                     EvidenceAdmission(candidate=candidate, state=state, warning=warning)
                 )
                 continue
+            colliding_locator = _minted_this_round.get(ref.evidence_ref_id)
+            if colliding_locator is not None and colliding_locator != candidate.locator:
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=EvidenceAvailability.UNAVAILABLE,
+                        warning="ambiguous_record_identity",
+                    )
+                )
+                continue
+            _minted_this_round[ref.evidence_ref_id] = candidate.locator
             admissions.append(
                 EvidenceAdmission(
                     candidate=candidate,
@@ -830,6 +898,7 @@ class EvidenceService:
             citation_text=sanitize_untrusted_text(record.raw_excerpt),
             repository_ids=list(record.repository_ids),
             valid_entity_ids=list(valid_entity_ids),
+            record_locator=record.record_locator,
             flags=DevEvidenceFlags(
                 stale=record.stale or record.freshness is FreshnessState.STALE,
                 unavailable=record.unavailable,

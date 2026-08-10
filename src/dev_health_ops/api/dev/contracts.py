@@ -593,6 +593,19 @@ class DevEvidenceRef(ContractModel):
     ) = None
     repository_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
     valid_entity_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
+    #: CHAOS-3633. The SOURCE's own identity for this specific record,
+    #: distinct from ``entity_id`` (the entity the record is *about*).
+    #: ``None`` for every ref minted by ``search``/``expand`` today, which
+    #: describe one record per entity and never had a collision to prevent.
+    #: The canonical evidence-admission path (``EvidenceService.admit``)
+    #: always sets this to the submitted candidate's own locator, so two
+    #: distinct same-kind records about one entity -- two reviews on one
+    #: PR, two incidents about one project -- mint distinct handles instead
+    #: of colliding on one. Additive and optional so every currently
+    #: persisted ``dev_answer.v1`` evidence ref keeps verifying unchanged:
+    #: ``EvidenceReferenceSigner._payload`` binds this field into the
+    #: signed HMAC only when it is not ``None``.
+    record_locator: OpaqueID | None = None
     flags: DevEvidenceFlags
 
 

@@ -107,6 +107,13 @@ class _CandidateIdentity:
     entity_type: str
     entity_id: str
     repository_ids: Sequence[str]
+    #: CHAOS-3633. ``None`` for every fact this executor derives -- none of
+    #: EVIDENCE_IDENTITY_TABLE's categories carry a source-record locator
+    #: distinct from ``entity_id`` -- which is also the correct default for
+    #: a handle minted before this field existed
+    #: (``EvidenceReferenceSigner._payload`` binds it only when set). See
+    #: ``evidence_service.IdentityPayload`` for the full property.
+    record_locator: str | None = None
 
 
 #: Codex finding (HIGH, 2026-08-02, round 2): raising the persistence

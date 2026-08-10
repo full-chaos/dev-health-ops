@@ -378,7 +378,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer_frame.v1.schema.json",
-        "sha256": "80a3b34dd46091d0067b7557c9333a337d1cc3c5506bddeef3c5c749bcf52e51"
+        "sha256": "9c140c634b0150fa5fab46427552af46e2fcfa2ca42a43daee6901e9f0d7d021"
       },
       "schema_version": "dev_answer_frame.v1"
     },
@@ -466,7 +466,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer.v2.schema.json",
-        "sha256": "2b4d7ad84527b080a0844b87554e8452a6d3eca80b41ad56cbf89a8503116ab2"
+        "sha256": "c843bdd88103af02a497cacc0bf73de068a80a36b766c8726b0c615ff4ce5d67"
       },
       "schema_version": "dev_answer.v2"
     },
@@ -485,7 +485,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "85e327677fd919beba5a7ae684c572befddd6474fbd2c0e3ea99576402bcd570"
+        "sha256": "19a3476fef002f7cd50ccc3a2c6ee9ad6dae9895e14cb3cf6fc81499bbe0d8cc"
       },
       "schema_version": "dev_stream_event.v2"
     }

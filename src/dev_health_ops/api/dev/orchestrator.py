@@ -115,6 +115,10 @@ from .graph_investigation_query import (
     GraphInvestigationRequest,
     GraphQueryOutcome,
 )
+from .graph_routing_policy import (
+    GraphRoutingEntitlementAuthorizer,
+    GraphRoutingPolicyDeniedError,
+)
 from .investigation_contract import AskDevInvestigationPacket, InvestigationOutcome
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
@@ -1189,6 +1193,7 @@ class DevOrchestrator:
         graph_investigation_query: GraphInvestigationQuery | None = None,
         evidence_service: EvidenceService | None = None,
         canonical_enrichment: CanonicalEnrichmentAccessor | None = None,
+        graph_routing_entitlement: GraphRoutingEntitlementAuthorizer | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -1259,10 +1264,33 @@ class DevOrchestrator:
         # ``evidence_service`` before this exists sees the exact same
         # assembly-deferred fallthrough the COMPLETED branch always had,
         # never a crash on a collaborator nobody constructed yet
-        # (production does not wire any of the three today; see
-        # CHAOS-3697).
+        # (production wires all three only when the Wave 3.1 organization
+        # gate is enabled; see CHAOS-3697).
         self._canonical_enrichment = canonical_enrichment
+        # Production supplies the canonical organization-level authorizer at
+        # this seam. A missing authorizer remains the legacy direct-test
+        # compatibility path; production composition never leaves it unset
+        # when the graph collaborators are present.
+        self._graph_routing_entitlement = graph_routing_entitlement
         self._composer = PromptComposer(registry)
+
+    async def _graph_route_is_entitled(self, *, org_id: str) -> bool:
+        """Check the canonical org gate immediately before graph entry."""
+
+        if self._graph_routing_entitlement is None:
+            # Graph collaborators without their organization-level policy
+            # authorizer are an incomplete production composition. Fail
+            # closed rather than treating an omitted policy gate as allow.
+            return False
+        try:
+            await self._graph_routing_entitlement.require(org_id)
+        except GraphRoutingPolicyDeniedError:
+            # The canonical authorizer owns both explicit-purchase policy and
+            # fail-closed storage errors. A denied org falls through to the
+            # existing bounded provider path; GraphInvestigationQuery is not
+            # entered.
+            return False
+        return True
 
     async def run(
         self,
@@ -3081,11 +3109,10 @@ class DevOrchestrator:
             # since PLAN_ID_BY_INTENT gives it a compat-only token,
             # CHAOS-3652), so gating this on self._plan_executor being
             # wired would tie graph routing to an unrelated collaborator.
-            # Both organization opt-in (self._evidence_service/
-            # self._graph_investigation_query only get constructed when the
-            # org feature is on, production_runtime.py's job) and the
-            # runtime kill switch are required -- independent gates, same
-            # shape as every other flag pair in this file.
+            # Wave 3.1 composition supplies the collaborators, while the
+            # independent graph entitlement is checked immediately below;
+            # the runtime kill switch remains a separate gate, same shape as
+            # every other flag pair in this file.
             #
             # CHAOS-3689/CHAOS-3660: computed unconditionally (cheap, pure
             # lexical matching, no side effects) rather than gated behind
@@ -3103,6 +3130,7 @@ class DevOrchestrator:
                 and self._graph_investigation_query is not None
                 and self._evidence_service is not None
                 and graph_routing_runtime_enabled()
+                and await self._graph_route_is_entitled(org_id=org_id)
             ):
                 graph_deadline = datetime.now(UTC) + timedelta(
                     seconds=max(0.0, remaining())

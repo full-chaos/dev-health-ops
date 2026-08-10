@@ -11,14 +11,22 @@ state, and the independent runtime kill switch must still default off.
 from __future__ import annotations
 
 import asyncio
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from dev_health_ops.api.dev import production_runtime
 from dev_health_ops.api.dev import runtime as runtime_module
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevMessageRequest
+from dev_health_ops.api.dev.graph_routing_policy import (
+    CanonicalGraphRoutingEntitlementAuthorizer,
+    GraphRoutingPolicyDeniedError,
+)
 from dev_health_ops.api.dev.orchestrator import (
     GRAPH_ROUTING_RUNTIME_FLAG,
     DevOrchestrator,
@@ -26,7 +34,17 @@ from dev_health_ops.api.dev.orchestrator import (
     graph_routing_runtime_enabled,
 )
 from dev_health_ops.api.dev.production_runtime import ProductionProviderResolution
+from dev_health_ops.licensing.feature_policy import FeatureDecisionReason
+from dev_health_ops.licensing.registry import (
+    ASK_DEV_GRAPH_ROUTING_FEATURE,
+    ASK_DEV_WAVE_3_1_FEATURE,
+)
 from dev_health_ops.llm.agent.policy import AgentProviderSource
+from dev_health_ops.models.git import Base
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
+from dev_health_ops.models.users import Organization
+from tests._chaos_3292_preflight import organization_resolution, request_for
+from tests._helpers import tables_of
 
 
 class _FakeProvider:
@@ -48,6 +66,100 @@ class _ConstructionObserved(Exception):
     """Raised by the capturing stand-in the instant construction finishes,
     so this test never has to drive a full agentic run just to observe what
     the real runtime handed the real constructor."""
+
+
+class _GraphRouteObserved(BaseException):
+    """Stop the real run after the production graph query is entered."""
+
+
+class _LegacyFallbackObserved(BaseException):
+    """Stop the real run when the denied route reaches the legacy provider."""
+
+
+class _FallbackProbeProvider:
+    async def decide(self, **_values: Any) -> Any:
+        raise _LegacyFallbackObserved()
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _GraphQueryProbe:
+    """Delegate to the real query, then stop so route entry is observable."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.calls = 0
+
+    async def investigate(self, request: Any) -> Any:
+        self.calls += 1
+        await self._inner.investigate(request)
+        raise _GraphRouteObserved() from None
+
+
+@asynccontextmanager
+async def _persistence_session(
+    *, graph_entitled: bool
+) -> AsyncIterator[tuple[AsyncSession, uuid.UUID]]:
+    """Seed the exact feature-decision tables used by production policy."""
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                Base.metadata.create_all,
+                tables=tables_of(
+                    Organization, FeatureFlag, OrgFeatureOverride, OrgLicense
+                ),
+            )
+
+        org_id = uuid.uuid4()
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            wave_feature = FeatureFlag(
+                key=ASK_DEV_WAVE_3_1_FEATURE,
+                name="Ask Dev Wave 3.1",
+                category="ai",
+                min_tier="community",
+            )
+            graph_feature = FeatureFlag(
+                key=ASK_DEV_GRAPH_ROUTING_FEATURE,
+                name="Ask Dev Graph Routing",
+                category="ai",
+                min_tier="community",
+            )
+            session.add_all(
+                [
+                    Organization(
+                        id=org_id,
+                        slug=f"graph-entitlement-{org_id.hex}",
+                        name="Graph Entitlement Regression",
+                        tier="community",
+                    ),
+                    wave_feature,
+                    graph_feature,
+                    OrgLicense(org_id=org_id, tier="community"),
+                ]
+            )
+            await session.flush()
+            session.add(
+                OrgFeatureOverride(
+                    org_id=org_id,
+                    feature_id=wave_feature.id,
+                    is_enabled=True,
+                )
+            )
+            if graph_entitled:
+                session.add(
+                    OrgFeatureOverride(
+                        org_id=org_id,
+                        feature_id=graph_feature.id,
+                        is_enabled=True,
+                    )
+                )
+            await session.commit()
+            yield session, org_id
+    finally:
+        await engine.dispose()
 
 
 async def _build_runtime(
@@ -88,6 +200,38 @@ async def _build_runtime(
     return await production_runtime.build_production_runtime(
         cast(Any, object()),
         org_id="org_01",
+        permission_fingerprint="permissions_01",
+        clickhouse=cast(Any, object()),
+    )
+
+
+async def _build_persisted_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> Any:
+    async def resolve_provider(
+        _session: Any, *, org_id: str
+    ) -> ProductionProviderResolution:
+        del org_id
+        return ProductionProviderResolution(
+            provider=cast(Any, _FallbackProbeProvider()),
+            source=AgentProviderSource.PLATFORM,
+            family="openai",
+            model="certified-model",
+            provider_label="OpenAI compatible",
+            model_label="certified-model",
+        )
+
+    monkeypatch.setattr(
+        production_runtime, "resolve_production_provider", resolve_provider
+    )
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-evidence-signing-secret-32-bytes-long")
+    monkeypatch.setenv("ASK_DEV_GRAPH_ROUTING_ENABLED", "1")
+    monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+    return await production_runtime.build_production_runtime(
+        session,
+        org_id=str(org_id),
         permission_fingerprint="permissions_01",
         clickhouse=cast(Any, object()),
     )
@@ -135,7 +279,7 @@ async def _capture_orchestrator_construction(
     return captured
 
 
-#: The 17 keyword arguments runtime.py's DevOrchestrator(...) call site
+#: The 18 keyword arguments runtime.py's DevOrchestrator(...) call site
 #: passes. Used by the positive control below to prove the capturing harness
 #: genuinely observed the real construction seam.
 _KWARGS_RUNTIME_PY_ACTUALLY_PASSES = frozenset(
@@ -157,6 +301,7 @@ _KWARGS_RUNTIME_PY_ACTUALLY_PASSES = frozenset(
         "graph_investigation_query",
         "evidence_service",
         "canonical_enrichment",
+        "graph_routing_entitlement",
     }
 )
 
@@ -176,7 +321,7 @@ async def test_the_capturing_harness_genuinely_observes_a_real_construction(
     construction.
 
     This test asserts the harness actually captured a construction: the
-    exact 17 keyword names ``runtime.py`` passes, populated
+    exact 18 keyword names ``runtime.py`` passes, populated
     with real values (not just present-but-empty) -- ``registry`` is a
     genuine ``AskDevToolRegistry``, and ``provider`` is the exact
     ``_FakeProvider`` instance this test's own stub handed to
@@ -252,12 +397,20 @@ async def test_production_runtime_wires_the_graph_route_collaborators(
         "canonical_enrichment is not threaded from the production "
         "composition root into DevOrchestrator"
     )
+    assert captured.get("graph_routing_entitlement") is not None, (
+        "the canonical graph entitlement authorizer is not threaded from "
+        "the production composition root into DevOrchestrator"
+    )
     assert (
         captured["graph_investigation_query"]
         is bounded_runtime.graph_investigation_query
     )
     assert captured["evidence_service"] is bounded_runtime.evidence_service
     assert captured["canonical_enrichment"] is bounded_runtime.canonical_enrichment
+    assert (
+        captured["graph_routing_entitlement"]
+        is bounded_runtime.graph_routing_entitlement
+    )
 
 
 @pytest.mark.asyncio
@@ -275,6 +428,7 @@ async def test_production_runtime_keeps_graph_collaborators_off_for_policy_off_o
     assert captured["graph_investigation_query"] is None
     assert captured["evidence_service"] is None
     assert captured["canonical_enrichment"] is None
+    assert captured["graph_routing_entitlement"] is None
 
 
 def test_graph_routing_runtime_flag_defaults_off_in_a_production_shaped_environment(
@@ -293,3 +447,82 @@ def test_graph_routing_runtime_flag_defaults_off_in_a_production_shaped_environm
 
     monkeypatch.delenv(GRAPH_ROUTING_RUNTIME_FLAG, raising=False)
     assert graph_routing_runtime_enabled() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("graph_entitled", "authorizer_wired"),
+    [
+        pytest.param(False, True, id="persistence-denied"),
+        pytest.param(True, True, id="persistence-allowed"),
+        pytest.param(True, False, id="collaborators-without-authorizer"),
+    ],
+)
+async def test_production_route_checks_persisted_graph_entitlement_before_query(
+    monkeypatch: pytest.MonkeyPatch,
+    graph_entitled: bool,
+    authorizer_wired: bool,
+) -> None:
+    """The real production run must gate GraphInvestigationQuery by org policy.
+
+    Wave 3.1 is enabled for both rows, while ``ask_dev_graph_routing`` is
+    independently absent/present. The probe delegates to the real production
+    query and only then stops, so a denied org cannot satisfy this test by
+    returning a synthetic disabled result from a mocked query. The third case
+    deliberately removes the authorizer while leaving the graph collaborators
+    present; that incomplete composition must fail closed before query entry.
+    """
+
+    async with _persistence_session(graph_entitled=graph_entitled) as (
+        session,
+        org_id,
+    ):
+        authorizer = CanonicalGraphRoutingEntitlementAuthorizer(session)
+        if graph_entitled:
+            await authorizer.require(str(org_id))
+        else:
+            with pytest.raises(GraphRoutingPolicyDeniedError) as denied:
+                await authorizer.require(str(org_id))
+            assert (
+                denied.value.reason is FeatureDecisionReason.EXPLICIT_PURCHASE_REQUIRED
+            )
+
+        bounded_runtime = await _build_persisted_runtime(monkeypatch, session, org_id)
+        if not authorizer_wired:
+            bounded_runtime.graph_routing_entitlement = None
+        graph_probe = _GraphQueryProbe(bounded_runtime.graph_investigation_query)
+        bounded_runtime.graph_investigation_query = graph_probe
+
+        async def resolve_scope(**values: Any) -> Any:
+            return organization_resolution(values["requested_scope"])
+
+        bounded_runtime.scope_resolver = resolve_scope
+        try:
+            with pytest.raises(BaseException) as observed:
+                await bounded_runtime.run(
+                    request=request_for(
+                        "Which teams are struggling right now?",
+                        organization_id=str(org_id),
+                    ),
+                    org_id=str(org_id),
+                    user_id=str(uuid.uuid4()),
+                    permission_fingerprint="permissions_01",
+                    run_id=str(uuid.uuid4()),
+                    conversation_id=str(uuid.uuid4()),
+                    answer_id=str(uuid.uuid4()),
+                    cancellation=asyncio.Event(),
+                    recorder=NullRunRecorder(),
+                    event_sink=lambda _event: asyncio.sleep(0),
+                )
+        finally:
+            await bounded_runtime.aclose()
+
+        if graph_entitled and authorizer_wired:
+            assert isinstance(observed.value, _GraphRouteObserved)
+            assert graph_probe.calls == 1
+        else:
+            assert isinstance(observed.value, _LegacyFallbackObserved)
+            assert graph_probe.calls == 0, (
+                "an organization without an effective graph entitlement "
+                "entered the graph route before policy was checked"
+            )

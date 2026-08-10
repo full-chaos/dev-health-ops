@@ -768,6 +768,7 @@ async def run_preflight_orchestrator(
     graph_investigation_query: Any = None,
     evidence_service: Any = None,
     canonical_enrichment: Any = None,
+    graph_routing_entitlement: Any = None,
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
@@ -797,6 +798,9 @@ async def run_preflight_orchestrator(
     so a genuine ``DISCOVERED_COHORT`` ``preflight_result`` (only the real
     interpreter/preflight pipeline produces one) drives the actual routing
     branch in ``DevOrchestrator.run()``, not a construction-only smoke test.
+    Routing tests must also pass an explicit ``graph_routing_entitlement``;
+    the production orchestrator fails closed when graph collaborators are
+    present without that organization-level authorizer.
     ``canonical_enrichment`` (CHAOS-3650) is the third collaborator the
     graph-grounded assembler needs; every existing caller leaves it unset,
     which keeps the COMPLETED-branch assembly attempt gated off exactly as
@@ -851,6 +855,7 @@ async def run_preflight_orchestrator(
         graph_investigation_query=graph_investigation_query,
         evidence_service=evidence_service,
         canonical_enrichment=canonical_enrichment,
+        graph_routing_entitlement=graph_routing_entitlement,
     )
     result = await orchestrator.run(
         request=request,

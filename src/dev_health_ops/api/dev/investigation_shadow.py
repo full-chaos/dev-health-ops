@@ -636,9 +636,19 @@ def _shadow_frame_facts(packet: AskDevInvestigationPacket) -> tuple[str, ...]:
     that property is cashed in rather than quietly relied on.
     """
 
+    # CHAOS-3660/CHAOS-3678: question_family is None on a production-shaped
+    # packet (AnalyticalJob.production_job set instead). No existing caller
+    # passes one today -- every packet reaching this function so far is
+    # trial-shaped -- so this is a total-function fix with no behavior
+    # change for any current call site, not a new capability.
+    family_fact = (
+        packet.analytical_job.question_family.value
+        if packet.analytical_job.question_family is not None
+        else "production"
+    )
     facts = [
         f"outcome:{packet.outcome.value}",
-        f"family:{packet.analytical_job.question_family.value}",
+        f"family:{family_fact}",
         f"shape:{packet.analytical_job.comparison_shape.value}",
         f"cohort_members:{len(packet.comparison_cohort.members)}",
         f"lineage_paths:{len(packet.related_context.paths)}",

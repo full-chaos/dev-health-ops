@@ -32,6 +32,7 @@ packet evidence unverifiable against the service that issues it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -98,6 +99,7 @@ from .vocabulary import (
 )
 
 __all__ = [
+    "CONTRACT_CHANGELOG",
     "INVESTIGATION_CONTRACT_MODELS",
     "AnalyticalJob",
     "AskDevInvestigationPacket",
@@ -106,6 +108,7 @@ __all__ = [
     "CohortExclusion",
     "CohortMember",
     "ComparisonCohort",
+    "ContractChangelogEntry",
     "DriverAnalysis",
     "DriverCandidate",
     "EvidenceCoverage",
@@ -115,6 +118,7 @@ __all__ = [
     "LineagePath",
     "MissingSource",
     "PacketLimitation",
+    "ProductionJobProvenance",
     "RelatedContext",
     "RelatedEntity",
     "SourceConflict",
@@ -296,6 +300,99 @@ class BoundedTimeContext(ContractModelV2):
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class ContractChangelogEntry:
+    """One dated, cited reason this frozen contract's shape widened.
+
+    Mirrors ``trials/chaos_3619/refusal_causes.py``'s ``LedgeredDivergence``
+    discipline: a frozen contract does not get to simply change shape, it
+    gets to widen with a citation. This is a different ledger for a
+    different question -- that one explains why measured *scores* diverge
+    from a pinned run; this one explains why the *schema itself* is not the
+    schema it was on a given date -- but the discipline is the same: never
+    edited or deleted once landed, always dated, always cited to the
+    decision that authorized it.
+    """
+
+    ticket: str
+    pull_request: str
+    #: ISO date the change landed. Required for the same reason
+    #: ``LedgeredDivergence.landed_on`` is: a changelog without dates cannot
+    #: be read as a history, only as a list of excuses.
+    landed_on: str
+    schema: str
+    from_version: str
+    to_version: str
+    rationale: str
+
+
+#: APPEND ONLY. Never edit or delete a landed entry.
+CONTRACT_CHANGELOG: tuple[ContractChangelogEntry, ...] = (
+    ContractChangelogEntry(
+        ticket="CHAOS-3660",
+        pull_request="TBD",
+        landed_on="2026-08-10",
+        schema="ask_dev_analytical_job",
+        from_version="v1",
+        to_version="v1+v2 (both accepted)",
+        rationale=(
+            "CHAOS-3678 (the production bounded graph query service) needs "
+            "AnalyticalJob to carry a production-shaped job identity with "
+            "NO QuestionFamilyID and NO TrialContext -- production's "
+            "QuestionIntentID (13 members) does not name-map onto the "
+            "trial's QuestionFamilyID (10 members; several, like "
+            "AMBIGUOUS_IDENTITY and CLARIFICATION_AND_NO_MATCH, have no "
+            "production counterpart at all), so minting a QuestionFamilyID "
+            "from a production question would be inventing trial vocabulary "
+            "that was never earned -- exactly what the corrective plan's "
+            "'trial construction is not production construction' rule "
+            "forbids. Ruled on CHAOS-3660 (orchestrator, packet-constructor "
+            "decision): widen AnalyticalJob with an optional "
+            "question_family (unchanged trial shape, schema_version stays "
+            "'.v1', byte-stable -- every packet build_packet has ever "
+            "emitted keeps this exact shape) and a new optional "
+            "production_job: ProductionJobProvenance (schema_version "
+            "'.v2', intent_id as a validated string per the ruling's "
+            "typing decision, no QuestionFamilyID import into this frozen "
+            "contract). validate_provenance_matches_schema_version enforces "
+            "exactly one shape per packet, tied to which schema_version "
+            "literal it declares. test_chaos_3678_real_artifacts_still_"
+            "validate.py proves every existing contracts/ask-dev-"
+            "investigation/v1/examples/ fixture still validates unchanged "
+            "under this widened schema."
+        ),
+    ),
+)
+
+
+class ProductionJobProvenance(ContractModelV2):
+    """Production's own job identity: no trial family, no fixture concept.
+
+    CHAOS-3660/CHAOS-3678. ``intent_id`` is a **validated string**, not the
+    production ``QuestionIntentID`` enum imported directly — this frozen
+    contract must never import production's vocabulary (see
+    ``investigation_contract/__init__.py``'s own "deliberately its own
+    tree" boundary, which exists precisely so this contract does not depend
+    on anything outside the trial). Coupling the frozen contract to a
+    vocabulary that changes on production's own schedule would let a
+    production enum edit silently rewrite what a *trial* schema_version
+    means — a frozen contract has no way to notice that happened. The
+    string is validated against the real ``QuestionIntentID`` member set by
+    the producer (``packet_builder.build_production_packet``), one layer up
+    from here, where the import is legitimate because that module is
+    production code, not the frozen contract itself.
+
+    ``run_id`` is the identifier the calling ``GraphInvestigationRequest``
+    already carried — production's analog of what ``TrialContext.run_id``
+    is for a trial run, but this model carries no corpus/fixture concept at
+    all: production has neither.
+    """
+
+    schema_version: Literal["ask_dev_production_job_provenance.v1"]
+    intent_id: ShortText
+    run_id: ServerHandle
+
+
 class AnalyticalJob(ContractModelV2):
     """The normalized analytical job, with its uncertainty stated.
 
@@ -305,11 +402,22 @@ class AnalyticalJob(ContractModelV2):
     ``question_family`` is a *family*, not an enumerated intent — ten of
     them cover the whole trial, and one of them is "clarification and safe
     no-match".
+
+    **Provenance is exactly one of two shapes (CHAOS-3660/CHAOS-3678).**
+    ``question_family`` (with ``schema_version`` ending ``.v1``) is the
+    original, byte-stable trial shape — every packet ``build_packet`` has
+    ever emitted keeps this exact shape, unchanged. ``production_job``
+    (with ``schema_version`` ending ``.v2``) is production's shape, with no
+    trial family and no fixture/corpus concept. See
+    ``CONTRACT_CHANGELOG`` for the dated, cited record of why this widened
+    rather than staying single-shape, and
+    ``validate_provenance_matches_schema_version`` for the enforcement.
     """
 
-    schema_version: Literal["ask_dev_analytical_job.v1"]
+    schema_version: Literal["ask_dev_analytical_job.v1", "ask_dev_analytical_job.v2"]
     job_id: OpaqueID
-    question_family: QuestionFamilyID
+    question_family: QuestionFamilyID | None = None
+    production_job: ProductionJobProvenance | None = None
     job_uncertainty: JobUncertainty
     job_statement: ShortText
     comparison_shape: ComparisonShape
@@ -323,6 +431,38 @@ class AnalyticalJob(ContractModelV2):
     interpretation_limitations: tuple[PacketLimitation, ...] = Field(
         default_factory=tuple, max_length=25
     )
+
+    @model_validator(mode="after")
+    def validate_provenance_matches_schema_version(self) -> Self:
+        """Exactly one provenance shape, tied to the schema version literal.
+
+        Not just "exactly one of the two fields is set" — that alone would
+        let a caller declare ``schema_version=".v1"`` while supplying
+        ``production_job``, which is a packet claiming to be the byte-stable
+        trial shape while actually carrying production's. Tying the check to
+        the literal is what makes "trial fields never silently defaulted on
+        production packets; production fields never on trial packets" (the
+        CHAOS-3660 ruling's own words) an enforced invariant rather than a
+        convention two constructors happen to follow today.
+        """
+
+        is_trial_schema = self.schema_version == "ask_dev_analytical_job.v1"
+        has_family = self.question_family is not None
+        has_production = self.production_job is not None
+        if has_family == has_production:
+            raise ValueError(
+                "AnalyticalJob must declare exactly one of question_family "
+                "(trial) or production_job (production) -- never both, "
+                "never neither"
+            )
+        if is_trial_schema != has_family:
+            raise ValueError(
+                f"schema_version {self.schema_version!r} does not match its "
+                "provenance: a '.v1' job must carry question_family and no "
+                "production_job; a '.v2' job must carry production_job and "
+                "no question_family"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_uncertainty_is_disclosed(self) -> Self:
@@ -1512,7 +1652,20 @@ class AskDevInvestigationPacket(ContractModelV2):
         present: an arm that could not read deployments may declare that in
         ``missing_sources``. What it may not do is stay silent, which is the
         difference between a disclosed gap and an undisclosed one.
+
+        CHAOS-3660/CHAOS-3678: a no-op for a production-shaped packet
+        (``analytical_job.question_family is None``). The whole family
+        registry -- ``QUESTION_FAMILY_REGISTRY``, permitted shapes, required
+        source classes, required sections -- is trial-scoring machinery; a
+        production packet does not claim a trial family and has nothing here
+        to be held to. Production's own answer-quality obligations are a
+        separate, not-yet-built mechanism (Phase 2, CHAOS-3669) and are
+        deliberately not invented here as a side effect of widening this
+        contract.
         """
+
+        if self.analytical_job.question_family is None:
+            return self
 
         family = QUESTION_FAMILY_REGISTRY[self.analytical_job.question_family]
 
@@ -1850,6 +2003,12 @@ class AskDevInvestigationPacket(ContractModelV2):
 INVESTIGATION_CONTRACT_MODELS: dict[str, type[ContractModelV2]] = {
     "ask_dev_investigation_packet.v1": AskDevInvestigationPacket,
     "ask_dev_analytical_job.v1": AnalyticalJob,
+    # CHAOS-3660/CHAOS-3678: production's AnalyticalJob shape. Same Python
+    # class as ".v1" -- the two schema_version literals distinguish the
+    # provenance shape a given instance carries (see
+    # validate_provenance_matches_schema_version), not two different models.
+    "ask_dev_analytical_job.v2": AnalyticalJob,
+    "ask_dev_production_job_provenance.v1": ProductionJobProvenance,
     "ask_dev_subject_discovery.v1": SubjectDiscovery,
     "ask_dev_comparison_cohort.v1": ComparisonCohort,
     "ask_dev_related_context.v1": RelatedContext,

@@ -2,7 +2,7 @@
   "$defs": {
     "AnalyticalJob": {
       "additionalProperties": false,
-      "description": "The normalized analytical job, with its uncertainty stated.\n\n``job_uncertainty`` is what keeps this contract from requiring a\npre-enumerated intent: an arm may declare a broad job it is uncertain\nabout and still investigate, provided it says so. The\n``question_family`` is a *family*, not an enumerated intent \u2014 ten of\nthem cover the whole trial, and one of them is \"clarification and safe\nno-match\".",
+      "description": "The normalized analytical job, with its uncertainty stated.\n\n``job_uncertainty`` is what keeps this contract from requiring a\npre-enumerated intent: an arm may declare a broad job it is uncertain\nabout and still investigate, provided it says so. The\n``question_family`` is a *family*, not an enumerated intent \u2014 ten of\nthem cover the whole trial, and one of them is \"clarification and safe\nno-match\".\n\n**Provenance is exactly one of two shapes (CHAOS-3660/CHAOS-3678).**\n``question_family`` (with ``schema_version`` ending ``.v1``) is the\noriginal, byte-stable trial shape \u2014 every packet ``build_packet`` has\never emitted keeps this exact shape, unchanged. ``production_job``\n(with ``schema_version`` ending ``.v2``) is production's shape, with no\ntrial family and no fixture/corpus concept. See\n``CONTRACT_CHANGELOG`` for the dated, cited record of why this widened\nrather than staying single-shape, and\n``validate_provenance_matches_schema_version`` for the enforcement.",
       "properties": {
         "comparison_shape": {
           "$ref": "#/$defs/ComparisonShape"
@@ -42,11 +42,33 @@
         "job_uncertainty": {
           "$ref": "#/$defs/JobUncertainty"
         },
+        "production_job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProductionJobProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "question_family": {
-          "$ref": "#/$defs/QuestionFamilyID"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QuestionFamilyID"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "schema_version": {
-          "const": "ask_dev_analytical_job.v1",
+          "enum": [
+            "ask_dev_analytical_job.v1",
+            "ask_dev_analytical_job.v2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -65,7 +87,6 @@
       "required": [
         "schema_version",
         "job_id",
-        "question_family",
         "job_uncertainty",
         "job_statement",
         "comparison_shape",
@@ -1447,6 +1468,37 @@
       ],
       "title": "PacketLimitationKind",
       "type": "string"
+    },
+    "ProductionJobProvenance": {
+      "additionalProperties": false,
+      "description": "Production's own job identity: no trial family, no fixture concept.\n\nCHAOS-3660/CHAOS-3678. ``intent_id`` is a **validated string**, not the\nproduction ``QuestionIntentID`` enum imported directly \u2014 this frozen\ncontract must never import production's vocabulary (see\n``investigation_contract/__init__.py``'s own \"deliberately its own\ntree\" boundary, which exists precisely so this contract does not depend\non anything outside the trial). Coupling the frozen contract to a\nvocabulary that changes on production's own schedule would let a\nproduction enum edit silently rewrite what a *trial* schema_version\nmeans \u2014 a frozen contract has no way to notice that happened. The\nstring is validated against the real ``QuestionIntentID`` member set by\nthe producer (``packet_builder.build_production_packet``), one layer up\nfrom here, where the import is legitimate because that module is\nproduction code, not the frozen contract itself.\n\n``run_id`` is the identifier the calling ``GraphInvestigationRequest``\nalready carried \u2014 production's analog of what ``TrialContext.run_id``\nis for a trial run, but this model carries no corpus/fixture concept at\nall: production has neither.",
+      "properties": {
+        "intent_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "ask_dev_production_job_provenance.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "intent_id",
+        "run_id"
+      ],
+      "title": "ProductionJobProvenance",
+      "type": "object"
     },
     "QuestionFamilyID": {
       "description": "The ten frozen families of the corrected trial.",

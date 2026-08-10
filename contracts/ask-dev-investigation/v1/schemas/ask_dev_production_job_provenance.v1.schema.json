@@ -1,0 +1,33 @@
+{
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev-investigation/v1/ask_dev_production_job_provenance.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Production's own job identity: no trial family, no fixture concept.\n\nCHAOS-3660/CHAOS-3678. ``intent_id`` is a **validated string**, not the\nproduction ``QuestionIntentID`` enum imported directly \u2014 this frozen\ncontract must never import production's vocabulary (see\n``investigation_contract/__init__.py``'s own \"deliberately its own\ntree\" boundary, which exists precisely so this contract does not depend\non anything outside the trial). Coupling the frozen contract to a\nvocabulary that changes on production's own schedule would let a\nproduction enum edit silently rewrite what a *trial* schema_version\nmeans \u2014 a frozen contract has no way to notice that happened. The\nstring is validated against the real ``QuestionIntentID`` member set by\nthe producer (``packet_builder.build_production_packet``), one layer up\nfrom here, where the import is legitimate because that module is\nproduction code, not the frozen contract itself.\n\n``run_id`` is the identifier the calling ``GraphInvestigationRequest``\nalready carried \u2014 production's analog of what ``TrialContext.run_id``\nis for a trial run, but this model carries no corpus/fixture concept at\nall: production has neither.",
+  "properties": {
+    "intent_id": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Intent Id",
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "ask_dev_production_job_provenance.v1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "intent_id",
+    "run_id"
+  ],
+  "title": "ProductionJobProvenance",
+  "type": "object"
+}

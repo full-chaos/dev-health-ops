@@ -243,15 +243,23 @@ class TestNoProductionCoupling:
         assert not offenders, offenders
 
     def test_the_declared_query_surface_is_exhaustive(self) -> None:
-        """Every Cypher string in the arm is one of the declared three.
+        """Every Cypher string in the arm is one of the declared read-only
+        queries or the one declared write query.
 
         Scanned from the AST's string *constants*, not with a text grep:
         grepping the file matches the prose in its own docstrings, which is
         how a containment check quietly becomes vacuous (or, as here,
         permanently red for the wrong reason).
+
+        CHAOS-3632 widened this from "every Cypher string is read-only" to
+        "every Cypher string is declared and auditable" -- a single-node,
+        uuid-scoped delete (:data:`store_module.WRITE_QUERIES`) is a
+        legitimate need this arm did not have before (see
+        ``TestWriteSurfaceIsNarrow`` below for what keeps that one
+        exception from becoming a general write surface).
         """
 
-        declared = set(READ_ONLY_QUERIES)
+        declared = set(READ_ONLY_QUERIES) | set(store_module.WRITE_QUERIES)
         stray: dict[str, list[str]] = {}
         for path in sorted(_ARM_ROOT.rglob("*.py")):
             for value in _string_constants(path):
@@ -299,6 +307,84 @@ class TestNoProductionCoupling:
             assert query.lstrip().upper().startswith("MATCH")
             offending = _CYPHER_WRITE.findall(query.upper())
             assert not offending, (query, offending)
+
+
+class TestWriteSurfaceIsNarrow:
+    """CHAOS-3632's one exception, kept from becoming a general write hole.
+
+    ``test_the_declared_query_surface_is_exhaustive`` above already proves
+    every write query in the arm is declared in
+    ``store_module.WRITE_QUERIES`` -- any second write string, anywhere in
+    the package, shows up there as "stray" the moment it exists. What these
+    tests add is that the ONE declared write is itself as narrow as a
+    single-node delete can be: exactly one entry, never built by
+    interpolating a caller-supplied value into Cypher text, and unable to
+    match more than the one node its uuid names.
+    """
+
+    def test_exactly_one_write_query_is_declared(self) -> None:
+        assert len(store_module.WRITE_QUERIES) == 1, (
+            "a second write query would need its own review under this "
+            "same scrutiny -- growing this list silently is exactly what "
+            "the exhaustive declaration is supposed to prevent"
+        )
+
+    def test_the_write_query_is_a_plain_constant_not_built_at_runtime(self) -> None:
+        """Parameterized via ``execute_query(..., uuid=...)``, never
+        interpolated.
+
+        Proven structurally, not by inspection: the query is one of the
+        AST's string *constants* (``ast.Constant``), which an f-string or a
+        ``.format()``/``%`` build would never be -- those parse as
+        ``ast.JoinedStr`` or a ``BinOp``/``Call`` the constant scanner in
+        this module does not walk. A query assembled by interpolating a
+        caller-supplied canonical id into Cypher text would not appear here
+        as "declared" at all -- it would be invisible to both this test and
+        the exhaustiveness scan above, which is exactly the injection
+        surface a widened "no write Cypher" guard must not reopen.
+        """
+
+        store_path = Path(store_module.__file__)
+        constants = set(_string_constants(store_path))
+        for query in store_module.WRITE_QUERIES:
+            assert query in constants, (
+                f"{query!r} is not a plain string constant declared in "
+                f"{store_path} -- if it were assembled via f-string, "
+                "format() or % at call time, it would not appear here"
+            )
+            assert "$uuid" in query, (
+                "the write query must reference its match subject through "
+                "a bound Cypher parameter ($uuid), never a literal value"
+            )
+
+    def test_the_write_query_cannot_match_more_than_one_node(self) -> None:
+        """No unscoped ``MATCH (n)``-shaped clause reaches a write query.
+
+        A node pattern with no property filter (``MATCH (n)``, no ``{...}``)
+        would match every node in the partition; ``DETACH DELETE`` on that
+        match would be a full-partition wipe wearing a single-node delete's
+        name. Every write query's node pattern must filter on ``{uuid:
+        $uuid}`` directly in the ``MATCH`` clause -- not merely reference
+        ``uuid`` somewhere later in the query text, which a ``WHERE`` clause
+        added after an unscoped ``MATCH`` would also do while still matching
+        every node up to that point.
+        """
+
+        unscoped_match = re.compile(r"MATCH\s*\(\s*[A-Za-z_]\w*\s*\)")
+        scoped_match = re.compile(
+            r"MATCH\s*\(\s*[A-Za-z_]\w*\s*\{\s*uuid\s*:\s*\$uuid\s*\}\s*\)"
+        )
+        for query in store_module.WRITE_QUERIES:
+            assert not unscoped_match.search(query), (
+                query,
+                "an unscoped MATCH (n) node pattern could match every node "
+                "in the partition",
+            )
+            assert scoped_match.search(query), (
+                query,
+                "the write query's MATCH clause must filter its node "
+                "pattern on {uuid: $uuid} directly",
+            )
 
 
 class TestTelemetryContainment:

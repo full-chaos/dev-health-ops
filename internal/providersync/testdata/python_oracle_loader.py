@@ -85,6 +85,10 @@ _OPERATIONAL_ORDERING_RULES_SOURCE = _source(
 )
 _OPERATIONAL_SOURCE = _source("dev_health_ops/models/operational.py")
 _OPERATIONAL_IDENTITY_SOURCE = _source("dev_health_ops/models/operational_identity.py")
+_PAGERDUTY_MODELS_SOURCE = _source("dev_health_ops/providers/pagerduty/models.py")
+_PAGERDUTY_NORMALIZE_SOURCE = _source("dev_health_ops/providers/pagerduty/normalize.py")
+_NORMALIZE_COMMON_SOURCE = _source("dev_health_ops/providers/normalize_common.py")
+_DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
 _OPERATIONAL_MIGRATION_SOURCE = _source(
     "dev_health_ops/providers/operational_migration.py"
 )
@@ -805,6 +809,34 @@ def _target_jsm_incidents() -> None:
     _load_source_module("dev_health_ops.providers.jira.jsm_models", _JSM_MODELS_SOURCE)
 
 
+def _target_pagerduty_normalize() -> None:
+    """Load the live PagerDuty normalizer and its canonical model chain."""
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_types",
+        _OPERATIONAL_ORDERING_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering_codec",
+        _OPERATIONAL_ORDERING_CODEC_SOURCE,
+    )
+    _load_source_module(
+        "dev_health_ops.models.operational_ordering",
+        _OPERATIONAL_ORDERING_RULES_SOURCE,
+    )
+    _load_source_module("dev_health_ops.models.operational", _OPERATIONAL_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.operational_identity", _OPERATIONAL_IDENTITY_SOURCE
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.providers.pagerduty.models", _PAGERDUTY_MODELS_SOURCE
+    )
+
+
 def _target_feature_policy() -> None:
     """Load the policy's real type and registry inputs without licensing init."""
     _load_source_module("dev_health_ops.licensing.types", _LICENSE_TYPES_SOURCE)
@@ -1038,6 +1070,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         _JSM_INCIDENTS_SOURCE,
         _target_jsm_incidents,
     ),
+    _PAGERDUTY_NORMALIZE_SOURCE: (
+        "dev_health_ops.providers.pagerduty.normalize",
+        _PAGERDUTY_NORMALIZE_SOURCE,
+        _target_pagerduty_normalize,
+    ),
     _FEATURE_POLICY_SOURCE: (
         "dev_health_ops.licensing.feature_policy",
         _FEATURE_POLICY_SOURCE,
@@ -1095,8 +1132,10 @@ def _install_namespace() -> None:
         "dev_health_ops.providers.github",
         "dev_health_ops.providers.gitlab",
         "dev_health_ops.providers.jira",
+        "dev_health_ops.providers.pagerduty",
         "dev_health_ops.providers.launchdarkly",
         "dev_health_ops.providers.linear",
+        "dev_health_ops.utils",
         "dev_health_ops.storage",
         "dev_health_ops.sync",
         "dev_health_ops.workers",

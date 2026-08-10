@@ -111,6 +111,15 @@ class EvidenceRecord:
     #: ``entity_id``'s value instead would let a resolver bug (or a
     #: resolver that took the cheap path instead of deriving) launder its
     #: way past the entity check merely by returning something falsy.
+    #:
+    #: **Requires ``repository_ids`` to be non-empty.** ``admit`` refuses
+    #: (never silently admits) a record with this flag set AND empty
+    #: ``repository_ids``: ``_authorize_expansion``'s entity check and its
+    #: repository check are BOTH truthy-gated, so an entity-less,
+    #: repository-less record would skip both and be admitted
+    #: unconditionally to any caller with a generally-valid resolution --
+    #: an authorization bypass, not a convenience. Every resolver that sets
+    #: this flag must resolve a repository to attach.
     no_authorizable_entity: bool = False
 
 
@@ -834,6 +843,24 @@ class EvidenceService:
             # leaving authorization to the unmodified, independent
             # ``repository_ids`` check below it.
             record = replace(record, record_locator=candidate.locator)
+            if record.no_authorizable_entity and not record.repository_ids:
+                # An empty ``valid_entity_ids`` skips the entity check;
+                # ``_authorize_expansion``'s repository check is ALSO
+                # truthy-gated (``if evidence.repository_ids:``). A record
+                # with neither has no authorization anchor at all -- both
+                # checks would skip and it would be admitted
+                # unconditionally to any caller with a generally-valid
+                # resolution, regardless of scope. Refused here rather
+                # than trusted to every current and future resolver's own
+                # discipline never to produce that combination.
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=EvidenceAvailability.UNAUTHORIZED,
+                        warning="no_authorization_anchor",
+                    )
+                )
+                continue
             valid_entity_ids = (
                 () if record.no_authorizable_entity else (record.entity_id,)
             )

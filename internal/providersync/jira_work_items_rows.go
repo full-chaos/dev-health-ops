@@ -513,6 +513,9 @@ func jiraResolveUser(value any, objectShape bool, resolver jiraIdentityResolver)
 	if objectShape {
 		mapped, _ := jiraMapValue(value)
 		email, accountID, displayName = stringFrom(mapped["emailAddress"]), stringFrom(mapped["accountId"]), stringFrom(mapped["displayName"])
+		if displayName == "" {
+			displayName = stringFrom(mapped["name"])
+		}
 	} else {
 		// This is deliberate: the shipped JSON branch calls getattr(dict,...)
 		// and therefore passes three None values to IdentityResolver.
@@ -537,6 +540,9 @@ func jiraResolveMapUser(value any, resolver jiraIdentityResolver) string {
 	email := stringFrom(mapped["emailAddress"])
 	accountID := stringFrom(mapped["accountId"])
 	displayName := stringFrom(mapped["displayName"])
+	if displayName == "" {
+		displayName = stringFrom(mapped["name"])
+	}
 	if resolver != nil {
 		return resolver(email, accountID, displayName)
 	}

@@ -50,6 +50,19 @@ type jiraAtlassianRows struct {
 	Worklogs []jiraWorklogRow
 }
 
+// JiraWorklogFetchObservation records both sides of the optional GraphQL
+// worklog route. It is returned as typed fetch evidence so a GraphQL failure
+// followed by a successful REST read cannot look like an uninstrumented REST
+// fetch.
+type JiraWorklogFetchObservation struct {
+	IssueKey         string
+	GraphQLAttempted bool
+	GraphQLRequests  int
+	GraphQLSucceeded bool
+	RESTFallbackUsed bool
+	RESTRequests     int
+}
+
 // JiraSprintReferenceSink is the narrow reference-cache boundary used by the
 // provider path.  It is intentionally not a registry or activation hook.
 type JiraSprintReferenceSink func([]jiraSprintRow) error
@@ -128,6 +141,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		Sprints:      cloneJiraSprintRows(handler.ReferenceSprints),
 	}, Worklogs: make([]jiraWorklogRow, 0)}
 	optionalIncomplete := make([]string, 0)
+	worklogObservations := make([]JiraWorklogFetchObservation, 0)
 	requests := searchPages
 	fetchComments := jiraOptionBool(claim, "fetch_comments", false)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
@@ -178,10 +192,11 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			if handler.GraphQLClient != nil {
 				worklogClient = handler.GraphQLClient
 			}
-			worklogs, worklogRequests, worklogErr := collectJiraAtlassianWorklogs(
+			worklogs, worklogRequests, worklogObservation, worklogErr := collectJiraAtlassianWorklogs(
 				ctx, client, worklogClient, key, useGraphQL, maxPages, handler.CloudID,
 			)
 			requests += worklogRequests
+			worklogObservations = append(worklogObservations, worklogObservation)
 			if worklogErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "worklogs:"+item.WorkItemID)
 			} else {
@@ -286,6 +301,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		Effects: effects, Result: result, Watermark: watermark,
 		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset,
 			Requests: requests, Pages: searchPages, Records: len(rows.WorkItems)},
+		WorklogObservations: worklogObservations,
 	}, nil
 }
 
@@ -539,13 +555,19 @@ func collectJiraBoardSprints(ctx context.Context, client *providerfoundation.HTT
 	}
 }
 
-func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *providerfoundation.HTTPClient, issueKey string, graphql bool, maxPages int, cloudID string) ([]map[string]any, int, error) {
+func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *providerfoundation.HTTPClient, issueKey string, graphql bool, maxPages int, cloudID string) ([]map[string]any, int, JiraWorklogFetchObservation, error) {
+	observation := JiraWorklogFetchObservation{IssueKey: issueKey}
 	graphqlRequests := 0
 	if graphql && strings.TrimSpace(cloudID) != "" {
+		observation.GraphQLAttempted = true
 		if values, requests, err := collectJiraGraphQLWorklogs(ctx, graphqlClient, issueKey, maxPages, cloudID); err == nil {
-			return values, requests, nil
+			observation.GraphQLRequests = requests
+			observation.GraphQLSucceeded = true
+			return values, requests, observation, nil
 		} else {
 			graphqlRequests = requests
+			observation.GraphQLRequests = requests
+			observation.RESTFallbackUsed = true
 		}
 	}
 	values := make([]map[string]any, 0)
@@ -553,10 +575,10 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 	seen := make(map[int]struct{})
 	for pages := 0; ; pages++ {
 		if pages >= maxPages {
-			return nil, graphqlRequests + requests, ErrPaginationCapExceeded
+			return nil, graphqlRequests + requests, observation, ErrPaginationCapExceeded
 		}
 		if _, ok := seen[start]; ok {
-			return nil, graphqlRequests + requests, ErrPaginationCapExceeded
+			return nil, graphqlRequests + requests, observation, ErrPaginationCapExceeded
 		}
 		seen[start] = struct{}{}
 		query := url.Values{"startAt": {strconv.Itoa(start)}, "maxResults": {strconv.Itoa(jiraAtlassianWorklogPerPage)}}
@@ -565,27 +587,29 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 			Total    *int              `json:"total"`
 		}
 		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
-			return nil, graphqlRequests + requests + 1, err
+			observation.RESTRequests = requests + 1
+			return nil, graphqlRequests + requests + 1, observation, err
 		}
 		requests++
+		observation.RESTRequests = requests
 		if page.Worklogs == nil {
-			return nil, graphqlRequests + requests, providerfoundation.ErrNormalizationInvalid
+			return nil, graphqlRequests + requests, observation, providerfoundation.ErrNormalizationInvalid
 		}
 		for _, raw := range page.Worklogs {
 			var value map[string]any
 			if err := decodeJiraJSON(raw, &value); err != nil {
-				return nil, graphqlRequests + requests, err
+				return nil, graphqlRequests + requests, observation, err
 			}
 			values = append(values, value)
 		}
 		if page.Total != nil && start+len(page.Worklogs) >= *page.Total {
-			return values, graphqlRequests + requests, nil
+			return values, graphqlRequests + requests, observation, nil
 		}
 		if page.Total == nil && len(page.Worklogs) < jiraAtlassianWorklogPerPage {
-			return values, graphqlRequests + requests, nil
+			return values, graphqlRequests + requests, observation, nil
 		}
 		if len(page.Worklogs) == 0 {
-			return nil, graphqlRequests + requests, ErrPaginationCapExceeded
+			return nil, graphqlRequests + requests, observation, ErrPaginationCapExceeded
 		}
 		start += len(page.Worklogs)
 	}

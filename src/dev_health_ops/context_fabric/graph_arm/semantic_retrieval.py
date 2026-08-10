@@ -32,6 +32,32 @@ on all eight cases, the leg was cosine-only under a heading that said hybrid,
 and nothing failed. :func:`wait_for_fulltext_index` is the positive control
 that closes that, and it raises rather than warning.
 
+**CHAOS-3632 follow-up, resolved: document nodes are lexically title-only,
+by design, not an instance of the failure above.** FalkorDB's
+``node_name_and_summary`` full-text index covers exactly two properties,
+``name`` and ``summary`` (verified against
+``graphiti_core.graph_queries``'s own index definition, not assumed). A
+document node's ``name`` is its title; ``backend.to_graphiti_document_nodes``
+sets ``summary=""`` unconditionally and states plainly that document body
+"reaches the embedder and NOTHING else -- never a stored attribute, never
+``summary``". So BM25 can only ever match a document by its title text; the
+document's actual content is findable exclusively through cosine similarity
+against ``name_embedding``, which that same function precomputes from body
+for exactly this reason. This is deliberately **not** fixed by widening
+``summary`` to include body: doing so would store raw document prose in a
+field this arm (and any future reader) can read back verbatim, which is
+precisely the persisted-untrusted-prose surface CHAOS-3632's whole approval
+gate exists to keep closed -- "indexed text can aid retrieval but cannot
+become executable instruction or trusted wire content" reads a stored,
+queryable ``summary`` field as a bigger risk than a lexical-coverage gap.
+The gap is real (a query using only body-specific terms gets no BM25
+support for that node) but it is a narrower, permanent, load-bearing design
+choice, not the same class of defect as an index that has not populated
+yet: the fulltext-readiness failure above is an accident of timing on
+fields that should be indexed and are not yet; this is a decision to
+never index a field at all, made once, for a stated trust reason, and does
+not need a readiness probe the way the timing failure does.
+
 **Per-candidate mechanism is derived from what actually surfaced it.**
 Hybrid retrieval fuses two result sets, and a node that only BM25 found was
 found lexically. Labelling it ``EMBEDDING_SIMILARITY`` because the *leg* is
@@ -85,8 +111,9 @@ from .backend import (
     graphiti_module,
 )
 from .discovery import CandidateMatch
+from .drivers import TRUSTED_ATTRIBUTION_LEVELS
 from .readback import _entities_by_canonical_id
-from .vocabulary import GraphEntityKind
+from .vocabulary import GraphEntityKind, GraphObservationKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -124,6 +151,14 @@ DEFAULT_SEMANTIC_LIMIT = 25
 _CANONICAL_ID_ATTRIBUTE = "cf_canonical_id"
 _ENTITY_KIND_ATTRIBUTE = "cf_entity_kind"
 _SOURCE_CLASS_ATTRIBUTE = "cf_source_class"
+_OBSERVATION_KIND_ATTRIBUTE = "cf_observation_kind"
+#: The raw, ``cf_attr_``-prefixed key ``backend.to_graphiti_document_nodes``
+#: writes every ``UnstructuredDocumentRecord.attributes`` entry under.
+#: Retrieval reads raw Graphiti nodes directly (never through ``readback``'s
+#: stripped shape), so this is the literal attribute name on the node, not
+#: the bare ``"corpus_trust"`` key :func:`drivers._is_trusted` reads off its
+#: own, already-processed record type.
+_CORPUS_TRUST_ATTRIBUTE = "cf_attr_corpus_trust"
 
 
 @runtime_checkable
@@ -479,6 +514,46 @@ def _subject_canonical_ids(node: Any) -> tuple[str, ...]:
     return tuple(item for item in raw.split(",") if item)
 
 
+def _is_document_observation(node: Any) -> bool:
+    """Whether ``node`` is a :attr:`~.vocabulary.GraphObservationKind.DOCUMENT`
+    observation -- the scope this gate applies to, and nothing wider. Every
+    other observation kind already passes through its own upstream quality
+    gate before reaching this arm's projection; see the module-level
+    CHAOS-3632 note above :func:`_document_trust_clears_bar`.
+    """
+
+    return (
+        _attribute(node, _OBSERVATION_KIND_ATTRIBUTE)
+        == GraphObservationKind.DOCUMENT.value
+    )
+
+
+def _document_trust_clears_bar(node: Any) -> bool:
+    """CHAOS-3632: whether a document-derived observation may hop a subject.
+
+    Mirrors :func:`drivers._is_trusted` exactly -- same source of truth
+    (``TRUSTED_ATTRIBUTION_LEVELS``), same refusal on an absent trust level.
+    ``backend.to_graphiti_document_nodes`` only ever writes a node for a
+    document ``projection.approved_documents`` already approved, but that
+    approval is computed once, at projection-build time; nothing re-checks
+    it afterward. A document approved when the projection was built and
+    later withdrawn, redacted, or revoked stays in the store, findable,
+    until the next full reprojection sweep purges it -- this is the re-check
+    that bounds that staleness window on read, rather than trusting a
+    one-time write-side gate to still be accurate.
+
+    A document carrying no ``corpus_trust`` attribute at all -- today's
+    actual shape, since ``corpus_adapter.py`` sets no ``attributes`` on any
+    document record -- is not trusted, the same "absence is not a default"
+    reasoning ``drivers._is_trusted`` states for exactly the same failure
+    mode: a stripped or never-written trust attribute must not silently read
+    as trustworthy.
+    """
+
+    trust = _attribute(node, _CORPUS_TRUST_ATTRIBUTE)
+    return trust is not None and trust in TRUSTED_ATTRIBUTION_LEVELS
+
+
 @dataclass(frozen=True, slots=True)
 class _HopSource:
     """The authorized observation that earned one subject its hop candidate."""
@@ -672,6 +747,13 @@ async def retrieve_candidates(
         kind_value = _attribute(node, _ENTITY_KIND_ATTRIBUTE)
         if kind_value is None:
             observations.append(canonical_id)
+            if _is_document_observation(node) and not _document_trust_clears_bar(node):
+                # CHAOS-3632: retrieval genuinely found this node -- it stays
+                # in observation_hits above -- but an untrusted document
+                # earns no hop. Skipping only this node's own contribution;
+                # a different, trusted observation naming the same subject
+                # is untouched (evaluated on its own iteration below).
+                continue
             score = float(score_by_uuid[uuid])
             for subject_id in _subject_canonical_ids(node):
                 if subject_id not in authorized:

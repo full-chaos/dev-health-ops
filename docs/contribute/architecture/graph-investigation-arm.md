@@ -847,13 +847,18 @@ the **record** is about, carried from the source, never by whichever
 observation the traversal happened to reach that cites it.
 
 Where a source issues none, the platform's own `EvidenceReferenceSigner`
-mints one — over the **record's** canonical id, not over the entity it is
-about. The platform payload uses one field for both, so two same-kind records
-about one entity otherwise mint the same handle and the contract's
-duplicate-handle refusal kills the whole packet on a legitimate handle-less
-world. The platform fix is CHAOS-3633; this is the arm-side containment, and
-its cost is that a minted handle is verified by re-deriving it through the
-same function rather than by `signer.verify` on the emitted ref.
+mints one — over the true entity **and** the record's own canonical id, in
+`entity_id` and `record_locator` respectively. Before CHAOS-3633 the platform
+payload had one field for both, so two same-kind records about one entity
+minted the same handle and the contract's duplicate-handle refusal killed the
+whole packet on a legitimate handle-less world; the arm's interim containment
+substituted `entity_id` with the record's canonical id to disambiguate, at
+the cost of the minted handle no longer verifying independently (see the
+residual below, now closed). CHAOS-3633 added `record_locator` to the signed
+payload for exactly this collision, so the substitution is retired:
+`entity_id` stays the true entity, `record_locator` carries the record's own
+identity, and a minted handle verifies through `signer.verify` on the emitted
+ref like any other platform-issued identity.
 
 **The two indexes behave differently, and only one of them refuses.** The
 projection builds an entity index keyed by `(kind, canonical_id)` and an
@@ -872,15 +877,17 @@ note claimed both indexes refuse, which was an overclaim a reviewer caught.
 Whether the entity index should refuse too is recorded on CHAOS-3627 and is
 not changed here.
 
-**Residual: a minted handle no longer verifies independently.** The arm signs
-a minted handle over the record's canonical id while the emitted `entity_id`
-is the entity, so `signer.verify` on the emitted ref cannot reproduce it and
-verification means re-deriving through the arm's own `_mint_handle`. That is
-verification by the same code that did the minting: a bug in the mint now
-verifies itself. It is the price of not shipping a denial-of-packet on
-legitimate handle-less sources, and it is temporary — CHAOS-3633's platform
-fix to the signer payload should restore true independent verifiability, and
-that ticket carries this requirement.
+**Residual, closed: a minted handle used to not verify independently.**
+Between CHAOS-3627's fix round and CHAOS-3633 landing, the arm signed a
+minted handle over the record's canonical id while the emitted `entity_id`
+was the entity, so `signer.verify` on the emitted ref could not reproduce it
+and verification meant re-deriving through the arm's own `_mint_handle` —
+verification by the same code that did the minting, a bug in the mint would
+have verified itself. CHAOS-3633's platform fix (a `record_locator` field in
+the signed payload, distinct from `entity_id`) removed the need for the
+substitution; the arm now signs both fields for what they actually are, and
+`test_chaos_3617_packet_contract.py`'s `TestEvidenceIdentity` asserts a
+minted handle through `signer.verify` again.
 
 **Residual: a carried handle's identity is asserted, never verified.**
 Ingestion checks a carried handle's *grammar* and the *completeness* of the

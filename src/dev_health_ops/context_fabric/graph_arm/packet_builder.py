@@ -826,37 +826,39 @@ def _mint_handle(
 ) -> str:
     """A handle for a record whose source issued none.
 
-    Minted through the platform's own ``EvidenceReferenceSigner`` -- not a
-    parallel scheme -- but over a record identified by its **canonical id**
-    rather than by the entity it is about.
+    Minted through the platform's own ``EvidenceReferenceSigner``, over a
+    record whose ``entity_id`` is the entity it is genuinely about --
+    unmodified -- and whose ``record_locator`` is the observation's own
+    canonical id.
 
-    That substitution is the arm-side fix for CHAOS-3633 and it is deliberate.
-    ``EvidenceReferenceSigner._payload`` identifies a record by ``(org,
-    source_system, source_version, entity_type, entity_id, repositories)``,
-    and ``entity_id`` on the wire is the entity the evidence is *about*. Two
-    distinct records of one kind about one entity therefore mint the SAME
-    handle, and since the frozen contract refuses a repeated handle in the
-    index, the second one killed the entire packet -- measured on a
-    legitimate handle-less world (the arm's own fixtures hold exactly such a
-    pair: ``dec_auth_1`` superseded by ``dec_auth_2``). A denial of service on
-    valid input, manufactured by the arm's own mint.
+    **This is the CHAOS-3633 platform fix, not the arm-side workaround it
+    replaced.** Before CHAOS-3633, ``EvidenceReferenceSigner._payload``
+    identified a record by ``(org, source_system, source_version,
+    entity_type, entity_id, repositories)`` alone, with no field for the
+    record's own identity. Two distinct records of one kind about one
+    entity therefore minted the SAME handle, and since the frozen contract
+    refuses a repeated handle in the index, the second one killed the
+    entire packet -- measured on a legitimate handle-less world (the arm's
+    own fixtures hold exactly such a pair: ``dec_auth_1`` superseded by
+    ``dec_auth_2``). The arm's interim fix substituted ``entity_id`` with
+    the observation's canonical id to disambiguate, at the cost of a real
+    handle no longer round-tripping through ``signer.verify`` (the emitted
+    ``entity_id`` was the entity while the signed one was the record --
+    ``test_chaos_3617_packet_contract`` re-derived the handle through this
+    function instead of verifying it, which proved the substitution self-
+    consistent and proved nothing about the platform's real identity
+    contract).
 
-    The platform fix belongs in ``evidence_service`` and is tracked as
-    CHAOS-3633; this arm must not reach into it. So the arm signs over the
-    record's identity, which is what the payload needed all along.
-
-    **The consequence, stated rather than buried**: the emitted evidence ref
-    no longer round-trips through ``signer.verify``, because the emitted
-    ``entity_id`` is the entity while the signed one is the record. Verifying
-    a minted handle means re-deriving it through this function -- which is
-    what ``test_chaos_3617_packet_contract`` now does. The property that
-    matters is unchanged: the handle comes from the evidence service's own
-    signing function, over this organization's key, and no scheme this arm
-    invented.
+    CHAOS-3633 added ``record_locator`` to the signed payload for exactly
+    this collision, so the workaround is retired: ``entity_id`` stays the
+    true entity, ``record_locator`` carries the record's own identity, and
+    the two records disambiguate on a field named for that job rather than
+    on a borrowed one. The handle round-trips through ``signer.verify``
+    again, and does.
     """
 
     return signer.issue(
-        org_id, dataclasses_replace(record, entity_id=observation.canonical_id)
+        org_id, dataclasses_replace(record, record_locator=observation.canonical_id)
     )
 
 
@@ -1496,11 +1498,20 @@ def build_packet(
             admitted_by_handle[handle] = admitted
         else:
             issued = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
-            handle = (
-                issued
-                if issued is not None
-                else _mint_handle(signer, readout.org_id, observation, record)
-            )
+            if issued is not None:
+                handle = issued
+            else:
+                handle = _mint_handle(signer, readout.org_id, observation, record)
+                # The payload _mint_handle signed carried record_locator
+                # (see its own docstring). The STORED record -- what
+                # becomes the emitted wire ref below -- must carry the
+                # same field, or the emitted ref's record_locator would be
+                # absent while the handle was signed with one present, and
+                # signer.verify would recompute a different payload than
+                # what this function actually signed.
+                record = dataclasses_replace(
+                    record, record_locator=observation.canonical_id
+                )
         if handle in evidence_groups:
             # Only reachable for a genuinely repeated SOURCE-issued handle
             # now: the arm's own mint discriminates by record identity (see
@@ -1643,6 +1654,12 @@ def build_packet(
                     "citation_text": None,
                     "repository_ids": list(group.record.repository_ids),
                     "valid_entity_ids": list(entry_supports),
+                    # CHAOS-3633/_mint_handle: present on the wire exactly
+                    # when it was present in the signed payload, so
+                    # signer.verify recomputes the SAME bytes that were
+                    # actually signed. None for a source-carried handle
+                    # (that payload never had one either).
+                    "record_locator": group.record.record_locator,
                     "flags": {},
                 },
                 source_class=group.source_class,

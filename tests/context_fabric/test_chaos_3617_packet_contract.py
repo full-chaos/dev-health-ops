@@ -365,22 +365,24 @@ class TestEvidenceIdentity:
     def test_the_arm_mints_a_platform_handle_when_the_source_issues_none(
         self, alpha_projection, signer
     ) -> None:
-        r"""The fallback branch, observed rather than assumed.
+        """The fallback branch, verified rather than re-derived.
 
-        Re-deriving through the same ``EvidenceReferenceSigner`` the evidence
-        service uses is the only check that means anything for a handle the
-        arm mints: it proves the arm did not invent a parallel scheme.
+        CHAOS-3633 added ``record_locator`` to the platform's signed
+        payload, retiring the arm-side workaround that used to substitute
+        ``entity_id`` with the record's canonical id to avoid a same-kind
+        collision (see ``_mint_handle``'s own docstring for that history).
+        The minted handle now round-trips through ``signer.verify`` like
+        any other platform-issued identity: ``entity_id`` on the wire is
+        the true entity, ``record_locator`` is the record's own identity,
+        and ``verify`` recomputes the SAME payload that was signed because
+        both fields are emitted, not one substituted for the other.
 
-        Re-derived rather than ``signer.verify``\ ed, and the difference is
-        CHAOS-3627's fix round. The arm signs a minted handle over the
-        RECORD's canonical id while the emitted ``entity_id`` is the entity
-        the evidence is about, because the platform payload uses one field for
-        both and two same-kind records about one entity otherwise collide --
-        which killed whole packets on legitimate handle-less worlds
-        (CHAOS-3633). ``verify`` recomputes from the emitted fields and so
-        cannot see the substitution; this asserts the stronger thing, that the
-        handle is byte-identical to what the service's own signing function
-        produces for that record.
+        ``signer.verify`` rather than a re-derived ``signer.issue`` call --
+        the stronger check, and the one this test used before CHAOS-3627's
+        fix round made it impossible: proof that the emitted ref is
+        actually self-consistent with what the platform's own function
+        would sign for it, not merely that the arm's minting function is
+        deterministic.
         """
 
         readout = _unissued(alpha_projection, _UNISSUED)
@@ -390,22 +392,13 @@ class TestEvidenceIdentity:
             item for item in readout.observations if item.canonical_id == _UNISSUED
         )
 
-        expected = signer.issue(
-            packet.organization_id,
-            EvidenceRecord(
-                source_system=entry.evidence.source_system,
-                source_version=entry.evidence.source_version,
-                entity_type=entry.evidence.entity_type,
-                entity_id=observation.canonical_id,
-                display_label=entry.evidence.display_label,
-                observed_at=entry.evidence.observed_at,
-                freshness=FreshnessState(entry.evidence.freshness),
-                provenance=entry.evidence.provenance,
-                confidence=entry.evidence.confidence,
-                repository_ids=tuple(entry.evidence.repository_ids),
-            ),
+        assert entry.evidence.record_locator == observation.canonical_id
+        assert entry.evidence.entity_id != observation.canonical_id, (
+            "entity_id must stay the true entity now that record_locator "
+            "carries the record's own identity -- the substitution this "
+            "test used to require is exactly what CHAOS-3633 retired"
         )
-        assert entry.evidence.evidence_ref_id == expected
+        assert signer.verify(packet.organization_id, entry.evidence)
 
     def test_a_minted_handle_for_another_organization_does_not_verify(
         self, alpha_projection, signer
@@ -421,9 +414,6 @@ class TestEvidenceIdentity:
         readout = _unissued(alpha_projection, _UNISSUED)
         packet = _packet(readout, signer)
         entry = _entry_for(packet, _UNISSUED)
-        observation = next(
-            item for item in readout.observations if item.canonical_id == _UNISSUED
-        )
 
         def mint(org_id: str) -> str:
             return signer.issue(
@@ -432,13 +422,14 @@ class TestEvidenceIdentity:
                     source_system=entry.evidence.source_system,
                     source_version=entry.evidence.source_version,
                     entity_type=entry.evidence.entity_type,
-                    entity_id=observation.canonical_id,
+                    entity_id=entry.evidence.entity_id,
                     display_label=entry.evidence.display_label,
                     observed_at=entry.evidence.observed_at,
                     freshness=FreshnessState(entry.evidence.freshness),
                     provenance=entry.evidence.provenance,
                     confidence=entry.evidence.confidence,
                     repository_ids=tuple(entry.evidence.repository_ids),
+                    record_locator=entry.evidence.record_locator,
                 ),
             )
 

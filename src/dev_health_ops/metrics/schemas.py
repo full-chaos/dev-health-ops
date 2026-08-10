@@ -325,6 +325,13 @@ class ProjectRecord:
     state: str = ""
     target_date: date | None = None
     url: str = ""
+    # Native Linear project enrichment selected by PROJECTS_QUERY. These are
+    # typed catalog dimensions, not an opaque provider metadata blob.
+    team_ids: list[str] = field(default_factory=list)
+    team_keys: list[str] = field(default_factory=list)
+    lead_id: str | None = None
+    lead_name: str | None = None
+    lead_email: str | None = None
 
 
 @dataclass(frozen=True)

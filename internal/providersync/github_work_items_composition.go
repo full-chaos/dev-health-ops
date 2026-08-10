@@ -313,8 +313,19 @@ func (deriver GitHubWorkItemDeriver) Derive(
 	rows githubWorkItemRows,
 	normalizedAt time.Time,
 ) (map[string][]json.RawMessage, error) {
+	return deriver.deriveForProvider(ctx, "github", claim, rows, normalizedAt)
+}
+
+func (deriver GitHubWorkItemDeriver) deriveForProvider(
+	ctx context.Context,
+	provider string,
+	claim Claim,
+	rows githubWorkItemRows,
+	normalizedAt time.Time,
+) (map[string][]json.RawMessage, error) {
 	if ctx == nil || deriver.Source == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "work-items" ||
+		!isDerivedWorkItemProvider(provider) || claim.Provider != provider ||
+		claim.Dataset != "work-items" ||
 		normalizedAt.IsZero() {
 		return nil, ErrInvalidConfiguration
 	}
@@ -322,8 +333,8 @@ func (deriver GitHubWorkItemDeriver) Derive(
 	if err != nil {
 		return nil, err
 	}
-	derivationContext, err := loadGitHubWorkItemDerivationContext(
-		ctx, claim, rows, deriver.Source, normalizedAt,
+	derivationContext, err := loadWorkItemDerivationContextForProvider(
+		ctx, provider, claim, rows, deriver.Source, normalizedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -335,8 +346,8 @@ func (deriver GitHubWorkItemDeriver) Derive(
 		derived[destination] = []json.RawMessage{}
 	}
 	for _, day := range days {
-		triplet, err := buildGitHubWorkItemMetricTriplet(
-			claim, rows, day, normalizedAt, derivationContext,
+		triplet, err := buildWorkItemMetricTripletForProvider(
+			provider, claim, rows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
 			return nil, err
@@ -348,8 +359,8 @@ func (deriver GitHubWorkItemDeriver) Derive(
 		if err := githubWorkItemMergeDerivedRows(derived, tripletRows); err != nil {
 			return nil, err
 		}
-		surfaces, err := buildGitHubWorkItemDerivedSurfaces(
-			claim, rows, day, normalizedAt, derivationContext,
+		surfaces, err := buildWorkItemDerivedSurfacesForProvider(
+			provider, claim, rows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
 			return nil, err

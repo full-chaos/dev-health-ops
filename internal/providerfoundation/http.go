@@ -335,8 +335,8 @@ func (c *HTTPClient) observe(class ErrorClass) {
 }
 
 // ClassifyHTTP mirrors the current Python provider taxonomy without retaining
-// response bodies or headers. GitHub's 403 rate-limit vocabulary is special;
-// all other 403s remain authentication/permission failures.
+// response bodies or headers. GitHub's and GitLab's 403 rate-limit vocabularies
+// are special; all other 403s remain authentication/permission failures.
 func ClassifyHTTP(provider string, status int, headers http.Header) *ProviderError {
 	return ClassifyHTTPWithMessage(provider, status, headers, "")
 }
@@ -344,7 +344,7 @@ func ClassifyHTTP(provider string, status int, headers http.Header) *ProviderErr
 func ClassifyHTTPWithMessage(provider string, status int, headers http.Header, message string) *ProviderError {
 	retryAfter := ParseRetryAfter(headerValue(headers, "retry-after"), time.Now())
 	message = strings.ToLower(message)
-	if provider == "github" && status == http.StatusForbidden && (headerValue(headers, "x-ratelimit-remaining") == "0" || headerValue(headers, "retry-after") != "" || strings.Contains(message, "rate limit") || strings.Contains(message, "abuse") || strings.Contains(message, "secondary")) {
+	if isRateLimitedForbidden(provider, status, headers, message) {
 		return &ProviderError{Class: ErrorRateLimited, StatusCode: status, RetryAfter: retryAfter}
 	}
 	switch status {
@@ -368,6 +368,22 @@ func ClassifyHTTPWithMessage(provider string, status int, headers http.Header, m
 	return nil
 }
 
+func isRateLimitedForbidden(provider string, status int, headers http.Header, message string) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	if provider == "gitlab" &&
+		(hasHeader(headers, "retry-after") || headerValue(headers, "ratelimit-remaining") == "0") {
+		return true
+	}
+	return provider == "github" &&
+		(headerValue(headers, "x-ratelimit-remaining") == "0" ||
+			headerValue(headers, "retry-after") != "" ||
+			strings.Contains(message, "rate limit") ||
+			strings.Contains(message, "abuse") ||
+			strings.Contains(message, "secondary"))
+}
+
 func headerValue(headers http.Header, wanted string) string {
 	for key, values := range headers {
 		if strings.EqualFold(key, wanted) && len(values) > 0 {
@@ -375,6 +391,15 @@ func headerValue(headers http.Header, wanted string) string {
 		}
 	}
 	return ""
+}
+
+func hasHeader(headers http.Header, wanted string) bool {
+	for key := range headers {
+		if strings.EqualFold(key, wanted) {
+			return true
+		}
+	}
+	return false
 }
 
 func ParseRetryAfter(raw string, now time.Time) time.Duration {

@@ -140,6 +140,38 @@ func TestHTTPClassificationAndPaginationFixtures(t *testing.T) {
 	}
 }
 
+func TestGitLabForbiddenRateLimitQualification(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		headers http.Header
+		want    ErrorClass
+	}{
+		{
+			name:    "retry-after",
+			headers: http.Header{"Retry-After": []string{"2"}},
+			want:    ErrorRateLimited,
+		},
+		{
+			name:    "remaining-zero",
+			headers: http.Header{"RateLimit-Remaining": []string{"0"}},
+			want:    ErrorRateLimited,
+		},
+		{
+			name:    "plain-forbidden",
+			headers: http.Header{},
+			want:    ErrorAuthentication,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ClassifyHTTP("gitlab", http.StatusForbidden, test.headers); got == nil || got.Class != test.want {
+				t.Fatalf("classification=%v, want %s", got, test.want)
+			}
+		})
+	}
+}
+
 func TestProviderParityFixture(t *testing.T) {
 	t.Parallel()
 	content, err := os.ReadFile("testdata/provider_parity.json")

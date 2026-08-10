@@ -184,6 +184,5 @@ class GraphInvestigationQuery(Protocol):
     condition to model.
     """
 
-    async def investigate(
-        self, request: GraphInvestigationRequest
-    ) -> GraphQueryResult: ...
+    async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
+        pass

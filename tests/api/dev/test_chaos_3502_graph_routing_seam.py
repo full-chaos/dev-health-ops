@@ -96,7 +96,7 @@ def test_graph_routing_runtime_flag_defaults_off(
 
 def test_graph_routing_is_an_explicit_purchase_feature_denied_by_default() -> None:
     assert ASK_DEV_GRAPH_ROUTING_FEATURE in EXPLICIT_PURCHASE_FEATURES
-    for tier in LicenseTier:
+    for tier in LicenseTier.__members__.values():
         features = get_features_for_tier(tier)
         assert features[ASK_DEV_GRAPH_ROUTING_FEATURE] is False
 

@@ -76,6 +76,7 @@ from dev_health_ops.context_fabric.graph_arm.vocabulary import (
 )
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 from tests.context_fabric import chaos_3620_spine as spine
+from tests.context_fabric import live_gate
 
 _PROBE_ORG = "org_3620_probe"
 _PROBE_AT = datetime(2026, 8, 1, tzinfo=UTC)
@@ -492,6 +493,8 @@ class TestTheLoadBearingInjectionCase:
         CHAOS-3632's write-side proof are demonstrably about the identical
         payload.
         """
+
+        live_gate.require_graphiti_extra()
 
         def _probe(canonical_id: str, *, approved: bool) -> UnstructuredDocumentRecord:
             return UnstructuredDocumentRecord(

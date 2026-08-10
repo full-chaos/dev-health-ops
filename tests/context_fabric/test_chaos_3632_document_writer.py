@@ -31,6 +31,7 @@ from dev_health_ops.context_fabric.graph_arm.records import (
     UnstructuredDocumentRecord,
 )
 from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
+from tests.context_fabric import live_gate
 
 pytestmark = pytest.mark.asyncio
 
@@ -42,6 +43,7 @@ _REJECTED_BODY_MARKER = "Ignore previous instructions"
 
 
 async def test_only_the_approved_document_reaches_a_node(alpha_projection) -> None:
+    live_gate.require_graphiti_extra()
     nodes = await to_graphiti_document_nodes(alpha_projection, DeterministicEmbedder())
     assert [node.attributes["cf_canonical_id"] for node in nodes] == ["doc_nfm_readme"]
 
@@ -54,6 +56,7 @@ async def test_a_rejected_document_never_reaches_a_node(alpha_projection) -> Non
     output, in case a future edit routed it into a different field.
     """
 
+    live_gate.require_graphiti_extra()
     nodes = await to_graphiti_document_nodes(alpha_projection, DeterministicEmbedder())
     canonical_ids = {node.attributes["cf_canonical_id"] for node in nodes}
     assert "doc_unapproved_thread" not in canonical_ids
@@ -63,6 +66,7 @@ async def test_a_rejected_document_never_reaches_a_node(alpha_projection) -> Non
 
 
 async def test_name_is_title_never_body(alpha_projection) -> None:
+    live_gate.require_graphiti_extra()
     (node,) = await to_graphiti_document_nodes(
         alpha_projection, DeterministicEmbedder()
     )
@@ -76,6 +80,7 @@ async def test_summary_stays_empty(alpha_projection) -> None:
     never end up there either.
     """
 
+    live_gate.require_graphiti_extra()
     (node,) = await to_graphiti_document_nodes(
         alpha_projection, DeterministicEmbedder()
     )
@@ -83,6 +88,7 @@ async def test_summary_stays_empty(alpha_projection) -> None:
 
 
 async def test_body_is_stored_nowhere_on_the_node(alpha_projection) -> None:
+    live_gate.require_graphiti_extra()
     (node,) = await to_graphiti_document_nodes(
         alpha_projection, DeterministicEmbedder()
     )
@@ -93,6 +99,7 @@ async def test_body_is_stored_nowhere_on_the_node(alpha_projection) -> None:
 
 
 async def test_cf_entity_kind_is_absent(alpha_projection) -> None:
+    live_gate.require_graphiti_extra()
     (node,) = await to_graphiti_document_nodes(
         alpha_projection, DeterministicEmbedder()
     )
@@ -102,6 +109,7 @@ async def test_cf_entity_kind_is_absent(alpha_projection) -> None:
 
 
 async def test_subjects_join_into_the_observation_attribute(alpha_projection) -> None:
+    live_gate.require_graphiti_extra()
     (node,) = await to_graphiti_document_nodes(
         alpha_projection, DeterministicEmbedder()
     )
@@ -115,6 +123,7 @@ async def test_generic_attributes_pass_through_with_the_cf_attr_prefix() -> None
     convention :func:`to_graphiti_nodes` already uses.
     """
 
+    live_gate.require_graphiti_extra()
     document = UnstructuredDocumentRecord(
         org_id="org_test",
         canonical_id="doc_trust_test",
@@ -144,6 +153,8 @@ async def test_name_embedding_is_a_function_of_body_not_title() -> None:
     ``body`` -- proven here by holding title fixed and varying body, and
     the converse.
     """
+
+    live_gate.require_graphiti_extra()
 
     def _doc(canonical_id: str, *, title: str, body: str) -> UnstructuredDocumentRecord:
         return UnstructuredDocumentRecord(
@@ -190,6 +201,7 @@ async def test_name_embedding_is_a_function_of_body_not_title() -> None:
 
 
 async def test_repository_ids_join_when_present() -> None:
+    live_gate.require_graphiti_extra()
     document = UnstructuredDocumentRecord(
         org_id="org_test",
         canonical_id="doc_repo_test",
@@ -213,6 +225,7 @@ async def test_repository_ids_join_when_present() -> None:
 
 
 async def test_no_approved_documents_produces_no_nodes() -> None:
+    live_gate.require_graphiti_extra()
     projection = GraphProjection(
         org_id="org_test",
         partition="cf_trial_org_test",
@@ -225,6 +238,7 @@ async def test_no_approved_documents_produces_no_nodes() -> None:
 
 
 async def test_multiple_subjects_sort_deterministically() -> None:
+    live_gate.require_graphiti_extra()
     document = UnstructuredDocumentRecord(
         org_id="org_test",
         canonical_id="doc_multi_subject",

@@ -22,6 +22,7 @@ const (
 	// a second page or issuing an unbounded nested crawl.
 	linearWorkItemsCommentsPerPage  = 50
 	linearWorkItemsCommentsMaxPages = 2
+	linearWorkItemsHistoryPerPage   = 50
 )
 
 // linearWorkItemsQuery deliberately follows the fields selected by
@@ -47,6 +48,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
           toState { name type }
           actor { name email }
         }
+        pageInfo { hasNextPage endCursor }
       }
       comments(first: 50) {
         nodes {
@@ -128,6 +130,21 @@ query LinearWorkItemsComments($first: Int!, $after: String, $issueId: String!) {
         body
         createdAt
         user { name email }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+const linearWorkItemsHistoryQuery = `
+query LinearWorkItemsHistory($first: Int!, $after: String, $issueId: String!) {
+  issue(id: $issueId) {
+    history(first: $first, after: $after) {
+      nodes {
+        createdAt
+        fromState { name type }
+        toState { name type }
+        actor { name email }
       }
       pageInfo { hasNextPage endCursor }
     }
@@ -227,7 +244,8 @@ type linearCyclesPayload struct {
 }
 
 type linearHistoryPayload struct {
-	Nodes []linearHistoryEntry `json:"nodes"`
+	Nodes    []linearHistoryEntry  `json:"nodes"`
+	PageInfo linearPageInfoPayload `json:"pageInfo"`
 }
 
 type linearPageInfoPayload struct {
@@ -355,6 +373,11 @@ type LinearWorkItemsRouteHandler struct {
 	FetchComments *bool
 	FetchHistory  *bool
 	FetchCycles   *bool
+	// GlobalDiscovery mirrors Python's repo=None mode. The claim still carries
+	// a non-empty source identity for lease/watermark fencing, but the route
+	// discovers every Linear team and applies the same bounded issue crawl to
+	// each team. It is provider-local and intentionally not a registry switch.
+	GlobalDiscovery bool
 	// ReferenceTeams and ReferenceSprints model the reference dimensions that
 	// Python receives through IngestionContext.  They are deliberately inputs
 	// to this provider-owned route only; no registry, planner, or sink wiring is
@@ -383,6 +406,42 @@ type LinearReferenceTeam struct {
 
 func linearWorkItemsFlag(value *bool) bool {
 	return value == nil || *value
+}
+
+func linearConnectionCursor(pageInfo linearPageInfoPayload) (string, error) {
+	if !pageInfo.HasNextPage {
+		return "", nil
+	}
+	cursor := strings.TrimSpace(pageInfo.EndCursor)
+	if cursor == "" {
+		return "", providerfoundation.ErrPaginationInvalid
+	}
+	return cursor, nil
+}
+
+func appendLinearUnique[T any](existing []T, extra ...[]T) []T {
+	seen := make(map[string]struct{}, len(existing))
+	key := func(value T) string {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
+	}
+	for _, value := range existing {
+		seen[key(value)] = struct{}{}
+	}
+	for _, values := range extra {
+		for _, value := range values {
+			valueKey := key(value)
+			if _, duplicate := seen[valueKey]; duplicate {
+				continue
+			}
+			seen[valueKey] = struct{}{}
+			existing = append(existing, value)
+		}
+	}
+	return existing
 }
 
 func linearNestedPageLimit() int { return 5 } // 5 * 100 == Python's 500-row bound
@@ -447,6 +506,80 @@ func (handler LinearWorkItemsRouteHandler) resolveLinearTeam(
 		return team, 0, nil
 	}
 	return collectLinearTeam(ctx, client, teamKey)
+}
+
+func linearReferenceTeamPayloads(rows []LinearReferenceTeam) []linearTeamPayload {
+	teams := make([]linearTeamPayload, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		provider := strings.TrimSpace(row.Provider)
+		if provider != "" && provider != "linear" {
+			continue
+		}
+		id := strings.TrimSpace(row.ID)
+		key := strings.TrimSpace(row.NativeTeamKey)
+		name := strings.TrimSpace(row.Name)
+		if key == "" {
+			for _, candidate := range row.ProjectKeys {
+				if candidate = strings.TrimSpace(candidate); candidate != "" {
+					key = candidate
+					break
+				}
+			}
+		}
+		if key == "" {
+			continue
+		}
+		if id == "" {
+			id = key
+		}
+		if name == "" {
+			name = key
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		teams = append(teams, linearTeamPayload{ID: id, Key: key, Name: name})
+	}
+	return teams
+}
+
+func collectLinearTeams(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	maxPages int,
+) ([]linearTeamPayload, int, error) {
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query:          linearWorkItemsTeamQuery,
+			Variables:      map[string]any{},
+			ConnectionPath: []string{"teams"},
+			PerPage:        linearWorkItemsMaxPerPage,
+			MaxPages:       maxPages,
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if page.CapReached {
+		return nil, page.Pages, ErrPaginationCapExceeded
+	}
+	teams := make([]linearTeamPayload, 0, len(page.Items))
+	seen := make(map[string]struct{}, len(page.Items))
+	for _, raw := range page.Items {
+		var team linearTeamPayload
+		if err := json.Unmarshal(raw, &team); err != nil ||
+			strings.TrimSpace(team.ID) == "" || strings.TrimSpace(team.Key) == "" {
+			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		if _, duplicate := seen[team.Key]; duplicate {
+			continue
+		}
+		seen[team.Key] = struct{}{}
+		teams = append(teams, team)
+	}
+	return teams, page.Pages, nil
 }
 
 func linearReferenceSprints(
@@ -536,6 +669,7 @@ func collectLinearIssueAttachments(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	issueID string,
+	after string,
 ) ([]linearAttachmentPayload, int, error) {
 	page, err := providerfoundation.CollectLinearGraphQLPages(
 		ctx, client, providerfoundation.LinearPageOptions{
@@ -543,10 +677,14 @@ func collectLinearIssueAttachments(
 			Variables:      map[string]any{"issueId": issueID},
 			ConnectionPath: []string{"issue", "attachments"},
 			PerPage:        100, MaxPages: linearNestedPageLimit(),
+			InitialCursor: after,
 		},
 	)
 	if err != nil {
 		return nil, 0, err
+	}
+	if page.CapReached {
+		return nil, page.Pages, ErrPaginationCapExceeded
 	}
 	items := make([]linearAttachmentPayload, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -556,11 +694,38 @@ func collectLinearIssueAttachments(
 		}
 		items = append(items, item)
 	}
-	// Python's attachment helper stops at its 500-row bound and keeps that
-	// prefix. It does not claim the omitted tail is present, so preserve that
-	// bounded behavior while still failing malformed pagination.
-	if len(items) > 500 {
-		items = items[:500]
+	return items, page.Pages, nil
+}
+
+func collectLinearIssueHistory(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	issueID string,
+	after string,
+) ([]linearHistoryEntry, int, error) {
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query:          linearWorkItemsHistoryQuery,
+			Variables:      map[string]any{"issueId": issueID},
+			ConnectionPath: []string{"issue", "history"},
+			PerPage:        linearWorkItemsHistoryPerPage,
+			MaxPages:       linearNestedPageLimit(),
+			InitialCursor:  after,
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if page.CapReached {
+		return nil, page.Pages, ErrPaginationCapExceeded
+	}
+	items := make([]linearHistoryEntry, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var item linearHistoryEntry
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		items = append(items, item)
 	}
 	return items, page.Pages, nil
 }
@@ -569,6 +734,7 @@ func collectLinearIssueComments(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	issueID string,
+	after string,
 ) ([]linearCommentPayload, int, error) {
 	page, err := providerfoundation.CollectLinearGraphQLPages(
 		ctx, client, providerfoundation.LinearPageOptions{
@@ -577,6 +743,7 @@ func collectLinearIssueComments(
 			ConnectionPath: []string{"issue", "comments"},
 			PerPage:        linearWorkItemsCommentsPerPage,
 			MaxPages:       linearWorkItemsCommentsMaxPages,
+			InitialCursor:  after,
 		},
 	)
 	if err != nil {
@@ -601,6 +768,7 @@ func collectLinearIssueRelations(
 	client *providerfoundation.HTTPClient,
 	issueID string,
 	inverse bool,
+	after string,
 ) ([]linearRelationPayload, int, error) {
 	query := linearWorkItemsRelationsQuery
 	connection := "relations"
@@ -614,6 +782,7 @@ func collectLinearIssueRelations(
 			Variables:      map[string]any{"issueId": issueID},
 			ConnectionPath: []string{"issue", connection},
 			PerPage:        100, MaxPages: linearNestedPageLimit(),
+			InitialCursor: after,
 		},
 	)
 	if err != nil {
@@ -878,22 +1047,6 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
-	filter := map[string]any{
-		"team": map[string]any{"key": map[string]any{
-			"in": []string{claim.SourceExternalID},
-		}},
-		"archivedAt": map[string]any{"null": true},
-	}
-	updatedAt := map[string]any{}
-	if claim.SinceAt != nil {
-		updatedAt["gte"] = claim.SinceAt.UTC().Format(time.RFC3339Nano)
-	}
-	if claim.BeforeAt != nil {
-		updatedAt["lte"] = claim.BeforeAt.UTC().Format(time.RFC3339Nano)
-	}
-	if len(updatedAt) > 0 {
-		filter["updatedAt"] = updatedAt
-	}
 	fetchComments := linearWorkItemsFlag(handler.FetchComments)
 	fetchHistory := linearWorkItemsFlag(handler.FetchHistory)
 	fetchCycles := linearWorkItemsFlag(handler.FetchCycles)
@@ -906,127 +1059,217 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		Interactions:      make([]linearWorkItemInteractionRow, 0),
 		Sprints:           make([]linearSprintRow, 0),
 	}
-	// Python resolves the scoped team before it starts the issue crawl even
-	// when cycles are disabled.  That check prevents a malformed or stale
-	// source external id from producing a clean-looking empty work-item batch.
-	team, teamPages, teamErr := handler.resolveLinearTeam(ctx, claim, client, claim.SourceExternalID)
-	pagesSeen += teamPages
-	if teamErr != nil {
-		return CompleteRouteBatch{}, teamErr
+	var teams []linearTeamPayload
+	if handler.GlobalDiscovery {
+		teams = linearReferenceTeamPayloads(handler.ReferenceTeams)
+		if len(teams) == 0 {
+			var teamErr error
+			var teamPages int
+			teams, teamPages, teamErr = collectLinearTeams(ctx, client, maxPages)
+			pagesSeen += teamPages
+			if teamErr != nil {
+				return CompleteRouteBatch{}, teamErr
+			}
+		}
+	} else {
+		// Python resolves the scoped team before it starts the issue crawl even
+		// when cycles are disabled. That check prevents a malformed or stale
+		// source external id from producing a clean-looking empty batch.
+		team, teamPages, teamErr := handler.resolveLinearTeam(ctx, claim, client, claim.SourceExternalID)
+		pagesSeen += teamPages
+		if teamErr != nil {
+			return CompleteRouteBatch{}, teamErr
+		}
+		teams = []linearTeamPayload{team}
 	}
-	if strings.TrimSpace(team.ID) == "" {
+	if len(teams) == 0 && !handler.GlobalDiscovery {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
-	if fetchCycles {
-		referenceSprints, referenceErr := linearReferenceSprints(claim, handler.ReferenceSprints)
-		if referenceErr != nil {
-			return CompleteRouteBatch{}, referenceErr
-		}
-		if len(referenceSprints) > 0 {
-			rows.Sprints = append(rows.Sprints, referenceSprints...)
-		} else {
-			cycles, cyclePages, cycleErr := collectLinearCycles(ctx, client, team.ID)
-			pagesSeen += cyclePages
-			if cycleErr != nil {
-				return CompleteRouteBatch{}, cycleErr
-			}
-			for _, cycle := range cycles {
-				sprint, sprintErr := normalizeLinearSprint(claim, cycle, normalizedAt)
-				if sprintErr != nil {
-					return CompleteRouteBatch{}, sprintErr
-				}
-				rows.Sprints = append(rows.Sprints, sprint)
-			}
-		}
-	}
-	page, err := providerfoundation.CollectLinearGraphQLPages(
-		ctx, client, providerfoundation.LinearPageOptions{
-			Query:          linearWorkItemsQuery,
-			Variables:      map[string]any{"filter": filter},
-			ConnectionPath: []string{"issues"}, PerPage: perPage, MaxPages: maxPages,
-		},
-	)
-	if err != nil {
-		return CompleteRouteBatch{}, err
-	}
-	if page.CapReached {
-		return CompleteRouteBatch{}, ErrPaginationCapExceeded
-	}
-	pagesSeen += page.Pages
-	for _, raw := range page.Items {
-		var payload linearWorkItemPayload
-		decoder := json.Unmarshal(raw, &payload)
-		if decoder != nil {
+	sprintSeen := make(map[string]struct{})
+	for _, team := range teams {
+		teamKey := strings.TrimSpace(team.Key)
+		if strings.TrimSpace(team.ID) == "" || teamKey == "" {
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
-		if payload.ArchivedAt != nil {
-			continue
+		teamClaim := claim
+		teamClaim.SourceExternalID = teamKey
+		filter := map[string]any{
+			"team": map[string]any{"key": map[string]any{
+				"in": []string{teamKey},
+			}},
+			"archivedAt": map[string]any{"null": true},
 		}
-		if payload.Attachments.PageInfo.HasNextPage && payload.ID != "" {
-			attachments, attachmentPages, attachmentErr := collectLinearIssueAttachments(
-				ctx, client, payload.ID,
-			)
-			pagesSeen += attachmentPages
-			if attachmentErr == nil {
-				payload.Attachments.Nodes = attachments
+		updatedAt := map[string]any{}
+		if claim.SinceAt != nil {
+			updatedAt["gte"] = claim.SinceAt.UTC().Format(time.RFC3339Nano)
+		}
+		if claim.BeforeAt != nil {
+			updatedAt["lte"] = claim.BeforeAt.UTC().Format(time.RFC3339Nano)
+		}
+		if len(updatedAt) > 0 {
+			filter["updatedAt"] = updatedAt
+		}
+		if fetchCycles {
+			var referenceSprints []linearSprintRow
+			var referenceErr error
+			if !handler.GlobalDiscovery {
+				referenceSprints, referenceErr = linearReferenceSprints(teamClaim, handler.ReferenceSprints)
+			}
+			if referenceErr != nil {
+				return CompleteRouteBatch{}, referenceErr
+			}
+			if len(referenceSprints) > 0 {
+				for _, sprint := range referenceSprints {
+					if _, duplicate := sprintSeen[sprint.SprintID]; !duplicate {
+						rows.Sprints = append(rows.Sprints, sprint)
+						sprintSeen[sprint.SprintID] = struct{}{}
+					}
+				}
+			} else {
+				cycles, cyclePages, cycleErr := collectLinearCycles(ctx, client, team.ID)
+				pagesSeen += cyclePages
+				if cycleErr != nil {
+					return CompleteRouteBatch{}, cycleErr
+				}
+				for _, cycle := range cycles {
+					sprint, sprintErr := normalizeLinearSprint(teamClaim, cycle, normalizedAt)
+					if sprintErr != nil {
+						return CompleteRouteBatch{}, sprintErr
+					}
+					if _, duplicate := sprintSeen[sprint.SprintID]; !duplicate {
+						rows.Sprints = append(rows.Sprints, sprint)
+						sprintSeen[sprint.SprintID] = struct{}{}
+					}
+				}
 			}
 		}
-		if fetchComments && payload.Comments.PageInfo.HasNextPage && payload.ID != "" {
-			comments, commentPages, commentErr := collectLinearIssueComments(
-				ctx, client, payload.ID,
-			)
-			pagesSeen += commentPages
-			if commentErr != nil {
-				return CompleteRouteBatch{}, commentErr
-			}
-			payload.Comments.Nodes = comments
-		}
-		if payload.Relations.PageInfo.HasNextPage && payload.ID != "" {
-			relations, relationPages, relationErr := collectLinearIssueRelations(
-				ctx, client, payload.ID, false,
-			)
-			pagesSeen += relationPages
-			if relationErr != nil {
-				return CompleteRouteBatch{}, relationErr
-			}
-			payload.Relations.Nodes = relations
-		}
-		if payload.InverseRelations.PageInfo.HasNextPage && payload.ID != "" {
-			relations, relationPages, relationErr := collectLinearIssueRelations(
-				ctx, client, payload.ID, true,
-			)
-			pagesSeen += relationPages
-			if relationErr != nil {
-				return CompleteRouteBatch{}, relationErr
-			}
-			payload.InverseRelations.Nodes = relations
-		}
-		if !fetchHistory {
-			payload.History.Nodes = nil
-		}
-		if !fetchComments {
-			payload.Comments.Nodes = nil
-		}
-		item, transitions, normalizeErr := normalizeLinearWorkItem(
-			claim, payload, normalizedAt,
+		page, pageErr := providerfoundation.CollectLinearGraphQLPages(
+			ctx, client, providerfoundation.LinearPageOptions{
+				Query:          linearWorkItemsQuery,
+				Variables:      map[string]any{"filter": filter},
+				ConnectionPath: []string{"issues"}, PerPage: perPage, MaxPages: maxPages,
+			},
 		)
-		if normalizeErr != nil {
-			return CompleteRouteBatch{}, normalizeErr
+		if pageErr != nil {
+			return CompleteRouteBatch{}, pageErr
 		}
-		rows.WorkItems = append(rows.WorkItems, item)
-		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
-		rows.Dependencies = append(rows.Dependencies, normalizeLinearDependencies(
-			claim, payload, item.WorkItemID, normalizedAt,
-		)...)
-		if fetchHistory {
-			rows.ReopenEvents = append(rows.ReopenEvents, normalizeLinearReopens(
-				claim, item.WorkItemID, payload.History.Nodes, normalizedAt,
-			)...)
+		if page.CapReached {
+			return CompleteRouteBatch{}, ErrPaginationCapExceeded
 		}
-		if fetchComments {
-			rows.Interactions = append(rows.Interactions, normalizeLinearInteractions(
-				claim, item.WorkItemID, payload.Comments.Nodes, normalizedAt,
+		pagesSeen += page.Pages
+		for _, raw := range page.Items {
+			var payload linearWorkItemPayload
+			if decoderErr := json.Unmarshal(raw, &payload); decoderErr != nil {
+				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			if payload.ArchivedAt != nil {
+				continue
+			}
+			if payload.ID == "" {
+				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			if payload.Attachments.PageInfo.HasNextPage {
+				cursor, cursorErr := linearConnectionCursor(payload.Attachments.PageInfo)
+				if cursorErr != nil {
+					return CompleteRouteBatch{}, cursorErr
+				}
+				attachments, attachmentPages, attachmentErr := collectLinearIssueAttachments(
+					ctx, client, payload.ID, cursor,
+				)
+				pagesSeen += attachmentPages
+				if attachmentErr != nil {
+					return CompleteRouteBatch{}, attachmentErr
+				}
+				payload.Attachments.Nodes = appendLinearUnique(payload.Attachments.Nodes, attachments)
+				payload.Attachments.PageInfo = linearPageInfoPayload{}
+			}
+			if fetchHistory && payload.History.PageInfo.HasNextPage {
+				cursor, cursorErr := linearConnectionCursor(payload.History.PageInfo)
+				if cursorErr != nil {
+					return CompleteRouteBatch{}, cursorErr
+				}
+				history, historyPages, historyErr := collectLinearIssueHistory(
+					ctx, client, payload.ID, cursor,
+				)
+				pagesSeen += historyPages
+				if historyErr != nil {
+					return CompleteRouteBatch{}, historyErr
+				}
+				payload.History.Nodes = appendLinearUnique(payload.History.Nodes, history)
+				payload.History.PageInfo = linearPageInfoPayload{}
+			}
+			if fetchComments && payload.Comments.PageInfo.HasNextPage {
+				cursor, cursorErr := linearConnectionCursor(payload.Comments.PageInfo)
+				if cursorErr != nil {
+					return CompleteRouteBatch{}, cursorErr
+				}
+				comments, commentPages, commentErr := collectLinearIssueComments(
+					ctx, client, payload.ID, cursor,
+				)
+				pagesSeen += commentPages
+				if commentErr != nil {
+					return CompleteRouteBatch{}, commentErr
+				}
+				payload.Comments.Nodes = appendLinearUnique(payload.Comments.Nodes, comments)
+				payload.Comments.PageInfo = linearPageInfoPayload{}
+			}
+			if payload.Relations.PageInfo.HasNextPage {
+				cursor, cursorErr := linearConnectionCursor(payload.Relations.PageInfo)
+				if cursorErr != nil {
+					return CompleteRouteBatch{}, cursorErr
+				}
+				relations, relationPages, relationErr := collectLinearIssueRelations(
+					ctx, client, payload.ID, false, cursor,
+				)
+				pagesSeen += relationPages
+				if relationErr != nil {
+					return CompleteRouteBatch{}, relationErr
+				}
+				payload.Relations.Nodes = appendLinearUnique(payload.Relations.Nodes, relations)
+				payload.Relations.PageInfo = linearPageInfoPayload{}
+			}
+			if payload.InverseRelations.PageInfo.HasNextPage {
+				cursor, cursorErr := linearConnectionCursor(payload.InverseRelations.PageInfo)
+				if cursorErr != nil {
+					return CompleteRouteBatch{}, cursorErr
+				}
+				relations, relationPages, relationErr := collectLinearIssueRelations(
+					ctx, client, payload.ID, true, cursor,
+				)
+				pagesSeen += relationPages
+				if relationErr != nil {
+					return CompleteRouteBatch{}, relationErr
+				}
+				payload.InverseRelations.Nodes = appendLinearUnique(payload.InverseRelations.Nodes, relations)
+				payload.InverseRelations.PageInfo = linearPageInfoPayload{}
+			}
+			if !fetchHistory {
+				payload.History.Nodes = nil
+			}
+			if !fetchComments {
+				payload.Comments.Nodes = nil
+			}
+			item, transitions, normalizeErr := normalizeLinearWorkItem(
+				teamClaim, payload, normalizedAt,
+			)
+			if normalizeErr != nil {
+				return CompleteRouteBatch{}, normalizeErr
+			}
+			rows.WorkItems = append(rows.WorkItems, item)
+			rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
+			rows.Dependencies = append(rows.Dependencies, normalizeLinearDependencies(
+				teamClaim, payload, item.WorkItemID, normalizedAt,
 			)...)
+			if fetchHistory {
+				rows.ReopenEvents = append(rows.ReopenEvents, normalizeLinearReopens(
+					teamClaim, item.WorkItemID, payload.History.Nodes, normalizedAt,
+				)...)
+			}
+			if fetchComments {
+				rows.Interactions = append(rows.Interactions, normalizeLinearInteractions(
+					teamClaim, item.WorkItemID, payload.Comments.Nodes, normalizedAt,
+				)...)
+			}
 		}
 	}
 	effects, err := buildLinearWorkItemEffectsFromRows(rows)

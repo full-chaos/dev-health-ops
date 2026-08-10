@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "name": "Linear bounded lifecycle, typed alias audit, and atomic completion",
+  "build": [
+    "go",
+    "test",
+    "-run",
+    "^$",
+    "./internal/providersync/"
+  ],
+  "mutations": [
+    {
+      "id": "LL1-connection-cursor-fails-closed",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "if cursor == \"\" {",
+      "replace": "if false {",
+      "rationale": "a nested connection that advertises another page without an end cursor must fail before the route can produce a watermark",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearRouteRejectsMalformedNestedConnectionBeforeWatermark$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LL2-pagination-honors-initial-cursor",
+      "file": "internal/providerfoundation/pagination.go",
+      "find": "cursor := strings.TrimSpace(options.InitialCursor)",
+      "replace": "cursor := \"\"",
+      "rationale": "continuation requests must start at the parent connection cursor rather than replaying the first page",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearRoutePaginatesInlineHistoryFromTheParentCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LL3-history-carries-parent-cursor",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "ConnectionPath: []string{\"issue\", \"history\"},\n\t\t\tPerPage:        linearWorkItemsHistoryPerPage,\n\t\t\tMaxPages:       linearNestedPageLimit(),\n\t\t\tInitialCursor:  after,",
+      "replace": "ConnectionPath: []string{\"issue\", \"history\"},\n\t\t\tPerPage:        linearWorkItemsHistoryPerPage,\n\t\t\tMaxPages:       linearNestedPageLimit(),\n\t\t\tInitialCursor:  \"\",",
+      "rationale": "the history continuation must pass the exact parent end cursor into the bounded collector",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearRoutePaginatesInlineHistoryFromTheParentCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LL4-history-pages-are-merged",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "payload.History.Nodes = appendLinearUnique(payload.History.Nodes, history)",
+      "replace": "payload.History.Nodes = history",
+      "rationale": "the canonical normalized history must retain both the inline first page and every bounded continuation page",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearRoutePaginatesInlineHistoryFromTheParentCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LL5-alias-effects-match-destinations",
+      "file": "internal/providersync/linear_work_items_lifecycle.go",
+      "find": "!slices.Equal(alias.EffectDestinations, expectedDestinations)",
+      "replace": "!slices.Equal(alias.EffectDestinations, alias.EffectDestinations) || len(expectedDestinations) < 0",
+      "rationale": "each of the five aliases must audit the exact migrated effect destinations and cannot claim another alias's rows",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearTypedCompletionRejectsAliasEffectMismatches$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LL6-empty-result-fails-closed",
+      "file": "internal/providersync/linear_work_items_lifecycle.go",
+      "find": "!result.NonEmpty || result.Watermark.IsZero()",
+      "replace": "false || result.Watermark.IsZero()",
+      "rationale": "a lifecycle completion with no normalized work must not be accepted as a successful provider run",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearTypedCompletionRejectsAliasEffectMismatches$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LL7-missing-watermark-fails-closed",
+      "file": "internal/providersync/linear_work_items_lifecycle.go",
+      "find": "if watermark == nil {",
+      "replace": "if false {",
+      "rationale": "a typed route without a bounded watermark cannot produce a truthful completion record",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearTypedLifecycleRejectsMissingWatermark$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LL8-atomic-completion-fans-out-five-watermarks",
+      "file": "internal/providersync/repository_postgres.go",
+      "find": "for _, datasetKey := range workitemcontract.FamilyDatasets() {",
+      "replace": "for _, datasetKey := range workitemcontract.FamilyDatasets()[:1] {",
+      "rationale": "the typed PostgreSQL completion transaction must write every alias watermark or roll back the unit audit rather than partially advancing the family",
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestLinearTypedCompletionAtomicallyAuditsFiveAliasesAndWatermarks$", "./internal/providersync/"]]
+    }
+  ]
+}

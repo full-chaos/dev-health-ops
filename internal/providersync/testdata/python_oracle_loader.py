@@ -58,6 +58,7 @@ _GITLAB_REPOSITORY_SOURCE = _source("dev_health_ops/providers/gitlab/repository.
 _GITLAB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/gitlab.py")
 _FETCH_UTILS_SOURCE = _source("dev_health_ops/processors/fetch_utils.py")
 _GIT_MODEL_SOURCE = _source("dev_health_ops/models/git.py")
+_CONNECTOR_MODELS_SOURCE = _source("dev_health_ops/connectors/models.py")
 _REPOSITORY_ROWS_SOURCE = _source("dev_health_ops/storage/repository_rows.py")
 _RELEASE_REF_SOURCE = _source("dev_health_ops/processors/release_ref.py")
 _TESTOPS_SCHEMAS_SOURCE = _source("dev_health_ops/metrics/testops_schemas.py")
@@ -403,21 +404,10 @@ def _target_gitlab_code_client() -> None:
         "dev_health_ops.providers.gitlab.ratelimit", _GITLAB_RATELIMIT_SOURCE
     )
     _load_source_module("dev_health_ops.providers.gitlab.budget", _GITLAB_BUDGET_SOURCE)
-    _install_module(
-        "dev_health_ops.connectors.models",
-        {
-            "Repository": type(
-                "Repository",
-                (),
-                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
-            ),
-            "SecurityAlertData": type(
-                "SecurityAlertData",
-                (),
-                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
-            ),
-        },
-    )
+    # The live security mapping returns SecurityAlertData. Load the checked-in
+    # dataclass so constructor shape and annotations remain production-owned;
+    # a kwargs container would let a field drift without the oracle noticing.
+    _load_source_module("dev_health_ops.connectors.models", _CONNECTOR_MODELS_SOURCE)
 
 
 _GITHUB_PROCESSOR_SOURCE = _source("dev_health_ops/processors/github.py")
@@ -607,18 +597,19 @@ def _target_gitlab_processor() -> None:
         "dev_health_ops.analytics.complexity",
         {"DEFAULT_COMPLEXITY_CONFIG_PATH": None, "ComplexityScanner": object},
     )
-    _install_module(
-        "dev_health_ops.connectors.models",
-        {
-            name: object
-            for name in ("Author", "Repository", "RepoStats", "SecurityAlertData")
-        },
-    )
+    _load_source_module("dev_health_ops.connectors.models", _CONNECTOR_MODELS_SOURCE)
     _install_module("dev_health_ops.metrics.sinks.ingestion", {"IngestionSink": object})
 
     class _Incident:
         def __init__(self, **kwargs: Any) -> None:
             self.__dict__.update(kwargs)
+
+    # The security helper constructs git_models.SecurityAlert directly after
+    # the live GitLab code-client normalizer returns SecurityAlertData. Load
+    # the checked-in ORM model rather than replacing it with a kwargs stub:
+    # this keeps the oracle on the production typed model and catches schema
+    # drift in the same constructor/field boundary the processor uses.
+    git_models = _load_source_module("dev_health_ops.models.git", _GIT_MODEL_SOURCE)
 
     class _GitPullRequestReview:
         # The live mapper constructs this model directly. Keep the stand-in
@@ -627,20 +618,11 @@ def _target_gitlab_processor() -> None:
         def __init__(self, **kwargs: Any) -> None:
             self.__dict__.update(kwargs)
 
-    _install_module(
-        "dev_health_ops.models.git",
-        {
-            "CiPipelineRun": object,
-            "Deployment": object,
-            "GitBlame": object,
-            "GitCommit": object,
-            "GitCommitStat": object,
-            "GitPullRequest": object,
-            "GitPullRequestReview": _GitPullRequestReview,
-            "Incident": _Incident,
-            "Repo": object,
-        },
-    )
+    # Keep the production model module for SecurityAlert and override only the
+    # review class used by the PR-family row oracle. Its kwargs-shaped output
+    # preserves the pair's field projection (without SQLAlchemy's private
+    # instance state) while security continues to exercise the typed model.
+    git_models.GitPullRequestReview = _GitPullRequestReview
     _install_module(
         "dev_health_ops.processors.base_git",
         {
@@ -986,6 +968,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
     _GIT_MODEL_SOURCE: (
         "dev_health_ops.models.git",
         _GIT_MODEL_SOURCE,
+        lambda: None,
+    ),
+    _CONNECTOR_MODELS_SOURCE: (
+        "dev_health_ops.connectors.models",
+        _CONNECTOR_MODELS_SOURCE,
         lambda: None,
     ),
     _REPOSITORY_ROWS_SOURCE: (

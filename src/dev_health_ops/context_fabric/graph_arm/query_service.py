@@ -18,7 +18,7 @@ states — is real, live-tested, and composes the absolute request deadline
 with CHAOS-3631's per-operation :class:`~.flags.GraphDeadlines` and
 CHAOS-3679's persisted watermark.
 
-**Increment 2 (this revision) implements exactly one COMPLETED path:**
+**Increment 2 implemented one COMPLETED path:**
 ``GraphMechanism.SEEDED_SINGULAR_SUBJECT``, via
 :func:`~.subject_resolution._resolve_exact_subjects` (EXACT canonical-id/
 display-label match only — see that module's own docstring for why this is
@@ -26,12 +26,20 @@ narrower than the trial's ``discovery.search_candidates``),
 :class:`~.readback.LiveGraphReader` traversal, and
 :func:`~.packet_builder.build_production_packet` with ``drivers=None`` (no
 driver synthesis — mirrors the trial's own PR1 scope, which never
-synthesized drivers either). ``SEEDED_EXPLICIT_COHORT`` and
-``SUBJECTLESS_COHORT_DISCOVERY`` still return ``PROVIDER_FAILURE`` with a
-diagnostic naming the mechanism — both need ``cohort_discovery`` wired in,
-tracked as separate follow-ups (filed on CHAOS-3678) rather than bundled
-here. Every path is an honest "not yet" where it applies, never a silent
-wrong answer, never a crash a caller has to guard against separately.
+synthesized drivers either).
+
+**Increment 3 (this revision) adds ``SEEDED_EXPLICIT_COHORT``** (CHAOS-3688),
+following the trial's own construction
+(``trials/chaos_3619/graph_leg.py``'s ``assemble_packet``) exactly: every
+mention resolves the same EXACT-only way, the first resolved candidate
+becomes the anchor subject, and :func:`~.cohort.build_cohort` walks two hops
+out from it over live edges (:func:`~.subject_resolution._live_cohort_edges`)
+to discover peers — never a cohort built directly from "the other named
+mentions". ``SUBJECTLESS_COHORT_DISCOVERY`` still returns
+``PROVIDER_FAILURE`` with a diagnostic naming the mechanism — it needs
+``cohort_discovery.discover_cohort`` wired in, tracked as CHAOS-3689. Every
+path is an honest "not yet" where it applies, never a silent wrong answer,
+never a crash a caller has to guard against separately.
 """
 
 from __future__ import annotations
@@ -57,6 +65,7 @@ from dev_health_ops.api.dev.graph_investigation_query import (
 )
 from dev_health_ops.api.dev.investigation_contract import ComparisonShape
 
+from .cohort import build_cohort
 from .flags import graph_read_enabled
 from .packet_builder import (
     ProductionJobContext,
@@ -65,7 +74,12 @@ from .packet_builder import (
 )
 from .readback import GraphReader, LiveGraphReader
 from .store import GraphArmStore, StoreUnavailableError
-from .subject_resolution import _resolve_exact_subjects
+from .subject_resolution import (
+    _live_cohort_edges,
+    _live_entities,
+    _live_entity_labels,
+    _resolve_exact_subjects,
+)
 from .watermark import DEFAULT_STALENESS_TOLERANCE, IndexWatermark
 
 logger = logging.getLogger(__name__)
@@ -326,22 +340,26 @@ class ProductionGraphInvestigationQuery:
                         f"cardinality={request.cardinality.value}",
                     ),
                 )
-            if mechanism is not GraphMechanism.SEEDED_SINGULAR_SUBJECT:
-                # SEEDED_EXPLICIT_COHORT / SUBJECTLESS_COHORT_DISCOVERY:
-                # both still need cohort_discovery wired in -- tracked as
-                # separate follow-ups on CHAOS-3678, not bundled here.
-                # Naming the mechanism rather than a bare "not implemented"
-                # is what makes this diagnostic actionable.
-                return GraphQueryResult(
-                    outcome=GraphQueryOutcome.PROVIDER_FAILURE,
-                    diagnostic=_diagnostic(
-                        "execution",
-                        f"mechanism {mechanism.value} selected; packet "
-                        "assembly for this mechanism is a tracked follow-up",
-                    ),
+            if mechanism is GraphMechanism.SEEDED_SINGULAR_SUBJECT:
+                return await self._complete_seeded_singular_subject(
+                    request, store, watermark
                 )
-            return await self._complete_seeded_singular_subject(
-                request, store, watermark
+            if mechanism is GraphMechanism.SEEDED_EXPLICIT_COHORT:
+                return await self._complete_seeded_explicit_cohort(
+                    request, store, watermark
+                )
+            # SUBJECTLESS_COHORT_DISCOVERY (CHAOS-3689): still needs
+            # cohort_discovery.discover_cohort wired in -- a separate,
+            # tracked follow-up, not bundled here. Naming the mechanism
+            # rather than a bare "not implemented" is what makes this
+            # diagnostic actionable.
+            return GraphQueryResult(
+                outcome=GraphQueryOutcome.PROVIDER_FAILURE,
+                diagnostic=_diagnostic(
+                    "execution",
+                    f"mechanism {mechanism.value} selected; packet "
+                    "assembly for this mechanism is a tracked follow-up",
+                ),
             )
         except asyncio.CancelledError:
             return GraphQueryResult(
@@ -429,6 +447,102 @@ class ProductionGraphInvestigationQuery:
             return GraphQueryResult(
                 outcome=GraphQueryOutcome.PROVIDER_FAILURE,
                 diagnostic=_diagnostic("execution", type(exc).__name__),
+            )
+        return GraphQueryResult(outcome=GraphQueryOutcome.COMPLETED, packet=packet)
+
+    async def _complete_seeded_explicit_cohort(
+        self,
+        request: GraphInvestigationRequest,
+        store: _WatermarkStore,
+        watermark: IndexWatermark,
+    ) -> GraphQueryResult:
+        """``SEEDED_EXPLICIT_COHORT``'s COMPLETED path (CHAOS-3688).
+
+        Resolves every mention (PLURAL_COHORT cardinality: two or more,
+        per ``DevQuestionIntent.validate_intent_invariants``) by the same
+        EXACT-only match as the singular path, then follows the trial's
+        own construction (``trials/chaos_3619/graph_leg.py``'s
+        ``assemble_packet``) exactly: the FIRST resolved candidate becomes
+        the anchor subject, and ``cohort.build_cohort`` walks two hops out
+        from it -- peers are DISCOVERED via shared team/portfolio/
+        initiative/dependency edges, not simply "the other named
+        mentions". A caller who named two subjects sharing no anchor gets
+        an honestly small or empty cohort from ``build_cohort`` itself,
+        never one fabricated from the mentions.
+
+        No mention resolving to an authorized anchor, or ``build_cohort``
+        producing fewer than two members or no comparison dimension
+        (``IncomparableCohortError``), both reach ``PROVIDER_FAILURE`` with
+        a diagnostic naming the mechanism -- an honest, explicit
+        degradation. Unlike ``SEEDED_SINGULAR_SUBJECT``, there is no
+        "empty but valid" packet shape here: ``ComparisonShape.
+        EXPLICIT_COHORT`` requires a real, comparable cohort by contract,
+        so a caller must be told plainly rather than handed a packet that
+        looks like a completed comparison but silently compares nothing.
+        """
+
+        traversal_store = cast(_TraversalStore, store)
+        queries = [mention.normalized_lookup_text for mention in request.mentions]
+        try:
+            candidates = await _resolve_exact_subjects(
+                traversal_store._driver,
+                traversal_store.partition,
+                queries,
+                request.authorized_entity_ids,
+            )
+            if not candidates:
+                return GraphQueryResult(
+                    outcome=GraphQueryOutcome.PROVIDER_FAILURE,
+                    diagnostic=_diagnostic(
+                        "execution",
+                        f"mechanism {GraphMechanism.SEEDED_EXPLICIT_COHORT.value}: "
+                        "no mention resolved to an authorized anchor subject",
+                    ),
+                )
+            subject_id = candidates[0].canonical_id
+            edges = await _live_cohort_edges(
+                traversal_store._driver, traversal_store.partition
+            )
+            entities = await _live_entities(
+                traversal_store._driver, traversal_store.partition
+            )
+            cohort = build_cohort(
+                subject_id,
+                edges,
+                _live_entity_labels(entities),
+                request.authorized_entity_ids,
+            )
+            reader = self._reader_factory(traversal_store)
+            readout = await reader.neighbourhood(
+                org_id=request.org_id,
+                seed_canonical_ids=[subject_id],
+                authorized_entity_ids=tuple(request.authorized_entity_ids),
+            )
+            packet = build_production_packet(
+                readout=readout,
+                job=ProductionJobContext(
+                    job_id=f"graph_query_{request.run_id}",
+                    intent_id=request.intent_id,
+                    run_id=request.run_id,
+                    job_statement=_job_statement(request.intent_id),
+                    comparison_shape=ComparisonShape.EXPLICIT_COHORT,
+                    window_start=request.window_start,
+                    window_end=request.window_end,
+                ),
+                cohort=cohort,
+                watermark=watermark,
+                signer=self._signer_factory(),
+                produced_at=datetime.now(UTC),
+                staleness_tolerance=self._staleness_tolerance,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return GraphQueryResult(
+                outcome=GraphQueryOutcome.PROVIDER_FAILURE,
+                diagnostic=_diagnostic(
+                    "execution",
+                    f"mechanism {GraphMechanism.SEEDED_EXPLICIT_COHORT.value}: "
+                    f"{type(exc).__name__}",
+                ),
             )
         return GraphQueryResult(outcome=GraphQueryOutcome.COMPLETED, packet=packet)
 

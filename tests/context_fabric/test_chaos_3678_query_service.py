@@ -8,17 +8,24 @@ Three halves, matching the module's own documented scope:
   mapping, tested against fake stores injected via ``store_factory`` (no
   live backend needed for DISABLED/UNAVAILABLE/STALE/DEADLINE_EXCEEDED/
   CANCELLED/PROVIDER_FAILURE) plus one live positive control.
-* ``SEEDED_SINGULAR_SUBJECT``'s ``COMPLETED`` path (this revision) —
-  tested against a fake ``reader_factory``/fake driver, never a live
-  FalkorDB: ``subject_resolution.resolve_exact_subjects`` already has its
-  own direct unit coverage (``test_chaos_3678_subject_resolution.py``), so
-  what matters here is the wiring between resolution, traversal and
+* ``SEEDED_SINGULAR_SUBJECT``'s ``COMPLETED`` path — tested against a fake
+  ``reader_factory``/fake driver, never a live FalkorDB:
+  ``subject_resolution._resolve_exact_subjects`` already has its own direct
+  unit coverage (``test_chaos_3678_subject_resolution.py``), so what
+  matters here is the wiring between resolution, traversal and
   ``build_production_packet``, not re-proving the resolver's own rules.
+* ``SEEDED_EXPLICIT_COHORT``'s ``COMPLETED`` path (this revision) — same
+  fake-driver approach; ``cohort.build_cohort`` and
+  ``subject_resolution._live_cohort_edges``/``_live_entity_labels`` each
+  have their own coverage elsewhere, so this proves the wiring: every
+  mention resolves, the first becomes the anchor, ``build_cohort`` runs
+  against live-shaped edges, and an incomparable/unresolved result reaches
+  ``PROVIDER_FAILURE`` naming the mechanism rather than a partial-silent
+  success.
 
-``SEEDED_EXPLICIT_COHORT``/``SUBJECTLESS_COHORT_DISCOVERY`` remain
-untouched by this revision — both still reach ``PROVIDER_FAILURE`` with a
-diagnostic naming the mechanism, which is the honest, current behaviour
-until ``cohort_discovery`` is wired in as a tracked follow-up.
+``SUBJECTLESS_COHORT_DISCOVERY`` remains untouched — still reaches
+``PROVIDER_FAILURE`` with a diagnostic naming the mechanism, the honest,
+current behaviour until ``cohort_discovery`` is wired in as CHAOS-3689.
 """
 
 from __future__ import annotations
@@ -41,6 +48,10 @@ from dev_health_ops.api.dev.graph_investigation_query import (
     GraphInvestigationRequest,
     GraphQueryOutcome,
 )
+from dev_health_ops.api.dev.investigation_contract import (
+    RelationshipDirection,
+    RelationshipType,
+)
 from dev_health_ops.context_fabric.graph_arm.query_service import (
     GraphMechanism,
     ProductionGraphInvestigationQuery,
@@ -48,7 +59,9 @@ from dev_health_ops.context_fabric.graph_arm.query_service import (
 )
 from dev_health_ops.context_fabric.graph_arm.readback import (
     DiscoveredEntity,
+    DiscoveredPath,
     InvestigationReadout,
+    PathStep,
 )
 from dev_health_ops.context_fabric.graph_arm.store import (
     GraphArmStore,
@@ -372,33 +385,17 @@ class TestUnsupportedMechanism:
         assert "no graph mechanism" in result.diagnostic
 
 
-class TestCohortMechanismsAreNotYetImplemented:
+class TestSubjectlessCohortDiscoveryIsNotYetImplemented:
     pytestmark = pytest.mark.asyncio
 
     """The remaining honest boundary: selected, not yet executed.
 
-    SEEDED_SINGULAR_SUBJECT graduated to a real COMPLETED path this
-    revision (see ``TestSeededSingularSubjectCompletes`` below) --
-    SEEDED_EXPLICIT_COHORT and SUBJECTLESS_COHORT_DISCOVERY have not, since
-    both need ``cohort_discovery`` wired in as a separate follow-up.
+    SEEDED_SINGULAR_SUBJECT and SEEDED_EXPLICIT_COHORT both graduated to
+    real COMPLETED paths (see ``TestSeededSingularSubjectCompletes`` and
+    ``TestSeededExplicitCohortCompletes`` below) -- SUBJECTLESS_COHORT_
+    DISCOVERY has not, since it needs ``cohort_discovery`` wired in as a
+    separate follow-up (CHAOS-3689).
     """
-
-    async def test_seeded_explicit_cohort_reaches_provider_failure_with_a_named_reason(
-        self, monkeypatch
-    ) -> None:
-        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
-        store = _FakeStore(watermark=_fresh_watermark())
-        service = _query(store)
-        result = await service.investigate(
-            _request(
-                intent_id=QuestionIntentID.METRIC_COMPARISON,
-                cardinality=Cardinality.PLURAL_COHORT,
-            )
-        )
-        assert result.outcome is GraphQueryOutcome.PROVIDER_FAILURE
-        assert result.packet is None
-        assert result.diagnostic is not None
-        assert "seeded_explicit_cohort" in result.diagnostic
 
     async def test_subjectless_cohort_discovery_reaches_provider_failure(
         self, monkeypatch
@@ -427,28 +424,63 @@ class _FakeDriver:
     ``test_chaos_3678_subject_resolution.py``'s fake -- this class exists
     separately because it belongs to a different fake store's lifecycle,
     not because the contract differs.
+
+    Query-aware (dispatches on ``"RELATES_TO" in query``) because
+    ``_complete_seeded_explicit_cohort`` issues BOTH an entity query
+    (``_resolve_exact_subjects``/``_live_entities``) and an edge query
+    (``_live_cohort_edges``) against the same driver -- a single flat
+    ``rows`` list would hand entity-shaped dicts back for the edge query
+    and vice versa.
     """
 
     rows: list[dict] = field(default_factory=list)
+    edge_rows: list[dict] = field(default_factory=list)
 
     async def execute_query(self, query: str, **params: object) -> tuple:
+        if "RELATES_TO" in query:
+            return (self.edge_rows, None, None)
         return (self.rows, None, None)
 
 
-def _entity_row(canonical_id: str, display_label: str) -> dict:
+def _entity_row(
+    canonical_id: str,
+    display_label: str,
+    *,
+    kind: str = GraphEntityKind.PROJECT.value,
+) -> dict:
     return {
         "canonical_id": canonical_id,
-        "entity_kind": GraphEntityKind.PROJECT.value,
+        "entity_kind": kind,
         "display_label": display_label,
         "source_class": SourceClass.WORK_GRAPH.value,
     }
 
 
-def _mention(text: str) -> DevSubjectMention:
+def _edge_row(source: str, relationship: RelationshipType, target: str) -> dict:
+    return {
+        "fact": f"{source} {relationship.value} {target}",
+        "source_class": SourceClass.WORK_GRAPH.value,
+        "observed_at": "2026-05-01T00:00:00+00:00",
+        "observation_ids": "",
+        "valid_from": None,
+        "valid_to": None,
+    }
+
+
+#: mention_id per ordinal -- fixed rather than randomly generated, so a
+#: multi-mention test's fixture is deterministic and readable.
+_MENTION_IDS = (
+    "1c2d3e4f-1111-4222-8333-444455556666",
+    "2c2d3e4f-1111-4222-8333-444455556666",
+    "3c2d3e4f-1111-4222-8333-444455556666",
+)
+
+
+def _mention(text: str, *, ordinal: int = 0) -> DevSubjectMention:
     return DevSubjectMention(
         schema_version="dev_subject_mention.v1",
-        mention_id="1c2d3e4f-1111-4222-8333-444455556666",
-        mention_ordinal=0,
+        mention_id=_MENTION_IDS[ordinal],
+        mention_ordinal=ordinal,
         original_text_span=text,
         requested_entity_kind=EntityKind.PROJECT,
         normalized_lookup_text=text,
@@ -626,6 +658,270 @@ class TestSeededSingularSubjectCompletes:
                 cardinality=Cardinality.SINGULAR,
                 run_id=_RUN_UUID,
                 mentions=(_mention("nothing matches"),),
+            )
+        )
+        assert store.close_calls == 1
+
+
+class TestSeededExplicitCohortCompletes:
+    pytestmark = pytest.mark.asyncio
+
+    """CHAOS-3688's real COMPLETED path.
+
+    Mirrors ``TestSeededSingularSubjectCompletes``'s fake-driver/fake-reader
+    approach: ``cohort.build_cohort`` and ``subject_resolution``'s live-data
+    helpers each have their own direct coverage elsewhere, so what these
+    tests prove is the wiring between "every mention resolves", "the first
+    becomes the anchor", "build_cohort runs against live-shaped edges", and
+    "an incomparable or unresolved result reaches PROVIDER_FAILURE naming
+    the mechanism, never a partial-silent success" (§4).
+    """
+
+    def _service(
+        self, *, driver: _FakeDriver, reader: _FakeReader
+    ) -> ProductionGraphInvestigationQuery:
+        store = _FakeStore(watermark=_fresh_watermark(), _driver=driver)
+        return ProductionGraphInvestigationQuery(
+            store_factory=_factory(store),
+            reader_factory=lambda _store: reader,
+            signer_factory=lambda: EvidenceReferenceSigner(_TEST_SIGNING_SECRET),
+        )
+
+    async def test_two_mentions_sharing_a_team_complete_with_a_real_cohort(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+        driver = _FakeDriver(
+            rows=[
+                _entity_row("proj_a", "Project A"),
+                _entity_row("proj_b", "Project B"),
+                _entity_row("team_x", "Team X", kind=GraphEntityKind.TEAM.value),
+            ],
+            edge_rows=[
+                _edge_row("proj_a", RelationshipType.OWNED_BY_TEAM, "team_x"),
+                _edge_row("proj_b", RelationshipType.OWNED_BY_TEAM, "team_x"),
+            ],
+        )
+        readout = InvestigationReadout(
+            org_id="org_query_service_test",
+            partition="cf_query_service_test",
+            seed_canonical_ids=("proj_a",),
+            authorized_entity_ids=("proj_a", "proj_b", "team_x"),
+            entities=(
+                DiscoveredEntity(
+                    canonical_id="proj_a",
+                    kind=GraphEntityKind.PROJECT,
+                    display_label="Project A",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=datetime.now(UTC),
+                ),
+            ),
+            # A real traversal from proj_a walks its own edge to team_x --
+            # packet_builder only COMMITS a subject touched by at least one
+            # path (its own rule, already covered by that module's tests);
+            # this is what a real neighbourhood() would have produced.
+            paths=(
+                DiscoveredPath(
+                    path_id="p0001",
+                    origin_canonical_id="proj_a",
+                    terminal_canonical_id="team_x",
+                    steps=(
+                        PathStep(
+                            from_canonical_id="proj_a",
+                            from_kind=GraphEntityKind.PROJECT,
+                            relationship=RelationshipType.OWNED_BY_TEAM,
+                            direction=RelationshipDirection.FORWARD,
+                            to_canonical_id="team_x",
+                            to_kind=GraphEntityKind.TEAM,
+                            source_class=SourceClass.WORK_GRAPH,
+                            observed_at=datetime.now(UTC),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        reader = _FakeReader(readout=readout)
+        service = self._service(driver=driver, reader=reader)
+
+        result = await service.investigate(
+            _request(
+                intent_id=QuestionIntentID.METRIC_COMPARISON,
+                cardinality=Cardinality.PLURAL_COHORT,
+                run_id=_RUN_UUID,
+                mentions=(
+                    _mention("Project A", ordinal=0),
+                    _mention("Project B", ordinal=1),
+                ),
+                authorized_entity_ids=frozenset({"proj_a", "proj_b", "team_x"}),
+            )
+        )
+
+        assert result.outcome is GraphQueryOutcome.COMPLETED
+        assert result.packet is not None
+        assert len(reader.calls) == 1
+        assert reader.calls[0]["org_id"] == "org_query_service_test"
+        assert reader.calls[0]["seed_canonical_ids"] == ["proj_a"]
+        # request.authorized_entity_ids is a frozenset -- iteration order is
+        # not guaranteed, unlike the singular-subject test's single-element
+        # case, so this compares as a set rather than pinning an order
+        # nothing here actually commits to.
+        assert set(reader.calls[0]["authorized_entity_ids"]) == {
+            "proj_a",
+            "proj_b",
+            "team_x",
+        }
+        job = result.packet.analytical_job
+        assert job.schema_version == "ask_dev_analytical_job.v2"
+        assert job.production_job is not None
+        assert result.packet.comparison_cohort.comparison_shape.value == (
+            "explicit_cohort"
+        )
+        # comparison_cohort.members lists everyone being compared -- the
+        # anchor subject alongside the peer build_cohort discovered, not
+        # peers only.
+        assert sorted(
+            member.canonical_id for member in result.packet.comparison_cohort.members
+        ) == ["proj_a", "proj_b"]
+
+    async def test_no_mention_resolving_reaches_provider_failure_naming_the_mechanism(
+        self, monkeypatch
+    ) -> None:
+        """§4: an unresolved anchor is an honest, explicit degradation --
+        never a partial-silent COMPLETED packet comparing nothing.
+        """
+
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+        driver = _FakeDriver(rows=[_entity_row("proj_a", "Project A")], edge_rows=[])
+        reader = _FakeReader(
+            readout=InvestigationReadout(
+                org_id="org_query_service_test",
+                partition="cf_query_service_test",
+                seed_canonical_ids=(),
+            )
+        )
+        service = self._service(driver=driver, reader=reader)
+
+        result = await service.investigate(
+            _request(
+                intent_id=QuestionIntentID.METRIC_COMPARISON,
+                cardinality=Cardinality.PLURAL_COHORT,
+                run_id=_RUN_UUID,
+                # Neither mention matches anything in the fixture.
+                mentions=(
+                    _mention("Nobody Home", ordinal=0),
+                    _mention("Nobody Else", ordinal=1),
+                ),
+            )
+        )
+
+        assert result.outcome is GraphQueryOutcome.PROVIDER_FAILURE
+        assert result.packet is None
+        assert result.diagnostic is not None
+        assert "seeded_explicit_cohort" in result.diagnostic
+        assert reader.calls == []
+
+    async def test_an_anchor_with_no_peers_reaches_provider_failure_not_a_lone_cohort(
+        self, monkeypatch
+    ) -> None:
+        """``build_cohort`` refuses fewer than two members
+        (``IncomparableCohortError``) -- caught and reported honestly,
+        never surfaced as a crash.
+        """
+
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+        driver = _FakeDriver(
+            rows=[
+                _entity_row("proj_a", "Project A"),
+                _entity_row("team_x", "Team X", kind=GraphEntityKind.TEAM.value),
+            ],
+            # proj_a HAS an anchor (team_x), but no OTHER entity shares
+            # it -- build_cohort finds team_x as an anchor and zero peers.
+            edge_rows=[
+                _edge_row("proj_a", RelationshipType.OWNED_BY_TEAM, "team_x"),
+            ],
+        )
+        readout = InvestigationReadout(
+            org_id="org_query_service_test",
+            partition="cf_query_service_test",
+            seed_canonical_ids=("proj_a",),
+            authorized_entity_ids=("proj_a", "team_x"),
+            entities=(
+                DiscoveredEntity(
+                    canonical_id="proj_a",
+                    kind=GraphEntityKind.PROJECT,
+                    display_label="Project A",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=datetime.now(UTC),
+                ),
+            ),
+            # proj_a is legitimately committed (its own edge to team_x),
+            # so this test isolates IncomparableCohortError specifically --
+            # not the "subject never committed" error the missing-path
+            # case would raise instead.
+            paths=(
+                DiscoveredPath(
+                    path_id="p0001",
+                    origin_canonical_id="proj_a",
+                    terminal_canonical_id="team_x",
+                    steps=(
+                        PathStep(
+                            from_canonical_id="proj_a",
+                            from_kind=GraphEntityKind.PROJECT,
+                            relationship=RelationshipType.OWNED_BY_TEAM,
+                            direction=RelationshipDirection.FORWARD,
+                            to_canonical_id="team_x",
+                            to_kind=GraphEntityKind.TEAM,
+                            source_class=SourceClass.WORK_GRAPH,
+                            observed_at=datetime.now(UTC),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        reader = _FakeReader(readout=readout)
+        service = self._service(driver=driver, reader=reader)
+
+        result = await service.investigate(
+            _request(
+                intent_id=QuestionIntentID.METRIC_COMPARISON,
+                cardinality=Cardinality.PLURAL_COHORT,
+                run_id=_RUN_UUID,
+                mentions=(
+                    _mention("Project A", ordinal=0),
+                    _mention("Nobody Else", ordinal=1),
+                ),
+                authorized_entity_ids=frozenset({"proj_a", "team_x"}),
+            )
+        )
+
+        assert result.outcome is GraphQueryOutcome.PROVIDER_FAILURE
+        assert result.packet is None
+        assert result.diagnostic is not None
+        assert "seeded_explicit_cohort" in result.diagnostic
+        assert "IncomparableCohortError" in result.diagnostic
+
+    async def test_the_store_is_closed_after_completed(self, monkeypatch) -> None:
+        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+        driver = _FakeDriver(rows=[], edge_rows=[])
+        reader = _FakeReader(
+            readout=InvestigationReadout(
+                org_id="org_query_service_test",
+                partition="cf_query_service_test",
+                seed_canonical_ids=(),
+            )
+        )
+        store = _FakeStore(watermark=_fresh_watermark(), _driver=driver)
+        service = ProductionGraphInvestigationQuery(
+            store_factory=_factory(store),
+            reader_factory=lambda _store: reader,
+            signer_factory=lambda: EvidenceReferenceSigner(_TEST_SIGNING_SECRET),
+        )
+        await service.investigate(
+            _request(
+                intent_id=QuestionIntentID.METRIC_COMPARISON,
+                cardinality=Cardinality.PLURAL_COHORT,
+                run_id=_RUN_UUID,
+                mentions=(_mention("nothing matches", ordinal=0),),
             )
         )
         assert store.close_calls == 1

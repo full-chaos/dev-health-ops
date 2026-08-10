@@ -1186,3 +1186,168 @@ async def test_the_no_anchor_guard_is_observed_failing_when_removed() -> None:
     # record for what it is.
     assert only.evidence is not None
     assert only.state is EvidenceAvailability.AVAILABLE
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3650 admission-side: ``EvidenceAdmission.refused`` is the single
+# classification a consumer degrading an answer around a canonically
+# refused candidate should read -- distinct from an unconfigured source and
+# a transient outage, never re-derived by hand-checking ``state`` against a
+# set the caller reconstructs itself.
+# ---------------------------------------------------------------------------
+
+
+def _admission(state: EvidenceAvailability) -> EvidenceAdmission:
+    candidate = EvidenceCandidate(
+        source_system="reviews",
+        entity_type="review",
+        entity_id="issue-1",
+        locator="repo-a#pr1#review1",
+    )
+    return EvidenceAdmission(candidate=candidate, state=state)
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_refused"),
+    [
+        (EvidenceAvailability.UNAUTHORIZED, True),
+        (EvidenceAvailability.NO_MATCHES, True),
+        (EvidenceAvailability.UNCONFIGURED, False),
+        (EvidenceAvailability.UNAVAILABLE, False),
+        (EvidenceAvailability.AVAILABLE, False),
+        (EvidenceAvailability.REDACTED, False),
+        (EvidenceAvailability.STALE, False),
+    ],
+)
+def test_refused_is_true_only_for_a_considered_canonical_no(
+    state: EvidenceAvailability, expected_refused: bool
+) -> None:
+    """UNAUTHORIZED and NO_MATCHES are both the canonical service having
+    LOOKED at this exact candidate and declined it -- a source-backed "no".
+    UNCONFIGURED (no resolver wired for this source_system at all -- an
+    operational coverage gap, not a canonical judgment about the record)
+    and UNAVAILABLE (a transient resolver failure -- retry-worthy, never a
+    considered refusal) must NOT be conflated with that, exactly the
+    distinction CHAOS-3650's admission-side half exists to make explicit
+    for a future consumer degrading an answer around a refusal."""
+
+    assert _admission(state).refused is expected_refused
+
+
+def test_refused_and_admitted_are_always_mutually_exclusive() -> None:
+    for state in EvidenceAvailability:
+        admission = _admission(state)
+        assert not (admission.refused and admission.admitted), (
+            f"{state} must never be both refused and admitted"
+        )
+
+
+class _MixedOutcomeResolver:
+    """One resolver, three candidates, three genuinely different
+    admission outcomes -- proves ``admit()`` never collapses distinct
+    per-record reasons into a shared one, and that a single canonically
+    refused candidate never aborts its unrelated siblings (the same
+    property CHAOS-3650's packet-level fix proves at the packet layer,
+    proven here at the admission layer that feeds it)."""
+
+    source_system = "mixed"
+
+    async def resolve(self, *, org_id, scope, candidate):
+        if candidate.locator == "no-such-record":
+            # NO_MATCHES: the canonical service looked and this exact
+            # locator does not correspond to a real record.
+            return None
+        if candidate.locator == "wrong-entity":
+            # UNAUTHORIZED: a real record, genuinely about an entity the
+            # caller's grant does not contain.
+            return EvidenceRecord(
+                source_system="mixed",
+                source_version="test.v1",
+                entity_type="review",
+                entity_id="issue-999-not-granted",
+                display_label="A record about an entity outside the grant",
+                observed_at=NOW,
+                freshness=FreshnessState.FRESH,
+                provenance="native",
+                confidence=1.0,
+                repository_ids=("repo-a",),
+            )
+        return EvidenceRecord(
+            source_system="mixed",
+            source_version="test.v1",
+            entity_type="review",
+            entity_id="issue-1",
+            display_label="A genuinely admissible record",
+            observed_at=NOW,
+            freshness=FreshnessState.FRESH,
+            provenance="native",
+            confidence=1.0,
+            repository_ids=("repo-a",),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_canonical_refusal_never_erases_unrelated_admitted_evidence_in_the_same_round() -> (
+    None
+):
+    """CHAOS-3650 acceptance criterion, proven at the admission layer: "A
+    single refused record cannot erase unrelated valid drivers or the
+    whole answer." Three candidates submitted together -- one admits, one
+    is NO_MATCHES, one is UNAUTHORIZED -- and every sibling resolves
+    exactly as it would alone; the batch never aborts and never conflates
+    the two distinct refusal reasons with each other or with the
+    admitted one."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_MixedOutcomeResolver()],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="mixed",
+            entity_type="review",
+            entity_id="issue-1",
+            locator="genuinely-admissible",
+        ),
+        EvidenceCandidate(
+            source_system="mixed",
+            entity_type="review",
+            entity_id="issue-1",
+            locator="no-such-record",
+        ),
+        EvidenceCandidate(
+            source_system="mixed",
+            entity_type="review",
+            entity_id="issue-1",
+            locator="wrong-entity",
+        ),
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    admitted, no_matches, unauthorized = result.admissions
+
+    assert admitted.state is EvidenceAvailability.AVAILABLE
+    assert admitted.admitted is True
+    assert admitted.refused is False
+
+    assert no_matches.state is EvidenceAvailability.NO_MATCHES
+    assert no_matches.admitted is False
+    assert no_matches.refused is True
+
+    assert unauthorized.state is EvidenceAvailability.UNAUTHORIZED
+    assert unauthorized.admitted is False
+    assert unauthorized.refused is True
+
+    # The two refusals are for genuinely different reasons -- a consumer
+    # reading only ``.refused`` cannot tell them apart, which is correct
+    # (both are "disclose narrowly, do not retry"), but the underlying
+    # ``state`` must still be preserved distinctly for anything that DOES
+    # want the finer-grained reason (e.g. telemetry).
+    assert no_matches.state != unauthorized.state

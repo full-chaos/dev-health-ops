@@ -175,6 +175,26 @@ class EvidenceCandidate:
     repository_ids: tuple[str, ...] = ()
 
 
+#: CHAOS-3650 admission-side. The states that mean the canonical service
+#: LOOKED at this specific candidate and considered-and-declined it -- a
+#: source-backed "no" a consumer should disclose narrowly (this candidate
+#: is not supportable) and never retry as though it might succeed later:
+#: UNAUTHORIZED (the caller may not see it) and NO_MATCHES (the exact
+#: record the candidate named does not exist in canon). Deliberately
+#: excludes UNCONFIGURED (no resolver wired for this source_system at all
+#: -- an operational coverage gap, not a canonical judgment about the
+#: record) and UNAVAILABLE (a transient resolver failure -- retry-worthy,
+#: not a considered refusal). See :attr:`EvidenceAdmission.refused`,
+#: the single source of truth for this classification -- a consumer
+#: (e.g. a future frame assembler mapping refused evidence into a
+#: degraded answer per CHAOS-3650) must use that property rather than
+#: re-deriving membership itself, so this set cannot drift out from under
+#: a caller that hand-rolled the check.
+_CANONICALLY_REFUSED_STATES = frozenset(
+    {EvidenceAvailability.UNAUTHORIZED, EvidenceAvailability.NO_MATCHES}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceAdmission:
     """One candidate's outcome. ``evidence`` is ``None`` unless admitted."""
@@ -187,6 +207,23 @@ class EvidenceAdmission:
     @property
     def admitted(self) -> bool:
         return self.evidence is not None
+
+    @property
+    def refused(self) -> bool:
+        """CHAOS-3650. ``True`` exactly when the canonical service
+        considered this candidate and declined to admit it -- see
+        :data:`_CANONICALLY_REFUSED_STATES` for the exact membership and
+        why. ``False`` for every other non-admitted state, and always
+        ``False`` when :attr:`admitted` is ``True`` (the states are
+        mutually exclusive per candidate -- see :meth:`EvidenceService.admit`).
+
+        This is the property a consumer degrading an answer around a
+        refused candidate (never aborting the whole answer, never
+        conflating a genuine refusal with an unconfigured source or a
+        transient outage) should read, rather than hand-checking
+        ``state`` against a set it reconstructs itself.
+        """
+        return self.state in _CANONICALLY_REFUSED_STATES
 
 
 @dataclass(frozen=True, slots=True)

@@ -179,10 +179,17 @@ def _detail(operation: str, attempts: int, exc: Exception) -> str:
     content, whatever the exception's own message says.
     """
 
-    return (
+    detail = (
         f"graph projection operation {operation!r} failed on attempt "
         f"{attempts} with {type(exc).__name__}"
     )
+    refusal = getattr(exc, "refusal", None)
+    if refusal is not None:
+        # ``IdentifierRefusal.safe_detail`` is a closed-vocabulary diagnostic;
+        # never append ``str(exc)`` because the rejected source value must not
+        # become worker telemetry.
+        detail = f"{detail}: {refusal.safe_detail()}"
+    return detail
 
 
 async def project_with_retry(

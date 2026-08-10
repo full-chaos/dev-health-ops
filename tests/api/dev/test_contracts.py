@@ -19,6 +19,7 @@ from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     DevAnswer,
     DevCapabilities,
+    DevEvidenceRef,
     DevMessageRequest,
     DevScope,
     DevScopeResolution,
@@ -39,6 +40,24 @@ from dev_health_ops.api.dev.scope_service import (
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)
 def test_positive_fixture_validates(schema_version: str) -> None:
     CONTRACT_MODELS[schema_version].model_validate(positive_fixtures()[schema_version])
+
+
+def test_record_locator_is_absent_by_default_on_every_existing_evidence_ref() -> None:
+    """CHAOS-3633 / CHAOS-3660 §8(i). The canonical fixture predates this
+    field and never sets it -- ``test_positive_fixture_validates`` already
+    proves ``dev_evidence_ref.v1`` still validates without it, so this
+    fixture is itself the backward-compatibility proof. This test pins the
+    actual value down explicitly rather than leaving that proof implicit.
+    """
+    ref = DevEvidenceRef.model_validate(positive_fixtures()["dev_evidence_ref.v1"])
+    assert ref.record_locator is None
+
+
+def test_record_locator_accepts_an_opaque_id_when_present() -> None:
+    payload = deepcopy(positive_fixtures()["dev_evidence_ref.v1"])
+    payload["record_locator"] = "loc_pr_review_01"
+    ref = DevEvidenceRef.model_validate(payload)
+    assert ref.record_locator == "loc_pr_review_01"
 
 
 @pytest.mark.parametrize(

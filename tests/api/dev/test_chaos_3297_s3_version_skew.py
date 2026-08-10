@@ -149,7 +149,7 @@ def test_tolerant_parse_changes_nothing_else() -> None:
     frame = DevAnswerFrame.model_validate(patched)
     reserialized = frame.model_dump(mode="json")
     for key, value in original.items():
-        if key in {"metrics", "coverage"}:
+        if key in {"metrics", "coverage", "evidence"}:
             continue
         assert reserialized[key] == value, key
 
@@ -171,6 +171,24 @@ def test_tolerant_parse_changes_nothing_else() -> None:
         "degraded_required_sources"
     }
     assert reserialized_coverage["degraded_required_sources"] == []
+
+    # Each ``evidence`` ref gained ``record_locator`` the same way --
+    # CHAOS-3633 / CHAOS-3660 §8(i), schema-only reservation, no populating
+    # code path exists on this branch today. Same posture as ``coverage``
+    # above: every original evidence-ref key keeps its exact value, and the
+    # only addition per ref is the new key at its empty (``None``) default,
+    # since a pre-s3 evidence ref cannot have known about a locator that
+    # did not exist yet.
+    original_evidence = original["evidence"]
+    reserialized_evidence = reserialized["evidence"]
+    assert len(reserialized_evidence) == len(original_evidence)
+    for original_ref, reserialized_ref in zip(
+        original_evidence, reserialized_evidence, strict=True
+    ):
+        for key, value in original_ref.items():
+            assert reserialized_ref[key] == value, f"evidence.{key}"
+        assert set(reserialized_ref) - set(original_ref) == {"record_locator"}
+        assert reserialized_ref["record_locator"] is None
 
 
 def test_tolerant_parse_does_not_touch_a_metric_with_real_evidence() -> None:

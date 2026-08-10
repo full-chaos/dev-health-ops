@@ -593,6 +593,20 @@ class DevEvidenceRef(ContractModel):
     ) = None
     repository_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
     valid_entity_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
+    #: CHAOS-3633 / CHAOS-3660 §8(i). Reserves the wire slot for the SOURCE's
+    #: own identity for this specific record, distinct from ``entity_id``
+    #: (the entity the record is *about*). Schema-only on ``main`` today:
+    #: the canonical evidence-admission path that will populate it
+    #: (``EvidenceService.admit``, still feature-branch-only -- see
+    #: CHAOS-3650/3632/3685) has not landed here yet, so nothing on this
+    #: branch sets, reads, or signs it. Additive and optional so every ref
+    #: minted by ``search``/``expand`` today -- and every already-persisted
+    #: ``dev_answer.v1`` evidence ref -- is completely unaffected: no
+    #: current code path constructs a ``DevEvidenceRef`` with this field, so
+    #: it is always its ``None`` default until the admission-path port lands
+    #: (a separate PR) and starts setting it and binding it into the signed
+    #: HMAC.
+    record_locator: OpaqueID | None = None
     flags: DevEvidenceFlags
 
 

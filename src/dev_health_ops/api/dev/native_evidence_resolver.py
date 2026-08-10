@@ -136,6 +136,89 @@ async def _resolve_incident(
     )
 
 
+#: CHAOS-3675 PR3. ``deployments.repo_id`` is NOT nullable -- a repository
+#: anchor always exists -- but ``pull_request_number`` IS, so unlike
+#: ``review``/``incident`` this row genuinely sometimes has a
+#: directly-authorizable PR entity and sometimes does not. Both branches
+#: are derived from THIS row, never from the candidate.
+_DEPLOYMENT_RESOLVE_SQL = """
+SELECT repo_id, deployment_id, status, environment, pull_request_number,
+       coalesce(deployed_at, finished_at, started_at, last_synced) AS observed_at,
+       last_synced
+FROM deployments FINAL
+WHERE org_id = {org_id:String}
+  AND concat(toString(repo_id), '#deployment', deployment_id) = {locator:String}
+LIMIT 1
+"""
+
+
+async def _resolve_deployment(
+    client: Any,
+    *,
+    org_id: str,
+    candidate: EvidenceCandidate,
+    policy: SourceFreshnessPolicy,
+    source_system: str,
+) -> EvidenceRecord | None:
+    rows = await query_dicts(
+        client,
+        _DEPLOYMENT_RESOLVE_SQL,
+        {"org_id": org_id, "locator": candidate.locator},
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    observed = _datetime(row.get("observed_at")) or datetime.now(UTC)
+    last_synced = _datetime(row.get("last_synced"))
+    freshness = policy.classify(last_synced, now=datetime.now(UTC))
+    pr_number = row.get("pull_request_number")
+    display_label = f"Deployment {row['deployment_id']}"
+    raw_excerpt = (
+        f"Status: {row.get('status') or 'unknown'}. "
+        f"Environment: {row.get('environment') or 'unknown'}"
+    )
+    repository_ids = (str(row["repo_id"]),)
+    stale = freshness is FreshnessState.STALE
+    if pr_number:
+        # A real PR link exists on THIS row -- always derived when present,
+        # never skipped for the cheaper anchor-only path (CHAOS-3675 PR3
+        # scope-lock condition: anti-laundering, the first resolver here
+        # with a genuine per-row choice between the two).
+        return EvidenceRecord(
+            source_system=source_system,
+            source_version=RESOLVER_SOURCE_VERSION,
+            entity_type="deployment",
+            entity_id=f"{row['repo_id']}#pr{pr_number}",
+            display_label=display_label,
+            observed_at=observed,
+            freshness=freshness,
+            provenance="native",
+            confidence=1.0,
+            repository_ids=repository_ids,
+            raw_excerpt=raw_excerpt,
+            stale=stale,
+        )
+    # No PR link on this row -- repo_id is schema-guaranteed non-null, so
+    # the repository-only path always has a real anchor to attach to; this
+    # never reaches #1648's no-anchor refusal the way a repo-less incident
+    # can.
+    return EvidenceRecord(
+        source_system=source_system,
+        source_version=RESOLVER_SOURCE_VERSION,
+        entity_type="deployment",
+        entity_id=str(row["deployment_id"]),
+        display_label=display_label,
+        observed_at=observed,
+        freshness=freshness,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=repository_ids,
+        raw_excerpt=raw_excerpt,
+        stale=stale,
+        no_authorizable_entity=True,
+    )
+
+
 async def _resolve_review(
     client: Any,
     *,
@@ -179,16 +262,22 @@ class NativeEvidenceCandidateResolver:
     Additive: only observation kinds with an implemented ``_resolve_*``
     below are handled; every other kind returns ``None`` (refused as
     ``NO_MATCHES``), never an error. CHAOS-3675 PR 1/3 implements
-    ``review`` (a directly-authorizable PR entity, derived from its own
-    row); PR 2/3 adds ``incident`` (no directly-authorizable entity in the
-    schema at all -- repository-only authorization via CHAOS-3675's
-    entity-less admission mechanism). ``deployment``'s linked PR is
-    nullable in the canonical schema (a deployment need not correspond to
-    any PR, but CAN), which needs its own per-row derive-vs-anchor
-    decision unlike ``incident``'s always-anchor shape; deferred to PR
-    3/3 rather than guessed at here. ``commit``/``ci_run`` need a
-    confirmed join path (candidate: ``work_graph_edges``) before they can
-    derive their linked entity at all -- also PR 3/3.
+    ``review`` (always a directly-authorizable PR entity); PR 2/3 adds
+    ``incident`` (never a directly-authorizable entity in the schema at
+    all -- always repository-only, via CHAOS-3675's entity-less admission
+    mechanism); PR 3/3 adds ``deployment`` (SOMETIMES a directly-
+    authorizable PR entity -- ``pull_request_number`` is nullable but
+    ``repo_id`` is not, so this is the first resolver with a genuine
+    per-row choice between the two paths).
+
+    ``commit``/``ci_run`` are a deliberate, recorded gap, not an oversight:
+    neither ``git_commits`` nor ``ci_pipeline_runs`` has any PR/issue link
+    column, and the only possible linkage -- the generic ``work_graph_edges``
+    table -- carries a ``provenance``/``confidence`` spread (native,
+    explicit_text, heuristic) that needs its own trust-threshold design
+    decision before it can safely grant entity-level authorization. Per
+    the CHAOS-3675 PR 3/3 scope-lock: refusing these two with the gap
+    recorded beats a speculative join.
     """
 
     def __init__(
@@ -230,6 +319,14 @@ class NativeEvidenceCandidateResolver:
                 org_id=org_id,
                 candidate=candidate,
                 policy=self._policies["incidents"],
+                source_system=self.source_system,
+            )
+        if candidate.entity_type == "deployment":
+            return await _resolve_deployment(
+                self._client,
+                org_id=org_id,
+                candidate=candidate,
+                policy=self._policies["deployments"],
                 source_system=self.source_system,
             )
         return None

@@ -492,6 +492,12 @@ class DevCapabilities(ContractModel):
     )
     contextual_entrypoints: bool = False
     evidence_resolver: bool = False
+    #: CHAOS-3660 §8(a). Reserves the capability flag for graph-assisted Ask
+    #: Dev routing (CHAOS-3502 wave), which is still feature-branch-only on
+    #: `main` today -- no runtime path here computes anything but the
+    #: ``False`` default, so no client observes this as ``True`` until the
+    #: wave's routing/answer-shape work itself lands.
+    ask_dev_graph_routing: bool = False
     administrator_safe_failure_reason: ShortText | None = None
 
     @model_validator(mode="after")
@@ -543,6 +549,17 @@ class DevMessageRequest(ContractModel):
     question_class: QuestionClass
     scope: DevScope
     requested_metric_ids: list[MetricID] = Field(default_factory=list, max_length=8)
+    #: CHAOS-3660 §8(k). Request-direction and additive: an old client that
+    #: never sends this key is indistinguishable from one whose absence
+    #: means "declares nothing", so no currently-issued request breaks by
+    #: this field existing. Reserves the slot a client uses to declare the
+    #: newest contract surface it can parse (the same version strings
+    #: ``DevCapabilities.supported_contract_versions`` already advertises).
+    #: Schema-only today: the wave's ``graph.state`` stream event this is
+    #: meant to gate emission of has not landed on `main` yet (CHAOS-3502),
+    #: so nothing here reads this field -- server-side validation and the
+    #: gating it enables are a later PR, once that surface exists to gate.
+    client_contract_version: Version | None = None
 
     @field_validator("question")
     @classmethod

@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "name": "feature_flag environment identity migration (CHAOS-3703)",
+  "$limitation": "This plan covers the migration's identity, fail-closed DDL verification, distinct-key preservation, source-key guard, unique-shadow concurrency, and post-exchange catch-up. M1 and M9 deliberately use real ClickHouse proofs; their integration setup/build is separate from the behavioral proof. Do not run this plan until reviewer/orchestrator GO.",
+  "build": [
+    ".venv/bin/python",
+    "-c",
+    "import importlib.util; p='src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py'; s=importlib.util.spec_from_file_location('feature_flag_identity', p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)"
+  ],
+  "mutations": [
+    {
+      "id": "M1-target-includes-environment",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "\"feature_flag\": \"(org_id, provider, project_key, flag_key, environment)\",",
+      "replace": "\"feature_flag\": \"(org_id, provider, project_key, flag_key)\",",
+      "rationale": "the deployed migration must produce an environment-aware physical identity; the real migration-chain proof must fail if it silently leaves the legacy key",
+      "build": [
+        "go",
+        "test",
+        "-tags",
+        "integration",
+        "./internal/testsupport/chschema",
+        "-run",
+        "^$",
+        "-count=1"
+      ],
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-run",
+          "^TestFeatureFlagEnvironmentIdentityAgainstMigrationChain$",
+          "./internal/testsupport/chschema",
+          "-count=1"
+        ]
+      ]
+    },
+    {
+      "id": "M2-rerun-convergence-branch",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "if current_key == target_key:",
+      "replace": "if False:",
+      "rationale": "an already-exchanged table with a leftover old shadow must converge by catch-up and drop on rerun",
+      "proof": [["pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "rerun_converges_leftover_old_table_after_exchange"]]
+    },
+    {
+      "id": "M3-shadow-sorting-key-proof",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "if shadow_key != target_key:",
+      "replace": "if False:",
+      "rationale": "a DDL rewrite that creates the wrong ClickHouse sorting key must fail before copying or exchanging data",
+      "proof": [["pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "sorting_key_rewrite_fails_closed_before_copy"]]
+    },
+    {
+      "id": "M4-distinct-key-preservation",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "if shadow_keys != source_keys:",
+      "replace": "if False:",
+      "rationale": "the snapshot must abort before EXCHANGE when the environment-aware logical-key count is not preserved",
+      "proof": [["pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "distinct_key_mismatch_aborts_before_exchange"]]
+    },
+    {
+      "id": "M5-post-exchange-catch-up",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "client.command(f\"INSERT INTO `{table}` SELECT * FROM `{shadow}`\")",
+      "replace": "client.command(f\"INSERT INTO `{table}` SELECT * FROM `{table}`\")",
+      "rationale": "rows written to the old side between snapshot and EXCHANGE must be reinserted before the old shadow is dropped",
+      "proof": [["pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "rebuild_catches_up_a_row_written_between_snapshot_and_exchange"]]
+    },
+    {
+      "id": "M6-legacy-source-key-guard",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "if current_key != LEGACY_KEY:",
+      "replace": "if False:",
+      "rationale": "the migration must fail closed rather than reinterpret an unexpected pre-074 sorting key",
+      "proof": [["pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "unexpected_source_key_does_not_get_silently_rewritten"]]
+    },
+    {
+      "id": "M7-exchange-engine-preflight",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "if engine not in _EXCHANGE_DATABASE_ENGINES:",
+      "replace": "if False:",
+      "rationale": "EXCHANGE TABLES must fail closed on non-Atomic/non-Shared databases rather than run with unsupported atomicity semantics",
+      "proof": [["pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "upgrade_fails_closed_when_database_engine_cannot_exchange_tables"]]
+    },
+    {
+      "id": "M8-unique-shadow-name",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "return f\"{table}_074_new_{uuid.uuid4().hex}\"",
+      "replace": "return f\"{table}_new\"",
+      "rationale": "concurrent migration runners must not share one shadow table name and race DROP/CREATE/EXCHANGE",
+      "proof": [["pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "default_shadow_names_are_unique_per_invocation"]]
+    },
+    {
+      "id": "M9-registry-logical-grouping",
+      "file": "src/dev_health_ops/api/graphql/resolvers/feature_flags.py",
+      "find": "GROUP BY provider, project_key, flag_key",
+      "replace": "GROUP BY provider, project_key, flag_key, environment",
+      "expect_occurrences": 2,
+      "rationale": "GraphQL must aggregate all physical environment rows back to one logical flag and one totalCount while preserving distinct flag_key values under the same provider/project and the environment-agnostic ID",
+      "build": [".venv/bin/python", "-c", "import dev_health_ops.api.graphql.resolvers.feature_flags"],
+      "proof": [[".venv/bin/python", "tests/tooling/run_feature_flag_identity_live_proof.py"]]
+    }
+  ]
+}

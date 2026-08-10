@@ -95,24 +95,43 @@ async def resolve_feature_flags(
     if not include_archived:
         where_clauses.append("archived_at IS NULL")
 
+    # Migration 074 makes environment part of the physical RMT identity, but
+    # the GraphQL registry contract remains one logical item per
+    # (provider, project, flag).  Aggregate after FINAL and choose every
+    # surfaced field from the same deterministic latest environment.  The
+    # environment tie-break keeps equal last_synced values stable without
+    # changing the established environment-agnostic flag ID.
+    latest_order = "tuple(last_synced, environment)"
     query = f"""
         SELECT
             provider,
             flag_key,
             project_key,
-            flag_type,
-            created_at,
-            archived_at
-        FROM feature_flag FINAL
-        WHERE {" AND ".join(where_clauses)}
+            tupleElement(latest, 1) AS flag_type,
+            tupleElement(latest, 2) AS created_at,
+            tupleElement(latest, 3) AS archived_at
+        FROM (
+            SELECT
+                provider,
+                flag_key,
+                project_key,
+                argMax(tuple(flag_type, created_at, archived_at), {latest_order}) AS latest
+            FROM feature_flag FINAL
+            WHERE {" AND ".join(where_clauses)}
+            GROUP BY provider, project_key, flag_key
+        )
         ORDER BY provider, project_key, flag_key
         LIMIT %(limit)s
     """
 
     count_query = f"""
         SELECT count() AS total
-        FROM feature_flag FINAL
-        WHERE {" AND ".join(where_clauses)}
+        FROM (
+            SELECT provider, project_key, flag_key
+            FROM feature_flag FINAL
+            WHERE {" AND ".join(where_clauses)}
+            GROUP BY provider, project_key, flag_key
+        )
     """
     count_params = {k: v for k, v in params.items() if k != "limit"}
 

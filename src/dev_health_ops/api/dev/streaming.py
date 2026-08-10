@@ -120,6 +120,11 @@ async def stream_orchestrator(
             return
         while not queue.empty():
             internal = queue.get_nowait()
+            if internal.graph_state is not None:
+                await public_event(
+                    StreamEventType.GRAPH_STATE,
+                    graph_state=internal.graph_state,
+                )
             progress = _PROGRESS_BY_STATE.get(internal.state)
             if progress is not None and progress is not last_progress:
                 last_progress = progress
@@ -148,6 +153,11 @@ async def stream_orchestrator(
             done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
             if next_internal in done:
                 internal = next_internal.result()
+                if internal.graph_state is not None:
+                    yield await public_event(
+                        StreamEventType.GRAPH_STATE,
+                        graph_state=internal.graph_state,
+                    )
                 progress = _PROGRESS_BY_STATE.get(internal.state)
                 if progress is not None and progress is not last_progress:
                     last_progress = progress
@@ -160,6 +170,11 @@ async def stream_orchestrator(
 
         while not queue.empty():
             internal = queue.get_nowait()
+            if internal.graph_state is not None:
+                yield await public_event(
+                    StreamEventType.GRAPH_STATE,
+                    graph_state=internal.graph_state,
+                )
             progress = _PROGRESS_BY_STATE.get(internal.state)
             if progress is not None and progress is not last_progress:
                 last_progress = progress

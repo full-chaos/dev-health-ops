@@ -909,8 +909,9 @@ class DevAnswerGraphAssistance(ContractModel):
     wave) contributed to an answer, in one namespace. ``cohort``,
     ``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are
     populated only when ``state`` reflects a completed, cohort-shaped
-    answer; ``None``/empty otherwise. Schema-only on ``main`` today -- see
-    ``DevAnswer.graph_assisted``'s own docstring.
+    answer; ``None``/empty otherwise. The orchestrator owns the runtime
+    projection of the route attempt; packet/backend details never cross this
+    contract boundary.
     """
 
     schema_version: Literal["dev_answer_graph_assistance.v1"]
@@ -950,11 +951,9 @@ class DevAnswer(ContractModel):
     #: route at all (mirrors the feature branch's
     #: ``describe_availability``'s own ``result is None`` branch); present
     #: with ``state=unavailable`` when attempted but the route
-    #: declined/failed. Schema-only on ``main`` today: the graph-routing
-    #: wave (CHAOS-3502) that computes a real value here has not landed on
-    #: `main` yet, so no runtime path constructs a ``DevAnswer`` with this
-    #: set -- every existing answer (and every already-persisted
-    #: ``dev_answer.v1``) is unaffected.
+    #: declined/failed. The field remains absent when routing was never
+    #: attempted, so existing non-graph answers and persisted v1 payloads are
+    #: unaffected.
     graph_assisted: DevAnswerGraphAssistance | None = None
 
     @model_validator(mode="after")
@@ -1528,9 +1527,8 @@ class DevStreamEvent(ContractModel):
     #: CHAOS-3660 §8(c). Carries only the `{state, as_of}` pair (via
     #: `DevAnswerGraphAssistance`, reused rather than a slimmer duplicate)
     #: -- the same object `DevAnswer.graph_assisted` carries once, in full,
-    #: on the terminal event. Schema-only on `main` today: see
-    #: `DevAnswer.graph_assisted`'s own docstring for why nothing here
-    #: emits a populated value yet.
+    #: on the terminal event. The streaming projection emits it only after a
+    #: graph query has actually returned, and carries no backend identifiers.
     graph_state: DevAnswerGraphAssistance | None = None
     delta: Annotated[str, StringConstraints(min_length=1, max_length=8_192)] | None = (
         None

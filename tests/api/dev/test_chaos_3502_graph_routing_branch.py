@@ -30,6 +30,7 @@ import logging
 
 import pytest
 
+from dev_health_ops.api.dev.contracts import GraphAssistedAvailability
 from dev_health_ops.api.dev.evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
@@ -137,7 +138,21 @@ async def test_every_fallthrough_outcome_is_observed_and_still_answers(
     # working answer.
     assert output.result.state is not RunState.CANCELLED
     assert output.result.state is not RunState.FAILED
-    assert output.result.answer is not None
+    answer = output.result.answer
+    assert answer is not None
+    assert answer.graph_assisted is not None
+    assert answer.graph_assisted.state is (
+        GraphAssistedAvailability.STALE
+        if outcome is GraphQueryOutcome.STALE
+        else GraphAssistedAvailability.LAGGING
+        if outcome is GraphQueryOutcome.COMPLETED
+        else GraphAssistedAvailability.UNAVAILABLE
+    )
+    graph_events = [
+        event for event in output.result.events if event.graph_state is not None
+    ]
+    assert len(graph_events) == 1
+    assert graph_events[0].graph_state == answer.graph_assisted
 
     assert any(
         record.levelno == logging.INFO
@@ -186,6 +201,13 @@ async def test_cancelled_outcome_terminates_the_run_directly(
     assert output.result.error is not None
     assert output.result.error.code == "cancelled"
     assert output.result.answer is None
+    graph_events = [
+        event for event in output.result.events if event.graph_state is not None
+    ]
+    assert len(graph_events) == 1
+    graph_state = graph_events[0].graph_state
+    assert graph_state is not None
+    assert graph_state.state is GraphAssistedAvailability.UNAVAILABLE
     assert output.calls == [], (
         "a CANCELLED graph outcome must terminate the run before the "
         "legacy model-tool-choice loop ever executes a tool"
@@ -242,6 +264,16 @@ async def test_flag_off_is_byte_identical_to_collaborators_never_wired(
     )
 
     assert with_collaborators.outcome_tuple() == without_collaborators.outcome_tuple()
+    assert with_collaborators.result.answer is not None
+    assert with_collaborators.result.answer.graph_assisted is None
+    assert not any(
+        event.graph_state is not None for event in with_collaborators.result.events
+    )
+    assert without_collaborators.result.answer is not None
+    assert without_collaborators.result.answer.graph_assisted is None
+    assert not any(
+        event.graph_state is not None for event in without_collaborators.result.events
+    )
 
 
 @pytest.mark.asyncio

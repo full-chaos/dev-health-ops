@@ -71,6 +71,7 @@ from .contracts import (
     V1_SCOPE_LIST_LIMIT,
     AnswerStatus,
     DevAnswer,
+    DevAnswerGraphAssistance,
     DevClaim,
     DevContractVersions,
     DevCoverage,
@@ -88,10 +89,14 @@ from .contracts import (
     EntityType,
     FreshnessState,
     MetricID,
+    PacketLimitationKind,
     QuestionClass,
     ScopeResolutionOutcome,
     ToolID,
     dev_error_remediation,
+)
+from .contracts import (
+    GraphAssistedAvailability as ContractGraphAssistedAvailability,
 )
 from .contracts_v2 import (
     NO_ANSWER_OUTCOMES,
@@ -117,10 +122,14 @@ from .graph_investigation_query import (
     GraphInvestigationQuery,
     GraphInvestigationRequest,
     GraphQueryOutcome,
+    GraphQueryResult,
 )
 from .graph_routing_policy import (
+    GraphAssistedAvailability,
     GraphRoutingEntitlementAuthorizer,
     GraphRoutingPolicyDeniedError,
+    describe_availability,
+    limitation_kinds_of,
 )
 from .investigation_contract import AskDevInvestigationPacket, InvestigationOutcome
 from .investigation_plans import PlanExecutor, StepContext
@@ -564,6 +573,47 @@ class DevRunLimits:
 class OrchestratorEvent:
     state: RunState
     safe_code: str | None = None
+    #: A public-safe graph routing state. The orchestrator emits this as an
+    #: interior event only after the graph seam was actually called; a run
+    #: that never attempted graph routing leaves it ``None``.
+    graph_state: DevAnswerGraphAssistance | None = None
+
+
+def _graph_assistance_for_result(
+    result: GraphQueryResult,
+    *,
+    graph_answered: bool,
+) -> DevAnswerGraphAssistance:
+    """Project one graph attempt into the public answer/event contract.
+
+    ``GraphQueryResult.diagnostic`` and packet internals deliberately never
+    cross this boundary. The optional packet details stay empty in this
+    narrow state slice; only limitations already disclosed by the validated
+    packet are copied for a graph-grounded answer.
+
+    A completed query that did not produce a graph answer is not advertised
+    as ``enabled`` merely because transport succeeded: the user received the
+    native arm, so graph assistance was unavailable for that answer.
+    """
+
+    availability = describe_availability(entitled=True, result=result)
+    if not graph_answered and availability is GraphAssistedAvailability.ENABLED:
+        availability = GraphAssistedAvailability.UNAVAILABLE
+    packet = result.packet
+    limitations: list[PacketLimitationKind] = []
+    if graph_answered and packet is not None:
+        # Map by the existing closed vocabulary. Do not expose packet details
+        # such as graph node names/IDs or backend-specific diagnostics.
+        limitations = [
+            PacketLimitationKind(kind.value)
+            for kind in sorted(limitation_kinds_of(packet), key=lambda item: item.value)
+        ]
+    return DevAnswerGraphAssistance(
+        schema_version="dev_answer_graph_assistance.v1",
+        state=ContractGraphAssistedAvailability(availability.value),
+        as_of=(packet.produced_at if packet is not None else datetime.now(UTC)),
+        limitations=limitations,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1441,6 +1491,9 @@ class DevOrchestrator:
         # it, without threading a new parameter through every one of
         # `finish()`'s ~35 call sites.
         investigation_result: DevInvestigationResult | None = None
+        # The public graph-assistance state is set only after the graph seam
+        # returns. A route that was gated off therefore remains ``None``.
+        graph_assistance: DevAnswerGraphAssistance | None = None
         # CHAOS-3393: mirrors investigation_result's own free-variable
         # posture -- set below when a PLURAL_COHORT/ORGANIZATION_WIDE
         # status.portfolio.v1 run actually executes against a committed
@@ -1504,6 +1557,17 @@ class DevOrchestrator:
             event = OrchestratorEvent(state=state, safe_code=safe_code)
             events.append(event)
             await self._recorder.transition(state)
+            if selected_event_sink is not None:
+                await selected_event_sink(event)
+
+        async def emit_graph_state(state: DevAnswerGraphAssistance) -> None:
+            """Publish a graph state without exposing internal graph data."""
+
+            event = OrchestratorEvent(
+                state=RunState.TOOL_EXECUTION,
+                graph_state=state,
+            )
+            events.append(event)
             if selected_event_sink is not None:
                 await selected_event_sink(event)
 
@@ -1575,6 +1639,11 @@ class DevOrchestrator:
                 answer = disclose_subject_match(
                     answer, span=matched_span, label=matched_label
                 )
+            if answer is not None and graph_assistance is not None:
+                # Attach the same object that was emitted on the interior
+                # event. This keeps live, persisted, and replayed answer
+                # projections on one server-owned state value.
+                answer = answer.model_copy(update={"graph_assisted": graph_assistance})
             # CHAOS-3367: the one place every terminal in this module passes
             # through, and therefore the only place a user-visible-copy rule
             # can be enforced structurally rather than by asking ~35 call
@@ -3264,6 +3333,10 @@ class DevOrchestrator:
                     # The RUN is cancelled, not just this one call -- unlike
                     # every other outcome below, this does not fall through
                     # to the legacy loop (see the CHAOS-3660 fallback table).
+                    graph_assistance = _graph_assistance_for_result(
+                        graph_result, graph_answered=False
+                    )
+                    await emit_graph_state(graph_assistance)
                     return await finish(
                         RunState.CANCELLED,
                         error=error("cancelled", "The request was cancelled."),
@@ -3303,6 +3376,10 @@ class DevOrchestrator:
                         packet=graph_result.packet,
                     )
                     if graph_answer is not None:
+                        graph_assistance = _graph_assistance_for_result(
+                            graph_result, graph_answered=True
+                        )
+                        await emit_graph_state(graph_assistance)
                         return await finish(
                             RunState.COMPLETED,
                             answer=graph_answer,
@@ -3323,6 +3400,14 @@ class DevOrchestrator:
                 # §4: graph outage, lag, or unavailability must never break
                 # existing Ask Dev behavior, and this question's legacy
                 # answer is a real, already-working path, not a regression.
+
+                # The graph route was attempted, but any answer below comes
+                # from the native arm. Derive only the public state; no
+                # backend diagnostics, names, or IDs are user-facing.
+                graph_assistance = _graph_assistance_for_result(
+                    graph_result, graph_answered=False
+                )
+                await emit_graph_state(graph_assistance)
 
             for round_index in range(self._limits.model_rounds):
                 del round_index

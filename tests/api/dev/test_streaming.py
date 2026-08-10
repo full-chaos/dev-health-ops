@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
-from dev_health_ops.api.dev.contracts import DevAnswer, DevError, StreamEventType
+from dev_health_ops.api.dev.contracts import (
+    DevAnswer,
+    DevAnswerGraphAssistance,
+    DevError,
+    GraphAssistedAvailability,
+    StreamEventType,
+)
 from dev_health_ops.api.dev.orchestrator import (
     OrchestratorEvent,
     OrchestratorResult,
@@ -56,6 +63,16 @@ def _error_result() -> OrchestratorResult:
         tool_call_count=0,
         provider_fingerprint=None,
         model_fingerprint=None,
+    )
+
+
+def _graph_state(
+    state: GraphAssistedAvailability = GraphAssistedAvailability.UNAVAILABLE,
+) -> DevAnswerGraphAssistance:
+    return DevAnswerGraphAssistance(
+        schema_version="dev_answer_graph_assistance.v1",
+        state=state,
+        as_of=datetime(2026, 8, 10, tzinfo=UTC),
     )
 
 
@@ -108,6 +125,30 @@ async def test_error_stream_has_one_error_then_done() -> None:
         StreamEventType.ERROR,
         StreamEventType.DONE,
     ]
+
+
+@pytest.mark.asyncio
+async def test_graph_state_is_projected_as_a_safe_interior_event() -> None:
+    graph_state = _graph_state()
+
+    async def run(sink):
+        await sink(OrchestratorEvent(RunState.TOOL_EXECUTION, graph_state=graph_state))
+        return _answer_result()
+
+    events = [
+        event
+        async for event in stream_orchestrator(
+            run_id="run_01", run_with_events=run, cancellation=asyncio.Event()
+        )
+    ]
+
+    validate_completed_stream(events)
+    graph_events = [
+        event for event in events if event.event is StreamEventType.GRAPH_STATE
+    ]
+    assert len(graph_events) == 1
+    assert graph_events[0].graph_state == graph_state
+    assert b"Graphiti" not in encode_sse(graph_events[0])
 
 
 @pytest.mark.asyncio
@@ -200,6 +241,73 @@ async def test_disconnect_persists_completion_once_before_generator_close(
         else StreamEventType.ERROR,
         StreamEventType.DONE,
     ]
+
+
+@pytest.mark.asyncio
+async def test_graph_state_persists_and_replays_once_after_cursor() -> None:
+    graph_state = _graph_state()
+    answer = _answer_result().answer
+    assert answer is not None
+    result = OrchestratorResult(
+        run_id="run_01",
+        state=RunState.COMPLETED,
+        answer=answer.model_copy(update={"graph_assisted": graph_state}),
+        error=None,
+        events=(OrchestratorEvent(RunState.COMPLETED),),
+        usage=AgentUsage(),
+        tool_call_count=1,
+        provider_fingerprint="provider_01",
+        model_fingerprint="model_01",
+    )
+    persisted: list[Mapping[str, Any]] = []
+
+    async def run(sink):
+        await sink(
+            OrchestratorEvent(
+                RunState.TOOL_EXECUTION,
+                graph_state=graph_state,
+            )
+        )
+        return result
+
+    async def persist(event: Mapping[str, Any]) -> None:
+        persisted.append(event)
+
+    events = [
+        event
+        async for event in stream_orchestrator(
+            run_id="run_01",
+            run_with_events=run,
+            cancellation=asyncio.Event(),
+            persist_event=persist,
+        )
+    ]
+    validate_completed_stream(events)
+    persisted_graph = [
+        event
+        for event in persisted
+        if event["event"] == StreamEventType.GRAPH_STATE.value
+    ]
+    assert len(persisted_graph) == 1
+
+    replayed = validate_persisted_resume_events(
+        run_id="run_01",
+        after_sequence=0,
+        persisted_events=persisted[1:],
+    )
+    replayed_graph = [
+        event for event in replayed if event.event is StreamEventType.GRAPH_STATE
+    ]
+    assert len(replayed_graph) == 1
+    assert replayed_graph[0].graph_state == graph_state
+
+    graph_sequence = persisted_graph[0]["sequence"]
+    suffix = validate_persisted_resume_events(
+        run_id="run_01",
+        after_sequence=graph_sequence,
+        persisted_events=persisted[graph_sequence + 1 :],
+    )
+    assert not any(event.event is StreamEventType.GRAPH_STATE for event in suffix)
 
 
 @pytest.mark.asyncio

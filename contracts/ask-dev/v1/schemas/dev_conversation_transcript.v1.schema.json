@@ -288,7 +288,7 @@
     },
     "DevAnswerGraphAssistance": {
       "additionalProperties": false,
-      "description": "CHAOS-3660 \u00a78(b)/(c)/(d). Everything the graph route (CHAOS-3502\nwave) contributed to an answer, in one namespace. ``cohort``,\n``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are\npopulated only when ``state`` reflects a completed, cohort-shaped\nanswer; ``None``/empty otherwise. Schema-only on ``main`` today -- see\n``DevAnswer.graph_assisted``'s own docstring.",
+      "description": "CHAOS-3660 \u00a78(b)/(c)/(d). Everything the graph route (CHAOS-3502\nwave) contributed to an answer, in one namespace. ``cohort``,\n``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are\npopulated only when ``state`` reflects a completed, cohort-shaped\nanswer; ``None``/empty otherwise. The orchestrator owns the runtime\nprojection of the route attempt; packet/backend details never cross this\ncontract boundary.",
       "properties": {
         "as_of": {
           "format": "date-time",

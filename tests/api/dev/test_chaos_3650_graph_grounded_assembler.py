@@ -36,7 +36,13 @@ from dev_health_ops.api.dev.canonical_enrichment import CanonicalEnrichmentAcces
 from dev_health_ops.api.dev.contract_fixtures import (
     positive_fixtures as v1_positive_fixtures,
 )
-from dev_health_ops.api.dev.contracts import AnswerStatus, DevMetricRef, FreshnessState
+from dev_health_ops.api.dev.contracts import (
+    AnswerStatus,
+    DevMetricRef,
+    FreshnessState,
+    GraphAssistedAvailability,
+    PacketLimitationKind,
+)
 from dev_health_ops.api.dev.evidence_service import (
     EvidenceRecord,
     EvidenceReferenceSigner,
@@ -314,12 +320,50 @@ async def test_completed_with_admissible_evidence_produces_a_graph_grounded_answ
     answer = output.result.answer
     assert answer is not None
     assert answer.status is AnswerStatus.PARTIAL
+    assert answer.graph_assisted is not None
+    assert answer.graph_assisted.state is GraphAssistedAvailability.LAGGING
+    assert answer.graph_assisted.cohort is None
+    assert answer.graph_assisted.ranked_drivers == []
+    assert answer.graph_assisted.evidence_lineage == []
+    assert answer.graph_assisted.limitations == [
+        PacketLimitationKind.MISSING_SOURCE,
+        PacketLimitationKind.STALE_SOURCE,
+    ]
+    assert "graphiti" not in answer.model_dump_json().casefold()
     assert len(answer.evidence) == 1
     assert answer.warnings == []
     assert recorder.grounding_validation_statuses[-1] == GRAPH_ASSISTED_GROUNDING_STATUS
     # The legacy model-tool-choice loop must never even start: the graph
     # path returned directly through finish().
     assert output.calls == []
+
+
+@pytest.mark.asyncio
+async def test_clean_graph_answer_exposes_enabled_state_without_backend_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(GRAPH_ROUTING_RUNTIME_FLAG, "1")
+    packet = _graph_arm_packet([_ADMIT_LOCATOR])
+    clean_coverage = packet.evidence_coverage.model_copy(update={"limitations": ()})
+    packet = packet.model_copy(update={"evidence_coverage": clean_coverage})
+
+    output = await run_preflight_orchestrator(
+        question=_DISCOVERED_COHORT_QUESTION,
+        entities=[],
+        org_id=ORG_ID,
+        script_id="chaos-w3-clean-state",
+        graph_investigation_query=FakeGraphInvestigationQuery(packet=packet),
+        evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
+        canonical_enrichment=_canonical_enrichment(),
+    )
+
+    assert output.result.answer is not None
+    graph_assistance = output.result.answer.graph_assisted
+    assert graph_assistance is not None
+    assert graph_assistance.state is GraphAssistedAvailability.ENABLED
+    assert graph_assistance.limitations == []
+    assert "graphiti" not in output.result.answer.model_dump_json().casefold()
 
 
 # ---------------------------------------------------------------------------

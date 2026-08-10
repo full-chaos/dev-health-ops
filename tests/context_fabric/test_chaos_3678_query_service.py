@@ -23,9 +23,10 @@ Three halves, matching the module's own documented scope:
   ``PROVIDER_FAILURE`` naming the mechanism rather than a partial-silent
   success.
 
-``SUBJECTLESS_COHORT_DISCOVERY`` remains untouched — still reaches
-``PROVIDER_FAILURE`` with a diagnostic naming the mechanism, the honest,
-current behaviour until ``cohort_discovery`` is wired in as CHAOS-3689.
+``SUBJECTLESS_COHORT_DISCOVERY`` graduated to a real ``COMPLETED`` path in
+CHAOS-3689 -- see ``test_chaos_3689_query_service.py``, which owns that
+mechanism's coverage the same way ``test_chaos_3678_subject_resolution.py``
+owns ``_resolve_exact_subjects``'s.
 """
 
 from __future__ import annotations
@@ -392,35 +393,21 @@ class TestUnsupportedMechanism:
         assert "no graph mechanism" in result.diagnostic
 
 
-class TestSubjectlessCohortDiscoveryIsNotYetImplemented:
-    pytestmark = pytest.mark.asyncio
-
-    """The remaining honest boundary: selected, not yet executed.
-
-    SEEDED_SINGULAR_SUBJECT and SEEDED_EXPLICIT_COHORT both graduated to
-    real COMPLETED paths (see ``TestSeededSingularSubjectCompletes`` and
-    ``TestSeededExplicitCohortCompletes`` below) -- SUBJECTLESS_COHORT_
-    DISCOVERY has not, since it needs ``cohort_discovery`` wired in as a
-    separate follow-up (CHAOS-3689).
-    """
-
-    async def test_subjectless_cohort_discovery_reaches_provider_failure(
-        self, monkeypatch
-    ) -> None:
-        monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
-        store = _FakeStore(watermark=_fresh_watermark())
-        service = _query(store)
-        result = await service.investigate(
-            _request(
-                intent_id=QuestionIntentID.DISCOVERED_COHORT,
-                cardinality=Cardinality.ORGANIZATION_WIDE,
-            )
-        )
-        assert result.outcome is GraphQueryOutcome.PROVIDER_FAILURE
-        assert result.packet is None
-        assert result.diagnostic is not None
-        assert "subjectless_cohort_discovery" in result.diagnostic
-
+# SUBJECTLESS_COHORT_DISCOVERY graduated to a real COMPLETED path in
+# CHAOS-3689 -- this file used to carry a
+# TestSubjectlessCohortDiscoveryIsNotYetImplemented class here, asserting
+# every call reached PROVIDER_FAILURE naming the mechanism. That claim is no
+# longer true, and leaving the class in place would have kept "passing" for
+# an entirely different, misleading reason: `_FakeStore`'s default `_driver`
+# is `None`, and a real completion attempt against a `None` driver raises
+# `AttributeError` inside `_complete_subjectless_cohort_discovery`'s own
+# broad `except Exception`, which ALSO reaches `PROVIDER_FAILURE` with
+# "subjectless_cohort_discovery" in the diagnostic -- the same assertions,
+# for a crash rather than an honest "not implemented". Removed rather than
+# left to pass for the wrong reason; see
+# ``test_chaos_3689_query_service.py`` for this mechanism's real coverage
+# (the family table, the live-snapshot wiring, and both the refusal and
+# COMPLETED paths).
 
 _TEST_SIGNING_SECRET = "chaos-3678-query-service-test-signing-secret-not-real"
 

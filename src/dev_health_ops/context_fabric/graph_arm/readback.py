@@ -81,6 +81,7 @@ __all__ = [
     "DiscoveredEntity",
     "DiscoveredObservation",
     "DiscoveredPath",
+    "EntityLookupRow",
     "GraphReader",
     "InvestigationReadout",
     "LiveGraphReader",
@@ -975,6 +976,26 @@ WHERE n.group_id = $partition
 RETURN DISTINCT n.cf_attachment_encoding AS attachment_encoding
 """
 
+#: CHAOS-3653: the observation->entity hop's one query.
+#:
+#: Bounded by construction, not by convention: an explicit ``$partition``
+#: and an explicit ``$canonical_ids IN`` list, never a wildcard and never a
+#: neighbourhood walk. The caller (:func:`~.semantic_retrieval.retrieve_candidates`)
+#: builds ``canonical_ids`` from nothing but the ``cf_subject_canonical_ids``
+#: already written on observation nodes that leg's OWN query already
+#: retrieved -- so this cannot become a general "look up anything" primitive
+#: no matter what a future caller passes, and it never widens beyond what an
+#: already-authorized observation named.
+_ENTITY_LOOKUP_BY_ID_QUERY = """
+MATCH (n:Entity)
+WHERE n.group_id = $partition AND n.cf_is_entity = true
+  AND n.cf_canonical_id IN $canonical_ids
+RETURN n.cf_canonical_id AS canonical_id,
+       n.cf_entity_kind AS entity_kind,
+       n.name AS display_label,
+       n.cf_source_class AS source_class
+"""
+
 
 #: Every Cypher statement the arm can issue, in one place.
 #:
@@ -993,6 +1014,7 @@ READ_ONLY_QUERIES: tuple[str, ...] = (
     _EDGE_QUERY,
     _PROJECTION_EMBEDDER_QUERY,
     _ATTACHMENT_ENCODING_QUERY,
+    _ENTITY_LOOKUP_BY_ID_QUERY,
     NODE_COUNT_QUERY,
 )
 
@@ -1206,6 +1228,70 @@ async def _rows(driver: Any, query: str, **params: object) -> list[dict[str, Any
         return []
     records, _, _ = result
     return list(records)
+
+
+@dataclass(frozen=True, slots=True)
+class EntityLookupRow:
+    """One entity, fetched by :func:`_entities_by_canonical_id`.
+
+    Deliberately narrower than :class:`DiscoveredEntity`: this is a
+    provenance lookup for a hop (CHAOS-3653), not a traversal result, and it
+    carries only what a caller needs to name and classify the entity it
+    landed on.
+    """
+
+    canonical_id: str
+    kind: GraphEntityKind
+    display_label: str
+    source_class: SourceClass
+
+
+async def _entities_by_canonical_id(
+    driver: Any, partition: str, canonical_ids: Sequence[str]
+) -> tuple[EntityLookupRow, ...]:
+    """Entity nodes for an explicit, caller-supplied id set. Nothing wider.
+
+    CHAOS-3653: subject resolution needs a bounded observation->entity hop
+    -- semantic/BM25 retrieval finds the right evidence and the resolver
+    still needs the canonical entity that evidence is about, which is not
+    something either search primitive returns. This is that lookup, and
+    the whole of it: an explicit id list, this partition only, and a
+    single-hop ``IN`` match with no relationship traversal at all.
+
+    A node without a legible ``cf_entity_kind`` or ``cf_source_class`` is
+    dropped rather than guessed at, matching
+    :func:`~.semantic_retrieval.retrieve_candidates`'s own rule for a node
+    this arm cannot classify.
+
+    An empty ``canonical_ids`` returns ``()`` without a query round trip --
+    the caller has nothing to hop to, and an unconditioned ``IN []`` is not
+    a query worth sending.
+    """
+
+    if not canonical_ids:
+        return ()
+    rows = await _rows(
+        driver,
+        _ENTITY_LOOKUP_BY_ID_QUERY,
+        partition=partition,
+        canonical_ids=list(canonical_ids),
+    )
+    results: list[EntityLookupRow] = []
+    for row in rows:
+        kind_value = row.get("entity_kind")
+        source_class_value = row.get("source_class")
+        display_label = row.get("display_label")
+        if kind_value is None or source_class_value is None or display_label is None:
+            continue
+        results.append(
+            EntityLookupRow(
+                canonical_id=row["canonical_id"],
+                kind=GraphEntityKind(kind_value),
+                display_label=display_label,
+                source_class=SourceClass(source_class_value),
+            )
+        )
+    return tuple(results)
 
 
 def _as_datetime(value: object) -> datetime:

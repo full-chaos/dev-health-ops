@@ -490,7 +490,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "820d4f3ae8048443e826b697f4c2a296551f22cdc799948e595002c42ff17b97"
+        "sha256": "1163612df6c1c9e523b755260bfeafcd7ce506d917f4c4702e479abac66cd9b6"
       },
       "schema_version": "dev_stream_event.v2"
     }

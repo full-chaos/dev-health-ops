@@ -60,6 +60,7 @@ from .contracts import (
     DevEvidenceExpansion,
     DevFeedback,
     DevMessageRequest,
+    DevRunResumeRequest,
     DevScope,
     DevTimeRange,
     DevTranscriptEntry,
@@ -99,7 +100,11 @@ from .prompts import (
     PromptConversationTurn,
 )
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
-from .streaming import encoded_sse_stream
+from .streaming import (
+    encoded_persisted_sse_stream,
+    encoded_sse_stream,
+    validate_persisted_resume_events,
+)
 
 
 def _disable_shared_cache(response: Response) -> None:
@@ -120,6 +125,9 @@ logger = logging.getLogger(__name__)
 #: recovers within a user's normal retry patience rather than needing a
 #: background sweep to notice it.
 _STALE_NON_TERMINAL_RUN_THRESHOLD = timedelta(minutes=5)
+_TERMINAL_RUN_STATES = frozenset(
+    {"completed", "insufficient_evidence", "refused", "failed", "cancelled"}
+)
 
 
 router = APIRouter(
@@ -1283,6 +1291,85 @@ async def delete_conversation(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/runs/{run_id}/resume")
+async def resume_run(
+    run_id: uuid.UUID,
+    body: DevRunResumeRequest,
+    auth: Annotated[
+        tuple[AuthenticatedUser, DevPersistenceService, str | None],
+        Depends(_require_ask_dev),
+    ],
+) -> StreamingResponse:
+    """Rejoin one owned run by replaying its durable SSE event ledger."""
+
+    user, service, header_request_id = auth
+    request_id = body.request_id or header_request_id
+    org_id, user_id = _owned_ids(user, request_id)
+    try:
+        run, persisted_scope = await service.get_run_resume_metadata(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+        if run.conversation_id != _parse_uuid(body.conversation_id, request_id):
+            _raise(
+                status.HTTP_409_CONFLICT,
+                "resume_scope_mismatch",
+                "The resume cursor does not belong to this conversation.",
+                request_id=request_id,
+            )
+        if persisted_scope != body.scope.model_dump(mode="json"):
+            _raise(
+                status.HTTP_409_CONFLICT,
+                "resume_scope_mismatch",
+                "The resume scope does not match the accepted run.",
+                request_id=request_id,
+            )
+        events = await service.list_stream_events(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            after_sequence=body.last_sequence,
+        )
+        if run.state not in _TERMINAL_RUN_STATES and not events:
+            _raise(
+                status.HTTP_409_CONFLICT,
+                "resume_unavailable",
+                "The live run has no durable event after this cursor.",
+                request_id=request_id,
+                retryable=True,
+            )
+        payloads = [row.event_data for row in events]
+        validate_persisted_resume_events(
+            run_id=str(run_id),
+            after_sequence=body.last_sequence,
+            persisted_events=payloads,
+        )
+    except (AskDevApiError, HTTPException):
+        raise
+    except ValueError as exc:
+        await service.session.rollback()
+        _raise(
+            status.HTTP_409_CONFLICT,
+            "resume_stream_invalid",
+            "The persisted Ask Dev stream cannot be resumed safely.",
+            request_id=request_id,
+        )
+        raise AssertionError("unreachable") from exc
+    except Exception as exc:
+        await service.session.rollback()
+        _raise_persistence(exc, request_id)
+        raise AssertionError("unreachable")
+
+    return StreamingResponse(
+        encoded_persisted_sse_stream(
+            run_id=str(run_id),
+            after_sequence=body.last_sequence,
+            persisted_events=payloads,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "private, no-store", "Pragma": "no-cache"},
+    )
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def create_message(
     conversation_id: uuid.UUID,
@@ -1389,6 +1476,7 @@ async def create_message(
                 limit=MAX_PRIOR_TURNS,
             )
             prior_turns = _bounded_prompt_history(history)
+        accepted_run_id = accepted.run.id
         await service.session.commit()
     except Exception as exc:
         await service.session.rollback()
@@ -1396,7 +1484,37 @@ async def create_message(
         raise AssertionError("unreachable")
 
     cancellation = asyncio.Event()
-    run_id = str(accepted.run.id)
+    run_id = str(accepted_run_id)
+    pending_events: list[Mapping[str, Any]] = []
+    use_independent_event_session = (
+        service.session.bind is not None
+        and service.session.bind.dialect.name != "sqlite"
+    )
+
+    async def persist_event(event: Mapping[str, Any]) -> None:
+        # Use an independent session: the orchestrator owns the request
+        # session and may flush concurrently while this public event is
+        # emitted. Per-emission commit makes reconnect durable even when the
+        # client closes the SSE generator before terminal completion.
+        if not use_independent_event_session:
+            pending_events.append(event)
+            return
+        try:
+            async with get_postgres_session() as event_session:
+                event_service = DevPersistenceService(event_session)
+                await event_service.record_stream_event(
+                    org_id=org_id,
+                    user_id=user_id,
+                    run_id=accepted_run_id,
+                    event=event,
+                )
+                await event_session.commit()
+        except DevPersistenceNotFound:
+            # A cleanup sweep can cascade-delete a zombie run while its
+            # response is still draining. The run is already gone, so there
+            # is no durable ledger row to append and persistence must not
+            # replace the orchestrator's safe terminal response.
+            return
 
     if not accepted.created:
         replay_run = accepted.run
@@ -1514,7 +1632,7 @@ async def create_message(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
-            run_id=accepted.run.id,
+            run_id=accepted_run_id,
             # Never read by record_error_message (it only persists the
             # transcript row) -- this run has no resolved provider at all,
             # so there is no real "platform"/"byo" value to report.
@@ -1535,7 +1653,7 @@ async def create_message(
         await service.update_run(
             org_id=org_id,
             user_id=user_id,
-            run_id=accepted.run.id,
+            run_id=accepted_run_id,
             state=RunState.FAILED.value,
             safe_error_code=error_code,
             terminal_error_payload=error.model_dump(mode="json"),
@@ -1555,7 +1673,7 @@ async def create_message(
         org_id=org_id,
         user_id=user_id,
         conversation_id=conversation_id,
-        run_id=accepted.run.id,
+        run_id=accepted_run_id,
         provider_source=runtime.provider_source,
     )
 
@@ -1628,7 +1746,7 @@ async def create_message(
                         await DevPersistenceService(
                             fallback_session
                         ).force_terminal_fallback(
-                            org_id=org_id, user_id=user_id, run_id=accepted.run.id
+                            org_id=org_id, user_id=user_id, run_id=accepted_run_id
                         )
                     fallback_exc = None
                     break
@@ -1647,12 +1765,27 @@ async def create_message(
             raise
 
     async def chunks() -> AsyncGenerator[bytes, None]:
-        async for chunk in encoded_sse_stream(
-            run_id=run_id,
-            run_with_events=run_with_events,
-            cancellation=cancellation,
-        ):
-            yield chunk
+        try:
+            async for chunk in encoded_sse_stream(
+                run_id=run_id,
+                run_with_events=run_with_events,
+                cancellation=cancellation,
+                persist_event=persist_event,
+            ):
+                yield chunk
+        finally:
+            if pending_events:
+                for event in pending_events:
+                    try:
+                        await service.record_stream_event(
+                            org_id=org_id,
+                            user_id=user_id,
+                            run_id=accepted_run_id,
+                            event=event,
+                        )
+                    except DevPersistenceNotFound:
+                        break
+                await service.session.commit()
 
     return StreamingResponse(
         chunks(),

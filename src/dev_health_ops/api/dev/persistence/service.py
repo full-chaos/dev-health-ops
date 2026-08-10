@@ -24,7 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from dev_health_ops.api.dev.contracts import DevError
+from dev_health_ops.api.dev.contracts import DevError, DevStreamEvent
 from dev_health_ops.api.dev.contracts_v2.base import NarrativeFailureCode
 from dev_health_ops.api.dev.contracts_v2.frame import (
     DevAnswerFrame as DevAnswerFrameContract,
@@ -55,6 +55,7 @@ from dev_health_ops.models.dev_persistence import (
     DevRunResolution,
     DevRunSourceObservation,
     DevRunStageDiagnostic,
+    DevRunStreamEvent,
     DevRunSubjectSet,
     DevToolCall,
 )
@@ -2240,7 +2241,9 @@ class DevPersistenceService:
         to the same row without erasing it.
         """
 
-        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        run = await self._owned_resume_run(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
         if run is None:
             raise DevPersistenceNotFound("run not found")
         if preflight_outcome is not None:
@@ -2311,7 +2314,9 @@ class DevPersistenceService:
             and narrative_failure_code not in _NARRATIVE_FAILURE_CODES
         ):
             raise DevPersistenceValidationError("invalid narrative failure code")
-        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        run = await self._owned_resume_run(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
         if run is None:
             raise DevPersistenceNotFound("run not found")
         if run.state in _TERMINAL_RUN_STATES:
@@ -3931,6 +3936,122 @@ class DevPersistenceService:
             )
         return await self.session.scalar(select(DevConversation).where(*conditions))
 
+    async def record_stream_event(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        event: Mapping[str, Any],
+    ) -> DevRunStreamEvent:
+        """Persist one validated public stream event for resumable delivery."""
+
+        run = await self._owned_resume_run(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+        if run is None:
+            raise DevPersistenceNotFound("Ask Dev run not found")
+        try:
+            validated = DevStreamEvent.model_validate(event)
+        except PydanticValidationError as exc:
+            raise DevPersistenceValidationError(
+                "invalid persisted stream event"
+            ) from exc
+        if validated.run_id != str(run.id):
+            raise DevPersistenceValidationError("stream event run ID mismatch")
+        event_data = validated.model_dump(mode="json")
+        sequence = validated.sequence
+        event_name = validated.event.value
+        existing = await self.session.scalar(
+            select(DevRunStreamEvent).where(
+                DevRunStreamEvent.run_id == run.id,
+                DevRunStreamEvent.sequence == sequence,
+            )
+        )
+        if existing is not None:
+            if existing.event_data != event_data:
+                raise DevPersistenceValidationError(
+                    "stream event sequence already has different content"
+                )
+            return existing
+        row = DevRunStreamEvent(
+            run_id=run.id,
+            org_id=org_id,
+            user_id=user_id,
+            sequence=sequence,
+            event=event_name,
+            event_data=event_data,
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(row)
+                await self.session.flush()
+        except IntegrityError:
+            existing = await self.session.scalar(
+                select(DevRunStreamEvent).where(
+                    DevRunStreamEvent.run_id == run.id,
+                    DevRunStreamEvent.sequence == sequence,
+                )
+            )
+            if existing is None or existing.event_data != event_data:
+                raise DevPersistenceValidationError(
+                    "stream event sequence already has different content"
+                )
+            return existing
+        return row
+
+    async def get_run_resume_metadata(
+        self, *, org_id: uuid.UUID, user_id: uuid.UUID, run_id: uuid.UUID
+    ) -> tuple[DevRun, dict[str, Any]]:
+        """Return the owned run and its persisted request scope."""
+
+        run = await self._owned_resume_run(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+        if run is None or run.user_message_id is None:
+            raise DevPersistenceNotFound("Ask Dev run not found")
+        message = await self.session.scalar(
+            select(DevMessage).where(
+                DevMessage.id == run.user_message_id,
+                DevMessage.org_id == org_id,
+                DevMessage.user_id == user_id,
+                DevMessage.conversation_id == run.conversation_id,
+                DevMessage.role == "user",
+            )
+        )
+        if message is None:
+            raise DevPersistenceNotFound("Ask Dev run scope not found")
+        return run, dict(message.scope_snapshot)
+
+    async def list_stream_events(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+        after_sequence: int,
+    ) -> list[DevRunStreamEvent]:
+        """Read only tenant-owned events strictly after a resume cursor."""
+
+        if after_sequence < -1:
+            raise DevPersistenceValidationError("invalid stream cursor")
+        run = await self._owned_resume_run(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+        if run is None:
+            raise DevPersistenceNotFound("Ask Dev run not found")
+        result = await self.session.scalars(
+            select(DevRunStreamEvent)
+            .where(
+                DevRunStreamEvent.run_id == run.id,
+                DevRunStreamEvent.org_id == org_id,
+                DevRunStreamEvent.user_id == user_id,
+                DevRunStreamEvent.sequence > after_sequence,
+            )
+            .order_by(DevRunStreamEvent.sequence)
+        )
+        return list(result)
+
     async def _owned_run(
         self, *, org_id: uuid.UUID, user_id: uuid.UUID, run_id: uuid.UUID
     ) -> DevRun | None:
@@ -3939,6 +4060,26 @@ class DevPersistenceService:
                 DevRun.id == run_id,
                 DevRun.org_id == org_id,
                 DevRun.user_id == user_id,
+            )
+        )
+
+    async def _owned_resume_run(
+        self, *, org_id: uuid.UUID, user_id: uuid.UUID, run_id: uuid.UUID
+    ) -> DevRun | None:
+        """Return a run only while its owning conversation is still live."""
+
+        return await self.session.scalar(
+            select(DevRun)
+            .join(DevConversation, DevConversation.id == DevRun.conversation_id)
+            .where(
+                DevRun.id == run_id,
+                DevRun.org_id == org_id,
+                DevRun.user_id == user_id,
+                DevConversation.org_id == org_id,
+                DevConversation.user_id == user_id,
+                DevConversation.deleted_at.is_(None),
+                DevConversation.expires_at.is_(None)
+                | (DevConversation.expires_at > self._now()),
             )
         )
 

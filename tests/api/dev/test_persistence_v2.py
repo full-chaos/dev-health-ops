@@ -86,6 +86,7 @@ from dev_health_ops.models.dev_persistence import (
     DevRunResolution,
     DevRunSourceObservation,
     DevRunStageDiagnostic,
+    DevRunStreamEvent,
     DevRunSubjectSet,
     DevToolCall,
 )
@@ -247,6 +248,7 @@ _TABLES = tables_of(
     DevAnswerFrame,
     DevRunNarrative,
     DevRunStageDiagnostic,
+    DevRunStreamEvent,
 )
 _ALL_V2_MODELS = (
     DevRunIntent,
@@ -314,6 +316,84 @@ async def _accepted_run(
         scope_snapshot={},
     )
     return conversation.id, accepted.run.id
+
+
+@pytest.mark.asyncio
+async def test_stream_events_are_tenant_owned_and_cursor_ordered(persistence) -> None:
+    maker, org_id, other_org_id, user_id, other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conversation_id, run_id = await _accepted_run(
+            service, org_id=org_id, user_id=user_id
+        )
+        first_event = await service.record_stream_event(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            event={
+                "schema_version": "dev_stream_event.v1",
+                "run_id": str(run_id),
+                "sequence": 0,
+                "event": "run.started",
+                "occurred_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        duplicate = await service.record_stream_event(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            event={
+                "schema_version": "dev_stream_event.v1",
+                "run_id": str(run_id),
+                "sequence": 0,
+                "event": "run.started",
+                "occurred_at": first_event.event_data["occurred_at"],
+            },
+        )
+        assert duplicate.id == first_event.id
+        await service.record_stream_event(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            event={
+                "schema_version": "dev_stream_event.v1",
+                "run_id": str(run_id),
+                "sequence": 1,
+                "event": "done",
+                "terminal_kind": "error",
+                "occurred_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        await session.commit()
+        rows = await service.list_stream_events(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            after_sequence=0,
+        )
+        assert [row.sequence for row in rows] == [1]
+        with pytest.raises(DevPersistenceNotFound):
+            await service.list_stream_events(
+                org_id=other_org_id,
+                user_id=other_user_id,
+                run_id=run_id,
+                after_sequence=-1,
+            )
+        conversation = await session.get(DevConversation, _conversation_id)
+        assert conversation is not None
+        conversation.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+        with pytest.raises(DevPersistenceNotFound):
+            await service.get_run_resume_metadata(
+                org_id=org_id, user_id=user_id, run_id=run_id
+            )
+        with pytest.raises(DevPersistenceNotFound):
+            await service.list_stream_events(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                after_sequence=-1,
+            )
 
 
 # -- dev_runs.provider_source durability --------------------------------

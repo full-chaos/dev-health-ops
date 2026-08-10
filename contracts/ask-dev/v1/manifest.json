@@ -375,7 +375,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "d06aedb5245ea51239d7020e4202a8c9cd97499bd1b7448e05bef4f379c596a2"
+        "sha256": "f78534a1189cfd2badabae531a70d71f08f9630735aa2e4932724a7d7031c864"
       },
       "schema_version": "dev_tool_result.v1"
     },
@@ -440,7 +440,7 @@
       ],
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "9e08ce3b72d9b7b3d92be5189abecbfb749914e0cdcbbebd666b19c3afe9e44c"
+        "sha256": "7cec5b786ce14b4b0f18b248b3a10ec44a5479108b4c0dbbd0351d0e767ac849"
       },
       "schema_version": "dev_stream_event.v1"
     },
@@ -459,7 +459,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_error.v1.schema.json",
-        "sha256": "6e43d439599900021500f04158fe07a266885d9273c530008db8b8923c1f087b"
+        "sha256": "51f1222fc03731360b56c565cc4bcfaf0f5bec6d943aed0ba943caafce3ef372"
       },
       "schema_version": "dev_error.v1"
     }
@@ -487,7 +487,7 @@
     {
       "case": "internal_prose_denylist",
       "path": "vocabulary/internal_prose_denylist.v1.json",
-      "sha256": "3b76d32fea472020b861912a8bc25233f6a8f529970b5ac95a9e37bb43b2833b"
+      "sha256": "d7c51f45a1b1a642d059a1a5e05496f52a4c93c1b11620ba7fdefbc5e5e7ae27"
     },
     {
       "case": "source_health_labels",

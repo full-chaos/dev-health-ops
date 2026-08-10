@@ -627,6 +627,16 @@ class DevMessageRequest(ContractModel):
         return value
 
 
+class DevRunResumeRequest(ContractModel):
+    """Additive cursor and immutable scope envelope for an SSE rejoin."""
+
+    schema_version: Literal["dev_run_resume_request.v1"]
+    request_id: OpaqueID
+    conversation_id: OpaqueID
+    last_sequence: int = Field(ge=-1, le=100_000)
+    scope: DevScope
+
+
 class DevCitationLink(ContractModel):
     internal_path: RelativePath | None = None
     source_url: (
@@ -1430,6 +1440,9 @@ class DevError(ContractModel):
         "scope_forbidden",
         "conversation_not_found",
         "conversation_expired",
+        "resume_scope_mismatch",
+        "resume_unavailable",
+        "resume_stream_invalid",
         "tool_limit_reached",
         "tool_unavailable",
         "source_unavailable",

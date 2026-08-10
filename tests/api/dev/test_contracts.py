@@ -30,6 +30,7 @@ from dev_health_ops.api.dev.export_contracts import (
     check_artifacts,
     expected_artifacts,
 )
+from dev_health_ops.api.dev.no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -440,6 +441,26 @@ def test_contract_schemas_are_provider_neutral_and_closed() -> None:
     assert 'additionalProperties": false' in schemas
     for provider_specific in ("openai_api_key", "anthropic_api_key", "tool_choice"):
         assert provider_specific not in schemas
+
+
+def test_published_denylist_full_set_matches_the_live_ops_side_union() -> None:
+    """CHAOS-3660 §8(h). Root-cause fix for a real finding (lane-W): the
+    published artifact's ``reason_codes``/``completion_states``/
+    ``extra_tokens`` keys were a hand-picked SUBSET of
+    ``INTERNAL_TOKEN_DENYLIST`` that could silently drift from it (a new
+    denylisted enum registered on the ops side had no path onto the wire).
+    ``full_denylist`` is computed directly from the live union, so this
+    test is really pinning that the wiring is correct -- and, concretely,
+    that this PR's own two new enums (``CohortDiscoveryFamily``,
+    ``PacketLimitationKind``) actually made it through both sites, not
+    just one.
+    """
+    denylist = json.loads(
+        expected_artifacts()["vocabulary/internal_prose_denylist.v1.json"]
+    )
+    assert set(denylist["full_denylist"]) == INTERNAL_TOKEN_DENYLIST
+    for expected_token in ("team_pressure", "project_capacity", "missing_source"):
+        assert expected_token in denylist["full_denylist"]
 
 
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)

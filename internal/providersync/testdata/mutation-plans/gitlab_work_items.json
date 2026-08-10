@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "name": "GitLab canonical work-items raw parity (CHAOS-3723)",
+  "build": ["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "This provider-local plan covers canonical-claim admission, project binding through the real GitLab route, pagination caps, label/history/comment/link/MR collection, Unicode comment measurement, derived-gap watermark withholding, typed six-fact effects, deterministic effect identity, and lease fencing. The integration-tagged ClickHouse test is the real schema/readback proof. It deliberately excludes registry, capability matrix, config, deployment, scheduler, and worker activation wiring; those are separate slices.",
+  "mutations": [
+    {
+      "id": "W1-claim-provider-guard",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "claim.Provider != \"gitlab\" ||",
+      "replace": "false ||",
+      "rationale": "the canonical GitLab work-items route must reject a foreign provider claim before any project request or normalization",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteRejectsInvalidScopeBeforeRequests$/wrong_claim_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W2-claim-dataset-guard",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "claim.Dataset != \"work-items\" ||",
+      "replace": "false ||",
+      "rationale": "a GitLab credential must not allow the work-items handler to execute a different dataset claim",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteRejectsInvalidScopeBeforeRequests$/wrong_claim_dataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W3-credential-identity-guard",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "credential.ID == \"\" || credential.ID != claim.CredentialID",
+      "replace": "credential.ID == \"\" || false",
+      "rationale": "the resolved credential must be the exact credential claimed by the leased unit, not merely a GitLab credential",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteRejectsInvalidScopeBeforeRequests$/credential_mismatch$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W4-client-provider-guard",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "client.Provider != \"gitlab\" ||",
+      "replace": "false ||",
+      "rationale": "GitLab URL and pagination semantics must only run on a client resolved for GitLab",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteRejectsInvalidScopeBeforeRequests$/wrong_client_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W5-before-bound-guard",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "claim.BeforeAt == nil ||",
+      "replace": "false ||",
+      "rationale": "the route must require the leased upper bound while it withholds the watermark for the ten unimplemented derived destinations",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteRejectsInvalidScopeBeforeRequests$/missing_before_bound$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W6-pagination-cap-fails-closed",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "if page.CapReached {",
+      "replace": "if false {",
+      "rationale": "a page-capped traversal is incomplete and must not emit a successful six-fact batch",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteRejectsPaginationCapAndMissingMapping$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W7-label-history-required",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "if fetchLabels {",
+      "replace": "if false && fetchLabels {",
+      "rationale": "label history is the real Python transition input and omitting it silently loses status transitions",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W8-history-required",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "if fetchHistory {",
+      "replace": "if false && fetchHistory {",
+      "expect_occurrences": 2,
+      "rationale": "issue and merge-request state history both feed the canonical transition/reopen facts",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W9-comments-required",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "if fetchComments {",
+      "replace": "if false && fetchComments {",
+      "expect_occurrences": 2,
+      "rationale": "issue and merge-request notes are the interaction fact and must not disappear while the route still reports success",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W10-links-required",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "if fetchLinks {",
+      "replace": "if false && fetchLinks {",
+      "rationale": "explicit links and description references are the canonical dependency fact, including canonical-blocks.v2 semantics",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W11-merge-requests-required",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "if includeMRs {",
+      "replace": "if false && includeMRs {",
+      "rationale": "the canonical provider batch includes merge-request work items and their history/comments, even though fetch_gitlab_work_items uses MRs only for blank-tenant attribution avoidance",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W12-unicode-comment-length",
+      "file": "internal/providersync/gitlab_work_items_rows.go",
+      "find": "BodyLength: utf8.RuneCountInString(note.Body)",
+      "replace": "BodyLength: len([]byte(note.Body)) + utf8.RuneCountInString(\"\")",
+      "rationale": "the Python interaction model measures Unicode code points, not UTF-8 bytes; the emoji fixture must catch byte-length drift",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W13-derived-gap-holds-watermark",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "WatermarkHeldForDerivedGap:       true",
+      "replace": "WatermarkHeldForDerivedGap:       false",
+      "rationale": "the typed result must honestly report that ten of sixteen derived destinations are not implemented, so callers cannot advance completion as if the family were whole",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W14-watermark-is-withheld",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "Effects: effects, Result: result, Watermark: nil",
+      "replace": "Effects: effects, Result: result, Watermark: claim.BeforeAt",
+      "rationale": "a route with an explicit ten-destination derived gap must not advance the leased watermark",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W15-effect-digest-rebuild",
+      "file": "internal/providersync/gitlab_work_items_effects.go",
+      "find": "rebuilt.ContentDigest != effect.ContentDigest ||",
+      "replace": "false ||",
+      "rationale": "recovery identity must reject a tampered effect payload rather than trusting a caller-supplied digest",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemEffectsFenceTenantGenerationAndLease$", "./internal/providersync/"]]
+    },
+    {
+      "id": "W16-post-write-lease-fence",
+      "file": "internal/providersync/gitlab_work_items_effects.go",
+      "find": "return sink.Lease.Assert(ctx)",
+      "replace": "return nil",
+      "rationale": "a lease lost after the adapter write must still fail the route before acknowledging the effect",
+      "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemEffectsFenceTenantGenerationAndLease$", "./internal/providersync/"]]
+    }
+  ]
+}

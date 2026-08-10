@@ -97,6 +97,11 @@
       "title": "Ask Dev",
       "type": "boolean"
     },
+    "ask_dev_graph_routing": {
+      "default": false,
+      "title": "Ask Dev Graph Routing",
+      "type": "boolean"
+    },
     "byo_llm": {
       "default": false,
       "title": "Byo Llm",

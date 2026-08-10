@@ -172,6 +172,18 @@ INTERNAL_TOKEN_DENYLIST: frozenset[str] = (
     | _underscore_members(
         get_args(DevActualCompletion.model_fields["state"].annotation)
     )
+    # CHAOS-3660 §8(h). Both freshly reserved on `main` by the graph-routing
+    # wave's contract package -- see their own docstrings in `contracts.py`.
+    # Registered here at the same commit that introduces them (not left for
+    # a later PR to remember), same discipline this comment already
+    # describes for every other source above. `GraphAssistedAvailability`
+    # is deliberately NOT unioned in: none of its 6 members contain an
+    # underscore (`_underscore_members` would drop them all), and its
+    # values (`enabled`, `stale`, ...) are ordinary English words legitimate
+    # prose may use -- the same reasoning the module docstring gives for
+    # keeping this denylist underscore-only in the first place.
+    | _underscore_members(member.value for member in CohortDiscoveryFamily)
+    | _underscore_members(member.value for member in PacketLimitationKind)
     | _EXTRA_INTERNAL_TOKENS
     | _GRAPH_ASSISTED_INTERNAL_TOKENS
 )

@@ -40,6 +40,15 @@
       "title": "ClaimKind",
       "type": "string"
     },
+    "CohortDiscoveryFamily": {
+      "description": "CHAOS-3660 \u00a78(d). The production-side classification signal for a\ndiscovered-cohort question. Reserved fresh here for the same reason as\n:class:`GraphAssistedAvailability` above -- the owning module\n(``graph_investigation_query.py``) is feature-branch-only today; must\nbe reconciled to that module's definition when it lands on ``main``.",
+      "enum": [
+        "team_pressure",
+        "project_capacity"
+      ],
+      "title": "CohortDiscoveryFamily",
+      "type": "string"
+    },
     "DevAnswer": {
       "additionalProperties": false,
       "properties": {
@@ -99,6 +108,17 @@
           "format": "date-time",
           "title": "Generated At",
           "type": "string"
+        },
+        "graph_assisted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerGraphAssistance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "metrics": {
           "items": {
@@ -160,6 +180,188 @@
         "model"
       ],
       "title": "DevAnswer",
+      "type": "object"
+    },
+    "DevAnswerCohortMember": {
+      "additionalProperties": false,
+      "description": "CHAOS-3660 \u00a78(d). One named member of a discovered cohort.\n\nDeliberately no \"excluded candidate\" counterpart: an excluded candidate\nis never named on the wire, since that would disclose a judgment about\nan entity nobody asked about. Disclosure of \"N candidates considered,\nnot included\" rides ``DevAnswerCohortSlot.warnings`` instead -- the\nsame mechanism v2's ``DevSubjectSet.warnings`` already uses for\ntruncation disclosure, not a new one.",
+      "properties": {
+        "display_label": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Display Label",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "inclusion_basis": {
+          "$ref": "#/$defs/CohortDiscoveryFamily"
+        }
+      },
+      "required": [
+        "entity_id",
+        "display_label",
+        "inclusion_basis"
+      ],
+      "title": "DevAnswerCohortMember",
+      "type": "object"
+    },
+    "DevAnswerCohortSlot": {
+      "additionalProperties": false,
+      "description": "CHAOS-3660 \u00a78(d). Deliberately narrower than v2's ``DevSubjectSet``:\nv1's ``DevScope``/``DirectScope`` is single-subject shaped and has\nnowhere else to represent a multi-entity cohort.",
+      "properties": {
+        "cohort_complete": {
+          "title": "Cohort Complete",
+          "type": "boolean"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/EntityType"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerCohortMember"
+          },
+          "maxItems": 25,
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "entity_kind",
+        "members",
+        "cohort_complete"
+      ],
+      "title": "DevAnswerCohortSlot",
+      "type": "object"
+    },
+    "DevAnswerDriverEntry": {
+      "additionalProperties": false,
+      "description": "CHAOS-3660 \u00a78(d). ``evidence_ref_ids`` point into the SAME answer's\nown ``evidence[]`` array -- see ``DevAnswer.validate_answer_invariants``\nbelow, which enforces that as a real constraint, not just a naming\nconvention.",
+      "properties": {
+        "contribution": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Contribution",
+          "type": "number"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Evidence Ref Ids",
+          "type": "array"
+        },
+        "rank": {
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rank",
+        "contribution",
+        "evidence_ref_ids"
+      ],
+      "title": "DevAnswerDriverEntry",
+      "type": "object"
+    },
+    "DevAnswerGraphAssistance": {
+      "additionalProperties": false,
+      "description": "CHAOS-3660 \u00a78(b)/(c)/(d). Everything the graph route (CHAOS-3502\nwave) contributed to an answer, in one namespace. ``cohort``,\n``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are\npopulated only when ``state`` reflects a completed, cohort-shaped\nanswer; ``None``/empty otherwise. Schema-only on ``main`` today -- see\n``DevAnswer.graph_assisted``'s own docstring.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "cohort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerCohortSlot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence_lineage": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerLineageHop"
+          },
+          "maxItems": 10,
+          "title": "Evidence Lineage",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/PacketLimitationKind"
+          },
+          "maxItems": 8,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "ranked_drivers": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerDriverEntry"
+          },
+          "maxItems": 25,
+          "title": "Ranked Drivers",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "dev_answer_graph_assistance.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/GraphAssistedAvailability"
+        }
+      },
+      "required": [
+        "schema_version",
+        "state",
+        "as_of"
+      ],
+      "title": "DevAnswerGraphAssistance",
+      "type": "object"
+    },
+    "DevAnswerLineageHop": {
+      "additionalProperties": false,
+      "description": "CHAOS-3660 \u00a78(d). One user-safe hop label in an evidence-lineage\npath, e.g. ``\"Team\"`` -> ``\"Project\"`` -> ``\"Pull Request\"``. Content-safe\nby construction: ``ShortText``, never a raw graph node id or internal\ntraversal vocabulary.",
+      "properties": {
+        "label": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "DevAnswerLineageHop",
       "type": "object"
     },
     "DevCitationLink": {
@@ -1286,6 +1488,19 @@
       "title": "FreshnessState",
       "type": "string"
     },
+    "GraphAssistedAvailability": {
+      "description": "CHAOS-3660 \u00a78(b)/(c)/(d). Web-facing degradation-state vocabulary for\ngraph-assisted Ask Dev routing (the CHAOS-3502 wave). Reserved fresh\nhere because the module that owns it on the feature branch\n(``graph_routing_policy.py``) has not landed on ``main`` yet -- see\nthat module's own docstring there for the full derivation (it is\nexplicitly NOT an independent source of truth: composed from the org\nentitlement decision, the graph query's transport-level outcome, and\nthe packet's own truncation/staleness disclosure). When that module\nlands on ``main``, this definition must be reconciled to it as the\nsingle source of truth, not kept as a second, independently-drifting\ncopy.",
+      "enum": [
+        "enabled",
+        "unavailable",
+        "stale",
+        "lagging",
+        "truncated",
+        "fallback"
+      ],
+      "title": "GraphAssistedAvailability",
+      "type": "string"
+    },
     "MetricID": {
       "enum": [
         "items_completed",
@@ -1298,6 +1513,21 @@
         "compounding_risk_score"
       ],
       "title": "MetricID",
+      "type": "string"
+    },
+    "PacketLimitationKind": {
+      "description": "CHAOS-3660 \u00a78(d)/(h). Reserved fresh here for the same reason as the\ntwo enums above -- the owning module\n(``investigation_contract/vocabulary.py``) is feature-branch-only\ntoday; must be reconciled to that module's definition when it lands on\n``main``.",
+      "enum": [
+        "missing_source",
+        "stale_source",
+        "conflicting_evidence",
+        "authorization_filtered",
+        "truncated_traversal",
+        "absent_staffing_denominator",
+        "historical_slice_not_comparable",
+        "interpretation_uncertainty"
+      ],
+      "title": "PacketLimitationKind",
       "type": "string"
     },
     "ProgressState": {
@@ -1331,6 +1561,7 @@
         "run.started",
         "scope.resolved",
         "progress",
+        "graph.state",
         "answer.delta",
         "answer.completed",
         "warning",
@@ -1383,6 +1614,17 @@
     },
     "event": {
       "$ref": "#/$defs/StreamEventType"
+    },
+    "graph_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevAnswerGraphAssistance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "occurred_at": {
       "format": "date-time",

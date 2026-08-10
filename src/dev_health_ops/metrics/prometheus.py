@@ -396,6 +396,20 @@ if _PROMETHEUS_AVAILABLE:
         ["reason"],
     )
 
+    # ---------------------------------------------------------------------------
+    # Integration credentials (issue 3694)
+    # ---------------------------------------------------------------------------
+    INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_integration_credential_decrypt_failed_total",
+        "Stored integration credential rows whose credentials_encrypted "
+        "payload existed but decrypt_value/json.loads raised when read -- "
+        "a key-mismatch class of failure (e.g. a rotated "
+        "SETTINGS_ENCRYPTION_KEY that can no longer decrypt rows written "
+        "under the old one). Every increment means a real credential a "
+        "caller believed was configured is now unusable; this must trend "
+        "to zero, never merely be a grep-able log line.",
+        ["provider"],
+    )
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -430,6 +444,7 @@ else:
     ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
     CONTEXT_FABRIC_DOCUMENTS_INDEXED_TOTAL = _noop_counter()
     CONTEXT_FABRIC_DOCUMENTS_REMOVED_TOTAL = _noop_counter()
+    INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

@@ -18,17 +18,24 @@ from dev_health_ops.api.dev.contract_fixtures import (
 from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     DevAnswer,
+    DevAnswerGraphAssistance,
     DevCapabilities,
+    DevEvidenceRef,
+    DevFeedback,
     DevMessageRequest,
     DevScope,
     DevScopeResolution,
     DevStreamEvent,
+    ToolID,
     validate_stream,
 )
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
 from dev_health_ops.api.dev.export_contracts import (
+    SOURCE_HEALTH_LABELS,
     check_artifacts,
     expected_artifacts,
 )
+from dev_health_ops.api.dev.no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from dev_health_ops.api.dev.scope_service import (
     AuthorizedEntity,
     EntityKind,
@@ -39,6 +46,24 @@ from dev_health_ops.api.dev.scope_service import (
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)
 def test_positive_fixture_validates(schema_version: str) -> None:
     CONTRACT_MODELS[schema_version].model_validate(positive_fixtures()[schema_version])
+
+
+def test_record_locator_is_absent_by_default_on_every_existing_evidence_ref() -> None:
+    """CHAOS-3633 / CHAOS-3660 §8(i). The canonical fixture predates this
+    field and never sets it -- ``test_positive_fixture_validates`` already
+    proves ``dev_evidence_ref.v1`` still validates without it, so this
+    fixture is itself the backward-compatibility proof. This test pins the
+    actual value down explicitly rather than leaving that proof implicit.
+    """
+    ref = DevEvidenceRef.model_validate(positive_fixtures()["dev_evidence_ref.v1"])
+    assert ref.record_locator is None
+
+
+def test_record_locator_accepts_an_opaque_id_when_present() -> None:
+    payload = deepcopy(positive_fixtures()["dev_evidence_ref.v1"])
+    payload["record_locator"] = "loc_pr_review_01"
+    ref = DevEvidenceRef.model_validate(payload)
+    assert ref.record_locator == "loc_pr_review_01"
 
 
 @pytest.mark.parametrize(
@@ -85,6 +110,71 @@ def test_answer_rejects_unknown_evidence_and_metric_ids() -> None:
         DevAnswer.model_validate(unknown_metric)
 
 
+def test_graph_assisted_is_absent_by_default_on_every_existing_answer() -> None:
+    """CHAOS-3660 §8(b). The canonical answer fixture predates this field
+    and never sets it -- pinning the default explicitly rather than
+    leaving the backward-compatibility proof implicit in the parametrized
+    fixture pass.
+    """
+    answer = DevAnswer.model_validate(positive_fixtures()["dev_answer.v1"])
+    assert answer.graph_assisted is None
+
+
+def test_graph_assisted_driver_evidence_must_reference_the_answers_own_evidence() -> (
+    None
+):
+    """CHAOS-3660 §8(d). ``ranked_drivers[].evidence_ref_ids`` point into
+    THIS answer's own ``evidence[]`` array -- enforced as a real
+    constraint by ``DevAnswer.validate_answer_invariants``, the same way
+    claims/conflicts/metrics already are, not just a naming convention.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["graph_assisted"] = {
+        "schema_version": "dev_answer_graph_assistance.v1",
+        "state": "enabled",
+        "as_of": payload["as_of"],
+        "ranked_drivers": [
+            {"rank": 1, "contribution": 0.5, "evidence_ref_ids": ["ev_unknown"]}
+        ],
+    }
+    with pytest.raises(ValidationError, match="graph-assisted driver"):
+        DevAnswer.model_validate(payload)
+
+    payload["graph_assisted"]["ranked_drivers"][0]["evidence_ref_ids"] = [
+        payload["evidence"][0]["evidence_ref_id"]
+    ]
+    answer = DevAnswer.model_validate(payload)
+    assert answer.graph_assisted is not None
+    assert answer.graph_assisted.ranked_drivers[0].rank == 1
+
+
+def test_graph_state_stream_event_carries_the_graph_assistance_object() -> None:
+    """CHAOS-3660 §8(c). ``graph.state`` requires its own payload (like
+    every other interior event) and rejects payloads meant for a
+    different event type, via the same ``allowed``/``required_payload``
+    machinery every existing event type already goes through.
+    """
+    payload = deepcopy(positive_fixtures()["dev_stream_event.v1"])
+    payload["event"] = "graph.state"
+    with pytest.raises(ValidationError, match="graph.state requires graph_state"):
+        DevStreamEvent.model_validate(payload)
+
+    graph_assistance = {
+        "schema_version": "dev_answer_graph_assistance.v1",
+        "state": "stale",
+        "as_of": payload["occurred_at"],
+    }
+    payload["graph_state"] = graph_assistance
+    event = DevStreamEvent.model_validate(payload)
+    assert event.graph_state == DevAnswerGraphAssistance.model_validate(
+        graph_assistance
+    )
+
+    payload["progress"] = "resolving_scope"
+    with pytest.raises(ValidationError, match="unexpected payloads"):
+        DevStreamEvent.model_validate(payload)
+
+
 def test_stream_sequences_require_exactly_one_terminal_then_done() -> None:
     fixtures = stream_fixtures()
     validate_stream([DevStreamEvent.model_validate(item) for item in fixtures["valid"]])
@@ -103,6 +193,19 @@ def test_capability_gates_are_independent() -> None:
     assert capabilities.agent_context_runtime is False
 
 
+def test_ask_dev_graph_routing_defaults_false_on_every_existing_capabilities_payload() -> (
+    None
+):
+    """CHAOS-3660 §8(a). The canonical fixture predates this flag and never
+    sets it -- pinning the default explicitly rather than leaving the
+    backward-compatibility proof implicit in the parametrized fixture pass.
+    """
+    capabilities = DevCapabilities.model_validate(
+        positive_fixtures()["dev_capabilities.v1"]
+    )
+    assert capabilities.ask_dev_graph_routing is False
+
+
 def test_neutral_message_scope_without_surface_context_remains_valid() -> None:
     payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
     payload["scope"]["direct_scope"] = "organization"
@@ -112,6 +215,67 @@ def test_neutral_message_scope_without_surface_context_remains_valid() -> None:
     request = DevMessageRequest.model_validate(payload)
 
     assert request.scope.surface_context is None
+
+
+def test_client_contract_version_is_absent_by_default_and_accepted_when_declared() -> (
+    None
+):
+    """CHAOS-3660 §8(k). Request-direction additive: an old client's
+    request (the canonical fixture, which never sets this) validates
+    unchanged, and a client that DOES declare a version round-trips it.
+    """
+    payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
+    assert "client_contract_version" not in payload
+    request = DevMessageRequest.model_validate(payload)
+    assert request.client_contract_version is None
+
+    payload["client_contract_version"] = "dev_stream_event.v2"
+    declared = DevMessageRequest.model_validate(payload)
+    assert declared.client_contract_version == "dev_stream_event.v2"
+
+
+def test_feedback_reasons_accepts_the_six_new_additive_members() -> None:
+    """CHAOS-3660 §8(f)/(j). None of the 6 new reasons were folded onto the
+    pre-existing, narrower ``wrong_scope`` -- each validates as its own
+    sibling value.
+    """
+    payload = deepcopy(positive_fixtures()["dev_feedback.v1"])
+    for reason in (
+        "wrong_subject",
+        "wrong_cohort",
+        "wrong_driver",
+        "unsafe_certainty",
+        "other",
+    ):
+        feedback = DevFeedback.model_validate({**payload, "reasons": [reason]})
+        assert feedback.reasons == [reason]
+
+
+def test_feedback_unspecified_reason_must_stand_alone() -> None:
+    """CHAOS-3660 §8(f)/(j). 'unspecified' is exactly ["unspecified"] or
+    contains no "unspecified" at all -- the constraint the server actually
+    enforces at runtime (pydantic), asserted here directly.
+
+    The exported JSON Schema's ``reasons`` property carries the SAME
+    constraint as a real ``oneOf``/``not``/``contains`` combinator (see
+    ``_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA`` in contracts.py), so a
+    client validating locally catches the same violation -- hand-verified
+    during implementation against a real Draft 2020-12 validator
+    (``jsonschema==4.26.0``, not a project dependency, so not re-asserted
+    here as a permanent test) over exactly these cases:
+    ``["unspecified"]`` valid, ``["unclear", "wrong_subject"]`` valid,
+    ``["unclear", "unspecified"]`` and ``["unspecified", "unclear"]``
+    invalid, ``[]`` invalid (``minItems``).
+    """
+    payload = deepcopy(positive_fixtures()["dev_feedback.v1"])
+
+    alone = DevFeedback.model_validate({**payload, "reasons": ["unspecified"]})
+    assert alone.reasons == ["unspecified"]
+
+    with pytest.raises(ValidationError, match="only reason"):
+        DevFeedback.model_validate({**payload, "reasons": ["unclear", "unspecified"]})
+    with pytest.raises(ValidationError, match="only reason"):
+        DevFeedback.model_validate({**payload, "reasons": ["unspecified", "unclear"]})
 
 
 @pytest.mark.parametrize("route_id", ["deployment_detail", "incident_detail"])
@@ -374,6 +538,59 @@ def test_contract_schemas_are_provider_neutral_and_closed() -> None:
     assert 'additionalProperties": false' in schemas
     for provider_specific in ("openai_api_key", "anthropic_api_key", "tool_choice"):
         assert provider_specific not in schemas
+
+
+def test_published_denylist_full_set_matches_the_live_ops_side_union() -> None:
+    """CHAOS-3660 §8(h). Root-cause fix for a real finding (lane-W): the
+    published artifact's ``reason_codes``/``completion_states``/
+    ``extra_tokens`` keys were a hand-picked SUBSET of
+    ``INTERNAL_TOKEN_DENYLIST`` that could silently drift from it (a new
+    denylisted enum registered on the ops side had no path onto the wire).
+    ``full_denylist`` is computed directly from the live union, so this
+    test is really pinning that the wiring is correct -- and, concretely,
+    that this PR's own two new enums (``CohortDiscoveryFamily``,
+    ``PacketLimitationKind``) actually made it through both sites, not
+    just one.
+    """
+    denylist = json.loads(
+        expected_artifacts()["vocabulary/internal_prose_denylist.v1.json"]
+    )
+    assert set(denylist["full_denylist"]) == INTERNAL_TOKEN_DENYLIST
+    for expected_token in ("team_pressure", "project_capacity", "missing_source"):
+        assert expected_token in denylist["full_denylist"]
+
+
+def test_source_health_labels_cover_every_known_required_source_producer() -> None:
+    """CHAOS-3660 §8(g). ``SOURCE_HEALTH_LABELS`` must have an entry for
+    every id ``DevCoverage.{unavailable,stale,degraded}_required_sources``
+    can actually carry -- derived here from the two live enums that feed
+    it (``ToolID``, ``SourceClass``) plus the one hardcoded literal
+    (``"tool_results"``), not a hand list independently re-typed.
+
+    Honesty about what this proves: it is a totality check against every
+    producer identified by reading ``orchestrator.py``'s
+    ``_coverage_from_tool_results``/``_coverage_with_plan_sources``/
+    ``_budget_exhausted_answer`` -- the only three call sites in the
+    codebase that assign into these three ``DevCoverage`` fields (verified
+    by grep, not assumed). It cannot dynamically catch a hypothetical
+    FUTURE fourth producer emitting a still-different literal; the
+    exact-equality assertion below at least ensures a member removed from
+    either enum (or the union going stale some other way) fails loudly
+    here rather than silently leaving a dead label.
+    """
+    expected = (
+        frozenset(member.value for member in ToolID)
+        | frozenset(member.value for member in SourceClass)
+        | {"tool_results"}
+    )
+    assert set(SOURCE_HEALTH_LABELS) == expected
+
+    published = json.loads(
+        expected_artifacts()["vocabulary/source_health_labels.v1.json"]
+    )
+    assert set(published["labels"]) == expected
+    for source_id, label in SOURCE_HEALTH_LABELS.items():
+        assert label, f"{source_id} has an empty label"
 
 
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)

@@ -1,8 +1,8 @@
 {
   "answer": null,
-  "delta": "hidden reasoning",
+  "delta": null,
   "error": null,
-  "event": "run.started",
+  "event": "graph.state",
   "graph_state": null,
   "occurred_at": "2026-07-28T12:00:00Z",
   "progress": null,

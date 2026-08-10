@@ -1,0 +1,32 @@
+{
+  "labels": {
+    "change_summary.v1": "Change summary",
+    "ci_run": "CI runs",
+    "code_change": "Code changes",
+    "cognitive_load": "Cognitive load",
+    "data_health.v1": "Data health",
+    "deficiency_inventory": "Deficiency inventory",
+    "deployment": "Deployments",
+    "get_evidence.v1": "Evidence expansion",
+    "health_profile": "Health profile",
+    "incident": "Incidents",
+    "investment_allocation": "Investment allocation",
+    "list_metrics.v1": "Metric catalog",
+    "operational_control": "Operational controls",
+    "pull_request": "Pull requests",
+    "query_metric.v1": "Metric query",
+    "resolve_scope.v1": "Scope resolution",
+    "review": "Reviews",
+    "search_evidence.v1": "Evidence search",
+    "source_health": "Source health",
+    "status_change": "Status changes",
+    "status_snapshot.v1": "Status snapshot",
+    "temporal_context": "Temporal context",
+    "test_report": "Test reports",
+    "tool_results": "Tool results",
+    "work_graph": "Work graph",
+    "work_graph_neighbors.v1": "Work graph",
+    "work_item": "Work items"
+  },
+  "schema_version": "ask_dev_source_health_labels.v1"
+}

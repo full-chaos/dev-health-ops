@@ -196,6 +196,64 @@ class ToolID(StrEnum):
     DATA_HEALTH = "data_health.v1"
 
 
+class GraphAssistedAvailability(StrEnum):
+    """CHAOS-3660 §8(b)/(c)/(d). Web-facing degradation-state vocabulary for
+    graph-assisted Ask Dev routing (the CHAOS-3502 wave). Reserved fresh
+    here because the module that owns it on the feature branch
+    (``graph_routing_policy.py``) has not landed on ``main`` yet -- see
+    that module's own docstring there for the full derivation (it is
+    explicitly NOT an independent source of truth: composed from the org
+    entitlement decision, the graph query's transport-level outcome, and
+    the packet's own truncation/staleness disclosure). When that module
+    lands on ``main``, this definition must be reconciled to it as the
+    single source of truth, not kept as a second, independently-drifting
+    copy.
+    """
+
+    ENABLED = "enabled"
+    UNAVAILABLE = "unavailable"
+    STALE = "stale"
+    LAGGING = "lagging"
+    TRUNCATED = "truncated"
+    #: Declared for forward-compatible closure but not yet reachable from
+    #: anything that emits this vocabulary on ``main`` OR the feature
+    #: branch today -- nothing yet names "graph route attempted, answer
+    #: degraded to native investigation" as a fact (see the feature
+    #: branch's own docstring). Stays in the wire enum; won't appear on
+    #: the wire until that gap closes separately.
+    FALLBACK = "fallback"
+
+
+class CohortDiscoveryFamily(StrEnum):
+    """CHAOS-3660 §8(d). The production-side classification signal for a
+    discovered-cohort question. Reserved fresh here for the same reason as
+    :class:`GraphAssistedAvailability` above -- the owning module
+    (``graph_investigation_query.py``) is feature-branch-only today; must
+    be reconciled to that module's definition when it lands on ``main``.
+    """
+
+    TEAM_PRESSURE = "team_pressure"
+    PROJECT_CAPACITY = "project_capacity"
+
+
+class PacketLimitationKind(StrEnum):
+    """CHAOS-3660 §8(d)/(h). Reserved fresh here for the same reason as the
+    two enums above -- the owning module
+    (``investigation_contract/vocabulary.py``) is feature-branch-only
+    today; must be reconciled to that module's definition when it lands on
+    ``main``.
+    """
+
+    MISSING_SOURCE = "missing_source"
+    STALE_SOURCE = "stale_source"
+    CONFLICTING_EVIDENCE = "conflicting_evidence"
+    AUTHORIZATION_FILTERED = "authorization_filtered"
+    TRUNCATED_TRAVERSAL = "truncated_traversal"
+    ABSENT_STAFFING_DENOMINATOR = "absent_staffing_denominator"
+    HISTORICAL_SLICE_NOT_COMPARABLE = "historical_slice_not_comparable"
+    INTERPRETATION_UNCERTAINTY = "interpretation_uncertainty"
+
+
 class DevTimeRange(ContractModel):
     start: AwareDatetime
     end: AwareDatetime
@@ -492,6 +550,12 @@ class DevCapabilities(ContractModel):
     )
     contextual_entrypoints: bool = False
     evidence_resolver: bool = False
+    #: CHAOS-3660 §8(a). Reserves the capability flag for graph-assisted Ask
+    #: Dev routing (CHAOS-3502 wave), which is still feature-branch-only on
+    #: `main` today -- no runtime path here computes anything but the
+    #: ``False`` default, so no client observes this as ``True`` until the
+    #: wave's routing/answer-shape work itself lands.
+    ask_dev_graph_routing: bool = False
     administrator_safe_failure_reason: ShortText | None = None
 
     @model_validator(mode="after")
@@ -543,6 +607,17 @@ class DevMessageRequest(ContractModel):
     question_class: QuestionClass
     scope: DevScope
     requested_metric_ids: list[MetricID] = Field(default_factory=list, max_length=8)
+    #: CHAOS-3660 §8(k). Request-direction and additive: an old client that
+    #: never sends this key is indistinguishable from one whose absence
+    #: means "declares nothing", so no currently-issued request breaks by
+    #: this field existing. Reserves the slot a client uses to declare the
+    #: newest contract surface it can parse (the same version strings
+    #: ``DevCapabilities.supported_contract_versions`` already advertises).
+    #: Schema-only today: the wave's ``graph.state`` stream event this is
+    #: meant to gate emission of has not landed on `main` yet (CHAOS-3502),
+    #: so nothing here reads this field -- server-side validation and the
+    #: gating it enables are a later PR, once that surface exists to gate.
+    client_contract_version: Version | None = None
 
     @field_validator("question")
     @classmethod
@@ -769,6 +844,78 @@ class DevModelMetadata(ContractModel):
     model_fingerprint: OpaqueID
 
 
+class DevAnswerCohortMember(ContractModel):
+    """CHAOS-3660 §8(d). One named member of a discovered cohort.
+
+    Deliberately no "excluded candidate" counterpart: an excluded candidate
+    is never named on the wire, since that would disclose a judgment about
+    an entity nobody asked about. Disclosure of "N candidates considered,
+    not included" rides ``DevAnswerCohortSlot.warnings`` instead -- the
+    same mechanism v2's ``DevSubjectSet.warnings`` already uses for
+    truncation disclosure, not a new one.
+    """
+
+    entity_id: OpaqueID
+    display_label: Label
+    inclusion_basis: CohortDiscoveryFamily
+
+
+class DevAnswerCohortSlot(ContractModel):
+    """CHAOS-3660 §8(d). Deliberately narrower than v2's ``DevSubjectSet``:
+    v1's ``DevScope``/``DirectScope`` is single-subject shaped and has
+    nowhere else to represent a multi-entity cohort.
+    """
+
+    entity_kind: EntityType
+    members: list[DevAnswerCohortMember] = Field(min_length=1, max_length=25)
+    cohort_complete: bool
+    warnings: list[ShortText] = Field(default_factory=list, max_length=20)
+
+
+class DevAnswerDriverEntry(ContractModel):
+    """CHAOS-3660 §8(d). ``evidence_ref_ids`` point into the SAME answer's
+    own ``evidence[]`` array -- see ``DevAnswer.validate_answer_invariants``
+    below, which enforces that as a real constraint, not just a naming
+    convention.
+    """
+
+    rank: int = Field(ge=1)
+    contribution: float = Field(ge=0.0, le=1.0)
+    evidence_ref_ids: list[OpaqueID] = Field(min_length=1, max_length=10)
+
+
+class DevAnswerLineageHop(ContractModel):
+    """CHAOS-3660 §8(d). One user-safe hop label in an evidence-lineage
+    path, e.g. ``"Team"`` -> ``"Project"`` -> ``"Pull Request"``. Content-safe
+    by construction: ``ShortText``, never a raw graph node id or internal
+    traversal vocabulary.
+    """
+
+    label: ShortText
+
+
+class DevAnswerGraphAssistance(ContractModel):
+    """CHAOS-3660 §8(b)/(c)/(d). Everything the graph route (CHAOS-3502
+    wave) contributed to an answer, in one namespace. ``cohort``,
+    ``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are
+    populated only when ``state`` reflects a completed, cohort-shaped
+    answer; ``None``/empty otherwise. Schema-only on ``main`` today -- see
+    ``DevAnswer.graph_assisted``'s own docstring.
+    """
+
+    schema_version: Literal["dev_answer_graph_assistance.v1"]
+    state: GraphAssistedAvailability
+    as_of: AwareDatetime
+    cohort: DevAnswerCohortSlot | None = None
+    ranked_drivers: list[DevAnswerDriverEntry] = Field(
+        default_factory=list, max_length=25
+    )
+    evidence_lineage: list[DevAnswerLineageHop] = Field(
+        default_factory=list, max_length=10
+    )
+    limitations: list[PacketLimitationKind] = Field(default_factory=list, max_length=8)
+
+
 class DevAnswer(ContractModel):
     schema_version: Literal["dev_answer.v1"]
     answer_id: OpaqueID
@@ -789,6 +936,16 @@ class DevAnswer(ContractModel):
     )
     versions: DevContractVersions
     model: DevModelMetadata
+    #: CHAOS-3660 §8(b). ``None`` when the run never attempted the graph
+    #: route at all (mirrors the feature branch's
+    #: ``describe_availability``'s own ``result is None`` branch); present
+    #: with ``state=unavailable`` when attempted but the route
+    #: declined/failed. Schema-only on ``main`` today: the graph-routing
+    #: wave (CHAOS-3502) that computes a real value here has not landed on
+    #: `main` yet, so no runtime path constructs a ``DevAnswer`` with this
+    #: set -- every existing answer (and every already-persisted
+    #: ``dev_answer.v1``) is unaffected.
+    graph_assisted: DevAnswerGraphAssistance | None = None
 
     @model_validator(mode="after")
     def validate_answer_invariants(self) -> Self:
@@ -811,6 +968,12 @@ class DevAnswer(ContractModel):
         for metric in self.metrics:
             if not set(metric.evidence_ref_ids) <= known_evidence:
                 raise ValueError("metric references unknown evidence IDs")
+        if self.graph_assisted is not None:
+            for driver in self.graph_assisted.ranked_drivers:
+                if not set(driver.evidence_ref_ids) <= known_evidence:
+                    raise ValueError(
+                        "graph-assisted driver references unknown evidence IDs"
+                    )
         if self.status is AnswerStatus.COMPLETE and (
             self.coverage.available_source_count != self.coverage.required_source_count
             or self.coverage.unavailable_required_sources
@@ -1171,6 +1334,31 @@ class DevToolResult(ContractModel):
         return self
 
 
+#: CHAOS-3660 §8(f)/(j). The 6 members added alongside the original 6:
+#: ``wrong_subject``/``wrong_cohort``/``wrong_driver`` (additive siblings of
+#: the pre-existing, narrower ``wrong_scope`` -- never folded into it),
+#: ``unsafe_certainty``, ``other`` (a specific-but-unlisted reason), and
+#: ``unspecified`` -- a neutral "declined to say" value, distinct from
+#: ``other``, closing the "web fabricates ``unclear``" data-honesty gap on
+#: a one-click thumbs-down. ``max_length`` below is 12 to match this
+#: doubled vocabulary size (was 6, coincidentally equal to the vocabulary
+#: size at the time) -- this is a genuine simultaneous-selection cap, not
+#: an accident of the old count.
+_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA: dict[str, Any] = {
+    # ``reasons`` is either EXACTLY ["unspecified"], or contains no
+    # "unspecified" at all -- a neutral "declined to say" can never sit
+    # alongside a specific reason (that would contradict the "declined"
+    # signal), and it can never be silently dropped from a mixed
+    # selection either. Expressed IN THE SCHEMA (not just the Python-side
+    # validator below) so a client validating locally catches the same
+    # violation the server would.
+    "oneOf": [
+        {"const": ["unspecified"]},
+        {"not": {"contains": {"const": "unspecified"}}},
+    ]
+}
+
+
 class DevFeedback(ContractModel):
     schema_version: Literal["dev_feedback.v1"]
     feedback_id: OpaqueID
@@ -1184,8 +1372,18 @@ class DevFeedback(ContractModel):
             "stale_data",
             "unclear",
             "useful",
+            "wrong_subject",
+            "wrong_cohort",
+            "wrong_driver",
+            "unsafe_certainty",
+            "other",
+            "unspecified",
         ]
-    ] = Field(min_length=1, max_length=6)
+    ] = Field(
+        min_length=1,
+        max_length=12,
+        json_schema_extra=_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA,
+    )
     comment: (
         Annotated[str, StringConstraints(min_length=1, max_length=2_048)] | None
     ) = Field(
@@ -1193,6 +1391,16 @@ class DevFeedback(ContractModel):
         json_schema_extra={"x-max-utf8-bytes": 2_048},
     )
     created_at: AwareDatetime
+
+    @field_validator("reasons")
+    @classmethod
+    def enforce_unspecified_exclusivity(cls, value: list[str]) -> list[str]:
+        if "unspecified" in value and value != ["unspecified"]:
+            raise ValueError(
+                "'unspecified' must be the only reason when present, "
+                "never combined with a specific reason"
+            )
+        return value
 
     @field_validator("comment")
     @classmethod
@@ -1269,6 +1477,16 @@ class StreamEventType(StrEnum):
     RUN_STARTED = "run.started"
     SCOPE_RESOLVED = "scope.resolved"
     PROGRESS = "progress"
+    #: CHAOS-3660 §8(c). A live routing-state signal, separate from the
+    #: heavy `graph_assisted` content that arrives once on the terminal
+    #: `answer.completed` event -- same convention as every other
+    #: "here's a new fact about how this run is unfolding" interior event
+    #: (`scope.resolved`, `progress`). Not a `run.started` payload: that
+    #: event is a structurally payload-free lifecycle marker fixed at
+    #: index 0 (see `allowed` below), and giving it a payload would mean
+    #: touching the lifecycle-position invariant machinery in
+    #: `validate_stream`, a much bigger change than this signal warrants.
+    GRAPH_STATE = "graph.state"
     ANSWER_DELTA = "answer.delta"
     ANSWER_COMPLETED = "answer.completed"
     WARNING = "warning"
@@ -1294,6 +1512,13 @@ class DevStreamEvent(ContractModel):
     occurred_at: AwareDatetime
     progress: ProgressState | None = None
     scope_resolution: DevScopeResolution | None = None
+    #: CHAOS-3660 §8(c). Carries only the `{state, as_of}` pair (via
+    #: `DevAnswerGraphAssistance`, reused rather than a slimmer duplicate)
+    #: -- the same object `DevAnswer.graph_assisted` carries once, in full,
+    #: on the terminal event. Schema-only on `main` today: see
+    #: `DevAnswer.graph_assisted`'s own docstring for why nothing here
+    #: emits a populated value yet.
+    graph_state: DevAnswerGraphAssistance | None = None
     delta: Annotated[str, StringConstraints(min_length=1, max_length=8_192)] | None = (
         None
     )
@@ -1307,6 +1532,7 @@ class DevStreamEvent(ContractModel):
         required_payload = {
             StreamEventType.SCOPE_RESOLVED: ("scope_resolution", self.scope_resolution),
             StreamEventType.PROGRESS: ("progress", self.progress),
+            StreamEventType.GRAPH_STATE: ("graph_state", self.graph_state),
             StreamEventType.ANSWER_DELTA: ("delta", self.delta),
             StreamEventType.ANSWER_COMPLETED: ("answer", self.answer),
             StreamEventType.WARNING: ("warning", self.warning),
@@ -1319,6 +1545,7 @@ class DevStreamEvent(ContractModel):
         payloads = {
             "progress": self.progress,
             "scope_resolution": self.scope_resolution,
+            "graph_state": self.graph_state,
             "delta": self.delta,
             "answer": self.answer,
             "warning": self.warning,
@@ -1329,6 +1556,7 @@ class DevStreamEvent(ContractModel):
             StreamEventType.RUN_STARTED: set(),
             StreamEventType.SCOPE_RESOLVED: {"scope_resolution"},
             StreamEventType.PROGRESS: {"progress"},
+            StreamEventType.GRAPH_STATE: {"graph_state"},
             StreamEventType.ANSWER_DELTA: {"delta"},
             StreamEventType.ANSWER_COMPLETED: {"answer"},
             StreamEventType.WARNING: {"warning"},
@@ -1388,6 +1616,7 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
     "dev_conversation_transcript.v1": DevConversationTranscript,
     "dev_message_request.v1": DevMessageRequest,
     "dev_answer.v1": DevAnswer,
+    "dev_answer_graph_assistance.v1": DevAnswerGraphAssistance,
     "dev_claim.v1": DevClaim,
     "dev_metric_ref.v1": DevMetricRef,
     "dev_evidence_ref.v1": DevEvidenceRef,
@@ -1404,6 +1633,7 @@ CONTRACT_MODELS: dict[str, type[ContractModel]] = {
 __all__ = [
     "CONTRACT_MODELS",
     "DevAnswer",
+    "DevAnswerGraphAssistance",
     "DevCapabilityLimits",
     "DevCapabilities",
     "DevClaim",

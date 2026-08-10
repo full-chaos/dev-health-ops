@@ -787,6 +787,73 @@ async def test_validated_answer_feedback_and_safe_tool_metadata_round_trip(persi
 
 
 @pytest.mark.asyncio
+async def test_feedback_accepts_the_additive_reasons_and_rejects_mixed_unspecified(
+    persistence,
+):
+    """CHAOS-3660 §8(f)/(j). ``_FEEDBACK_REASONS`` is one of three
+    independent copies of this vocabulary (contracts.DevFeedback, router's
+    request model, this persistence-layer allowlist) -- this proves the
+    NEW reasons actually made it through to the layer that would silently
+    reject them if only the wire contract had been widened.
+    """
+    maker, org_id, _other_org_id, user_id, _other_user_id = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="What changed?",
+            scope_snapshot={},
+        )
+        answer_id = uuid.uuid4()
+        payload = _validated_answer(conversation.id, answer_id)
+        await service.append_assistant_answer(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            answer_payload=payload,
+            validator=_identity_validator,
+            scope_snapshot={},
+        )
+
+        additive = await service.record_feedback(
+            org_id=org_id,
+            user_id=user_id,
+            answer_id=answer_id,
+            rating="not_helpful",
+            reasons=["wrong_subject", "wrong_cohort", "wrong_driver"],
+        )
+        assert sorted(additive.reasons) == [
+            "wrong_cohort",
+            "wrong_driver",
+            "wrong_subject",
+        ]
+
+        alone = await service.record_feedback(
+            org_id=org_id,
+            user_id=user_id,
+            answer_id=answer_id,
+            rating="not_helpful",
+            reasons=["unspecified"],
+        )
+        assert alone.reasons == ["unspecified"]
+
+        with pytest.raises(DevPersistenceValidationError, match="stand alone"):
+            await service.record_feedback(
+                org_id=org_id,
+                user_id=user_id,
+                answer_id=answer_id,
+                rating="not_helpful",
+                reasons=["unclear", "unspecified"],
+            )
+
+
+@pytest.mark.asyncio
 async def test_deletion_expiry_and_cleanup_are_bounded_idempotent_and_content_free(
     persistence,
 ):

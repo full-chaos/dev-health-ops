@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from enum import StrEnum
 from typing import Any, Final
 
 from sqlalchemy import select
@@ -15,6 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
+from dev_health_ops.metrics.prometheus import (
+    INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL,
+)
 from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 
@@ -84,6 +88,36 @@ def _validate_pagerduty_descriptor(
         raise ValueError("PagerDuty config auth_mode must match credentials")
 
 
+class CredentialLookupOutcome(StrEnum):
+    """issue 3694. Why a by-id credential lookup came back unusable --
+    :meth:`IntegrationCredentialsService.get_decrypted_credentials_by_id`
+    collapses all three into a single ``(None, ...)`` return, which is
+    correct for its existing callers (none of them need the reason) but
+    wrong for a caller that must tell a client WHY, e.g. whether to retry
+    the same request (never, for any of these) or re-enter the credential
+    (only ``NO_PAYLOAD``/``DECRYPT_FAILED``, never ``NOT_FOUND``, which
+    means there is nothing to re-enter).
+
+    Deliberately does NOT distinguish "row absent" from "row exists in a
+    different org" -- both are ``NOT_FOUND``, preserving the existing
+    not-found-as-forbidden cross-tenant posture (:meth:`get_by_id` already
+    scopes its query to ``self.org_id``, so a different org's row is
+    indistinguishable from no row at all by the time this code sees it,
+    and must stay that way)."""
+
+    #: Case 1: no row (absent, or scoped to a different org -- the two are
+    #: indistinguishable by design; see the class docstring).
+    NOT_FOUND = "not_found"
+    #: Case 2: the row exists but ``credentials_encrypted`` is falsy.
+    NO_PAYLOAD = "no_payload"
+    #: Case 3: the row exists with a payload, but ``decrypt_value``/
+    #: ``json.loads`` raised -- a key-mismatch class of failure, silent to
+    #: every existing caller before this enum existed.
+    DECRYPT_FAILED = "decrypt_failed"
+    #: The lookup succeeded; ``decrypted`` is a real, usable dict.
+    OK = "ok"
+
+
 class AmbiguousCredentialError(ValueError):
     """Raised when a provider has multiple active credentials and no
     explicit name/id was given to disambiguate."""
@@ -139,21 +173,53 @@ class IntegrationCredentialsService:
     ) -> tuple[dict[str, Any] | None, IntegrationCredential | None]:
         """Get credentials as a decrypted dictionary, looked up by ID.
 
-        Returns (decrypted_dict, credential_record) tuple.
+        Returns (decrypted_dict, credential_record) tuple. A thin,
+        outcome-discarding wrapper over
+        :meth:`get_decrypted_credentials_by_id_with_outcome` for the
+        existing callers that only ever needed "did this work", never
+        "why not" (issue 3694) -- their behavior is unchanged.
+        """
+        (
+            decrypted,
+            cred,
+            _outcome,
+        ) = await self.get_decrypted_credentials_by_id_with_outcome(credential_id)
+        return decrypted, cred
+
+    async def get_decrypted_credentials_by_id_with_outcome(
+        self,
+        credential_id: str,
+    ) -> tuple[
+        dict[str, Any] | None, IntegrationCredential | None, CredentialLookupOutcome
+    ]:
+        """Same lookup as :meth:`get_decrypted_credentials_by_id`, plus WHY
+        a falsy result is falsy (issue 3694) -- see
+        :class:`CredentialLookupOutcome` for what each case means and why
+        ``NOT_FOUND`` alone stays 404-shaped for cross-tenant safety.
+
+        Case 3 (``DECRYPT_FAILED``) also increments
+        ``INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL`` -- a key-mismatch
+        class of failure was previously only a ``logger.error`` line, not
+        countable/alertable.
         """
         cred: Any | None = await self.get_by_id(credential_id)
-        if cred is None or not cred.credentials_encrypted:
-            return None, cred
+        if cred is None:
+            return None, None, CredentialLookupOutcome.NOT_FOUND
+        if not cred.credentials_encrypted:
+            return None, cred, CredentialLookupOutcome.NO_PAYLOAD
 
         try:
             decrypted = decrypt_value(cred.credentials_encrypted)
-            return json.loads(decrypted), cred
+            return json.loads(decrypted), cred, CredentialLookupOutcome.OK
         except (ValueError, json.JSONDecodeError):
             logger.error(
                 "Failed to decrypt/parse integration config for id=%s",
                 sanitize_for_log(str(credential_id)),
             )
-            return None, cred
+            INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL.labels(
+                provider=sanitize_for_log(str(getattr(cred, "provider", "unknown")))
+            ).inc()
+            return None, cred, CredentialLookupOutcome.DECRYPT_FAILED
 
     async def get_decrypted_credentials(
         self,

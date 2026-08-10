@@ -1,0 +1,31 @@
+{
+  "as_of": "2026-07-28T12:00:00Z",
+  "cohort": {
+    "cohort_complete": true,
+    "entity_kind": "team",
+    "members": [],
+    "warnings": []
+  },
+  "evidence_lineage": [
+    {
+      "label": "Team"
+    },
+    {
+      "label": "Project"
+    }
+  ],
+  "limitations": [
+    "truncated_traversal"
+  ],
+  "ranked_drivers": [
+    {
+      "contribution": 0.6,
+      "evidence_ref_ids": [
+        "ev_01"
+      ],
+      "rank": 1
+    }
+  ],
+  "schema_version": "dev_answer_graph_assistance.v1",
+  "state": "enabled"
+}

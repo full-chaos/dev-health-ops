@@ -183,6 +183,12 @@ _RUN_STATES = _TERMINAL_RUN_STATES | frozenset(
         "answer_validation",
     }
 )
+#: CHAOS-3660 §8(f)/(j). The 6 members below the blank line are additive
+#: siblings, none folded onto the pre-existing, narrower ``wrong_scope``.
+#: Mirrors ``router.DevFeedbackCreateRequest.reasons`` and
+#: ``contracts.DevFeedback.reasons`` -- all three must widen together, or a
+#: newly-additive reason the contract declares valid gets silently
+#: rejected at whichever of the three gates was not updated.
 _FEEDBACK_REASONS = frozenset(
     {
         "incorrect",
@@ -191,6 +197,12 @@ _FEEDBACK_REASONS = frozenset(
         "stale_data",
         "unclear",
         "useful",
+        "wrong_subject",
+        "wrong_cohort",
+        "wrong_driver",
+        "unsafe_certainty",
+        "other",
+        "unspecified",
     }
 )
 _FORBIDDEN_METADATA_KEYS = frozenset(
@@ -1694,6 +1706,43 @@ class DevPersistenceService:
                 DevRunNarrative.run_id == run_id,
                 DevRunNarrative.org_id == org_id,
                 DevRunNarrative.user_id == user_id,
+            )
+        )
+
+    async def get_subject_set(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> DevRunSubjectSet | None:
+        """Return the tenant-owned committed subject set for one run, if any.
+
+        Step 1 of issue 3660 §8 item (e): the read-path counterpart to
+        ``record_subject_set``, which has had no selector since Wave 3.1
+        (CHAOS-3299/3301) introduced the write side. Symmetric to
+        ``get_answer_frame``/``get_run_narrative`` in every respect --
+        tenant-scoped by ``org_id``/``user_id`` in addition to ``run_id``
+        (never by ``run_id`` alone, matching every other reader in this
+        module: a run id is unguessable but this module's own posture is
+        that HTTP payloads and model output never get to substitute for an
+        authenticated tenant check), and returns ``None`` rather than
+        raising when the run recorded no subject set -- true for every
+        singular, non-cohort run, which is the common case (0..1 rows per
+        run, ``uq_dev_run_subject_sets_run``).
+
+        Deliberately unused by any caller for now: it is the inert half of
+        a two-step change (issue 3660 §8 item (e)) -- the projection that
+        will consume it, and the ``compat.py`` cohort refusal it would
+        replace, both wait for an ANSWERED-outcome cohort consumer that
+        does not exist yet.
+        """
+
+        return await self.session.scalar(
+            select(DevRunSubjectSet).where(
+                DevRunSubjectSet.run_id == run_id,
+                DevRunSubjectSet.org_id == org_id,
+                DevRunSubjectSet.user_id == user_id,
             )
         )
 
@@ -3508,6 +3557,16 @@ class DevPersistenceService:
         normalized_reasons = sorted(set(reasons))
         if not set(normalized_reasons).issubset(_FEEDBACK_REASONS):
             raise DevPersistenceValidationError("invalid feedback reason")
+        # CHAOS-3660 §8(f)/(j) defense in depth: the router's own request
+        # model enforces this first, but this method holds its own
+        # invariant rather than trusting every caller to have gone through
+        # that gate.
+        if "unspecified" in normalized_reasons and normalized_reasons != [
+            "unspecified"
+        ]:
+            raise DevPersistenceValidationError(
+                "'unspecified' feedback reason must stand alone"
+            )
         comment = _bounded_text(comment, field="feedback comment", max_bytes=2048)
         answer = await self.session.scalar(
             select(DevMessage).where(

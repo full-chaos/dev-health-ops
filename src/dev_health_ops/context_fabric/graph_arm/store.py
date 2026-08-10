@@ -29,6 +29,7 @@ orphan, and :func:`org_deletion_visit` — the callable registered in
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,7 +46,9 @@ from .backend import (
 from .budgets import DEFAULT_BUDGETS, TrialBudgets
 from .flags import (
     TRIAL_STORE_URI_VAR,
+    GraphDeadlines,
     TrialStoreConfig,
+    graph_deadlines,
     graph_projection_enabled,
     trial_store_config,
 )
@@ -59,6 +62,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "EmbeddingBudgetExceededError",
     "GraphArmStore",
+    "GraphOperationTimeoutError",
     "ProjectionDisabledError",
     "partition_exists_for",
     "StoreUnavailableError",
@@ -82,6 +86,61 @@ class EmbeddingBudgetExceededError(RuntimeError):
     """The projection would need more embedding calls than the run allows."""
 
 
+class GraphOperationTimeoutError(StoreUnavailableError):
+    """A live-store operation did not complete within its configured deadline.
+
+    CHAOS-3631. A ``StoreUnavailableError`` subclass, deliberately: every
+    caller that already treats "the store is unavailable" as "fall back to
+    the existing non-graph Ask Dev path" catches a hung backend for free,
+    with no separate except-clause to add and no risk of forgetting one.
+
+    A caller must never treat this as an empty or no-match result -- a
+    timeout says nothing about what the graph contains, only that the
+    question could not be answered inside the deadline. It is a distinct
+    degraded/unavailable outcome, not a quality signal.
+    """
+
+
+async def _await_with_deadline(
+    awaitable: Any, *, timeout_s: float, operation: str, detail: str
+) -> Any:
+    """Await ``awaitable``, bounded by ``timeout_s``.
+
+    This is the second, coarser bound described on :class:`GraphDeadlines`:
+    the FalkorDB client already carries a socket-level timeout, and this
+    catches everything above the socket too -- a request queued on a
+    saturated event loop, one blocked on a server-side lock, anything that
+    would otherwise wedge the caller past what the socket alone bounds.
+    Callers pass ``deadlines.read_timeout_s`` for a bounded metadata/read
+    operation or ``deadlines.write_timeout_s`` for the projection write,
+    which is proportional to batch size and, with a semantic embedder, to
+    real per-record network calls -- see the module docstring on
+    :class:`~.flags.GraphDeadlines` for why the two must not share a bound.
+
+    ``asyncio.TimeoutError`` never escapes this function. It is translated to
+    :class:`GraphOperationTimeoutError` so a caller can distinguish "the
+    store is unreachable/slow" from every other failure shape without
+    special-casing the stdlib's own timeout type, and so the failure is
+    logged once, here, with content-safe detail only -- an operation name and
+    an opaque org id/partition, never an entity label, title or body.
+    """
+
+    try:
+        return await asyncio.wait_for(awaitable, timeout=timeout_s)
+    except TimeoutError as exc:
+        logger.warning(
+            "context-fabric graph operation %s timed out after %.1fs (%s)",
+            operation,
+            timeout_s,
+            detail,
+        )
+        raise GraphOperationTimeoutError(
+            f"graph operation {operation!r} did not complete within "
+            f"{timeout_s}s ({detail}); treat this as a degraded/unavailable "
+            "graph, never as an empty result"
+        ) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class WriteResult:
     """What one projection write actually did."""
@@ -99,11 +158,19 @@ class GraphArmStore:
     parameter a caller could use to name a different one.
     """
 
-    def __init__(self, *, org_id: str, driver: Any, embedder: EmbeddingBackend) -> None:
+    def __init__(
+        self,
+        *,
+        org_id: str,
+        driver: Any,
+        embedder: EmbeddingBackend,
+        deadlines: GraphDeadlines | None = None,
+    ) -> None:
         self._org_id = org_id
         self._partition = partition_for_org(org_id)
         self._driver = driver
         self._embedder = embedder
+        self._deadlines = deadlines or graph_deadlines()
 
     @property
     def org_id(self) -> str:
@@ -116,6 +183,38 @@ class GraphArmStore:
     @property
     def embedder(self) -> EmbeddingBackend:
         return self._embedder
+
+    @property
+    def deadlines(self) -> GraphDeadlines:
+        """The connect/socket/read/write bounds this store's operations honour."""
+
+        return self._deadlines
+
+    async def _bounded_read(self, awaitable: Any, *, operation: str) -> Any:
+        """Bound a metadata/administrative operation by ``read_timeout_s``."""
+
+        return await _await_with_deadline(
+            awaitable,
+            timeout_s=self._deadlines.read_timeout_s,
+            operation=operation,
+            detail=f"org {self._org_id!r} partition {self._partition!r}",
+        )
+
+    async def _bounded_write(self, awaitable: Any, *, operation: str) -> Any:
+        """Bound the projection write by ``write_timeout_s``.
+
+        Deliberately a wider bound than :meth:`_bounded_read`: this call is
+        proportional to batch size and, with a semantic embedder, makes one
+        real network call per node and edge -- see
+        :class:`~.flags.GraphDeadlines`.
+        """
+
+        return await _await_with_deadline(
+            awaitable,
+            timeout_s=self._deadlines.write_timeout_s,
+            operation=operation,
+            detail=f"org {self._org_id!r} partition {self._partition!r}",
+        )
 
     @property
     def driver(self) -> Any:
@@ -147,6 +246,7 @@ class GraphArmStore:
         *,
         config: TrialStoreConfig | None = None,
         embedder: EmbeddingBackend | None = None,
+        deadlines: GraphDeadlines | None = None,
     ) -> GraphArmStore:
         """Open the trial store for a **server-derived** organization id.
 
@@ -154,6 +254,14 @@ class GraphArmStore:
         configured. It deliberately does not fall back to a default host and
         port: a misconfigured environment must fail, not project an
         organization's graph into whatever is listening locally.
+
+        CHAOS-3631: the underlying FalkorDB client is built here, explicitly,
+        with :data:`~.flags.GraphDeadlines`' connect/socket timeouts and
+        connection-pool bound, and handed to ``FalkorDriver`` via
+        ``falkor_db=``. ``FalkorDriver`` itself exposes no timeout parameter
+        at all -- constructing it the old way (``host=``/``port=``) let it
+        build an unconfigured client with redis-py's "block forever"
+        defaults, which is the whole defect.
         """
 
         resolved = config or trial_store_config()
@@ -163,25 +271,35 @@ class GraphArmStore:
                 "CONTEXT_FABRIC_GRAPH_STORE_URI (there is deliberately no "
                 "default host/port)"
             )
+        resolved_deadlines = deadlines or graph_deadlines()
         partition = partition_for_org(org_id)
-        driver = graphiti_module("driver.falkordb_driver").FalkorDriver(
+        falkordb_module = graphiti_module("driver.falkordb_driver")
+        client = falkordb_module.FalkorDB(
             host=resolved.host,
             port=resolved.port,
             password=resolved.password,
-            database=partition,
+            socket_connect_timeout=resolved_deadlines.connect_timeout_s,
+            socket_timeout=resolved_deadlines.socket_timeout_s,
+            max_connections=resolved_deadlines.max_connections,
         )
+        driver = falkordb_module.FalkorDriver(falkor_db=client, database=partition)
         return cls(
-            org_id=org_id, driver=driver, embedder=embedder or DeterministicEmbedder()
+            org_id=org_id,
+            driver=driver,
+            embedder=embedder or DeterministicEmbedder(),
+            deadlines=resolved_deadlines,
         )
 
     async def health_check(self) -> None:
-        await self._driver.health_check()
+        await self._bounded_read(self._driver.health_check(), operation="health_check")
 
     async def build_indices(self) -> None:
-        await self._driver.build_indices_and_constraints()
+        await self._bounded_read(
+            self._driver.build_indices_and_constraints(), operation="build_indices"
+        )
 
     async def close(self) -> None:
-        await self._driver.close()
+        await self._bounded_read(self._driver.close(), operation="close")
 
     async def write_projection(
         self, projection: GraphProjection, *, budgets: TrialBudgets = DEFAULT_BUDGETS
@@ -228,8 +346,11 @@ class GraphArmStore:
 
         nodes = to_graphiti_nodes(projection, self._embedder)
         edges = to_graphiti_edges(projection, self._embedder)
-        await graphiti_module("utils.bulk_utils").add_nodes_and_edges_bulk(
-            self._driver, [], [], nodes, edges, self._embedder
+        await self._bounded_write(
+            graphiti_module("utils.bulk_utils").add_nodes_and_edges_bulk(
+                self._driver, [], [], nodes, edges, self._embedder
+            ),
+            operation="write_projection",
         )
         indexed_through = max(
             (node.observed_at for node in projection.nodes),
@@ -265,13 +386,17 @@ class GraphArmStore:
         :func:`partition_exists_for`, which is the read-only check.
         """
 
-        graphs = await self._driver.client.list_graphs()
+        graphs = await self._bounded_read(
+            self._driver.client.list_graphs(), operation="partition_exists"
+        )
         return self._partition in set(graphs or ())
 
     async def count_nodes(self) -> int:
         if not await self.partition_exists():
             return 0
-        result = await self._driver.execute_query(NODE_COUNT_QUERY)
+        result = await self._bounded_read(
+            self._driver.execute_query(NODE_COUNT_QUERY), operation="count_nodes"
+        )
         if not result:
             return 0
         records, _, _ = result
@@ -302,12 +427,22 @@ class GraphArmStore:
             return total
         # One keyspace per organization, so deletion is a drop: there is no
         # partial state a failure could leave behind, and no node that a
-        # traversal-based delete could miss.
-        await self._driver.client.select_graph(self._partition).delete()
+        # traversal-based delete could miss. A drop is a single fixed-cost
+        # operation regardless of partition size, so it belongs under the
+        # read bound, not the write one.
+        await self._bounded_read(
+            self._driver.client.select_graph(self._partition).delete(),
+            operation="purge_org",
+        )
         return total
 
 
-async def partition_exists_for(org_id: str, config: TrialStoreConfig) -> bool:
+async def partition_exists_for(
+    org_id: str,
+    config: TrialStoreConfig,
+    *,
+    deadlines: GraphDeadlines | None = None,
+) -> bool:
     """Whether an organization has a trial keyspace, **without creating one**.
 
     Found by probing the running store: ``FalkorDriver.__init__`` schedules
@@ -322,13 +457,30 @@ async def partition_exists_for(org_id: str, config: TrialStoreConfig) -> bool:
     Graphiti driver. ``test_chaos_3617_live_store.py`` asserts the keyspace
     is still absent afterwards, against the live store rather than against an
     assumption about it.
+
+    CHAOS-3631: the bare client is built with the same connect/socket
+    deadlines and connection-pool bound as :meth:`GraphArmStore.for_org`, and
+    the ``list_graphs`` call is bounded by ``read_timeout_s`` the same way --
+    this preview path talks to the live store exactly as much as the store
+    itself does, and must be exactly as bounded.
     """
 
+    resolved_deadlines = deadlines or graph_deadlines()
     client = graphiti_module("driver.falkordb_driver").FalkorDB(
-        host=config.host, port=config.port, password=config.password
+        host=config.host,
+        port=config.port,
+        password=config.password,
+        socket_connect_timeout=resolved_deadlines.connect_timeout_s,
+        socket_timeout=resolved_deadlines.socket_timeout_s,
+        max_connections=resolved_deadlines.max_connections,
     )
     try:
-        graphs = await client.list_graphs()
+        graphs = await _await_with_deadline(
+            client.list_graphs(),
+            timeout_s=resolved_deadlines.read_timeout_s,
+            operation="partition_exists_for",
+            detail=f"org {org_id!r}",
+        )
         return partition_for_org(org_id) in set(graphs or ())
     finally:
         aclose = getattr(client, "aclose", None)

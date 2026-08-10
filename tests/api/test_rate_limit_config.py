@@ -144,6 +144,33 @@ def test_noop_limiter_allowed_in_development(monkeypatch):
     assert module.LIMITER_BACKEND == "noop"
 
 
+# ---------------------------------------------------------------------------
+# CHAOS-3692: AUTH_REGISTER_LIMIT is a test-environment knob, not a
+# security-posture change. The production default (3/hour) must never move
+# on its own -- only a workflow that explicitly sets AUTH_REGISTER_LIMIT
+# (the live-e2e CI job, per its own workflow file) may raise it, for
+# itself, and nothing else changes when the env var is absent.
+# ---------------------------------------------------------------------------
+
+
+def test_auth_register_limit_defaults_to_3_per_hour_when_env_absent(monkeypatch):
+    """The production default is UNCHANGED: no AUTH_REGISTER_LIMIT env var
+    set (the case for every deployment except live-e2e's own CI job) must
+    resolve to exactly the same "3/hour" ceiling as before this change."""
+    monkeypatch.delenv("AUTH_REGISTER_LIMIT", raising=False)
+    module, _ = _reload_rate_limit(monkeypatch, redis_url=None, environment="test")
+    assert module.AUTH_REGISTER_LIMIT == "3/hour"
+
+
+def test_auth_register_limit_honors_env_override_when_set(monkeypatch):
+    """A workflow that explicitly sets AUTH_REGISTER_LIMIT (live-e2e's own
+    CI job, not production) gets the value it asked for -- this is the
+    test-environment knob CHAOS-3692 exists to add."""
+    monkeypatch.setenv("AUTH_REGISTER_LIMIT", "500/hour")
+    module, _ = _reload_rate_limit(monkeypatch, redis_url=None, environment="test")
+    assert module.AUTH_REGISTER_LIMIT == "500/hour"
+
+
 def test_admin_user_key_hashes_authenticated_user_id(monkeypatch):
     module, _ = _reload_rate_limit(monkeypatch, redis_url=None, environment="test")
 

@@ -6,7 +6,7 @@
       "claim_id": "claim_01",
       "confidence": 1.0,
       "evidence_ref_ids": [
-        "ev_unknown"
+        "ev_01"
       ],
       "flags": {
         "conflicting": false,
@@ -103,7 +103,43 @@
     }
   ],
   "generated_at": "2026-07-28T12:00:00Z",
-  "graph_assisted": null,
+  "graph_assisted": {
+    "as_of": "2026-07-28T12:00:00Z",
+    "cohort": {
+      "cohort_complete": true,
+      "entity_kind": "team",
+      "members": [
+        {
+          "display_label": "Platform",
+          "entity_id": "team_platform",
+          "inclusion_basis": "team_pressure"
+        }
+      ],
+      "warnings": []
+    },
+    "evidence_lineage": [
+      {
+        "label": "Team"
+      },
+      {
+        "label": "Project"
+      }
+    ],
+    "limitations": [
+      "truncated_traversal"
+    ],
+    "ranked_drivers": [
+      {
+        "contribution": 0.6,
+        "evidence_ref_ids": [
+          "ev_unknown"
+        ],
+        "rank": 1
+      }
+    ],
+    "schema_version": "dev_answer_graph_assistance.v1",
+    "state": "enabled"
+  },
   "metrics": [
     {
       "aggregation": "count",

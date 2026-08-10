@@ -18,6 +18,7 @@ from .contract_fixtures import (
 )
 from .contracts import CONTRACT_MODELS, DevStreamEvent, ToolID, validate_stream
 from .contracts_v2.base import SourceClass
+from .no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from .status_change_service import STATUS_REASON_CODES
 
 #: CHAOS-3660 §8(g). ``DevCoverage.{unavailable,stale,degraded}_required_
@@ -227,6 +228,20 @@ def expected_artifacts() -> dict[str, str]:
     # evidence handle carries a random 40-hex-char suffix, so the client
     # must match it by SHAPE, not by a fixed string (see
     # ``contracts_v2/base.py``'s own ``ev1_[0-9a-f]{40}`` pattern).
+    #
+    # CHAOS-3660 §8(h). ``reason_codes``/``completion_states``/
+    # ``extra_tokens`` above are themselves a hand-picked SUBSET of
+    # ``INTERNAL_TOKEN_DENYLIST`` (missing, among others,
+    # ``ScopeResolutionOutcome``/``AnswerStatus``/``PublicOutcome`` members,
+    # and now ``CohortDiscoveryFamily``/``PacketLimitationKind``) --
+    # confirmed the root cause of a real finding (lane-W, CHAOS-3660): this
+    # artifact drifts from the ops-side union because it is a second,
+    # independently hand-maintained list, not derived from it. Kept the
+    # existing keys verbatim (an already-shipped client may parse them by
+    # name) and added ``full_denylist`` alongside as the actual union,
+    # computed here -- never hand-copied -- so it cannot re-drift the same
+    # way. A future client migrates onto ``full_denylist`` as the single
+    # source of truth; the narrower keys stay for back-compat only.
     denylist_contents = _json(
         {
             "schema_version": "ask_dev_internal_prose_denylist.v1",
@@ -234,6 +249,7 @@ def expected_artifacts() -> dict[str, str]:
             "completion_states": ["not_ready"],
             "extra_tokens": ["actual_completion"],
             "evidence_handle_pattern": "^ev1_[0-9a-f]{40}$",
+            "full_denylist": sorted(INTERNAL_TOKEN_DENYLIST),
         }
     )
     artifacts["vocabulary/internal_prose_denylist.v1.json"] = denylist_contents

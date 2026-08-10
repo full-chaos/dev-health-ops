@@ -204,6 +204,40 @@ def _error() -> dict[str, Any]:
     }
 
 
+def _graph_assistance(*, evidence_ref_ids: list[str] | None = None) -> dict[str, Any]:
+    """CHAOS-3660 §8(b)/(d). ``evidence_ref_ids`` lets callers point a
+    ranked driver at whatever evidence handle(s) the enclosing answer
+    fixture actually carries, since ``DevAnswer.validate_answer_invariants``
+    enforces that as a real constraint (see contracts.py).
+    """
+    return {
+        "schema_version": "dev_answer_graph_assistance.v1",
+        "state": "enabled",
+        "as_of": NOW,
+        "cohort": {
+            "entity_kind": "team",
+            "members": [
+                {
+                    "entity_id": "team_platform",
+                    "display_label": "Platform",
+                    "inclusion_basis": "team_pressure",
+                }
+            ],
+            "cohort_complete": True,
+            "warnings": [],
+        },
+        "ranked_drivers": [
+            {
+                "rank": 1,
+                "contribution": 0.6,
+                "evidence_ref_ids": evidence_ref_ids or ["ev_01"],
+            }
+        ],
+        "evidence_lineage": [{"label": "Team"}, {"label": "Project"}],
+        "limitations": ["truncated_traversal"],
+    }
+
+
 def _answer() -> dict[str, Any]:
     return {
         "schema_version": "dev_answer.v1",
@@ -238,6 +272,7 @@ def _answer() -> dict[str, Any]:
             "provider_family": "openai_compatible",
             "model_fingerprint": "model_certified_01",
         },
+        "graph_assisted": None,
     }
 
 
@@ -319,6 +354,7 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
             "requested_metric_ids": ["items_completed"],
         },
         "dev_answer.v1": _answer(),
+        "dev_answer_graph_assistance.v1": _graph_assistance(),
         "dev_claim.v1": _claim(),
         "dev_metric_ref.v1": _metric(),
         "dev_evidence_ref.v1": _evidence(),
@@ -397,6 +433,7 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
             "occurred_at": NOW,
             "progress": None,
             "scope_resolution": None,
+            "graph_state": None,
             "delta": None,
             "answer": None,
             "warning": None,
@@ -424,6 +461,22 @@ def positive_variant_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     return {
         "dev_scope.v1": [("team_direct_scope", _team_scope())],
         "dev_scope_resolution.v1": [("team_direct_scope", _team_scope_resolution())],
+        "dev_answer.v1": [
+            (
+                "graph_assisted",
+                {**_answer(), "graph_assisted": _graph_assistance()},
+            )
+        ],
+        "dev_stream_event.v1": [
+            (
+                "graph_state",
+                {
+                    **deepcopy(positive_fixtures()["dev_stream_event.v1"]),
+                    "event": "graph.state",
+                    "graph_state": _graph_assistance(),
+                },
+            )
+        ],
         "dev_feedback.v1": [
             (
                 "unspecified_alone",
@@ -494,6 +547,13 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         "dev_answer.v1",
         lambda value: value["coverage"].__setitem__(
             "stale_required_sources", ["work_graph"]
+        ),
+    )
+    answer_graph_assisted_unknown_evidence = changed(
+        "dev_answer.v1",
+        lambda value: value.__setitem__(
+            "graph_assisted",
+            _graph_assistance(evidence_ref_ids=["ev_unknown"]),
         ),
     )
     return {
@@ -600,6 +660,22 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             ("invalid_scope", answer_invalid_scope),
             ("oversized_evidence", answer_oversized),
             ("invalid_complete_state", answer_invalid_complete),
+            (
+                "graph_assisted_unknown_evidence_id",
+                answer_graph_assisted_unknown_evidence,
+            ),
+        ],
+        "dev_answer_graph_assistance.v1": [
+            (
+                "empty_cohort",
+                changed(
+                    "dev_answer_graph_assistance.v1",
+                    lambda value: value.__setitem__(
+                        "cohort",
+                        {**value["cohort"], "members": []},
+                    ),
+                ),
+            )
         ],
         "dev_claim.v1": [
             (
@@ -761,7 +837,23 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     **deepcopy(positives["dev_stream_event.v1"]),
                     "delta": "hidden reasoning",
                 },
-            )
+            ),
+            (
+                "graph_state_missing_payload",
+                {
+                    **deepcopy(positives["dev_stream_event.v1"]),
+                    "event": "graph.state",
+                },
+            ),
+            (
+                "graph_state_unexpected_progress_payload",
+                {
+                    **deepcopy(positives["dev_stream_event.v1"]),
+                    "event": "graph.state",
+                    "graph_state": _graph_assistance(),
+                    "progress": "resolving_scope",
+                },
+            ),
         ],
         "dev_error.v1": [
             (
@@ -777,33 +869,69 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
 
 def stream_fixtures() -> dict[str, list[dict[str, Any]]]:
     started = deepcopy(positive_fixtures()["dev_stream_event.v1"])
-    terminal_error = {
+    #: CHAOS-3660 §8(c). Proves the new interior `graph.state` event slots
+    #: into a real run lifecycle without disturbing `validate_stream`'s
+    #: terminal-position invariant -- same convention as `progress`,
+    #: `scope.resolved`, any other "here's a new fact" interior event.
+    graph_state_event = {
         **deepcopy(started),
         "sequence": 1,
+        "event": "graph.state",
+        "graph_state": _graph_assistance(),
+    }
+    terminal_error = {
+        **deepcopy(started),
+        "sequence": 2,
         "event": "error",
         "error": _error(),
     }
     done = {
         **deepcopy(started),
-        "sequence": 2,
+        "sequence": 3,
         "event": "done",
         "terminal_kind": "error",
     }
+    # Each of these three negative cases gets its own independent,
+    # contiguous 0..N-1 sequence -- NOT built from `terminal_error`/`done`
+    # above (whose sequence numbers shifted to make room for
+    # `graph_state_event` in "valid") -- so each one still fails for the
+    # SPECIFIC invariant its name claims, not incidentally for a sequence-
+    # contiguity mismatch introduced by that shift.
     duplicate_terminal = [
         deepcopy(started),
-        deepcopy(terminal_error),
-        {**deepcopy(terminal_error), "sequence": 2},
-        {**deepcopy(done), "sequence": 3},
+        {**deepcopy(started), "sequence": 1, "event": "error", "error": _error()},
+        {**deepcopy(started), "sequence": 2, "event": "error", "error": _error()},
+        {
+            **deepcopy(started),
+            "sequence": 3,
+            "event": "done",
+            "terminal_kind": "error",
+        },
+    ]
+    missing_done = [
+        deepcopy(started),
+        {**deepcopy(started), "sequence": 1, "event": "error", "error": _error()},
+    ]
+    out_of_order = [
+        {**deepcopy(started), "sequence": 1},
+        {
+            **deepcopy(started),
+            "sequence": 0,
+            "event": "error",
+            "error": _error(),
+        },
+        {
+            **deepcopy(started),
+            "sequence": 2,
+            "event": "done",
+            "terminal_kind": "error",
+        },
     ]
     return {
-        "valid": [started, terminal_error, done],
+        "valid": [started, graph_state_event, terminal_error, done],
         "invalid_duplicate_terminal": duplicate_terminal,
-        "invalid_missing_done": [deepcopy(started), deepcopy(terminal_error)],
-        "invalid_out_of_order": [
-            {**deepcopy(started), "sequence": 1},
-            {**deepcopy(terminal_error), "sequence": 0},
-            deepcopy(done),
-        ],
+        "invalid_missing_done": missing_done,
+        "invalid_out_of_order": out_of_order,
     }
 
 

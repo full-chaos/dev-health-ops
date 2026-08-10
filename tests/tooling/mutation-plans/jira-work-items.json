@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "jira-work-items-native-family",
+  "$comment": "CHAOS-3704 provider-local parity slice. Each mutation removes one Jira completeness, pagination, or tenant fence and must drive its direct proof red before restore.",
+  "build": [
+    "env",
+    "GOCACHE=/tmp/jira-go-cache",
+    "go",
+    "test",
+    "-count=1",
+    "-run",
+    "^$",
+    "./internal/providersync"
+  ],
+  "mutations": [
+    {
+      "id": "JI1",
+      "file": "internal/providersync/jira_work_items_route.go",
+      "find": "\tif len(optionalIncomplete) == 0 {",
+      "replace": "\tif len(optionalIncomplete) != 0 {",
+      "expect_occurrences": 1,
+      "rationale": "A Jira comments or sprint child failure is typed as incomplete and must withhold the watermark; advancing it would permanently skip the retry window.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraWorkItemsRouteOptionalCommentFailureIsTypedAndDoesNotAdvance$", "./internal/providersync"]]
+    },
+    {
+      "id": "JI2",
+      "file": "internal/providersync/jira_work_items_effects_clickhouse.go",
+      "find": "orgID != identity.OrgID",
+      "replace": "orgID == identity.OrgID",
+      "expect_occurrences": 1,
+      "rationale": "Every non-empty direct effect must be fenced to the claimed tenant before write or readback; accepting a foreign org row breaks isolation.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraWorkItemsEffectsFenceTenantLeaseAndReadbackRecovery$", "./internal/providersync"]]
+    },
+    {
+      "id": "JI3",
+      "file": "internal/providersync/jira_work_items_route.go",
+      "find": "\t\tif page.NextPageToken == \"\" {\n\t\t\treturn nil, pages + 1, ErrPaginationCapExceeded\n\t\t}",
+      "replace": "\t\tif page.NextPageToken == \"\" {\n\t\t\treturn issues, pages + 1, nil\n\t\t}",
+      "expect_occurrences": 1,
+      "rationale": "Jira must fail closed when a non-terminal page omits its continuation token; returning success would advance a watermark over an incomplete inventory.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraWorkItemsRouteFailsClosedWhenJiraDoesNotProvideNextPageToken$", "./internal/providersync"]]
+    }
+  ]
+}

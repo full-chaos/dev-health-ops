@@ -90,6 +90,10 @@ _OPERATIONAL_MIGRATION_SOURCE = _source(
 )
 _JSM_MODELS_SOURCE = _source("dev_health_ops/providers/jira/jsm_models.py")
 _JSM_INCIDENTS_SOURCE = _source("dev_health_ops/providers/jira/jsm_incidents.py")
+_JIRA_NORMALIZE_SOURCE = _source("dev_health_ops/providers/jira/normalize.py")
+_IDENTITY_SOURCE = _source("dev_health_ops/providers/identity.py")
+_NORMALIZE_COMMON_SOURCE = _source("dev_health_ops/providers/normalize_common.py")
+_DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
 _LICENSE_TYPES_SOURCE = _source("dev_health_ops/licensing/types.py")
 _LICENSE_REGISTRY_SOURCE = _source("dev_health_ops/licensing/registry.py")
 _FEATURE_POLICY_SOURCE = _source("dev_health_ops/licensing/feature_policy.py")
@@ -805,6 +809,20 @@ def _target_jsm_incidents() -> None:
     _load_source_module("dev_health_ops.providers.jira.jsm_models", _JSM_MODELS_SOURCE)
 
 
+def _target_jira_normalize() -> None:
+    """Load Jira's live work-item normalizers with their real pure inputs."""
+    _target_status_mapping()
+    _load_source_module(
+        "dev_health_ops.providers.status_mapping", _STATUS_MAPPING_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.identity", _IDENTITY_SOURCE)
+    _install_package("dev_health_ops.utils")
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+
+
 def _target_feature_policy() -> None:
     """Load the policy's real type and registry inputs without licensing init."""
     _load_source_module("dev_health_ops.licensing.types", _LICENSE_TYPES_SOURCE)
@@ -1037,6 +1055,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.jira.jsm_incidents",
         _JSM_INCIDENTS_SOURCE,
         _target_jsm_incidents,
+    ),
+    _JIRA_NORMALIZE_SOURCE: (
+        "dev_health_ops.providers.jira.normalize",
+        _JIRA_NORMALIZE_SOURCE,
+        _target_jira_normalize,
     ),
     _FEATURE_POLICY_SOURCE: (
         "dev_health_ops.licensing.feature_policy",

@@ -34,8 +34,12 @@ func TestBuildLinearWorkItemEffectsIsDeterministicAndExhaustive(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("effect construction is order-sensitive:\nfirst=%+v\nsecond=%+v", first, second)
 	}
-	if len(first) != 2 || first[0].Destination != "work_items" ||
-		first[1].Destination != "work_item_transitions" {
+	if len(first) != 6 || first[0].Destination != "work_items" ||
+		first[1].Destination != "work_item_transitions" ||
+		first[2].Destination != "work_item_dependencies" ||
+		first[3].Destination != "work_item_reopen_events" ||
+		first[4].Destination != "work_item_interactions" ||
+		first[5].Destination != "sprints" {
 		t.Fatalf("effects=%+v", first)
 	}
 	for index, effect := range first {
@@ -43,7 +47,8 @@ func TestBuildLinearWorkItemEffectsIsDeterministicAndExhaustive(t *testing.T) {
 			t.Fatalf("effect[%d]=%+v", index, effect)
 		}
 	}
-	if len(first[0].Rows) != 2 || len(first[1].Rows) != 0 {
+	if len(first[0].Rows) != 2 || len(first[1].Rows) != 0 || len(first[2].Rows) != 0 ||
+		len(first[3].Rows) != 0 || len(first[4].Rows) != 0 || len(first[5].Rows) != 0 {
 		t.Fatalf("empty destination was dropped: %+v", first)
 	}
 	if _, err := BuildLinearWorkItemEffects(LinearWorkItemEffectRows{
@@ -164,6 +169,36 @@ func TestLinearWorkItemEffectsRecoverAfterMidWrite(t *testing.T) {
 	}
 }
 
+func TestLinearWorkItemEffectsDispatchEveryRawDestination(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	effects, err := BuildLinearWorkItemEffects(LinearWorkItemEffectRows{
+		WorkItems:         []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1"}`)},
+		StatusTransitions: []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1","occurred_at":"2026-07-30T11:00:00Z","from_status":"todo","to_status":"in_progress"}`)},
+		Dependencies:      []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","source_work_item_id":"ghpr:acme/repo#9","target_work_item_id":"linear:ENG-1","relationship_type":"relates_to","relationship_type_raw":"linear_attachment","relationship_semantics_version":"canonical-blocks.v2"}`)},
+		ReopenEvents:      []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","work_item_id":"linear:ENG-1","occurred_at":"2026-07-30T11:00:00Z","from_status":"done","to_status":"in_progress"}`)},
+		Interactions:      []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","work_item_id":"linear:ENG-1","interaction_type":"comment","occurred_at":"2026-07-30T11:00:00Z","body_length":4}`)},
+		Sprints:           []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","provider":"linear","sprint_id":"linear:cycle:7","name":"Cycle 7","state":"active"}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := newLinearSemanticEffectBackend()
+	sink := linearWorkItemEffectsFixture(backend, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	for _, effect := range effects {
+		if len(effect.Rows) == 0 {
+			continue
+		}
+		if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
+			t.Fatalf("destination %s write error=%v", effect.Destination, err)
+		}
+	}
+	for _, destination := range linearWorkItemEffectDestinations {
+		if backend.writeCounts[destination] != 1 {
+			t.Fatalf("destination %s writes=%v", destination, backend.writeCounts)
+		}
+	}
+}
+
 func TestLinearDirectAdaptersFenceTenantAndMirrorSinkColumnOwnership(t *testing.T) {
 	t.Parallel()
 	if containsColumn(linearWorkItemsInsert, "description") ||
@@ -248,7 +283,7 @@ func (backend *linearSemanticEffectBackend) WriteLinearWorkItemEffect(
 			Provider string `json:"provider"`
 		}
 		if err := json.Unmarshal(raw, &row); err != nil ||
-			row.OrgID != identity.OrgID || row.Provider != "linear" {
+			row.OrgID != identity.OrgID || (row.Provider != "" && row.Provider != "linear") {
 			return ErrInvalidConfiguration
 		}
 	}
@@ -286,6 +321,18 @@ func linearWorkItemEffectsFixture(
 		},
 		StatusTransitions: linearDestinationCheckingAdapter{
 			destination: "work_item_transitions", delegate: backend,
+		},
+		Dependencies: linearDestinationCheckingAdapter{
+			destination: "work_item_dependencies", delegate: backend,
+		},
+		ReopenEvents: linearDestinationCheckingAdapter{
+			destination: "work_item_reopen_events", delegate: backend,
+		},
+		Interactions: linearDestinationCheckingAdapter{
+			destination: "work_item_interactions", delegate: backend,
+		},
+		Sprints: linearDestinationCheckingAdapter{
+			destination: "sprints", delegate: backend,
 		},
 	}
 }

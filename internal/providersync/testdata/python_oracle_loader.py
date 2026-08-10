@@ -111,6 +111,9 @@ _NORMALIZE_COMMON_SOURCE = _source("dev_health_ops/providers/normalize_common.py
 _NORMALIZE_HELPERS_SOURCE = _source("dev_health_ops/providers/normalize_helpers.py")
 _DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
 _LINEAR_NORMALIZE_SOURCE = _source("dev_health_ops/providers/linear/normalize.py")
+_LINEAR_PROVIDER_SOURCE = _source("dev_health_ops/providers/linear/provider.py")
+_PROVIDERS_BASE_SOURCE = _source("dev_health_ops/providers/base.py")
+_PROVIDERS_UTILS_SOURCE = _source("dev_health_ops/providers/utils.py")
 
 # The ClickHouse metrics sink package, for the direct work-item destination
 # projection oracle. Every one of these is a real production source; the list
@@ -915,6 +918,27 @@ def _target_linear_normalize() -> None:
     )
 
 
+def _target_linear_provider() -> None:
+    """Load the live Linear provider wrapper for provider-only helpers.
+
+    The reference-dimension resolver lives in ``provider.py`` rather than the
+    pure normalizer.  Keep the provider module itself live while loading only
+    the dependency-free contracts needed to define its class; the oracle never
+    enters the HTTP client or ingestion method.
+    """
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module("dev_health_ops.providers.base", _PROVIDERS_BASE_SOURCE)
+    _load_source_module("dev_health_ops.providers.utils", _PROVIDERS_UTILS_SOURCE)
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+    _install_module(
+        "dev_health_ops.providers.linear.client",
+        {"LinearClient": type("LinearClient", (), {})},
+    )
+
+
 def _target_fetch_utils() -> None:
     _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
 
@@ -1003,6 +1027,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.providers.linear.normalize",
         _LINEAR_NORMALIZE_SOURCE,
         _target_linear_normalize,
+    ),
+    _LINEAR_PROVIDER_SOURCE: (
+        "dev_health_ops.providers.linear.provider",
+        _LINEAR_PROVIDER_SOURCE,
+        _target_linear_provider,
     ),
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",

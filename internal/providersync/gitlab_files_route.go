@@ -481,7 +481,11 @@ func gitLabFileContentEligible(filePath string) bool {
 	if strings.HasSuffix(base, ".config.mjs") {
 		return false
 	}
-	switch strings.ToLower(path.Ext(base)) {
+	// The Python producer applies the lowercase include_globs through
+	// fnmatch.fnmatch, which is case-sensitive on the supported worker
+	// platform. Keep the extension's source spelling instead of normalizing it:
+	// Main.GO and mixed.Go must remain paths-only, just as Python emits them.
+	switch path.Ext(base) {
 	case ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".rs", ".java", ".kt", ".kts", ".rb", ".php", ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".swift", ".scala", ".m", ".mm", ".lua", ".vue":
 		return true
 	default:

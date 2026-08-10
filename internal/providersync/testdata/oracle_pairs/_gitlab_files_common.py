@@ -49,6 +49,7 @@ class FileTraceRow:
 @dataclass(frozen=True)
 class FileTraversalTrace:
     producer_requests: list[str]
+    requested_content_paths: list[str]
     usage_request_count: int
     tree_paths: list[str]
     rows: list[FileTraceRow]
@@ -57,7 +58,14 @@ class FileTraversalTrace:
 
 def reflected_trace_fields() -> frozenset[str]:
     return frozenset(
-        {"producer_requests", "usage_request_count", "tree_paths", "rows", "incomplete"}
+        {
+            "producer_requests",
+            "requested_content_paths",
+            "usage_request_count",
+            "tree_paths",
+            "rows",
+            "incomplete",
+        }
     )
 
 
@@ -82,6 +90,7 @@ def run_python_producer(case: dict[str, Any]) -> FileTraversalTrace:
     processor.write_historical_complexity = lambda **_kwargs: None
 
     requests: list[str] = []
+    requested_content_paths: list[str] = []
     tree_pages = case.get("tree_pages", [[]])
     tree_next_pages = case.get("tree_next_pages", [])
     commit_rows = case.get("commit_rows", [])
@@ -107,6 +116,8 @@ def run_python_producer(case: dict[str, Any]) -> FileTraversalTrace:
             variables = body["variables"]
             paths = [str(path) for path in variables["paths"]]
             query = str(body["query"])
+            if "rawSize" in query or "rawTextBlob" in query:
+                requested_content_paths.extend(paths)
             if case.get("content_failure") and "rawTextBlob" in query:
                 return httpx.Response(500, json={}, request=request)
             if "rawSize" in query:
@@ -212,6 +223,7 @@ def run_python_producer(case: dict[str, Any]) -> FileTraversalTrace:
         )
     return FileTraversalTrace(
         producer_requests=requests,
+        requested_content_paths=requested_content_paths,
         usage_request_count=usage_request_count,
         tree_paths=tree_paths,
         rows=rows,

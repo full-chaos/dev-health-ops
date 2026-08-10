@@ -43,6 +43,7 @@ from dev_health_ops.llm.agent.errors import (
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL,
     ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL,
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
@@ -65,6 +66,7 @@ from .answer_validator import (
     completion_truncation_detail,
     validate_answer_candidate,
 )
+from .canonical_enrichment import CanonicalEnrichmentAccessor, EnrichmentGap
 from .contracts import (
     V1_SCOPE_LIST_LIMIT,
     AnswerStatus,
@@ -107,11 +109,13 @@ from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
 from .evidence_service import EvidenceService
+from .graph_evidence_admission import extract_evidence_candidates
 from .graph_investigation_query import (
     GraphInvestigationQuery,
     GraphInvestigationRequest,
     GraphQueryOutcome,
 )
+from .investigation_contract import AskDevInvestigationPacket, InvestigationOutcome
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .investigation_shadow import (
@@ -149,7 +153,11 @@ from .qua_promotion import (
 )
 from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
 from .question_interpreter import classify_cohort_discovery_family
-from .scope_service import MAX_CANDIDATES, ScopeResolutionService
+from .scope_service import (
+    MAX_CANDIDATES,
+    ScopeResolutionService,
+    scope_request_from_scope,
+)
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
@@ -399,6 +407,45 @@ SERVER_GROUNDED_WARNING = (
     "server-verified data is reported here."
 )
 
+#: CHAOS-3502/3650: the graph-assisted counterpart of ``SERVER_GROUNDED_
+#: SUMMARY``/``WARNING`` above -- same "server statement about the shape of
+#: what follows" class of copy, naming no source, entity or domain fact. Used
+#: by ``_graph_grounded_answer`` for every answer it assembles, degraded or
+#: not; ``direct_summary`` never varies by degrade cause (that distinction
+#: lives in the two WARNING constants below, added independently -- CHAOS-3502
+#: forbids conflating "evidence was refused" with "an enrichment source was
+#: unavailable" into one message).
+GRAPH_GROUNDED_SUMMARY = (
+    "This result was assembled by the server from graph-discovered evidence "
+    "that the canonical evidence service verified for this request."
+)
+#: CHAOS-3650 drop-and-disclose: at least one graph-discovered evidence
+#: candidate was canonically REFUSED (the service looked at it and declined
+#: to admit it -- UNAUTHORIZED or NO_MATCHES, never UNCONFIGURED/UNAVAILABLE,
+#: see ``EvidenceAdmission.refused``) and was excluded from this answer.
+#: Never fabricated, never silently dropped -- disclosed here.
+GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED = (
+    "Some graph-discovered evidence could not be canonically verified and "
+    "was excluded from this answer."
+)
+#: A distinct cause from the one above: a canonical enrichment source
+#: (status/health/workload/readiness) was unavailable for this scope, not
+#: that evidence was refused. Kept as its own message rather than merged
+#: with ``GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED`` -- CHAOS-3502's ruling
+#: forbids conflating the two causes, and a reader benefits from knowing
+#: which one actually applies to their answer.
+GRAPH_GROUNDED_WARNING_ENRICHMENT_GAP = (
+    "Some canonical enrichment sources were unavailable for this request."
+)
+#: No live model call backs a graph-assembled answer (mirrors
+#: ``_budget_answer``/``_deterministic_status_answer``'s own
+#: ``DevModelMetadata`` construction off ``self._provider_source``/
+#: ``self._provider_family`` with no live ``decision_result`` to read a
+#: fingerprint from) -- a fixed, content-safe sentinel rather than an empty
+#: string, so a stored run row can tell "no model call happened because the
+#: graph route answered" apart from a genuinely missing fingerprint.
+GRAPH_ROUTING_MODEL_FINGERPRINT = "graph_routing.v1"
+
 #: ``dev_runs.grounding_validation_status`` values for the two demoted
 #: guards (a ``String(32)`` column, no CHECK constraint -- both fit).
 #:
@@ -417,6 +464,15 @@ GUARD_DEMOTED_GROUNDING_FLOOR_STATUS = "advisory_grounding_floor"
 #: way a grounding-floor violation is -- never a hard FAILED, which would
 #: throw away real evidence the run already retrieved.
 GUARD_DEMOTED_REFUSAL_STATUS = "advisory_refused_with_grounding"
+#: CHAOS-3502/3650. Set on every ``finish(RunState.COMPLETED, ...)`` this
+#: leg's own assembler produces -- clean or degraded alike (degraded-vs-clean
+#: is already independently visible on ``DevAnswer.status``: DEGRADED vs
+#: PARTIAL; this column instead answers "which route produced this",
+#: matching what ``GUARD_DEMOTED_*`` already means for its own two paths).
+#: Never set on the no-material fallthrough or the assembly-raised path --
+#: a bare ``RunState.COMPLETED`` with no status stays exactly what it means
+#: today (legacy loop or a demoted guard).
+GRAPH_ASSISTED_GROUNDING_STATUS = "graph_assisted"
 
 _LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
     "resolve_scope_ambiguous": (
@@ -1051,6 +1107,62 @@ def graph_routing_runtime_enabled() -> bool:
     return os.getenv(GRAPH_ROUTING_RUNTIME_FLAG) == "1"
 
 
+#: CHAOS-3502/3650. The two ``InvestigationOutcome`` members that assert the
+#: investigation reached a real judgment -- ``AskDevInvestigationPacket``'s
+#: own ``validate_supported_outcome_asserts_a_judgment`` validator GUARANTEES
+#: ``evidence_coverage.evidence_index`` is non-empty whenever the packet's
+#: outcome is one of these two, so gating assembly on membership here means
+#: ``extract_evidence_candidates`` always has at least one candidate to
+#: admit. The other three members (NEEDS_CLARIFICATION, NO_MATCH,
+#: UNSUPPORTED) may carry an empty index, so attempting assembly for them
+#: would be attempting admission over nothing this packet ever claimed to
+#: have found -- the same "COMPLETED-with-no-material still falls through"
+#: rule, applied one layer earlier, before spending an admission round-trip.
+_GRAPH_ASSEMBLY_SUPPORTED_OUTCOMES = frozenset(
+    {InvestigationOutcome.SUPPORTED, InvestigationOutcome.SUPPORTED_WITH_GAPS}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphAssemblyOutcome:
+    """What ``_graph_grounded_answer`` actually did with one COMPLETED graph
+    result -- CHAOS-3502/3650.
+
+    ``answer`` is ``None`` exactly when there was no material to ground an
+    answer on (the CHAOS-3290 floor, applied via ``_assemble_grounded_
+    answer``'s own guard) -- the "COMPLETED-with-no-material still falls
+    through" rule. ``evidence_refused``/``enrichment_gap`` are two
+    INDEPENDENT causes of degradation, carried separately rather than
+    collapsed into one flag: CHAOS-3502's ruling forbids conflating "the
+    canonical evidence service refused a candidate" with "a canonical
+    enrichment source was unavailable" -- they are different failures with
+    different user-facing meanings, and a caller (telemetry, warnings) must
+    be able to tell them apart even though both make ``degraded`` True on
+    the assembled ``DevAnswer`` itself.
+    """
+
+    answer: DevAnswer | None
+    evidence_refused: bool
+    enrichment_gap: bool
+
+
+def _graph_assembly_outcome_label(evidence_refused: bool, enrichment_gap: bool) -> str:
+    """The closed ``ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL`` label for one
+    successfully-assembled answer. Never called when ``answer is None``
+    (that case is ``"no_material"``, decided by the caller) -- see
+    ``metrics.prometheus.ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL`` for the full
+    outcome vocabulary this is one half of.
+    """
+
+    if evidence_refused and enrichment_gap:
+        return "assembled_degraded_both"
+    if evidence_refused:
+        return "assembled_degraded_evidence_refused"
+    if enrichment_gap:
+        return "assembled_degraded_enrichment_gap"
+    return "assembled_clean"
+
+
 class DevOrchestrator:
     """Execute one Ask Dev message as a bounded state machine."""
 
@@ -1076,6 +1188,7 @@ class DevOrchestrator:
         investigation_packet_producer: InvestigationPacketProducer | None = None,
         graph_investigation_query: GraphInvestigationQuery | None = None,
         evidence_service: EvidenceService | None = None,
+        canonical_enrichment: CanonicalEnrichmentAccessor | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -1132,16 +1245,23 @@ class DevOrchestrator:
         # ``graph_investigation_query.py`` and CHAOS-3502/CHAOS-3664 for the
         # canonical-admission bridge that finishes this seam.
         self._graph_investigation_query = graph_investigation_query
-        # CHAOS-3502 increment 2c: ``None`` is the flag-off path, same shape
-        # as ``graph_investigation_query`` immediately above -- ``run()``
-        # does not read this attribute yet. Landed ahead of the routing
-        # branch that will call ``evidence_service.admit()`` on packet-
-        # extracted candidates (``graph_evidence_admission.
-        # extract_evidence_candidates``, CHAOS-3680) so that branch's own
-        # design (CHAOS-3660, pending sign-off) can assume the collaborator
-        # already exists rather than bundling its construction with the
-        # first PR that actually calls it.
+        # CHAOS-3502 increment 2c (now consumed): ``EvidenceService.admit()``
+        # is called on packet-extracted candidates
+        # (``graph_evidence_admission.extract_evidence_candidates``) by
+        # ``_graph_grounded_answer`` below. ``None`` remains the flag-off
+        # path, byte-identical to this collaborator not existing -- the
+        # COMPLETED branch in ``run()`` gates assembly on this being set,
+        # same as ``graph_investigation_query`` above.
         self._evidence_service = evidence_service
+        # CHAOS-3502/3650: the third and final collaborator this leg's
+        # assembler needs. ``None`` is ALSO a flag-off path, independent of
+        # the two above -- a caller that wires ``graph_investigation_query``/
+        # ``evidence_service`` before this exists sees the exact same
+        # assembly-deferred fallthrough the COMPLETED branch always had,
+        # never a crash on a collaborator nobody constructed yet
+        # (production does not wire any of the three today; see
+        # CHAOS-3697).
+        self._canonical_enrichment = canonical_enrichment
         self._composer = PromptComposer(registry)
 
     async def run(
@@ -3042,21 +3162,56 @@ class DevOrchestrator:
                         error=error("cancelled", "The request was cancelled."),
                     )
                 if graph_result.outcome is GraphQueryOutcome.COMPLETED:
-                    # CHAOS-3502: assembly (candidate extraction -> canonical
-                    # admission -> _graph_grounded_answer) is not yet wired
-                    # here -- it depends on Lane A's packet refactor and
-                    # Lane C's canonical enrichment type, both still pending
-                    # on CHAOS-3660 as of this landing. The graph result is
-                    # never silently discarded: the outcome counter/log
-                    # above already recorded a real COMPLETED call, distinct
-                    # from every failure/unavailable reason below.
-                    logger.info(
-                        "ask_dev.orchestrator.graph_routing_completed_assembly_deferred",
-                        extra={"run_id": run_id},
+                    # CHAOS-3502/3650: assembly. Both dependencies this
+                    # branch used to wait on are landed --
+                    # build_production_packet (Lane A) and
+                    # CanonicalEnrichmentAccessor (Lane C, CHAOS-3664) -- so a
+                    # COMPLETED call with a genuinely supported packet now
+                    # becomes a real, disclosed answer instead of an
+                    # observed-only no-op.
+                    #
+                    # DECISION (CHAOS-3650): drop-and-disclose, not
+                    # withheld-evidence-finding -- matching packet_builder.
+                    # py's own CHAOS-3650 choice at the driver layer (#1644).
+                    # A canonically refused evidence candidate is excluded
+                    # from this answer and the exclusion is disclosed via
+                    # GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED; it is never
+                    # admitted, never fabricated a replacement handle for,
+                    # and never aborts the run or an unrelated sibling
+                    # candidate. See ``_graph_grounded_answer``'s own
+                    # docstring for the full reasoning.
+                    #
+                    # ``GraphQueryResult``'s own ``__post_init__`` guarantees
+                    # ``packet is not None`` iff ``outcome is COMPLETED`` --
+                    # narrowed here for mypy, not a new runtime check.
+                    assert graph_result.packet is not None
+                    graph_answer = await self._attempt_graph_grounded_answer(
+                        run_id=run_id,
+                        answer_id=answer_id,
+                        conversation_id=conversation_id,
+                        resolution=resolution,
+                        authorized_scope=authorized_scope,
+                        org_id=org_id,
+                        permission_fingerprint=permission_fingerprint,
+                        packet=graph_result.packet,
                     )
+                    if graph_answer is not None:
+                        return await finish(
+                            RunState.COMPLETED,
+                            answer=graph_answer,
+                            grounding_validation_status=(
+                                GRAPH_ASSISTED_GROUNDING_STATUS
+                            ),
+                        )
+                    # No material (or the collaborator/packet-outcome gate
+                    # never attempted assembly, or assembly raised) -- falls
+                    # through to the legacy loop below, exactly like every
+                    # other non-CANCELLED outcome. ``_attempt_graph_grounded_
+                    # answer`` already logged/counted which of those three
+                    # this was; they are never conflated with each other.
                 # Every other outcome -- DISABLED, UNAVAILABLE, STALE,
                 # PROVIDER_FAILURE, DEADLINE_EXCEEDED, and
-                # COMPLETED-with-assembly-deferred immediately above -- falls
+                # COMPLETED-with-no-graph-answer immediately above -- falls
                 # through to the legacy loop below. Per the Wave 3.2 handoff
                 # §4: graph outage, lag, or unavailability must never break
                 # existing Ask Dev behavior, and this question's legacy
@@ -5051,6 +5206,299 @@ class DevOrchestrator:
         """
 
         return preflight is not None
+
+    async def _attempt_graph_grounded_answer(
+        self,
+        *,
+        run_id: str,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        authorized_scope: DevScope,
+        org_id: str,
+        permission_fingerprint: str,
+        packet: AskDevInvestigationPacket,
+    ) -> DevAnswer | None:
+        """The gate, observability and exception-containment wrapper around
+        :meth:`_graph_grounded_answer` -- CHAOS-3502/3650.
+
+        Three, and only three, outcomes leave this function, and each is
+        logged and counted under a DISTINCT name so none is ever conflated
+        with another (CHAOS-3502's ruling: "never conflate states"):
+
+        * ``graph_routing_completed_assembled`` (INFO) /
+          ``ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL{outcome=assembled_*}`` --
+          real material, degraded or clean.
+        * ``graph_routing_completed_no_material`` (INFO) /
+          ``{outcome="no_material"}`` -- assembly was attempted (both gates
+          below passed) but admission + enrichment together produced
+          nothing to ground an answer on. This is the "COMPLETED-with-
+          no-material still falls through" rule.
+        * ``graph_routing_completed_assembly_raised`` (ERROR, ``exc_info=
+          True``) / ``{outcome="assembly_raised"}`` -- an unexpected
+          exception during admission or enrichment. Logged loud and
+          distinct from the two ordinary outcomes above precisely so a
+          genuine bug can never look like a routine fall-through in the
+          logs (CHAOS-3502 Condition 3) -- but still degrades to the
+          legacy loop rather than aborting the run, mirroring
+          ``GraphInvestigationQuery``'s own "must never raise for an
+          ordinary condition" posture extended to this seam's own
+          assembly step.
+
+          ``except Exception`` deliberately does not need to special-case
+          ``asyncio.CancelledError``: since Python 3.8,
+          ``asyncio.CancelledError`` subclasses ``BaseException``, not
+          ``Exception`` (verified directly against this interpreter, not
+          assumed), so a cancellation propagates through this catch
+          unchanged and the run still ends up ``RunState.CANCELLED``
+          through the ordinary cancellation path above this branch.
+
+          Deliberately kept broad rather than narrowed to named exception
+          types, unlike ``packet_builder.py``'s own "narrow, deliberate,
+          documented" precedent (catching only ``CanonicalEvidenceRefusedError``
+          at :func:`~.packet_builder.build_packet`'s driver loop). That
+          precedent's boundary is ONE custom exception type this codebase
+          itself defines and raises for exactly one condition; this
+          boundary spans ``self._evidence_service.admit()`` (whose own
+          ``entitlement``/``authorizer`` collaborators are caller-supplied
+          Protocols with no fixed exception contract -- an
+          ``AskDevEntitlementAuthorizer`` or a database-backed
+          ``EvidenceScopeAuthorizer`` may raise anything) and
+          ``_assemble_grounded_answer``'s own ``DevAnswer(...)``
+          construction, which is known to raise a concrete
+          ``pydantic.ValidationError`` if a future change ever reintroduces
+          the metric ``evidence_ref_ids`` mismatch Condition 4's scrub
+          exists to prevent (reproduced live during this leg's own
+          verification: temporarily removing the scrub raised exactly this,
+          caught here, degrading to a clean fallthrough rather than a
+          crash). Naming only that one concrete type and leaving the
+          entitlement/authorizer surface behind a second, unnamed catch
+          would not be real narrowing -- it would be false completeness
+          over a boundary whose real exception vocabulary is not owned
+          here. The full observability Condition 3 requires (ERROR level,
+          ``exc_info=True``, a distinct counter value, and cancellation
+          verified never to be swallowed) is what makes keeping this catch
+          broad safe rather than a silence.
+
+        A fourth case -- the gate below never passing at all (no
+        ``canonical_enrichment`` wired, or the packet's own outcome does not
+        assert a judgment) -- reuses the pre-existing
+        ``graph_routing_completed_assembly_deferred`` log name with no
+        counter increment: assembly was never attempted, so there is no
+        assembly outcome to report, and the existing
+        ``ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL{outcome=completed}`` increment
+        from the call site above already recorded the transport-level
+        COMPLETED call.
+        """
+
+        if (
+            self._canonical_enrichment is None
+            or packet.outcome not in _GRAPH_ASSEMBLY_SUPPORTED_OUTCOMES
+        ):
+            logger.info(
+                "ask_dev.orchestrator.graph_routing_completed_assembly_deferred",
+                extra={"run_id": run_id},
+            )
+            return None
+        try:
+            outcome = await self._graph_grounded_answer(
+                answer_id=answer_id,
+                conversation_id=conversation_id,
+                resolution=resolution,
+                scope=authorized_scope,
+                org_id=org_id,
+                permission_fingerprint=permission_fingerprint,
+                packet=packet,
+                now=datetime.now(UTC),
+            )
+        except Exception as exc:  # noqa: BLE001 -- see docstring: contained and counted, never re-raised
+            logger.error(
+                "ask_dev.orchestrator.graph_routing_completed_assembly_raised",
+                extra={"run_id": run_id, "exception_type": type(exc).__name__},
+                exc_info=True,
+            )
+            ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome="assembly_raised").inc()
+            return None
+        if outcome.answer is None:
+            logger.info(
+                "ask_dev.orchestrator.graph_routing_completed_no_material",
+                extra={"run_id": run_id},
+            )
+            ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome="no_material").inc()
+            return None
+        label = _graph_assembly_outcome_label(
+            outcome.evidence_refused, outcome.enrichment_gap
+        )
+        logger.info(
+            "ask_dev.orchestrator.graph_routing_completed_assembled",
+            extra={
+                "run_id": run_id,
+                "evidence_refused": outcome.evidence_refused,
+                "enrichment_gap": outcome.enrichment_gap,
+            },
+        )
+        ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome=label).inc()
+        return outcome.answer
+
+    async def _graph_grounded_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        scope: DevScope,
+        org_id: str,
+        permission_fingerprint: str,
+        packet: AskDevInvestigationPacket,
+        now: datetime,
+    ) -> GraphAssemblyOutcome:
+        """The graph-frame path's own assembler -- CHAOS-3502/3650.
+
+        Extract candidates -> canonical admission -> a degrade-not-abort
+        join with canonical enrichment -> :meth:`_assemble_grounded_answer`.
+        Callers must only invoke this once ``self._evidence_service`` and
+        ``self._canonical_enrichment`` are both known non-``None`` (asserted
+        below) and ``packet.outcome`` has already been checked against
+        :data:`_GRAPH_ASSEMBLY_SUPPORTED_OUTCOMES` -- see
+        :meth:`_attempt_graph_grounded_answer` for both gates and the
+        exception containment this function relies on its caller for.
+
+        **Drop-and-disclose (CHAOS-3650's chosen behavior).** A candidate
+        the canonical evidence service REFUSED (``EvidenceAdmission.
+        refused`` -- ``UNAUTHORIZED``/``NO_MATCHES``, a considered "no", never
+        confused with ``UNCONFIGURED``/``UNAVAILABLE``) is excluded from
+        ``canonical_evidence`` and never admitted, fabricated, or retried;
+        the run still completes on whatever admissible material remains
+        (this function's caller never raises the run to FAILED/
+        INSUFFICIENT_EVIDENCE over a refusal), and the exclusion is
+        disclosed via ``GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED`` -- never
+        silently swallowed. Matches ``packet_builder.py``'s own CHAOS-3650
+        choice at the driver layer (#1644): drop the unsupported unit, keep
+        the rest, disclose narrowly, never abort. A conflicting/adversarial
+        but canonically ADMISSIBLE record is not touched by any of this --
+        it is simply admitted like any other candidate and stays usable as
+        counter-evidence, exactly as CHAOS-3650's acceptance requires.
+
+        **Two independent degrade causes, never conflated (CHAOS-3502).**
+        ``evidence_refused`` (a candidate was canonically refused) and
+        ``enrichment_gap`` (a canonical enrichment source was unavailable)
+        are computed and returned separately on :class:`GraphAssemblyOutcome`
+        -- each gets its own warning string and its own telemetry label, so
+        a caller can always tell which cause (or both) applies, even though
+        both make the underlying ``DevAnswer.status`` ``DEGRADED`` the same
+        way (``_assemble_grounded_answer`` takes one ``degraded: bool``).
+
+        **The metric evidence-vocabulary mismatch (recon finding, CHAOS-3502
+        Condition 4).** ``CanonicalEnrichmentAccessor``'s metrics are
+        ``MetricQueryService.query(...).contract_refs(scope)`` verbatim,
+        whose ``evidence_ref_ids`` cite ``MetricSourceRef.ref_id`` -- a
+        completely different id vocabulary from the signed
+        ``EvidenceReferenceSigner`` handles this function admits above.
+        ``DevAnswer.validate_answer_invariants`` requires every metric's
+        ``evidence_ref_ids`` to be a subset of the answer's own evidence
+        ids, so passing these through unmodified would raise on
+        construction the moment a metric carried any source ref at all.
+        Confirmed at the call site, not assumed from the shape of the code:
+        ``production_runtime.py``'s own ``query_metric.v1`` tool handler
+        hits the identical mismatch and resolves it with
+        ``item.model_copy(update={"evidence_ref_ids": []})`` -- this reuses
+        that exact precedent rather than inventing a second one.
+        **Documented limitation**: this DROPS the metric's own provenance
+        link with nothing to reconcile it against (the two vocabularies do
+        not name the same records) -- a graph-assisted answer's metrics
+        carry no evidence citation at all, the same as every legacy-loop
+        metric today. See ``test_chaos_3650_graph_grounded_assembler.py``
+        for the test pinning this scrub, so a future change that starts
+        emitting real linkage here fails loudly instead of silently.
+        """
+
+        assert self._evidence_service is not None
+        assert self._canonical_enrichment is not None
+
+        candidates = extract_evidence_candidates(packet)
+        admission = await self._evidence_service.admit(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            scope_request=scope_request_from_scope(scope),
+            candidates=candidates,
+        )
+        canonical_evidence: list[DevEvidenceRef] = []
+        evidence_refused = False
+        for item in admission.admissions:
+            if item.evidence is not None:
+                canonical_evidence.append(item.evidence)
+            elif item.refused:
+                evidence_refused = True
+            # An UNCONFIGURED (no resolver wired for this source_system) or
+            # UNAVAILABLE (transient) candidate is dropped the same way --
+            # neither a canonical refusal (nothing to disclose as "refused"
+            # under CHAOS-3650's own vocabulary) nor material this answer
+            # can cite.
+
+        enrichment = await self._canonical_enrichment.enrich(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            scope=scope,
+            now=now,
+        )
+        canonical_metrics = [
+            metric.model_copy(update={"evidence_ref_ids": []})
+            for metric in enrichment.metrics
+        ]
+
+        enrichment_gap = any(
+            isinstance(value, EnrichmentGap)
+            and value is not EnrichmentGap.NOT_APPLICABLE
+            for value in (
+                enrichment.status,
+                enrichment.health,
+                enrichment.workload,
+                enrichment.readiness,
+            )
+        )
+        degraded = evidence_refused or enrichment_gap
+        warnings: list[str] = []
+        if evidence_refused:
+            warnings.append(GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED)
+        if enrichment_gap:
+            warnings.append(GRAPH_GROUNDED_WARNING_ENRICHMENT_GAP)
+
+        degraded_sources: list[str] = []
+        if evidence_refused:
+            degraded_sources.append("graph_evidence_admission")
+        if enrichment_gap:
+            degraded_sources.append("canonical_enrichment")
+        coverage = DevCoverage(
+            required_source_count=2,
+            available_source_count=2 - len(degraded_sources),
+            unavailable_required_sources=[],
+            stale_required_sources=[],
+            degraded_required_sources=degraded_sources,
+            as_of=now,
+        )
+
+        answer = self._assemble_grounded_answer(
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            resolution=resolution,
+            coverage=coverage,
+            canonical_metrics=canonical_metrics,
+            canonical_evidence=canonical_evidence,
+            degraded=degraded,
+            model=DevModelMetadata(
+                provider_source=self._provider_source,
+                provider_family=self._provider_family,
+                model_fingerprint=GRAPH_ROUTING_MODEL_FINGERPRINT,
+            ),
+            now=now,
+            direct_summary=GRAPH_GROUNDED_SUMMARY,
+            warnings=warnings,
+        )
+        return GraphAssemblyOutcome(
+            answer=answer,
+            evidence_refused=evidence_refused,
+            enrichment_gap=enrichment_gap,
+        )
 
     def _server_grounded_answer(
         self,

@@ -767,6 +767,7 @@ async def run_preflight_orchestrator(
     investigation_packet_producer: Any = None,
     graph_investigation_query: Any = None,
     evidence_service: Any = None,
+    canonical_enrichment: Any = None,
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
@@ -789,13 +790,17 @@ async def run_preflight_orchestrator(
     actual rows a live run leaves behind, not a fake recorder's captured
     call list.
 
-    ``graph_investigation_query``/``evidence_service`` default to ``None``
-    (flag-off, same as production when the org feature is off) --
-    CHAOS-3502's routing-branch suite passes a real
+    ``graph_investigation_query``/``evidence_service``/``canonical_enrichment``
+    default to ``None`` (flag-off, same as production when the org feature is
+    off) -- CHAOS-3502's routing-branch suite passes a real
     ``FakeGraphInvestigationQuery`` plus a minimal ``EvidenceService`` here
     so a genuine ``DISCOVERED_COHORT`` ``preflight_result`` (only the real
     interpreter/preflight pipeline produces one) drives the actual routing
     branch in ``DevOrchestrator.run()``, not a construction-only smoke test.
+    ``canonical_enrichment`` (CHAOS-3650) is the third collaborator the
+    graph-grounded assembler needs; every existing caller leaves it unset,
+    which keeps the COMPLETED-branch assembly attempt gated off exactly as
+    it was before that assembler existed.
     """
 
     catalog = SeededCatalog(entities, fail_search=fail_search)
@@ -845,6 +850,7 @@ async def run_preflight_orchestrator(
         investigation_packet_producer=investigation_packet_producer,
         graph_investigation_query=graph_investigation_query,
         evidence_service=evidence_service,
+        canonical_enrichment=canonical_enrichment,
     )
     result = await orchestrator.run(
         request=request,

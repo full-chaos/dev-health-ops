@@ -902,3 +902,189 @@ async def test_a_genuine_handle_collision_within_one_round_is_refused_not_silent
     assert second.state is EvidenceAvailability.UNAVAILABLE
     assert second.evidence is None
     assert second.warning == "ambiguous_record_identity"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3675 PR2: entity-less admission (a deployment with no linked PR, an
+# incident with no linked repository) falls through to repository-only
+# authorization -- ONLY when explicitly marked, never merely because
+# entity_id happens to be empty.
+# ---------------------------------------------------------------------------
+
+
+class _EntityLessResolver:
+    """Returns a record with no directly-authorizable entity -- the shape a
+    real deployment/incident resolver produces when its linkage column is
+    genuinely absent."""
+
+    source_system = "deployments"
+
+    def __init__(self, *, marked: bool, repository_ids: tuple[str, ...]) -> None:
+        self._marked = marked
+        self._repository_ids = repository_ids
+
+    async def resolve(self, *, org_id, scope, candidate):
+        return EvidenceRecord(
+            source_system="deployments",
+            source_version="native.v1",
+            entity_type="deployment",
+            # A normal, non-empty DESCRIPTIVE identity -- DevEvidenceRef.
+            # entity_id requires at least one character and is never
+            # repurposed as an authorization signal. Whether this record
+            # authorizes via entity or via repository-only is governed
+            # SOLELY by ``no_authorizable_entity`` below, not by this
+            # value.
+            entity_id="repo-a#deployment1",
+            display_label="Deployment with no linked PR",
+            observed_at=NOW,
+            freshness=FreshnessState.FRESH,
+            provenance="native",
+            confidence=1.0,
+            repository_ids=self._repository_ids,
+            no_authorizable_entity=self._marked,
+        )
+
+
+def _entity_less_candidate(*, entity_id: str = "issue-999") -> EvidenceCandidate:
+    return EvidenceCandidate(
+        source_system="deployments",
+        entity_type="deployment",
+        # Deliberately a claim the resolver's own record does not carry --
+        # nothing about entity-less admission should ever consult it.
+        entity_id=entity_id,
+        locator="repo-a#deployment1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_entity_less_record_with_repository_access_is_admitted() -> None:
+    """RED-first: before this fix, admit() hardcoded
+    ``valid_entity_ids=(record.entity_id,)`` -- an entity-less record
+    produced ``("",)``, which the entity containment check always fails
+    (the empty string is never a real authorized entity), wrongly refusing
+    evidence the caller's repository access should admit.
+    """
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=True, repository_ids=("repo-a",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),  # repo-a, granted
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.state is EvidenceAvailability.AVAILABLE
+    assert only.evidence is not None
+    assert only.evidence.valid_entity_ids == []
+
+
+@pytest.mark.asyncio
+async def test_without_the_explicit_marker_the_entity_check_runs_as_before() -> None:
+    """Condition (i): the empty-``valid_entity_ids`` path requires the
+    EXPLICIT ``no_authorizable_entity`` marker -- gating on the flag alone,
+    never inferred from ``entity_id``'s value. With the marker ``False``,
+    the SAME record's descriptive (but non-authorizable) ``entity_id``
+    goes through the ordinary entity containment check exactly as before
+    this fix, and is refused because the caller's grant does not contain
+    it -- proving the fallback is opt-in per record, not automatic
+    whenever a resolver returns something that isn't a "real" entity."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=False, repository_ids=("repo-a",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.evidence is None
+    assert only.state is EvidenceAvailability.UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_entity_less_record_without_repository_access_is_refused() -> None:
+    """Condition (iii), positive case: the repository-only fallback is a
+    REAL check, not a rubber stamp -- an entity-less record naming a repo
+    the caller cannot see is refused. The mutation-kill proof that this
+    test actually discriminates is
+    ``test_the_repository_only_check_is_observed_failing_when_short_circuited``
+    below."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=True, repository_ids=("repo-unauthorized",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),  # repo-a granted; the record names a DIFFERENT repo
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.evidence is None
+    assert only.state is EvidenceAvailability.UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_the_repository_only_check_is_observed_failing_when_short_circuited() -> (
+    None
+):
+    """Condition (iii), the mutation-kill proof itself: a signer/service
+    combination that SKIPS the repository check entirely -- simulating the
+    defect class the check exists to catch -- wrongly admits the
+    unauthorized-repo record the previous test correctly refuses. Observed
+    failing here (against the shim), never assumed passing against the
+    real code."""
+
+    class _RepositoryCheckSkippingService(EvidenceService):
+        async def _authorize_expansion(
+            self, org_id, permission_fingerprint, scope_request, resolution, evidence
+        ):
+            # Short-circuits exactly the check CHAOS-3675 PR2 condition
+            # (iii) requires: no repository re-resolution, no containment
+            # comparison, always "available".
+            return EvidenceAvailability.AVAILABLE, None
+
+    service = _RepositoryCheckSkippingService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=True, repository_ids=("repo-unauthorized",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    # This is the FAILURE the shim demonstrates -- an unauthorized-repo
+    # record wrongly admitted -- proving
+    # ``test_entity_less_record_without_repository_access_is_refused``
+    # exercises a real check against the unmodified service.
+    assert only.evidence is not None
+    assert only.state is EvidenceAvailability.AVAILABLE

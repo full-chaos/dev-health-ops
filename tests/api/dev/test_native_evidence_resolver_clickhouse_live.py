@@ -75,6 +75,7 @@ def _clean_tables(ch_client: Any) -> Any:
         "git_pull_request_reviews",
         "operational_incidents",
         "work_graph_deployment_incident_edges",
+        "deployments",
     )
     for table in tables:
         ch_client.command(f"TRUNCATE TABLE IF EXISTS {table}")
@@ -363,3 +364,100 @@ async def test_an_incident_with_no_edge_at_all_refuses_against_the_real_table(
     )
 
     assert record is None
+
+
+def _insert_deployment(
+    client: Any,
+    *,
+    org_id: str,
+    repo_id: str = REPO_ID,
+    deployment_id: str,
+    pull_request_number: int | None,
+    status: str = "success",
+    environment: str = "production",
+) -> None:
+    client.insert(
+        "deployments",
+        [
+            [
+                org_id,
+                repo_id,
+                deployment_id,
+                status,
+                environment,
+                pull_request_number,
+                NOW,
+                NOW,
+            ]
+        ],
+        column_names=[
+            "org_id",
+            "repo_id",
+            "deployment_id",
+            "status",
+            "environment",
+            "pull_request_number",
+            "deployed_at",
+            "last_synced",
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_real_deployment_sql_derives_a_linked_pr(ch_client: Any) -> None:
+    _insert_deployment(
+        ch_client, org_id=ORG_A, deployment_id="deploy-live-1", pull_request_number=77
+    )
+
+    record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}#deploymentdeploy-live-1",
+        entity_type="deployment",
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is False
+    assert record.entity_id == f"{REPO_ID}#pr77"
+    assert record.repository_ids == (REPO_ID,)
+
+
+@pytest.mark.asyncio
+async def test_the_real_deployment_sql_falls_through_to_repository_only_when_unlinked(
+    ch_client: Any,
+) -> None:
+    _insert_deployment(
+        ch_client,
+        org_id=ORG_A,
+        deployment_id="deploy-live-2",
+        pull_request_number=None,
+    )
+
+    record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}#deploymentdeploy-live-2",
+        entity_type="deployment",
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is True
+    assert record.repository_ids == (REPO_ID,)
+
+
+@pytest.mark.asyncio
+async def test_the_real_deployment_sql_enforces_tenant_isolation(
+    ch_client: Any,
+) -> None:
+    _insert_deployment(
+        ch_client, org_id=ORG_A, deployment_id="deploy-live-3", pull_request_number=1
+    )
+
+    other_org = await _resolve(
+        ch_client,
+        org_id=ORG_B,
+        locator=f"{REPO_ID}#deploymentdeploy-live-3",
+        entity_type="deployment",
+    )
+
+    assert other_org is None

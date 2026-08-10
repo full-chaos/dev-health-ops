@@ -1,6 +1,7 @@
-"""CHAOS-3675 PR 1/3 (review) and PR 2/3 (incident): production resolvers,
-and the invariant they exist to enforce -- the entity a record is about is
-derived from the canonical row, never from ``candidate.entity_id``.
+"""CHAOS-3675 PR 1/3 (review), PR 2/3 (incident), and PR 3/3 (deployment):
+production resolvers, and the invariant they exist to enforce -- the entity
+a record is about is derived from the canonical row, never from
+``candidate.entity_id``.
 
 Every test here uses a fake ClickHouse-shaped sink whose ``query_dicts``
 call simulates the real SQL's own filtering predicates, so an org-mismatch
@@ -242,13 +243,17 @@ def test_a_locator_that_exists_only_in_a_different_org_is_refused(
     )
 
 
+@pytest.mark.parametrize("entity_type", ["commit", "ci_run"])
 def test_unimplemented_observation_kinds_are_refused_without_querying(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, entity_type: str
 ) -> None:
-    """``deployment``/``commit``/``ci_run``/``incident`` are deliberately
-    unimplemented in PR 1/3 (see the class docstring) -- refused cleanly,
-    never a crash, and never a query issued for a kind this resolver
-    cannot yet verify safely."""
+    """``commit``/``ci_run`` are a deliberate, recorded gap (see the class
+    docstring: neither canonical table has a PR/issue link column, and the
+    only possible linkage needs a trust-threshold decision this resolver
+    doesn't have standing to make) -- refused cleanly, never a crash, and
+    never a query issued for a kind this resolver cannot yet verify
+    safely. ``review``/``incident``/``deployment`` are all implemented as
+    of PR 3/3 and covered by their own dedicated tests."""
 
     sink = _FakeSink([_row()])
     _monkeypatch_query_dicts(monkeypatch, sink)
@@ -256,9 +261,9 @@ def test_unimplemented_observation_kinds_are_refused_without_querying(
 
     candidate = EvidenceCandidate(
         source_system=ARM_SOURCE_SYSTEM,
-        entity_type="deployment",
+        entity_type=entity_type,
         entity_id="issue-999",
-        locator="repo-1#deployment1",
+        locator="repo-1@deadbeef",
     )
     assert _resolve(resolver, candidate) is None
     assert sink.calls == []
@@ -575,3 +580,186 @@ def test_an_edge_belonging_to_a_different_org_does_not_leak_its_repository(
     )
 
     assert record is None
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3675 PR 3/3: the deployments resolver. Unlike review (always
+# derives) and incident (never derives), deployments genuinely sometimes
+# have a linked PR and sometimes don't -- the first resolver with a real
+# per-row choice between deriving an entity and falling through to
+# repository-only.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _DeploymentRow:
+    org_id: str
+    repo_id: str
+    deployment_id: str
+    status: str
+    environment: str
+    pull_request_number: int | None
+    observed_at: datetime
+    last_synced: datetime
+
+
+class _DeploymentFakeSink:
+    """Simulates the deployment-resolve SQL's own WHERE clause: a row is
+    returned only when BOTH ``org_id`` and the composite locator
+    (``{repo_id}#deployment{deployment_id}``) match."""
+
+    def __init__(self, rows: list[_DeploymentRow]) -> None:
+        self._rows = rows
+        self.calls: list[dict[str, Any]] = []
+
+    async def query_dicts(
+        self, query: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        self.calls.append(params)
+        for row in self._rows:
+            locator = f"{row.repo_id}#deployment{row.deployment_id}"
+            if row.org_id == params["org_id"] and locator == params["locator"]:
+                return [
+                    {
+                        "repo_id": row.repo_id,
+                        "deployment_id": row.deployment_id,
+                        "status": row.status,
+                        "environment": row.environment,
+                        "pull_request_number": row.pull_request_number,
+                        "observed_at": row.observed_at,
+                        "last_synced": row.last_synced,
+                    }
+                ]
+        return []
+
+
+def _monkeypatch_deployment_query_dicts(
+    monkeypatch: pytest.MonkeyPatch, sink: _DeploymentFakeSink
+) -> None:
+    async def _fake_query_dicts(client: Any, query: str, params: dict[str, Any]):
+        assert client is sink
+        return await sink.query_dicts(query, params)
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_evidence_resolver.query_dicts",
+        _fake_query_dicts,
+    )
+
+
+def _deployment_candidate(
+    *, locator: str, claimed_entity_id: str = "issue-999"
+) -> EvidenceCandidate:
+    return EvidenceCandidate(
+        source_system=ARM_SOURCE_SYSTEM,
+        entity_type="deployment",
+        # Never consulted -- same rule as every other resolver here.
+        entity_id=claimed_entity_id,
+        locator=locator,
+    )
+
+
+def test_a_deployment_with_a_linked_pr_derives_the_pr_entity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED-first: before PR 3/3, ``deployment``-kind candidates refuse
+    ``UNCONFIGURED``. With a real linked PR, resolution derives a genuine
+    PR entity -- never falls through to repository-only merely because
+    that path also exists on this resolver."""
+
+    row = _DeploymentRow(
+        org_id=ORG_A,
+        repo_id="repo-1",
+        deployment_id="deploy-1",
+        status="success",
+        environment="production",
+        pull_request_number=77,
+        observed_at=NOW,
+        last_synced=NOW,
+    )
+    sink = _DeploymentFakeSink([row])
+    _monkeypatch_deployment_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    record = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A,
+            scope=_UNUSED_SCOPE,
+            candidate=_deployment_candidate(locator="repo-1#deploymentdeploy-1"),
+        )
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is False
+    assert record.entity_id == "repo-1#pr77"
+    assert record.repository_ids == ("repo-1",)
+    assert "issue-999" not in (record.display_label, record.raw_excerpt or "")
+
+
+def test_a_deployment_with_no_linked_pr_falls_through_to_repository_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pull_request_number IS NULL`` -- repo_id is schema-guaranteed
+    present, so this always has a real anchor; never reaches the
+    no-anchor refusal the way a repo-less incident can."""
+
+    row = _DeploymentRow(
+        org_id=ORG_A,
+        repo_id="repo-1",
+        deployment_id="deploy-2",
+        status="success",
+        environment="production",
+        pull_request_number=None,
+        observed_at=NOW,
+        last_synced=NOW,
+    )
+    sink = _DeploymentFakeSink([row])
+    _monkeypatch_deployment_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    record = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A,
+            scope=_UNUSED_SCOPE,
+            candidate=_deployment_candidate(locator="repo-1#deploymentdeploy-2"),
+        )
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is True
+    assert record.repository_ids == ("repo-1",)
+
+
+def test_a_deployment_locator_that_exists_only_in_a_different_org_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _DeploymentRow(
+        org_id=ORG_B,
+        repo_id="repo-1",
+        deployment_id="deploy-3",
+        status="success",
+        environment="production",
+        pull_request_number=77,
+        observed_at=NOW,
+        last_synced=NOW,
+    )
+    sink = _DeploymentFakeSink([row])
+    _monkeypatch_deployment_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    refused = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A,
+            scope=_UNUSED_SCOPE,
+            candidate=_deployment_candidate(locator="repo-1#deploymentdeploy-3"),
+        )
+    )
+    admitted = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_B,
+            scope=_UNUSED_SCOPE,
+            candidate=_deployment_candidate(locator="repo-1#deploymentdeploy-3"),
+        )
+    )
+
+    assert refused is None
+    assert admitted is not None

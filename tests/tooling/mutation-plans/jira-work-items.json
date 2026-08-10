@@ -25,10 +25,10 @@
     {
       "id": "JI2",
       "file": "internal/providersync/jira_work_items_effects_clickhouse.go",
-      "find": "orgID != identity.OrgID",
-      "replace": "orgID == identity.OrgID",
+      "find": "!ok || json.Unmarshal(value, &orgID) != nil || orgID != identity.OrgID",
+      "replace": "!ok || json.Unmarshal(value, &orgID) != nil",
       "expect_occurrences": 1,
-      "rationale": "Every non-empty direct effect must be fenced to the claimed tenant before write or readback; accepting a foreign org row breaks isolation.",
+      "rationale": "Every non-empty direct effect must be fenced to the claimed tenant before write or readback; removing the final org equality clause must be killed by the foreign-tenant write assertion, while preserving valid-row writes.",
       "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraWorkItemsEffectsFenceTenantLeaseAndReadbackRecovery$", "./internal/providersync"]]
     },
     {
@@ -39,6 +39,51 @@
       "expect_occurrences": 1,
       "rationale": "Jira must fail closed when a non-terminal page omits its continuation token; returning success would advance a watermark over an incomplete inventory.",
       "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraWorkItemsRouteFailsClosedWhenJiraDoesNotProvideNextPageToken$", "./internal/providersync"]]
+    },
+    {
+      "id": "JI4",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "\t\tif fetchWorklogs {",
+      "replace": "\t\tif fetchWorklogs && false {",
+      "expect_occurrences": 1,
+      "rationale": "The Atlassian route must retain non-empty worklog enrichment when the dataset option is enabled; dropping the fetch branch silently loses time accounting while all canonical work-item lists still pass.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges$", "./internal/providersync"]]
+    },
+    {
+      "id": "JI5",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "\tif fetchBoardSprints && len(rows.Sprints) == 0 {",
+      "replace": "\tif fetchBoardSprints && false {",
+      "expect_occurrences": 1,
+      "rationale": "Board sprint enumeration is the only Atlassian source for uncached sprints; removing this branch must be killed by the non-empty board sprint assertion and request evidence.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges$", "./internal/providersync"]]
+    },
+    {
+      "id": "JI6",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)...)",
+      "replace": "normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)[:0]...)",
+      "expect_occurrences": 1,
+      "rationale": "Issue-link edges are a persisted direct destination, not optional decoration; the canonical edge assertion must fail when the dependency normalizer is made empty.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges$", "./internal/providersync"]]
+    },
+    {
+      "id": "JI7",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,",
+      "replace": "normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)[:0]...,",
+      "expect_occurrences": 1,
+      "rationale": "Comment interactions must survive the Atlassian enrichment path when requested; an empty interaction list is a false pass unless the direct persisted interaction count fails.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges$", "./internal/providersync"]]
+    },
+    {
+      "id": "JI8",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "\tif len(optionalIncomplete) == 0 {",
+      "replace": "\tif len(optionalIncomplete) != 0 {",
+      "expect_occurrences": 1,
+      "rationale": "A complete Atlassian run advances the watermark and an optional child failure withholds it; flipping this predicate must fail the successful non-empty route proof and the typed failure proof.",
+      "proof": [["env", "GOCACHE=/tmp/jira-go-cache", "go", "test", "-count=1", "-run", "^TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges$|^TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark$", "./internal/providersync"]]
     }
   ]
 }

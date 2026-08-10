@@ -25,7 +25,7 @@ import os
 import pathlib
 import sys
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from internal.providersync.testdata import oracle_registry
 
@@ -198,7 +198,7 @@ def _deterministic_row(value: Any, org_id: str) -> dict[str, Any]:
             updates["org_id"] = org_id
         if "last_synced" in names:
             updates["last_synced"] = _NORMALIZED_AT
-        value = dataclasses.replace(value, **updates)
+        value = cast(Any, dataclasses.replace(cast(Any, value), **updates))
         return dataclasses.asdict(value)
     raise TypeError(f"Jira producer returned non-dataclass row {type(value)!r}")
 
@@ -234,19 +234,26 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            batch = _producer.fetch_jira_work_items_with_extras(
-                since=datetime.fromisoformat(str(case["since"]).replace("Z", "+00:00")),
-                until=datetime.fromisoformat(str(case["until"]).replace("Z", "+00:00"))
-                if case.get("until")
-                else None,
-                status_mapping=status_mapping,
-                identity=identity,
-                project_keys=[str(key) for key in case.get("project_keys") or []]
-                or None,
-                client=client,
-                fetch_all=bool(case.get("fetch_all", False)),
-                use_env_query_options=False,
-                reference_sprints=_reference_sprints(case, org_id),
+            batch = cast(
+                tuple[list[Any], list[Any], list[Any], list[Any], list[Any], list[Any]],
+                _producer.fetch_jira_work_items_with_extras(
+                    since=datetime.fromisoformat(
+                        str(case["since"]).replace("Z", "+00:00")
+                    ),
+                    until=datetime.fromisoformat(
+                        str(case["until"]).replace("Z", "+00:00")
+                    )
+                    if case.get("until")
+                    else None,
+                    status_mapping=status_mapping,
+                    identity=identity,
+                    project_keys=[str(key) for key in case.get("project_keys") or []]
+                    or None,
+                    client=client,
+                    fetch_all=bool(case.get("fetch_all", False)),
+                    use_env_query_options=False,
+                    reference_sprints=_reference_sprints(case, org_id),
+                ),
             )
     finally:
         for name, value in old_env.items():

@@ -43,6 +43,12 @@ type jiraIdentityResolver func(email, accountID, displayName string) string
 type jiraWorkItemFixtureInput struct {
 	Raw         map[string]any
 	ObjectShape bool
+	// AtlassianShape marks JSON decoded from iter_issues_via_rest. The
+	// Atlassian canonical mapper validates users as objects before invoking the
+	// Python normalizer, so account/email/display identity must be preserved on
+	// this route even though the legacy JSON compatibility path intentionally
+	// retains its historical getattr(dict, ...) behavior.
+	AtlassianShape bool
 }
 
 func normalizeJiraWorkItem(
@@ -80,14 +86,15 @@ func normalizeJiraWorkItem(
 	typeName := statusMapping.NormalizeType("jira", typeRaw, labels)
 
 	assignees := make([]string, 0, 1)
+	identityShape := issue.ObjectShape || issue.AtlassianShape
 	if value := jiraField(fields, "assignee", issue.ObjectShape); value != nil {
-		if resolved := jiraResolveUser(value, issue.ObjectShape, resolveIdentity); resolved != "" && resolved != "unknown" {
+		if resolved := jiraResolveUser(value, identityShape, resolveIdentity); resolved != "" && resolved != "unknown" {
 			assignees = append(assignees, resolved)
 		}
 	}
 	var reporter *string
 	if value := jiraField(fields, "reporter", issue.ObjectShape); value != nil {
-		if resolved := jiraResolveUser(value, issue.ObjectShape, resolveIdentity); resolved != "" && resolved != "unknown" {
+		if resolved := jiraResolveUser(value, identityShape, resolveIdentity); resolved != "" && resolved != "unknown" {
 			reporter = &resolved
 		}
 	}
@@ -131,7 +138,7 @@ func normalizeJiraWorkItem(
 	changelog, _ := jiraMapValue(jiraField(raw, "changelog", issue.ObjectShape))
 	transitions := normalizeJiraTransitions(
 		claim, key, changelog, labels, *createdAt, statusMapping, resolveIdentity,
-		issue.ObjectShape, normalizedAt,
+		issue.ObjectShape, identityShape, normalizedAt,
 	)
 	row.StartedAt, row.CompletedAt = deriveJiraLifecycle(transitions, status, closedAt, *updatedAt)
 	if err := validateJiraWorkItem(row, claim); err != nil {
@@ -203,6 +210,7 @@ func normalizeJiraTransitions(
 	statusMapping *StatusMapping,
 	resolveIdentity jiraIdentityResolver,
 	objectShape bool,
+	identityObjectShape bool,
 	normalizedAt time.Time,
 ) []jiraWorkItemTransitionRow {
 	histories := mapSlice(changelog["histories"])
@@ -237,7 +245,7 @@ func normalizeJiraTransitions(
 			occurred = createdAt
 		}
 		author := jiraField(history.value, "author", objectShape)
-		actor := jiraResolveUser(author, objectShape, resolveIdentity)
+		actor := jiraResolveUser(author, identityObjectShape, resolveIdentity)
 		if !objectShape {
 			actor = jiraResolveMapUser(author, resolveIdentity)
 		}

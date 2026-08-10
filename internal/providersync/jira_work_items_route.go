@@ -25,11 +25,12 @@ const (
 // provider-local canonical work-items family while registry/activation remains
 // a separate migration slice.
 type JiraWorkItemsRouteHandler struct {
-	StatusMapping *StatusMapping
-	Identity      jiraIdentityResolver
-	MaxPages      int
-	MaxRows       int
-	PerPage       int
+	StatusMapping    *StatusMapping
+	Identity         jiraIdentityResolver
+	MaxPages         int
+	MaxRows          int
+	PerPage          int
+	ReferenceSprints []jiraSprintRow
 }
 
 func (handler JiraWorkItemsRouteHandler) limits() (int, int, int, error) {
@@ -97,6 +98,16 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
 	sprintIDs := make(map[string]struct{})
+	sprintCache := make(map[string]jiraSprintRow, len(handler.ReferenceSprints))
+	for _, sprint := range handler.ReferenceSprints {
+		if sprint.Provider != "jira" || sprint.OrgID != claim.OrgID || sprint.SprintID == "" {
+			return CompleteRouteBatch{}, providerfoundation.ErrInvalidScope
+		}
+		if err := validateJiraSprint(sprint, claim); err != nil {
+			return CompleteRouteBatch{}, err
+		}
+		sprintCache[sprint.SprintID] = sprint
+	}
 	for _, issue := range issues {
 		item, transitions, normalizeErr := normalizeJiraWorkItem(
 			claim, jiraWorkItemFixtureInput{Raw: issue}, handler.StatusMapping,
@@ -130,6 +141,10 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	}
 
 	for sprintID := range sprintIDs {
+		if sprint, ok := sprintCache[sprintID]; ok {
+			rows.Sprints = append(rows.Sprints, sprint)
+			continue
+		}
 		payload, sprintErr := fetchJiraSprint(ctx, client, sprintID)
 		requests++
 		if sprintErr != nil {

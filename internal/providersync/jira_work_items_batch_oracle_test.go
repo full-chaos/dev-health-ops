@@ -1,11 +1,16 @@
 package providersync
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"sort"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // jiraBatchOracleRow is the complete six-list return boundary of Python's
@@ -53,20 +58,21 @@ func buildJiraProducerBatchOracleRow(
 	claim.OrgID = stringFrom(input["org_id"])
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
+		"fetch_comments":     jiraBatchBool(input["fetch_comments"], true),
+		"comments_limit":     jiraBatchInt(input["comments_limit"]),
 		"story_points_field": "customfield_10016",
 		"sprint_field":       "customfield_10020",
 		"epic_link_field":    "customfield_10014",
+		"fetch_all":          jiraBatchBool(input["fetch_all"], false),
 	}
 	normalizedAt := jiraProducerBatchNormalizedAt()
-	statusMapping := loadRealStatusMapping(t)
-
-	result := jiraBatchOracleRow{
-		WorkItems:    make([]jiraWorkItemOraclePrepRow, 0),
-		Transitions:  make([]jiraBatchTransitionRow, 0),
-		Dependencies: make([]jiraWorkItemDependencyRow, 0),
-		ReopenEvents: make([]jiraWorkItemReopenRow, 0),
-		Interactions: make([]jiraWorkItemInteractionRow, 0),
-		Sprints:      make([]jiraSprintRow, 0),
+	rawIssues, ok := input["issues"].([]any)
+	if !ok || len(rawIssues) < 2 {
+		t.Fatalf("batch case needs at least two issues, got %T/%d", input["issues"], len(rawIssues))
+	}
+	issues := make([]map[string]any, 0, len(rawIssues))
+	for _, raw := range rawIssues {
+		issues = append(issues, jiraBatchMap(t, raw))
 	}
 	comments := make(map[string][]map[string]any)
 	if rawComments, ok := input["comments"].(map[string]any); ok {
@@ -74,15 +80,13 @@ func buildJiraProducerBatchOracleRow(
 			comments[key] = jiraBatchMaps(t, raw)
 		}
 	}
-	fetchComments := jiraBatchBool(input["fetch_comments"], true)
-	commentsLimit := jiraBatchInt(input["comments_limit"])
 	sprintPayloads := make(map[string]map[string]any)
 	if rawSprints, ok := input["sprints"].(map[string]any); ok {
 		for id, raw := range rawSprints {
 			sprintPayloads[id] = jiraBatchMap(t, raw)
 		}
 	}
-	sprintCache := make(map[string]jiraSprintRow)
+	sprintCache := make([]jiraSprintRow, 0)
 	if rawReference, ok := input["reference_sprints"].([]any); ok {
 		for _, raw := range rawReference {
 			payload := jiraBatchMap(t, raw)
@@ -90,74 +94,97 @@ func buildJiraProducerBatchOracleRow(
 			if err != nil {
 				t.Fatalf("normalize reference sprint: %v", err)
 			}
-			sprintCache[sprint.SprintID] = sprint
+			sprintCache = append(sprintCache, sprint)
 		}
 	}
-	sprintIDs := make(map[string]struct{})
-	rawIssues, ok := input["issues"].([]any)
-	if !ok || len(rawIssues) < 2 {
-		t.Fatalf("batch case needs at least two issues, got %T/%d", input["issues"], len(rawIssues))
+	client := jiraWorkItemsTestClient(t, &jiraBatchOracleDoer{t: t, issues: issues, comments: comments, sprints: sprintPayloads}, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	batch, err := (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraOracleIdentity, ReferenceSprints: sprintCache}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
+	if err != nil {
+		t.Fatalf("Jira route oracle collect: %v", err)
 	}
-	for _, raw := range rawIssues {
-		issue := jiraBatchMap(t, raw)
-		item, transitions, err := normalizeJiraWorkItem(
-			claim,
-			jiraWorkItemFixtureInput{Raw: issue},
-			statusMapping,
-			jiraOracleIdentity,
-			normalizedAt,
-		)
-		if err != nil {
-			t.Fatalf("normalize Jira batch issue: %v", err)
-		}
-		result.WorkItems = append(result.WorkItems, jiraBatchSemanticWorkItem(item))
-		for _, transition := range transitions {
-			result.Transitions = append(result.Transitions, jiraBatchSemanticTransition(transition))
-		}
-		result.Dependencies = append(
-			result.Dependencies,
-			normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)...,
-		)
-		result.ReopenEvents = append(
-			result.ReopenEvents,
-			jiraReopenEvents(claim, transitions, normalizedAt)...,
-		)
-		if fetchComments {
-			issueKey := stringFrom(issue["key"])
-			issueComments := comments[issueKey]
-			if commentsLimit > 0 && len(issueComments) > commentsLimit {
-				issueComments = issueComments[:commentsLimit]
+	result := jiraBatchOracleRow{WorkItems: make([]jiraWorkItemOraclePrepRow, 0), Transitions: make([]jiraBatchTransitionRow, 0), Dependencies: make([]jiraWorkItemDependencyRow, 0), ReopenEvents: make([]jiraWorkItemReopenRow, 0), Interactions: make([]jiraWorkItemInteractionRow, 0), Sprints: make([]jiraSprintRow, 0)}
+	for _, effect := range batch.Effects {
+		for _, raw := range effect.Rows {
+			switch effect.Destination {
+			case "work_items":
+				var row jiraWorkItemRow
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				result.WorkItems = append(result.WorkItems, jiraBatchSemanticWorkItem(row))
+			case "work_item_transitions":
+				var row jiraWorkItemTransitionRow
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				result.Transitions = append(result.Transitions, jiraBatchSemanticTransition(row))
+			case "work_item_dependencies":
+				var row jiraWorkItemDependencyRow
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				result.Dependencies = append(result.Dependencies, row)
+			case "work_item_reopen_events":
+				var row jiraWorkItemReopenRow
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				result.ReopenEvents = append(result.ReopenEvents, row)
+			case "work_item_interactions":
+				var row jiraWorkItemInteractionRow
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				result.Interactions = append(result.Interactions, row)
+			case "sprints":
+				var row jiraSprintRow
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				result.Sprints = append(result.Sprints, row)
 			}
-			result.Interactions = append(
-				result.Interactions,
-				normalizeJiraInteractions(claim, item.WorkItemID, issueComments, jiraOracleIdentity, normalizedAt)...,
-			)
 		}
-		if item.SprintID != nil && *item.SprintID != "" {
-			sprintIDs[*item.SprintID] = struct{}{}
-		}
-	}
-	ids := make([]string, 0, len(sprintIDs))
-	for id := range sprintIDs {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		if sprint, ok := sprintCache[id]; ok {
-			result.Sprints = append(result.Sprints, sprint)
-			continue
-		}
-		payload, ok := sprintPayloads[id]
-		if !ok {
-			t.Fatalf("missing sprint payload for %s", id)
-		}
-		sprint, err := normalizeJiraSprint(claim, payload, normalizedAt)
-		if err != nil {
-			t.Fatalf("normalize Jira sprint %s: %v", id, err)
-		}
-		result.Sprints = append(result.Sprints, sprint)
 	}
 	return result
+}
+
+type jiraBatchOracleDoer struct {
+	t        *testing.T
+	issues   []map[string]any
+	comments map[string][]map[string]any
+	sprints  map[string]map[string]any
+}
+
+func (doer *jiraBatchOracleDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	var value any
+	switch {
+	case request.URL.Path == "/rest/api/3/search/jql":
+		pageIssues := doer.issues
+		isLast := true
+		nextToken := ""
+		if request.URL.Query().Get("nextPageToken") == "" && len(doer.issues) > 1 {
+			pageIssues = doer.issues[:1]
+			isLast = false
+			nextToken = "oracle-next"
+		} else if request.URL.Query().Get("nextPageToken") != "" {
+			pageIssues = doer.issues[1:]
+		}
+		value = map[string]any{"issues": pageIssues, "isLast": isLast, "nextPageToken": nextToken}
+	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/") && strings.HasSuffix(request.URL.Path, "/comment"):
+		key := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/rest/api/3/issue/"), "/comment")
+		value = map[string]any{"comments": doer.comments[key], "isLast": true}
+	case strings.HasPrefix(request.URL.Path, "/rest/agile/1.0/sprint/"):
+		id := strings.TrimPrefix(request.URL.Path, "/rest/agile/1.0/sprint/")
+		value = doer.sprints[id]
+	default:
+		doer.t.Fatalf("unexpected route-oracle request %s", request.URL.String())
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(string(raw))), Request: request}, nil
 }
 
 func jiraProducerBatchNormalizedAt() time.Time {

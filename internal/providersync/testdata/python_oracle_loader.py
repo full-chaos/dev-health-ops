@@ -46,6 +46,7 @@ _JIRA_BUDGET_SOURCE = _source("dev_health_ops/providers/jira/budget.py")
 _LAUNCHDARKLY_BUDGET_SOURCE = _source("dev_health_ops/providers/launchdarkly/budget.py")
 _DATASET_ADAPTERS_SOURCE = _source("dev_health_ops/processors/dataset_adapters.py")
 _BASE_GIT_SOURCE = _source("dev_health_ops/processors/base_git.py")
+_COMPLEXITY_SOURCE = _source("dev_health_ops/analytics/complexity.py")
 _GITHUB_CODE_CLIENT_SOURCE = _source("dev_health_ops/providers/github/code_client.py")
 _GITHUB_WORK_ITEM_OPTIONS_SOURCE = _source(
     "dev_health_ops/providers/github/work_item_options.py"
@@ -247,18 +248,12 @@ class _OracleAsyncBatchCollector:
 def _target_base_git() -> None:
     """Stub base_git.py's heavy, unrelated imports (CHAOS-3122).
 
-    ``BaseGitProcessor.coerce_created_at`` and the module-level
-    ``build_git_pull_request`` are pure functions; everything base_git.py
-    imports beyond them (complexity scanning, ORM models, the async batch
-    collector) is dead weight for this oracle and, more importantly, is not
-    importable under the stock interpreter this loader exists for. Each stub
-    only needs to satisfy the *names* base_git.py imports at module-load
-    time -- it never calls into any of them.
+    Most base_git.py imports remain unrelated to row construction and are
+    stubbed so this loader stays dependency-light. The real complexity module
+    is loaded because the GitLab files traversal oracle executes the live
+    processor's scanner gate before the worker persistence boundary.
     """
-    _install_module(
-        "dev_health_ops.analytics.complexity",
-        {"DEFAULT_COMPLEXITY_CONFIG_PATH": None, "ComplexityScanner": object},
-    )
+    _load_source_module("dev_health_ops.analytics.complexity", _COMPLEXITY_SOURCE)
     _install_module(
         "dev_health_ops.metrics.schemas",
         {"FileComplexitySnapshot": object, "RepoComplexityDaily": object},
@@ -607,10 +602,7 @@ def _target_gitlab_processor() -> None:
         "dev_health_ops.providers.operational_migration",
         _OPERATIONAL_MIGRATION_SOURCE,
     )
-    _install_module(
-        "dev_health_ops.analytics.complexity",
-        {"DEFAULT_COMPLEXITY_CONFIG_PATH": None, "ComplexityScanner": object},
-    )
+    _load_source_module("dev_health_ops.analytics.complexity", _COMPLEXITY_SOURCE)
     _install_module(
         "dev_health_ops.connectors.models",
         {

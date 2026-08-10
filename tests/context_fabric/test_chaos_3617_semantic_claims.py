@@ -572,9 +572,23 @@ class TestEmbeddingBudget:
             async def close(self) -> None:
                 return None
 
+        class _FakeConnection:
+            """CHAOS-3679: ``persist_watermark`` reaches this after a real
+            write, via ``driver.client.connection``. Not a FalkorDB fake --
+            this test never talks to one -- just enough to let the
+            durable-watermark write this store now always performs on a
+            successful projection complete without erroring."""
+
+            async def set(self, _key: str, _value: str) -> None:
+                return None
+
+        class _FakeClient:
+            connection = _FakeConnection()
+
         class _RecordingDriver:
             provider = "fake"
             graph_operations_interface = None
+            client = _FakeClient()
 
             def session(self) -> _FakeSession:
                 return _FakeSession()

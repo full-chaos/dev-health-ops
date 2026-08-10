@@ -30,6 +30,7 @@ orphan, and :func:`org_deletion_visit` — the callable registered in
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -72,6 +73,20 @@ __all__ = [
 
 #: The name this store registers under in ``EXTERNAL_DERIVED_STORES``.
 TRIAL_DERIVED_STORE_NAME = "context_fabric_graph_trial"
+
+#: CHAOS-3679. Prefix for the watermark's Redis key, on the FalkorDB client's
+#: OWN connection -- deliberately not a Cypher graph node. A graph node would
+#: be counted by ``readback.NODE_COUNT_QUERY``'s unconditional
+#: ``MATCH (n) RETURN count(n)``, silently breaking the
+#: ``count_nodes() == len(projection.nodes)`` / ``purge_org() returns
+#: len(projection.nodes)`` invariants the CHAOS-3617 live suite already
+#: asserts. A plain key needs no change to the closed query vocabulary and no
+#: change to node counting anywhere.
+_WATERMARK_KEY_PREFIX = "context_fabric:graph:watermark:"
+
+
+def _watermark_key(partition: str) -> str:
+    return f"{_WATERMARK_KEY_PREFIX}{partition}"
 
 
 class StoreUnavailableError(RuntimeError):
@@ -374,8 +389,83 @@ class GraphArmStore:
             self._partition,
             watermark.detail_for(indexed_through or datetime.now(UTC)),
         )
+        await self.persist_watermark(watermark)
         return WriteResult(
             nodes_written=len(nodes), edges_written=len(edges), watermark=watermark
+        )
+
+    async def persist_watermark(self, watermark: IndexWatermark) -> None:
+        """Durably record ``watermark`` for this store's partition.
+
+        CHAOS-3679. Called by :meth:`write_projection` after every successful
+        write, and exposed publicly so a caller with its own watermark (a
+        multi-batch run recording a partial one, for instance) can persist it
+        directly without going through a write. Stored as a plain Redis key
+        on the FalkorDB client's own connection -- see
+        :data:`_WATERMARK_KEY_PREFIX` for why this is deliberately not a
+        Cypher graph node.
+        """
+
+        payload = json.dumps(
+            {
+                "indexed_through": (
+                    watermark.indexed_through.isoformat()
+                    if watermark.indexed_through is not None
+                    else None
+                ),
+                "projected_at": (
+                    watermark.projected_at.isoformat()
+                    if watermark.projected_at is not None
+                    else None
+                ),
+                "records_indexed": watermark.records_indexed,
+                "partial": watermark.partial,
+            }
+        )
+        await self._bounded_read(
+            self._driver.client.connection.set(
+                _watermark_key(self._partition), payload
+            ),
+            operation="persist_watermark",
+        )
+
+    async def read_watermark(self) -> IndexWatermark:
+        """The durably persisted watermark for this store's partition.
+
+        CHAOS-3679. Returns ``IndexWatermark(indexed_through=None)`` --
+        never-projected -- when nothing has been persisted, which is
+        distinct from a transport failure: a hung or unreachable connection
+        raises :class:`GraphOperationTimeoutError`/
+        :class:`StoreUnavailableError` rather than silently reporting
+        never-projected. "Checked and absent" and "could not check" must
+        stay distinct here exactly as they do for
+        :func:`org_deletion_visit`'s :class:`DeletionCompletenessUnknownError`
+        -- a caller that cannot tell them apart would report an unreachable
+        store as confidently fresh-with-nothing-in-it.
+        """
+
+        raw = await self._bounded_read(
+            self._driver.client.connection.get(_watermark_key(self._partition)),
+            operation="read_watermark",
+        )
+        if raw is None:
+            return IndexWatermark(indexed_through=None)
+        data = json.loads(raw)
+        indexed_through_raw = data.get("indexed_through")
+        projected_at_raw = data.get("projected_at")
+        return IndexWatermark(
+            indexed_through=(
+                datetime.fromisoformat(indexed_through_raw)
+                if indexed_through_raw is not None
+                else None
+            ),
+            projected_at=(
+                datetime.fromisoformat(projected_at_raw)
+                if projected_at_raw is not None
+                else None
+            ),
+            records_indexed=int(data.get("records_indexed") or 0),
+            partial=bool(data.get("partial", False)),
         )
 
     async def partition_exists(self) -> bool:
@@ -418,6 +508,12 @@ class GraphArmStore:
         *genuine* deletion failure that happened to contain the same words.
         An incomplete deletion has to be visible —
         ``_purge_external_stores`` records exactly that.
+
+        CHAOS-3679: also removes the persisted watermark key. It is not part
+        of the graph keyspace the drop below removes -- a raw Redis key, by
+        design (see :data:`_WATERMARK_KEY_PREFIX`) -- so it needs its own
+        explicit cleanup, or organization deletion would leave freshness
+        metadata behind for an organization that no longer has any data.
         """
 
         if not await self.partition_exists():
@@ -433,6 +529,10 @@ class GraphArmStore:
         await self._bounded_read(
             self._driver.client.select_graph(self._partition).delete(),
             operation="purge_org",
+        )
+        await self._bounded_read(
+            self._driver.client.connection.delete(_watermark_key(self._partition)),
+            operation="purge_watermark",
         )
         return total
 

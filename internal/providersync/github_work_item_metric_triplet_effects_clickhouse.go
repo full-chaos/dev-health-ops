@@ -374,8 +374,7 @@ func validateGitHubWorkItemMetricEffect[T any](
 	effect EffectBatch,
 	destination string,
 ) ([]T, error) {
-	if strings.TrimSpace(identity.OrgID) == "" ||
-		(identity.Provider != "github" && identity.Provider != "gitlab") ||
+	if strings.TrimSpace(identity.OrgID) == "" || !isDerivedWorkItemProvider(identity.Provider) ||
 		!isWorkItemFamilyDataset(identity.Dataset) || strings.TrimSpace(identity.Generation) == "" ||
 		identity.Destination != destination || effect.Destination != destination ||
 		identity.ContentDigest != effect.ContentDigest || identity.RowCount != len(effect.Rows) ||

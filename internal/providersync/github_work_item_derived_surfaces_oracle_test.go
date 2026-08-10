@@ -718,7 +718,15 @@ func buildGitHubDerivedOracleSurfaces(
 	t *testing.T, input map[string]any,
 ) githubWorkItemDerivedSurfaces {
 	t.Helper()
-	claim := githubWorkItemOracleClaim()
+	provider := "github"
+	if items, ok := input["WorkItems"].([]any); ok && len(items) > 0 {
+		if item, ok := items[0].(map[string]any); ok {
+			if value, ok := item["provider"].(string); ok && value != "" {
+				provider = value
+			}
+		}
+	}
+	claim := nativeTestClaim(provider, "work-items")
 	claim.OrgID = input["OrgID"].(string)
 	day, err := time.Parse("2006-01-02", input["Day"].(string))
 	if err != nil {
@@ -784,7 +792,9 @@ func buildGitHubDerivedOracleSurfaces(
 		subjects[subject.WorkItemID] = subject
 	}
 	derived.linkedIssue = derived.buildLinkedIssueIndex(subjects, rows.Dependencies)
-	surfaces, err := buildGitHubWorkItemDerivedSurfaces(claim, rows, day, computedAt, derived)
+	surfaces, err := buildWorkItemDerivedSurfacesForProvider(
+		provider, claim, rows, day, computedAt, derived,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

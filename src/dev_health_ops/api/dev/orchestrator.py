@@ -148,6 +148,7 @@ from .qua_promotion import (
     verify_still_authorized,
 )
 from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
+from .question_interpreter import classify_cohort_discovery_family
 from .scope_service import MAX_CANDIDATES, ScopeResolutionService
 from .status_answer_render import (
     build_deterministic_status_claims,
@@ -2965,10 +2966,20 @@ class DevOrchestrator:
             # org feature is on, production_runtime.py's job) and the
             # runtime kill switch are required -- independent gates, same
             # shape as every other flag pair in this file.
+            #
+            # CHAOS-3689/CHAOS-3660: computed unconditionally (cheap, pure
+            # lexical matching, no side effects) rather than gated behind
+            # the other conditions -- it must be known before the `if`
+            # below since it is itself one of the gates: an honestly
+            # unclassifiable question (``None``) means the graph seam is
+            # never called at all, exactly like any other gate failure --
+            # never a guess passed across the wire.
+            cohort_discovery_family = classify_cohort_discovery_family(request.question)
             if (
                 preflight_result is not None
                 and preflight_result.interpretation.intent.intent_id
                 is QuestionIntentID.DISCOVERED_COHORT
+                and cohort_discovery_family is not None
                 and self._graph_investigation_query is not None
                 and self._evidence_service is not None
                 and graph_routing_runtime_enabled()
@@ -3003,6 +3014,9 @@ class DevOrchestrator:
                     # bounded identically.
                     window_start=authorized_scope.time_range.start,
                     window_end=authorized_scope.time_range.end,
+                    # CHAOS-3689: non-None by construction -- the gate above
+                    # never enters this block when classification failed.
+                    cohort_discovery_family=cohort_discovery_family,
                     deadline=graph_deadline,
                 )
                 graph_result = await self._graph_investigation_query.investigate(

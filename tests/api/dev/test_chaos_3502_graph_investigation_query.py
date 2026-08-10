@@ -15,6 +15,7 @@ import pytest
 
 from dev_health_ops.api.dev.contracts_v2.base import Cardinality, QuestionIntentID
 from dev_health_ops.api.dev.graph_investigation_query import (
+    CohortDiscoveryFamily,
     GraphInvestigationQuery,
     GraphInvestigationRequest,
     GraphQueryOutcome,
@@ -40,6 +41,9 @@ def _request(
         authorized_entity_ids=authorized_entity_ids,
         window_start=datetime(2026, 5, 12, 0, 0, tzinfo=UTC),
         window_end=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
+        # CHAOS-3689: matches the question text above -- "teams... struggling"
+        # is exactly the TEAM_PRESSURE pairing.
+        cohort_discovery_family=CohortDiscoveryFamily.TEAM_PRESSURE,
         deadline=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
     )
 

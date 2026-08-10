@@ -12,6 +12,7 @@ from dev_health_ops.api.dev.contracts_v2 import (
     EntityKind,
     QuestionIntentID,
 )
+from dev_health_ops.api.dev.graph_investigation_query import CohortDiscoveryFamily
 from dev_health_ops.api.dev.question_interpreter import (
     _KIND_NOUNS,
     _NON_NAMING_MODIFIERS,
@@ -22,6 +23,7 @@ from dev_health_ops.api.dev.question_interpreter import (
     MAX_MENTIONS,
     ClassifierProposal,
     QuestionInterpreter,
+    classify_cohort_discovery_family,
     extract_mentions,
     organization_mention_spans,
     untyped_name_candidates,
@@ -148,6 +150,66 @@ async def test_a_named_subject_never_routes_to_discovered_cohort(
     interpreted = await _interpreter().interpret(request_for(question))
     assert interpreted.intent.intent_id is not QuestionIntentID.DISCOVERED_COHORT
     assert interpreted.mentions, "expected a named subject to be extracted"
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Which teams are currently struggling?", CohortDiscoveryFamily.TEAM_PRESSURE),
+        ("Which squads are falling behind?", CohortDiscoveryFamily.TEAM_PRESSURE),
+        (
+            "Which projects appear capacity-constrained?",
+            CohortDiscoveryFamily.PROJECT_CAPACITY,
+        ),
+        (
+            "Which projects are unusually lightly loaded relative to demand?",
+            CohortDiscoveryFamily.PROJECT_CAPACITY,
+        ),
+    ],
+)
+def test_classify_cohort_discovery_family_matches_the_exclusive_pairing(
+    question: str, expected: CohortDiscoveryFamily
+) -> None:
+    """CHAOS-3689: an exclusive (subject-kind, judgment-kind) pairing --
+    exactly the shape ``cohort.discovery`` already recognizes as
+    ``DISCOVERED_COHORT`` -- classifies to the matching family.
+    """
+
+    assert classify_cohort_discovery_family(question) is expected
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # No anchor of either group at all.
+        "What is the sky?",
+        # Mixed subject: both TEAM and PROJECT anchors present.
+        "Which teams and projects are struggling?",
+        # Mixed judgment: both PRESSURE and CAPACITY anchors present.
+        "Which teams are struggling and capacity-constrained?",
+        # Cross-mismatch: FAMILY_CANDIDATE_KINDS cannot satisfy team+capacity
+        # (TEAM_PRESSURE needs a pressure judgment) or project+pressure
+        # (PROJECT_CAPACITY needs a project subject, TEAM_PRESSURE needs a
+        # team subject).
+        "Which teams are capacity-constrained?",
+        "Which projects are struggling?",
+        # GraphEntityKind.REPOSITORY/SERVICE are distinct from PROJECT and
+        # no family maps to either -- unclassifiable, not folded into
+        # PROJECT_CAPACITY.
+        "Which repos are struggling?",
+        "Which services are capacity-constrained?",
+    ],
+)
+def test_classify_cohort_discovery_family_is_honestly_unclassifiable(
+    question: str,
+) -> None:
+    """CHAOS-3689: every combination this round doesn't cover returns
+    ``None`` rather than guessing -- the orchestrator's routing-branch gate
+    treats ``None`` as "never call the graph seam", falling back to the
+    legacy loop exactly like any other unclassified question.
+    """
+
+    assert classify_cohort_discovery_family(question) is None
 
 
 @pytest.mark.asyncio

@@ -62,6 +62,7 @@ from .contracts_v2 import (
     EntityKind,
     QuestionIntentID,
 )
+from .graph_investigation_query import CohortDiscoveryFamily
 from .metrics.definitions import METRIC_REGISTRY
 
 __all__ = [
@@ -74,6 +75,7 @@ __all__ = [
     "IntentClassifier",
     "InterpretedQuestion",
     "QuestionInterpreter",
+    "classify_cohort_discovery_family",
     "count_mention_candidates",
     "extract_mentions",
     "organization_mention_spans",
@@ -970,6 +972,32 @@ _COHORT_DISCOVERY_JUDGMENT_ANCHORS = _any_of(
     "unusually lightly loaded",
     "lightly loaded",
 )
+#: CHAOS-3689: family-classification sub-groups for
+#: ``classify_cohort_discovery_family``, split out of the two anchor groups
+#: above by kind -- the SAME phrase lists, zero new lexical surface (per
+#: this round's "no corpus tuning" constraint). Subject anchors split into
+#: TEAM / PROJECT / unclassifiable-on-purpose: ``repo``/``repos``/
+#: ``repository``/``repositories``/``service``/``services`` are deliberately
+#: NOT folded into PROJECT -- ``GraphEntityKind`` has distinct
+#: ``REPOSITORY``/``SERVICE`` members, and ``cohort_discovery.
+#: FAMILY_CANDIDATE_KINDS`` never maps any family to either, so a question
+#: naming them cannot be satisfied by ``discover_cohort`` regardless of
+#: family choice — honestly unclassifiable, not a guess. Judgment anchors
+#: split into PRESSURE (mirrors the trial's ``STRUGGLING_TEAMS``/
+#: ``PRESSURE_SIGNALS`` phrasing) / CAPACITY (mirrors ``PROJECT_CAPACITY``'s
+#: own "capacity-constrained... unusually lightly loaded" phrasing
+#: near-verbatim).
+_COHORT_DISCOVERY_TEAM_SUBJECT_ANCHORS = _any_of("team", "teams", "squad", "squads")
+_COHORT_DISCOVERY_PROJECT_SUBJECT_ANCHORS = _any_of("project", "projects")
+_COHORT_DISCOVERY_PRESSURE_JUDGMENT_ANCHORS = _any_of(
+    "struggling", "struggle", "falling behind", "underperforming"
+)
+_COHORT_DISCOVERY_CAPACITY_JUDGMENT_ANCHORS = _any_of(
+    "capacity-constrained",
+    "capacity constrained",
+    "unusually lightly loaded",
+    "lightly loaded",
+)
 _RANKING_ANCHORS = _any_of(
     "top ",
     "most ",
@@ -1116,6 +1144,48 @@ _RECOGNIZERS: tuple[_Recognizer, ...] = (
         ),
     ),
 )
+
+
+def classify_cohort_discovery_family(
+    question_text: str,
+) -> CohortDiscoveryFamily | None:
+    """CHAOS-3689/CHAOS-3660: the one closed-vocabulary classification signal
+    a ``DISCOVERED_COHORT`` question carries beyond ``(intent_id,
+    cardinality)`` -- see ``CohortDiscoveryFamily``'s own docstring
+    (``graph_investigation_query.py``) for why this exists and why it has
+    only two members.
+
+    Intended to be called only after the ``cohort.discovery`` recognizer has
+    already matched (i.e. at least one subject anchor and one judgment
+    anchor are already known present) -- this just identifies WHICH ones,
+    reusing the exact same, already-measured phrase lists (split into
+    sub-groups above, not new lexical surface).
+
+    Requires an EXCLUSIVE match on both axes -- exactly one subject kind and
+    exactly one judgment kind -- before committing to a family. Returns
+    ``None`` (honestly unclassifiable) for everything else: a mixed subject
+    ("teams and projects"), a mixed judgment, a cross-mismatch
+    ``FAMILY_CANDIDATE_KINDS`` cannot satisfy (e.g. "teams" +
+    "capacity-constrained" -- ``TEAM_PRESSURE`` requires a pressure
+    judgment, ``PROJECT_CAPACITY`` requires a project subject), or a
+    repo/service subject (``GraphEntityKind.REPOSITORY``/``SERVICE`` are
+    distinct from ``PROJECT``; no family maps to either). The caller
+    (orchestrator's routing branch) never invokes the graph seam at all when
+    this returns ``None`` -- an honest miss here falls back to the existing
+    legacy loop exactly like any other unclassified question, never a
+    guess.
+    """
+
+    normalized = _normalize(question_text)
+    is_team = _COHORT_DISCOVERY_TEAM_SUBJECT_ANCHORS(normalized)
+    is_project = _COHORT_DISCOVERY_PROJECT_SUBJECT_ANCHORS(normalized)
+    is_pressure = _COHORT_DISCOVERY_PRESSURE_JUDGMENT_ANCHORS(normalized)
+    is_capacity = _COHORT_DISCOVERY_CAPACITY_JUDGMENT_ANCHORS(normalized)
+    if is_team and not is_project and is_pressure and not is_capacity:
+        return CohortDiscoveryFamily.TEAM_PRESSURE
+    if is_project and not is_team and is_capacity and not is_pressure:
+        return CohortDiscoveryFamily.PROJECT_CAPACITY
+    return None
 
 
 def _cardinality_for(mention_count: int) -> Cardinality:

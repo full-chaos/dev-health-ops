@@ -418,6 +418,34 @@ class CloudEmbedder:
         )
 
     def _client(self) -> Any:
+        # Issue 3632: refuse before constructing the client, not just before
+        # reporting `semantic`. The OpenAI SDK falls back to an AMBIENT
+        # OPENAI_API_KEY environment variable whenever `api_key=None` is
+        # passed explicitly -- so a bare, unconfigured `CloudEmbedder()`
+        # (which correctly reports `semantic=False`, implying "cannot
+        # embed") would silently succeed anyway if the process happens to
+        # have OPENAI_API_KEY set for an unrelated reason (this repo's own
+        # Ask Dev LLM features, for one). Confirmed directly: with a real
+        # process env var set and the socket layer blocked, `create()`
+        # attempted a live connection before this guard existed. A caller
+        # that reaches here without going through `from_environment()` (for
+        # instance `to_graphiti_document_nodes`, which calls `create()`
+        # unconditionally for every embedder, unlike `to_graphiti_nodes`'s
+        # deterministic-only special case) must not be able to send document
+        # text to a provider this instance's own credential state never
+        # explicitly authorized -- "fail closed ... when providers/text
+        # indexing are disallowed" is exactly this case, and org policy for
+        # whether a provider may be used is expressed by whether an api_key
+        # was explicitly supplied through this class's own convention.
+        if not self.api_key:
+            raise RuntimeError(
+                "CloudEmbedder has no api_key configured, so it cannot "
+                "embed -- refusing to fall back to an ambient "
+                "OPENAI_API_KEY/environment credential this instance never "
+                "explicitly received. `semantic` already reports False for "
+                "exactly this reason; this guard makes that promise true "
+                "rather than advisory"
+            )
         module = graphiti_module("embedder.openai")
         return module.OpenAIEmbedder(
             config=module.OpenAIEmbedderConfig(

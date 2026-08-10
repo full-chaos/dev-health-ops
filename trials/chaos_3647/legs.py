@@ -43,11 +43,15 @@ from typing import TYPE_CHECKING, Any
 
 from dev_health_ops.context_fabric.graph_arm.discovery import search_candidates
 from dev_health_ops.context_fabric.graph_arm.semantic_retrieval import (
+    assess_disposition,
+    resolve_conversational_reference,
     retrieve_candidates,
 )
 from trials.chaos_3619.graph_leg import mention_texts
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Sequence
+
     from dev_health_ops.context_fabric.graph_arm.projection import GraphProjection
     from dev_health_ops.context_fabric.graph_arm.semantic_retrieval import (
         RetrievalStore,
@@ -61,6 +65,7 @@ __all__ = [
     "prose_disclosures_in",
     "resolve_deterministic",
     "resolve_semantic",
+    "resolve_semantic_with_context",
 ]
 
 #: The candidate horizon every leg is measured over. One number, shared, so
@@ -122,6 +127,18 @@ class LegResolution:
     #: only. Recorded because an empty tuple here is the single most
     #: load-bearing fact in the whole comparison.
     mentions: tuple[str, ...] = ()
+    #: CHAOS-3666. The semantic leg's own ``SemanticDisposition`` (propose /
+    #: clarify / refuse), empty string on the deterministic legs, which
+    #: apply no disposition policy. ``subjects`` on the semantic leg is
+    #: already gated to what this disposition presents -- this field exists
+    #: so a reader of the trial artifact can see the POLICY DECISION that
+    #: produced ``subjects``, not just its result: a REFUSE (empty
+    #: ``subjects``) is a different finding from retrieval simply returning
+    #: nothing, and only this field distinguishes them.
+    disposition: str = ""
+    #: The disposition policy's own stated reason. Trial diagnostic, mirrors
+    #: ``SemanticDispositionResult.reason``.
+    disposition_reason: str = ""
 
     @property
     def resolved(self) -> bool:
@@ -244,6 +261,19 @@ async def resolve_semantic(
     empty mention tuple would guarantee an empty result and measure nothing.
     The cost of that choice is that the two legs no longer share an input,
     which is exactly what ``DETERMINISTIC_QUESTION`` exists to price.
+
+    **CHAOS-3666: reports what a caller would actually receive.**
+    ``retrieve_candidates`` alone returns every authorized candidate it
+    fused, unbounded and unfiltered by confidence -- exactly the raw ranking
+    ``semantic_retrieval.assess_disposition`` exists to gate before anything
+    downstream trusts it (see that function's own docstring: a nonexistent
+    entity or an unresolved reference produces a long, confident-looking
+    ranking with no lexical grounding underneath it). This leg calls it and
+    reports only ``disposition_result.presented`` as ``subjects`` -- empty on
+    REFUSE, one entry on PROPOSE, a bounded tied set on CLARIFY -- so
+    ``subjects`` here means the same thing it means on the deterministic
+    legs: what this leg would actually hand a consumer, not an internal
+    ranking a policy layer would filter before anyone saw it.
     """
 
     retrieval = await retrieve_candidates(
@@ -252,6 +282,7 @@ async def resolve_semantic(
         authorized_entity_ids=authorized_entity_ids,
         limit=limit,
     )
+    disposition_result = assess_disposition(retrieval)
     return LegResolution(
         leg=LegId.SEMANTIC_HYBRID,
         query=question,
@@ -265,11 +296,100 @@ async def resolve_semantic(
                 methods=tuple(sorted(method.value for method in candidate.methods)),
                 rrf_score=candidate.rrf_score,
             )
-            for candidate in retrieval.candidates
+            for candidate in disposition_result.presented
         ),
         authorization_filtered_count=retrieval.authorization_filtered_count,
         withheld_canonical_ids=retrieval.withheld_canonical_ids,
         bm25_order=retrieval.bm25_order,
         cosine_order=retrieval.cosine_order,
         observation_hits=retrieval.observation_hits,
+        disposition=disposition_result.disposition.value,
+        disposition_reason=disposition_result.reason,
+    )
+
+
+async def resolve_semantic_with_context(
+    *,
+    question: str,
+    store: RetrievalStore,
+    authorized_entity_ids: frozenset[str],
+    prior_subject_ids: Sequence[str],
+    limit: int = LEG_LIMIT,
+) -> LegResolution:
+    """issue 3666: give the semantic leg a fair chance to use conversation
+    context before falling through to ordinary retrieval.
+
+    ``prior_subject_ids`` must be what a PRIOR LEG RUN actually resolved for
+    the turn this question follows -- never the oracle's expected/correct
+    answer. Seeding from ground truth would test whether the wiring exists,
+    not whether ``resolve_conversational_reference`` correctly carries
+    forward whatever the mechanism itself concluded, right or wrong; see the
+    module docstring's "no leg is handed the answer" rule, which this
+    respects rather than routes around.
+
+    Tries :func:`~.semantic_retrieval.resolve_conversational_reference`
+    first, but only commits to its answer when it actually resolves. Every
+    refusal path there — the query carries real content, no prior context,
+    an ambiguous or unauthorized or deleted prior subject — falls through to
+    :func:`resolve_semantic` unchanged, so a case with no prior turn (every
+    case that is not a follow-up) sees identical behaviour to before this
+    function existed.
+
+    **Not wired into ``runner.py``, and this is a documented finding, not an
+    oversight.** ``_is_pure_conversational_reference`` was checked directly
+    against all eight corpus ambiguity questions before any of this was
+    built: it returns ``False`` on every one, including the two
+    ``follows_case_id`` cases (H04 "what's holding it up?" — "holding" is
+    real content; H05 "what about the other project we discussed?" — "we
+    discussed" is real content). Building the dependency-ordered,
+    state-threading runner restructure this function was designed to slot
+    into would therefore move zero lines of the trial artifact for THIS
+    corpus — no case's literal text would ever route through it. Widening
+    the deictic vocabulary to make H04/H05 qualify would be exactly the
+    corpus-specific tuning the safety principles forbid, so that path is
+    closed too. The conversational-reference capability is real, correct
+    (proven by the four unit tests beside this function), and reachable —
+    it is simply corpus-unmeasurable by design for this trial's eight
+    cases. H04–H06's current "safely refuses instead of confidently wrong"
+    state is therefore the correct terminal state for this corpus, not an
+    unfinished capability — real measurement of this leg waits on a real
+    conversation-state source (production's own interpreter/routing;
+    see the CHAOS-3686-successor ticket's own framing: wiring
+    ``prior_subject_ids`` to a real source was always a separate, later
+    concern). A future reader regenerating this trial and seeing a flat
+    H04–H06 delta should read this paragraph before concluding the
+    capability regressed or was never finished.
+    """
+
+    if prior_subject_ids:
+        reference = await resolve_conversational_reference(
+            question,
+            store=store,
+            prior_subject_ids=prior_subject_ids,
+            authorized_entity_ids=authorized_entity_ids,
+        )
+        if reference.candidate is not None:
+            candidate = reference.candidate
+            return LegResolution(
+                leg=LegId.SEMANTIC_HYBRID,
+                query=question,
+                subjects=(
+                    RankedSubject(
+                        canonical_id=candidate.canonical_id,
+                        display_label=candidate.display_label,
+                        rank=0,
+                        signal=candidate.signal.value,
+                        mechanism=candidate.mechanism.value,
+                    ),
+                ),
+                authorization_filtered_count=0,
+                disposition="conversational_reference",
+                disposition_reason=reference.reason,
+            )
+
+    return await resolve_semantic(
+        question=question,
+        store=store,
+        authorized_entity_ids=authorized_entity_ids,
+        limit=limit,
     )

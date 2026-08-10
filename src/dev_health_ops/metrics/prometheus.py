@@ -5,6 +5,7 @@ Defines application-level counters, histograms, and gauges for:
   - ClickHouse query latency
   - LLM API calls (OpenAI / Anthropic)
   - GitHub API calls (requests by endpoint/status, rate limit remaining)
+  - Context Fabric graph arm: embedded-surface document indexing/removal
 
 Usage:
     from dev_health_ops.metrics.prometheus import (
@@ -19,6 +20,8 @@ Usage:
         GITHUB_RATE_LIMIT_REMAINING,
         record_github_api_request,
         record_github_rate_limit,
+        record_context_fabric_documents_indexed,
+        record_context_fabric_document_removed,
     )
 """
 
@@ -338,6 +341,31 @@ if _PROMETHEUS_AVAILABLE:
         "starved), not just that one run failed.",
     )
 
+    # ---------------------------------------------------------------------------
+    # Context Fabric graph arm: embedded-surface document lifecycle (issue 3632)
+    #
+    # Content-safe by construction: neither counter's labels ever carry a
+    # title, body or canonical id -- only a closed reason-code vocabulary
+    # (context_fabric.graph_arm.store.DocumentRemovalReason's own values).
+    # ---------------------------------------------------------------------------
+    CONTEXT_FABRIC_DOCUMENTS_INDEXED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_context_fabric_documents_indexed_total",
+        "Documents written as nodes to the context-fabric graph trial "
+        "store, cumulative across all partitions. Incremented once per "
+        "document per successful projection write -- a write that raises "
+        "increments nothing, since no node was actually written.",
+    )
+
+    CONTEXT_FABRIC_DOCUMENTS_REMOVED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_context_fabric_documents_removed_total",
+        "Documents removed from the context-fabric graph trial store via "
+        "GraphArmStore.remove_document, by reason. Incremented only when a "
+        "node was actually deleted -- a no-op removal (already absent, or "
+        "never approved in the first place) increments nothing, so this "
+        "counter measures real index shrinkage, not call volume.",
+        ["reason"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -369,6 +397,8 @@ else:
     ASK_DEV_RETENTION_SWEEP_TOTAL = _noop_counter()
     ASK_DEV_RETENTION_SWEEP_PURGED_TOTAL = _noop_counter()
     ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
+    CONTEXT_FABRIC_DOCUMENTS_INDEXED_TOTAL = _noop_counter()
+    CONTEXT_FABRIC_DOCUMENTS_REMOVED_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +507,32 @@ def record_ask_dev_retention_sweep(
         ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP.set(
             timestamp if timestamp is not None else time.time()
         )
+
+
+def record_context_fabric_documents_indexed(count: int) -> None:
+    """Record ``count`` documents written as nodes in one projection write.
+
+    ``count`` rather than a one-at-a-time call: the write side embeds and
+    writes an entire batch per ``write_projection`` call, and recording once
+    per call (with the real count) avoids a metrics-loop for something the
+    caller already has as a single number.
+    """
+
+    if count:
+        CONTEXT_FABRIC_DOCUMENTS_INDEXED_TOTAL.inc(count)
+
+
+def record_context_fabric_document_removed(reason: str) -> None:
+    """Record one document actually removed from the graph store.
+
+    ``reason`` is expected to be one of
+    ``context_fabric.graph_arm.store.DocumentRemovalReason``'s values --
+    passed as a plain ``str`` here (not the enum type) so this module stays
+    free of a dependency on the optional graph arm, matching every other
+    entry in this file.
+    """
+
+    CONTEXT_FABRIC_DOCUMENTS_REMOVED_TOTAL.labels(reason=reason).inc()
 
 
 @contextmanager

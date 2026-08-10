@@ -237,10 +237,22 @@ class TestTheSemanticLegRunsAgainstTheRealThing:
             ),
         )
         assert resolution.leg is LegId.SEMANTIC_HYBRID
-        assert resolution.subjects, (
-            "hybrid retrieval returned nothing for a query naming a real "
-            "project; the store, the index or the vectors are not what this "
-            "leg thinks they are"
+        # CHAOS-3666: ``subjects`` is now disposition-gated (see
+        # ``resolve_semantic``'s own docstring), so it may legitimately be
+        # empty on a genuine REFUSE even when the underlying mechanism is
+        # completely sound. The soundness claim this test makes -- the
+        # store, the index and the vectors are real and reachable -- is
+        # ``bm25_order``/``cosine_order`` (the RAW primitive output, never
+        # gated); asserting on those is the correct proof now, not on
+        # ``subjects``, which is a policy decision, not a mechanism check.
+        assert resolution.bm25_order or resolution.cosine_order, (
+            "neither retrieval primitive returned anything for a query "
+            "naming a real project; the store, the index or the vectors "
+            "are not what this leg thinks they are"
+        )
+        assert resolution.disposition, (
+            "the disposition policy must always reach a verdict; an empty "
+            "value here means assess_disposition was not reached at all"
         )
         assert resolution.cosine_order, "the cosine primitive returned nothing"
         assert resolution.bm25_order, (

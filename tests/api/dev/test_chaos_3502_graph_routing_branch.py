@@ -34,7 +34,10 @@ from dev_health_ops.api.dev.evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
-from dev_health_ops.api.dev.graph_investigation_query import GraphQueryOutcome
+from dev_health_ops.api.dev.graph_investigation_query import (
+    CohortDiscoveryFamily,
+    GraphQueryOutcome,
+)
 from dev_health_ops.api.dev.orchestrator import GRAPH_ROUTING_RUNTIME_FLAG
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.metrics.prometheus import ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL
@@ -46,8 +49,20 @@ from tests._chaos_3502_graph_investigation_fake import FakeGraphInvestigationQue
 #: anchor "teams" + judgment anchor "struggling", CHAOS-3652) resolves this
 #: to ``QuestionIntentID.DISCOVERED_COHORT`` /
 #: ``Cardinality.ORGANIZATION_WIDE`` through the real preflight pipeline --
-#: never asserted by construction here, only by driving the real seam.
+#: never asserted by construction here, only by driving the real seam. Also
+#: an exclusive (TEAM, PRESSURE) pairing (CHAOS-3689), so
+#: ``classify_cohort_discovery_family`` resolves it to ``TEAM_PRESSURE``.
 _DISCOVERED_COHORT_QUESTION = "Which teams are struggling right now?"
+
+#: CHAOS-3689: still recognized as ``DISCOVERED_COHORT`` by the ``cohort.
+#: discovery`` recognizer (its own subject anchors are an undifferentiated
+#: union -- "team"/"teams" OR "project"/"projects" both satisfy it) but a
+#: mixed subject for family classification -- both TEAM and PROJECT anchors
+#: present, so neither exclusive pairing is satisfied. Verified directly
+#: (not guessed): the real interpreter resolves this to
+#: ``QuestionIntentID.DISCOVERED_COHORT`` with zero mentions, while
+#: ``classify_cohort_discovery_family`` returns ``None``.
+_UNCLASSIFIABLE_COHORT_QUESTION = "Which teams and projects are struggling?"
 
 _EVIDENCE_SIGNING_SECRET = "chaos-3502-branch-test-secret-at-least-32-bytes"
 
@@ -221,6 +236,77 @@ async def test_flag_off_is_byte_identical_to_collaborators_never_wired(
         entities=[],
         org_id=ORG_ID,
         script_id="chaos3502-flag-off",
+    )
+
+    assert with_collaborators.outcome_tuple() == without_collaborators.outcome_tuple()
+
+
+@pytest.mark.asyncio
+async def test_the_request_carries_the_classified_cohort_discovery_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3689: the routing branch populates ``GraphInvestigationRequest.
+    cohort_discovery_family`` from ``question_interpreter.
+    classify_cohort_discovery_family`` -- supplied, not re-derived by the
+    seam (same "supplied, never invented" posture as ``authorized_entity_ids``/
+    ``window_start``/``window_end``).
+    """
+
+    monkeypatch.setenv(GRAPH_ROUTING_RUNTIME_FLAG, "1")
+    fake = FakeGraphInvestigationQuery(outcome=GraphQueryOutcome.DISABLED)
+
+    await run_preflight_orchestrator(
+        question=_DISCOVERED_COHORT_QUESTION,
+        entities=[],
+        org_id=ORG_ID,
+        script_id="chaos3689-family",
+        graph_investigation_query=fake,
+        evidence_service=_evidence_service(),
+    )
+
+    assert len(fake.received_requests) == 1
+    assert (
+        fake.received_requests[0].cohort_discovery_family
+        is CohortDiscoveryFamily.TEAM_PRESSURE
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unclassifiable_cohort_question_never_calls_the_seam(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3689: an honest ``None`` classification gates the routing
+    branch itself -- the graph seam is never invoked at all, exactly like
+    every other gate failure (flag off, missing collaborator). The run
+    still completes via the legacy loop, and is byte-identical
+    (``RunOutput.outcome_tuple()``) to a run with the graph collaborators
+    never wired at all, mirroring the flag-off inertness test above.
+    """
+
+    monkeypatch.setenv(GRAPH_ROUTING_RUNTIME_FLAG, "1")
+    fake = FakeGraphInvestigationQuery(outcome=GraphQueryOutcome.COMPLETED)
+
+    with_collaborators = await run_preflight_orchestrator(
+        question=_UNCLASSIFIABLE_COHORT_QUESTION,
+        entities=[],
+        org_id=ORG_ID,
+        script_id="chaos3689-unclassifiable",
+        graph_investigation_query=fake,
+        evidence_service=_evidence_service(),
+    )
+    assert fake.received_requests == [], (
+        "an unclassifiable cohort-discovery family must mean the graph seam "
+        "is never called, even though both collaborators are wired and the "
+        "flag is on"
+    )
+    assert with_collaborators.result.state is not RunState.FAILED
+    assert with_collaborators.result.answer is not None
+
+    without_collaborators = await run_preflight_orchestrator(
+        question=_UNCLASSIFIABLE_COHORT_QUESTION,
+        entities=[],
+        org_id=ORG_ID,
+        script_id="chaos3689-unclassifiable",
     )
 
     assert with_collaborators.outcome_tuple() == without_collaborators.outcome_tuple()

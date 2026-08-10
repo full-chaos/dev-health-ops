@@ -305,6 +305,7 @@ async def test_completed_with_admissible_evidence_produces_a_graph_grounded_answ
         script_id="chaos3650-clean",
         graph_investigation_query=fake,
         evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
         canonical_enrichment=_canonical_enrichment(),
         recorder_factory=lambda: recorder,
     )
@@ -341,6 +342,7 @@ async def test_a_refused_candidate_degrades_but_never_aborts(
         script_id="chaos3650-degrade",
         graph_investigation_query=fake,
         evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
         canonical_enrichment=_canonical_enrichment(),
     )
 
@@ -378,6 +380,7 @@ async def test_an_enrichment_gap_degrades_independently_of_evidence_refusal(
         script_id="chaos3650-enrichment-gap",
         graph_investigation_query=fake,
         evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
         canonical_enrichment=_canonical_enrichment(status_raises=True),
     )
 
@@ -415,6 +418,7 @@ async def test_completed_with_no_material_still_falls_through(
             script_id="chaos3650-no-material",
             graph_investigation_query=fake,
             evidence_service=_evidence_service(),
+            graph_routing_entitlement=_Entitlement(),
             canonical_enrichment=_canonical_enrichment(),
         )
 
@@ -458,6 +462,7 @@ async def test_an_unexpected_exception_during_assembly_falls_through_and_is_coun
             script_id="chaos3650-raised",
             graph_investigation_query=fake,
             evidence_service=_evidence_service(entitlement=_RaisingEntitlement()),
+            graph_routing_entitlement=_Entitlement(),
             canonical_enrichment=_canonical_enrichment(),
         )
 
@@ -510,6 +515,7 @@ async def test_a_genuine_cancellation_during_assembly_is_not_swallowed(
             script_id="chaos3650-cancelled",
             graph_investigation_query=fake,
             evidence_service=_evidence_service(entitlement=_CancellingEntitlement()),
+            graph_routing_entitlement=_Entitlement(),
             canonical_enrichment=_canonical_enrichment(),
         )
 
@@ -564,6 +570,7 @@ async def test_enrichment_metric_evidence_ref_ids_are_scrubbed_before_assembly(
         script_id="chaos3650-metric-scrub",
         graph_investigation_query=fake,
         evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
         canonical_enrichment=_canonical_enrichment(metric_refs=(metric_ref,)),
     )
 

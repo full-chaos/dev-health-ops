@@ -111,6 +111,7 @@ from .evidence_service import (
     EvidenceService,
 )
 from .graph_investigation_query import GraphInvestigationQuery
+from .graph_routing_policy import CanonicalGraphRoutingEntitlementAuthorizer
 from .investigation_plans import PlanExecutor
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
 from .investigation_plans.wave_3_1_plans import (
@@ -2578,6 +2579,7 @@ async def _assemble_production_runtime(
     plan_executor: PlanExecutor | None = None
     graph_investigation_query: GraphInvestigationQuery | None = None
     canonical_enrichment: CanonicalEnrichmentAccessor | None = None
+    graph_routing_entitlement: CanonicalGraphRoutingEntitlementAuthorizer | None = None
     if wave_3_1_enabled:
         # Keep the optional graph arm out of production module import time.
         # Organization policy is evaluated first, so a policy-off request
@@ -2614,6 +2616,7 @@ async def _assemble_production_runtime(
             metrics=metric_service,
         )
         graph_investigation_query = ProductionGraphInvestigationQuery()
+        graph_routing_entitlement = CanonicalGraphRoutingEntitlementAuthorizer(session)
         # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305/3393 service is
         # constructed over the SAME PlanExecutorRuntime instance the six
         # core plans' steps use -- never a second, parallel query path.
@@ -2680,6 +2683,7 @@ async def _assemble_production_runtime(
         graph_investigation_query=graph_investigation_query,
         evidence_service=evidence_service if wave_3_1_enabled else None,
         canonical_enrichment=canonical_enrichment,
+        graph_routing_entitlement=graph_routing_entitlement,
     )
 
 

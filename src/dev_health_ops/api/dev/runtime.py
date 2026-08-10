@@ -16,6 +16,7 @@ from .contracts_v2.base import QuestionIntentID
 from .contracts_v2.plan import DevInvestigationPlan
 from .evidence_service import EvidenceService
 from .graph_investigation_query import GraphInvestigationQuery
+from .graph_routing_policy import GraphRoutingEntitlementAuthorizer
 from .investigation_plans import PlanExecutor
 from .investigation_shadow import InvestigationPacketProducer, InvestigationShadow
 from .orchestrator import (
@@ -90,6 +91,11 @@ class BoundedDevRuntime:
     graph_investigation_query: GraphInvestigationQuery | None = None
     evidence_service: EvidenceService | None = None
     canonical_enrichment: CanonicalEnrichmentAccessor | None = None
+    #: The independent organization-level graph entitlement. Production
+    #: carries the canonical authorizer only when the Wave 3.1 collaborators
+    #: are constructed; the orchestrator checks it immediately before route
+    #: entry, leaving the runtime kill switch independent.
+    graph_routing_entitlement: GraphRoutingEntitlementAuthorizer | None = None
 
     async def run(
         self,
@@ -124,6 +130,7 @@ class BoundedDevRuntime:
             graph_investigation_query=self.graph_investigation_query,
             evidence_service=self.evidence_service,
             canonical_enrichment=self.canonical_enrichment,
+            graph_routing_entitlement=self.graph_routing_entitlement,
         )
         return await orchestrator.run(
             request=request,

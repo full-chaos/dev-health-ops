@@ -121,6 +121,7 @@ async def test_every_fallthrough_outcome_is_observed_and_still_answers(
             script_id=f"chaos3502-{outcome.value}",
             graph_investigation_query=fake,
             evidence_service=_evidence_service(),
+            graph_routing_entitlement=_Entitlement(),
         )
 
     assert len(fake.received_requests) == 1, (
@@ -178,6 +179,7 @@ async def test_cancelled_outcome_terminates_the_run_directly(
             script_id="chaos3502-cancelled",
             graph_investigation_query=fake,
             evidence_service=_evidence_service(),
+            graph_routing_entitlement=_Entitlement(),
         )
 
     assert output.result.state is RunState.CANCELLED
@@ -225,6 +227,7 @@ async def test_flag_off_is_byte_identical_to_collaborators_never_wired(
         script_id="chaos3502-flag-off",
         graph_investigation_query=fake,
         evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
     )
     assert fake.received_requests == [], (
         "flag off must mean the graph seam is never called, even though "
@@ -262,6 +265,7 @@ async def test_the_request_carries_the_classified_cohort_discovery_family(
         script_id="chaos3689-family",
         graph_investigation_query=fake,
         evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
     )
 
     assert len(fake.received_requests) == 1
@@ -293,6 +297,7 @@ async def test_an_unclassifiable_cohort_question_never_calls_the_seam(
         script_id="chaos3689-unclassifiable",
         graph_investigation_query=fake,
         evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
     )
     assert fake.received_requests == [], (
         "an unclassifiable cohort-discovery family must mean the graph seam "

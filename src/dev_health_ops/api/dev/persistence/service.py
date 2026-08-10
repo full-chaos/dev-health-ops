@@ -1709,6 +1709,43 @@ class DevPersistenceService:
             )
         )
 
+    async def get_subject_set(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> DevRunSubjectSet | None:
+        """Return the tenant-owned committed subject set for one run, if any.
+
+        Step 1 of issue 3660 §8 item (e): the read-path counterpart to
+        ``record_subject_set``, which has had no selector since Wave 3.1
+        (CHAOS-3299/3301) introduced the write side. Symmetric to
+        ``get_answer_frame``/``get_run_narrative`` in every respect --
+        tenant-scoped by ``org_id``/``user_id`` in addition to ``run_id``
+        (never by ``run_id`` alone, matching every other reader in this
+        module: a run id is unguessable but this module's own posture is
+        that HTTP payloads and model output never get to substitute for an
+        authenticated tenant check), and returns ``None`` rather than
+        raising when the run recorded no subject set -- true for every
+        singular, non-cohort run, which is the common case (0..1 rows per
+        run, ``uq_dev_run_subject_sets_run``).
+
+        Deliberately unused by any caller for now: it is the inert half of
+        a two-step change (issue 3660 §8 item (e)) -- the projection that
+        will consume it, and the ``compat.py`` cohort refusal it would
+        replace, both wait for an ANSWERED-outcome cohort consumer that
+        does not exist yet.
+        """
+
+        return await self.session.scalar(
+            select(DevRunSubjectSet).where(
+                DevRunSubjectSet.run_id == run_id,
+                DevRunSubjectSet.org_id == org_id,
+                DevRunSubjectSet.user_id == user_id,
+            )
+        )
+
     async def get_answer_message(
         self,
         *,

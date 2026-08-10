@@ -3,6 +3,8 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +16,12 @@ const (
 	linearWorkItemsDefaultPerPage = 50
 	linearWorkItemsMaxPerPage     = 100
 	linearWorkItemsDefaultPages   = 100
+	// LinearClient's bulk issue query asks for 50 comments.  The Python
+	// provider's explicit comment helper has a bounded 100-comment contract;
+	// keep the native route on that same boundary instead of silently dropping
+	// a second page or issuing an unbounded nested crawl.
+	linearWorkItemsCommentsPerPage  = 50
+	linearWorkItemsCommentsMaxPages = 2
 )
 
 // linearWorkItemsQuery deliberately follows the fields selected by
@@ -40,35 +48,130 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
           actor { name email }
         }
       }
+      comments(first: 50) {
+        nodes {
+          body
+          createdAt
+          user { name email }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+      attachments(first: 50) {
+        nodes { url sourceType }
+        pageInfo { hasNextPage endCursor }
+      }
+      relations(first: 50) {
+        nodes {
+          type
+          issue { identifier }
+          relatedIssue { identifier }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+      inverseRelations(first: 50) {
+        nodes {
+          type
+          issue { identifier }
+          relatedIssue { identifier }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
     }
     pageInfo { hasNextPage endCursor }
   }
 }`
 
+const linearWorkItemsTeamQuery = `
+query LinearWorkItemsTeam($first: Int!, $after: String, $filter: TeamFilter) {
+  teams(first: $first, after: $after, filter: $filter) {
+    nodes { id key name }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
+
+const linearWorkItemsCyclesQuery = `
+query LinearWorkItemsCycles($first: Int!, $after: String, $filter: CycleFilter) {
+  cycles(first: $first, after: $after, filter: $filter) {
+    nodes {
+      id number name startsAt endsAt completedAt progress
+      team { id key name }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
+
+const linearWorkItemsAttachmentsQuery = `
+query LinearWorkItemsAttachments($first: Int!, $after: String, $issueId: String!) {
+  issue(id: $issueId) {
+    attachments(first: $first, after: $after) {
+      nodes { url sourceType }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+const linearWorkItemsRelationsQuery = `
+query LinearWorkItemsRelations($first: Int!, $after: String, $issueId: String!) {
+  issue(id: $issueId) {
+    relations(first: $first, after: $after) {
+      nodes { type issue { identifier } relatedIssue { identifier } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+const linearWorkItemsCommentsQuery = `
+query LinearWorkItemsComments($first: Int!, $after: String, $issueId: String!) {
+  issue(id: $issueId) {
+    comments(first: $first, after: $after) {
+      nodes {
+        body
+        createdAt
+        user { name email }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+const linearWorkItemsInverseRelationsQuery = `
+query LinearWorkItemsInverseRelations($first: Int!, $after: String, $issueId: String!) {
+  issue(id: $issueId) {
+    inverseRelations(first: $first, after: $after) {
+      nodes { type issue { identifier } relatedIssue { identifier } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
 type linearWorkItemPayload struct {
-	ID          string                 `json:"id"`
-	Identifier  string                 `json:"identifier"`
-	Title       string                 `json:"title"`
-	Description *string                `json:"description"`
-	Priority    *int                   `json:"priority"`
-	Estimate    *float64               `json:"estimate"`
-	CreatedAt   string                 `json:"createdAt"`
-	UpdatedAt   string                 `json:"updatedAt"`
-	StartedAt   *string                `json:"startedAt"`
-	CompletedAt *string                `json:"completedAt"`
-	CanceledAt  *string                `json:"canceledAt"`
-	DueDate     *string                `json:"dueDate"`
-	URL         *string                `json:"url"`
-	ArchivedAt  *string                `json:"archivedAt"`
-	State       *linearStatePayload    `json:"state"`
-	Assignee    *linearIdentityPayload `json:"assignee"`
-	Creator     *linearIdentityPayload `json:"creator"`
-	Labels      linearLabelsPayload    `json:"labels"`
-	Parent      *linearParentPayload   `json:"parent"`
-	Project     *linearProjectPayload  `json:"project"`
-	Cycle       *linearCyclePayload    `json:"cycle"`
-	Team        *linearTeamPayload     `json:"team"`
-	History     linearHistoryPayload   `json:"history"`
+	ID               string                   `json:"id"`
+	Identifier       string                   `json:"identifier"`
+	Title            string                   `json:"title"`
+	Description      *string                  `json:"description"`
+	Priority         *int                     `json:"priority"`
+	Estimate         *float64                 `json:"estimate"`
+	CreatedAt        string                   `json:"createdAt"`
+	UpdatedAt        string                   `json:"updatedAt"`
+	StartedAt        *string                  `json:"startedAt"`
+	CompletedAt      *string                  `json:"completedAt"`
+	CanceledAt       *string                  `json:"canceledAt"`
+	DueDate          *string                  `json:"dueDate"`
+	URL              *string                  `json:"url"`
+	ArchivedAt       *string                  `json:"archivedAt"`
+	State            *linearStatePayload      `json:"state"`
+	Assignee         *linearIdentityPayload   `json:"assignee"`
+	Creator          *linearIdentityPayload   `json:"creator"`
+	Labels           linearLabelsPayload      `json:"labels"`
+	Parent           *linearParentPayload     `json:"parent"`
+	Project          *linearProjectPayload    `json:"project"`
+	Cycle            *linearCyclePayload      `json:"cycle"`
+	Team             *linearTeamPayload       `json:"team"`
+	History          linearHistoryPayload     `json:"history"`
+	Comments         linearCommentsPayload    `json:"comments"`
+	Attachments      linearAttachmentsPayload `json:"attachments"`
+	Relations        linearRelationsPayload   `json:"relations"`
+	InverseRelations linearRelationsPayload   `json:"inverseRelations"`
 }
 
 type linearStatePayload struct {
@@ -97,17 +200,75 @@ type linearProjectPayload struct {
 }
 
 type linearCyclePayload struct {
-	ID     string `json:"id"`
-	Number *int   `json:"number"`
-	Name   string `json:"name"`
+	ID          string             `json:"id"`
+	Number      *int               `json:"number"`
+	Name        string             `json:"name"`
+	StartsAt    *string            `json:"startsAt"`
+	EndsAt      *string            `json:"endsAt"`
+	CompletedAt *string            `json:"completedAt"`
+	Progress    *float64           `json:"progress"`
+	Team        *linearTeamPayload `json:"team"`
 }
 
 type linearTeamPayload struct {
-	Key string `json:"key"`
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+type linearTeamsPayload struct {
+	Nodes    []linearTeamPayload   `json:"nodes"`
+	PageInfo linearPageInfoPayload `json:"pageInfo"`
+}
+
+type linearCyclesPayload struct {
+	Nodes    []linearCyclePayload  `json:"nodes"`
+	PageInfo linearPageInfoPayload `json:"pageInfo"`
 }
 
 type linearHistoryPayload struct {
 	Nodes []linearHistoryEntry `json:"nodes"`
+}
+
+type linearPageInfoPayload struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
+type linearCommentPayload struct {
+	Body      string                 `json:"body"`
+	CreatedAt string                 `json:"createdAt"`
+	User      *linearIdentityPayload `json:"user"`
+}
+
+type linearCommentsPayload struct {
+	Nodes    []linearCommentPayload `json:"nodes"`
+	PageInfo linearPageInfoPayload  `json:"pageInfo"`
+}
+
+type linearAttachmentPayload struct {
+	URL        string `json:"url"`
+	SourceType string `json:"sourceType"`
+}
+
+type linearAttachmentsPayload struct {
+	Nodes    []linearAttachmentPayload `json:"nodes"`
+	PageInfo linearPageInfoPayload     `json:"pageInfo"`
+}
+
+type linearRelationIssuePayload struct {
+	Identifier string `json:"identifier"`
+}
+
+type linearRelationPayload struct {
+	Type         string                      `json:"type"`
+	Issue        *linearRelationIssuePayload `json:"issue"`
+	RelatedIssue *linearRelationIssuePayload `json:"relatedIssue"`
+}
+
+type linearRelationsPayload struct {
+	Nodes    []linearRelationPayload `json:"nodes"`
+	PageInfo linearPageInfoPayload   `json:"pageInfo"`
 }
 
 type linearHistoryEntry struct {
@@ -168,17 +329,502 @@ type linearWorkItemTransitionRow struct {
 	LastSynced    time.Time `json:"last_synced"`
 }
 
+// These rows reuse the provider-neutral direct sink contracts already proven
+// against the ClickHouse schema. Linear owns collection/normalization; the
+// direct adapters own the exact Python sink projection.
+type linearWorkItemDependencyRow = githubWorkItemDependencyRow
+type linearWorkItemReopenRow = githubWorkItemReopenRow
+type linearWorkItemInteractionRow = githubWorkItemInteractionRow
+type linearSprintRow = githubSprintRow
+
 type linearWorkItemRows struct {
 	WorkItems         []linearWorkItemRow
 	StatusTransitions []linearWorkItemTransitionRow
+	Dependencies      []linearWorkItemDependencyRow
+	ReopenEvents      []linearWorkItemReopenRow
+	Interactions      []linearWorkItemInteractionRow
+	Sprints           []linearSprintRow
 }
 
 // LinearWorkItemsRouteHandler is the provider-only canonical work-items
 // vertical slice. It is intentionally not registered or activated here; the
 // family planner and route gate remain separate work.
 type LinearWorkItemsRouteHandler struct {
-	PerPage  int
-	MaxPages int
+	PerPage       int
+	MaxPages      int
+	FetchComments *bool
+	FetchHistory  *bool
+	FetchCycles   *bool
+	// ReferenceTeams and ReferenceSprints model the reference dimensions that
+	// Python receives through IngestionContext.  They are deliberately inputs
+	// to this provider-owned route only; no registry, planner, or sink wiring is
+	// implied by their presence here.
+	ReferenceTeams   []LinearReferenceTeam
+	ReferenceSprints []linearSprintRow
+}
+
+// LinearReferenceTeam is the small reference projection used to resolve a
+// team-scoped Linear unit before the issue crawl.  The Python resolver accepts
+// id, name, native_team_key, and project_keys as candidates, and treats a
+// blank provider as provider-agnostic; the native resolver below preserves
+// those semantics exactly.
+type LinearReferenceTeam struct {
+	Provider      string
+	ID            string
+	Name          string
+	NativeTeamKey string
+	ProjectKeys   []string
+}
+
+func linearWorkItemsFlag(value *bool) bool {
+	return value == nil || *value
+}
+
+func linearNestedPageLimit() int { return 5 } // 5 * 100 == Python's 500-row bound
+
+func linearReferenceTeamPayload(
+	rows []LinearReferenceTeam,
+	teamKey string,
+) (linearTeamPayload, bool) {
+	teamKey = strings.TrimSpace(teamKey)
+	if teamKey == "" {
+		return linearTeamPayload{}, false
+	}
+	for _, row := range rows {
+		provider := strings.TrimSpace(row.Provider)
+		if provider != "" && provider != "linear" {
+			continue
+		}
+		id := strings.TrimSpace(row.ID)
+		name := strings.TrimSpace(row.Name)
+		nativeKey := strings.TrimSpace(row.NativeTeamKey)
+		candidates := map[string]struct{}{}
+		for _, candidate := range append([]string{id, name, nativeKey}, row.ProjectKeys...) {
+			if candidate = strings.TrimSpace(candidate); candidate != "" {
+				candidates[candidate] = struct{}{}
+			}
+		}
+		if _, ok := candidates[teamKey]; !ok {
+			continue
+		}
+		if id == "" {
+			id = teamKey
+		}
+		if nativeKey == "" {
+			nativeKey = teamKey
+		}
+		if name == "" {
+			name = teamKey
+		}
+		return linearTeamPayload{ID: id, Key: nativeKey, Name: name}, true
+	}
+	return linearTeamPayload{}, false
+}
+
+func (handler LinearWorkItemsRouteHandler) resolveLinearTeam(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	teamKey string,
+) (linearTeamPayload, int, error) {
+	if team, ok := linearReferenceTeamPayload(handler.ReferenceTeams, teamKey); ok {
+		return team, 0, nil
+	}
+	return collectLinearTeam(ctx, client, teamKey)
+}
+
+func linearReferenceSprints(
+	claim Claim,
+	rows []linearSprintRow,
+) ([]linearSprintRow, error) {
+	result := make([]linearSprintRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Provider != "linear" || row.OrgID != claim.OrgID || row.NativeTeamKey == nil ||
+			*row.NativeTeamKey != claim.SourceExternalID {
+			continue
+		}
+		if err := validateLinearSprint(row, claim); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func collectLinearTeam(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	teamKey string,
+) (linearTeamPayload, int, error) {
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query: linearWorkItemsTeamQuery,
+			Variables: map[string]any{
+				"filter": map[string]any{"key": map[string]any{"eq": teamKey}},
+			},
+			ConnectionPath: []string{"teams"}, PerPage: 2, MaxPages: 1,
+		},
+	)
+	if err != nil {
+		return linearTeamPayload{}, 0, err
+	}
+	if page.CapReached {
+		return linearTeamPayload{}, page.Pages, ErrPaginationCapExceeded
+	}
+	for _, raw := range page.Items {
+		var team linearTeamPayload
+		if err := json.Unmarshal(raw, &team); err != nil {
+			return linearTeamPayload{}, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		if team.Key == teamKey || team.Name == teamKey {
+			return team, page.Pages, nil
+		}
+	}
+	return linearTeamPayload{}, page.Pages, providerfoundation.ErrNormalizationInvalid
+}
+
+func collectLinearCycles(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	teamID string,
+) ([]linearCyclePayload, int, error) {
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query: linearWorkItemsCyclesQuery,
+			Variables: map[string]any{
+				"filter": map[string]any{"team": map[string]any{
+					"id": map[string]any{"eq": teamID},
+				}},
+			},
+			ConnectionPath: []string{"cycles"}, PerPage: 100, MaxPages: linearNestedPageLimit(),
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if page.CapReached {
+		return nil, page.Pages, ErrPaginationCapExceeded
+	}
+	cycles := make([]linearCyclePayload, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var cycle linearCyclePayload
+		if err := json.Unmarshal(raw, &cycle); err != nil {
+			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		cycles = append(cycles, cycle)
+	}
+	return cycles, page.Pages, nil
+}
+
+func collectLinearIssueAttachments(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	issueID string,
+) ([]linearAttachmentPayload, int, error) {
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query:          linearWorkItemsAttachmentsQuery,
+			Variables:      map[string]any{"issueId": issueID},
+			ConnectionPath: []string{"issue", "attachments"},
+			PerPage:        100, MaxPages: linearNestedPageLimit(),
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	items := make([]linearAttachmentPayload, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var item linearAttachmentPayload
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		items = append(items, item)
+	}
+	// Python's attachment helper stops at its 500-row bound and keeps that
+	// prefix. It does not claim the omitted tail is present, so preserve that
+	// bounded behavior while still failing malformed pagination.
+	if len(items) > 500 {
+		items = items[:500]
+	}
+	return items, page.Pages, nil
+}
+
+func collectLinearIssueComments(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	issueID string,
+) ([]linearCommentPayload, int, error) {
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query:          linearWorkItemsCommentsQuery,
+			Variables:      map[string]any{"issueId": issueID},
+			ConnectionPath: []string{"issue", "comments"},
+			PerPage:        linearWorkItemsCommentsPerPage,
+			MaxPages:       linearWorkItemsCommentsMaxPages,
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if page.CapReached {
+		return nil, page.Pages, ErrPaginationCapExceeded
+	}
+	comments := make([]linearCommentPayload, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var comment linearCommentPayload
+		if err := json.Unmarshal(raw, &comment); err != nil {
+			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		comments = append(comments, comment)
+	}
+	return comments, page.Pages, nil
+}
+
+func collectLinearIssueRelations(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	issueID string,
+	inverse bool,
+) ([]linearRelationPayload, int, error) {
+	query := linearWorkItemsRelationsQuery
+	connection := "relations"
+	if inverse {
+		query = linearWorkItemsInverseRelationsQuery
+		connection = "inverseRelations"
+	}
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query:          query,
+			Variables:      map[string]any{"issueId": issueID},
+			ConnectionPath: []string{"issue", connection},
+			PerPage:        100, MaxPages: linearNestedPageLimit(),
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if page.CapReached {
+		return nil, page.Pages, ErrPaginationCapExceeded
+	}
+	items := make([]linearRelationPayload, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var item linearRelationPayload
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		items = append(items, item)
+	}
+	return items, page.Pages, nil
+}
+
+func normalizeLinearSprint(
+	claim Claim,
+	cycle linearCyclePayload,
+	normalizedAt time.Time,
+) (linearSprintRow, error) {
+	if strings.TrimSpace(cycle.ID) == "" {
+		return linearSprintRow{}, providerfoundation.ErrNormalizationInvalid
+	}
+	name := strings.TrimSpace(cycle.Name)
+	if name == "" && cycle.Number != nil {
+		name = "Cycle " + strconv.Itoa(*cycle.Number)
+	}
+	if name == "" {
+		return linearSprintRow{}, providerfoundation.ErrNormalizationInvalid
+	}
+	state := "future"
+	if cycle.CompletedAt != nil && parseLinearTimePtr(cycle.CompletedAt) != nil {
+		state = "closed"
+	} else if cycle.Progress != nil && *cycle.Progress > 0 {
+		state = "active"
+	}
+	nativeTeamKey := claim.SourceExternalID
+	row := linearSprintRow{
+		Provider: "linear", SprintID: "linear:cycle:" + cycle.ID,
+		Name: nullableLinearString(name), State: nullableLinearString(state),
+		StartedAt: parseLinearTimePtr(cycle.StartsAt), EndedAt: parseLinearTimePtr(cycle.EndsAt),
+		CompletedAt: parseLinearTimePtr(cycle.CompletedAt), NativeTeamKey: nullableLinearString(nativeTeamKey),
+		LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+	}
+	if err := validateLinearSprint(row, claim); err != nil {
+		return linearSprintRow{}, err
+	}
+	return row, nil
+}
+
+func validateLinearSprint(row linearSprintRow, claim Claim) error {
+	if row.Provider != "linear" || row.OrgID == "" || row.OrgID != claim.OrgID ||
+		row.SprintID == "" || row.Name == nil || row.State == nil || row.LastSynced.IsZero() {
+		return providerfoundation.ErrInvalidScope
+	}
+	return nil
+}
+
+func linearTrustedSCMHosts() map[string]struct{} {
+	hosts := map[string]struct{}{
+		"github.com": {}, "www.github.com": {},
+		"gitlab.com": {}, "www.gitlab.com": {},
+	}
+	for _, value := range strings.Split(os.Getenv("LINEAR_TRUSTED_SCM_HOSTS"), ",") {
+		if host := strings.ToLower(strings.TrimSpace(value)); host != "" {
+			hosts[host] = struct{}{}
+		}
+	}
+	return hosts
+}
+
+func linearAttachmentWorkItemID(attachment linearAttachmentPayload) string {
+	sourceType := strings.ToLower(attachment.SourceType)
+	if !strings.Contains(sourceType, "github") && !strings.Contains(sourceType, "gitlab") {
+		return ""
+	}
+	parsed, err := url.Parse(attachment.URL)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return ""
+	}
+	// Python's `_trusted_scm_hosts` compares urlsplit(...).netloc exactly.  Use
+	// URL.Host (including an explicit port) and reject userinfo so a URL that
+	// merely has a trusted hostname does not widen the Python allowlist.
+	if _, ok := linearTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if strings.Contains(sourceType, "github") && len(parts) >= 4 &&
+		parts[len(parts)-2] == "pull" {
+		return "ghpr:" + strings.Join(parts[:len(parts)-2], "/") + "#" + parts[len(parts)-1]
+	}
+	if strings.Contains(sourceType, "gitlab") && len(parts) >= 4 &&
+		parts[len(parts)-2] == "merge_requests" && parts[len(parts)-3] == "-" {
+		return "gitlab:" + strings.Join(parts[:len(parts)-3], "/") + "!" + parts[len(parts)-1]
+	}
+	return ""
+}
+
+func normalizeLinearDependencies(
+	claim Claim,
+	payload linearWorkItemPayload,
+	workItemID string,
+	normalizedAt time.Time,
+) []linearWorkItemDependencyRow {
+	rows := make([]linearWorkItemDependencyRow, 0)
+	seen := make(map[string]struct{})
+	appendRow := func(source, target, relationType, relationRaw string) {
+		if source == "" || target == "" || relationType == "" {
+			return
+		}
+		key := source + "\x00" + relationType + "\x00" + target
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		rows = append(rows, linearWorkItemDependencyRow{
+			SourceWorkItemID: source, TargetWorkItemID: target,
+			RelationshipType: relationType, RelationshipTypeRaw: relationRaw,
+			RelationshipSemanticsVersion: "canonical-blocks.v2",
+			LastSynced:                   normalizedAt.UTC(), OrgID: claim.OrgID,
+		})
+	}
+	for _, attachment := range payload.Attachments.Nodes {
+		if source := linearAttachmentWorkItemID(attachment); source != "" {
+			appendRow(source, workItemID, "relates_to", "linear_attachment")
+		}
+	}
+	for _, relations := range []linearRelationsPayload{payload.Relations, payload.InverseRelations} {
+		for _, relation := range relations.Nodes {
+			if relation.Issue == nil || relation.RelatedIssue == nil {
+				continue
+			}
+			source := "linear:" + relation.Issue.Identifier
+			target := "linear:" + relation.RelatedIssue.Identifier
+			relationType := strings.ToLower(strings.TrimSpace(relation.Type))
+			switch relationType {
+			case "blocked_by", "is_blocked_by", "blocked":
+				source, target, relationType = target, source, "blocks"
+			case "blocks", "blocking":
+				relationType = "blocks"
+			case "duplicate", "duplicates":
+				relationType = "duplicates"
+			case "related", "relates", "relates_to":
+				relationType = "relates_to"
+			default:
+				continue
+			}
+			appendRow(source, target, relationType, "linear_relation:"+strings.ToLower(strings.TrimSpace(relation.Type)))
+		}
+	}
+	return rows
+}
+
+func normalizeLinearReopens(
+	claim Claim,
+	workItemID string,
+	history []linearHistoryEntry,
+	normalizedAt time.Time,
+) []linearWorkItemReopenRow {
+	rows := make([]linearWorkItemReopenRow, 0)
+	for _, entry := range history {
+		if entry.FromState == nil || entry.ToState == nil {
+			continue
+		}
+		fromType := strings.ToLower(entry.FromState.Type)
+		toType := strings.ToLower(entry.ToState.Type)
+		if (fromType != "completed" && fromType != "canceled" && fromType != "cancelled") ||
+			(toType != "backlog" && toType != "unstarted" && toType != "started") {
+			continue
+		}
+		occurred := parseLinearTime(entry.CreatedAt)
+		if occurred == nil {
+			fallback := normalizedAt.UTC()
+			occurred = &fallback
+		}
+		var actor *string
+		if entry.Actor != nil {
+			identity := linearIdentity(*entry.Actor)
+			if identity != "unknown" {
+				actor = &identity
+			}
+		}
+		rows = append(rows, linearWorkItemReopenRow{
+			WorkItemID: workItemID, OccurredAt: occurred.UTC(),
+			FromStatus: linearStatus(fromType), ToStatus: linearStatus(toType),
+			FromStatusRaw: nullableLinearString(entry.FromState.Name),
+			ToStatusRaw:   nullableLinearString(entry.ToState.Name), Actor: actor,
+			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+		})
+	}
+	return rows
+}
+
+func normalizeLinearInteractions(
+	claim Claim,
+	workItemID string,
+	comments []linearCommentPayload,
+	normalizedAt time.Time,
+) []linearWorkItemInteractionRow {
+	rows := make([]linearWorkItemInteractionRow, 0, len(comments))
+	for _, comment := range comments {
+		if comment.Body == "" {
+			continue
+		}
+		occurred := parseLinearTime(comment.CreatedAt)
+		if occurred == nil {
+			fallback := normalizedAt.UTC()
+			occurred = &fallback
+		}
+		var actor *string
+		if comment.User != nil {
+			identity := linearIdentity(*comment.User)
+			if identity != "unknown" {
+				actor = &identity
+			}
+		}
+		rows = append(rows, linearWorkItemInteractionRow{
+			WorkItemID: workItemID, Provider: "linear", InteractionType: "comment",
+			OccurredAt: occurred.UTC(), Actor: actor,
+			BodyLength: len([]rune(comment.Body)), LastSynced: normalizedAt.UTC(),
+			OrgID: claim.OrgID,
+		})
+	}
+	return rows
 }
 
 func (handler LinearWorkItemsRouteHandler) limits() (int, int, error) {
@@ -231,6 +877,51 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 	if len(updatedAt) > 0 {
 		filter["updatedAt"] = updatedAt
 	}
+	fetchComments := linearWorkItemsFlag(handler.FetchComments)
+	fetchHistory := linearWorkItemsFlag(handler.FetchHistory)
+	fetchCycles := linearWorkItemsFlag(handler.FetchCycles)
+	pagesSeen := 0
+	rows := linearWorkItemRows{
+		WorkItems:         make([]linearWorkItemRow, 0),
+		StatusTransitions: make([]linearWorkItemTransitionRow, 0),
+		Dependencies:      make([]linearWorkItemDependencyRow, 0),
+		ReopenEvents:      make([]linearWorkItemReopenRow, 0),
+		Interactions:      make([]linearWorkItemInteractionRow, 0),
+		Sprints:           make([]linearSprintRow, 0),
+	}
+	// Python resolves the scoped team before it starts the issue crawl even
+	// when cycles are disabled.  That check prevents a malformed or stale
+	// source external id from producing a clean-looking empty work-item batch.
+	team, teamPages, teamErr := handler.resolveLinearTeam(ctx, client, claim.SourceExternalID)
+	pagesSeen += teamPages
+	if teamErr != nil {
+		return CompleteRouteBatch{}, teamErr
+	}
+	if strings.TrimSpace(team.ID) == "" {
+		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+	}
+	if fetchCycles {
+		referenceSprints, referenceErr := linearReferenceSprints(claim, handler.ReferenceSprints)
+		if referenceErr != nil {
+			return CompleteRouteBatch{}, referenceErr
+		}
+		if len(referenceSprints) > 0 {
+			rows.Sprints = append(rows.Sprints, referenceSprints...)
+		} else {
+			cycles, cyclePages, cycleErr := collectLinearCycles(ctx, client, team.ID)
+			pagesSeen += cyclePages
+			if cycleErr != nil {
+				return CompleteRouteBatch{}, cycleErr
+			}
+			for _, cycle := range cycles {
+				sprint, sprintErr := normalizeLinearSprint(claim, cycle, normalizedAt)
+				if sprintErr != nil {
+					return CompleteRouteBatch{}, sprintErr
+				}
+				rows.Sprints = append(rows.Sprints, sprint)
+			}
+		}
+	}
 	page, err := providerfoundation.CollectLinearGraphQLPages(
 		ctx, client, providerfoundation.LinearPageOptions{
 			Query:          linearWorkItemsQuery,
@@ -244,10 +935,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 	if page.CapReached {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
-	rows := linearWorkItemRows{
-		WorkItems:         make([]linearWorkItemRow, 0, len(page.Items)),
-		StatusTransitions: make([]linearWorkItemTransitionRow, 0),
-	}
+	pagesSeen += page.Pages
 	for _, raw := range page.Items {
 		var payload linearWorkItemPayload
 		decoder := json.Unmarshal(raw, &payload)
@@ -257,6 +945,51 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		if payload.ArchivedAt != nil {
 			continue
 		}
+		if payload.Attachments.PageInfo.HasNextPage && payload.ID != "" {
+			attachments, attachmentPages, attachmentErr := collectLinearIssueAttachments(
+				ctx, client, payload.ID,
+			)
+			pagesSeen += attachmentPages
+			if attachmentErr == nil {
+				payload.Attachments.Nodes = attachments
+			}
+		}
+		if fetchComments && payload.Comments.PageInfo.HasNextPage && payload.ID != "" {
+			comments, commentPages, commentErr := collectLinearIssueComments(
+				ctx, client, payload.ID,
+			)
+			pagesSeen += commentPages
+			if commentErr != nil {
+				return CompleteRouteBatch{}, commentErr
+			}
+			payload.Comments.Nodes = comments
+		}
+		if payload.Relations.PageInfo.HasNextPage && payload.ID != "" {
+			relations, relationPages, relationErr := collectLinearIssueRelations(
+				ctx, client, payload.ID, false,
+			)
+			pagesSeen += relationPages
+			if relationErr != nil {
+				return CompleteRouteBatch{}, relationErr
+			}
+			payload.Relations.Nodes = relations
+		}
+		if payload.InverseRelations.PageInfo.HasNextPage && payload.ID != "" {
+			relations, relationPages, relationErr := collectLinearIssueRelations(
+				ctx, client, payload.ID, true,
+			)
+			pagesSeen += relationPages
+			if relationErr != nil {
+				return CompleteRouteBatch{}, relationErr
+			}
+			payload.InverseRelations.Nodes = relations
+		}
+		if !fetchHistory {
+			payload.History.Nodes = nil
+		}
+		if !fetchComments {
+			payload.Comments.Nodes = nil
+		}
 		item, transitions, normalizeErr := normalizeLinearWorkItem(
 			claim, payload, normalizedAt,
 		)
@@ -265,6 +998,19 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		}
 		rows.WorkItems = append(rows.WorkItems, item)
 		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
+		rows.Dependencies = append(rows.Dependencies, normalizeLinearDependencies(
+			claim, payload, item.WorkItemID, normalizedAt,
+		)...)
+		if fetchHistory {
+			rows.ReopenEvents = append(rows.ReopenEvents, normalizeLinearReopens(
+				claim, item.WorkItemID, payload.History.Nodes, normalizedAt,
+			)...)
+		}
+		if fetchComments {
+			rows.Interactions = append(rows.Interactions, normalizeLinearInteractions(
+				claim, item.WorkItemID, payload.Comments.Nodes, normalizedAt,
+			)...)
+		}
 	}
 	effects, err := buildLinearWorkItemEffectsFromRows(rows)
 	if err != nil {
@@ -274,14 +1020,18 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: map[string]any{
-			"work_items_synced":  len(rows.WorkItems),
-			"transitions_synced": len(rows.StatusTransitions),
+			"work_items_synced":    len(rows.WorkItems),
+			"transitions_synced":   len(rows.StatusTransitions),
+			"dependencies_synced":  len(rows.Dependencies),
+			"reopen_events_synced": len(rows.ReopenEvents),
+			"interactions_synced":  len(rows.Interactions),
+			"sprints_synced":       len(rows.Sprints),
 		},
 		Watermark: &watermark,
-		Evidence: FetchEvidence{
-			Provider: "linear", Dataset: "work-items", Requests: page.Pages,
-			Pages: page.Pages, Records: len(rows.WorkItems) + len(rows.StatusTransitions),
-		},
+		Evidence: FetchEvidence{Provider: "linear", Dataset: "work-items",
+			Requests: pagesSeen, Pages: pagesSeen,
+			Records: len(rows.WorkItems) + len(rows.StatusTransitions) + len(rows.Dependencies) +
+				len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints)},
 	}, nil
 }
 

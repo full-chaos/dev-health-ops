@@ -71,6 +71,7 @@ from dev_health_ops.metrics.prometheus import (
 )
 from dev_health_ops.models.settings import SettingCategory
 
+from .canonical_enrichment import CanonicalEnrichmentAccessor
 from .contracts import (
     DevActualCompletion,
     DevAnswer,
@@ -109,6 +110,7 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
+from .graph_investigation_query import GraphInvestigationQuery
 from .investigation_plans import PlanExecutor
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
 from .investigation_plans.wave_3_1_plans import (
@@ -2574,7 +2576,20 @@ async def _assemble_production_runtime(
     # organization gate as preflight -- a plan can only run once a subject
     # is committed, and only the preflight commits one.
     plan_executor: PlanExecutor | None = None
+    graph_investigation_query: GraphInvestigationQuery | None = None
+    canonical_enrichment: CanonicalEnrichmentAccessor | None = None
     if wave_3_1_enabled:
+        # Keep the optional graph arm out of production module import time.
+        # Organization policy is evaluated first, so a policy-off request
+        # never imports or constructs the arm.
+        from dev_health_ops.context_fabric.graph_arm.query_service import (
+            ProductionGraphInvestigationQuery,
+        )
+
+        # The graph-assisted enrichment path and authored-plan path share the
+        # exact same canonical service instances. Their construction is
+        # side-effect free; organization policy controls their presence, and
+        # the independent runtime kill switch controls execution.
         plan_executor_runtime = _ProductionPlanExecutorRuntime(
             status_service=status_service,
             metric_service=metric_service,
@@ -2582,6 +2597,23 @@ async def _assemble_production_runtime(
             data_health_service=data_health_service,
             evidence_signer=evidence_signer,
         )
+        team_health_service = TeamHealthService(
+            plan_executor_runtime, status_change_source
+        )
+        team_workload_service = TeamWorkloadService(
+            plan_executor_runtime, status_change_source, team_workload_source
+        )
+        operational_deficiency_service = OperationalDeficiencyService(
+            plan_executor_runtime, status_change_source, team_workload_source
+        )
+        canonical_enrichment = CanonicalEnrichmentAccessor(
+            status=status_service,
+            health=team_health_service,
+            workload=team_workload_service,
+            readiness=operational_deficiency_service,
+            metrics=metric_service,
+        )
+        graph_investigation_query = ProductionGraphInvestigationQuery()
         # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305/3393 service is
         # constructed over the SAME PlanExecutorRuntime instance the six
         # core plans' steps use -- never a second, parallel query path.
@@ -2609,15 +2641,9 @@ async def _assemble_production_runtime(
             registry=build_registry_with_wave_3_1(
                 plan_executor_runtime,
                 project_health=project_health_service,
-                team_health=TeamHealthService(
-                    plan_executor_runtime, status_change_source
-                ),
-                team_workload=TeamWorkloadService(
-                    plan_executor_runtime, status_change_source, team_workload_source
-                ),
-                operational_deficiency=OperationalDeficiencyService(
-                    plan_executor_runtime, status_change_source, team_workload_source
-                ),
+                team_health=team_health_service,
+                team_workload=team_workload_service,
+                operational_deficiency=operational_deficiency_service,
                 # CHAOS-3393: PortfolioStatusService batches over the SAME
                 # ProjectHealthService instance the health.project.v1 step
                 # above uses -- never a second, parallel query path.
@@ -2651,6 +2677,9 @@ async def _assemble_production_runtime(
             else None
         ),
         plan_executor=plan_executor,
+        graph_investigation_query=graph_investigation_query,
+        evidence_service=evidence_service if wave_3_1_enabled else None,
+        canonical_enrichment=canonical_enrichment,
     )
 
 

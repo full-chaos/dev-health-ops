@@ -329,7 +329,10 @@ def _rebuild_table(
 def upgrade(client):
     """Rebuild feature_flag so environment scopes survive RMT merges."""
     log.info("=== Migration 074: feature_flag environment identity (CHAOS-3737) ===")
-    _assert_exchange_supported(client)
     for table, new_order_by in TABLES.items():
+        if not _table_exists(client, table):
+            log.warning("  %s: table does not exist, skipping", table)
+            continue
+        _assert_exchange_supported(client)
         _rebuild_table(client, table, new_order_by)
     log.info("=== Migration 074: Complete ===")

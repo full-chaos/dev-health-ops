@@ -86,8 +86,9 @@ async def test_feature_flags_query_scopes_org_filters_and_orders(
     assert "ORDER BY provider, project_key, flag_key" in sql
     assert "LIMIT %(limit)s" in sql
     # Registry is one-row-per-(provider, project, flag); environment is NOT
-    # surfaced (CHAOS-2632 — FINAL over an env-agnostic key collapsed envs).
-    assert "environment" not in sql
+    # surfaced (CHAOS-2632).  After 074, physical environments are aggregated
+    # back to this logical registry identity.
+    assert "GROUP BY provider, project_key, flag_key" in sql
     assert params == {
         "org_id": "test-org",
         "provider": "launchdarkly",
@@ -116,6 +117,48 @@ async def test_feature_flags_query_scopes_org_filters_and_orders(
     assert result.flags[0].created_at == created_at.isoformat()
     assert result.flags[0].archived_at is None
     assert not hasattr(result.flags[0], "environment")
+
+
+@pytest.mark.asyncio
+async def test_feature_flags_aggregate_environments_to_one_logical_registry_item(
+    mock_context: GraphQLContext,
+) -> None:
+    created_at = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+    with patch(
+        "dev_health_ops.api.queries.client.query_dicts",
+        new_callable=AsyncMock,
+    ) as mock_query:
+        # The real aggregate returns one latest-field row after two physical
+        # environment rows are grouped.  The source contract is asserted
+        # below as well, so this test cannot pass by merely truncating rows.
+        mock_query.side_effect = [
+            [
+                {
+                    "provider": "launchdarkly",
+                    "flag_key": "checkout-v2",
+                    "project_key": "web",
+                    "flag_type": "boolean",
+                    "created_at": created_at,
+                    "archived_at": None,
+                }
+            ],
+            [{"total": 1}],
+        ]
+
+        result = await resolve_feature_flags(mock_context, provider="launchdarkly")
+
+    list_sql = mock_query.call_args_list[0][0][1]
+    count_sql = mock_query.call_args_list[1][0][1]
+    assert "argMax" in list_sql
+    assert "tuple(last_synced, environment)" in list_sql
+    assert "GROUP BY provider, project_key, flag_key" in list_sql
+    assert "argMax" not in count_sql
+    assert "GROUP BY provider, project_key, flag_key" in count_sql
+    assert len(result.flags) == 1
+    assert result.total_count == 1
+    assert result.flags[0].flag_id == generate_feature_flag_id(
+        "test-org", "launchdarkly", "web", "checkout-v2"
+    )
 
 
 @pytest.mark.asyncio

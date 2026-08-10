@@ -14,20 +14,28 @@ import (
 // guarded by the authoritative unit lease; wiring this sink does not activate
 // a route.
 type GitHubPullRequestSocialClickHouseEffects struct {
-	Conn  driver.Conn
-	Lease providerfoundation.LeaseGuard
+	Conn     driver.Conn
+	Lease    providerfoundation.LeaseGuard
+	Provider string
+}
+
+func (sink GitHubPullRequestSocialClickHouseEffects) provider() string {
+	if sink.Provider == "" {
+		return "github"
+	}
+	return sink.Provider
 }
 
 func (sink GitHubPullRequestSocialClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || !isGitHubPRSocialDataset(claim.Dataset) {
+		claim.Provider != sink.provider() || !isPRSocialDataset(claim.Dataset) {
 		return ErrInvalidConfiguration
 	}
 	if effect.Destination == "git_pull_requests" {
 		return (GitHubPullRequestClickHouseEffects{
-			Conn: sink.Conn, Lease: sink.Lease,
+			Conn: sink.Conn, Lease: sink.Lease, Provider: sink.provider(),
 		}).writePullRequestEffect(ctx, claim, effect, claim.Dataset)
 	}
 	if effect.Destination != "git_pull_request_reviews" {
@@ -78,13 +86,13 @@ func (sink GitHubPullRequestSocialClickHouseEffects) InspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || sink.Conn == nil ||
-		claim.Validate() != nil || claim.Provider != "github" ||
-		!isGitHubPRSocialDataset(claim.Dataset) {
+		claim.Validate() != nil || claim.Provider != sink.provider() ||
+		!isPRSocialDataset(claim.Dataset) {
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	if effect.Destination == "git_pull_requests" {
 		return (GitHubPullRequestClickHouseEffects{
-			Conn: sink.Conn, Lease: sink.Lease,
+			Conn: sink.Conn, Lease: sink.Lease, Provider: sink.provider(),
 		}).inspectPullRequestEffect(ctx, claim, effect, claim.Dataset)
 	}
 	if effect.Destination != "git_pull_request_reviews" {

@@ -616,6 +616,13 @@ def _target_gitlab_processor() -> None:
         def __init__(self, **kwargs: Any) -> None:
             self.__dict__.update(kwargs)
 
+    class _GitPullRequestReview:
+        # The live mapper constructs this model directly. Keep the stand-in
+        # kwargs-shaped so the oracle executes the production constructor call
+        # and returns every mapped attribute without importing SQLAlchemy.
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
     _install_module(
         "dev_health_ops.models.git",
         {
@@ -625,7 +632,7 @@ def _target_gitlab_processor() -> None:
             "GitCommit": object,
             "GitCommitStat": object,
             "GitPullRequest": object,
-            "GitPullRequestReview": object,
+            "GitPullRequestReview": _GitPullRequestReview,
             "Incident": _Incident,
             "Repo": object,
         },

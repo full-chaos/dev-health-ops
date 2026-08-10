@@ -28,8 +28,8 @@
     {
       "id": "L3-pagination-cap-fails-closed",
       "file": "internal/providersync/linear_work_items_route.go",
-      "find": "if page.CapReached {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
-      "replace": "if false {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
+      "find": "\t\tif page.CapReached {\n\t\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t\t}",
+      "replace": "\t\tif false {\n\t\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t\t}",
       "rationale": "a capped GraphQL collection cannot advance the watermark as if the provider result were complete",
       "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemsRouteFailsClosedOnGraphQLErrorsAndCaps$", "./internal/providersync/"]]
     },

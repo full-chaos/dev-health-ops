@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -159,6 +160,68 @@ func (repository *PostgresRepository) Complete(
 			); err != nil {
 				return ErrInvalidConfiguration
 			}
+		}
+	}
+	if _, err := tx.Exec(ctx, upsertFinalizeSQL,
+		uuid.New(), claim.OrgID, claim.SyncRunID, completedAt.UTC(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrInvalidConfiguration
+	}
+	return nil
+}
+
+// CompleteLinearWorkItemFamily is the typed completion boundary for the
+// Linear five-alias family. It writes the canonical unit audit and all five
+// alias watermarks in one PostgreSQL transaction; callers cannot accidentally
+// complete one alias while leaving the others unadvanced. The generic
+// Complete method remains for legacy providers and is intentionally not used
+// by this proof path.
+func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
+	ctx context.Context,
+	claim Claim,
+	result LinearWorkItemsCompletionResult,
+	startedAt time.Time,
+	completedAt time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || startedAt.IsZero() || completedAt.Before(startedAt) ||
+		ValidateLinearWorkItemsCompletion(claim, result) != nil {
+		return ErrInvalidConfiguration
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, completeUnitSQL,
+		claim.ID, claim.Owner, completedAt.UTC(),
+		int(completedAt.Sub(startedAt).Seconds()), encoded,
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	if _, err := tx.Exec(ctx, deletePreparedRouteSnapshotSQL,
+		claim.OrgID, claim.ID, claim.GenerationKey(),
+	); err != nil {
+		return ErrInvalidConfiguration
+	}
+	for _, datasetKey := range workitemcontract.FamilyDatasets() {
+		normalized := normalizeWatermarkWrite(
+			result.Watermark, claim.BeforeAt, completedAt,
+			claim.OrgID, claim.SourceExternalID, datasetKey,
+		)
+		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
+			uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
+			normalized, completedAt.UTC(),
+		); err != nil {
+			return ErrInvalidConfiguration
 		}
 	}
 	if _, err := tx.Exec(ctx, upsertFinalizeSQL,

@@ -76,6 +76,9 @@ def _clean_tables(ch_client: Any) -> Any:
         "operational_incidents",
         "work_graph_deployment_incident_edges",
         "deployments",
+        "git_commits",
+        "ci_pipeline_runs",
+        "work_graph_pr_commit",
     )
     for table in tables:
         ch_client.command(f"TRUNCATE TABLE IF EXISTS {table}")
@@ -458,6 +461,288 @@ async def test_the_real_deployment_sql_enforces_tenant_isolation(
         org_id=ORG_B,
         locator=f"{REPO_ID}#deploymentdeploy-live-3",
         entity_type="deployment",
+    )
+
+    assert other_org is None
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3685: ci_run and commit, against the real schema. ci_run needs no
+# join (ci_pipeline_runs.pr_number is native-attributed); commit's trust
+# threshold (only provenance='native' on work_graph_pr_commit derives) is
+# the one property this file exists to prove against the REAL engine, not
+# a fake sink's assumption about it -- see
+# test_the_real_commit_sql_never_derives_from_a_heuristic_or_explicit_text_link
+# below, which was live-verified by breaking the production SQL text.
+# ---------------------------------------------------------------------------
+
+
+def _insert_ci_run(
+    client: Any,
+    *,
+    org_id: str,
+    repo_id: str = REPO_ID,
+    run_id: str,
+    status: str = "success",
+    pr_number: int | None,
+) -> None:
+    client.insert(
+        "ci_pipeline_runs",
+        [[org_id, repo_id, run_id, status, pr_number, NOW, NOW]],
+        column_names=[
+            "org_id",
+            "repo_id",
+            "run_id",
+            "status",
+            "pr_number",
+            "started_at",
+            "last_synced",
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_real_ci_run_sql_derives_a_natively_linked_pr(
+    ch_client: Any,
+) -> None:
+    _insert_ci_run(ch_client, org_id=ORG_A, run_id="run-live-1", pr_number=77)
+
+    record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}#cirun-live-1",
+        entity_type="ci_run",
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is False
+    assert record.entity_id == f"{REPO_ID}#pr77"
+    assert record.repository_ids == (REPO_ID,)
+
+
+@pytest.mark.asyncio
+async def test_the_real_ci_run_sql_falls_through_to_repository_only_when_unlinked(
+    ch_client: Any,
+) -> None:
+    _insert_ci_run(ch_client, org_id=ORG_A, run_id="run-live-2", pr_number=None)
+
+    record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}#cirun-live-2",
+        entity_type="ci_run",
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is True
+    assert record.repository_ids == (REPO_ID,)
+
+
+@pytest.mark.asyncio
+async def test_the_real_ci_run_sql_enforces_tenant_isolation(ch_client: Any) -> None:
+    _insert_ci_run(ch_client, org_id=ORG_A, run_id="run-live-3", pr_number=1)
+
+    other_org = await _resolve(
+        ch_client,
+        org_id=ORG_B,
+        locator=f"{REPO_ID}#cirun-live-3",
+        entity_type="ci_run",
+    )
+
+    assert other_org is None
+
+
+def _insert_commit(
+    client: Any,
+    *,
+    org_id: str,
+    repo_id: str = REPO_ID,
+    commit_hash: str,
+    message: str = "A commit",
+) -> None:
+    client.insert(
+        "git_commits",
+        [[org_id, repo_id, commit_hash, message, NOW, NOW, 1, NOW]],
+        column_names=[
+            "org_id",
+            "repo_id",
+            "hash",
+            "message",
+            "author_when",
+            "committer_when",
+            "parents",
+            "last_synced",
+        ],
+    )
+
+
+def _insert_pr_commit_link(
+    client: Any,
+    *,
+    org_id: str,
+    repo_id: str = REPO_ID,
+    pr_number: int,
+    commit_hash: str,
+    provenance: str,
+    confidence: float,
+) -> None:
+    client.insert(
+        "work_graph_pr_commit",
+        [
+            [
+                org_id,
+                repo_id,
+                pr_number,
+                commit_hash,
+                confidence,
+                provenance,
+                "test-evidence",
+                NOW,
+            ]
+        ],
+        column_names=[
+            "org_id",
+            "repo_id",
+            "pr_number",
+            "commit_hash",
+            "confidence",
+            "provenance",
+            "evidence",
+            "last_synced",
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_real_commit_sql_derives_a_native_provenance_linked_pr(
+    ch_client: Any,
+) -> None:
+    _insert_commit(ch_client, org_id=ORG_A, commit_hash="deadbeef01")
+    _insert_pr_commit_link(
+        ch_client,
+        org_id=ORG_A,
+        pr_number=77,
+        commit_hash="deadbeef01",
+        provenance="native",
+        confidence=1.0,
+    )
+
+    record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}@deadbeef01",
+        entity_type="commit",
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is False
+    assert record.entity_id == f"{REPO_ID}#pr77"
+    assert record.repository_ids == (REPO_ID,)
+
+
+@pytest.mark.asyncio
+async def test_the_real_commit_sql_never_derives_from_a_heuristic_or_explicit_text_link(
+    ch_client: Any,
+) -> None:
+    """**Adversarial / anti-laundering, live-verified.** Two commits, each
+    with a real ``work_graph_pr_commit`` row pointing at a real PR, but
+    below the ratified trust threshold: one ``heuristic`` (0.6, a
+    squash-merge subject match), one ``explicit_text`` (0.9, an explicit
+    merge-keyword match -- HIGHER confidence than the heuristic tier, to
+    prove the gate is genuinely on ``provenance``, not a confidence
+    cutoff a high-confidence non-native link could slip past). Neither
+    must derive the linked PR -- both must resolve repository-only,
+    exactly as if no link existed at all.
+
+    Live-verified as a real guard, not an assumed one: with
+    ``_COMMIT_RESOLVE_SQL``'s subquery ``AND provenance = 'native'``
+    clause removed, this test was re-run against this same live schema
+    and BOTH commits wrongly derived their linked PR (observed directly).
+    Do not weaken, skip, or delete this test.
+    """
+
+    _insert_commit(ch_client, org_id=ORG_A, commit_hash="heuristic01")
+    _insert_pr_commit_link(
+        ch_client,
+        org_id=ORG_A,
+        pr_number=77,
+        commit_hash="heuristic01",
+        provenance="heuristic",
+        confidence=0.6,
+    )
+    _insert_commit(ch_client, org_id=ORG_A, commit_hash="expltext01")
+    _insert_pr_commit_link(
+        ch_client,
+        org_id=ORG_A,
+        pr_number=88,
+        commit_hash="expltext01",
+        provenance="explicit_text",
+        confidence=0.9,
+    )
+
+    heuristic_record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}@heuristic01",
+        entity_type="commit",
+    )
+    explicit_text_record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}@expltext01",
+        entity_type="commit",
+    )
+
+    assert heuristic_record is not None
+    assert heuristic_record.no_authorizable_entity is True
+    assert heuristic_record.entity_id == "heuristic01"
+
+    assert explicit_text_record is not None
+    assert explicit_text_record.no_authorizable_entity is True
+    assert explicit_text_record.entity_id == "expltext01"
+
+
+@pytest.mark.asyncio
+async def test_the_real_commit_sql_falls_through_to_repository_only_when_unlinked(
+    ch_client: Any,
+) -> None:
+    _insert_commit(ch_client, org_id=ORG_A, commit_hash="nolinkhash")
+
+    record = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}@nolinkhash",
+        entity_type="commit",
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is True
+    assert record.repository_ids == (REPO_ID,)
+
+
+@pytest.mark.asyncio
+async def test_the_real_commit_sql_enforces_tenant_isolation(ch_client: Any) -> None:
+    """A native-provenance link exists, but for a DIFFERENT org than the
+    caller -- the outer ``WHERE c.org_id`` and the subquery's own
+    ``WHERE org_id`` must both hold; a same-hash commit in ORG_A must not
+    resolve at all (it was never inserted for ORG_A), and must not
+    accidentally pick up ORG_B's link."""
+
+    _insert_commit(ch_client, org_id=ORG_B, commit_hash="orgbcommit")
+    _insert_pr_commit_link(
+        ch_client,
+        org_id=ORG_B,
+        pr_number=1,
+        commit_hash="orgbcommit",
+        provenance="native",
+        confidence=1.0,
+    )
+
+    other_org = await _resolve(
+        ch_client,
+        org_id=ORG_A,
+        locator=f"{REPO_ID}@orgbcommit",
+        entity_type="commit",
     )
 
     assert other_org is None

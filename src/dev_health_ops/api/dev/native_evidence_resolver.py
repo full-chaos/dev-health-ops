@@ -254,6 +254,193 @@ async def _resolve_review(
     )
 
 
+#: CHAOS-3685. ``ci_pipeline_runs.repo_id`` is NOT nullable
+#: (``000_raw_tables.sql``); ``pr_number`` IS -- the same per-row
+#: derive-vs-anchor shape as ``_resolve_deployment``. Unlike ``commit``
+#: below, no trust-threshold join is needed here at all: ``pr_number`` is
+#: populated straight from the CI provider's own native attribution
+#: (GitHub workflow-run ``pull_requests[0].number``, GitLab's
+#: ``merge_request_iid`` -- see ``providers/*/testops_pipeline.py``), never
+#: inferred, exactly the same raw-nullable-column shape
+#: ``deployments.pull_request_number`` already has. ``native_status_change.py``
+#: already joins on this column for team/PR scoping today -- this is not a
+#: new trust surface.
+_CI_RUN_RESOLVE_SQL = """
+SELECT repo_id, run_id, status, pr_number,
+       coalesce(finished_at, started_at) AS observed_at,
+       last_synced
+FROM ci_pipeline_runs FINAL
+WHERE org_id = {org_id:String}
+  AND concat(toString(repo_id), '#ci', run_id) = {locator:String}
+LIMIT 1
+"""
+
+
+async def _resolve_ci_run(
+    client: Any,
+    *,
+    org_id: str,
+    candidate: EvidenceCandidate,
+    policy: SourceFreshnessPolicy,
+    source_system: str,
+) -> EvidenceRecord | None:
+    rows = await query_dicts(
+        client, _CI_RUN_RESOLVE_SQL, {"org_id": org_id, "locator": candidate.locator}
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    observed = _datetime(row.get("observed_at")) or datetime.now(UTC)
+    last_synced = _datetime(row.get("last_synced"))
+    freshness = policy.classify(last_synced, now=datetime.now(UTC))
+    pr_number = row.get("pr_number")
+    display_label = f"CI run {row['run_id']}"
+    raw_excerpt = f"Status: {row.get('status') or 'unknown'}"
+    repository_ids = (str(row["repo_id"]),)
+    stale = freshness is FreshnessState.STALE
+    if pr_number:
+        # A real, natively-attributed PR link on THIS row -- always derived
+        # when present, never skipped for the cheaper anchor-only path
+        # (same anti-laundering discipline as _resolve_deployment).
+        return EvidenceRecord(
+            source_system=source_system,
+            source_version=RESOLVER_SOURCE_VERSION,
+            entity_type="ci_run",
+            entity_id=f"{row['repo_id']}#pr{pr_number}",
+            display_label=display_label,
+            observed_at=observed,
+            freshness=freshness,
+            provenance="native",
+            confidence=1.0,
+            repository_ids=repository_ids,
+            raw_excerpt=raw_excerpt,
+            stale=stale,
+        )
+    # No PR link on this row -- repo_id is schema-guaranteed non-null, so
+    # the repository-only path always has a real anchor; this never reaches
+    # #1648's no-anchor refusal the way a repo-less incident can.
+    return EvidenceRecord(
+        source_system=source_system,
+        source_version=RESOLVER_SOURCE_VERSION,
+        entity_type="ci_run",
+        entity_id=str(row["run_id"]),
+        display_label=display_label,
+        observed_at=observed,
+        freshness=freshness,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=repository_ids,
+        raw_excerpt=raw_excerpt,
+        stale=stale,
+        no_authorizable_entity=True,
+    )
+
+
+#: CHAOS-3685. ``git_commits`` has no PR/issue link column of its own; the
+#: only linkage is ``work_graph_pr_commit``, the purpose-built fast-path
+#: table ``work_graph/builder.py``'s own ``_build_pr_commit_edges_from_fast_path``
+#: already treats as canonical (not the generic, string-typed
+#: ``work_graph_edges``). The trust-threshold policy this ticket exists to
+#: force: **only ``provenance = 'native'`` derives the linked PR** --
+#: ``explicit_text``/``heuristic`` never do, regardless of confidence value
+#: (a confidence float does not establish the same class of guarantee as a
+#: native id; a 0.9-confidence commit-message regex match is still "text a
+#: human wrote"). The filter lives INSIDE the joined subquery, not as an
+#: outer ``WHERE``/``ORDER BY`` tiebreak, so a commit with only
+#: non-native links joins to nothing at all -- never ambiguous with
+#: ClickHouse's own no-match column defaults for the (non-nullable)
+#: ``pr_number``/``provenance`` columns on the fast-path table.
+#:
+#: Read from the only real writer of this table
+#: (``work_graph/builder.py:_derive_pr_commit_links``): production
+#: ingestion **never writes ``provenance='native'`` today** -- only
+#: ``explicit_text`` (0.9, explicit merge-keyword match) and ``heuristic``
+#: (0.6, squash-merge subject-suffix match), both below this threshold.
+#: **Practical consequence: ``commit`` candidates resolve repository-only
+#: in all real production data today**, until/unless a native PR-commit
+#: source is added upstream -- the "under-admits (safe but reduces
+#: coverage)" side of this ticket's own stated trade-off, taken
+#: deliberately. Fixtures do write ``native`` provenance
+#: (``fixtures/generators/commits.py``, ``fixtures/runner.py``), so the
+#: derive branch is exercised by the live-ClickHouse suite even though
+#: today's real ingestion never reaches it.
+_COMMIT_RESOLVE_SQL = """
+SELECT c.repo_id AS repo_id, c.hash AS hash, ifNull(c.message, '') AS message,
+       c.committer_when AS observed_at, c.last_synced AS last_synced,
+       p.pr_number AS pr_number
+FROM git_commits AS c FINAL
+LEFT JOIN (
+    SELECT repo_id, commit_hash, pr_number
+    FROM work_graph_pr_commit FINAL
+    WHERE org_id = {org_id:String} AND provenance = 'native'
+) AS p
+  ON p.repo_id = c.repo_id AND p.commit_hash = c.hash
+WHERE c.org_id = {org_id:String}
+  AND concat(toString(c.repo_id), '@', c.hash) = {locator:String}
+LIMIT 1
+"""
+
+
+async def _resolve_commit(
+    client: Any,
+    *,
+    org_id: str,
+    candidate: EvidenceCandidate,
+    policy: SourceFreshnessPolicy,
+    source_system: str,
+) -> EvidenceRecord | None:
+    rows = await query_dicts(
+        client, _COMMIT_RESOLVE_SQL, {"org_id": org_id, "locator": candidate.locator}
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    observed = _datetime(row.get("observed_at")) or datetime.now(UTC)
+    last_synced = _datetime(row.get("last_synced"))
+    freshness = policy.classify(last_synced, now=datetime.now(UTC))
+    pr_number = row.get("pr_number")
+    commit_hash = str(row["hash"])
+    display_label = f"Commit {commit_hash[:12]}"
+    raw_excerpt = str(row.get("message") or "")
+    repository_ids = (str(row["repo_id"]),)
+    stale = freshness is FreshnessState.STALE
+    if pr_number:
+        # The subquery already restricted this join to provenance='native'
+        # -- a truthy pr_number here is always a natively-attributed link,
+        # never a laundered heuristic/explicit_text one.
+        return EvidenceRecord(
+            source_system=source_system,
+            source_version=RESOLVER_SOURCE_VERSION,
+            entity_type="commit",
+            entity_id=f"{row['repo_id']}#pr{pr_number}",
+            display_label=display_label,
+            observed_at=observed,
+            freshness=freshness,
+            provenance="native",
+            confidence=1.0,
+            repository_ids=repository_ids,
+            raw_excerpt=raw_excerpt,
+            stale=stale,
+        )
+    # No native-provenance link -- repo_id is schema-guaranteed non-null on
+    # git_commits, so the repository-only path always has a real anchor.
+    return EvidenceRecord(
+        source_system=source_system,
+        source_version=RESOLVER_SOURCE_VERSION,
+        entity_type="commit",
+        entity_id=commit_hash,
+        display_label=display_label,
+        observed_at=observed,
+        freshness=freshness,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=repository_ids,
+        raw_excerpt=raw_excerpt,
+        stale=stale,
+        no_authorizable_entity=True,
+    )
+
+
 class NativeEvidenceCandidateResolver:
     """Resolves ``context_fabric_graph_arm`` candidates against real
     ClickHouse native evidence tables, one ``GraphObservationKind`` at a
@@ -270,17 +457,15 @@ class NativeEvidenceCandidateResolver:
     ``repo_id`` is not, so this is the first resolver with a genuine
     per-row choice between the two paths).
 
-    ``commit``/``ci_run`` are a deliberate, recorded gap, not an oversight,
-    tracked as `CHAOS-3685
-    <https://linear.app/fullchaos/issue/CHAOS-3685>`_ (not just this
-    docstring -- a requirement stated only in prose does not survive
-    triage): neither ``git_commits`` nor ``ci_pipeline_runs`` has any
-    PR/issue link column, and the only possible linkage -- the generic
-    ``work_graph_edges`` table -- carries a ``provenance``/``confidence``
-    spread (native, explicit_text, heuristic) that needs its own
-    trust-threshold design decision before it can safely grant
-    entity-level authorization. Per the CHAOS-3675 PR 3/3 scope-lock:
-    refusing these two with the gap recorded beats a speculative join.
+    `CHAOS-3685 <https://linear.app/fullchaos/issue/CHAOS-3685>`_ closes
+    the last two reachable ``GraphObservationKind``s with a native source:
+    ``ci_run`` (``ci_pipeline_runs.pr_number`` is a native, provider-
+    attributed column -- same derive-vs-anchor shape as ``deployment``,
+    no join needed) and ``commit`` (no link column of its own; joins
+    ``work_graph_pr_commit``, but only ``provenance='native'`` derives --
+    see ``_COMMIT_RESOLVE_SQL``'s docstring for the ratified trust
+    threshold and why real production data resolves it repository-only
+    today).
     """
 
     def __init__(
@@ -330,6 +515,22 @@ class NativeEvidenceCandidateResolver:
                 org_id=org_id,
                 candidate=candidate,
                 policy=self._policies["deployments"],
+                source_system=self.source_system,
+            )
+        if candidate.entity_type == "ci_run":
+            return await _resolve_ci_run(
+                self._client,
+                org_id=org_id,
+                candidate=candidate,
+                policy=self._policies["ci_runs"],
+                source_system=self.source_system,
+            )
+        if candidate.entity_type == "commit":
+            return await _resolve_commit(
+                self._client,
+                org_id=org_id,
+                candidate=candidate,
+                policy=self._policies["commits"],
                 source_system=self.source_system,
             )
         return None

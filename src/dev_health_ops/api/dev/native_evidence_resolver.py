@@ -67,6 +67,75 @@ def _review_pr_entity_id(row: Mapping[str, Any]) -> str:
     return f"{row['repo_id']}#pr{row['number']}"
 
 
+#: CHAOS-3675 PR2. ``operational_incidents`` has no PR/work_item/project
+#: link column at all -- the only repository linkage is this LEFT JOIN,
+#: which can miss entirely (no edge row), not just carry a null
+#: ``repo_id``. ``org_id`` types differ across the two tables
+#: (``operational_incidents.org_id`` is ``String``,
+#: ``work_graph_deployment_incident_edges.org_id`` is ``UUID``) --
+#: ``toUUIDOrZero`` matches the cast ``native_evidence.py``'s own
+#: ``incidents`` ``_SourceSpec`` already uses for this exact join.
+_INCIDENT_RESOLVE_SQL = """
+SELECT i.id AS id, i.title AS title, i.normalized_status AS normalized_status,
+       coalesce(i.source_event_at, i.observed_at) AS observed_at,
+       i.last_synced AS last_synced, e.repo_id AS repo_id
+FROM operational_incidents AS i FINAL
+LEFT JOIN work_graph_deployment_incident_edges AS e FINAL
+  ON e.org_id = toUUIDOrZero(i.org_id) AND e.incident_id = i.id
+WHERE i.org_id = {org_id:String} AND i.id = {locator:String}
+LIMIT 1
+"""
+
+
+async def _resolve_incident(
+    client: Any,
+    *,
+    org_id: str,
+    candidate: EvidenceCandidate,
+    policy: SourceFreshnessPolicy,
+    source_system: str,
+) -> EvidenceRecord | None:
+    rows = await query_dicts(
+        client, _INCIDENT_RESOLVE_SQL, {"org_id": org_id, "locator": candidate.locator}
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    repo_id = row.get("repo_id")
+    if not repo_id:
+        # No linked repository at all (missing edge row, or a null
+        # repo_id on the edge that exists) -- EntityKind has no INCIDENT
+        # member, and a repository is never entity-check-able (that's
+        # what no_authorizable_entity is for), so with no repository
+        # either there is NO authorization anchor whatsoever. Refused
+        # here, not emitted and left to admit()'s own anchor guard alone.
+        return None
+    observed = _datetime(row.get("observed_at")) or datetime.now(UTC)
+    last_synced = _datetime(row.get("last_synced"))
+    freshness = policy.classify(last_synced, now=datetime.now(UTC))
+    return EvidenceRecord(
+        source_system=source_system,
+        source_version=RESOLVER_SOURCE_VERSION,
+        entity_type="incident",
+        # Descriptive only -- see the module docstring. Incidents have no
+        # directly-authorizable entity in the current canonical schema at
+        # all (only ever a repository), so no_authorizable_entity is
+        # ALWAYS True whenever this resolver succeeds; there is no
+        # "sometimes derive an entity" branch to launder past, unlike the
+        # review/deployment resolvers.
+        entity_id=str(row["id"]),
+        display_label=f"Incident: {row.get('title') or row['id']}",
+        observed_at=observed,
+        freshness=freshness,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=(str(repo_id),),
+        raw_excerpt=f"Status: {row.get('normalized_status') or 'unknown'}",
+        stale=freshness is FreshnessState.STALE,
+        no_authorizable_entity=True,
+    )
+
+
 async def _resolve_review(
     client: Any,
     *,
@@ -110,14 +179,16 @@ class NativeEvidenceCandidateResolver:
     Additive: only observation kinds with an implemented ``_resolve_*``
     below are handled; every other kind returns ``None`` (refused as
     ``NO_MATCHES``), never an error. CHAOS-3675 PR 1/3 implements
-    ``review`` only -- ``deployment``'s linked PR is nullable in the
-    canonical schema (a deployment need not correspond to any PR), which
-    needs its own authorization-shape decision (empty ``valid_entity_ids``,
-    repository-only authorization) before it can resolve safely; deferred
-    rather than guessed at here. ``commit``/``ci_run`` need a confirmed
-    join path (candidate: ``work_graph_edges``) before they can derive
-    their linked entity at all. ``incident`` follows the same shape
-    ``native_evidence.py``'s own ``incidents`` spec already joins through.
+    ``review`` (a directly-authorizable PR entity, derived from its own
+    row); PR 2/3 adds ``incident`` (no directly-authorizable entity in the
+    schema at all -- repository-only authorization via CHAOS-3675's
+    entity-less admission mechanism). ``deployment``'s linked PR is
+    nullable in the canonical schema (a deployment need not correspond to
+    any PR, but CAN), which needs its own per-row derive-vs-anchor
+    decision unlike ``incident``'s always-anchor shape; deferred to PR
+    3/3 rather than guessed at here. ``commit``/``ci_run`` need a
+    confirmed join path (candidate: ``work_graph_edges``) before they can
+    derive their linked entity at all -- also PR 3/3.
     """
 
     def __init__(
@@ -151,6 +222,14 @@ class NativeEvidenceCandidateResolver:
                 org_id=org_id,
                 candidate=candidate,
                 policy=self._policies["reviews"],
+                source_system=self.source_system,
+            )
+        if candidate.entity_type == "incident":
+            return await _resolve_incident(
+                self._client,
+                org_id=org_id,
+                candidate=candidate,
+                policy=self._policies["incidents"],
                 source_system=self.source_system,
             )
         return None

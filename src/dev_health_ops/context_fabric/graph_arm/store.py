@@ -20,11 +20,25 @@ it and could not use it if they did — :meth:`GraphArmStore.for_org` derives
 it, and every read re-derives and asserts it via
 :func:`identity.assert_partition_matches_org`.
 
-**Deletion is a drop, not a sweep.** :meth:`GraphArmStore.purge_org` deletes
-the whole keyspace. There is no per-node deletion path that could leave an
-orphan, and :func:`org_deletion_visit` — the callable registered in
+**Org deletion is a drop, not a sweep.** :meth:`GraphArmStore.purge_org`
+deletes the whole keyspace in one operation with no per-node traversal that
+could miss one, and :func:`org_deletion_visit` — the callable registered in
 ``EXTERNAL_DERIVED_STORES`` — is a thin wrapper over it that honours
 ``dry_run``.
+
+**One narrow exception to "no write Cypher in this arm" (CHAOS-3632).**
+:meth:`GraphArmStore.remove_document` deletes a single document's node by its
+server-derived uuid, promptly, without waiting for a full reprojection sweep
+— required because a revoked/withdrawn document's approval is checked once,
+at projection-build time; nothing re-checks it afterward, and the node would
+otherwise sit in the graph, findable by BM25/vector search, until the next
+sweep purges it. This is the arm's only per-node write: :data:`WRITE_QUERIES`
+declares it, exactly one entry, uuid-parameterized and single-node scoped —
+``tests/context_fabric/test_chaos_3617_containment.py`` widens its
+declared-surface guard to check membership in
+``READ_ONLY_QUERIES | WRITE_QUERIES`` instead of asserting no writes exist at
+all, and separately asserts this is the only write, it takes no
+caller-supplied Cypher, and it cannot match more than one node.
 """
 
 from __future__ import annotations
@@ -34,6 +48,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 
 from .backend import (
@@ -54,14 +69,16 @@ from .flags import (
     graph_projection_enabled,
     trial_store_config,
 )
-from .identity import assert_partition_matches_org, partition_for_org
+from .identity import assert_partition_matches_org, observation_uuid, partition_for_org
 from .projection import GraphProjection
 from .readback import NODE_COUNT_QUERY
+from .vocabulary import GraphObservationKind
 from .watermark import IndexWatermark
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DocumentRemovalReason",
     "EmbeddingBudgetExceededError",
     "GraphArmStore",
     "GraphOperationTimeoutError",
@@ -69,11 +86,57 @@ __all__ = [
     "partition_exists_for",
     "StoreUnavailableError",
     "TRIAL_DERIVED_STORE_NAME",
+    "WRITE_QUERIES",
     "org_deletion_visit",
 ]
 
 #: The name this store registers under in ``EXTERNAL_DERIVED_STORES``.
 TRIAL_DERIVED_STORE_NAME = "context_fabric_graph_trial"
+
+#: CHAOS-3632. The arm's ONE per-node write. Deletes a single document node
+#: by its server-derived uuid -- never a caller-supplied value, see
+#: :meth:`GraphArmStore.remove_document`. ``{uuid: $uuid}`` in the node
+#: pattern (not a bare ``MATCH (n)``) is what makes this provably single-node
+#: scoped: a query that matched every node and deleted them all would still
+#: satisfy "one string, one parameter" but would not satisfy "one node," so
+#: the scoping is asserted structurally by
+#: ``test_chaos_3617_containment.py``, not merely declared here. Read via
+#: ``execute_query(..., uuid=...)`` parameter binding, never string
+#: interpolation -- interpolating a canonical id into Cypher text is exactly
+#: the injection surface a "no write Cypher" guard exists to keep out, and
+#: widening that guard for this one query must not reopen it.
+_DELETE_DOCUMENT_NODE_QUERY = (
+    "MATCH (n {uuid: $uuid}) WITH n, count(n) AS matched "
+    "DETACH DELETE n RETURN matched AS total"
+)
+
+#: Every write-capable Cypher statement the arm can issue, in one place --
+#: the write-side counterpart to ``readback.READ_ONLY_QUERIES``. Exactly one
+#: entry: see the module docstring's "one narrow exception" note.
+WRITE_QUERIES: tuple[str, ...] = (_DELETE_DOCUMENT_NODE_QUERY,)
+
+
+class DocumentRemovalReason(str, Enum):
+    """Why a document's node was removed from the graph (CHAOS-3632).
+
+    Content-safe by construction: a member's *name* is a reason code, never
+    a title, body or canonical id, because these values are meant to flow
+    into telemetry labels and structured logs where indexed prose must never
+    appear (see the acceptance text's own "instruction-shaped content never
+    becomes trusted wire content" clause -- a log line is trusted wire
+    content too).
+    """
+
+    #: The document's approval was withdrawn/revoked/redacted after it was
+    #: already written -- the load-bearing case this primitive exists for.
+    APPROVAL_REVOKED = "approval_revoked"
+    #: Organization policy no longer permits this document class/source to
+    #: be indexed at all.
+    POLICY_FORBIDDEN = "policy_forbidden"
+    #: The document was found attributed to, or attached to, an
+    #: unauthorized/foreign tenant.
+    CROSS_TENANT = "cross_tenant"
+
 
 #: CHAOS-3679. Prefix for the watermark's Redis key, on the FalkorDB client's
 #: OWN connection -- deliberately not a Cypher graph node. A graph node would
@@ -560,6 +623,74 @@ class GraphArmStore:
             operation="purge_watermark",
         )
         return total
+
+    async def remove_document(
+        self, canonical_id: str, *, reason: DocumentRemovalReason
+    ) -> bool:
+        """Remove one document's node from this partition. Returns whether
+        anything was actually removed.
+
+        CHAOS-3632's "removing approval propagates to the index" clause.
+        ``to_graphiti_document_nodes`` (CHAOS-3632, write side) only ever
+        writes a node for a document already in ``projection.approved_
+        documents`` -- but that approval is checked once, at projection-build
+        time, and nothing re-checks it afterward. A document approved when a
+        projection was built and later withdrawn, redacted or revoked stays
+        in the store, findable by BM25/vector search, until the next full
+        reprojection sweep purges it (:meth:`purge_org` is organization-wide
+        and is not a routine response to one document's status changing).
+        This closes that gap on the write side, promptly, per-document.
+
+        Deliberately NOT ``graphiti_core``'s own ``EntityNode.delete()``:
+        that method matches only nodes labelled ``Entity``, ``Episodic`` or
+        ``Community`` for the FalkorDB/Neptune driver branch (verified
+        directly against the installed ``graphiti_core`` source, not
+        assumed). A document node's label is ``CFObsDocument`` --
+        :func:`~.backend.to_graphiti_document_nodes`'s own convention -- so
+        ``EntityNode.delete()`` would silently match nothing and report
+        success while removing zero nodes. :data:`_DELETE_DOCUMENT_NODE_QUERY`
+        matches on ``uuid`` alone, label-agnostic, which is what makes it
+        correct for a label graphiti's own delete does not know about.
+
+        Idempotent: removing an already-removed or never-written canonical id
+        is a safe no-op that returns ``False``, not an error -- a caller
+        reacting to a revocation event has no reliable way to know whether an
+        earlier delivery of the same event already ran.
+
+        ``uuid`` is derived here, server-side, from this store's own
+        ``org_id`` and the caller-supplied ``canonical_id`` -- never accepted
+        as a raw uuid -- so a caller can name what to remove only by the same
+        identity the write side used to create it, never an arbitrary graph
+        address.
+
+        This is a mutation proportional to a single node lookup, not to
+        partition size, but unlike :meth:`purge_org`'s fixed-cost keyspace
+        drop it is an unindexed property match (the arm builds no index on
+        this custom label), so it is bounded under the write deadline rather
+        than the read one -- the more conservative of the two.
+        """
+
+        uuid = observation_uuid(
+            self._org_id, GraphObservationKind.DOCUMENT, canonical_id
+        )
+        result = await self._bounded_write(
+            self._driver.execute_query(_DELETE_DOCUMENT_NODE_QUERY, uuid=uuid),
+            operation="remove_document",
+        )
+        records, _, _ = result
+        removed = bool(records) and int(records[0]["total"]) > 0
+        # canonical_id is an opaque internal identifier, logged the same way
+        # org_id is logged elsewhere in this module -- never the document's
+        # title or body, which is the content-safety line the acceptance
+        # text actually draws.
+        logger.info(
+            "context-fabric graph document %s %s in partition %s (reason=%s)",
+            canonical_id,
+            "removed" if removed else "not found; no-op",
+            self._partition,
+            reason.value,
+        )
+        return removed
 
 
 async def partition_exists_for(

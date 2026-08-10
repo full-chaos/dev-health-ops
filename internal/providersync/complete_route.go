@@ -11,10 +11,11 @@ import (
 )
 
 type CompleteRouteBatch struct {
-	Effects   []EffectBatch
-	Result    map[string]any
-	Watermark *time.Time
-	Evidence  FetchEvidence
+	Effects             []EffectBatch
+	Result              map[string]any
+	Watermark           *time.Time
+	Evidence            FetchEvidence
+	WorklogObservations []JiraWorklogFetchObservation
 }
 
 func (batch CompleteRouteBatch) validate(descriptor CompleteRouteDescriptor) error {
@@ -103,12 +104,13 @@ type CompleteRouteExecutor struct {
 }
 
 type CompleteRouteExecutionResult struct {
-	Fetch      FetchEvidence
-	Result     map[string]any
-	Watermark  *time.Time
-	Comparison ShadowComparison
-	Effects    EffectCommitResult
-	ShadowOnly bool
+	Fetch               FetchEvidence
+	Result              map[string]any
+	Watermark           *time.Time
+	Comparison          ShadowComparison
+	Effects             EffectCommitResult
+	ShadowOnly          bool
+	WorklogObservations []JiraWorklogFetchObservation
 }
 
 func (executor CompleteRouteExecutor) now() time.Time {
@@ -208,6 +210,7 @@ func (executor CompleteRouteExecutor) Execute(
 			}
 			result.Fetch, result.Result, result.Watermark =
 				manifest.Batch.Evidence, manifest.Batch.Result, manifest.Batch.Watermark
+			result.WorklogObservations = manifest.Batch.WorklogObservations
 			result.Comparison = manifest.Comparison
 			result.Effects, err = executor.Committer.CommitPrepared(
 				workContext, session.Claim, manifest.Batch.Effects, *recoveredEffects,
@@ -305,6 +308,7 @@ func (executor CompleteRouteExecutor) Execute(
 		}
 		result.Fetch, result.Result, result.Watermark =
 			batch.Evidence, batch.Result, batch.Watermark
+		result.WorklogObservations = batch.WorklogObservations
 		comparison, err := executor.Comparator.CompareCompleteRoute(
 			workContext, session.Claim, batch,
 		)

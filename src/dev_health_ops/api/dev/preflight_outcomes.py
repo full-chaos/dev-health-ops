@@ -75,6 +75,12 @@ PLAN_ID_BY_INTENT: Mapping[QuestionIntentID, str] = {
     QuestionIntentID.TEAM_WORKLOAD_BALANCE: "balance.team_workload.v1",
     QuestionIntentID.OPERATIONAL_DEFICIENCY_INVENTORY: "deficiency.operational.v1",
     QuestionIntentID.BOUNDED_INVESTIGATION: "investigation.bounded.v1",
+    # CHAOS-3652: a compatibility marker, same shape as BOUNDED_INVESTIGATION's
+    # entry above -- no DevInvestigationPlan document exists or should exist
+    # for this id. DISCOVERED_COHORT routes to the graph-assisted
+    # investigation seam (orchestrator.py), never through
+    # ``self._plan_registry``/``PlanExecutor``.
+    QuestionIntentID.DISCOVERED_COHORT: "investigation.discovered_cohort.v1",
 }
 
 # Import-time totality, in both directions: an intent added without a plan, or

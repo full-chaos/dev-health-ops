@@ -72,6 +72,12 @@ PLAN_REGISTRY: frozenset[str] = frozenset(
         # loop produced this" is the fix; borrowing a real plan's identity to
         # pass the membership check would misstate what actually ran.
         "legacy.tool_choice.v1",
+        # CHAOS-3652: another compatibility marker, same shape as
+        # "investigation.bounded.v1" above -- QuestionIntentID.DISCOVERED_COHORT
+        # is not plan-governed (it routes to the graph-assisted investigation
+        # seam, not ``self._plan_registry``/``DevInvestigationPlan``), but its
+        # frames still need a truthful, registry-member ``versions.plan_id``.
+        "investigation.discovered_cohort.v1",
     }
 )
 

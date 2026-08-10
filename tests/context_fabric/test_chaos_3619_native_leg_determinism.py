@@ -64,7 +64,29 @@ _SRC = Path(__file__).resolve().parents[2] / "src" / "dev_health_ops"
 #: capability fact the per-family tables must be read against, and a silent
 #: change to recognizer coverage would move the native column for a reason
 #: that has nothing to do with graph assistance.
-CORPUS_QUESTIONS_BELOW_THE_FALLBACK_FLOOR = 34
+#:
+#: Re-measured 2026-08-10, CHAOS-3652: was 34, now 31. CHAOS-3652 adds one
+#: new deterministic recognizer (``cohort.discovery``, zero-mention
+#: cohort-discovery questions -- "which teams are struggling", "which
+#: projects are capacity-constrained") that legitimately moves 3 corpus
+#: questions from below the floor to a deterministic
+#: ``QuestionIntentID.DISCOVERED_COHORT`` recognition, with no model
+#: involved -- guards 1/2 above (no ``IntentClassifier`` exists, production
+#: still constructs a bare ``QuestionInterpreter()``) are untouched, so this
+#: is recognizer coverage growing, not the fallback floor moving. The three
+#: cases, all in families the fairness table already marks as a
+#: classifier-closeable CONFOUND rather than a graph RESULT (see
+#: ``trials/chaos_3619/results/consolidated-post-wave-note.md``'s CHAOS-3652
+#: addendum for the per-family delta):
+#:
+#: * ``T01_clearly_struggling_team`` (``struggling_teams``) -- "What teams
+#:   are currently struggling, and why?"
+#: * ``P01_demand_exceeds_capacity`` (``project_capacity``) -- "Which
+#:   projects are capacity-constrained right now?"
+#: * ``P02_critical_path_few_contributors`` (``project_capacity``) --
+#:   "Which projects appear capacity-constrained, understaffed, overstaffed,
+#:   or unusually lightly loaded relative to demand?"
+CORPUS_QUESTIONS_BELOW_THE_FALLBACK_FLOOR = 31
 AUTHORED_CORPUS_CASES = 39
 
 

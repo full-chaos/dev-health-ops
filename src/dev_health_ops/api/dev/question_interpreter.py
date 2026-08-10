@@ -839,6 +839,36 @@ _DEFICIENCY_ANCHORS = _any_of(
     "missing controls",
     "process gaps",
 )
+#: CHAOS-3652. Deliberately disjoint from ``_HEALTH_ANCHORS``/``_WORKLOAD_
+#: ANCHORS``' phrases -- a zero-mention question already recognized by an
+#: earlier recognizer (``balance.team_workload``, ``health.team``,
+#: ``health.project``) must keep resolving to that intent; this recognizer
+#: is deliberately placed last in ``_RECOGNIZERS`` so it only catches what
+#: nothing else does, and never re-routes an existing recognized shape.
+_COHORT_DISCOVERY_SUBJECT_ANCHORS = _any_of(
+    "team",
+    "teams",
+    "project",
+    "projects",
+    "squad",
+    "squads",
+    "repo",
+    "repos",
+    "repository",
+    "repositories",
+    "service",
+    "services",
+)
+_COHORT_DISCOVERY_JUDGMENT_ANCHORS = _any_of(
+    "struggling",
+    "struggle",
+    "falling behind",
+    "underperforming",
+    "capacity-constrained",
+    "capacity constrained",
+    "unusually lightly loaded",
+    "lightly loaded",
+)
 _RANKING_ANCHORS = _any_of(
     "top ",
     "most ",
@@ -962,6 +992,27 @@ _RECOGNIZERS: tuple[_Recognizer, ...] = (
         "status.singular",
         QuestionIntentID.ENTITY_STATUS,
         lambda s: _STATUS_ANCHORS(s.normalized) and s.mention_count >= 1,
+    ),
+    # CHAOS-3652. Placed last, deliberately: every earlier recognizer keeps
+    # first-match-wins precedence over this one, so this only catches a
+    # zero-mention, cohort-discovery-shaped question that would otherwise
+    # fall all the way through to BOUNDED_INVESTIGATION -- never anything an
+    # existing launch-intent recognizer already claims. Gated on
+    # ``mention_count == 0`` (checked before ``MAX_MENTIONS`` capping and
+    # after untyped-name merging -- see ``_Signals``): a question naming
+    # something, resolved or not, must never route here (Wave 3.2's
+    # no-organization-widening-for-an-unresolved-name guardrail; also
+    # enforced structurally by ``DevQuestionIntent.validate_intent_
+    # invariants``, which rejects this intent at any cardinality other than
+    # ``ORGANIZATION_WIDE``).
+    _Recognizer(
+        "cohort.discovery",
+        QuestionIntentID.DISCOVERED_COHORT,
+        lambda s: (
+            s.mention_count == 0
+            and _COHORT_DISCOVERY_SUBJECT_ANCHORS(s.normalized)
+            and _COHORT_DISCOVERY_JUDGMENT_ANCHORS(s.normalized)
+        ),
     ),
 )
 

@@ -47,6 +47,11 @@
           "case": "clarification_without_reason",
           "path": "examples/negative/dev_question_intent.v1.clarification_without_reason.json",
           "sha256": "647687109c9ac4b368c3907a7791061305e4d0e93aa26a307f42d8d10f0dba3f"
+        },
+        {
+          "case": "discovered_cohort_requires_organization_wide_cardinality",
+          "path": "examples/negative/dev_question_intent.v1.discovered_cohort_requires_organization_wide_cardinality.json",
+          "sha256": "d33f1320734a49f8cd8d18c9d3b77ee4962396ad6c0500dba229c40f9dfffec7"
         }
       ],
       "positive": {
@@ -56,7 +61,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_question_intent.v1.schema.json",
-        "sha256": "ab9aba605adc6d28366087aa1d543453e5fac7eae09b25adee806b63f62e492e"
+        "sha256": "dbaf9871984d64ebc6c9ea0e270fe069b5d0a2d0476df685b2b98cb19f7d88c1"
       },
       "schema_version": "dev_question_intent.v1"
     },
@@ -151,7 +156,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_investigation_plan.v1.schema.json",
-        "sha256": "ad300ef9d6716a5d5c090ade23ff4cb438e32e2acae4c63c63f8d3f006e90ba2"
+        "sha256": "e0b5f48243149aecbb49a3736e015fa53749865fc6fdfb9dbda1ddae3d1ddd76"
       },
       "schema_version": "dev_investigation_plan.v1"
     },

@@ -103,7 +103,9 @@ class EntityKind(StrEnum):
 
 
 class QuestionIntentID(StrEnum):
-    """The twelve Wave 3.1 launch intents (Amendment TRD v2 §4.1)."""
+    """The twelve Wave 3.1 launch intents (Amendment TRD v2 §4.1), plus the
+    CHAOS-3652 graph-assisted subjectless-cohort-discovery intent.
+    """
 
     ENTITY_STATUS = "entity_status"
     PORTFOLIO_STATUS = "portfolio_status"
@@ -117,6 +119,24 @@ class QuestionIntentID(StrEnum):
     TEAM_WORKLOAD_BALANCE = "team_workload_balance"
     OPERATIONAL_DEFICIENCY_INVENTORY = "operational_deficiency_inventory"
     BOUNDED_INVESTIGATION = "bounded_investigation"
+    #: CHAOS-3652: a question that names zero subjects but lexically
+    #: describes a bounded team/project cohort-discovery job ("which teams
+    #: are currently struggling?"), as distinct from a genuinely
+    #: unbounded/ambiguous zero-mention question (which stays
+    #: ``BOUNDED_INVESTIGATION``). Requires ``Cardinality.ORGANIZATION_WIDE``
+    #: (``DevQuestionIntent.validate_intent_invariants``), but that is a
+    #: **closed-universe** discovery job, never organization-wide sweep
+    #: authorization: the graph-assisted route this intent triggers resolves
+    #: it against a bounded, question-family-specific candidate universe
+    #: derived server-side from the authorized scope (CHAOS-3645's
+    #: ``graph_arm.cohort_discovery.discover_cohort`` proved this shape:
+    #: family -> closed candidate-kind set -> authorized universe -> narrow
+    #: via graph relationships/measurements -- never an unrestricted
+    #: enumeration). ``ORGANIZATION_WIDE`` here only encodes "zero named
+    #: mentions were extracted"; it must never be read, by any consumer, as
+    #: authorization to sweep every entity in the organization. See
+    #: CHAOS-3652/CHAOS-3660 for the full guardrail discussion.
+    DISCOVERED_COHORT = "discovered_cohort"
 
 
 class Cardinality(StrEnum):

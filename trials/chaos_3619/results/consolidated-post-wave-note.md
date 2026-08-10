@@ -229,6 +229,52 @@ No `.records.json` file was regenerated or edited. See
 and `tests/context_fabric/test_chaos_3619_refusal_causes.py` for the executable form of both
 paragraphs above.
 
+### Addendum, 2026-08-10 — CHAOS-3652 moves the native recognizer-coverage baseline
+
+**This addendum is additive; nothing above it is edited.** Every number above stays true as a
+description of `eee3d1571`/`b7ed26d55`. It no longer describes current `main`.
+
+`question_interpreter.py` gained one new deterministic recognizer (`cohort.discovery`, CHAOS-3652)
+for zero-mention questions that lexically describe a bounded team/project cohort-discovery job
+("which teams are struggling", "which projects are capacity-constrained"), recognized as the new
+`QuestionIntentID.DISCOVERED_COHORT`. This is recognizer coverage growing, not the fallback floor
+moving, and not a model being wired: `tests/context_fabric/test_chaos_3619_native_leg_determinism.py`'s
+own `TestTheModelFallbackIsUnwired` guards (no `IntentClassifier` implementation exists in `src`;
+production still constructs a bare `QuestionInterpreter()`) are unaffected and still pass.
+
+Re-measured live through the real interpreter (not from a `.records.json` file, and not requiring
+a live graph store — this is a native-interpreter-only fact): **31**, not 34, of the 39 authored
+corpus questions now land below `FALLBACK_CONFIDENCE_FLOOR`. The three that moved, all newly
+recognized as `discovered_cohort`, all in families this note's disposition table already marks a
+classifier-closeable CONFOUND rather than a graph RESULT:
+
+| case | family | question |
+| --- | --- | --- |
+| `T01_clearly_struggling_team` | `struggling_teams` | "What teams are currently struggling, and why?" |
+| `P01_demand_exceeds_capacity` | `project_capacity` | "Which projects are capacity-constrained right now?" |
+| `P02_critical_path_few_contributors` | `project_capacity` | "Which projects appear capacity-constrained, understaffed, overstaffed, or unusually lightly loaded relative to demand?" |
+
+Per-family delta against the "below fallback floor" / "no native family -> unprojectable" columns
+this note's report table (`trial-report.md`/`consolidated-post-wave-report.md` line ~58-69) carries
+for these two families:
+
+| family | cases (Leg A) | below fallback floor (was) | below fallback floor (now) |
+| --- | --- | --- | --- |
+| `struggling_teams` | 5 | 5 | **4** |
+| `project_capacity` | 3 | 3 | **1** |
+
+**What this addendum does NOT claim.** It does not re-run the trial sweep, does not touch
+`consolidated-post-wave.records.json` or any other `.records.json`, and does not claim anything
+about Leg A/Leg B graph-arm invocation, scoring, or the `not_run_precondition: 34` disposition-matrix
+cell above: that cell is `trials.chaos_3619.sweep`'s own frozen measurement of a specific tree, and
+whether a `DISCOVERED_COHORT`-recognized question becomes graph-arm-invocable is CHAOS-3502's still-
+unwired production routing, not a fact this recognizer-only change establishes. What is measured and
+asserted here is exactly one thing: the native interpreter's recognizer-coverage baseline the fairness
+table is read against has moved from 34 to 31, pinned by
+`tests/context_fabric/test_chaos_3619_native_leg_determinism.py::TestHowMuchOfTheCorpusTheRecognizersActuallyRecognize::test_the_number_of_questions_below_the_fallback_floor_is_pinned`,
+which fails loudly (RED, not silently passing) if this number ever drifts again without a matching
+addendum.
+
 ## Reproducing this
 
 ```

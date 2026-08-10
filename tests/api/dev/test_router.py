@@ -1848,6 +1848,70 @@ async def test_dev_feedback_is_scoped_to_the_target_conversation(dev_api_context
 
 
 @pytest.mark.asyncio
+async def test_dev_feedback_accepts_additive_reasons_and_rejects_mixed_unspecified(
+    dev_api_context,
+):
+    """CHAOS-3660 §8(f)/(j), full HTTP stack. ``DevFeedbackCreateRequest``
+    is a SEPARATE request-body model from ``contracts.DevFeedback`` -- this
+    proves a client sending a newly-additive reason is actually accepted
+    at the real API surface, not just by the wire contract's own schema.
+    """
+    client = dev_api_context.client
+    maker = dev_api_context.maker
+    org_id = dev_api_context.org_id
+    user_id = dev_api_context.user_id
+
+    create = await client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(org_id)},
+    )
+    assert create.status_code == 201
+    conversation_id = create.json()["conversation_id"]
+
+    answer_id = uuid.uuid4()
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=uuid.UUID(conversation_id),
+            client_message_id=uuid.uuid4(),
+            question="What changed?",
+            scope_snapshot={},
+        )
+        await service.append_assistant_answer(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=uuid.UUID(conversation_id),
+            answer_payload={
+                "schema_version": "dev_answer.v1",
+                "answer_id": str(answer_id),
+                "conversation_id": conversation_id,
+                "summary": "The answer is stored for feedback testing.",
+                "claims": [],
+                "metrics": [],
+                "evidence": [],
+            },
+            validator=lambda payload: payload,
+            scope_snapshot={},
+        )
+        await session.commit()
+
+    additive = await client.post(
+        f"/api/v1/dev/answers/{answer_id}/feedback",
+        json={"rating": "not_helpful", "reasons": ["wrong_subject"]},
+    )
+    assert additive.status_code == 200
+    assert additive.json()["reasons"] == ["wrong_subject"]
+
+    mixed_unspecified = await client.post(
+        f"/api/v1/dev/answers/{answer_id}/feedback",
+        json={"rating": "not_helpful", "reasons": ["unclear", "unspecified"]},
+    )
+    assert mixed_unspecified.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_dev_evidence_expansion_requires_owned_answer_relationship(
     dev_api_context, monkeypatch: pytest.MonkeyPatch
 ):

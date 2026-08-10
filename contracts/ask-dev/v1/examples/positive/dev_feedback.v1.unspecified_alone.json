@@ -1,0 +1,11 @@
+{
+  "answer_id": "answer_01",
+  "comment": null,
+  "created_at": "2026-07-28T12:00:00Z",
+  "feedback_id": "feedback_02",
+  "rating": "not_helpful",
+  "reasons": [
+    "unspecified"
+  ],
+  "schema_version": "dev_feedback.v1"
+}

@@ -96,6 +96,22 @@ class EvidenceRecord:
     #: (never trusting a resolver to remember to set it): see ``admit``'s
     #: docstring for why that is always correct for the admission path.
     record_locator: str | None = None
+    #: CHAOS-3675 PR2. An EXPLICIT, typed resolver capability, independent
+    #: of whatever ``entity_id`` holds. ``True`` only when a resolver has
+    #: independently confirmed, from the canonical row itself, that this
+    #: record has no directly-authorizable :class:`~.scope_service.EntityKind`
+    #: entity at all (a deployment with no linked PR, an incident with no
+    #: linked repository). ``entity_id`` stays whatever the record's own
+    #: descriptive identity is in that case (``DevEvidenceRef.entity_id``
+    #: requires a non-empty string; it is never repurposed as an
+    #: authorization signal) -- this flag, not the VALUE of ``entity_id``,
+    #: is what tells :meth:`EvidenceService.admit` to skip entity
+    #: authorization. A resolver that CAN derive an authorizable entity
+    #: must always derive it and leave this ``False``: gating on
+    #: ``entity_id``'s value instead would let a resolver bug (or a
+    #: resolver that took the cheap path instead of deriving) launder its
+    #: way past the entity check merely by returning something falsy.
+    no_authorizable_entity: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -802,8 +818,26 @@ class EvidenceService:
             # docstring. That single-element set is what turns the existing
             # containment check in ``_authorize_expansion`` from a tautology
             # into the admission path's entity authorization.
+            #
+            # CHAOS-3675 PR2, entity-less records (deployments with no
+            # linked PR, incidents with no linked repository): empty ONLY
+            # when the resolver has EXPLICITLY set
+            # ``no_authorizable_entity`` -- never inferred from
+            # ``entity_id``'s value, which stays a normal, non-empty
+            # descriptive identity either way (``DevEvidenceRef.entity_id``
+            # requires at least one character). Gating on the flag alone,
+            # not on ``entity_id`` being falsy, is what stops a resolver
+            # bug from silently earning repository-only authorization by
+            # merely returning something empty. An empty
+            # ``valid_entity_ids`` skips the entity containment check
+            # entirely (``_authorize_expansion``'s own truthy gate),
+            # leaving authorization to the unmodified, independent
+            # ``repository_ids`` check below it.
             record = replace(record, record_locator=candidate.locator)
-            ref = self._to_ref(org_id, record, valid_entity_ids=(record.entity_id,))
+            valid_entity_ids = (
+                () if record.no_authorizable_entity else (record.entity_id,)
+            )
+            ref = self._to_ref(org_id, record, valid_entity_ids=valid_entity_ids)
             state, warning = await self._authorize_expansion(
                 org_id,
                 permission_fingerprint,

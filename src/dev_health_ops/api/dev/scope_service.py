@@ -458,6 +458,17 @@ class AuthorizedEntityCatalog(Protocol):
         """
         ...
 
+    async def organization_team_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """Return up to ``limit`` authorized teams and the true total.
+
+        The graph candidate resolver uses this tenant-filtered roster for
+        team-pressure questions.  The true total lets that resolver reject a
+        truncated page rather than widening or silently sampling authority.
+        """
+        ...
+
 
 class ScopeRequestCache:
     """Small request-local LRU; never share this object across requests."""
@@ -1541,6 +1552,41 @@ class ScopeResolutionService:
                 entities, total = cached
                 return entities, total, True
             entities, total = await self._catalog.organization_project_entities(
+                org_id, limit=limit
+            )
+            self._cache.put(cache_key, (entities, total))
+            return entities, total, True
+        except Exception:
+            return [], 0, False
+
+    async def organization_committed_teams(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        *,
+        limit: int,
+    ) -> tuple[list[AuthorizedEntity], int, bool]:
+        """Return the complete bounded team universe for graph routing.
+
+        A graph cohort must not receive a partial organization roster as if it
+        were complete.  This mirrors the project enumeration cache and keeps
+        catalog failures distinct from an authoritative empty roster.
+        """
+
+        try:
+            watermark = await self._catalog.watermark(org_id, (EntityKind.TEAM,))
+            cache_key = self._cache_key(
+                "organization_graph_teams",
+                org_id,
+                permission_fingerprint,
+                {"limit": limit},
+                watermark,
+            )
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, tuple) and len(cached) == 2:
+                entities, total = cached
+                return entities, total, True
+            entities, total = await self._catalog.organization_team_entities(
                 org_id, limit=limit
             )
             self._cache.put(cache_key, (entities, total))

@@ -93,6 +93,8 @@ from .contracts import (
     DevStatusFact,
     DevToolRequest,
     DevToolResult,
+    DirectScope,
+    EntityType,
     FreshnessState,
     ToolID,
 )
@@ -110,7 +112,11 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
-from .graph_investigation_query import GraphInvestigationQuery
+from .graph_investigation_query import (
+    CohortDiscoveryFamily,
+    GraphAuthorizationScope,
+    GraphInvestigationQuery,
+)
 from .graph_routing_policy import CanonicalGraphRoutingEntitlementAuthorizer
 from .investigation_plans import PlanExecutor
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
@@ -135,6 +141,7 @@ from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
 from .scope_service import (
+    MAX_CANDIDATES,
     MODEL_SEARCHABLE_ENTITY_KINDS,
     EntityKind,
     ScopeRequestCache,
@@ -1626,6 +1633,143 @@ async def _assemble_production_runtime(
     scope_service = ScopeResolutionService(
         ClickHouseAuthorizedEntityCatalog(clickhouse), cache=ScopeRequestCache()
     )
+
+    async def resolve_graph_authorization(
+        requested_org_id: str,
+        requested_permission_fingerprint: str,
+        family: CohortDiscoveryFamily,
+        authorized_scope: DevScope,
+    ) -> GraphAuthorizationScope | None:
+        """Derive the bounded graph candidate universe from the canonical catalog.
+
+        The graph arm receives only a complete page from the same
+        tenant-filtered catalog used by native Ask Dev scope resolution.  A
+        catalog outage, empty roster, or roster larger than the bound is an
+        explicit incomplete envelope and therefore falls back to the legacy
+        path; no graph membership or model text is consulted.
+        """
+
+        if (
+            requested_org_id != org_id
+            or requested_permission_fingerprint != permission_fingerprint
+        ):
+            return None
+
+        def requested_candidate_ids() -> frozenset[str] | None:
+            """Map the committed request scope to a catalog entity set.
+
+            Team-to-repository/project expansion is deliberately unavailable
+            here: the canonical catalog does not grant that relationship, so
+            a narrower scope that cannot be represented by the graph family
+            fails closed instead of widening to the organization roster.
+            An empty set means the committed scope is organization-wide and
+            therefore selects the complete catalog page.
+            """
+
+            if authorized_scope.organization_id != requested_org_id:
+                return None
+
+            expected_type = (
+                EntityType.TEAM
+                if family is CohortDiscoveryFamily.TEAM_PRESSURE
+                else EntityType.PROJECT
+            )
+            if authorized_scope.surface_context is not None and any(
+                ref.entity_type is not expected_type
+                for ref in authorized_scope.surface_context.entity_refs
+            ):
+                return None
+            if any(
+                ref.entity_type is not expected_type
+                for ref in authorized_scope.entity_refs
+            ):
+                return None
+
+            requested = {
+                ref.entity_id
+                for ref in authorized_scope.entity_refs
+                if ref.entity_type is expected_type
+            }
+            if authorized_scope.team_ids:
+                if family is not CohortDiscoveryFamily.TEAM_PRESSURE:
+                    return None
+                requested.update(authorized_scope.team_ids)
+
+            if family is CohortDiscoveryFamily.TEAM_PRESSURE:
+                if authorized_scope.direct_scope not in {
+                    DirectScope.ORGANIZATION,
+                    DirectScope.TEAM,
+                }:
+                    return None
+            elif authorized_scope.direct_scope not in {
+                DirectScope.ORGANIZATION,
+                DirectScope.PROJECT,
+            }:
+                return None
+
+            return frozenset(requested)
+
+        requested_ids = requested_candidate_ids()
+        if requested_ids is None:
+            return GraphAuthorizationScope(
+                organization_id=requested_org_id,
+                permission_fingerprint=requested_permission_fingerprint,
+                scope=authorized_scope,
+                cohort_discovery_family=family,
+                authorized_entity_ids=frozenset(),
+                complete=False,
+            )
+        if family is CohortDiscoveryFamily.TEAM_PRESSURE:
+            (
+                entities,
+                total,
+                catalog_available,
+            ) = await scope_service.organization_committed_teams(
+                requested_org_id,
+                requested_permission_fingerprint,
+                limit=MAX_CANDIDATES,
+            )
+        elif family is CohortDiscoveryFamily.PROJECT_CAPACITY:
+            (
+                entities,
+                total,
+                catalog_available,
+            ) = await scope_service.organization_committed_projects(
+                requested_org_id,
+                requested_permission_fingerprint,
+                limit=MAX_CANDIDATES,
+            )
+        else:
+            return None
+
+        if requested_ids:
+            entities = [
+                entity for entity in entities if entity.canonical_id in requested_ids
+            ]
+
+        ids = frozenset(entity.canonical_id for entity in entities)
+        complete = (
+            catalog_available
+            and total > 0
+            and total <= MAX_CANDIDATES
+            and (
+                (not requested_ids and len(entities) == total and len(ids) == total)
+                or (
+                    bool(requested_ids)
+                    and len(entities) == len(requested_ids)
+                    and ids == requested_ids
+                )
+            )
+        )
+        return GraphAuthorizationScope(
+            organization_id=requested_org_id,
+            permission_fingerprint=requested_permission_fingerprint,
+            scope=authorized_scope,
+            cohort_discovery_family=family,
+            authorized_entity_ids=ids,
+            complete=complete,
+        )
+
     metric_service = MetricQueryService(ClickHouseMetricSource(clickhouse))
     # CHAOS-3297 stack #3: kept as a NAMED reference (not inlined into
     # StatusChangeService's constructor call the way it was before this
@@ -2684,6 +2828,9 @@ async def _assemble_production_runtime(
         evidence_service=evidence_service if wave_3_1_enabled else None,
         canonical_enrichment=canonical_enrichment,
         graph_routing_entitlement=graph_routing_entitlement,
+        graph_authorization_resolver=(
+            resolve_graph_authorization if wave_3_1_enabled else None
+        ),
     )
 
 

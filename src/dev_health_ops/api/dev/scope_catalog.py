@@ -75,6 +75,18 @@ _ORGANIZATION_PROJECT_ENTITIES_SQL = """
     LIMIT {limit:UInt32}
 """
 
+#: Bounded, deterministic organization team roster for graph candidate
+#: derivation.  This is intentionally a separate query from substring
+#: search: the graph route needs the complete tenant-filtered candidate
+#: universe (or an explicit incomplete result), not model-supplied labels.
+_ORGANIZATION_TEAM_ENTITIES_SQL = """
+    SELECT id AS canonical_id, name AS label, count() OVER () AS total_authorized
+    FROM teams FINAL
+    WHERE org_id = {org_id:String} AND is_active = 1
+    ORDER BY lowerUTF8(name), canonical_id
+    LIMIT {limit:UInt32}
+"""
+
 
 def _entity_sort_key(entity: AuthorizedEntity) -> tuple[str, str, str]:
     return (entity.label.casefold(), entity.kind.value, entity.canonical_id)
@@ -349,6 +361,30 @@ class ClickHouseAuthorizedEntityCatalog:
         entities = [
             AuthorizedEntity(
                 kind=EntityKind.PROJECT,
+                canonical_id=str(row["canonical_id"]),
+                label=str(row["label"]),
+            )
+            for row in rows
+            if row.get("canonical_id")
+        ]
+        total = int(rows[0]["total_authorized"])
+        return entities, total
+
+    async def organization_team_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """Return a bounded, tenant-filtered team page and true total."""
+
+        rows = await query_dicts(
+            self._client,
+            _ORGANIZATION_TEAM_ENTITIES_SQL,
+            {"org_id": org_id, "limit": limit},
+        )
+        if not rows:
+            return [], 0
+        entities = [
+            AuthorizedEntity(
+                kind=EntityKind.TEAM,
                 canonical_id=str(row["canonical_id"]),
                 label=str(row["label"]),
             )

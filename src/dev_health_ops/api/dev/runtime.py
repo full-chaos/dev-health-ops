@@ -15,7 +15,10 @@ from .contracts import DevContractVersions, DevMessageRequest
 from .contracts_v2.base import QuestionIntentID
 from .contracts_v2.plan import DevInvestigationPlan
 from .evidence_service import EvidenceService
-from .graph_investigation_query import GraphInvestigationQuery
+from .graph_investigation_query import (
+    GraphAuthorizationResolver,
+    GraphInvestigationQuery,
+)
 from .graph_routing_policy import GraphRoutingEntitlementAuthorizer
 from .investigation_plans import PlanExecutor
 from .investigation_shadow import InvestigationPacketProducer, InvestigationShadow
@@ -96,6 +99,9 @@ class BoundedDevRuntime:
     #: are constructed; the orchestrator checks it immediately before route
     #: entry, leaving the runtime kill switch independent.
     graph_routing_entitlement: GraphRoutingEntitlementAuthorizer | None = None
+    #: Complete server-owned graph candidate envelope resolver. ``None`` is
+    #: fail-closed for direct callers and for organizations outside Wave 3.1.
+    graph_authorization_resolver: GraphAuthorizationResolver | None = None
 
     async def run(
         self,
@@ -131,6 +137,7 @@ class BoundedDevRuntime:
             evidence_service=self.evidence_service,
             canonical_enrichment=self.canonical_enrichment,
             graph_routing_entitlement=self.graph_routing_entitlement,
+            graph_authorization_resolver=self.graph_authorization_resolver,
         )
         return await orchestrator.run(
             request=request,

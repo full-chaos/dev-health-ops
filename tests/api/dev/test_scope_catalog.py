@@ -359,3 +359,43 @@ async def test_organization_repository_ids_empty_org_reports_zero_total(
 
     assert ids == []
     assert total == 0
+
+
+@pytest.mark.asyncio
+async def test_organization_team_entities_is_tenant_scoped_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    async def fake_query_dicts(
+        _client: object, sql: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        observed.update(sql=sql, params=params)
+        rows = [
+            {
+                "canonical_id": "team-inactive",
+                "label": "Inactive",
+                "is_active": 0,
+            },
+            {"canonical_id": "team-a", "label": "Platform", "is_active": 1},
+        ]
+        if "is_active = 1" in sql:
+            rows = [row for row in rows if row["is_active"] == 1]
+        for row in rows:
+            row["total_authorized"] = len(rows)
+        return rows
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", fake_query_dicts
+    )
+    catalog = ClickHouseAuthorizedEntityCatalog(object())
+
+    entities, total = await catalog.organization_team_entities("org-a", limit=25)
+
+    assert [entity.canonical_id for entity in entities] == ["team-a"]
+    assert entities[0].kind is EntityKind.TEAM
+    assert total == 1
+    assert observed["params"] == {"org_id": "org-a", "limit": 25}
+    assert "FROM teams FINAL" in observed["sql"]
+    assert "count() OVER ()" in observed["sql"]
+    assert "is_active = 1" in observed["sql"]

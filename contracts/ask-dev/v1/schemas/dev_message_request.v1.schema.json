@@ -265,6 +265,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "client_contract_version": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Contract Version"
+    },
     "client_message_id": {
       "maxLength": 128,
       "minLength": 1,

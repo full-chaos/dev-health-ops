@@ -122,6 +122,19 @@ def test_capability_gates_are_independent() -> None:
     assert capabilities.agent_context_runtime is False
 
 
+def test_ask_dev_graph_routing_defaults_false_on_every_existing_capabilities_payload() -> (
+    None
+):
+    """CHAOS-3660 §8(a). The canonical fixture predates this flag and never
+    sets it -- pinning the default explicitly rather than leaving the
+    backward-compatibility proof implicit in the parametrized fixture pass.
+    """
+    capabilities = DevCapabilities.model_validate(
+        positive_fixtures()["dev_capabilities.v1"]
+    )
+    assert capabilities.ask_dev_graph_routing is False
+
+
 def test_neutral_message_scope_without_surface_context_remains_valid() -> None:
     payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
     payload["scope"]["direct_scope"] = "organization"
@@ -131,6 +144,23 @@ def test_neutral_message_scope_without_surface_context_remains_valid() -> None:
     request = DevMessageRequest.model_validate(payload)
 
     assert request.scope.surface_context is None
+
+
+def test_client_contract_version_is_absent_by_default_and_accepted_when_declared() -> (
+    None
+):
+    """CHAOS-3660 §8(k). Request-direction additive: an old client's
+    request (the canonical fixture, which never sets this) validates
+    unchanged, and a client that DOES declare a version round-trips it.
+    """
+    payload = deepcopy(positive_fixtures()["dev_message_request.v1"])
+    assert "client_contract_version" not in payload
+    request = DevMessageRequest.model_validate(payload)
+    assert request.client_contract_version is None
+
+    payload["client_contract_version"] = "dev_stream_event.v2"
+    declared = DevMessageRequest.model_validate(payload)
+    assert declared.client_contract_version == "dev_stream_event.v2"
 
 
 @pytest.mark.parametrize("route_id", ["deployment_detail", "incident_detail"])

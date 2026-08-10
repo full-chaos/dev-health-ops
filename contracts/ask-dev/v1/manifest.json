@@ -16,7 +16,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_capabilities.v1.schema.json",
-        "sha256": "66f9dd47b340f1ca3b3d545761912e69a0833b1550868a8f45a6ab2836ec2050"
+        "sha256": "e213726e709177362829dedf284c8a8118d883725dd5b0b6b45b51197c4b491b"
       },
       "schema_version": "dev_capabilities.v1"
     },
@@ -112,7 +112,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_message_request.v1.schema.json",
-        "sha256": "258a495a3ac72ec52164b37164d71b4f01b60d8f1008b046965cd2f002c7b2bc"
+        "sha256": "2ac58a542edcc35e32b0f7a592920b4ab53a588b433ac00b9b224271a76011b5"
       },
       "schema_version": "dev_message_request.v1"
     },

@@ -137,6 +137,7 @@ __all__ = [
     "PacketTooLargeError",
     "SubjectMatchFinding",
     "AuthorizationWithheldEvidenceError",
+    "CanonicalEvidenceRefusedError",
     "UnsupportedMatchMechanismError",
     "TrialContext",
     "UnsupportedComparisonShapeError",
@@ -218,6 +219,31 @@ class AuthorizationWithheldEvidenceError(PermissionError):
 
     A ``PermissionError`` rather than a ``ValueError`` so a caller can route
     it the way it routes every other authorization refusal in this arm.
+    """
+
+
+class CanonicalEvidenceRefusedError(RuntimeError):
+    """A driver rests on evidence the canonical service declined to admit.
+
+    CHAOS-3650. A third case landing on the same missing-handle check as
+    :class:`AuthorizationWithheldEvidenceError` and the raw ``ValueError``
+    beside it, and distinct from both for the same reason those two are
+    distinct from each other: the CAUSE determines whether this is an arm
+    bug, a caller-authorization boundary working correctly, or -- this one
+    -- a canonical service exercising its own authority over what the frame
+    may cite. None of the three is the others, and collapsing any two would
+    misreport an honest refusal as a defect or a defect as a refusal.
+
+    Caught in :func:`build_packet`, not left to propagate: unlike the other
+    two, this one must not abort the whole packet. A driver whose support
+    the canonical service refused is dropped and disclosed; every driver
+    that does not cite the refused record is unaffected. See
+    ``_driver_candidates`` for where the catch happens and
+    ``PacketLimitationKind.AUTHORIZATION_FILTERED``'s existing
+    ``admission_refused`` disclosure for where the drop becomes visible to
+    a reader -- the count already included these records before this fix;
+    what changes is that a driver citing one no longer takes the rest of
+    the packet down with it.
     """
 
 
@@ -549,11 +575,13 @@ def _driver_candidate(
     known_subject_ids: Container[str],
     filtered_ids: Container[str],
     path_relevance: Mapping[str, RelevanceState],
+    admission_refused_ids: Container[str] = (),
 ) -> DriverCandidate:
     """One structural finding, as the frozen contract's driver candidate.
 
     Evidence is translated from canonical observation ids to the handles
-    this run minted, and an id with no handle **raises**.
+    this run minted, and an id with no handle **raises** -- one of three
+    ways, and CHAOS-3650 is the reason there are three rather than two.
 
     The first version dropped such ids silently. That branch turned out to be
     unreachable in every world under test — the guard-injection harness
@@ -562,7 +590,14 @@ def _driver_candidate(
     reachable and correct: a finding citing evidence this packet does not
     carry is an internal inconsistency between discovery and emission, and
     the honest response is to fail rather than to quietly emit a driver with
-    less support than it was built from.
+    less support than it was built from -- for the ids that ARE that
+    inconsistency. ``admission_refused_ids`` is the third case (CHAOS-3650)
+    that is not: the canonical evidence service declined to admit a record
+    the arm's traversal genuinely reached, which is the service exercising
+    its own authority, not the arm disagreeing with itself. That case raises
+    :class:`CanonicalEvidenceRefusedError`, which :func:`build_packet`
+    catches per finding and turns into a drop-and-disclose rather than a
+    packet-wide abort -- see the exception's own docstring.
     """
 
     def handles(ids: Sequence[str], role: str) -> tuple[str, ...]:
@@ -570,8 +605,23 @@ def _driver_candidate(
         if missing:
             # CHAOS-3627 fix round 2, verifier N1. Two very different things
             # were reaching this one raise, and only one of them is an
-            # internal inconsistency.
-            #
+            # internal inconsistency. CHAOS-3650 adds a third check, ahead of
+            # both: a canonically refused id is neither an authorization
+            # withholding nor an unobserved one, and checking for it first
+            # keeps the other two branches meaning exactly what their
+            # messages say -- an id that is BOTH withheld and refused cannot
+            # occur (see ``build_packet``'s own comment on why those two sets
+            # are disjoint by construction), so order does not trade one
+            # misclassification for another.
+            refused = sorted(item for item in missing if item in admission_refused_ids)
+            if refused:
+                raise CanonicalEvidenceRefusedError(
+                    f"driver {finding.driver_id} rests on {role} evidence the "
+                    f"canonical service declined to admit: {refused}. The arm "
+                    "reached these records; the service did not mint a "
+                    "handle for them, which is the service's own authority "
+                    "over what this frame may cite, not an arm defect"
+                )
             # An id the AUTHORIZATION FILTER removed -- because the record it
             # names is about an entity outside this caller's grant -- is the
             # arm working correctly on a partial grant. Raising there turned a
@@ -1417,6 +1467,15 @@ def build_packet(
     #: the ARM withholding an entity it may not name, this one is the
     #: canonical service withholding a record the arm asked about.
     admission_refused: set[str] = set()
+    #: CHAOS-3650. The SAME refusals as ``admission_refused``, keyed by the
+    #: observation's own canonical id rather than its admission locator --
+    #: what ``_driver_candidate`` needs, since a finding's ``evidence_ids``
+    #: are canonical ids and the two are not always equal (the locator falls
+    #: back to the canonical id only when no source-issued evidence id is
+    #: attached; see ``_admission_locator``). Populated at both refusal
+    #: sites below, alongside ``admission_refused`` rather than derived from
+    #: it, so the two can never drift apart.
+    admission_refused_observation_ids: set[str] = set()
     #: handle -> the admitted ref, so the entry can carry it VERBATIM.
     admitted_by_handle: dict[str, DevEvidenceRefV2] = {}
     for observation, supports in indexable:
@@ -1431,6 +1490,7 @@ def build_packet(
             admitted = admitted_evidence.get(_admission_locator(observation))
             if admitted is None:
                 admission_refused.add(_admission_locator(observation))
+                admission_refused_observation_ids.add(observation.canonical_id)
                 continue
             handle = admitted.evidence_ref_id
             admitted_by_handle[handle] = admitted
@@ -1482,6 +1542,7 @@ def build_packet(
             cited = admitted_evidence.get(_admission_locator(observation))
             if cited is None:
                 admission_refused.add(_admission_locator(observation))
+                admission_refused_observation_ids.add(observation.canonical_id)
                 continue
             handle = cited.evidence_ref_id
             admitted_by_handle[handle] = cited
@@ -1970,16 +2031,38 @@ def build_packet(
         | {member.canonical_id for member in cohort_members}
         | known_entity_ids
     )
-    driver_candidates = tuple(
-        _driver_candidate(
-            finding,
-            handle_by_observation,
-            known_subject_ids,
-            withheld_observation_ids,
-            path_relevance,
-        )
-        for finding in drivers or ()
-    )
+    # CHAOS-3650. A per-finding catch, not a comprehension: a driver whose
+    # evidence the canonical service refused must be dropped on its own,
+    # never take an unrelated sibling driver down with it. Every OTHER
+    # raise out of ``_driver_candidate`` -- an authorization withholding, or
+    # a genuinely unindexed id -- is still a packet-wide abort, unchanged;
+    # only ``CanonicalEvidenceRefusedError`` is caught here.
+    #
+    # The dropped driver_id is not carried further: the record it rested on
+    # is already counted in ``admission_refused`` and already disclosed by
+    # the AUTHORIZATION_FILTERED limitation below ("... and are not cited
+    # by this packet" -- now literally true for a driver that cited one,
+    # where before this fix the packet would not have constructed at all).
+    # A per-driver disclosure field would be a frozen-contract addition
+    # (new ``PacketLimitationKind``/``DriverExclusionReason`` member) this
+    # lane does not have standing to make unilaterally; see the PR/issue for
+    # the proposal posted for a contract owner's decision.
+    driver_candidates_list: list[DriverCandidate] = []
+    for finding in drivers or ():
+        try:
+            driver_candidates_list.append(
+                _driver_candidate(
+                    finding,
+                    handle_by_observation,
+                    known_subject_ids,
+                    withheld_observation_ids,
+                    path_relevance,
+                    admission_refused_observation_ids,
+                )
+            )
+        except CanonicalEvidenceRefusedError:
+            continue
+    driver_candidates = tuple(driver_candidates_list)
     # Evidence entries now name the drivers that cite them. Without this the
     # index and the drivers agree only in one direction: a driver could point
     # at an entry that never claimed to support it, which is how unrelated

@@ -50,7 +50,12 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from dev_health_ops.api.dev.investigation_contract import RelationshipType
 
 from . import identity
-from .projection import GraphEdge, GraphNode, GraphProjection
+from .projection import (
+    GraphEdge,
+    GraphNode,
+    GraphProjection,
+    withheld_if_instruction_shaped,
+)
 from .vocabulary import GraphObservationKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -637,7 +642,17 @@ async def to_graphiti_document_nodes(
     * ``name`` is the document's ``title``, never its ``body`` --
       :func:`to_graphiti_nodes`'s own "no prose" rule applies here exactly as
       it does to every other node; the graph carries no rendered document
-      text as a display name.
+      text as a display name. The title itself passes through
+      :func:`~.projection.withheld_if_instruction_shaped` first (CHAOS-3637)
+      -- an attacker-controlled title is exactly as attacker-controlled as
+      an entity's display label or an observation's title, both of which
+      this arm already withholds when instruction-shaped; a document title
+      was the one place that check did not reach until this revision,
+      confirmed by reading ``projection._entity_node``/``_observation_node``
+      directly rather than assumed. Withheld, not refused: dropping the
+      document over a poisoned title would let an attacker erase their own
+      incriminating document from every packet with a clean audit trail --
+      the exact dual of CHAOS-3637's own reasoning for entities.
     * ``cf_entity_kind`` is never set (a document is not an entity); the
       node is an OBSERVATION of kind :attr:`~.vocabulary.GraphObservationKind.
       DOCUMENT`, exactly like every other structured record CHAOS-3617
@@ -692,7 +707,7 @@ async def to_graphiti_document_nodes(
                     GraphObservationKind.DOCUMENT,
                     document.canonical_id,
                 ),
-                name=document.title,
+                name=withheld_if_instruction_shaped(document.title),
                 group_id=projection.partition,
                 labels=[f"CFObs{GraphObservationKind.DOCUMENT.value.title()}"],
                 created_at=document.observed_at,

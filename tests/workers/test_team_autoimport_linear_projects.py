@@ -130,7 +130,18 @@ def test_generated_page_carries_the_fields_the_worker_reads() -> None:
     selects every field :func:`_linear_project_records` depends on."""
 
     selection = _projects_node_selection()
-    for required in ("id", "name", "updatedAt", "archivedAt", "trashed", "status"):
+    for required in (
+        "id",
+        "name",
+        "updatedAt",
+        "archivedAt",
+        "trashed",
+        "status",
+        "targetDate",
+        "url",
+        "teams",
+        "lead",
+    ):
         assert required in selection, (
             f"PROJECTS_QUERY stopped selecting {required!r}; the Linear project "
             "catalog rows silently lose their id/name/version/activity source."
@@ -621,6 +632,11 @@ def test_linear_lifecycle_fields_are_stored_verbatim(
     )
     assert row.target_date == date(2026, 9, 1)
     assert row.url.endswith(ASK_DEV_PROJECT_ID)
+    assert row.team_ids == ["team-1"]
+    assert row.team_keys == ["CHAOS"]
+    assert row.lead_id == "usr-1"
+    assert row.lead_name == "Dev User"
+    assert row.lead_email == "dev@example.com"
     # Storing lifecycle must not leak back into resolvability.
     assert row.is_active == 1
 

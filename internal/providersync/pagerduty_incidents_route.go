@@ -23,7 +23,6 @@ const (
 	pagerDutyIncidentFamilyMaxRows       = 100_000
 	pagerDutyIncidentFamilyPerPage       = 100
 	pagerDutyIncidentFamilyEnrichmentCap = 100
-	pagerDutyIncidentFamilyMaxChildPages = 10_000
 )
 
 // PagerDuty's incident family has one parent stream and three independently
@@ -846,10 +845,6 @@ func pagerDutyStringOrFallback(values ...*string) string {
 		}
 	}
 	return ""
-}
-
-func pagerDutyStringOrID(values ...*string) string {
-	return pagerDutyStringOrFallback(values...)
 }
 
 func pagerDutyURL(htmlURL, selfURL *string) *string {

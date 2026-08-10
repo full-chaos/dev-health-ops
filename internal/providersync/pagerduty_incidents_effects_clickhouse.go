@@ -249,7 +249,8 @@ func validatePagerDutyIncidentRows(claim Claim, providerInstance string, rows []
 		canonical.OrderingContract = 0
 		if err := fillPagerDutyIncidentOrdering(&canonical); err != nil ||
 			canonical.ID != row.ID || canonical.SourceConflictKey != row.SourceConflictKey ||
-			canonical.SourceRevision.Cmp(row.SourceRevision) != 0 || canonical.IngestRevision.Cmp(row.IngestRevision) != 0 {
+			canonical.SourceRevision.Cmp(row.SourceRevision) != 0 || canonical.IngestRevision.Cmp(row.IngestRevision) != 0 ||
+			canonical.OrderingContract != row.OrderingContract {
 			return providerfoundation.ErrInvalidScope
 		}
 	}
@@ -278,7 +279,7 @@ func validatePagerDutyAlertRows(claim Claim, providerInstance string, rows []pag
 		canonical.OrderingContract = 0
 		if err := fillPagerDutyAlertOrdering(&canonical); err != nil || canonical.ID != row.ID ||
 			canonical.SourceConflictKey != row.SourceConflictKey || canonical.SourceRevision.Cmp(row.SourceRevision) != 0 ||
-			canonical.IngestRevision.Cmp(row.IngestRevision) != 0 {
+			canonical.IngestRevision.Cmp(row.IngestRevision) != 0 || canonical.OrderingContract != row.OrderingContract {
 			return providerfoundation.ErrInvalidScope
 		}
 	}
@@ -305,7 +306,7 @@ func validatePagerDutyLogEntryRows(claim Claim, providerInstance string, rows []
 		canonical.OrderingContract = 0
 		if err := fillPagerDutyLogEntryOrdering(&canonical); err != nil || canonical.ID != row.ID ||
 			canonical.SourceConflictKey != row.SourceConflictKey || canonical.SourceRevision.Cmp(row.SourceRevision) != 0 ||
-			canonical.IngestRevision.Cmp(row.IngestRevision) != 0 {
+			canonical.IngestRevision.Cmp(row.IngestRevision) != 0 || canonical.OrderingContract != row.OrderingContract {
 			return providerfoundation.ErrInvalidScope
 		}
 	}
@@ -332,7 +333,7 @@ func validatePagerDutyNoteRows(claim Claim, providerInstance string, rows []page
 		canonical.OrderingContract = 0
 		if err := fillPagerDutyNoteOrdering(&canonical); err != nil || canonical.ID != row.ID ||
 			canonical.SourceConflictKey != row.SourceConflictKey || canonical.SourceRevision.Cmp(row.SourceRevision) != 0 ||
-			canonical.IngestRevision.Cmp(row.IngestRevision) != 0 {
+			canonical.IngestRevision.Cmp(row.IngestRevision) != 0 || canonical.OrderingContract != row.OrderingContract {
 			return providerfoundation.ErrInvalidScope
 		}
 	}

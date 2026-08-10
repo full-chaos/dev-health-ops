@@ -79,6 +79,11 @@ func TestPagerDutyIncidentFamilyEffectsValidateEachTypedDestinationAndScope(t *t
 	if err := validatePagerDutyIncidentRows(claim, "acme", []pagerDutyIncidentRow{tampered}); !errors.Is(err, providerfoundation.ErrInvalidScope) {
 		t.Fatalf("ordering tamper error=%v", err)
 	}
+	contractTampered := incident
+	contractTampered.OrderingContract = 3
+	if err := validatePagerDutyIncidentRows(claim, "acme", []pagerDutyIncidentRow{contractTampered}); !errors.Is(err, providerfoundation.ErrInvalidScope) {
+		t.Fatalf("ordering contract tamper error=%v", err)
+	}
 	if err := validatePagerDutyIncidentRows(claim, "acme", []pagerDutyIncidentRow{incident, incident}); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("duplicate error=%v", err)
 	}

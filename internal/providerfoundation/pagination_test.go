@@ -183,6 +183,53 @@ func TestGitLabPaginationUsesHeaderThenItemCountFallback(t *testing.T) {
 	}
 }
 
+func TestPagerDutyOffsetPaginationUsesReturnedLengthAndMore(t *testing.T) {
+	t.Parallel()
+	doer := &paginationDoer{responses: []paginationResponse{
+		{body: `{"escalation_policies":[{"id":"one"},{"id":"two"}],"more":true}`},
+		{body: `{"escalation_policies":[{"id":"three"}],"more":false}`},
+	}}
+	client := paginationClient(t, "pagerduty", "https://api.pagerduty.com", doer)
+	result, err := CollectPagerDutyOffsetPages(context.Background(), client, PagerDutyOffsetOptions{
+		Path: "/escalation_policies", DataKey: "escalation_policies", PerPage: 100, MaxPages: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Pages != 2 || result.CapReached || len(result.Items) != 3 {
+		t.Fatalf("result=%+v", result)
+	}
+	if got := doer.requests[0].URL.RawQuery; got != "limit=100&offset=0" {
+		t.Fatalf("first query=%q", got)
+	}
+	if got := doer.requests[1].URL.RawQuery; got != "limit=100&offset=2" {
+		t.Fatalf("second query=%q", got)
+	}
+}
+
+func TestPagerDutyOffsetPaginationRejectsMalformedOrNonProgressingPages(t *testing.T) {
+	t.Parallel()
+	for name, body := range map[string]string{
+		"missing collection": `{"more":false}`,
+		"null collection":    `{"escalation_policies":null,"more":false}`,
+		"missing more":       `{"escalation_policies":[]}`,
+		"null more":          `{"escalation_policies":[],"more":null}`,
+		"wrong more type":    `{"escalation_policies":[],"more":"false"}`,
+		"empty progress":     `{"escalation_policies":[],"more":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			doer := &paginationDoer{responses: []paginationResponse{{body: body}}}
+			client := paginationClient(t, "pagerduty", "https://api.pagerduty.com", doer)
+			_, err := CollectPagerDutyOffsetPages(context.Background(), client, PagerDutyOffsetOptions{
+				Path: "/escalation_policies", DataKey: "escalation_policies", PerPage: 100, MaxPages: 10,
+			})
+			if !errors.Is(err, ErrPaginationInvalid) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestGitLabMalformedNextPageStopsWithoutSpeculation(t *testing.T) {
 	t.Parallel()
 	doer := &paginationDoer{responses: []paginationResponse{{

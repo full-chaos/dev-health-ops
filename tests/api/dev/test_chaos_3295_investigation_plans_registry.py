@@ -60,9 +60,12 @@ def test_totality_every_core_intent_has_a_registered_plan():
             QuestionIntentID.OPERATIONAL_DEFICIENCY_INVENTORY,
             QuestionIntentID.PORTFOLIO_STATUS,
             QuestionIntentID.BOUNDED_INVESTIGATION,
+            QuestionIntentID.DISCOVERED_COHORT,
         }:
             # Explicitly out of CHAOS-3295 scope (3303/3304/3305, or never
-            # plan-governed at all for BOUNDED_INVESTIGATION).
+            # plan-governed at all for BOUNDED_INVESTIGATION and, per
+            # CHAOS-3652, DISCOVERED_COHORT -- it routes to the graph-assisted
+            # investigation seam, not a ``DevInvestigationPlan``).
             continue
         assert intent_id in CORE_PLANS_BY_INTENT, f"{intent_id} has no core plan"
 

@@ -278,6 +278,77 @@ def test_message_request_v2_has_no_authoritative_question_class_field() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-3652: DISCOVERED_COHORT requires organization-wide cardinality
+# (mutate-per-clause: each direction of the implication is tested
+# independently, plus a positive control proving the new clause doesn't
+# over-reject an unrelated intent/cardinality combination).
+# ---------------------------------------------------------------------------
+
+
+def _discovered_cohort_payload() -> dict[str, Any]:
+    payload = deepcopy(positive_fixtures()["dev_question_intent.v1"])
+    payload["intent_id"] = "discovered_cohort"
+    payload["cardinality"] = "organization_wide"
+    payload["subject_kinds"] = []
+    payload["mention_ordinals"] = []
+    payload["interpretation_reasons"] = ["cohort.discovery"]
+    return payload
+
+
+def test_discovered_cohort_accepts_organization_wide_cardinality() -> None:
+    """Positive control: the new clause must not over-reject the one
+    combination it exists to allow."""
+
+    intent = v2.DevQuestionIntent.model_validate(_discovered_cohort_payload())
+    assert intent.intent_id is v2.QuestionIntentID.DISCOVERED_COHORT
+    assert intent.cardinality is v2.Cardinality.ORGANIZATION_WIDE
+
+
+def test_discovered_cohort_rejects_singular_cardinality() -> None:
+    """CHAOS-3652 load-bearing guardrail, clause direction 1 of 2: a named
+    (even if unresolved) subject must never carry the ``DISCOVERED_COHORT``
+    intent -- that would be organization/cohort widening for a named
+    subject, which Wave 3.2 forbids structurally, not just by convention."""
+
+    payload = _discovered_cohort_payload()
+    payload["cardinality"] = "singular"
+    payload["subject_kinds"] = ["team"]
+    payload["mention_ordinals"] = [0]
+    with pytest.raises(ValidationError, match="discovered-cohort intent requires"):
+        v2.DevQuestionIntent.model_validate(payload)
+
+
+def test_discovered_cohort_rejects_plural_cohort_cardinality() -> None:
+    """CHAOS-3652 load-bearing guardrail, clause direction 2 of 2: an
+    explicit (named) cohort must never carry the ``DISCOVERED_COHORT``
+    intent -- that intent means "the graph discovered this cohort", not
+    "the user named these subjects"."""
+
+    payload = _discovered_cohort_payload()
+    payload["cardinality"] = "plural_cohort"
+    payload["subject_kinds"] = ["team"]
+    payload["mention_ordinals"] = [0, 1]
+    with pytest.raises(ValidationError, match="discovered-cohort intent requires"):
+        v2.DevQuestionIntent.model_validate(payload)
+
+
+def test_organization_wide_cardinality_is_unaffected_for_other_intents() -> None:
+    """Scope check: the new clause is gated on
+    ``intent_id is DISCOVERED_COHORT`` -- confirm it does not fire for an
+    unrelated intent that also happens to carry organization-wide
+    cardinality (e.g. today's ``BOUNDED_INVESTIGATION`` catch-all)."""
+
+    payload = deepcopy(positive_fixtures()["dev_question_intent.v1"])
+    payload["intent_id"] = "bounded_investigation"
+    payload["cardinality"] = "organization_wide"
+    payload["subject_kinds"] = []
+    payload["mention_ordinals"] = []
+    payload["interpretation_reasons"] = ["recognizer.none"]
+    intent = v2.DevQuestionIntent.model_validate(payload)
+    assert intent.intent_id is v2.QuestionIntentID.BOUNDED_INVESTIGATION
+
+
+# ---------------------------------------------------------------------------
 # TEAM as a first-class subject kind (v2 contract layer only)
 # ---------------------------------------------------------------------------
 

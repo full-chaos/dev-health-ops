@@ -369,6 +369,11 @@ type LinearWorkItemsRouteHandler struct {
 // blank provider as provider-agnostic; the native resolver below preserves
 // those semantics exactly.
 type LinearReferenceTeam struct {
+	// OrgID is populated by the reference catalog.  Existing callers that pass
+	// a provider-only cache may leave it blank; the legacy resolver below keeps
+	// that behavior, while tenant-aware catalog resolution requires an exact
+	// match through linearReferenceTeamPayloadForOrg.
+	OrgID         string
 	Provider      string
 	ID            string
 	Name          string
@@ -423,10 +428,22 @@ func linearReferenceTeamPayload(
 
 func (handler LinearWorkItemsRouteHandler) resolveLinearTeam(
 	ctx context.Context,
+	claim Claim,
 	client *providerfoundation.HTTPClient,
 	teamKey string,
 ) (linearTeamPayload, int, error) {
-	if team, ok := linearReferenceTeamPayload(handler.ReferenceTeams, teamKey); ok {
+	tenantScoped := false
+	for _, reference := range handler.ReferenceTeams {
+		if strings.TrimSpace(reference.OrgID) != "" {
+			tenantScoped = true
+			break
+		}
+	}
+	if tenantScoped {
+		if team, ok := linearReferenceTeamPayloadForOrg(handler.ReferenceTeams, claim.OrgID, teamKey); ok {
+			return team, 0, nil
+		}
+	} else if team, ok := linearReferenceTeamPayload(handler.ReferenceTeams, teamKey); ok {
 		return team, 0, nil
 	}
 	return collectLinearTeam(ctx, client, teamKey)
@@ -892,7 +909,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 	// Python resolves the scoped team before it starts the issue crawl even
 	// when cycles are disabled.  That check prevents a malformed or stale
 	// source external id from producing a clean-looking empty work-item batch.
-	team, teamPages, teamErr := handler.resolveLinearTeam(ctx, client, claim.SourceExternalID)
+	team, teamPages, teamErr := handler.resolveLinearTeam(ctx, claim, client, claim.SourceExternalID)
 	pagesSeen += teamPages
 	if teamErr != nil {
 		return CompleteRouteBatch{}, teamErr

@@ -110,7 +110,7 @@ func (engine *GitHubWorkItemEngineDeriver) Derive(
 ) (map[string][]json.RawMessage, error) {
 	if ctx == nil || engine == nil || engine.statusMapping == nil ||
 		engine.investmentClassifier == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || !isWorkItemFamilyDataset(claim.Dataset) ||
+		!isDerivedWorkItemProvider(claim.Provider) || !isWorkItemFamilyDataset(claim.Dataset) ||
 		day.IsZero() || computedAt.IsZero() {
 		return nil, ErrInvalidConfiguration
 	}

@@ -191,7 +191,11 @@ func githubWorkItemMetricTripletOracleResult(
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim := nativeTestClaim("github", "work-items")
+	provider := "github"
+	if len(decoded.WorkItems) > 0 && decoded.WorkItems[0].Provider != "" {
+		provider = decoded.WorkItems[0].Provider
+	}
+	claim := nativeTestClaim(provider, "work-items")
 	claim.OrgID = decoded.OrgID
 	rows := githubWorkItemRows{
 		WorkItems:         decoded.WorkItems,

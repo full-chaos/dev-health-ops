@@ -147,7 +147,7 @@ func loadGitHubWorkItemDerivationContext(
 	asOf time.Time,
 ) (githubWorkItemDerivationContext, error) {
 	if ctx == nil || source == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "work-items" || asOf.IsZero() {
+		!isDerivedWorkItemProvider(claim.Provider) || claim.Dataset != "work-items" || asOf.IsZero() {
 		return githubWorkItemDerivationContext{}, ErrInvalidConfiguration
 	}
 	for _, row := range rows.WorkItems {
@@ -774,7 +774,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) Load(
 	request githubWorkItemDerivationLoadRequest,
 ) (githubWorkItemDerivationFacts, error) {
 	if ctx == nil || source.Conn == nil || source.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "work-items" || request.AsOf.IsZero() {
+		!isDerivedWorkItemProvider(claim.Provider) || claim.Dataset != "work-items" || request.AsOf.IsZero() {
 		return githubWorkItemDerivationFacts{}, ErrInvalidConfiguration
 	}
 	if err := source.Lease.Assert(ctx); err != nil {

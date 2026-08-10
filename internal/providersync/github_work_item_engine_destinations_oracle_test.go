@@ -188,7 +188,15 @@ func buildGitHubWorkItemEngineOracleRows(
 	[]githubInvestmentMetricsDailyRow,
 ) {
 	t.Helper()
-	claim := githubWorkItemOracleClaim()
+	provider := "github"
+	if items, ok := input["WorkItems"].([]any); ok && len(items) > 0 {
+		if item, ok := items[0].(map[string]any); ok {
+			if value, ok := item["provider"].(string); ok && value != "" {
+				provider = value
+			}
+		}
+	}
+	claim := nativeTestClaim(provider, "work-items")
 	claim.OrgID = input["OrgID"].(string)
 	if sinceRaw, ok := input["SinceAt"].(string); ok {
 		since := githubDerivedOracleTime(t, sinceRaw)
@@ -209,6 +217,11 @@ func buildGitHubWorkItemEngineOracleRows(
 			rows.WorkItems, githubDerivedOracleGoItem(t, raw.(map[string]any)),
 		)
 	}
+	for _, raw := range githubDerivedOracleList(input, "Dependencies") {
+		rows.Dependencies = append(
+			rows.Dependencies, githubDerivedOracleGoDependency(t, raw.(map[string]any)),
+		)
+	}
 	encodedFacts, err := json.Marshal(input["Facts"])
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +229,15 @@ func buildGitHubWorkItemEngineOracleRows(
 	var facts githubWorkItemDerivationFacts
 	if err := json.Unmarshal(encodedFacts, &facts); err != nil {
 		t.Fatal(err)
+	}
+	// The Python helper merges persisted donor subjects with freshly synced
+	// rows before resolving linked-issue inheritance. Feed the same donors
+	// through the real context loader seam for both provider variants; omitting
+	// them makes a linked donor case silently fall back to the unassigned team.
+	for _, raw := range githubDerivedOracleList(input, "Donors") {
+		facts.DonorItems = append(facts.DonorItems, githubWorkItemDerivationSubjectFromRow(
+			githubDerivedOracleGoItem(t, raw.(map[string]any)),
+		))
 	}
 	statusMapping := loadRealStatusMapping(t)
 	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))

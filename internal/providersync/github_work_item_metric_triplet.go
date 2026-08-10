@@ -167,7 +167,7 @@ func buildGitHubWorkItemMetricTriplet(
 	computedAt time.Time,
 	derived githubWorkItemDerivationContext,
 ) (githubWorkItemMetricTriplet, error) {
-	if claim.Validate() != nil || claim.Provider != "github" ||
+	if claim.Validate() != nil || !isDerivedWorkItemProvider(claim.Provider) ||
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
 		return githubWorkItemMetricTriplet{}, ErrInvalidConfiguration
 	}

@@ -151,7 +151,7 @@ func buildGitHubWorkItemDerivedSurfaces(
 	computedAt time.Time,
 	derived githubWorkItemDerivationContext,
 ) (githubWorkItemDerivedSurfaces, error) {
-	if claim.Validate() != nil || claim.Provider != "github" ||
+	if claim.Validate() != nil || !isDerivedWorkItemProvider(claim.Provider) ||
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
 		return githubWorkItemDerivedSurfaces{}, ErrInvalidConfiguration
 	}

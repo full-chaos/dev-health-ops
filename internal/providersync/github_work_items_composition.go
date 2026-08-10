@@ -314,7 +314,7 @@ func (deriver GitHubWorkItemDeriver) Derive(
 	normalizedAt time.Time,
 ) (map[string][]json.RawMessage, error) {
 	if ctx == nil || deriver.Source == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "work-items" ||
+		!isDerivedWorkItemProvider(claim.Provider) || claim.Dataset != "work-items" ||
 		normalizedAt.IsZero() {
 		return nil, ErrInvalidConfiguration
 	}

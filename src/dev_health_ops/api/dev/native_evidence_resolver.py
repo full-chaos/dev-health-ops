@@ -270,14 +270,17 @@ class NativeEvidenceCandidateResolver:
     ``repo_id`` is not, so this is the first resolver with a genuine
     per-row choice between the two paths).
 
-    ``commit``/``ci_run`` are a deliberate, recorded gap, not an oversight:
-    neither ``git_commits`` nor ``ci_pipeline_runs`` has any PR/issue link
-    column, and the only possible linkage -- the generic ``work_graph_edges``
-    table -- carries a ``provenance``/``confidence`` spread (native,
-    explicit_text, heuristic) that needs its own trust-threshold design
-    decision before it can safely grant entity-level authorization. Per
-    the CHAOS-3675 PR 3/3 scope-lock: refusing these two with the gap
-    recorded beats a speculative join.
+    ``commit``/``ci_run`` are a deliberate, recorded gap, not an oversight,
+    tracked as `CHAOS-3685
+    <https://linear.app/fullchaos/issue/CHAOS-3685>`_ (not just this
+    docstring -- a requirement stated only in prose does not survive
+    triage): neither ``git_commits`` nor ``ci_pipeline_runs`` has any
+    PR/issue link column, and the only possible linkage -- the generic
+    ``work_graph_edges`` table -- carries a ``provenance``/``confidence``
+    spread (native, explicit_text, heuristic) that needs its own
+    trust-threshold design decision before it can safely grant
+    entity-level authorization. Per the CHAOS-3675 PR 3/3 scope-lock:
+    refusing these two with the gap recorded beats a speculative join.
     """
 
     def __init__(

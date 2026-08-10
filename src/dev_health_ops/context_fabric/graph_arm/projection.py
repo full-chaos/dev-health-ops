@@ -92,12 +92,15 @@ from .vocabulary import (
 
 __all__ = [
     "ALIAS_SIGNAL",
+    "IDENTIFIER_POLICY_VERSION",
     "MAX_ATTRIBUTE_CHARS",
+    "MAX_IDENTIFIER_CHARS",
     "READBACK_ATTRIBUTE_KEYS",
     "PROJECTION_VERSION",
     "GraphEdge",
     "GraphNode",
     "GraphProjection",
+    "IdentifierRefusal",
     "ProjectionError",
     "build_projection",
 ]
@@ -113,6 +116,19 @@ PROJECTION_VERSION = "graph_arm_projection.v1"
 #: comfortably more than any identifier, status token or provider key, and
 #: comfortably less than a sentence anyone would call a summary.
 MAX_ATTRIBUTE_CHARS = 256
+
+#: Source-issued identifiers are not labels.  They become storage addresses,
+#: edge endpoints and evidence references, so accepting prose here would let
+#: source-controlled instruction text cross the structured projection
+#: boundary.  The bound deliberately matches the existing structured-value
+#: ceiling: it is large enough for provider paths and composite keys while
+#: still preventing an identifier from becoming a payload carrier.
+MAX_IDENTIFIER_CHARS = MAX_ATTRIBUTE_CHARS
+
+#: Bumped when the accepted source-id grammar or refusal reasons change.  The
+#: value is included in bounded refusal telemetry so an operator can tell
+#: which policy refused a record without seeing its source content.
+IDENTIFIER_POLICY_VERSION = "graph_arm_source_identifier.v1"
 
 #: The attribute keys the arm commits to reading BACK out of the store.
 #:
@@ -154,6 +170,142 @@ READBACK_ATTRIBUTE_KEYS: tuple[str, ...] = (
 )
 
 _ATTRIBUTE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+#: The default machine-id shape used by every closed source class.  Provider
+#: adapters use the same identity vocabulary but different delimiters: Jira
+#: keys use ``ABC-123``, GitHub uses ``owner/repo#123``, GitLab can use
+#: ``group/project!42``, and ACR uses underscore-delimited ids.  Whitespace
+#: and sentence punctuation are intentionally outside this grammar.
+_SOURCE_IDENTIFIER_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#@+~!\-]{0,255}$")
+_MACHINE_TOKEN_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,255}$")
+_CONTROL_KEY_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-]{0,255}$")
+
+
+@dataclass(frozen=True, slots=True)
+class _IdentifierPolicy:
+    """Versioned adapter choice for one closed source class."""
+
+    adapter: str
+    shape: re.Pattern[str]
+
+
+# Keep this opt-in list explicit.  Adding a new closed source class must also
+# choose an identifier adapter here; a dict comprehension over ``SourceClass``
+# would silently give a new source a policy it had never reviewed.
+_SOURCE_IDENTIFIER_POLICY_SOURCES = (
+    SourceClass.STATUS_CHANGE,
+    SourceClass.WORK_ITEM,
+    SourceClass.WORK_GRAPH,
+    SourceClass.PULL_REQUEST,
+    SourceClass.CODE_CHANGE,
+    SourceClass.REVIEW,
+    SourceClass.CI_RUN,
+    SourceClass.TEST_REPORT,
+    SourceClass.DEPLOYMENT,
+    SourceClass.INCIDENT,
+    SourceClass.OPERATIONAL_CONTROL,
+    SourceClass.SOURCE_HEALTH,
+    SourceClass.COGNITIVE_LOAD,
+    SourceClass.INVESTMENT_ALLOCATION,
+    SourceClass.HEALTH_PROFILE,
+    SourceClass.DEFICIENCY_INVENTORY,
+    SourceClass.TEMPORAL_CONTEXT,
+)
+_SOURCE_IDENTIFIER_POLICIES: Mapping[SourceClass, _IdentifierPolicy] = {
+    SourceClass.STATUS_CHANGE: _IdentifierPolicy("machine_token", _MACHINE_TOKEN_SHAPE),
+    SourceClass.WORK_ITEM: _IdentifierPolicy(
+        "provider_composite", _SOURCE_IDENTIFIER_SHAPE
+    ),
+    SourceClass.WORK_GRAPH: _IdentifierPolicy(
+        "provider_composite", _SOURCE_IDENTIFIER_SHAPE
+    ),
+    SourceClass.PULL_REQUEST: _IdentifierPolicy(
+        "provider_composite", _SOURCE_IDENTIFIER_SHAPE
+    ),
+    SourceClass.CODE_CHANGE: _IdentifierPolicy("machine_token", _MACHINE_TOKEN_SHAPE),
+    SourceClass.REVIEW: _IdentifierPolicy(
+        "provider_composite", _SOURCE_IDENTIFIER_SHAPE
+    ),
+    SourceClass.CI_RUN: _IdentifierPolicy(
+        "provider_composite", _SOURCE_IDENTIFIER_SHAPE
+    ),
+    SourceClass.TEST_REPORT: _IdentifierPolicy(
+        "provider_composite", _SOURCE_IDENTIFIER_SHAPE
+    ),
+    SourceClass.DEPLOYMENT: _IdentifierPolicy(
+        "provider_composite", _SOURCE_IDENTIFIER_SHAPE
+    ),
+    SourceClass.INCIDENT: _IdentifierPolicy("machine_token", _MACHINE_TOKEN_SHAPE),
+    SourceClass.OPERATIONAL_CONTROL: _IdentifierPolicy(
+        "control_key", _CONTROL_KEY_SHAPE
+    ),
+    SourceClass.SOURCE_HEALTH: _IdentifierPolicy("machine_token", _MACHINE_TOKEN_SHAPE),
+    SourceClass.COGNITIVE_LOAD: _IdentifierPolicy(
+        "machine_token", _MACHINE_TOKEN_SHAPE
+    ),
+    SourceClass.INVESTMENT_ALLOCATION: _IdentifierPolicy(
+        "machine_token", _MACHINE_TOKEN_SHAPE
+    ),
+    SourceClass.HEALTH_PROFILE: _IdentifierPolicy(
+        "machine_token", _MACHINE_TOKEN_SHAPE
+    ),
+    SourceClass.DEFICIENCY_INVENTORY: _IdentifierPolicy(
+        "machine_token", _MACHINE_TOKEN_SHAPE
+    ),
+    SourceClass.TEMPORAL_CONTEXT: _IdentifierPolicy(
+        "machine_token", _MACHINE_TOKEN_SHAPE
+    ),
+}
+_IDENTIFIER_WORDS = re.compile(r"[a-z0-9]+")
+_PROSE_MARKERS = frozenset(
+    {
+        "all",
+        "and",
+        "disclose",
+        "follow",
+        "for",
+        "from",
+        "ignore",
+        "instructions",
+        "message",
+        "now",
+        "or",
+        "please",
+        "previous",
+        "reveal",
+        "secrets",
+        "share",
+        "system",
+        "tenant",
+        "the",
+        "this",
+        "to",
+        "with",
+    }
+)
+_INSTRUCTION_ID_PHRASES = (
+    "ignore previous instruction",
+    "ignore prior instruction",
+    "ignore all previous instruction",
+    "disregard previous instruction",
+    "disregard prior instruction",
+    "forget previous instruction",
+    "follow these instruction",
+    "override system message",
+    "override system prompt",
+    "ignore system prompt",
+    "system message",
+    "reveal secrets",
+    "ignore previous",
+    "reveal hidden context",
+    "reveal hidden instruction",
+    "disclose tenant",
+    "disclose all tenant",
+    "leak tenant",
+    "dump secrets",
+    "list secrets",
+    "delete all record",
+)
 
 #: A source-issued handle must satisfy the frozen contract's grammar before it
 #: is stored. Refused at ingestion rather than repaired: a handle is an
@@ -256,8 +408,265 @@ ALIAS_SIGNAL: Mapping[AliasKind, SubjectMatchSignal] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class IdentifierRefusal:
+    """The content-free operational shape of an identifier refusal.
+
+    Every value in this object comes from a closed source/record/field/reason
+    vocabulary selected by the projection, never from the rejected id.  It is
+    safe to put on a worker outcome or in a health log.
+    """
+
+    source_class: SourceClass | None
+    record_type: str
+    field: str
+    reason: str
+    adapter: str = "unknown"
+    policy_version: str = IDENTIFIER_POLICY_VERSION
+
+    def safe_detail(self) -> str:
+        source = (
+            self.source_class.value
+            if isinstance(self.source_class, SourceClass)
+            else "unknown"
+        )
+        detail = (
+            "source_identifier_refused"
+            f" policy={self.policy_version} source={source}"
+            f" record_type={self.record_type} field={self.field}"
+            f" reason={self.reason} adapter={self.adapter}"
+        )
+        # Keep the long-standing storage-boundary mechanism visible without
+        # carrying the offending value.  Existing operators/tests can still
+        # distinguish a join-byte refusal from a control-character refusal,
+        # while the structured reason remains stable for telemetry consumers.
+        if self.reason == "separator":
+            detail += " mechanism=joins multi-valued attributes (comma/unit separator)"
+        elif self.reason == "control_character":
+            detail += " mechanism=control characters"
+        return detail
+
+
 class ProjectionError(ValueError):
     """A structured record could not be projected, and why."""
+
+    def __init__(
+        self, message: str, *, refusal: IdentifierRefusal | None = None
+    ) -> None:
+        super().__init__(message)
+        self.refusal = refusal
+
+
+def _identifier_reason(value: str, *, adapter: str) -> str | None:
+    """Return a fixed refusal reason, or ``None`` for an accepted shape."""
+
+    if not value:
+        return "empty"
+    if len(value) > MAX_IDENTIFIER_CHARS:
+        return "oversized"
+    if any(separator in value for separator, _name in _LIST_SEPARATORS):
+        return "separator"
+    if _CONTROL_CHARACTERS & set(value):
+        return "control_character"
+
+    normalized = " ".join(_IDENTIFIER_WORDS.findall(value.casefold()))
+    if any(phrase in normalized for phrase in _INSTRUCTION_ID_PHRASES):
+        return "instruction_shaped"
+    # IDs with whitespace are not provider keys.  Underscores and hyphens are
+    # deliberately *not* treated as word separators here: ``proj_safe`` and
+    # ``ENG-123`` are normal provider ids, while a source sentence has actual
+    # whitespace.  Instruction phrases above still normalize delimiters so a
+    # hyphenated prompt-shaped id is refused before this branch.
+    if any(character.isspace() for character in value):
+        return "prose_like"
+    words = _IDENTIFIER_WORDS.findall(value.casefold())
+    hostile_compound_markers = {
+        "disclose",
+        "ignore",
+        "instructions",
+        "message",
+        "please",
+        "previous",
+        "reveal",
+        "secrets",
+        "share",
+        "system",
+        "tenant",
+    }
+    if len(words) >= 4 and len(set(words) & hostile_compound_markers) >= 2:
+        return "prose_like"
+    return None
+
+
+def _reject_source_identifier(
+    source_class: SourceClass,
+    record_type: str,
+    field: str,
+    value: object,
+) -> None:
+    """Refuse one source-controlled identifier without carrying its content."""
+
+    policy = (
+        _SOURCE_IDENTIFIER_POLICIES.get(source_class)
+        if isinstance(source_class, SourceClass)
+        else None
+    )
+    reason: str | None
+    if not isinstance(value, str):
+        reason = "malformed"
+    else:
+        reason = _identifier_reason(
+            value, adapter=policy.adapter if policy else "unknown"
+        )
+        if reason is None and policy is not None and not policy.shape.fullmatch(value):
+            reason = "malformed"
+        if reason is None and policy is None:
+            reason = "unsupported_source_policy"
+    if reason is None:
+        return
+    refusal = IdentifierRefusal(
+        source_class=source_class if isinstance(source_class, SourceClass) else None,
+        record_type=record_type,
+        field=field,
+        reason=reason,
+        adapter=policy.adapter if policy is not None else "unknown",
+    )
+    raise ProjectionError(
+        refusal.safe_detail(),
+        refusal=refusal,
+    )
+
+
+_EPISODE_KINDS = frozenset(
+    {
+        GraphObservationKind.AGENT_EPISODE,
+        GraphObservationKind.AGENT_TASK,
+        GraphObservationKind.AGENT_ARTIFACT,
+        GraphObservationKind.AGENT_OUTCOME,
+    }
+)
+
+
+def _observation_record_type(kind: GraphObservationKind) -> str:
+    return "episode" if kind in _EPISODE_KINDS else "observation"
+
+
+def _validate_canonical_ref(
+    source_class: SourceClass, record_type: str, field: str, reference: CanonicalRef
+) -> None:
+    _reject_source_identifier(source_class, record_type, field, reference.canonical_id)
+
+
+def _validate_known_attribute_identifiers(
+    source_class: SourceClass,
+    record_type: str,
+    attributes: Mapping[str, str | int | float | bool | None],
+) -> None:
+    """Validate identity-bearing attribute values before generic attributes."""
+
+    for attribute_field in (
+        "measurement_evidence_slug",
+        "superseded_by",
+    ):
+        if attribute_field in attributes:
+            _reject_source_identifier(
+                source_class,
+                "evidence" if "evidence" in attribute_field else record_type,
+                attribute_field,
+                attributes[attribute_field],
+            )
+
+
+def _validate_batch_identifiers(batch: IngestionBatch) -> None:
+    """Preflight every identity that can reach a graph or evidence field."""
+
+    for entity in batch.entities:
+        _reject_source_identifier(
+            entity.source_class, "entity", "canonical_id", entity.canonical_id
+        )
+        for alias in entity.aliases:
+            if alias.kind is AliasKind.PROVIDER_IDENTIFIER:
+                _reject_source_identifier(
+                    entity.source_class, "entity", "alias", alias.value
+                )
+        for repository_id in entity.repository_ids:
+            _reject_source_identifier(
+                entity.source_class, "entity", "repository_ids", repository_id
+            )
+        _validate_known_attribute_identifiers(
+            entity.source_class, "entity", entity.attributes
+        )
+
+    for observation in batch.observations:
+        record_type = _observation_record_type(observation.kind)
+        _reject_source_identifier(
+            observation.source_class,
+            record_type,
+            "canonical_id",
+            observation.canonical_id,
+        )
+        for subject in observation.subjects:
+            _validate_canonical_ref(
+                observation.source_class, record_type, "subjects", subject
+            )
+        for repository_id in observation.repository_ids:
+            _reject_source_identifier(
+                observation.source_class, record_type, "repository_ids", repository_id
+            )
+        for superseded in observation.supersedes:
+            _reject_source_identifier(
+                observation.source_class, record_type, "supersedes", superseded
+            )
+        for attempt in observation.prior_attempt_ids:
+            _reject_source_identifier(
+                observation.source_class, record_type, "prior_attempt_ids", attempt
+            )
+        _validate_known_attribute_identifiers(
+            observation.source_class, record_type, observation.attributes
+        )
+        _validate_source_evidence(
+            observation.source_class,
+            record_type,
+            f"{record_type} record",
+            observation.attributes,
+        )
+
+    for relationship in batch.relationships:
+        _validate_canonical_ref(
+            relationship.source_class,
+            "relationship",
+            "source",
+            relationship.source,
+        )
+        _validate_canonical_ref(
+            relationship.source_class,
+            "relationship",
+            "target",
+            relationship.target,
+        )
+        for observation_id in relationship.observation_ids:
+            _reject_source_identifier(
+                relationship.source_class,
+                "relationship",
+                "observation_ids",
+                observation_id,
+            )
+
+    for document in batch.documents:
+        _reject_source_identifier(
+            document.source_class, "document", "canonical_id", document.canonical_id
+        )
+        for subject in document.subjects:
+            _validate_canonical_ref(
+                document.source_class, "document", "subjects", subject
+            )
+        for repository_id in document.repository_ids:
+            _reject_source_identifier(
+                document.source_class, "document", "repository_ids", repository_id
+            )
+        _validate_known_attribute_identifiers(
+            document.source_class, "document", document.attributes
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,7 +792,10 @@ def _validate_attributes(
 
 
 def _validate_source_evidence(
-    where: str, attributes: Mapping[str, str | int | float | bool | None]
+    source_class: SourceClass,
+    record_type: str,
+    where: str,
+    attributes: Mapping[str, str | int | float | bool | None],
 ) -> None:
     """Refuse a source-issued handle the arm could not honestly cite.
 
@@ -400,13 +812,32 @@ def _validate_source_evidence(
     state = attributes.get(SOURCE_EVIDENCE_STATE_ATTRIBUTE)
     if handle is None and source_id is None and source_entity is None and state is None:
         return
+    if source_id is not None:
+        _reject_source_identifier(
+            source_class,
+            "evidence",
+            SOURCE_EVIDENCE_ID_ATTRIBUTE,
+            source_id,
+        )
+    if source_entity is not None:
+        _reject_source_identifier(
+            source_class,
+            "evidence",
+            SOURCE_EVIDENCE_ENTITY_ATTRIBUTE,
+            source_entity,
+        )
     if handle is not None and (not isinstance(source_entity, str) or not source_entity):
+        refusal = IdentifierRefusal(
+            source_class,
+            "evidence",
+            SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+            "missing_pair",
+            adapter="evidence_handle",
+        )
         raise ProjectionError(
-            f"{where} carries a source-issued evidence handle with no "
-            f"{SOURCE_EVIDENCE_ENTITY_ATTRIBUTE}. The entry describing this "
-            "record must name the entity the RECORD is about, and the arm "
-            "will not re-derive that from whichever observation happens to "
-            "cite it"
+            "source evidence handle has no source evidence entity; one half "
+            "of the source evidence pair is missing",
+            refusal=refusal,
         )
     if state is not None and state not in _SOURCE_EVIDENCE_STATES:
         # CHAOS-3628. Refused rather than treated as unknown-therefore-citable.
@@ -419,27 +850,43 @@ def _validate_source_evidence(
             "read must not be presented as live support"
         )
     if handle is not None and state is None:
+        refusal = IdentifierRefusal(
+            source_class,
+            "evidence",
+            SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+            "missing_state",
+            adapter="evidence_handle",
+        )
         raise ProjectionError(
-            f"{where} carries a source-issued evidence handle with no "
-            f"{SOURCE_EVIDENCE_STATE_ATTRIBUTE}. A source that issues handles "
-            "is a source that knows whether its records have been withdrawn, "
-            "and the arm will not infer that they have not"
+            "source evidence handle has no source_evidence_state; evidence "
+            "state is required",
+            refusal=refusal,
         )
     if handle is None or source_id is None:
+        refusal = IdentifierRefusal(
+            source_class,
+            "evidence",
+            SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+            "missing_pair",
+            adapter="evidence_handle",
+        )
         raise ProjectionError(
-            f"{where} declares one half of the source evidence pair "
-            f"({SOURCE_EVIDENCE_HANDLE_ATTRIBUTE}="
-            f"{handle!r}, {SOURCE_EVIDENCE_ID_ATTRIBUTE}={source_id!r}). A "
-            "handle the packet cannot attribute to a record, or a record "
-            "whose handle went missing, is provenance the arm would have to "
-            "invent the other half of"
+            "one half of the source evidence pair is missing; provenance "
+            "cannot be attributed",
+            refusal=refusal,
         )
     if not isinstance(handle, str) or not _EVIDENCE_HANDLE.fullmatch(handle):
+        refusal = IdentifierRefusal(
+            source_class,
+            "evidence",
+            SOURCE_EVIDENCE_HANDLE_ATTRIBUTE,
+            "invalid_evidence_handle",
+            adapter="evidence_handle",
+        )
         raise ProjectionError(
-            f"{where} declares source evidence handle {handle!r}, which is "
-            "not the frozen contract's EvidenceHandle grammar. A handle is an "
-            "identity: repairing one here would attribute this record to "
-            "whatever the repaired string happened to name"
+            "source evidence handle is not the frozen contract's EvidenceHandle "
+            "grammar; repairing an identity is refused",
+            refusal=refusal,
         )
     if not isinstance(source_id, str) or not source_id:
         raise ProjectionError(
@@ -605,7 +1052,12 @@ def _observation_node(record: ObservationRecord, partition: str) -> GraphNode:
     if record.prior_attempt_ids:
         attributes["prior_attempt_ids"] = ",".join(sorted(record.prior_attempt_ids))
     _validate_attributes(where, attributes)
-    _validate_source_evidence(where, attributes)
+    _validate_source_evidence(
+        record.source_class,
+        _observation_record_type(record.kind),
+        where,
+        attributes,
+    )
     return GraphNode(
         uuid=identity.observation_uuid(record.org_id, record.kind, record.canonical_id),
         org_id=record.org_id,
@@ -665,6 +1117,12 @@ def build_projection(
             "changing which entities exist -- narrow the batch at the reader, "
             "or raise max_ingest_records deliberately"
         )
+
+    # Identity validation is a batch preflight.  Nothing below may create a
+    # storage address, edge endpoint, evidence reference or approved-document
+    # handoff before every source-controlled id has passed the same versioned
+    # source-aware policy.
+    _validate_batch_identifiers(batch)
 
     partition = identity.partition_for_org(batch.org_id)
 

@@ -51,6 +51,8 @@ from dev_health_ops.api.dev.contracts_v2 import base as _base
 from dev_health_ops.api.dev.contracts_v2.narrative import (
     DevNarrative as DevNarrativeContract,
 )
+from dev_health_ops.api.dev.contracts_v2.subject import DevSubjectSet
+from dev_health_ops.api.dev.orchestrator_persistence import PersistenceRunRecorder
 from dev_health_ops.api.dev.persistence import (
     DevAdmissionLimits,
     DevMonthlyRequestLimitExceeded,
@@ -65,6 +67,12 @@ from dev_health_ops.api.dev.persistence.service import (
 )
 from dev_health_ops.api.dev.persistence.service import (
     _PAYLOAD_MODEL_VALIDATORS,
+)
+from dev_health_ops.api.dev.scope_service import (
+    AuthorizedEntity,
+    EntityKind,
+    ScopeRequestCache,
+    ScopeResolutionService,
 )
 from dev_health_ops.models.dev_persistence import (
     DevAnswerFrame,
@@ -83,6 +91,7 @@ from dev_health_ops.models.dev_persistence import (
 )
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
+from tests._chaos_3292_preflight import SeededCatalog
 from tests._helpers import tables_of
 
 #: The v1 evidence-handle grammar (`evidence_service.EvidenceHandleService.issue`)
@@ -710,6 +719,283 @@ async def test_record_subject_set_happy_path_and_invalid_entity_kind(persistence
                 fingerprint="fp",
                 payload={},
             )
+
+
+# -- get_subject_set (read path, issue 3660 §8 item (e) step 1) -----------
+#
+# The write side (record_subject_set) has existed since Wave 3.1; this is
+# its first selector. Ships inert -- no caller wired -- and step 2 (the
+# projection, and the compat.py refusal it will eventually replace) is
+# explicitly out of scope here. See test_get_subject_set_ships_inert_with_
+# no_caller_wired_yet below for the structural proof of that boundary.
+
+
+def _real_subject_set(*, set_id: uuid.UUID) -> DevSubjectSet:
+    """A real ``dev_subject_set.v1``, built by the REAL producer
+    (``ScopeResolutionService.committed_subject_set_for``) rather than
+    hand-authored -- a hand-written fixture passes a unit test while
+    diverging from what production actually constructs (identical
+    rationale to test_chaos_3534_cohort_scope_outcome.py's own use of this
+    same builder)."""
+
+    service = ScopeResolutionService(SeededCatalog([]), cache=ScopeRequestCache())
+    return service.committed_subject_set_for(
+        [
+            AuthorizedEntity(EntityKind.PROJECT, "project-atlas-1", "Atlas One"),
+            AuthorizedEntity(EntityKind.PROJECT, "project-atlas-2", "Atlas Two"),
+        ],
+        set_id=str(set_id),
+        original_mention_count=2,
+    )
+
+
+async def _persist_subject_set(
+    maker,
+    *,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    subject_set: DevSubjectSet,
+) -> uuid.UUID:
+    """The exact real production write path -- ``orchestrator.run()`` ->
+    ``PersistenceRunRecorder.record_subject_set`` -> ``DevPersistenceService
+    .record_subject_set`` -- never a synthetic call straight against the
+    service, so a round trip through this proves the read path agrees with
+    what the write path actually persists, not just with itself. Commits
+    and returns only the ``run_id``: every read in this section re-opens a
+    FRESH session, so a same-transaction echo of an uncommitted write can
+    never pass for durable persistence.
+    """
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        conversation = await service.create_conversation(
+            org_id=org_id, user_id=user_id, current_scope={}
+        )
+        accepted = await service.append_user_message_and_run(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            client_message_id=uuid.uuid4(),
+            question="Compare project Atlas One and project Atlas Two",
+            scope_snapshot={},
+        )
+        run_id = accepted.run.id
+        recorder = PersistenceRunRecorder(
+            service,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation.id,
+            run_id=run_id,
+            provider_source="platform",
+        )
+        await recorder.record_subject_set(subject_set)
+        await session.commit()
+    return run_id
+
+
+@pytest.mark.asyncio
+async def test_get_subject_set_round_trips_every_field_against_the_real_producer(
+    persistence,
+) -> None:
+    """The read back ``DevSubjectSet`` must be equal in every field to the
+    one the real producer built and the real write path persisted.
+
+    The compared field set is derived from ``DevSubjectSet.model_fields``
+    itself, not a hand-picked list, so this cannot quietly cover three
+    fields while a fourth silently diverges -- and each field's TYPE is
+    checked too, not just its value, since a JSON round trip is exactly the
+    kind of boundary that collapses an int to a float or silently equates
+    values pydantic's own ``==`` might still consider equal.
+    """
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    subject_set = _real_subject_set(set_id=uuid.uuid4())
+    run_id = await _persist_subject_set(
+        maker, org_id=org_id, user_id=user_id, subject_set=subject_set
+    )
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        record = await service.get_subject_set(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+
+    assert record is not None
+    assert record.run_id == run_id
+    assert record.set_id == uuid.UUID(subject_set.set_id)
+    assert record.entity_kind == subject_set.entity_kind.value
+    assert record.cohort_complete == subject_set.cohort_complete
+    assert record.fingerprint == subject_set.fingerprint
+
+    reconstructed = DevSubjectSet.model_validate(record.payload)
+    assert reconstructed == subject_set  # whole-model equality, same type
+    for field_name in type(subject_set).model_fields:
+        original_value = getattr(subject_set, field_name)
+        round_tripped_value = getattr(reconstructed, field_name)
+        assert round_tripped_value == original_value, field_name
+        assert type(round_tripped_value) is type(original_value), (
+            f"{field_name} changed type across the JSON payload boundary "
+            f"({type(original_value)} -> {type(round_tripped_value)})"
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_subject_set_returns_none_when_the_run_recorded_none(
+    persistence,
+) -> None:
+    """The common case -- an ordinary singular run never calls
+    ``record_subject_set`` at all -- must read back as ``None``, not raise,
+    matching ``get_answer_frame``/``get_run_narrative``'s own posture for
+    the same 0..1-row shape."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        _conv_id, run_id = await _accepted_run(service, org_id=org_id, user_id=user_id)
+        await session.commit()
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        record = await service.get_subject_set(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+    assert record is None
+
+
+@pytest.mark.asyncio
+async def test_get_subject_set_is_tenant_scoped_not_run_id_alone(persistence) -> None:
+    """Guards the same invariant every other reader in this module enforces
+    (``get_answer_frame``, ``get_run_narrative``): a run id is never
+    sufficient on its own, ``org_id`` AND ``user_id`` must independently
+    agree, matching this module's own docstring ("HTTP payloads and model
+    output must never supply those values" -- i.e. no reader may trust a
+    caller-supplied identifier alone).
+
+    Planted and observed: with the ``org_id``/``user_id`` predicates
+    removed from ``get_subject_set``'s query (leaving only
+    ``DevRunSubjectSet.run_id == run_id``), both ``wrong_org`` and
+    ``wrong_user`` below come back non-``None`` -- the row leaks to any
+    caller that names the right ``run_id`` regardless of tenant. Restoring
+    the predicates is what turns that into ``None``.
+    """
+
+    maker, org_id, other_org_id, user_id, other_user_id = persistence
+    subject_set = _real_subject_set(set_id=uuid.uuid4())
+    run_id = await _persist_subject_set(
+        maker, org_id=org_id, user_id=user_id, subject_set=subject_set
+    )
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        wrong_org = await service.get_subject_set(
+            org_id=other_org_id, user_id=user_id, run_id=run_id
+        )
+        wrong_user = await service.get_subject_set(
+            org_id=org_id, user_id=other_user_id, run_id=run_id
+        )
+        right_tenant = await service.get_subject_set(
+            org_id=org_id, user_id=user_id, run_id=run_id
+        )
+
+    assert wrong_org is None
+    assert wrong_user is None
+    assert right_tenant is not None
+    assert right_tenant.run_id == run_id
+
+
+@pytest.mark.asyncio
+async def test_get_subject_set_selects_the_owning_run_not_any_tenant_row(
+    persistence,
+) -> None:
+    """Two runs in the SAME tenant, each with its own subject set: the
+    selector must return the one belonging to the ``run_id`` asked for, not
+    merely the newest row or an arbitrary one for that tenant."""
+
+    maker, org_id, _other_org, user_id, _other_user = persistence
+    first_set_id, second_set_id = uuid.uuid4(), uuid.uuid4()
+    first_run_id = await _persist_subject_set(
+        maker,
+        org_id=org_id,
+        user_id=user_id,
+        subject_set=_real_subject_set(set_id=first_set_id),
+    )
+    second_run_id = await _persist_subject_set(
+        maker,
+        org_id=org_id,
+        user_id=user_id,
+        subject_set=_real_subject_set(set_id=second_set_id),
+    )
+
+    async with maker() as session:
+        service = DevPersistenceService(session)
+        first_record = await service.get_subject_set(
+            org_id=org_id, user_id=user_id, run_id=first_run_id
+        )
+        second_record = await service.get_subject_set(
+            org_id=org_id, user_id=user_id, run_id=second_run_id
+        )
+
+    assert first_record is not None and first_record.set_id == first_set_id
+    assert second_record is not None and second_record.set_id == second_set_id
+
+
+def test_get_subject_set_ships_inert_with_no_caller_wired_yet() -> None:
+    """Step 1 of issue 3660 §8 item (e) is the read path ALONE: step 2 (the
+    projection, and the ``compat.py`` cohort refusal it will eventually
+    replace) waits for an ANSWERED-outcome cohort consumer that does not
+    exist yet. This is a structural proof, not a claim -- grep every
+    non-test source file under ``src/`` for a call site; the only
+    reference in the whole tree may be the definition itself.
+
+    A source-scanning test that finds nothing and passes reads as coverage
+    while measuring nothing -- an empty ``rglob`` (wrong root, a future
+    packaging move that shifts ``parents[3]``, a traversal that silently
+    visited zero files) is indistinguishable from a genuinely clean result
+    unless something proves the scan itself actually works. Two positive
+    controls, both against the SAME scanned file list the caller filter
+    below reuses (never a second, unaudited traversal):
+
+    1. The scan visited a plausible number of files -- ``len(scanned) >
+       100`` is a floor far below the real ``src/`` count and far above
+       zero, so a broken root/traversal that yields a handful of files (or
+       none) fails loudly here before the caller assertion ever gets a
+       chance to pass vacuously.
+    2. The string search itself works: the DEFINITION site
+       (``service_module_file``) is asserted to contain the string
+       ``"get_subject_set"`` before it is excluded from the caller list --
+       proving a file that unambiguously SHOULD match, does. If this
+       assertion ever fails, the search mechanism is broken and the empty
+       caller list downstream means nothing.
+    """
+
+    service_module_file = Path(dev_persistence_service.__file__).resolve()
+    src_root = service_module_file.parents[3]
+    assert src_root.name == "dev_health_ops"
+
+    scanned = list(src_root.rglob("*.py"))
+    assert len(scanned) > 100, (
+        f"only {len(scanned)} .py files found under {src_root} -- the "
+        "traversal looks broken (wrong root, or src/ moved), which would "
+        "make the caller-search below pass vacuously rather than prove "
+        "anything"
+    )
+
+    contents_by_path = {path: path.read_text() for path in scanned}
+    assert "get_subject_set" in contents_by_path[service_module_file], (
+        "the string search itself is broken: the DEFINITION site does not "
+        "match its own name, so an empty caller list below would prove "
+        "nothing about whether callers exist"
+    )
+
+    callers = [
+        path
+        for path, text in contents_by_path.items()
+        if path != service_module_file and "get_subject_set" in text
+    ]
+    assert callers == [], (
+        "get_subject_set must have zero callers until the step-2 projection "
+        f"lands; found references in: {callers}"
+    )
 
 
 # -- dev_run_source_observations ------------------------------------------

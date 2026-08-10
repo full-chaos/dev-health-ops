@@ -64,6 +64,7 @@ from dev_health_ops.models.dev_persistence import (
     DevRun,
     DevRunNarrative,
     DevRunResolution,
+    DevRunStreamEvent,
     DevToolCall,
 )
 from dev_health_ops.models.git import Base
@@ -99,6 +100,7 @@ _TABLES = tables_of(
     # silently absorbs it -- exactly the shape of gap
     # DevRunResolution's own comment above describes for a sibling table.
     DevRunNarrative,
+    DevRunStreamEvent,
     Setting,
 )
 

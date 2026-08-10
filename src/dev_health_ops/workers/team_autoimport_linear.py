@@ -113,6 +113,33 @@ def _project_id(org_id: str, provider: str, project_key: str) -> str:
     return f"{org_id}:{provider}:{project_key}"
 
 
+def _linear_team_row(
+    *,
+    org_id: str,
+    team_id: str,
+    name: str,
+    description: str | None,
+    project_keys: list[str],
+    now: datetime,
+) -> dict[str, Any]:
+    """Build the concrete team dimension row written by Linear auto-import."""
+
+    return {
+        "id": team_id,
+        "name": name,
+        "description": description,
+        "members": [],
+        "project_keys": project_keys,
+        "repo_patterns": [],
+        "is_active": True,
+        "updated_at": now,
+        "org_id": org_id,
+        "provider": "linear",
+        "native_team_key": team_id,
+        "parent_team_id": None,
+    }
+
+
 def _project_is_active(node: Mapping[str, Any]) -> int:
     """Activity for a Linear project is retirement, NOT lifecycle state.
 
@@ -160,10 +187,52 @@ def _project_target_date(value: Any) -> date | None:
 
     if not value:
         return None
+
     try:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
+
+
+def _project_team_edges(node: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+    """Return the native Linear team id/key edges in producer order."""
+
+    teams = node.get("teams")
+    if not isinstance(teams, Mapping):
+        return [], []
+    nodes = teams.get("nodes")
+    if not isinstance(nodes, list):
+        return [], []
+    team_ids: list[str] = []
+    team_keys: list[str] = []
+    for team in nodes:
+        if not isinstance(team, Mapping):
+            continue
+        team_id = str(team.get("id") or "").strip()
+        team_key = str(team.get("key") or "").strip()
+        if team_id and team_id not in team_ids:
+            team_ids.append(team_id)
+        if team_key and team_key not in team_keys:
+            team_keys.append(team_key)
+    return team_ids, team_keys
+
+
+def _project_lead(node: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """Return the selected lead identity fields without widening the row."""
+
+    lead = node.get("lead")
+    if not isinstance(lead, Mapping):
+        return None, None, None
+
+    def _optional(value: Any) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    return (
+        _optional(lead.get("id")),
+        _optional(lead.get("name")),
+        _optional(lead.get("email")),
+    )
 
 
 def _linear_project_records(
@@ -184,6 +253,8 @@ def _linear_project_records(
         project_id = str(node.get("id") or "").strip()
         if not project_id:
             continue
+        team_ids, team_keys = _project_team_edges(node)
+        lead_id, lead_name, lead_email = _project_lead(node)
         rows.append(
             ProjectRecord(
                 id=project_id,
@@ -209,6 +280,11 @@ def _linear_project_records(
                 # most recent look at the world always wins.
                 updated_at=now,
                 last_synced=now,
+                team_ids=team_ids,
+                team_keys=team_keys,
+                lead_id=lead_id,
+                lead_name=lead_name,
+                lead_email=lead_email,
             )
         )
     return rows
@@ -297,20 +373,14 @@ def populate(
             project_keys = [team_id]
 
         team_rows.append(
-            {
-                "id": team_id,
-                "name": team.name,
-                "description": team.description,
-                "members": [],
-                "project_keys": project_keys,
-                "repo_patterns": [],
-                "is_active": True,
-                "updated_at": now,
-                "org_id": org_id,
-                "provider": "linear",
-                "native_team_key": team_id,
-                "parent_team_id": None,
-            }
+            _linear_team_row(
+                org_id=org_id,
+                team_id=team_id,
+                name=team.name,
+                description=team.description,
+                project_keys=project_keys,
+                now=now,
+            )
         )
 
         for project_key in project_keys:

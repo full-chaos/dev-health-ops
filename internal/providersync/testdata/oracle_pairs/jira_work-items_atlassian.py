@@ -34,6 +34,7 @@ with (
 ):
     import atlassian
     from atlassian import canonical_models
+    from atlassian.graph.api import jira_worklogs as jira_worklogs_api
     from atlassian.rest.api import jira_boards
 
     from dev_health_ops.models.work_items import Sprint
@@ -203,17 +204,28 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
         atlassian.iter_issues_via_rest,
         atlassian.iter_issue_changelog_via_rest,
         atlassian.iter_issue_worklogs_via_rest,
+        jira_worklogs_api.iter_issue_worklogs_via_graphql,
         atlassian.iter_board_sprints_via_rest,
         jira_boards.iter_boards_via_rest,
         atlassian_compat.build_atlassian_rest_client,
+        atlassian_compat.build_atlassian_graphql_client,
         atlassian_compat.get_atlassian_cloud_id,
     )
+    graphql_attempted = False
+
+    def _failing_graphql_iter(*_args: Any, **_kwargs: Any):
+        nonlocal graphql_attempted
+        graphql_attempted = True
+        raise RuntimeError("graphql worklog test failure")
+
     try:
         os.environ["JIRA_FETCH_WORKLOGS"] = "1" if case.get("fetch_worklogs") else "0"
         os.environ["JIRA_FETCH_BOARD_SPRINTS"] = (
             "1" if case.get("fetch_board_sprints") else "0"
         )
-        os.environ["ATLASSIAN_GQL_ENABLED"] = "0"
+        os.environ["ATLASSIAN_GQL_ENABLED"] = (
+            "1" if case.get("graphql_fallback") else "0"
+        )
         atlassian.iter_issues_via_rest = lambda _client, cloud_id, jql, **kwargs: (
             _fake_issue_iter(client, cloud_id, jql, **kwargs)
         )
@@ -227,6 +239,7 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
                 client, issue_key=issue_key, **kwargs
             )
         )
+        jira_worklogs_api.iter_issue_worklogs_via_graphql = _failing_graphql_iter
         atlassian.iter_board_sprints_via_rest = lambda _client, *, board_id, **kwargs: (
             _fake_sprint_iter(client, board_id=board_id, **kwargs)
         )
@@ -237,6 +250,11 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
             atlassian_compat,
             "build_atlassian_rest_client",
             lambda *args: client,
+        )
+        setattr(
+            atlassian_compat,
+            "build_atlassian_graphql_client",
+            lambda *args, **kwargs: client,
         )
         setattr(
             atlassian_compat,
@@ -254,17 +272,23 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-        setattr(atlassian_compat, "build_atlassian_rest_client", old_functions[5])
-        setattr(atlassian_compat, "get_atlassian_cloud_id", old_functions[6])
         (
             atlassian.iter_issues_via_rest,
             atlassian.iter_issue_changelog_via_rest,
             atlassian.iter_issue_worklogs_via_rest,
+        ) = old_functions[:3]
+        (
+            jira_worklogs_api.iter_issue_worklogs_via_graphql,
             atlassian.iter_board_sprints_via_rest,
             jira_boards.iter_boards_via_rest,
-        ) = old_functions[:5]
+        ) = old_functions[3:6]
+        setattr(atlassian_compat, "build_atlassian_rest_client", old_functions[6])
+        setattr(atlassian_compat, "build_atlassian_graphql_client", old_functions[7])
+        setattr(atlassian_compat, "get_atlassian_cloud_id", old_functions[8])
     if not client.closed:
         raise RuntimeError("Atlassian Jira producer did not close REST client")
+    if case.get("graphql_fallback") and not graphql_attempted:
+        raise RuntimeError("Atlassian Jira producer did not attempt GraphQL worklogs")
     return {
         "work_items": [_deterministic(row, org_id) for row in batch.work_items],
         "status_transitions": [

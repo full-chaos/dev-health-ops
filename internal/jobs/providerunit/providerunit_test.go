@@ -55,6 +55,10 @@ func TestEnabledProviderUnitExecutesCompleteRouteAndTerminalizes(t *testing.T) {
 	if _, ok := repository.result["go_provider_route"]; !ok {
 		t.Fatalf("terminal result=%#v", repository.result)
 	}
+	observations, ok := repository.result["go_worklog_observations"].([]providersync.JiraWorklogFetchObservation)
+	if !ok || len(observations) != 1 || !observations[0].RESTFallbackUsed {
+		t.Fatalf("persisted worklog observations=%#v", repository.result["go_worklog_observations"])
+	}
 }
 
 func TestProviderUnitPersistsCanonicalProviderUsageObservations(t *testing.T) {
@@ -355,7 +359,7 @@ func successfulExecutor(
 			) providerfoundation.BackoffGate {
 				return testBackoffGate{}
 			},
-			Handler:           testCompleteRouteHandler{t: t, now: now},
+			Handler:           testCompleteRouteHandler{t: t, now: now, WorklogObservations: []providersync.JiraWorklogFetchObservation{{IssueKey: "FLAGS-1", RESTFallbackUsed: true}}},
 			Comparator:        providersync.ProductionContractComparator{},
 			Committer:         providersync.EffectCommitter{Ledger: &testEffectLedger{}, Sink: testEffectSink{}, Readback: testEffectReadback{}, Now: func() time.Time { return now }},
 			HeartbeatInterval: 10 * time.Second,
@@ -609,8 +613,9 @@ func (testBackoffGate) Penalize(context.Context, time.Duration) error {
 }
 
 type testCompleteRouteHandler struct {
-	t   *testing.T
-	now time.Time
+	t                   *testing.T
+	now                 time.Time
+	WorklogObservations []providersync.JiraWorklogFetchObservation
 }
 
 func (handler testCompleteRouteHandler) Collect(
@@ -650,7 +655,8 @@ func (handler testCompleteRouteHandler) Collect(
 				}},
 			},
 		},
-		Watermark: &watermark,
+		Watermark:           &watermark,
+		WorklogObservations: handler.WorklogObservations,
 		Evidence: providersync.FetchEvidence{
 			Provider: "launchdarkly", Dataset: "feature-flags", Records: 4,
 		},

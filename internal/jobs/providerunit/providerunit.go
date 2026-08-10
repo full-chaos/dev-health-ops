@@ -287,6 +287,9 @@ func (handler *Handler) Work(
 		result, err = executor.Execute(ctx, session, descriptor)
 		if err == nil {
 			payload := cloneResult(result.Result)
+			if len(result.WorklogObservations) > 0 {
+				payload["go_worklog_observations"] = result.WorklogObservations
+			}
 			payload["go_provider_route"] = map[string]any{
 				"effects_written": result.Effects.Written,
 				"effects_skipped": result.Effects.Skipped,

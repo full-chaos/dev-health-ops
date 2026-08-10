@@ -161,6 +161,92 @@ func TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark(t *testing
 	}
 }
 
+func TestJiraAtlassianGraphQLWorklogPreservesNameIdentity(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	claim.DatasetOptions["atlassian_gql_enabled"] = true
+	rest := &jiraAtlassianDoer{t: t}
+	graphql := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/graphql" {
+			t.Fatalf("unexpected GraphQL request %s", request.URL.String())
+		}
+		body := `{"data":{"issue":{"worklogs":{"pageInfo":{"hasNextPage":false,"endCursor":""},"edges":[{"node":{"worklogId":"wl-gql","author":{"name":"GraphQL Worker"},"timeSpent":{"timeInSeconds":1800},"created":"2026-08-01T10:01:00.123456Z","updated":"2026-08-01T10:02:00.123456Z","startDate":"2026-08-01T10:00:00.123456Z"}}]}}}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
+		}, nil
+	})
+	client := jiraWorkItemsTestClient(t, rest, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	graphqlClient := jiraWorkItemsTestClient(t, graphql, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	batch, err := (JiraAtlassianRouteHandler{
+		StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
+		CloudID: "cloud-301", GraphQLClient: graphqlClient,
+	}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.WorklogObservations) != 1 {
+		t.Fatalf("worklog observations=%+v", batch.WorklogObservations)
+	}
+	observation := batch.WorklogObservations[0]
+	if !observation.GraphQLAttempted || !observation.GraphQLSucceeded || observation.RESTFallbackUsed || observation.GraphQLRequests != 1 || observation.RESTRequests != 0 {
+		t.Fatalf("GraphQL observation=%+v", observation)
+	}
+	if len(batch.Effects) != 7 {
+		t.Fatalf("effects=%d want=7", len(batch.Effects))
+	}
+	var worklog jiraWorklogRow
+	for _, effect := range batch.Effects {
+		if effect.Destination != "worklogs" || len(effect.Rows) != 1 {
+			continue
+		}
+		if err := json.Unmarshal(effect.Rows[0], &worklog); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if worklog.Author == nil || *worklog.Author != "GraphQL Worker" {
+		t.Fatalf("GraphQL name identity=%v want GraphQL Worker", worklog.Author)
+	}
+}
+
+func TestJiraAtlassianGraphQLFailureRecordsRESTFallbackObservation(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	claim.DatasetOptions["atlassian_gql_enabled"] = true
+	rest := &jiraAtlassianDoer{t: t}
+	graphql := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/graphql" {
+			t.Fatalf("unexpected GraphQL request %s", request.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"errors":[{"message":"temporary"}]}`)), Request: request,
+		}, nil
+	})
+	client := jiraWorkItemsTestClient(t, rest, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	graphqlClient := jiraWorkItemsTestClient(t, graphql, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	batch, err := (JiraAtlassianRouteHandler{
+		StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
+		CloudID: "cloud-301", GraphQLClient: graphqlClient,
+	}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.WorklogObservations) != 1 {
+		t.Fatalf("worklog observations=%+v", batch.WorklogObservations)
+	}
+	observation := batch.WorklogObservations[0]
+	if !observation.GraphQLAttempted || observation.GraphQLSucceeded || !observation.RESTFallbackUsed || observation.GraphQLRequests != 1 || observation.RESTRequests != 1 {
+		t.Fatalf("fallback observation=%+v", observation)
+	}
+}
+
 type jiraAtlassianDoerFunc func(*http.Request) (*http.Response, error)
 
 func (doer jiraAtlassianDoerFunc) Do(request *http.Request) (*http.Response, error) {

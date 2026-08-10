@@ -213,6 +213,16 @@ if _PROMETHEUS_AVAILABLE:
         ["intent"],
     )
 
+    ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_graph_routing_outcome_total",
+        "DISCOVERED_COHORT Ask Dev requests routed through the graph-assisted "
+        "seam, by GraphQueryOutcome (CHAOS-3502, beta gate 10 observability "
+        "hook). Every value other than 'completed' falls back to the legacy "
+        "model-tool-choice loop -- content-safe: the label is the closed "
+        "GraphQueryOutcome vocabulary, never question or entity text.",
+        ["outcome"],
+    )
+
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _prometheus_client_module.Counter(
         "devhealth_ask_dev_narrative_fallback_total",
         "Ask Dev narrative provider calls that fell back to the deterministic "
@@ -337,6 +347,7 @@ else:
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _noop_counter()
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL = _noop_counter()
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
+    ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL = _noop_counter()
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_TOTAL = _noop_counter()
     ASK_DEV_QUA_COMMIT_TOTAL = _noop_counter()

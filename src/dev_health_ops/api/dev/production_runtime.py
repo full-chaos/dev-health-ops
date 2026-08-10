@@ -87,7 +87,6 @@ from .contracts import (
     DevStatusFact,
     DevToolRequest,
     DevToolResult,
-    DirectScope,
     FreshnessState,
     ToolID,
 )
@@ -130,12 +129,10 @@ from .scope_catalog import ClickHouseAuthorizedEntityCatalog
 from .scope_service import (
     MODEL_SEARCHABLE_ENTITY_KINDS,
     EntityKind,
-    ScopeRef,
     ScopeRequestCache,
     ScopeResolutionService,
-    ScopeResolveRequest,
     ScopeSearchRequest,
-    TimeRangeRequest,
+    scope_request_from_scope,
 )
 from .status_change_service import (
     ChangeSummaryRequest,
@@ -1118,42 +1115,6 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
     )
 
 
-def _scope_request(scope: DevScope) -> ScopeResolveRequest:
-    refs: tuple[ScopeRef, ...]
-    if scope.direct_scope is DirectScope.ORGANIZATION:
-        refs = (ScopeRef(EntityKind.ORGANIZATION, scope.organization_id),)
-    elif scope.direct_scope is DirectScope.REPOSITORY:
-        refs = tuple(
-            ScopeRef(EntityKind.REPOSITORY, value) for value in scope.repositories
-        )
-    else:
-        refs = tuple(
-            ScopeRef(EntityKind(item.entity_type.value), item.entity_id)
-            for item in scope.entity_refs
-        )
-    return ScopeResolveRequest(
-        explicit_refs=refs,
-        # A team *direct* scope already carries its team as an explicit_ref
-        # (via the entity_refs branch above); team_ids there is required by
-        # DevScope.validate_direct_scope to name that same team, not a second
-        # independent dimension. Also passing it as a team_filter_ref would
-        # make `resolve()` treat the run as team-*filtered* (outcome=FILTERED)
-        # rather than an exact single-entity commit (CHAOS-3301).
-        team_filter_refs=(
-            ()
-            if scope.direct_scope is DirectScope.TEAM
-            else tuple(ScopeRef(EntityKind.TEAM, value) for value in scope.team_ids)
-        ),
-        time_range=TimeRangeRequest(
-            preset_days=None,
-            start_date=date.fromisoformat(scope.time_range.start.date().isoformat()),
-            end_date=date.fromisoformat(scope.time_range.end.date().isoformat()),
-            timezone=scope.time_range.timezone,
-        ),
-        allow_organization_fallback=False,
-    )
-
-
 async def _resolve_exact_contract(
     service: ScopeResolutionService,
     *,
@@ -1162,7 +1123,7 @@ async def _resolve_exact_contract(
     requested_scope: DevScope,
 ) -> DevScopeResolution:
     resolution = await service.resolve_contract(
-        org_id, permission_fingerprint, _scope_request(requested_scope)
+        org_id, permission_fingerprint, scope_request_from_scope(requested_scope)
     )
     if resolution.resolved_scope is None:
         return resolution.model_copy(update={"requested_scope": requested_scope})
@@ -1522,7 +1483,7 @@ class _ProductionPlanExecutorRuntime:
             org_id=org_id,
             permission_fingerprint=permission_fingerprint,
             request=WorkGraphNeighborsRequest(
-                scope_request=_scope_request(scope),
+                scope_request=scope_request_from_scope(scope),
                 root_refs=roots,
                 relationship_types=tuple(sorted(ALLOWED_RELATIONSHIP_TYPES)),
                 direction=GraphDirection.BOTH,
@@ -1534,7 +1495,7 @@ class _ProductionPlanExecutorRuntime:
         return await self.data_health_service.inspect(
             org_id=org_id,
             permission_fingerprint=permission_fingerprint,
-            scope_request=_scope_request(scope),
+            scope_request=scope_request_from_scope(scope),
             required_sources=NATIVE_EVIDENCE_SOURCES,
         )
 
@@ -2298,7 +2259,7 @@ async def _assemble_production_runtime(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
             request=WorkGraphNeighborsRequest(
-                scope_request=_scope_request(request.scope),
+                scope_request=scope_request_from_scope(request.scope),
                 root_refs=roots,
                 relationship_types=tuple(sorted(ALLOWED_RELATIONSHIP_TYPES)),
                 direction=GraphDirection.BOTH,
@@ -2353,7 +2314,7 @@ async def _assemble_production_runtime(
         result = await evidence_service.search(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
-            scope_request=_scope_request(request.scope),
+            scope_request=scope_request_from_scope(request.scope),
             query=request.query or "",
             limit=request.limit,
         )
@@ -2385,7 +2346,7 @@ async def _assemble_production_runtime(
         result = await evidence_service.expand(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
-            scope_request=_scope_request(request.scope),
+            scope_request=scope_request_from_scope(request.scope),
             evidence=known,
         )
         facts = [
@@ -2411,7 +2372,7 @@ async def _assemble_production_runtime(
         result = await data_health_service.inspect(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
-            scope_request=_scope_request(request.scope),
+            scope_request=scope_request_from_scope(request.scope),
             required_sources=NATIVE_EVIDENCE_SOURCES,
         )
         items = [
@@ -2657,7 +2618,7 @@ async def expand_production_evidence(
     return await service.expand(
         org_id=org_id,
         permission_fingerprint=permission_fingerprint,
-        scope_request=_scope_request(scope),
+        scope_request=scope_request_from_scope(scope),
         evidence=evidence,
     )
 

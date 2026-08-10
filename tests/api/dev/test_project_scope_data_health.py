@@ -17,7 +17,7 @@ derives, from the same shared ``PROJECT_REPOSITORIES_SQL``, or fails closed.
 CHAOS-3375 found two residual gaps in that fix, both covered below:
 
 1. A committed TEAM direct scope reaches the *exact same* widening bug
-   (``production_runtime._scope_request``'s ``DirectScope.TEAM`` branch
+   (``scope_service.scope_request_from_scope``'s ``DirectScope.TEAM`` branch
    commits a TEAM entity with ``repository_id=None``, just like PROJECT) --
    #1453 only special-cased ``EntityKind.PROJECT``, so a team subject fell
    straight through to the org-wide ``empty(repository_ids) OR ...`` arm,

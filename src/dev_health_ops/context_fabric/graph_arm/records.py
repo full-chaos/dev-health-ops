@@ -195,6 +195,15 @@ class UnstructuredDocumentRecord:
     Extraction itself is out of PR1's scope; this type exists now so the
     boundary is visible in the ingestion contract from the start and so the
     structured path can be proven not to touch it.
+
+    ``attributes`` is the same closed-vocabulary, generic mapping
+    :class:`EntityRecord`/:class:`ObservationRecord` already carry (CHAOS-3632)
+    -- deliberately not a dedicated trust/evidence field. Trust and
+    provenance signals a document needs (``corpus_trust``, ``corpus_state``,
+    ...) already exist in :data:`~.projection.READBACK_ATTRIBUTE_KEYS`;
+    adding a parallel, document-specific vocabulary for the same concepts
+    would be the second hand-maintained implementation of one idea this
+    project's own corrective plan forbids.
     """
 
     org_id: str
@@ -206,6 +215,9 @@ class UnstructuredDocumentRecord:
     subjects: tuple[CanonicalRef, ...] = ()
     approved: bool = False
     repository_ids: tuple[str, ...] = ()
+    attributes: Mapping[str, str | int | float | bool | None] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -49,7 +49,9 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from dev_health_ops.api.dev.investigation_contract import RelationshipType
 
+from . import identity
 from .projection import GraphEdge, GraphNode, GraphProjection
+from .vocabulary import GraphObservationKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from graphiti_core.edges import EntityEdge
@@ -72,6 +74,7 @@ __all__ = [
     "graphiti_version",
     "parse_triple_fact",
     "require_graphiti",
+    "to_graphiti_document_nodes",
     "to_graphiti_edges",
     "to_graphiti_nodes",
     "triple_fact",
@@ -584,6 +587,90 @@ def to_graphiti_nodes(
                 name_embedding=embedder.embed(node.canonical_id)
                 if isinstance(embedder, DeterministicEmbedder)
                 else None,
+            )
+        )
+    return nodes
+
+
+async def to_graphiti_document_nodes(
+    projection: GraphProjection, embedder: EmbeddingBackend
+) -> list[EntityNode]:
+    """Approved documents as Graphiti ``EntityNode``s (CHAOS-3632).
+
+    Reads ``projection.approved_documents`` only -- never
+    ``rejected_document_ids``, which exists so a caller can account for what
+    was declined, not so the writer can decide differently.
+    ``test_chaos_3632_document_writer.py::test_a_rejected_document_never_
+    reaches_a_node`` is the guard that a rejected document cannot reach this
+    function's output by any path.
+
+    Three conventions this function commits to, agreed on CHAOS-3660:
+
+    * ``name`` is the document's ``title``, never its ``body`` --
+      :func:`to_graphiti_nodes`'s own "no prose" rule applies here exactly as
+      it does to every other node; the graph carries no rendered document
+      text as a display name.
+    * ``cf_entity_kind`` is never set (a document is not an entity); the
+      node is an OBSERVATION of kind :attr:`~.vocabulary.GraphObservationKind.
+      DOCUMENT`, exactly like every other structured record CHAOS-3617
+      ingests, so ``cf_subject_canonical_ids`` (the same CHAOS-3653 hop
+      contract observations already use) is how a document's subjects are
+      recovered on read -- no new attachment mechanism.
+    * ``body`` reaches the embedder and NOTHING else -- never a stored
+      attribute, never ``summary`` (:func:`to_graphiti_nodes`'s "no prose"
+      rule again), never any field a live reader echoes back. This is why
+      this function is ``async`` and :func:`to_graphiti_nodes` is not: the
+      embedder must be given ``body``, not ``title``, as the embedding
+      input, and ``graphiti_core.utils.bulk_utils.add_nodes_and_edges_bulk``
+      only calls ``generate_name_embedding`` (which would embed ``name`` --
+      the title) when ``name_embedding`` is still ``None`` on arrival. Pre-
+      computing it here from ``body``, for every embedder (not only the
+      deterministic one :func:`to_graphiti_nodes` special-cases, since that
+      function's sync signature cannot await a real embedder's network
+      call), is what makes a document findable by its actual content rather
+      than by title text alone.
+    """
+
+    entity_node_cls = graphiti_module("nodes").EntityNode
+    nodes: list[EntityNode] = []
+    for document in projection.approved_documents:
+        attributes: dict[str, Any] = {
+            "cf_canonical_id": document.canonical_id,
+            "cf_org_id": document.org_id,
+            ATTACHMENT_ENCODING_ATTRIBUTE: ATTACHMENT_ENCODING,
+            PROJECTION_EMBEDDER_ATTRIBUTE: embedder.model_id,
+            "cf_source_class": document.source_class.value,
+            "cf_observed_at": document.observed_at.isoformat(),
+            "cf_is_entity": False,
+            "cf_observation_kind": GraphObservationKind.DOCUMENT.value,
+        }
+        if document.repository_ids:
+            attributes["cf_repository_ids"] = ",".join(sorted(document.repository_ids))
+        if document.subjects:
+            # Sorted for the same reason to_graphiti_nodes sorts observation
+            # subjects: a store written twice from the same batch must be
+            # byte-identical.
+            subjects = sorted(ref.canonical_id for ref in document.subjects)
+            attributes[OBSERVATION_SUBJECTS_ATTRIBUTE] = ",".join(subjects)
+        for key, value in document.attributes.items():
+            attributes[f"cf_attr_{key}"] = value
+        name_embedding = await embedder.create(
+            input_data=[document.body.replace("\n", " ")]
+        )
+        nodes.append(
+            entity_node_cls(
+                uuid=identity.observation_uuid(
+                    document.org_id,
+                    GraphObservationKind.DOCUMENT,
+                    document.canonical_id,
+                ),
+                name=document.title,
+                group_id=projection.partition,
+                labels=[f"CFObs{GraphObservationKind.DOCUMENT.value.title()}"],
+                created_at=document.observed_at,
+                summary="",
+                attributes=attributes,
+                name_embedding=name_embedding,
             )
         )
     return nodes

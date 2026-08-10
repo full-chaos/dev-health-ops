@@ -78,7 +78,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
-        "sha256": "d0df8dccbf190a280412e6d4872006459072128d87c7cf8d9e9facc016ab62a3"
+        "sha256": "8712d49d50e56e71030e3dbe27e70c9387a749ee0367c712e48b6940eb5df17f"
       },
       "schema_version": "dev_conversation_transcript.v1"
     },
@@ -156,7 +156,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer.v1.schema.json",
-        "sha256": "e156ced39c676bae4e08f5c5e5acc86a4d7120b472ab628ba20f1a605a8ce6fc"
+        "sha256": "8c92ecc438cef1331ef130862bc75bf565c4111e74d8a03b67eb229e620d41ae"
       },
       "schema_version": "dev_answer.v1"
     },
@@ -213,7 +213,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_evidence_ref.v1.schema.json",
-        "sha256": "ec835b4334f2f627a14fbb361244b403fd8faed8825b051122e16780918cdf2b"
+        "sha256": "4f523fa4b63df80da741a75e0483384467b74e082bcd0648f9bd12d863422620"
       },
       "schema_version": "dev_evidence_ref.v1"
     },
@@ -232,7 +232,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_evidence_expansion.v1.schema.json",
-        "sha256": "615e2e20b938e0e1181dcd5681495352f30d515f7a45f3fb0dd6879d6cdc0628"
+        "sha256": "d3ab1a7dfe7c667ab05f58b210f9cf7274d7dc7b34d1c1861baf708e86023d38"
       },
       "schema_version": "dev_evidence_expansion.v1"
     },
@@ -345,7 +345,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "7e596208a1c2711a4d6b7d2e6ba202b971a1ae8eae0af215e06aa01511f3e07e"
+        "sha256": "52e8aa52e86b16596ae671e5672e59fe6a61541c0dc12bef5135794d8265c937"
       },
       "schema_version": "dev_tool_result.v1"
     },
@@ -383,7 +383,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "694eeacf026c3c6abe6363625d1188fa59c3b1d194713acd8754babeeaa0dfad"
+        "sha256": "1581f9d501b4bbfa5bd2e273ebae6d10e5e9073972eb2ea43a43394720a00122"
       },
       "schema_version": "dev_stream_event.v1"
     },

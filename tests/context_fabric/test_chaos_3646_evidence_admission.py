@@ -731,6 +731,9 @@ def test_a_refused_candidate_leaves_no_verifiable_residue() -> None:
         entity_type="work_item",
         entity_id="proj_quarry",
         repository_ids=(),
+        # What a genuine admission attempt for this locator would have
+        # bound (CHAOS-3633) -- the forgery is the entity, not the locator.
+        record_locator="wg_identity_rewrite",
     )
     assert signer.verify(ORG, forged) is False
 

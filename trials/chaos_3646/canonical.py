@@ -171,6 +171,13 @@ def record_for(
         # Carries the slug to the mint. Not emitted on the ref:
         # ``_safe_link`` ignores a path that does not start with "/".
         internal_path=evidence.slug,
+        # CHAOS-3633 platform fix: the slug IS this record's own locator --
+        # the same value ``_candidate()``'s ``locator`` field carries in
+        # this trial's own tests -- so ``EvidenceService.admit`` binding
+        # ``record_locator=candidate.locator`` and this function agree, and
+        # ``CorpusEvidenceSigner.verify`` (which calls this function with no
+        # candidate in scope at all) recomputes the identical payload.
+        record_locator=evidence.slug,
     )
 
 

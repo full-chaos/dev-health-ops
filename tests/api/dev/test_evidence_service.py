@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +11,7 @@ from dev_health_ops.api.dev.contracts import FreshnessState
 from dev_health_ops.api.dev.evidence_service import (
     MAX_EXPANSION_BYTES,
     EvidenceAvailability,
+    EvidenceCandidate,
     EvidenceRecord,
     EvidenceReferenceSigner,
     EvidenceService,
@@ -556,3 +559,346 @@ async def test_no_matches_is_distinct_from_unconfigured_optional_source() -> Non
         "work_items": EvidenceAvailability.NO_MATCHES,
         "acr": EvidenceAvailability.UNCONFIGURED,
     }
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3633: two same-kind records about one entity must not collide onto
+# one handle.
+# ---------------------------------------------------------------------------
+
+
+class _TwoRecordResolver:
+    """Resolves two DISTINCT records of the same kind about one entity.
+
+    Keyed by ``candidate.locator`` -- the source's own record identity
+    (CHAOS-3646, ``EvidenceCandidate.locator`` docstring) -- never by
+    ``entity_id``, which both records share on purpose: that sharing is
+    exactly the CHAOS-3633 scenario (two reviews on one PR, two incidents
+    about one project, ...).
+    """
+
+    source_system = "reviews"
+
+    def __init__(self, records_by_locator: dict[str, EvidenceRecord]) -> None:
+        self._records = records_by_locator
+
+    async def resolve(
+        self, *, org_id: str, scope: object, candidate: EvidenceCandidate
+    ) -> EvidenceRecord | None:
+        return self._records.get(candidate.locator)
+
+
+def _same_entity_record(locator: str, *, label: str) -> EvidenceRecord:
+    return EvidenceRecord(
+        source_system="reviews",
+        source_version="native.v1",
+        entity_type="pull_request",
+        entity_id="issue-1",
+        display_label=label,
+        observed_at=NOW,
+        freshness=FreshnessState.FRESH,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=(),
+        raw_excerpt=f"{label} content, locator {locator}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_same_kind_records_about_one_entity_mint_distinct_handles() -> None:
+    """CHAOS-3633 RED-first: the defect this test demonstrates is a
+    denial-of-service on legitimate, distinct evidence. Before the fix,
+    ``EvidenceReferenceSigner._payload`` binds only
+    ``(org, source_system, source_version, entity_type, entity_id,
+    repositories)`` -- none of which differ between these two records, since
+    they are two DIFFERENT records about the SAME entity. Both mint the
+    identical ``evidence_ref_id``, and a caller enforcing "no repeated index
+    handle" (the frozen graph packet contract) refuses the second, genuine
+    record as though it were a duplicate of the first.
+    """
+
+    records = {
+        "review-1": _same_entity_record("review-1", label="First review"),
+        "review-2": _same_entity_record("review-2", label="Second review"),
+    }
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_TwoRecordResolver(records)],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="reviews",
+            entity_type="pull_request",
+            entity_id="issue-1",
+            locator=locator,
+        )
+        for locator in ("review-1", "review-2")
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    first, second = result.admissions
+    assert first.state is EvidenceAvailability.AVAILABLE
+    assert second.state is EvidenceAvailability.AVAILABLE
+    assert first.evidence is not None
+    assert second.evidence is not None
+    assert first.evidence.display_label == "First review"
+    assert second.evidence.display_label == "Second review"
+    # The defect: without a distinct record identity in the signed payload,
+    # these two DIFFERENT records mint the SAME handle.
+    assert first.evidence.evidence_ref_id != second.evidence.evidence_ref_id
+
+
+def test_adjacent_field_concatenation_cannot_collide_payloads() -> None:
+    """Contract-owner condition 1: the signed payload is a JSON object with
+    a distinct named key per field, never a concatenation of
+    ``entity_type``/``record_locator`` -- so ``(entity_type="a",
+    record_locator="bc")`` and ``(entity_type="ab", record_locator="c")``
+    -- which a naive ``entity_type + record_locator`` string join WOULD
+    equate, both reducing to ``"abc"`` -- must sign to different bytes."""
+
+    left = EvidenceRecord(
+        source_system="reviews",
+        source_version="native.v1",
+        entity_type="a",
+        entity_id="issue-1",
+        display_label="Left",
+        observed_at=NOW,
+        freshness=FreshnessState.FRESH,
+        provenance="native",
+        confidence=1.0,
+        record_locator="bc",
+    )
+    right = replace(left, entity_type="ab", record_locator="c")
+    signer = EvidenceReferenceSigner(SECRET)
+    assert signer.issue("org-a", left) != signer.issue("org-a", right)
+
+
+class _RecordLocatorStrippingSigner(EvidenceReferenceSigner):
+    """A DELIBERATELY weakened encoder: identical to the real signer except
+    it drops ``record_locator`` from the signed payload -- i.e. exactly
+    today's pre-CHAOS-3633 behaviour. Exists only so the strip/forge tests
+    below can be shown failing against it, proving those tests actually
+    discriminate rather than passing by construction."""
+
+    @staticmethod
+    def _payload(org_id: str, evidence) -> bytes:
+        repository_ids = sorted(evidence.repository_ids)
+        payload = {
+            "org": org_id,
+            "source": evidence.source_system,
+            "source_version": evidence.source_version,
+            "entity_type": evidence.entity_type,
+            "entity_id": evidence.entity_id,
+            "repositories": repository_ids,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _locator_bearing_record(locator: str) -> EvidenceRecord:
+    return EvidenceRecord(
+        source_system="reviews",
+        source_version="native.v1",
+        entity_type="pull_request",
+        entity_id="issue-1",
+        display_label="A review",
+        observed_at=NOW,
+        freshness=FreshnessState.FRESH,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=(),
+        record_locator=locator,
+    )
+
+
+@pytest.mark.parametrize(
+    "signer_cls,discriminates",
+    [
+        pytest.param(EvidenceReferenceSigner, True, id="real_signer"),
+        pytest.param(_RecordLocatorStrippingSigner, False, id="weakened_signer"),
+    ],
+)
+def test_stripping_the_signed_locator_is_caught_only_by_the_real_signer(
+    signer_cls: type[EvidenceReferenceSigner], discriminates: bool
+) -> None:
+    """Contract-owner condition 2, strip direction: a ref signed WITH a
+    locator, then presented for verification WITHOUT one, must fail.
+    Parametrized over the real signer and the deliberately weakened one
+    above so this property is observed FAILING against the weak encoder
+    (``discriminates=False``) before it is trusted to pass against the real
+    one -- a strip test that could never fail proves nothing."""
+
+    signer = signer_cls(SECRET)
+    signed = _locator_bearing_record("review-1")
+    handle = signer.issue("org-a", signed)
+    stripped = replace(signed, record_locator=None)
+    verified = signer.verify(
+        "org-a",
+        SimpleNamespace(
+            evidence_ref_id=handle,
+            source_system=stripped.source_system,
+            source_version=stripped.source_version,
+            entity_type=stripped.entity_type,
+            entity_id=stripped.entity_id,
+            repository_ids=stripped.repository_ids,
+            record_locator=stripped.record_locator,
+        ),
+    )
+    # A stripped locator must NEVER verify against the real signer
+    # (``discriminates=True``), and -- observed here, not assumed -- DOES
+    # verify against the deliberately weakened one, which is exactly what
+    # makes the weakened encoder weak and this parametrization meaningful.
+    assert verified is not discriminates
+
+
+@pytest.mark.parametrize(
+    "signer_cls,discriminates",
+    [
+        pytest.param(EvidenceReferenceSigner, True, id="real_signer"),
+        pytest.param(_RecordLocatorStrippingSigner, False, id="weakened_signer"),
+    ],
+)
+def test_forging_a_different_locator_is_caught_only_by_the_real_signer(
+    signer_cls: type[EvidenceReferenceSigner], discriminates: bool
+) -> None:
+    """Contract-owner condition 2, forge direction: a ref signed for one
+    locator, then presented with a DIFFERENT locator substituted in, must
+    fail against the real signer -- and, observed here rather than assumed,
+    does NOT fail against the deliberately weakened one, proving this test
+    discriminates instead of passing by construction."""
+
+    signer = signer_cls(SECRET)
+    signed = _locator_bearing_record("review-1")
+    handle = signer.issue("org-a", signed)
+    forged = replace(signed, record_locator="review-2")
+    verified = signer.verify(
+        "org-a",
+        SimpleNamespace(
+            evidence_ref_id=handle,
+            source_system=forged.source_system,
+            source_version=forged.source_version,
+            entity_type=forged.entity_type,
+            entity_id=forged.entity_id,
+            repository_ids=forged.repository_ids,
+            record_locator=forged.record_locator,
+        ),
+    )
+    assert verified is not discriminates
+
+
+@pytest.mark.asyncio
+async def test_non_vacuity_admission_forces_distinct_locators_even_if_the_resolver_forgets() -> (
+    None
+):
+    """Contract-owner condition 3: same-kind multi-record admission MUST set
+    the locator -- unset-by-default must not be able to silently
+    reintroduce CHAOS-3633. The resolver below is deliberately "lazy": it
+    never sets ``record_locator`` on the ``EvidenceRecord`` it returns (the
+    field defaults to ``None``, exactly as every pre-fix resolver would).
+    ``EvidenceService.admit`` must still force distinctness by binding the
+    submitted candidate's own locator -- see ``admit``'s docstring -- so
+    this passes not because the resolver did the right thing, but because
+    the service does not let it get this wrong.
+    """
+
+    class _LazyResolver:
+        source_system = "reviews"
+
+        async def resolve(self, *, org_id, scope, candidate):
+            # Deliberately ignores ``candidate.locator`` when building the
+            # record -- ``record_locator`` stays at its ``None`` default.
+            return EvidenceRecord(
+                source_system="reviews",
+                source_version="native.v1",
+                entity_type="pull_request",
+                entity_id="issue-1",
+                display_label=f"Review at {candidate.locator}",
+                observed_at=NOW,
+                freshness=FreshnessState.FRESH,
+                provenance="native",
+                confidence=1.0,
+                repository_ids=(),
+            )
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_LazyResolver()],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="reviews",
+            entity_type="pull_request",
+            entity_id="issue-1",
+            locator=locator,
+        )
+        for locator in ("review-1", "review-2")
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    first, second = result.admissions
+    assert first.evidence is not None and second.evidence is not None
+    assert first.evidence.evidence_ref_id != second.evidence.evidence_ref_id
+    assert first.evidence.record_locator == "review-1"
+    assert second.evidence.record_locator == "review-2"
+
+
+@pytest.mark.asyncio
+async def test_a_genuine_handle_collision_within_one_round_is_refused_not_silently_merged() -> (
+    None
+):
+    """Defense-in-depth backstop for condition 3: even if two DIFFERENT
+    locators somehow minted the identical handle -- a payload-encoding
+    regression, not something reachable through the real signer today --
+    the second admission must be refused rather than silently returned as
+    though it were a distinct, valid record. Exercised with the
+    deliberately weakened (locator-blind) signer, which is exactly the kind
+    of regression this guard exists to catch.
+    """
+
+    class _TwoLocatorResolver:
+        source_system = "reviews"
+
+        async def resolve(self, *, org_id, scope, candidate):
+            return _locator_bearing_record(candidate.locator)
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=_RecordLocatorStrippingSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_TwoLocatorResolver()],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="reviews",
+            entity_type="pull_request",
+            entity_id="issue-1",
+            locator=locator,
+        )
+        for locator in ("review-1", "review-2")
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    first, second = result.admissions
+    assert first.state is EvidenceAvailability.AVAILABLE
+    assert first.evidence is not None
+    assert second.state is EvidenceAvailability.UNAVAILABLE
+    assert second.evidence is None
+    assert second.warning == "ambiguous_record_identity"

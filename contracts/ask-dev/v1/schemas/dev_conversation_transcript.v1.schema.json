@@ -636,6 +636,21 @@
           "title": "Provenance",
           "type": "string"
         },
+        "record_locator": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Locator"
+        },
         "repository_ids": {
           "items": {
             "maxLength": 128,

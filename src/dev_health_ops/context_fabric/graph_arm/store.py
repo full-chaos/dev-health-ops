@@ -41,6 +41,7 @@ from .backend import (
     EmbeddingBackend,
     GraphitiUnavailableError,
     graphiti_module,
+    to_graphiti_document_nodes,
     to_graphiti_edges,
     to_graphiti_nodes,
 )
@@ -350,7 +351,19 @@ class GraphArmStore:
             # nothing, rather than costing most of the budget and then
             # stopping half-written. A non-semantic embedder makes no calls
             # and is deliberately not charged.
-            needed = len(projection.nodes) + len(projection.edges)
+            #
+            # Documents get their OWN embedding call each (CHAOS-3632:
+            # to_graphiti_document_nodes embeds body, unconditionally, for
+            # every embedder -- unlike to_graphiti_nodes, which only
+            # pre-embeds for the deterministic case and otherwise leaves
+            # add_nodes_and_edges_bulk to embed on name). Omitting them here
+            # would let a document-heavy batch spend more calls than this
+            # check ever saw.
+            needed = (
+                len(projection.nodes)
+                + len(projection.edges)
+                + len(projection.approved_documents)
+            )
             outcome = budgets.check_embedding_calls(needed)
             if not outcome.within_budget:
                 raise EmbeddingBudgetExceededError(
@@ -360,6 +373,11 @@ class GraphArmStore:
                 )
 
         nodes = to_graphiti_nodes(projection, self._embedder)
+        document_nodes = await self._bounded_write(
+            to_graphiti_document_nodes(projection, self._embedder),
+            operation="embed_documents",
+        )
+        nodes = nodes + document_nodes
         edges = to_graphiti_edges(projection, self._embedder)
         await self._bounded_write(
             graphiti_module("utils.bulk_utils").add_nodes_and_edges_bulk(
@@ -368,13 +386,20 @@ class GraphArmStore:
             operation="write_projection",
         )
         indexed_through = max(
-            (node.observed_at for node in projection.nodes),
+            (
+                *(node.observed_at for node in projection.nodes),
+                *(document.observed_at for document in projection.approved_documents),
+            ),
             default=None,
         )
         watermark = IndexWatermark(
             indexed_through=indexed_through,
             projected_at=datetime.now(UTC),
-            records_indexed=len(projection.nodes) + len(projection.edges),
+            records_indexed=(
+                len(projection.nodes)
+                + len(projection.edges)
+                + len(projection.approved_documents)
+            ),
             # A projection is all-or-nothing (over budget raises in
             # build_projection), and this write either completed or raised.
             # So a watermark produced here is never partial; the flag stays

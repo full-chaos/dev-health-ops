@@ -502,7 +502,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
         f"{_ADV}::TestTheLoadBearingInjectionCase::"
         "test_its_payload_still_never_reaches_a_packet",
         f"{_ADV}::TestTheLoadBearingInjectionCase::"
-        "test_because_nothing_reads_the_approved_set_at_all",
+        "test_approval_is_now_the_load_bearing_enforcement_gate",
         f"{_ADV}::TestTheLoadBearingInjectionCase::"
         "test_the_EPISODE_channel_carries_no_injection_because_none_is_ingested",
         f"{_ADV}::TestTheLoadBearingInjectionCase::"

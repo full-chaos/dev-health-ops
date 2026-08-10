@@ -156,9 +156,11 @@ class TestNoGraphNodeWasAdded:
         # persisted nothing (and thus trivially left count_nodes alone)
         # cannot pass this test by doing nothing.
         assert (await store.read_watermark()).never_projected is False
-        assert (
-            await store.count_nodes() == len(projection.nodes) == (result.nodes_written)
-        ), (
+        # CHAOS-3632: approved documents are written as nodes too, alongside
+        # (not as part of) projection.nodes -- result.nodes_written already
+        # reflects that; the live count must agree with it.
+        expected = len(projection.nodes) + len(projection.approved_documents)
+        assert await store.count_nodes() == expected == result.nodes_written, (
             "count_nodes() changed after persisting a watermark -- the "
             "watermark must never be stored as a Cypher graph node, because "
             "NODE_COUNT_QUERY counts every node unconditionally"
@@ -172,10 +174,11 @@ class TestNoGraphNodeWasAdded:
 
         deleted = await store.purge_org()
 
-        assert deleted == len(projection.nodes), (
+        # CHAOS-3632: approved documents are written as nodes too.
+        assert deleted == len(projection.nodes) + len(projection.approved_documents), (
             "purge_org's node count included something other than the "
-            "projected nodes -- a graph-stored watermark sentinel would do "
-            "exactly this"
+            "projected nodes and written documents -- a graph-stored "
+            "watermark sentinel would do exactly this"
         )
 
 

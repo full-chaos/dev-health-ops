@@ -138,7 +138,11 @@ async def alpha_store(
 class TestLiveWriteAndReadBack:
     async def test_the_projection_is_written_and_counted(self, alpha_store) -> None:
         store, projection = alpha_store
-        assert await store.count_nodes() == len(projection.nodes)
+        # CHAOS-3632: approved documents are written as nodes too, alongside
+        # (not as part of) projection.nodes -- see to_graphiti_document_nodes.
+        assert await store.count_nodes() == len(projection.nodes) + len(
+            projection.approved_documents
+        )
 
     async def test_canonical_ids_survive_a_real_round_trip(self, alpha_store) -> None:
         """record -> Graphiti -> FalkorDB -> Cypher -> readout.
@@ -715,7 +719,8 @@ class TestDeterministicCleanup:
             assert await store.count_nodes() > 0
 
             deleted = await store.purge_org()
-            assert deleted == len(projection.nodes)
+            # CHAOS-3632: approved documents are written as nodes too.
+            assert deleted == len(projection.nodes) + len(projection.approved_documents)
             # Read back rather than trusting the return value: a purge that
             # reported a count without deleting would pass on the count alone.
             assert await store.count_nodes() == 0
@@ -724,9 +729,10 @@ class TestDeterministicCleanup:
 
     async def test_a_dry_run_counts_without_deleting(self, alpha_store) -> None:
         store, projection = alpha_store
+        expected = len(projection.nodes) + len(projection.approved_documents)
         counted = await store.purge_org(dry_run=True)
-        assert counted == len(projection.nodes)
-        assert await store.count_nodes() == len(projection.nodes)
+        assert counted == expected
+        assert await store.count_nodes() == expected
 
     async def test_purging_an_organization_that_never_projected_is_not_an_error(
         self,
@@ -849,8 +855,13 @@ class TestDeterministicCleanup:
             if item.name == TRIAL_DERIVED_STORE_NAME
         )
         assert entry.visit is not None
-        assert await entry.visit(org_id, True) == len(projection.nodes)
-        assert await entry.visit(org_id, False) == len(projection.nodes)
+        # CHAOS-3632: approved documents are written as nodes too.
+        assert await entry.visit(org_id, True) == len(projection.nodes) + len(
+            projection.approved_documents
+        )
+        assert await entry.visit(org_id, False) == len(projection.nodes) + len(
+            projection.approved_documents
+        )
         assert await entry.visit(org_id, False) == 0
 
 

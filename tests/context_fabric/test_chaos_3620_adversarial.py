@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
@@ -46,8 +45,10 @@ from dev_health_ops.api.dev.investigation_corpus import world
 from dev_health_ops.context_fabric.graph_arm import build_projection
 from dev_health_ops.context_fabric.graph_arm import corpus_adapter as adapter
 from dev_health_ops.context_fabric.graph_arm.backend import (
+    DeterministicEmbedder,
     GraphitiUnavailableError,
     parse_triple_fact,
+    to_graphiti_document_nodes,
 )
 from dev_health_ops.context_fabric.graph_arm.budgets import (
     DEFAULT_BUDGETS,
@@ -75,6 +76,7 @@ from dev_health_ops.context_fabric.graph_arm.vocabulary import (
 )
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 from tests.context_fabric import chaos_3620_spine as spine
+from tests.context_fabric import live_gate
 
 _PROBE_ORG = "org_3620_probe"
 _PROBE_AT = datetime(2026, 8, 1, tzinfo=UTC)
@@ -463,38 +465,94 @@ class TestTheLoadBearingInjectionCase:
             "the denial-of-evidence route it was designed to avoid"
         )
 
-    def test_because_nothing_reads_the_approved_set_at_all(self) -> None:
-        """The reason, asserted rather than assumed — and the residual.
+    def test_approval_is_now_the_load_bearing_enforcement_gate(self) -> None:
+        """CHAOS-3632's instruction, fulfilled: this replaces the tripwire
+        that used to live here (``test_because_nothing_reads_the_approved_
+        set_at_all``), which asserted ``approved_documents`` had zero
+        readers in ``src/`` and named itself for deletion the moment that
+        stopped being true.
 
-        ``approved_documents`` is written by ``build_projection`` and read by
-        nobody. That is what actually contains the payload today, and it is
-        why the containment above is not evidence that approval works: it is
-        evidence that no extraction pass exists yet.
+        It is no longer true: ``backend.to_graphiti_document_nodes``
+        (CHAOS-3632) reads ``approved_documents`` and writes each one as a
+        graph node. So the class docstring's own framing has flipped --
+        "approval is not what contains the payload today" is now false, and
+        this test is the proof the old one demanded be built first:
+        approval decides whether a document reaches a node AT ALL, and the
+        rejected twin of the same poisoned probe must never reach one.
 
-        This test goes red the moment one does, which is exactly when the
-        approval gate stops being decorative and needs its own proof.
+        The node's own content stays contained a second, independent way
+        even for the APPROVED case: ``to_graphiti_document_nodes`` stores
+        ``body`` nowhere on the node (title only, per CHAOS-3660's
+        "name=title never body" convention) -- reading it back through
+        semantic/BM25 retrieval remains Lane D's follow-up
+        (``semantic_retrieval.py``, out of CHAOS-3632's scope), and direct
+        unit coverage of that convention lives in
+        ``test_chaos_3632_document_writer.py``. What this test adds that
+        module cannot: proof against the SAME adversarial probe this whole
+        class already uses, so the CHAOS-3620 injection record and
+        CHAOS-3632's write-side proof are demonstrably about the identical
+        payload.
         """
 
-        arm_root = (
-            Path(spine.__file__).resolve().parents[2]
-            / "src"
-            / "dev_health_ops"
-            / "context_fabric"
+        live_gate.require_graphiti_extra()
+
+        def _probe(canonical_id: str, *, approved: bool) -> UnstructuredDocumentRecord:
+            return UnstructuredDocumentRecord(
+                org_id=world.ORG_HELIO,
+                canonical_id=canonical_id,
+                title="Migration notes",
+                body=_INJECTION_PAYLOAD,
+                source_class=SourceClass.WORK_GRAPH,
+                observed_at=_PROBE_AT,
+                subjects=(
+                    CanonicalRef(kind=GraphEntityKind.PROJECT, canonical_id="proj_acr"),
+                ),
+                approved=approved,
+            )
+
+        # Two probes, same payload, differing ONLY in approval -- the one
+        # variable this test exists to isolate.
+        batch = adapter.corpus_batch(world.ORG_HELIO)
+        projection = build_projection(
+            dataclasses.replace(
+                batch,
+                documents=(
+                    *batch.documents,
+                    _probe("doc_probe_approved_poison_2", approved=True),
+                    _probe("doc_probe_rejected_poison", approved=False),
+                ),
+            )
         )
-        readers = sorted(
-            path.relative_to(arm_root).as_posix()
-            for path in arm_root.rglob("*.py")
-            if "approved_documents" in path.read_text(encoding="utf-8")
-            and path.name != "projection.py"
+        assert "doc_probe_approved_poison_2" in {
+            document.canonical_id for document in projection.approved_documents
+        }
+        assert "doc_probe_rejected_poison" in projection.rejected_document_ids
+
+        nodes = asyncio.run(
+            to_graphiti_document_nodes(projection, DeterministicEmbedder())
         )
-        assert not readers, (
-            "something now reads projection.approved_documents: "
-            f"{readers}. Untrusted document text is reachable by an "
-            "extraction pass, so approval has become the load-bearing gate. "
-            "CHAOS-3632 is the instruction: the approval-enforcement proof "
-            "must be built BEFORE the extraction pass ships. Do not delete "
-            "this test -- read the ticket, then replace it with that proof "
-            "-- the CHAOS-3620 injection record must be updated"
+        node_ids = {node.attributes["cf_canonical_id"] for node in nodes}
+        assert "doc_probe_approved_poison_2" in node_ids, (
+            "an APPROVED poisoned document did not reach a node -- approval "
+            "is supposed to be the gate that lets it through"
+        )
+        assert "doc_probe_rejected_poison" not in node_ids, (
+            "a REJECTED poisoned document reached a node -- approval is not "
+            "enforced, and the CHAOS-3620 containment this class measures "
+            "no longer holds"
+        )
+        (approved_node,) = (
+            node
+            for node in nodes
+            if node.attributes["cf_canonical_id"] == "doc_probe_approved_poison_2"
+        )
+        serialized = repr(
+            (approved_node.name, approved_node.summary, approved_node.attributes)
+        )
+        assert _INJECTION_PAYLOAD[:40] not in serialized, (
+            "the approved probe's own payload text reached the node despite "
+            "being approved to exist as a node -- 'name=title never body' "
+            "is what is supposed to prevent this, independent of approval"
         )
 
 

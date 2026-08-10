@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
+from dev_health_ops.api.graphql.security import is_development_environment
 from dev_health_ops.api.services.configuration.generic import SettingsService
 from dev_health_ops.models.settings import SettingCategory
 
@@ -43,14 +44,43 @@ TERMINAL_RUN_STATES: frozenset[str] = frozenset(
 
 
 def _bounded_operator_limit(
-    name: str, *, default: int, minimum: int, hard_maximum: int
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    hard_maximum: int,
+    dev_override_name: str | None = None,
 ) -> int:
     raw = os.getenv(name, "").strip()
     try:
         value = int(raw) if raw else default
     except ValueError:
         value = default
-    return min(hard_maximum, max(minimum, value))
+    ceiling = hard_maximum
+    if dev_override_name is not None and is_development_environment():
+        # CHAOS-3523(B): dev/local escape hatch for the compiled-in hard
+        # maximum. A local/dev account otherwise cannot exceed
+        # ``hard_maximum`` without SQL surgery on dev_runs. Gated on
+        # ``is_development_environment()`` -- the SAME production/dev signal
+        # ``api/graphql/security.py`` already stakes real security posture on
+        # (GraphQL introspection, the GraphiQL IDE) and ``rate_limit.py``
+        # uses for its own dev/test bypass -- not a second, independently
+        # spoofable flag. That signal already defaults CLOSED: with
+        # ENVIRONMENT/APP_ENV/ENV all unset, ``environment_name()`` resolves
+        # to ``"production"`` and this branch never runs, so
+        # ``dev_override_name`` is never even read in that posture. A
+        # deployment where this DID leak open would already have GraphQL
+        # introspection and the GraphiQL IDE exposed -- a louder signal ops
+        # would catch long before this cap mattered.
+        override_raw = os.getenv(dev_override_name, "").strip()
+        if override_raw:
+            try:
+                override_ceiling = int(override_raw)
+            except ValueError:
+                override_ceiling = 0
+            if override_ceiling > 0:
+                ceiling = override_ceiling
+    return min(ceiling, max(minimum, value))
 
 
 def platform_operator_request_limit() -> int:
@@ -59,6 +89,7 @@ def platform_operator_request_limit() -> int:
         default=PLATFORM_MONTHLY_REQUEST_LIMIT_DEFAULT,
         minimum=PLATFORM_MONTHLY_REQUEST_LIMIT_MIN,
         hard_maximum=PLATFORM_MONTHLY_REQUEST_LIMIT_HARD_MAX,
+        dev_override_name="ASK_DEV_PLATFORM_MONTHLY_REQUEST_DEV_MAX",
     )
 
 
@@ -68,6 +99,7 @@ def platform_operator_cost_limit_microusd() -> int:
         default=PLATFORM_MONTHLY_COST_LIMIT_DEFAULT_MICROUSD,
         minimum=PLATFORM_MONTHLY_COST_LIMIT_MIN_MICROUSD,
         hard_maximum=PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD,
+        dev_override_name="ASK_DEV_PLATFORM_MONTHLY_COST_DEV_MAX_MICROUSD",
     )
 
 

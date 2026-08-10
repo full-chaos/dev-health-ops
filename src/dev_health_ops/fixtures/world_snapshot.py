@@ -120,15 +120,17 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+from dev_health_ops.fixtures.ttl_horizon import TTL_SAFETY_MARGIN
 from dev_health_ops.fixtures.ttl_registry import (
     TTL_SAFETY_MARGIN_DAYS,
     assert_snapshot_not_expired,
+    assert_ttl_vocabulary_is_consistent,
     clickhouse_ttl_retentions,
     snapshot_expiry,
 )
@@ -188,6 +190,24 @@ class RestoreRefusedError(RuntimeError):
     migrated acceptance target is exactly the failure mode
     ``_require_scratch_database`` protects ``fixtures world`` from, and this
     path must fail just as closed.
+    """
+
+
+class SnapshotExpiredError(RuntimeError):
+    """The snapshot is older than the shelf life its own generation bought.
+
+    CHAOS-3432/3544. ClickHouse TTLs delete rows on load, so a restored world
+    is not the world that was snapshotted once enough real time has passed --
+    the bytes are identical and the TABLE is not. Generated history stops a
+    full ``TTL_SAFETY_MARGIN`` inside the tightest TTL, and that margin is
+    exactly how long a snapshot stays restorable.
+
+    Raised BEFORE the content oracle, deliberately. The oracle would also
+    fail -- with a hash mismatch on whichever table happened to cross its
+    horizon first, which is how this defect spent months being attributed to
+    generator nondeterminism. "SNAPSHOT EXPIRED, re-mint required" is a
+    five-minute fix; "feature_flag_event: source=32c53f52 target=0160527f" at
+    2am is a night of archaeology for the same cause.
     """
 
 
@@ -585,6 +605,38 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _scalar_count(result: Any, *, context: str, default: int | None = None) -> int:
+    """Extract a single scalar ``count()`` from a ClickHouse query result --
+    never trusting ``result_rows[0][0]`` unvalidated.
+
+    Codex round-2 finding (MEDIUM, confirmed): a bare ``len(result_rows) !=
+    1`` check let ``result_rows == [[]]`` (one row, ZERO columns) through,
+    which then raised an uncontrolled ``IndexError`` at ``[0][0]`` instead
+    of a named ``SnapshotError`` -- and ``result_rows == [[0, "extra"]]``
+    (an unexpected extra column) passed silently. Every ``count()`` call
+    site in this module -- the TTL-horizon guard, both counts in the dump-
+    verification retry loop -- now goes through this ONE function, so a
+    response-shape defect fails the same, named way everywhere instead of
+    differently depending on which call site happened to hit it.
+
+    ``default`` is for a genuinely diagnostic-only caller (a warning
+    message, not a pass/fail decision) that would rather log a sentinel
+    than abort on a malformed *diagnostic* query; omitted, this raises.
+    """
+
+    rows = getattr(result, "result_rows", None)
+    if not rows or len(rows) != 1 or len(rows[0]) != 1:
+        if default is not None:
+            return default
+        raise SnapshotError(
+            f"world snapshot: {context} returned a malformed result "
+            f"({rows!r}) instead of a single scalar count() row -- "
+            'refusing to fold that into "0" (a measurement that did not '
+            "actually happen must fail, not silently pass)."
+        )
+    return int(rows[0][0])
+
+
 async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
     """CHAOS-3602: refuse to snapshot a table holding rows within
     ``TTL_SAFETY_MARGIN_DAYS`` of their own TTL deletion horizon.
@@ -593,20 +645,59 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
     silently, with no error, no warning. A table with horizon-adjacent rows
     is racing the background merge scheduler: whether a row survives to be
     read depends entirely on exactly when a merge happens to run relative
-    to when this snapshot reads the table. That race is what actually
-    happened: `fixtures world` generated a `feature_flag_event` row at
-    precisely `now - 90 days` (that table's own TTL), and it was gone by
-    the time `fixtures world-snapshot` read the table minutes later, once a
-    background merge swept it (confirmed against `system.part_log`:
-    `merge_reason: TTLDeleteMerge`, the part shrinking from 95 to 94 rows).
+    to when this snapshot reads the table.
 
-    The real fix is fixture generation staying inside a safety margin
-    (`ttl_registry.max_safe_backdate_days`, applied at generation time).
-    This is the belt-and-braces guard that catches a violation BEFORE the
-    snapshot ever races the merge scheduler, rather than discovering it via
+    CHAOS-3432/3544 already keeps fixture GENERATION a margin inside the
+    single tightest schema-wide TTL horizon (``ttl_horizon.py``), and that
+    is the primary defense. This is the belt-and-braces guard on top of it,
+    scoped PER TABLE (via :func:`clickhouse_ttl_retentions`, parsed from the
+    migration source the same way) and checked against the LIVE data right
+    before any dump runs -- catching a violation from any source (clock
+    drift, a future generator that forgets to clamp, hand-seeded data)
+    before it can race the merge scheduler, rather than discovering it via
     a content-oracle mismatch after data has already been silently lost.
+
+    Codex finding (HIGH, confirmed): this guard's entire safety depends on
+    :func:`clickhouse_ttl_retentions` actually parsing something -- a
+    migrations-directory path failure or parser regression makes it return
+    ``{}``, and the loop below treats every table as "no TTL, nothing to
+    check" and passes with ZERO queries issued. Reproduced directly: pointed
+    the registry at a nonexistent directory and confirmed this function
+    returned cleanly against a fake client that would have reported a
+    massive violation had it been queried at all. This schema is known to
+    carry several TTL'd tables, so an empty registry always means the
+    parser/path broke, never that the risk went away -- fail loudly instead
+    of silently minting an unchecked snapshot.
+
+    Codex round-2 finding (HIGH, confirmed): "non-empty" is not the same
+    guarantee as "complete". Reproduced directly: dropping just
+    ``telemetry_signal_bucket`` from an otherwise-full registry (every OTHER
+    table still parsing fine) let a fake client reporting 999999 violating
+    rows for that exact table pass silently -- ``retentions.get(table)``
+    returning ``None`` is indistinguishable from "genuinely no TTL" at this
+    call site.
+
+    Codex round-3 finding (HIGH, confirmed): checking against
+    :data:`KNOWN_TTL_TABLES` alone only catches a table falling OUT of an
+    otherwise-working registry -- a table that never enters the registry
+    (an unmatched TTL syntax variant) AND was never added to
+    ``KNOWN_TTL_TABLES`` satisfies that check trivially. Reproduced
+    directly: a synthetic ``TTL occurred_at + INTERVAL 4 WEEK`` (a real
+    ClickHouse form the precise parser's ``DAY``-only regex cannot match)
+    is invisible to :func:`clickhouse_ttl_retentions` entirely, so the
+    previous ``KNOWN_TTL_TABLES - retentions.keys()`` check passed
+    vacuously. :func:`assert_ttl_vocabulary_is_consistent` closes this with
+    an independent third source (see its own docstring).
+
+    The per-table query result is held to the same standard: a malformed or
+    empty result is never folded into "0 violating rows" (see
+    :func:`_scalar_count`).
     """
 
+    try:
+        assert_ttl_vocabulary_is_consistent()
+    except RuntimeError as exc:
+        raise SnapshotError(f"world snapshot: {exc}") from exc
     retentions = clickhouse_ttl_retentions()
     violations: list[str] = []
     for table in tables:
@@ -619,7 +710,9 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
             f"SELECT count() FROM `{table}` "
             f"WHERE `{retention.column}` <= now() - INTERVAL {safe_days} DAY",
         )
-        count = int(result.result_rows[0][0]) if result.result_rows else 0
+        count = _scalar_count(
+            result, context=f"the TTL-horizon check for table {table!r}"
+        )
         if count:
             violations.append(
                 f"{table}: {count} row(s) with {retention.column} at or "
@@ -633,9 +726,8 @@ async def _assert_no_ttl_horizon_rows(client: Any, tables: list[str]) -> None:
             "within their own TTL deletion margin -- a mint over "
             "horizon-adjacent data races ClickHouse's background merge "
             "scheduler rather than producing a deterministic artifact "
-            "(CHAOS-3602: this exact race silently dropped a "
-            "feature_flag_event row from a real mint). Regenerate the "
-            "world so every date stays inside its table's safe margin "
+            "(CHAOS-3602). Regenerate the world so every date stays inside "
+            "its table's safe margin "
             f"(dev_health_ops.fixtures.ttl_registry.max_safe_backdate_days): "
             f"{violations}"
         )
@@ -698,7 +790,9 @@ async def _dump_clickhouse(
         pre_count = await asyncio.to_thread(
             client.query, f"SELECT count() FROM `{table}`{final}"
         )
-        expected = int(pre_count.result_rows[0][0])
+        expected = _scalar_count(
+            pre_count, context=f"the pre-dump count() for table {table!r}"
+        )
 
         # Decode what the payload ACTUALLY holds, server-side, via a
         # throwaway staging table -- not a second independent count() on the
@@ -722,7 +816,13 @@ async def _dump_clickhouse(
             decoded = await asyncio.to_thread(
                 client.query, f"SELECT count() FROM `{verify_table}`"
             )
-            decoded_count = int(decoded.result_rows[0][0])
+            decoded_count = _scalar_count(
+                decoded,
+                context=(
+                    f"the decoded-payload count() for table {table!r} "
+                    f"(attempt {attempt})"
+                ),
+            )
         finally:
             await asyncio.to_thread(
                 client.command, f"DROP TABLE IF EXISTS `{verify_table}`"
@@ -738,8 +838,13 @@ async def _dump_clickhouse(
             "AND database = {db:String} AND active",
             parameters={"t": table, "db": client.database},
         )
-        active_parts = (
-            int(parts_result.result_rows[0][0]) if parts_result.result_rows else -1
+        # Diagnostic-only (feeds the warning message below, not a decision):
+        # a malformed result here logs a sentinel rather than aborting the
+        # retry loop over a formatting query.
+        active_parts = _scalar_count(
+            parts_result,
+            context=f"the system.parts diagnostic for table {table!r}",
+            default=-1,
         )
         last_diagnostics = (
             f"table={table!r} attempt={attempt}/{_DUMP_VERIFY_ATTEMPTS} "
@@ -1098,6 +1203,25 @@ async def snapshot_world(
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "world_schema_version": manifest.world["schema_version"],
         "master_seed": manifest.master_seed,
+        # CHAOS-3432/3544: the snapshot's own shelf life, recorded so a
+        # restore can fail on STALENESS rather than on the cryptic content
+        # mismatch staleness eventually causes.
+        "minted_at": datetime.now(UTC).isoformat(),
+        "shelf_life_days": _shelf_life_days(manifest),
+        # CHAOS-3602: a second, PER-TABLE-registry-derived expiry instant,
+        # informational only -- recorded so a human (or a future restore
+        # guard) can see the shelf life implied by ttl_registry's per-table
+        # margins without doing the pinned_now + margin arithmetic
+        # themselves. Deliberately NOT enforced at restore here: it uses a
+        # much tighter margin (TTL_SAFETY_MARGIN_DAYS) than the
+        # CHAOS-3432/3544 `shelf_life_days` guard above, which already
+        # enforces staleness at restore (`_assert_snapshot_within_shelf_
+        # life`) using the wider, schema-tightest-horizon margin this
+        # snapshot was actually minted under. Wiring both as enforcing
+        # checks would fail restores of already-valid, CHAOS-3432/3544-
+        # compliant snapshots on a stricter, uncalibrated-for-this-mint
+        # threshold.
+        "ttl_shelf_life_expiry": snapshot_expiry(manifest.pinned_now).isoformat(),
         # CHAOS-3463, Codex adversarial review (MEDIUM, confirmed): the two
         # fields above were stamped and then never read by anything -- a
         # recorded value nobody checks is a claim, not a guard. They are now
@@ -1106,12 +1230,6 @@ async def snapshot_world(
         # catches a manifest edit the digest cannot see (see
         # world.world_manifest_contract_hash).
         "world_manifest_contract": world_manifest_contract_hash(manifest),
-        # CHAOS-3602: recorded so a human (or `assert_snapshot_not_expired`
-        # at restore time) can see the shelf life without doing the
-        # pinned_now + TTL-margin arithmetic themselves -- past this
-        # instant, this snapshot's oldest rows are due for a live TTL merge
-        # to silently delete them before anything ever reads them.
-        "ttl_shelf_life_expiry": snapshot_expiry(manifest.pinned_now).isoformat(),
         "clickhouse": {
             "tables": ch_entries,
             "schema_fingerprint": ch_schema,
@@ -1575,6 +1693,78 @@ class RestoreResult:
     minted: bool
 
 
+def _shelf_life_days(manifest: WorldManifest) -> int:
+    """How long THIS snapshot actually restores cleanly, in days.
+
+    Not simply ``TTL_SAFETY_MARGIN``. The generators place history relative to
+    the world's ``pinned_now``, but ClickHouse evaluates TTLs against the
+    WALL CLOCK -- so every day between ``pinned_now`` and the moment of
+    minting is a day of margin already spent before the snapshot is even
+    written.
+
+    Measured on the first re-mint under CHAOS-3544: history capped at 60 days
+    before a ``pinned_now`` of 2026-08-05, minted on 2026-08-07, left the
+    oldest row 62 days old against a 90-day TTL -- 28 days of real shelf
+    life, not the nominal 30. Recording the nominal figure would have left a
+    two-day window in which rows decay while the expiry preflight still says
+    the snapshot is fresh, which is exactly the cryptic-content-mismatch
+    failure this preflight exists to replace.
+
+    The gap grows as a world's ``pinned_now`` ages, so this cannot be a
+    constant.
+    """
+
+    pinned_raw = manifest.world.get("pinned_now")
+    if not pinned_raw:
+        return TTL_SAFETY_MARGIN.days
+    pinned = datetime.fromisoformat(str(pinned_raw))
+    if pinned.tzinfo is None:
+        pinned = pinned.replace(tzinfo=UTC)
+    spent = (datetime.now(UTC) - pinned).days
+    return max(0, TTL_SAFETY_MARGIN.days - max(0, spent))
+
+
+def _assert_snapshot_within_shelf_life(document: dict) -> None:
+    """Fail on STALENESS before failing on its symptoms (CHAOS-3432/3544).
+
+    A snapshot older than its shelf life restores rows the database then
+    deletes on TTL, so the content oracle below would fail anyway -- on
+    whichever table crossed its horizon first, with a hash mismatch that
+    looks like generator nondeterminism and is not. This turns that into a
+    named, actionable failure.
+
+    An older snapshot with no recorded mint time is not rejected: it predates
+    this field, and refusing it would break restores that are still perfectly
+    valid. It simply cannot be checked, which is disclosed rather than
+    silently treated as fresh.
+    """
+
+    minted_at_raw = document.get("minted_at")
+    shelf_life_days = document.get("shelf_life_days")
+    if not minted_at_raw or not shelf_life_days:
+        logger.warning(
+            "world restore: snapshot records no mint time, so its shelf life "
+            "cannot be checked (pre-CHAOS-3544 snapshot); a stale one will "
+            "surface as a content-oracle mismatch instead"
+        )
+        return
+
+    minted_at = datetime.fromisoformat(minted_at_raw)
+    if minted_at.tzinfo is None:
+        minted_at = minted_at.replace(tzinfo=UTC)
+    age_days = (datetime.now(UTC) - minted_at).days
+    if age_days > int(shelf_life_days):
+        raise SnapshotExpiredError(
+            f"SNAPSHOT EXPIRED (age {age_days}d > shelf life "
+            f"{shelf_life_days}d): re-mint required. Generated history stops "
+            "a fixed margin inside the tightest ClickHouse TTL, and that "
+            "margin IS the shelf life -- past it, rows cross the TTL horizon "
+            "and are deleted on restore, so the restored world is not the "
+            "world that was snapshotted. Re-mint with "
+            "`scripts/acceptance/mint_ask_dev_world_snapshot.sh`."
+        )
+
+
 async def restore_world(
     *,
     sink: str,
@@ -1606,7 +1796,7 @@ async def restore_world(
     # live TTL merge to silently delete them before a boot's own content
     # oracle or digest check ever reads them, turning into exactly the
     # "mysterious 3am acceptance failure" this guard exists to name instead.
-    assert_snapshot_not_expired(manifest.pinned_now, datetime.now(timezone.utc))
+    assert_snapshot_not_expired(manifest.pinned_now, datetime.now(UTC))
 
     ch_tables = document["clickhouse"]["tables"]
     pg_tables = document["postgres"]["tables"]
@@ -1646,6 +1836,8 @@ async def restore_world(
 
     target_ch_hashes = await _with_clickhouse_client(sink, _clickhouse_content_hashes)
     target_pg_after = await _with_postgres_conn(postgres_uri, _postgres_row_counts)
+    _assert_snapshot_within_shelf_life(document)
+
     _assert_content_identity(
         source=content_hashes_from_manifest(
             document["clickhouse"]["source_content_hashes"]

@@ -168,6 +168,15 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         # just that case, not this shared default.
         "ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX": "1000",
         "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD": "200000000",
+        # CHAOS-3532: the QUA ladder, off by default and overridable from the
+        # invoking shell. The DEFAULT is the load-bearing half -- an armed
+        # corpus run that silently gained a QUA shadow evaluation would
+        # change what every existing case measures, and the pre-registered
+        # predictions those runs are graded against would be comparing to a
+        # different system. Exact-set here on purpose: flipping either
+        # default has to be a deliberate edit to this assertion.
+        "ASK_DEV_QUA_SHADOW_ENABLED": "${ASK_DEV_QUA_SHADOW_ENABLED:-0}",
+        "ASK_DEV_QUA_COMMIT_ENABLED": "${ASK_DEV_QUA_COMMIT_ENABLED:-0}",
     }
     assert api["networks"] == ["default", "ask-dev-acceptance"]
     assert api["depends_on"]["ask-dev-scripted-openai"] == {
@@ -1185,6 +1194,78 @@ def test_beat_sentinel_date_parsing_handles_naive_and_aware_timestamps() -> None
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-3572: ordinary-boot wrong-worktree guard
+# ---------------------------------------------------------------------------
+
+
+def test_launcher_sources_the_shared_container_source_guard() -> None:
+    """CHAOS-3572: an ordinary boot has the SAME exposure the mint guard
+    (#1582, CHAOS-3544) closed for the one-off mint flow -- `compose.yml` is
+    launched with `--project-directory <ops_root>` and bind-mounts that
+    directory at /app, so the launcher's own stack can just as easily serve
+    a different worktree's source. `docker ps`, the API, and every later
+    test all look healthy regardless of which worktree booted the container
+    -- nothing else in the launcher would ever report this.
+
+    Sourced from container_source_guard.sh (a shared function), NOT a
+    per-entrypoint copy -- CHAOS-3572 explicitly calls out avoiding
+    per-entrypoint duplication so a future boot entrypoint (e.g. the
+    corpus-lane armed-boot script) inherits the same check rather than
+    growing its own that can drift.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    guard_script = _ROOT / "scripts" / "acceptance" / "container_source_guard.sh"
+    assert guard_script.exists(), (
+        "the shared guard script must exist for the launcher to source"
+    )
+    assert 'source "${script_dir}/container_source_guard.sh"' in launcher, (
+        "the launcher must source the SHARED guard, not reimplement its own "
+        "copy of the signature check"
+    )
+    assert "container_source_guard_check" in launcher, (
+        "the launcher must actually CALL the guard, not merely source the "
+        "file that defines it"
+    )
+
+
+def test_launcher_runs_the_container_source_guard_immediately_after_boot() -> None:
+    """Ordering is load-bearing, exactly like the world-restore check below:
+    the guard must run BEFORE `fixtures world-restore` (or anything else)
+    touches the stack -- a mismatch discovered after data has already been
+    restored/generated against the wrong container is a mismatch discovered
+    too late to matter."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    boot_index = launcher.index('up -d --build --wait "${boot_services[@]}"')
+    guard_call_index = launcher.index("container_source_guard_check ")
+    restore_index = launcher.index("dev-hops fixtures world-restore")
+
+    assert boot_index < guard_call_index < restore_index, (
+        "the container-source guard must run immediately after boot and "
+        "before the world is restored into the (possibly wrong) container"
+    )
+
+
+def test_launcher_container_source_guard_is_not_gated_by_acr_arming() -> None:
+    """The guard call must sit OUTSIDE the `if [[ "${acr_armed}" == "1" ]]`
+    block -- an ACR-armed boot has exactly the same bind-mount exposure as a
+    plain one, and a guard that only ran when ACR happened to be armed would
+    read as coverage it does not have on the (default, far more common)
+    unarmed path."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    acr_block_start = launcher.index('if [[ "${acr_armed}" == "1" ]]; then')
+    acr_block_end = launcher.index("\nfi\n", acr_block_start)
+    acr_block = launcher[acr_block_start:acr_block_end]
+
+    assert "container_source_guard_check" not in acr_block, (
+        "the guard must run unconditionally, not only inside the ACR-armed branch"
+    )
+    assert "container_source_guard_check" in launcher
+
+
+# ---------------------------------------------------------------------------
 # CHAOS-3463: world seeding wiring
 # ---------------------------------------------------------------------------
 
@@ -1584,3 +1665,251 @@ def test_snapshot_manifest_alembic_heads_are_current_for_this_checkout() -> None
         f"scripts/acceptance/mint_ask_dev_world_snapshot.sh (they are only "
         f"ever valid as a pair). See CHAOS-3488."
     )
+
+
+def test_mint_script_refuses_a_container_serving_another_checkout() -> None:
+    """CHAOS-3544: the mint must assert the container is serving THIS checkout.
+
+    `fixtures world` runs INSIDE the api container, so the world is generated
+    by whatever code that image carries -- not by the checkout the script was
+    invoked from. The script previously stated `up -d --build` as a
+    prerequisite in a header comment, which is a dead guard: nothing checked
+    it and skipping it is invisible.
+
+    That is the worst failure this ticket can produce. Measured on
+    2026-08-07, before this assert existed, against the running container:
+
+        container has TTL cap: False
+        container has old literal: True
+
+    Minting in that state would have regenerated the decaying world,
+    snapshotted it, re-pinned WORLD_DIGEST, and printed "mint: done" -- a
+    snapshot that fails its own content oracle again within days, wearing a
+    fresh digest that makes it look deliberate.
+    """
+
+    mint = (
+        _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "mint: verifying the api container is serving this checkout" in mint, (
+        "the mint script must verify the running container serves the "
+        "invoking checkout before generating anything"
+    )
+    assert "REFUSING" in mint and "exit 70" in mint, (
+        "and it must REFUSE on mismatch -- warning and continuing would still "
+        "produce the snapshot, which is the whole failure"
+    )
+    assert "up -d --build --wait api" in mint, (
+        "the refusal must carry the remedy; an operator who hits this needs "
+        "the rebuild command, not a diagnosis"
+    )
+
+    # The check must run BEFORE any generation, or it certifies nothing.
+    assert mint.index("verifying the api container is serving") < mint.index(
+        "dev-hops fixtures world "
+    ), "the container-currency check must precede world generation"
+
+
+def test_acceptance_overlay_wires_the_qua_ladder_off_by_default() -> None:
+    """CHAOS-3532: the stack must be ABLE to exercise QUA commit, and must
+    not do so unless someone asked for it.
+
+    Before this, neither flag appeared anywhere in the acceptance tooling, so
+    the shadow never evaluated and the promotion never engaged -- the stack
+    demonstrated pre-CHAOS-3525 behaviour by construction, whatever the code
+    did. A live probe against it would have faithfully reproduced the old
+    dead-end and been read as a negative result about the fix.
+
+    Both halves are asserted, and the default matters as much as the
+    presence: an armed corpus run that silently gained a QUA shadow
+    evaluation would change what every existing case measures, and the
+    pre-registered predictions those runs are graded against would be
+    comparing to a different system.
+    """
+
+    overlay = _OVERLAY.read_text(encoding="utf-8")
+
+    for flag in ("ASK_DEV_QUA_SHADOW_ENABLED", "ASK_DEV_QUA_COMMIT_ENABLED"):
+        assert f'{flag}: "${{{flag}:-0}}"' in overlay, (
+            f"{flag} must be wired into the acceptance overlay, defaulting "
+            "OFF and overridable from the invoking shell -- without it the "
+            "stack cannot exercise the QUA path at all"
+        )
+
+
+def test_ambient_qua_flags_cannot_arm_the_acceptance_stack() -> None:
+    """CHAOS-3532: the QUA flags are CLEARED by the launcher, and armed only
+    by its own one-shot opt-in.
+
+    THIS ASSERTION IS THE REVERSE OF THE ONE IT REPLACES, and the reversal was
+    forced by reality within the hour. The first version passed the flags
+    through from the invoking shell (`${VAR:-0}`) so an operator could arm a
+    run, and asserted they must NOT be in the unset list. Then `ops/.env`
+    gained `ASK_DEV_QUA_SHADOW_ENABLED=1` / `ASK_DEV_QUA_COMMIT_ENABLED=1`
+    for the dev stack, direnv exports that file into every shell under the
+    ops tree, and passthrough would therefore have booted EVERY future
+    acceptance stack silently ARMED -- changing what every baseline corpus
+    case measures, against predictions registered on an unarmed system.
+
+    That is not a hypothetical leftover export. It was the live state of
+    every ops shell on this machine, verified directly, while the
+    passthrough version of this file was already committed.
+
+    So arming is now a deliberate act at the launcher boundary and nowhere
+    else: both names are cleared unconditionally, and only
+    `ASK_DEV_ACCEPTANCE_QUA=1` -- the launcher's own knob, translated AFTER
+    the clear -- turns them on.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    unset_match = re.search(r"\nunset \\\n(.*?)\n\nweb_root=", launcher, re.S)
+    assert unset_match is not None
+    unset_vars = set(re.findall(r"[A-Z_][A-Z0-9_]*", unset_match.group(1)))
+
+    for flag in ("ASK_DEV_QUA_SHADOW_ENABLED", "ASK_DEV_QUA_COMMIT_ENABLED"):
+        assert flag in unset_vars, (
+            f"{flag} must be CLEARED by the launcher. It is exported by "
+            "ops/.env and reaches every shell under the ops tree via direnv, "
+            "so leaving it to pass through arms every acceptance stack "
+            "booted from a developer shell."
+        )
+
+    assert "ASK_DEV_ACCEPTANCE_QUA" in launcher, (
+        "the launcher must own a one-shot opt-in; clearing the flags without "
+        "one leaves no way to arm a QUA run at all"
+    )
+
+    # Ordering is the whole guarantee: translated AFTER the clear, or the
+    # clear removes what the translation just set.
+    assert launcher.index("\nunset \\\n") < launcher.index(
+        "export ASK_DEV_QUA_SHADOW_ENABLED="
+    ), "the opt-in translation must run AFTER the unset block, not before"
+
+
+def test_launcher_runs_the_wave4_access_matrix_with_its_own_arming_contract() -> None:
+    """CHAOS-3586 (unblocks CHAOS-3510 / Phase 4 Lane 4d).
+
+    The Wave 4 access matrix is a SECOND playwright invocation with its own
+    arming contract. Every assertion here exists because the corresponding
+    omission would produce a silently weaker run rather than a failure:
+
+    - a missing config reference means the matrix never runs at all, and the
+      launcher still exits 0;
+    - a missing ASK_DEV_WAVE4_ACCESS_MATRIX means a launcher predating this
+      lane looks like it ran the matrix;
+    - a missing ASK_DEV_ACCEPTANCE_ORG_IDS means the entitlement rows cannot
+      find the disabled-entitlement tenant;
+    - a missing ASK_DEV_ACCEPTANCE_ACR means the non-coupling rows assert
+      against an undeclared toggle state.
+    """
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+
+    assert "playwright.ask-dev-wave4.config.ts" in launcher
+    assert "ASK_DEV_WAVE4_ACCESS_MATRIX=1" in launcher
+    assert 'ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}"' in launcher
+    assert 'ASK_DEV_ACCEPTANCE_ACR="${acr_armed}"' in launcher
+
+    # Two SEPARATE invocations, not one with more env. Folding them together
+    # would couple the Phase 1 oracle to the access matrix so either could
+    # take the other down.
+    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 2
+
+    # Ordering: the matrix runs after web is up and after the Phase 1 spec,
+    # so a Phase 1 regression is reported against Phase 1 rather than
+    # surfacing as a confusing access-matrix failure.
+    #
+    # Anchor the matrix on its INVOCATION SITE, not on the config filename.
+    # The filename now also appears in the presence guard's variable
+    # assignment and in prose above it, and anchoring on the string made this
+    # assertion silently measure the wrong position the moment the guard
+    # landed -- it failed loudly, which is the only reason it was caught.
+    web_up_index = launcher.index("up -d --build --wait web")
+    acceptance_config_index = launcher.index("playwright.ask-dev-acceptance.config.ts")
+    wave4_invocation_index = launcher.index('-c "${wave4_config}"')
+    assert web_up_index < acceptance_config_index < wave4_invocation_index
+
+    # The org-ids artifact must be written before it is forwarded. index()
+    # raises rather than passing vacuously if either anchor disappears.
+    org_ids_written_index = launcher.index(
+        'ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT="${org_ids_output}"'
+    )
+    org_ids_forwarded_index = launcher.index(
+        'ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}"'
+    )
+    assert org_ids_written_index < org_ids_forwarded_index
+
+    # A missing/empty artifact must ABORT, never skip. The matrix asserting
+    # nothing about tenants it could not identify is the false green this
+    # whole lane exists to prevent.
+    assert '[[ ! -s "${org_ids_output}" ]]' in launcher
+    preflight_index = launcher.index('[[ ! -s "${org_ids_output}" ]]')
+    assert preflight_index < wave4_invocation_index
+    assert "|| true" not in launcher[preflight_index:wave4_invocation_index]
+
+
+def test_launcher_requires_the_wave4_config_and_never_skips_the_matrix() -> None:
+    """CHAOS-3510: the wave4 leg is MANDATORY now that the config is on web main.
+
+    History this pins deliberately. The ops half of this feature merged before
+    the web half, so an interim revision SKIPPED the leg (with a loud marker)
+    when the config was absent -- otherwise every launcher run, including the
+    nightly, died on a dangling cross-repo path. That condition is gone:
+    playwright.ask-dev-wave4.config.ts is on dev-health-web main.
+
+    The skip is REMOVED rather than left dormant. A skip path that is correct
+    today and unreachable tomorrow is how a gate quietly stops gating -- it
+    survives precisely because nothing fails when it fires. So this test
+    asserts the skip is GONE, not merely that a fail path exists beside it.
+    """
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+
+    # Guarded on the file, not on an env flag: a flag would still let a caller
+    # arm a config that does not exist.
+    assert 'wave4_config="${web_root}/playwright.ask-dev-wave4.config.ts"' in launcher
+    assert 'if [[ ! -f "${wave4_config}" ]]; then' in launcher
+
+    # Absent config ABORTS. The marker names the outcome so a log scraper can
+    # classify the run without parsing prose.
+    assert "WAVE4_ACCESS_MATRIX=FAILED reason=config-absent" in launcher
+    assert "WAVE4_ACCESS_MATRIX=RUNNING" in launcher
+
+    # The scaffolding must be GONE, not dormant. This is the assertion that
+    # distinguishes "mandatory" from "a fail branch that some other path can
+    # still route around".
+    assert "WAVE4_ACCESS_MATRIX=NOT_RUN" not in launcher
+    assert "proves NOTHING about the Context Fabric" not in launcher
+
+    # The failure branch must actually exit, and do so BEFORE the invocation.
+    failed_index = launcher.index("WAVE4_ACCESS_MATRIX=FAILED")
+    running_index = launcher.index("WAVE4_ACCESS_MATRIX=RUNNING")
+    invocation_index = launcher.index('-c "${wave4_config}"')
+    assert failed_index < running_index < invocation_index
+
+    # Scope the abort check to the CONFIG-ABSENT BRANCH ITSELF -- up to its own
+    # closing `fi`, not onward to the RUNNING marker.
+    #
+    # Widening it to [FAILED, RUNNING) is not merely sloppy, it is
+    # unfalsifiable: the org-ids preflight sits inside that span and carries
+    # its OWN `exit 1`, so deleting this branch's abort still leaves a matching
+    # string in the region. A mutation removing it SURVIVED exactly that way.
+    # Second time a region assertion in this guard was satisfied by something
+    # other than the thing it names -- the region must end where the construct
+    # ends.
+    absent_branch_end = launcher.index("\nfi\n", failed_index)
+    absent_branch = launcher[failed_index:absent_branch_end]
+    assert "exit 1" in absent_branch
+
+    # No `else` may re-introduce a continue-anyway path in that branch.
+    assert "else" not in absent_branch
+
+    # The leg itself stays mandatory: a real matrix failure must still abort.
+    # The slice runs to the END of the invocation block, not merely to the
+    # invocation line. An earlier version of this assertion checked only
+    # [marker, invocation) and a mutation appending `|| true` to the
+    # invocation SURVIVED -- the swallow lands after the anchor, in the region
+    # that version never examined. A region assertion is only as good as its
+    # region, so that mutation stays in this guard's permanent set.
+    tail = launcher[running_index : invocation_index + 400]
+    assert "|| true" not in tail
+    assert "set +e" not in tail

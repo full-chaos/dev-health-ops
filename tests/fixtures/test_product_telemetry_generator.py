@@ -175,3 +175,22 @@ def test_generator_respects_day_count_in_event_timestamps() -> None:
     assert earliest >= FIXED_END.replace(
         hour=0, minute=0, second=0, microsecond=0
     ).replace(tzinfo=timezone.utc).replace(year=2026, month=5, day=22)
+
+
+def test_a_zero_ceiling_actually_clamps_instead_of_falling_back(monkeypatch) -> None:
+    """Codex round-2 finding (HIGH, confirmed): `X or self.spec.days` treats
+    a legitimate ceiling of exactly 0 as falsy and falls back to the
+    caller's unclamped `days` -- requesting 100 days with a 0-day ceiling
+    must produce ZERO events, not ~100 days of them.
+    """
+    monkeypatch.setattr(
+        "dev_health_ops.fixtures.generators.product_telemetry.max_generated_age_days_for_table",
+        lambda table: 0,
+    )
+    spec = _spec(days=100, sessions_per_day=2)
+    events = ProductTelemetryGenerator(spec).generate_events()
+    assert events == [], (
+        f"got {len(events)} events requesting 100 days with a 0-day "
+        "ceiling -- the ceiling was not applied (fell back to the "
+        "unclamped request instead of clamping to 0)"
+    )

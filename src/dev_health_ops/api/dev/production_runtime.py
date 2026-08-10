@@ -30,7 +30,9 @@ from dev_health_ops.llm.agent.errors import AgentProviderError, AgentProviderErr
 from dev_health_ops.llm.agent.openai_compatible import (
     READINESS_VERSION,
     OpenAICompatibleAgentProvider,
+    PlatformCostMetering,
     build_completion_request,
+    platform_cost_metering,
 )
 from dev_health_ops.llm.agent.policy import (
     CERTIFIED_PLATFORM_AGENT_PROVIDERS,
@@ -64,6 +66,9 @@ from dev_health_ops.llm.providers import (
 )
 from dev_health_ops.llm.providers.base import DEFAULT_MODEL_BY_PROVIDER
 from dev_health_ops.llm.qua_shadow_budget import attach_qua_shadow_budget_guard
+from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL,
+)
 from dev_health_ops.models.settings import SettingCategory
 
 from .contracts import (
@@ -1095,9 +1100,86 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
         raise DevRuntimeUnavailable(
             "model_not_supported", "The configured Ask Dev model is not supported."
         )
+    # CHAOS-3552: an unmeterable model must never be booked SILENTLY.
+    #
+    # ProviderBudget reserves US$1 per model call and reconciles it down to the
+    # real cost afterwards -- but ONLY when a real cost exists.
+    # ``_estimated_cost_microusd`` returns None for an unpriced model and the
+    # reconciliation branch leaves the reservation standing, so every call
+    # permanently books US$1 against the org's monthly allowance. Measured on
+    # the dev stack's own ``gpt-5-nano``: US$4.00 booked per run against
+    # US$0.018 real -- a 222x overcharge that exhausted the default US$100
+    # allowance after 25 runs, against a 1,000-run request cap. That is what
+    # CHAOS-3523's "bounds sized for BYO are gating platform runs" actually was.
+    #
+    # Reported HERE, at construction, rather than per call: once per provider
+    # build is enough to tell an operator, and per-call would be log spam on
+    # exactly the deployments already paying for the defect.
+    #
+    # NOTHING RAISES. An earlier revision refused construction; measured
+    # availability evidence retired that (see the branch history): with a
+    # three-entry price book, refusing would have removed Ask Dev from every
+    # organization running gpt-4o, gpt-5, o3 or any other unlisted model --
+    # far larger harm than an overstated allowance. Self-hosted providers pass
+    # through genuinely unmetered, and the acceptance fixture is carved out.
+    # See ``platform_cost_metering``.
+    metering = platform_cost_metering(
+        provider=candidate.provider,
+        model=candidate.model,
+        base_url=candidate.credentials.base_url,
+    )
+    if metering in (
+        PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR,
+        PlatformCostMetering.UNKNOWN_BILLABILITY,
+    ):
+        # LOUD, not fatal (team-lead ruling, revising an earlier fail-loud
+        # ruling on measured availability evidence). Refusing construction
+        # would have taken Ask Dev away from every organization running an
+        # OpenAI model outside this build's three-entry price book --
+        # gpt-4o, gpt-5, o3 and the rest -- which is a far larger harm than
+        # an overstated allowance.
+        #
+        # So the run proceeds and books the worst-case reservation exactly as
+        # it does today, because a platform run spends real operator dollars
+        # on the platform key and unmetered openai spend bounded only by the
+        # request cap is not an acceptable posture. What changes is that it is
+        # never SILENT: the invariant survives as written -- "must never
+        # SILENTLY book the reservation as its cost" -- and loud booking
+        # satisfies it. Under chris's request-primary ruling the request cap
+        # is the control anyway, so a conservative charge against the cost
+        # backstop is defensible once it is attributed.
+        #
+        # Emitted at CONSTRUCTION rather than per call: once per provider
+        # build is enough to tell an operator, and per-call would be log spam
+        # on the exact deployments already paying for the defect.
+        logger.warning(
+            "ask_dev.platform_model_unpriced",
+            extra={
+                "model": candidate.model,
+                "provider": candidate.provider,
+                "reason": metering.value,
+                # Two different operators, two different remedies: a typo'd
+                # or new OpenAI model needs a price entry; an Azure/OpenRouter
+                # /gateway deployment needs its endpoint priced (CHAOS-3560),
+                # and telling them the same thing sends one of them chasing
+                # the wrong fix.
+                "remedy": (
+                    "price the model in _PLATFORM_MODEL_PRICES or set "
+                    "LLM_MODEL to a priced model"
+                    if metering is PlatformCostMetering.UNPRICED_CONFIGURATION_ERROR
+                    else "this endpoint is not api.openai.com, so its billing "
+                    "rates are unknown and runs book the conservative "
+                    "reservation; pricing known gateways is CHAOS-3560"
+                ),
+            },
+        )
+        ASK_DEV_PLATFORM_MODEL_UNPRICED_TOTAL.labels(
+            model=candidate.model, reason=metering.value
+        ).inc()
     return OpenAICompatibleAgentProvider(
         api_key=candidate.credentials.api_key or "platform-openai-compatible",
         model=candidate.model,
+        cost_provider=candidate.provider,
         base_url=candidate.credentials.base_url or None,
         disclosure_key=(
             _ACCEPTANCE_OPENAI_DISCLOSURE_KEY

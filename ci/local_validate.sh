@@ -65,7 +65,8 @@
 # USAGE:
 #   Run from the worktree ROOT (the dir containing ci/run_tests.sh) using its .venv:
 #     bash ci/local_validate.sh
-#   Skip the live-ClickHouse stage (pure-Python gates only, e.g. no docker):
+#   Skip the live-ClickHouse stage (pure-Python gates only, e.g. no docker) --
+#   this is now the ONLY way to run without them; see STAGE MANIFEST below:
 #     SKIP_CLICKHOUSE=1 bash ci/local_validate.sh
 #   Force a specific scratch db name (rarely needed — the default is already
 #   unique per worktree):
@@ -74,6 +75,38 @@
 #   concurrent gate to release the lock, then fails with an actionable message.
 #   Fail fast instead of waiting if another gate already holds the lock:
 #     LOCK_WAIT_SECS=0 bash ci/local_validate.sh
+#
+# *** STAGE MANIFEST (CHAOS-3571) ***
+#   Observed 2026-08-07: a `docker ps` probe failure inside the ClickHouse
+#   provisioning step was rendered as "container not running" and the gate
+#   `skip`'d 3 of 8 stages (ch-scratch-create, ch-migrate, the argMax live-exec
+#   proof) while still printing `GATE PASSED. safe to push.` -- the container
+#   had been up and healthy the entire time. A degraded run was indistinguishable
+#   from a full one unless a human counted the ✔ lines.
+#
+#   Since that fix: without SKIP_CLICKHOUSE=1, EVERY reason the ClickHouse stages
+#   might not run -- docker missing, the probe itself failing/timing out
+#   (indeterminate container state), the container confirmed not running, or a
+#   missing dev-hops CLI -- is a HARD FAILURE with a distinct diagnostic message
+#   naming the true mechanism, never a silent skip. SKIP_CLICKHOUSE=1 is the
+#   ONLY sanctioned way to run without the CH-dependent stages: it is an
+#   explicit, logged, caller-initiated decision that shrinks the gate's
+#   DECLARED stage set up front, not a runtime probe result the gate decided on
+#   its own to trust.
+#
+#   A machine-readable `GATE_STAGE_MANIFEST ... declared=<N> executed=<N>
+#   declared_ids=... executed_ids=...` log line carries the literal counts and
+#   ids, and the human verdict line carries the same information formatted as
+#   `[executed/declared: ids]` (`GATE PASSED. [10/10: lint_format,lint_check,
+#   typecheck,ch_probe,ch_scratch_create,ch_migrate,unit_suite,ch_argmax_proof,
+#   ch_declared_state_history_tests,ch_migration_075_reconcile_tests]
+#   safe to push.`, or `[4/4: ...]` under SKIP_CLICKHOUSE=1) -- a degraded run
+#   cannot produce a verdict line indistinguishable from a full one, even in a
+#   copy-pasted PR quote. `verify_stage_manifest()` additionally self-checks
+#   that the set of stages that actually ran equals the declared set and fails
+#   the gate on ANY mismatch, even if every stage that did run passed -- an independent
+#   backstop against this exact class of bug recurring, not just a fix for this
+#   one instance of it. See tests/tooling/test_local_validate_stage_manifest.py.
 #
 set -uo pipefail
 
@@ -118,7 +151,11 @@ SCRATCH_URI="clickhouse://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCR
 PYBIN="${ROOT}/.venv/bin/python"
 RUFF="${ROOT}/.venv/bin/ruff"
 MYPY="${ROOT}/.venv/bin/mypy"
-DEVHOPS="${ROOT}/.venv/bin/dev-hops"
+# Overridable (CHAOS-3571): every real caller gets the identical computed
+# default (env unset), so this changes no production behavior. It lets a test
+# point DEVHOPS at a deliberately-missing path to exercise ch_probe_docker()'s
+# "dev-hops CLI missing" branch without touching the real, shared venv.
+DEVHOPS="${DEVHOPS:-${ROOT}/.venv/bin/dev-hops}"
 
 # Neutralize the local socks5h proxy for every pytest/python invocation. Without
 # this, httpx-based tests fail with 'socksio not installed' — false negatives, not
@@ -560,6 +597,59 @@ declare -a RESULTS=()
 FAILED=0
 CH_READY=0 # set to 1 by ch_provision() once the scratch CH is migrated
 
+# --- Stage manifest (CHAOS-3571). ---------------------------------------------------
+# CHAOS-3571 root cause: ch_provision() rendered a FAILED docker probe as
+# "container not running" and quietly `skip`'d every ClickHouse-dependent stage,
+# and nothing else in the script noticed 3 of 8 declared stages never ran --
+# GATE PASSED still printed. RESULTS/print_summary above only show what a human
+# scrolling the log happens to count; they are not a machine-checkable
+# assertion that the full declared stage set actually executed.
+#
+# DECLARED_STAGE_IDS is the full set of stage ids this run is committed to
+# executing, decided ONCE up front (see run_declared_stages) -- never narrowed
+# later by a stage's own runtime discovery that it "can't" run. The only
+# sanctioned way to shrink it is the explicit, caller-supplied SKIP_CLICKHOUSE=1
+# opt-out, which removes the CH-dependent ids from the declaration itself
+# BEFORE anything runs, rather than letting a stage quietly not show up after
+# the fact. EXECUTED_STAGE_IDS is appended to ONLY by run_stage() and the two
+# manual ch_provision() call sites that record a result outside of run_stage
+# (see ch_provision below) -- i.e. it reflects what actually ran, regardless of
+# pass/fail. verify_stage_manifest() (near main()) diffs the two sets and fails
+# the gate on ANY mismatch, even if every stage that did run passed -- the
+# structural, can't-be-fooled-by-a-single-branch-bug version of "don't silently
+# do less than declared".
+declare -a DECLARED_STAGE_IDS=()
+declare -a EXECUTED_STAGE_IDS=()
+
+# bash 3.2 (stock macOS /bin/bash) treats `"${arr[@]}"` on a DECLARED-BUT-EMPTY
+# array as an unbound-variable error under `set -u` -- confirmed directly on
+# this host, not assumed (see ci/aggregate_gate_results.sh's header comment for
+# the same finding against its own array-avoidance choice). Every expansion of
+# DECLARED_STAGE_IDS/EXECUTED_STAGE_IDS elsewhere in this script goes through
+# these two helpers so that landmine is closed in exactly one place rather than
+# re-solved (or missed) at every call site.
+array_contains() {
+  local needle="$1"
+  shift
+  local candidate
+  for candidate in "$@"; do
+    [ "${candidate}" = "${needle}" ] && return 0
+  done
+  return 1
+}
+
+join_commas() {
+  local out="" item
+  for item in "$@"; do
+    if [ -z "${out}" ]; then
+      out="${item}"
+    else
+      out="${out},${item}"
+    fi
+  done
+  printf '%s' "${out}"
+}
+
 c_red() { printf '\033[31m%s\033[0m' "$1"; }
 c_green() { printf '\033[32m%s\033[0m' "$1"; }
 c_yellow() { printf '\033[33m%s\033[0m' "$1"; }
@@ -595,19 +685,43 @@ die() {
   exit 2
 }
 
+# Shared fail-fast tail (CHAOS-3571): print the summary, the machine-readable
+# stage manifest (so a FAILED run is just as auditable as a PASSED one -- see
+# the stage manifest header comment above), and exit 1. Used both by run_stage
+# below and by ch_provision()'s own call sites that record a result without
+# going through run_stage (docker-probe failure, scratch-create failure) --
+# those are stage failures too and must get the identical fail-fast contract,
+# not a bespoke shorter one that a future reader could believe is less serious.
+fail_fast() {
+  local name="$1"
+  print_summary
+  printf 'GATE_STAGE_MANIFEST result=FAILED declared=%d executed=%d declared_ids=%s executed_ids=%s failed_at=%s\n' \
+    "${#DECLARED_STAGE_IDS[@]}" "${#EXECUTED_STAGE_IDS[@]}" \
+    "$(join_commas "${DECLARED_STAGE_IDS[@]+"${DECLARED_STAGE_IDS[@]}"}")" \
+    "$(join_commas "${EXECUTED_STAGE_IDS[@]+"${EXECUTED_STAGE_IDS[@]}"}")" \
+    "${name}"
+  printf '\n%s first failing stage: %s — fix it, then re-run before pushing.\n' "$(c_red 'GATE FAILED.')" "${name}"
+  exit 1
+}
+
 # Run a stage; on failure print an actionable hint and STOP (fail fast) unless the
 # caller passes KEEP_GOING=1. We fail fast by default so the first red is the signal.
+#
+# stage_id (CHAOS-3571) is the stable, human-name-independent key this stage is
+# tracked under in EXECUTED_STAGE_IDS / DECLARED_STAGE_IDS -- appended
+# regardless of pass/fail, because "executed" means "ran", not "ran and
+# passed" (a failing stage still ran; failing to run at all is the distinct,
+# worse condition this whole mechanism exists to catch).
 run_stage() {
-  local name="$1"
-  shift
+  local name="$1" stage_id="$2"
+  shift 2
   banner "${name}"
   "$@"
   local rc=$?
   record "${name}" "${rc}"
+  EXECUTED_STAGE_IDS+=("${stage_id}")
   if [ "$rc" -ne 0 ] && [ "${KEEP_GOING:-0}" != "1" ]; then
-    print_summary
-    printf '\n%s first failing stage: %s — fix it, then re-run before pushing.\n' "$(c_red 'GATE FAILED.')" "${name}"
-    exit 1
+    fail_fast "${name}"
   fi
   return "$rc"
 }
@@ -705,10 +819,85 @@ gate_unit_suite() {
 }
 
 # --- Live-ClickHouse stage, ISOLATED to a scratch db (dropped on exit). ------------
-ch_available() {
-  command -v docker >/dev/null 2>&1 || return 1
-  docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${CH_CONTAINER}" || return 1
-  [ -x "${DEVHOPS}" ] || return 2
+#
+# ch_probe_docker() (CHAOS-3571 fix). The predecessor of this function,
+# ch_available(), collapsed four DIFFERENT facts into one `return 1`: docker not
+# installed, `docker ps` itself failing (daemon unreachable, timeout, permission
+# error), and the container genuinely not running all looked identical to the
+# caller. ch_provision() then printed the ONE fact it assumed -- "container
+# '...' not running" -- no matter which of the three actually happened, and
+# `skip`'d the CH-dependent stages. Observed for real 2026-08-07 (CHAOS-3571):
+# `docker ps` failed transiently under host load (most likely — the exact
+# invocation was never captured, see the ticket), the container was up and
+# healthy the whole time, and the gate printed "container ... not running" and
+# GATE PASSED with 3 of 8 stages silently missing.
+#
+# This function returns a DISTINCT code for each cause and sets CH_PROBE_DETAIL
+# to a message that names the ACTUAL mechanism rather than a guessed
+# interpretation of it -- "probe FAILED, state UNKNOWN" is not the same claim
+# as "confirmed not running", and only ch_provision() (not this function)
+# decides what to do with that distinction. Every branch here logs docker's own
+# exit code and stderr verbatim (the ticket's own first diagnostic step),
+# rather than swallowing them the way `2>/dev/null` did before.
+#
+#   0  available: docker present, `docker ps` succeeded, container present,
+#      dev-hops present.
+#   1  docker CLI missing from PATH.
+#   2  `docker ps` ITSELF failed (nonzero exit) -- INDETERMINATE. This is the
+#      exact CHAOS-3571 mechanism: the probe could not get an answer at all,
+#      so "not running" would be a fabricated claim, not a measurement.
+#   3  `docker ps` succeeded and the container is confirmed ABSENT from the
+#      running-container list -- a real, provable "not running" fact.
+#   4  docker + container confirmed present, but the dev-hops CLI the CH
+#      stages shell out to is missing from this venv.
+#
+# CHAOS-3571 policy (decided in ch_provision(), not here): ONLY an explicit,
+# caller-supplied SKIP_CLICKHOUSE=1 may turn "CH stages did not run" into a
+# clean, gate-passing SKIP. Every code below (1-4) is a HARD FAILURE of the
+# gate when SKIP_CLICKHOUSE is not set -- including case 3, which the
+# CHAOS-3571 ticket's own proposed direction treats as legitimate to skip.
+# This script deliberately does NOT take that half of the proposal: a merge
+# gate that trusts an unattended runtime probe's "confirmed not running" enough
+# to silently pass is exactly the shape of tool this ticket was filed against,
+# and the whole point of (a)/(c) below is that NOTHING short of the caller's
+# own explicit, logged opt-in may shrink what "PASSED" claims to have run.
+# CH_PROBE_DETAIL still names case 3 distinctly from case 2 in the failure
+# message, so a human fixing this after a HARD FAIL is told the true
+# mechanism, not a fabricated one -- that half of the ticket's ask is honored.
+CH_PROBE_DETAIL=""
+
+ch_probe_docker() {
+  CH_PROBE_DETAIL=""
+  if ! command -v docker >/dev/null 2>&1; then
+    CH_PROBE_DETAIL="docker CLI not found on PATH"
+    return 1
+  fi
+  # Capture docker ps's exit code AND stderr unconditionally (CHAOS-3571's own
+  # first diagnostic step) instead of the old `2>/dev/null` that threw the
+  # actual error away before anyone could see it. A private mktemp file, not a
+  # pipe: this is a single small command, not the CHAOS-3362/3489 large-payload
+  # here-document hazard, but there is no reason to introduce a pipe here either.
+  local ps_err_file ps_out ps_rc
+  ps_err_file="$(mktemp "${TMPDIR:-/tmp}/local-validate-docker-ps-stderr.XXXXXX")" || {
+    CH_PROBE_DETAIL="could not create a temp file to capture the docker ps probe's stderr"
+    return 2
+  }
+  ps_out="$(docker ps --format '{{.Names}}' 2>"${ps_err_file}")"
+  ps_rc=$?
+  if [ "${ps_rc}" -ne 0 ]; then
+    CH_PROBE_DETAIL="docker ps probe FAILED (exit ${ps_rc}): $(tr '\n' ' ' <"${ps_err_file}" | sed -e 's/ *$//') — container state UNKNOWN, NOT confirmed absent"
+    rm -f "${ps_err_file}"
+    return 2
+  fi
+  rm -f "${ps_err_file}"
+  if ! printf '%s\n' "${ps_out}" | grep -qx "${CH_CONTAINER}"; then
+    CH_PROBE_DETAIL="container '${CH_CONTAINER}' confirmed NOT running (docker ps succeeded; name absent from the running-container list)"
+    return 3
+  fi
+  if [ ! -x "${DEVHOPS}" ]; then
+    CH_PROBE_DETAIL="dev-hops CLI missing at ${DEVHOPS} — install the [dev] extra: uv sync --all-extras --dev"
+    return 4
+  fi
   return 0
 }
 
@@ -885,29 +1074,39 @@ ch_argmax_proof() {
 # Provision the isolated scratch db + apply THIS branch's migrations BEFORE the
 # unit suite, then export CLICKHOUSE_URI=<scratch> so the CH-dependent unit tests
 # run faithfully and the CH-marked tests + argMax proof reuse the same schema.
+#
+# CHAOS-3571: every failure branch below now goes through `record` (so it
+# appears in RESULTS / the summary) and `fail_fast` (so it stops the gate
+# immediately, the same contract run_stage gives every other stage) instead of
+# the old `skip ...; return 0`, which is the exact mechanism that let a FAILED
+# docker probe read as a clean, gate-passing result. The ONLY remaining `skip`
+# path left in this function is the top one: an explicit, caller-supplied
+# SKIP_CLICKHOUSE=1. That is a loud, logged, opt-in decision the caller made on
+# purpose -- categorically different from the gate silently deciding on its own
+# that it "can't" run these stages, which is what CHAOS-3571 was filed against.
 ch_provision() {
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
-    skip "clickhouse provisioning (scratch db)" "SKIP_CLICKHOUSE=1 — CH stages skipped"
+    skip "clickhouse provisioning (scratch db)" "SKIP_CLICKHOUSE=1 — CH stages explicitly excluded by caller (see DECLARED_STAGE_IDS)"
     return 0
   fi
   banner "clickhouse provisioning (isolated scratch db: ${SCRATCH_DB})"
-  ch_available
-  case $? in
-  1)
-    skip "clickhouse provisioning" "container '${CH_CONTAINER}' not running (start the dev stack, or SKIP_CLICKHOUSE=1)"
-    return 0
-    ;;
-  2)
-    skip "clickhouse provisioning" "missing ${DEVHOPS} (install [dev] extra into .venv)"
-    return 0
-    ;;
-  esac
+  if ! ch_probe_docker; then
+    record "clickhouse: docker probe (${CH_PROBE_DETAIL})" 1
+    EXECUTED_STAGE_IDS+=("ch_probe")
+    fail_fast "clickhouse: docker probe"
+  fi
+  record "clickhouse: docker probe (container '${CH_CONTAINER}' reachable, dev-hops present)" 0
+  EXECUTED_STAGE_IDS+=("ch_probe")
+
   if ! ch_create_scratch; then
-    skip "clickhouse provisioning" "could not create scratch db ${SCRATCH_DB}"
-    return 0
+    record "ch-scratch-create (${SCRATCH_DB})" 1
+    EXECUTED_STAGE_IDS+=("ch_scratch_create")
+    fail_fast "ch-scratch-create (${SCRATCH_DB})"
   fi
   record "ch-scratch-create (${SCRATCH_DB})" 0
-  run_stage "ch-migrate (upgrade + status --check)" ch_migrate
+  EXECUTED_STAGE_IDS+=("ch_scratch_create")
+
+  run_stage "ch-migrate (upgrade + status --check)" ch_migrate ch_migrate
   CH_READY=1
   export CLICKHOUSE_URI="${SCRATCH_URI}"
   printf '   %s -> %s\n' "$(c_green 'CLICKHOUSE_URI')" "${SCRATCH_URI} (scratch)"
@@ -953,14 +1152,21 @@ ch_migration_075_reconcile_tests() {
 # Runs AFTER the unit suite, reusing the provisioned scratch db.
 ch_tests() {
   if [ "${CH_READY:-0}" != "1" ]; then
-    skip "argMax live-exec proof" "scratch CH not provisioned"
-    skip "declared-state-history live tests" "scratch CH not provisioned"
-    skip "migration 075 reconcile live tests" "scratch CH not provisioned"
+    # CHAOS-3571: this branch is reachable ONLY via the explicit
+    # SKIP_CLICKHOUSE=1 opt-out now -- ch_provision() fail_fast's the whole
+    # gate on every other reason CH_READY could be unset, so CH_READY=0
+    # reaching here with no opt-out set would itself be a bug in ch_provision,
+    # not a legitimate runtime state. DECLARED_STAGE_IDS already excludes
+    # these three under SKIP_CLICKHOUSE=1 (see run_declared_stages), so none
+    # of these skips need their own EXECUTED_STAGE_IDS entry.
+    skip "argMax live-exec proof" "scratch CH not provisioned (SKIP_CLICKHOUSE=1)"
+    skip "declared-state-history live tests" "scratch CH not provisioned (SKIP_CLICKHOUSE=1)"
+    skip "migration 075 reconcile live tests" "scratch CH not provisioned (SKIP_CLICKHOUSE=1)"
     return 0
   fi
-  run_stage "argMax live-exec proof (real engine)" ch_argmax_proof
-  run_stage "declared-state-history live tests (real engine)" ch_declared_state_history_tests
-  run_stage "migration 075 reconcile live tests (real engine)" ch_migration_075_reconcile_tests
+  run_stage "argMax live-exec proof (real engine)" ch_argmax_proof ch_argmax_proof
+  run_stage "declared-state-history live tests (real engine)" ch_declared_state_history_tests ch_declared_state_history_tests
+  run_stage "migration 075 reconcile live tests (real engine)" ch_migration_075_reconcile_tests ch_migration_075_reconcile_tests
 }
 
 print_summary() {
@@ -976,27 +1182,96 @@ print_summary() {
   hr
 }
 
+# verify_stage_manifest() (CHAOS-3571): the structural, independent backstop.
+# Every individual stage above already fails fast on its own bad outcome; this
+# does not re-check any of them. It checks something no single stage's own
+# logic can: that the SET of stages which actually ran (EXECUTED_STAGE_IDS) is
+# exactly the set this run committed to up front (DECLARED_STAGE_IDS) --
+# neither short (something declared never ran) nor long (something ran that
+# was never declared, e.g. a copy-paste stage_id typo hiding a duplicate). A
+# mismatch fails the gate even if every stage that DID run passed, which is
+# exactly the CHAOS-3571 shape: a docker-probe-failure branch that quietly
+# `return`s 0 without ever calling record()/fail_fast is a bug this backstop
+# still catches, because it never touches EXECUTED_STAGE_IDS -- independent of
+# whether whoever wrote that hypothetical future bug also got the RESULTS/
+# FAILED bookkeeping right.
+verify_stage_manifest() {
+  local id missing="" extra=""
+  for id in "${DECLARED_STAGE_IDS[@]+"${DECLARED_STAGE_IDS[@]}"}"; do
+    array_contains "${id}" "${EXECUTED_STAGE_IDS[@]+"${EXECUTED_STAGE_IDS[@]}"}" ||
+      missing="${missing:+${missing} }${id}"
+  done
+  for id in "${EXECUTED_STAGE_IDS[@]+"${EXECUTED_STAGE_IDS[@]}"}"; do
+    array_contains "${id}" "${DECLARED_STAGE_IDS[@]+"${DECLARED_STAGE_IDS[@]}"}" ||
+      extra="${extra:+${extra} }${id}"
+  done
+  if [ -n "${missing}" ] || [ -n "${extra}" ]; then
+    record "stage-manifest self-check (declared-but-not-executed=[${missing:-none}] executed-but-not-declared=[${extra:-none}])" 1
+    fail_fast "stage-manifest self-check"
+  fi
+  record "stage-manifest self-check (${#EXECUTED_STAGE_IDS[@]}/${#DECLARED_STAGE_IDS[@]} declared stages executed)" 0
+}
+
+# run_declared_stages() (CHAOS-3571): DECLARED_STAGE_IDS is decided HERE, in
+# full, BEFORE any stage runs -- not derived after the fact from whatever
+# happened to execute. The only branch is the explicit SKIP_CLICKHOUSE=1
+# opt-out; every other reason a CH stage might not run (docker missing, the
+# probe failing, the container confirmed absent, dev-hops missing) is a
+# ch_provision() hard failure against the FULL 10-id declaration, never a
+# reason to shrink it at runtime. Factored out of main() so the CHAOS-3571
+# `--stage-manifest-probe` test-only hook near the bottom of this file can
+# exercise this exact sequencing (with the expensive leaf stages stubbed) --
+# same precedent as `--lock-probe` exercising the real acquire_lock/
+# release_lock without paying for preflight/lint/mypy/the unit suite.
+run_declared_stages() {
+  if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
+    DECLARED_STAGE_IDS=(lint_format lint_check typecheck unit_suite)
+  else
+    DECLARED_STAGE_IDS=(lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof ch_declared_state_history_tests ch_migration_075_reconcile_tests)
+  fi
+
+  run_stage "lint: ruff format --check" lint_format gate_lint_format
+  run_stage "lint: ruff check" lint_check gate_lint_check
+  run_stage "typecheck: mypy" typecheck gate_typecheck
+  # run_stage "go: format + vet + test"     go_fast    gate_go_fast
+  # run_stage "river: static compatibility harness" river_compat gate_river_compat_static
+  ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
+  run_stage "unit suite (FULL, not subset)" unit_suite gate_unit_suite
+  ch_tests # argMax + declared-state-history + migration 075 reconcile live tests (reuses the scratch db)
+
+  verify_stage_manifest
+
+  print_summary
+  if [ "${FAILED}" -ne 0 ]; then
+    printf 'GATE_STAGE_MANIFEST result=FAILED declared=%d executed=%d declared_ids=%s executed_ids=%s\n' \
+      "${#DECLARED_STAGE_IDS[@]}" "${#EXECUTED_STAGE_IDS[@]}" \
+      "$(join_commas "${DECLARED_STAGE_IDS[@]+"${DECLARED_STAGE_IDS[@]}"}")" \
+      "$(join_commas "${EXECUTED_STAGE_IDS[@]+"${EXECUTED_STAGE_IDS[@]}"}")"
+    printf '\n%s do NOT push. Fix the failures above.\n' "$(c_red 'GATE FAILED.')"
+    exit 1
+  fi
+  # The verdict line itself now carries the stage count and the exact ids that
+  # ran (CHAOS-3571 (b)): "GATE PASSED [10/10: ...]" cannot be produced by a run
+  # that executed fewer stages than it declared -- verify_stage_manifest above
+  # already exited 1 before this line if it had. A degraded run can no longer
+  # print an indistinguishable "GATE PASSED. safe to push." — the bracketed
+  # count is unconditionally part of the same line a human or a PR quote would
+  # copy, not a separate line easy to omit when pasting.
+  printf 'GATE_STAGE_MANIFEST result=PASSED declared=%d executed=%d declared_ids=%s executed_ids=%s\n' \
+    "${#DECLARED_STAGE_IDS[@]}" "${#EXECUTED_STAGE_IDS[@]}" \
+    "$(join_commas "${DECLARED_STAGE_IDS[@]+"${DECLARED_STAGE_IDS[@]}"}")" \
+    "$(join_commas "${EXECUTED_STAGE_IDS[@]+"${EXECUTED_STAGE_IDS[@]}"}")"
+  printf '\n%s [%d/%d: %s] safe to push.\n' \
+    "$(c_green 'GATE PASSED.')" "${#EXECUTED_STAGE_IDS[@]}" "${#DECLARED_STAGE_IDS[@]}" \
+    "$(join_commas "${EXECUTED_STAGE_IDS[@]+"${EXECUTED_STAGE_IDS[@]}"}")"
+  exit 0
+}
+
 # ===================================================================================
 main() {
   acquire_lock # CHAOS-3403 single-flight mutex — before any work is done
   preflight
-
-  run_stage "lint: ruff format --check" gate_lint_format
-  run_stage "lint: ruff check" gate_lint_check
-  run_stage "typecheck: mypy" gate_typecheck
-  # run_stage "go: format + vet + test"     gate_go_fast
-  # run_stage "river: static compatibility harness" gate_river_compat_static
-  ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
-  run_stage "unit suite (FULL, not subset)" gate_unit_suite
-  ch_tests # argMax live-exec proof on the real engine (reuses the scratch db)
-
-  print_summary
-  if [ "${FAILED}" -ne 0 ]; then
-    printf '\n%s do NOT push. Fix the failures above.\n' "$(c_red 'GATE FAILED.')"
-    exit 1
-  fi
-  printf '\n%s safe to push.\n' "$(c_green 'GATE PASSED.')"
-  exit 0
+  run_declared_stages
 }
 
 # High-resolution timestamp for --lock-probe, in order of preference: bash's
@@ -1107,6 +1382,82 @@ if [ "${1:-}" = "--lock-probe-exit-order" ]; then
   # exactly that flaky non-observation during this hook's own development.
   # hold_secs makes the window a real, controllable duration to poll for.
   sleep "${hold_secs}"
+  exit 0
+fi
+
+# Test-only harness hook (CHAOS-3571): exercises the REAL ch_probe_docker()
+# function in isolation -- no lock, no preflight, no lint/mypy/unit suite, no
+# scratch db. Prints its return code and CH_PROBE_DETAIL so a test can plant a
+# specific docker failure mode (missing binary, `docker ps` erroring, a clean
+# "container absent" result) via a PATH-shadowing stub `docker` binary, and
+# assert the exact distinguishing message CHAOS-3571 was filed over -- a probe
+# FAILURE reported as a confirmed "not running" fact. Never invoked by main();
+# only by tests/tooling/test_local_validate_stage_manifest.py.
+if [ "${1:-}" = "--ch-probe-only" ]; then
+  shift
+  ch_probe_docker
+  ch_probe_rc=$?
+  printf 'ch-probe-result: rc=%s detail=%s\n' "${ch_probe_rc}" "${CH_PROBE_DETAIL}"
+  exit "${ch_probe_rc}"
+fi
+
+# Test-only harness hook (CHAOS-3571): exercises the REAL stage-declaration /
+# stage-execution / verify_stage_manifest / verdict-line bookkeeping in
+# run_declared_stages() end-to-end, with every expensive or environment-
+# dependent LEAF stage swapped for a trivial stand-in -- same technique as
+# --lock-probe-exit-order's cleanup_scratch() override above, applied to eight
+# functions instead of one. This is deliberately NOT a test of any individual
+# gate's correctness (lint/mypy/pytest are not being exercised here at all);
+# it is a test that the manifest machinery itself -- the part CHAOS-3571 was
+# actually about -- correctly declares, tracks, diffs, and reports, without
+# paying for the ~15-minute real gate or touching a real docker/ClickHouse.
+# Never invoked by main(); only by
+# tests/tooling/test_local_validate_stage_manifest.py.
+if [ "${1:-}" = "--stage-manifest-probe" ]; then
+  shift
+  gate_lint_format() { return 0; }
+  gate_lint_check() { return 0; }
+  gate_typecheck() { return 0; }
+  gate_unit_suite() { return 0; }
+  ch_probe_docker() {
+    CH_PROBE_DETAIL="stubbed: available"
+    return 0
+  }
+  # NOTE: does NOT set SCRATCH_CREATED=1 -- the real cleanup_scratch() (run
+  # unconditionally by the on_exit EXIT trap registered near the top of this
+  # script, which this hook does not disable) gates its `docker exec ...
+  # DROP DATABASE` on that flag. Leaving it unset means on_exit's real
+  # cleanup_scratch() call is a guaranteed no-op here, so this hook makes
+  # zero docker calls end to end -- consistent with "no docker commands
+  # against real containers" for a probe whose whole point is to test the
+  # manifest bookkeeping, not ClickHouse.
+  ch_create_scratch() { return 0; }
+  ch_migrate() { return 0; }
+  ch_argmax_proof() { return 0; }
+  ch_declared_state_history_tests() { return 0; }
+  ch_migration_075_reconcile_tests() { return 0; }
+  run_declared_stages
+fi
+
+# Test-only harness hook (CHAOS-3571): exercises verify_stage_manifest() in
+# total isolation from run_declared_stages -- feeds it a DECLARED_STAGE_IDS /
+# EXECUTED_STAGE_IDS pair with a deliberate gap (something declared that never
+# "ran") and confirms it fails loudly by name, rather than trusting that a
+# normal gate run can ever actually produce a mismatch to test against (under
+# the CHAOS-3571 fix it structurally can't -- run_stage/ch_provision append to
+# EXECUTED_STAGE_IDS unconditionally on every path, so the only way to observe
+# this function's own refusal logic is to hand it a gap directly). Reads the
+# fake declared/executed id lists from argv so a test can vary them freely.
+# Never invoked by main(); only by
+# tests/tooling/test_local_validate_stage_manifest.py.
+if [ "${1:-}" = "--stage-manifest-mismatch-probe" ]; then
+  shift
+  declared_csv="${1:?declared csv required}"
+  executed_csv="${2:?executed csv required}"
+  IFS=',' read -r -a DECLARED_STAGE_IDS <<<"${declared_csv}"
+  IFS=',' read -r -a EXECUTED_STAGE_IDS <<<"${executed_csv}"
+  verify_stage_manifest
+  printf 'stage-manifest-mismatch-probe: no mismatch detected (unexpected)\n'
   exit 0
 fi
 

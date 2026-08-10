@@ -140,4 +140,30 @@ report_status=$?
 if [[ ${report_status} -ne 0 ]]; then
   exit ${report_status}
 fi
+
+# CHAOS-3575: "did anything run" and "did what ran measure anything" are
+# different questions, and the second one has been answered wrong. The armed
+# run of 2026-08-07 10:03 reported `134 collected, 0 skipped`, executed 90 real
+# corpus cases, and passed the executed-case assertion above -- while 59 of
+# those 90 had raised HTTP 429 before their recorder ran and had therefore
+# asserted NOTHING. Every count this script already checked was correct; none
+# of them compared cases-executed against receipts-written, so a run that
+# measured a third of the corpus was indistinguishable from a complete one.
+#
+# Runs even when pytest failed, for the same reason the executed-case assertion
+# does: this matters MOST when the run looks like an ordinary red, because that
+# is what a mass-degraded run looks like from the outside.
+echo "=== receipt-coverage assertion ==="
+PYTHONPATH="${ops_root}/src:${ops_root}" "${venv_python}" -m \
+  scripts.acceptance.corpus.receipt_coverage "${report}" \
+  --receipts-dir "${report_dir}"
+coverage_status=$?
+
+# UNMEASURED outranks a red corpus: a run that did not measure cannot be graded
+# at all, so its status must never be masked by pytest's own exit code. Exit 68
+# is distinct from pytest's 1..5 and from run_report's 66/67, so a caller can
+# tell "the corpus went red" from "the corpus did not get measured".
+if [[ ${coverage_status} -ne 0 ]]; then
+  exit ${coverage_status}
+fi
 exit ${pytest_status}

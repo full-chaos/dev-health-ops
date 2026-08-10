@@ -51,12 +51,46 @@ unset \
   WORKER_CONCURRENCY WORKER_HEAVY_CONCURRENCY \
   WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED WORKER_GITHUB_REPO_METADATA_ENABLED \
   DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER \
-  BUGSINK_BASE_URL BUGSINK_CREATE_SUPERUSER
+  BUGSINK_BASE_URL BUGSINK_CREATE_SUPERUSER \
+  ASK_DEV_QUA_SHADOW_ENABLED ASK_DEV_QUA_COMMIT_ENABLED
 
 web_root="$(cd -- "$2" && pwd)"
 if [[ ! -f "${web_root}/Dockerfile" || ! -f "${web_root}/package.json" ]]; then
   echo "--web-root must identify a dev-health-web checkout" >&2
   exit 64
+fi
+
+# CHAOS-3532: arming the QUA ladder is a deliberate act HERE, and nowhere
+# else.
+#
+# These two are the only ASK_DEV_-namespaced names this launcher clears
+# rather than letting through. That prefix normally means "this launcher's
+# own knob, cannot collide with an ambient dev .env by construction" -- the
+# third bucket of test_launcher_hardens_compose_interpolation_env_for_every
+# _var_it_boots. For these two the assumption behind that bucket is simply
+# false: ops/.env sets ASK_DEV_QUA_SHADOW_ENABLED=1 and
+# ASK_DEV_QUA_COMMIT_ENABLED=1 for the DEV stack, direnv exports that file
+# into every shell under the ops tree, and passing them through would boot
+# every acceptance stack from a developer shell silently ARMED.
+#
+# That is not a hypothetical leftover export. It was the live state of every
+# ops shell on this machine, verified directly, hours after the passthrough
+# version of this wiring was written -- which is why this reverses it.
+#
+# An armed stack is not merely "more feature on": the QUA shadow changes
+# what every baseline corpus case measures, and armed runs are graded
+# against predictions pre-registered on an UNARMED system. Silent arming
+# invalidates the comparison rather than extending it.
+#
+# So: cleared unconditionally above, then translated from this launcher's
+# own one-shot knob AFTER the clear. Setting the two flags directly cannot
+# arm anything; only ASK_DEV_ACCEPTANCE_QUA=1 can.
+if [[ "${ASK_DEV_ACCEPTANCE_QUA:-0}" == "1" ]]; then
+  export ASK_DEV_QUA_SHADOW_ENABLED=1
+  export ASK_DEV_QUA_COMMIT_ENABLED=1
+else
+  export ASK_DEV_QUA_SHADOW_ENABLED=0
+  export ASK_DEV_QUA_COMMIT_ENABLED=0
 fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -162,6 +196,19 @@ trap report_failure EXIT
 # without touching a normal dev-health-ops Compose project.
 "${compose[@]}" down --volumes --remove-orphans
 "${compose[@]}" up -d --build --wait "${boot_services[@]}"
+
+# CHAOS-3572: refuse to proceed unless the api container we just booted is
+# serving THIS checkout. Runs immediately after boot and before anything --
+# world-restore, fixtures, any smoke/corpus script -- reads or writes through
+# it, so a wrong-worktree stack is refused here rather than discovered mid-
+# measurement (or not discovered at all: docker ps, the API, and every test
+# all look healthy regardless of which worktree booted the container). Same
+# mechanism and exit code (70) as the mint guard #1582 added for the one-off
+# mint flow; see container_source_guard.sh for why it is a shared function
+# rather than a copy in every entrypoint.
+# shellcheck source=container_source_guard.sh
+source "${script_dir}/container_source_guard.sh"
+container_source_guard_check "${ops_root}" "${compose[@]}"
 
 # CHAOS-3463 (Phase 2 exit blockers B2 + B3): seed the pinned
 # ask-dev-world.v1 into the databases this stack's API actually serves.
@@ -346,6 +393,84 @@ TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${web_root}/node_modules/.bin/playwright" test \
   -c "${web_root}/playwright.ask-dev-acceptance.config.ts"
+
+# CHAOS-3586 (unblocks CHAOS-3510 / Phase 4 Lane 4d): the Wave 4 access
+# matrix. A SECOND playwright invocation rather than more env on the one
+# above, because the two configs arm on different contracts and must be able
+# to fail independently -- folding them together would let a Phase 1 oracle
+# change take the access matrix down with it, and vice versa.
+#
+# ASK_DEV_WAVE4_ACCESS_MATRIX is deliberately its own knob, not implied by
+# ASK_DEV_LIVE_ACCEPTANCE. A launcher predating this lane sets the latter but
+# not the former, so it cannot appear to have run a matrix that did not exist
+# yet -- the web config throws instead of silently proving nothing.
+#
+# ASK_DEV_ACCEPTANCE_ACR is forwarded rather than defaulted: the entitlement
+# non-coupling rows assert against the DECLARED arming state, and the web
+# config rejects anything that is not exactly "0" or "1". Forwarding
+# ${acr_armed} (already normalized above) keeps that contract honest whether
+# or not this run armed ACR.
+# PRESENCE GUARD (CHAOS-3586 follow-up). The config below lives in
+# dev-health-web and landed there AFTER this leg did -- an ordering mistake in
+# the original change: the ops half had a hard dependency on the web half and
+# merged first. Until the web change is on main, `playwright test -c <missing>`
+# exits 1 and `set -e` kills the whole run AFTER a full boot, seed and Phase 1
+# pass. That broke every launcher invocation whose --web-root is any checkout
+# without the config, including the nightly workflow.
+#
+# A source-reading contract test cannot catch this: it proves the invocation
+# exists in THIS file and can say nothing about whether the path resolves in
+# another repository. The reference is cross-repo and was dangling.
+#
+# So: skip when absent -- but a skip must never be readable as a pass. The
+# marker below is a single greppable line stating explicitly that the matrix
+# did NOT run and why, so no log reader and no artifact scraper can mistake
+# this run for one that exercised the matrix. When the web config IS present
+# the leg is mandatory and any failure still aborts the run.
+# MANDATORY (CHAOS-3510 landed the config on web main). The previous
+# revision SKIPPED this leg with a loud marker when the config was absent.
+# That skip was scaffolding for exactly one condition -- the ops half of this
+# feature merged before the web half -- and that condition no longer exists:
+# playwright.ask-dev-wave4.config.ts is on dev-health-web main.
+#
+# The scaffolding is REMOVED rather than left dormant. A skip path that is
+# correct today and unreachable tomorrow is how a gate quietly stops gating:
+# it survives because nothing fails when it fires, and the next person to
+# delete or rename the config gets a green run and a marker nobody greps for.
+#
+# Unconditional on purpose. A developer pointing --web-root at a checkout
+# predating CHAOS-3510 is TOLD, loudly, what to update -- "tolerant for local
+# convenience" is precisely how the dormant path would survive.
+wave4_config="${web_root}/playwright.ask-dev-wave4.config.ts"
+if [[ ! -f "${wave4_config}" ]]; then
+  echo "WAVE4_ACCESS_MATRIX=FAILED reason=config-absent web_root=${web_root}" >&2
+  echo "The Wave 4 access matrix config is REQUIRED and was not found:" >&2
+  echo "  ${wave4_config}" >&2
+  echo "It has been on dev-health-web main since CHAOS-3510. A --web-root" >&2
+  echo "without it is a checkout predating that change; update or rebase it." >&2
+  echo "This leg is mandatory: refusing to report a run that never exercised" >&2
+  echo "the Context Fabric Validation access matrix." >&2
+  exit 1
+fi
+if [[ ! -s "${org_ids_output}" ]]; then
+  echo "Wave 4 access matrix cannot run: ${org_ids_output} is missing or empty." >&2
+  echo "prepare_ask_dev_acceptance.py must have written the org-ids artifact" >&2
+  echo "(schema ask_dev_acceptance_org_ids.v1) before this point. Refusing to" >&2
+  echo "run the matrix against unknown tenants rather than skipping it." >&2
+  exit 1
+fi
+echo "WAVE4_ACCESS_MATRIX=RUNNING web_root=${web_root}"
+ASK_DEV_LIVE_ACCEPTANCE=1 \
+ASK_DEV_COMPOSE_WEB_READY=1 \
+ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
+ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
+ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
+PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL=admin@devhealth.example \
+TEST_SUPERUSER_PASSWORD=devhealth123 \
+  "${web_root}/node_modules/.bin/playwright" test \
+  -c "${wave4_config}"
 
 # CHAOS-3219 Phase 5 (CI lane): keep the stack up for a caller that has more
 # to run against it -- specifically scripts/acceptance/run_wave4_corpus.sh,

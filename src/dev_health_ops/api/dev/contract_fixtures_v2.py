@@ -881,6 +881,7 @@ _NO_ANSWER_DISPLAY_LABELS = {
     "unsupported": "Not supported yet",
     "denied": "Not permitted",
     "failed": "Something went wrong",
+    "refused": "Not something Ask Dev can do",
 }
 
 

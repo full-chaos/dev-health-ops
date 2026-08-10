@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
-from dev_health_ops.fixtures.ttl_registry import max_generated_age_days
+from dev_health_ops.fixtures.ttl_horizon import max_generated_age_days_for_table
 from dev_health_ops.metrics.schemas import (
     FeatureFlagEventRecord,
     FeatureFlagLinkRecord,
@@ -15,6 +15,20 @@ from dev_health_ops.metrics.schemas import (
     TelemetrySignalBucketRecord,
 )
 from dev_health_ops.models.work_items import WorkItem, WorkItemInteractionEvent
+
+
+def _max_history_days() -> int:
+    """The oldest history these generators may write, derived from the schema.
+
+    Deliberately a function call rather than a module constant captured at
+    import: the horizon comes from the migrations on disk, so a migration
+    that tightens a TTL takes effect without anyone remembering to update a
+    second copy of the number.
+    """
+
+    from dev_health_ops.fixtures.ttl_horizon import max_generated_history_days
+
+    return max_generated_history_days()
 
 
 class InteractionsGeneratorMixin(BaseGeneratorMixin):
@@ -108,20 +122,15 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         random.shuffle(keys)
         keys = keys[:count]
 
-        # CHAOS-3602: this range used to be a hardcoded `random.randint(7,
-        # 90)` -- landing exactly on feature_flag_event's own 90-day TTL
-        # horizon with zero margin. A flag's `created_at` becomes that
-        # table's `event_ts` for its "create" event (generate_feature_flag_
-        # events below), so a row minted at precisely `now - 90 days` was
-        # due for silent TTL deletion the moment `now` advanced past mint
-        # time -- caught live when a mint's content oracle found a restored
-        # row count one short of what was generated. Bounded from the TTL
-        # registry (parsed from the migration itself), not a second
-        # hardcoded guess.
-        max_offset_days = max_generated_age_days("feature_flag_event") or 90
-
         for i, key in enumerate(keys):
-            created_offset_days = random.randint(7, max_offset_days)
+            # CHAOS-3432/3544: bounded by the SCHEMA's tightest TTL, not by a
+            # literal. This used to be `randint(7, 90)` against a 90-day
+            # `TTL … DELETE` on feature_flag_event, so the oldest rows sat
+            # exactly on the boundary the moment the world was generated --
+            # and ClickHouse deleted them on restore days later, breaking the
+            # content oracle with no code change anywhere. Measured: 1 row
+            # already expired and 24 due within a week.
+            created_offset_days = random.randint(7, _max_history_days())
             created_at = now - timedelta(days=created_offset_days)
 
             archived_at = None
@@ -297,12 +306,22 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         release_refs: list[str] | None = None,
     ) -> list[TelemetrySignalBucketRecord]:
         """Generate hourly telemetry signal buckets."""
-        # CHAOS-3602: defense in depth alongside generate_feature_flags'
-        # fix -- `days` is caller-supplied (from `--days`/the world
-        # manifest), not intrinsic to this generator, so clamp it against
-        # this table's own TTL horizon rather than trusting the caller
-        # never to pass something that backdates past it.
-        days = min(days, max_generated_age_days("telemetry_signal_bucket") or days)
+        # CHAOS-3602: defense in depth -- `days` is caller-supplied (from
+        # `--days`/the world manifest), not intrinsic to this generator, so
+        # clamp it against this table's own TTL horizon (per the migration-
+        # derived registry, not a second hardcoded number) rather than
+        # trusting the caller never to pass something that backdates past it.
+        # Uses THIS repo's canonical TTL_SAFETY_MARGIN (ttl_horizon.py, 30
+        # days) -- not ttl_registry.py's own (looser) margin constants --
+        # so a row this clamp allows stays compatible with the 30-day
+        # restore shelf life `_assert_snapshot_within_shelf_life` actually
+        # enforces (codex finding, confirmed: the looser margin let a
+        # restore up to the advertised shelf life land 20 days past this
+        # table's own TTL horizon). `is None` (never `or`, codex round-2
+        # finding, confirmed): a legitimate ceiling of exactly 0 must clamp
+        # to 0, not fall back to the caller's unclamped `days`.
+        _ceiling = max_generated_age_days_for_table("telemetry_signal_bucket")
+        days = days if _ceiling is None else min(days, _ceiling)
         buckets: list[TelemetrySignalBucketRecord] = []
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
@@ -371,7 +390,10 @@ class InteractionsGeneratorMixin(BaseGeneratorMixin):
         """Generate daily release impact metrics."""
         # CHAOS-3602: same defense-in-depth clamp as
         # generate_telemetry_signal_buckets -- `days` is caller-supplied.
-        days = min(days, max_generated_age_days("release_impact_daily") or days)
+        # `is None`, never `or` (codex round-2 finding, confirmed): see the
+        # sibling comment above.
+        _ceiling = max_generated_age_days_for_table("release_impact_daily")
+        days = days if _ceiling is None else min(days, _ceiling)
         records: list[ReleaseImpactDailyRecord] = []
         now = datetime.now(timezone.utc)
         end_date = now.date()

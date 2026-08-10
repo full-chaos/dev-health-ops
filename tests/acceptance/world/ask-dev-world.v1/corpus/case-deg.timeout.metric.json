@@ -33,10 +33,19 @@
       },
       "assert": "The run's derived wave4_case_result.v1 resolution_path equals this case's resolution-profiles/deterministic-v1.json entry's own resolution_path (null is a valid, asserted value for n/a-subject cases that never attempt mention resolution).",
       "executable_today": true
+    },
+    {
+      "category": "terminal-outcome-matches-profile",
+      "check": "public_outcome_in",
+      "args": {
+        "from_profile": "expected_public_outcome"
+      },
+      "assert": "The run reaches the terminal PublicOutcome its resolution profile declares -- not merely a non-crash, and not merely a persisted row. Wired CHAOS-3219 Phase 3 (P3-1).",
+      "executable_today": true,
+      "$comment": "CHAOS-3219 Phase 3 P3-1: the profile ALREADY declared expected_public_outcome for this case and nothing asserted it. Every active group-8 case was in that state, so the whole adversarial family's security claims reduced to 'the run did not crash' plus 'a row was persisted' -- a product that stopped refusing, or answered where it should have failed, passed all of them. The checker and the expected value both already existed; only the wire between them was missing."
     }
   ],
   "resolution_profile_ref": "deterministic-v1",
-  "fault_ref": "deg.timeout.metric",
   "notes": "Same 'no dedicated per-stage timeout fault type exists today' honesty basis as deg.timeout.graph/evidence/data-health (see those cases' notes for the full fault-type inventory). Stands in for a metric-query-stage timeout using the EXISTING slow-response mechanism: round 0 issues a real, immediate tool_call to query_metric.v1 (wire name query_metric_v1, arguments metric_id=items_completed/include_comparison=false/limit=12 -- the metric_id/limit shape reused from provider-fail.after-frame's own already-authored, real pre_fault_decisions entry for the same tool, include_comparison deliberately flipped to keep this case's decision sequence distinguishable from that one), then fires_from_round=1 applies the 4000ms slow-response delay to the round immediately after. Honesty caveat: identical to deg.timeout.graph's -- the fault mechanism delays the provider's own decide() round-trip, not literal server-side tool execution latency, so this is a plausible, explicitly-flagged proxy for 'the metric query itself timed out', not a literal one. Subject resolves EXACT via the quoted noun-adjacent span 'the repo \"meridian/web-app\"', independent of and prior to the fault.",
   "$comment_principal_pool": "CHAOS-3490: user_alias assigned by deterministic round-robin over the ordinary-primary pool (sorted case id, index 33 of 85). The pool is role-identical to primary.ordinary, so this changes request DISTRIBUTION only -- never what this case proves. Spreading exists because production caps one user at 20 requests/15min and 85 cases on one alias made a single-pass armed run impossible."
 }

@@ -59,7 +59,15 @@ __all__ = [
 #: (sections/facts) must stay empty, which ``validate_outcome_consistency``
 #: already enforces.
 NO_ANSWER_OUTCOMES = frozenset(
-    {"not_found", "temporarily_unavailable", "unsupported", "denied", "failed"}
+    {
+        "not_found",
+        "temporarily_unavailable",
+        "unsupported",
+        "denied",
+        "failed",
+        # CHAOS-3541
+        "refused",
+    }
 )
 
 # ---------------------------------------------------------------------------
@@ -79,6 +87,13 @@ CANONICAL_NO_ANSWER_COPY: Mapping[str, str] = {
     "unsupported": "This question is not supported yet.",
     "denied": "You do not have access to ask about this.",
     "failed": "Something went wrong while preparing this answer.",
+    # CHAOS-3541 (team-lead ruling 2026-08-07): the SAME sentence as the
+    # live v1 error.safe_message for this outcome -- deliberately, not a
+    # variant. Two wordings for one concept is drift waiting to happen.
+    "refused": (
+        "Ask Dev can only read and summarize your data; it can't run "
+        "commands or make changes."
+    ),
 }
 
 #: Server-owned remediation for each no-answer outcome, used by the v1
@@ -91,6 +106,7 @@ CANONICAL_NO_ANSWER_REMEDIATION: Mapping[str, tuple[str, ...]] = {
     "unsupported": ("Try a status, health, or metric question instead.",),
     "denied": ("Ask an administrator for access to this area.",),
     "failed": ("Try the question again.",),
+    "refused": ("Ask a read-only question about your data instead.",),
 }
 
 #: The matching ``dev_answer.v2`` display labels, kept in step with
@@ -101,6 +117,7 @@ CANONICAL_NO_ANSWER_DISPLAY_LABELS: Mapping[str, str] = {
     "unsupported": "Not supported yet",
     "denied": "Not permitted",
     "failed": "Something went wrong",
+    "refused": "Not something Ask Dev can do",
 }
 
 #: The ``OpaqueID`` shape: a whitespace-free identifier token. A string that

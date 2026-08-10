@@ -1230,6 +1230,13 @@ class DevError(ContractModel):
         "cancelled",
         "provider_contract_violation",
         "internal_error",
+        # CHAOS-3541: a distinct wire code for a genuinely prohibited
+        # request (arbitrary execution, a write) -- never
+        # "insufficient_evidence", which would mislabel a categorical
+        # refusal as an evidence gap the requester could resolve by asking
+        # differently. See terminal_frames.PUBLIC_OUTCOME_BY_ERROR_CODE and
+        # contracts_v2.base.PublicOutcome.REFUSED.
+        "refused",
     ]
     safe_message: ShortText
     retryable: bool

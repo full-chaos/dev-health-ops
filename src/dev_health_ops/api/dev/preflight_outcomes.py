@@ -274,6 +274,7 @@ _DISPLAY_LABELS: Mapping[PublicOutcome, str] = {
     PublicOutcome.UNSUPPORTED: "Not supported yet",
     PublicOutcome.DENIED: "Not permitted",
     PublicOutcome.FAILED: "Something went wrong",
+    PublicOutcome.REFUSED: "Not something Ask Dev can do",
 }
 
 

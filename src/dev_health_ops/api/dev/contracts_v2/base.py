@@ -427,10 +427,14 @@ PlatformVersionToken = Annotated[
 class PublicOutcome(StrEnum):
     """The exact dev_answer.v2 public outcome vocabulary (PRD v2 §8).
 
-    ``refused`` is deliberately absent: it is reserved for genuinely
-    prohibited requests (writes, arbitrary execution, secret extraction,
-    cross-tenant access) and is never a Wave 3.1 answer-frame outcome for a
-    normal status/health question that could not be resolved.
+    ``REFUSED`` (CHAOS-3541) is reserved for genuinely prohibited requests
+    (writes, arbitrary execution, secret extraction, cross-tenant access) --
+    distinct from ``DENIED`` (an authorization claim: this scope is not
+    yours) and from every evidence-gap outcome (``NOT_FOUND`` et al: ask
+    again with more to go on). A refusal asserts neither -- the requester
+    has access, and no amount of additional evidence changes the answer.
+    Was previously never producible from any answer-frame outcome; this
+    docstring itself predates the implementation that finally reaches it.
     """
 
     ANSWERED = "answered"
@@ -441,6 +445,7 @@ class PublicOutcome(StrEnum):
     UNSUPPORTED = "unsupported"
     DENIED = "denied"
     FAILED = "failed"
+    REFUSED = "refused"
 
 
 #: Outcomes that MUST carry zero answer content (no sections/facts) because
@@ -452,6 +457,7 @@ EMPTY_CONTENT_OUTCOMES = frozenset(
         PublicOutcome.UNSUPPORTED,
         PublicOutcome.DENIED,
         PublicOutcome.FAILED,
+        PublicOutcome.REFUSED,
         PublicOutcome.NEEDS_CLARIFICATION,
     }
 )

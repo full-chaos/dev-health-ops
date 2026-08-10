@@ -90,6 +90,38 @@ def test_selected_ollama_local_profile_fails_before_compose_without_model() -> N
     assert "ASK_DEV_PROVIDER_MODEL is required" in result.stderr
 
 
+def test_launcher_runs_the_shared_container_source_guard_after_boot() -> None:
+    """CHAOS-3572: the provider-profile launcher boots its own compose
+    project with `--project-directory <ops_root>`, the same bind-mount
+    hazard `run_ask_dev_compose.sh` has -- a stack booted from a different
+    worktree keeps serving that worktree's source after being handed to
+    this one, and nothing else here would report it. Must source the SAME
+    shared guard the main launcher uses (not a copy), and must run it after
+    the api container boots but before anything reads or writes through it
+    (`fixtures generate` here, `fixtures world-restore` in the main
+    launcher).
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    guard_script = _ROOT / "scripts" / "acceptance" / "container_source_guard.sh"
+    assert guard_script.exists()
+    assert 'source "${script_dir}/container_source_guard.sh"' in launcher, (
+        "the provider-profile launcher must source the SHARED guard"
+    )
+    assert "container_source_guard_check" in launcher
+
+    boot_index = launcher.index(
+        "up -d --build --wait \\\n  postgres pgbouncer clickhouse valkey migrate api"
+    )
+    guard_call_index = launcher.index("container_source_guard_check ")
+    generate_index = launcher.index("dev-hops fixtures generate")
+
+    assert boot_index < guard_call_index < generate_index, (
+        "the guard must run immediately after boot and before fixtures are "
+        "generated against a possibly-wrong container"
+    )
+
+
 def test_live_smoke_uses_public_conversation_and_bounded_sse_contract() -> None:
     smoke = _SMOKE.read_text(encoding="utf-8")
     assert "/api/v1/dev/conversations" in smoke

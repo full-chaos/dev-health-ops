@@ -286,6 +286,11 @@ _ERROR_OUTCOME_CODES: dict[PublicOutcome, tuple[str, bool]] = {
     PublicOutcome.UNSUPPORTED: ("feature_not_enabled", False),
     PublicOutcome.DENIED: ("forbidden", False),
     PublicOutcome.FAILED: ("internal_error", False),
+    # CHAOS-3541: matches orchestrator.py's own live wire code for this
+    # outcome exactly ("refused") -- never "insufficient_evidence", which
+    # would mislabel a categorical refusal as a resolvable evidence gap on
+    # replay too.
+    PublicOutcome.REFUSED: ("refused", False),
 }
 
 

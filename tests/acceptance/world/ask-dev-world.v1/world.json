@@ -41,22 +41,7 @@
           "resource_type": "dev_conversation",
           "retention_days": 30
         }
-      ],
-      "kill_switches": {
-        "global": "enabled",
-        "org": "enabled",
-        "provider": {
-          "scripted-v1": "enabled"
-        },
-        "role": {
-          "primary_answer": "enabled"
-        },
-        "surface": {
-          "window": "enabled",
-          "dev_workspace": "enabled"
-        },
-        "contextual_entry": "enabled"
-      }
+      ]
     },
     {
       "alias": "sibling",
@@ -85,22 +70,7 @@
           "resource_type": "dev_conversation",
           "retention_days": 0
         }
-      ],
-      "kill_switches": {
-        "global": "enabled",
-        "org": "enabled",
-        "provider": {
-          "scripted-v1": "enabled"
-        },
-        "role": {
-          "primary_answer": "enabled"
-        },
-        "surface": {
-          "window": "enabled",
-          "dev_workspace": "enabled"
-        },
-        "contextual_entry": "enabled"
-      }
+      ]
     },
     {
       "alias": "disabled",
@@ -128,22 +98,7 @@
           "resource_type": "dev_conversation",
           "retention_days": 30
         }
-      ],
-      "kill_switches": {
-        "global": "enabled",
-        "org": "disabled",
-        "provider": {
-          "scripted-v1": "enabled"
-        },
-        "role": {
-          "primary_answer": "enabled"
-        },
-        "surface": {
-          "window": "enabled",
-          "dev_workspace": "enabled"
-        },
-        "contextual_entry": "enabled"
-      }
+      ]
     }
   ],
   "users": [
@@ -267,8 +222,7 @@
       "full_name": "Uma UnsupportedModel",
       "membership_role": "member",
       "is_superuser": false,
-      "feature_overrides": {},
-      "provider_profile_override": "unsupported-model-profile"
+      "feature_overrides": {}
     },
     {
       "alias": "primary.degraded-readiness-user",
@@ -279,8 +233,7 @@
       "full_name": "Dana DegradedReadiness",
       "membership_role": "member",
       "is_superuser": false,
-      "feature_overrides": {},
-      "provider_profile_override": "degraded-profile"
+      "feature_overrides": {}
     },
     {
       "alias": "sibling.ordinary",

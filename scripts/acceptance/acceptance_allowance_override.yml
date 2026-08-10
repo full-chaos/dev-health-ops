@@ -1,0 +1,31 @@
+# CHAOS-3575: raise the acceptance api's platform-allowance OPERATOR MAXIMUM so
+# the cost guard cannot gate a measurement run. Harness interference only; this
+# file is applied with an extra `-f` by armed_corpus_boot.sh and is never part
+# of a production compose stack.
+#
+# WHY AN OVERRIDE FILE. tests/acceptance/compose.ask-dev.yml pins
+# ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD as a LITERAL, so it cannot be
+# raised from the shell environment.
+#
+# WHY BOTH LAYERS MOVE. This variable is the ceiling an org may be CONFIGURED UP
+# TO -- it clamps the stored per-org row -- so on its own it changes nothing:
+# with no stored row the EFFECTIVE limit falls back to
+# PLATFORM_MONTHLY_COST_LIMIT_DEFAULT_MICROUSD ($100). set_platform_allowance.py
+# writes the row; this file lets the row exceed $200. Change them together.
+#
+# WHY 500000000. That is PLATFORM_MONTHLY_COST_LIMIT_HARD_MAX_MICROUSD, the
+# largest value the product accepts -- both _bounded_operator_limit and
+# _stored_limit clamp to it, so a larger number here is silently truncated
+# rather than honoured. At the observed ~$3.38M/case it is ~1.64x the ~$304M a
+# 90-case corpus needs.
+#
+# SAFE FOR THE CORPUS: no ACTIVE case asserts platform-allowance behaviour. The
+# only cases that would, deg.budget-exhaustion.with-frame/.without-frame, are
+# declared-blocked under CHAOS-3455 and execute nothing; when they unblock they
+# will need an EXHAUSTIBLE allowance and this override becomes their problem to
+# account for. adv.abuse.retry-storm's 429 comes from a scripted PROVIDER fault
+# (fault_ref, http_error 429 scripted_fault_retry_storm), not this ceiling.
+services:
+  api:
+    environment:
+      ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD: "500000000"

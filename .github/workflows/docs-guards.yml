@@ -94,6 +94,37 @@ jobs:
           python scripts/check_docs_candidate_facts.py \
             2>&1 | tee .build/docs-facts.log
 
+      # CHAOS-3514 (chris ruling: gate the scripts, keep the tests). These two
+      # guards had unit tests in tests/docs but their SCRIPTS ran only from
+      # Makefile targets -- never in CI -- so the property each enforces was
+      # unguarded on every PR. Both take repo-relative defaults and need no
+      # inputs CI lacks, which is why they can be wired honestly here; the
+      # user-guide-evidence validator cannot and is reported separately
+      # rather than invoked against a fabricated corpus.
+      - name: Check code prerequisites
+        run: |
+          set -o pipefail
+          python scripts/check_code_prerequisites.py \
+            2>&1 | tee .build/docs-code-prerequisites.log
+
+      - name: Check freshness inventory
+        run: |
+          set -o pipefail
+          python scripts/check_freshness_inventory.py \
+            2>&1 | tee .build/docs-freshness-inventory.log
+
+      # CHAOS-3220. Same rule as the two above: the script runs here, not only
+      # from `make docs:check-fast`, because the property it enforces -- that
+      # the Ask Dev answers page quotes the runtime's user-facing strings
+      # verbatim -- is broken by an edit on EITHER side, and a page that
+      # misquotes the product is worse than one that says nothing. Reads only
+      # repo files, so it is honest to wire here.
+      - name: Check Ask Dev published-copy drift
+        run: |
+          set -o pipefail
+          python scripts/check_ask_dev_copy_drift.py \
+            2>&1 | tee .build/docs-ask-dev-copy-drift.log
+
       - name: Upload documentation quality evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

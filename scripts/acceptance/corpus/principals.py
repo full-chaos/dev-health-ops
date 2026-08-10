@@ -273,6 +273,8 @@ class PrincipalSessions:
         self._directory = directory
         self._sessions: dict[str, PrincipalSession] = {}
         self._failures: dict[str, BaseException] = {}
+        self._logins: dict[str, int] = {}
+        self._relogins: list[tuple[str, str]] = []
 
     def session_for(self, case: Any) -> PrincipalSession:
         principal = self._directory.principal_for(case)
@@ -315,7 +317,66 @@ class PrincipalSessions:
             self._failures[principal.user_alias] = exc
             raise
         self._sessions[principal.user_alias] = session
+        self._logins[principal.user_alias] = (
+            self._logins.get(principal.user_alias, 0) + 1
+        )
         return session
+
+    def login_count(self, user_alias: str) -> int:
+        """Real authentications performed for ``user_alias`` this run.
+
+        Exists so "one login per principal, regardless of case count" is a
+        MEASURABLE property rather than a docstring claim. CHAOS-3529 was
+        filed believing this runner logs in per case; it does not, and never
+        did -- but nothing asserted that, which is how a load-bearing,
+        documented behaviour becomes folklore. See
+        ``test_principals.py::TestLoginBudget``.
+        """
+
+        return self._logins.get(user_alias, 0)
+
+    @property
+    def total_logins(self) -> int:
+        return sum(self._logins.values())
+
+    @property
+    def relogin_events(self) -> tuple[tuple[str, str], ...]:
+        """``(user_alias, reason)`` for every session refresh, for receipts.
+
+        A refresh that is not recorded is indistinguishable from never having
+        needed one, which is exactly the kind of silence this corpus exists
+        to remove.
+        """
+
+        return tuple(self._relogins)
+
+    def invalidate(self, user_alias: str, *, reason: str) -> bool:
+        """Drop ``user_alias``'s cached session so the next use re-logs in.
+
+        The deterministic half of the expiry story. Access tokens carry a
+        60-minute TTL (``api/services/auth.py``) and are cached for the whole
+        run, so a run that outlives the token starts failing with 401s that
+        look nothing like their cause. A caller that observes such a 401
+        calls this and retries once; the re-login is RECORDED in
+        ``relogin_events`` so a receipt can show it happened.
+
+        MEASURED, so this is proportionate rather than speculative -- the
+        docstring above previously said the duration was unknown and declined
+        to build against a guess, which was right at the time. It is known
+        now: the 2026-08-07 armed run ran **6.8 minutes** wall
+        (04:55:03 -> 05:01:48 across 139 receipts) against a 60-minute TTL,
+        roughly 8.8x headroom. So expiry is NOT expected in a healthy run,
+        and this is deliberately a cheap, explicit invalidation rather than
+        background refresh machinery: the failure it covers is a slow or
+        wedged run, not the normal case. Returns whether a session was
+        actually dropped, so a caller cannot mistake "nothing was cached" for
+        "a refresh happened".
+        """
+
+        existed = self._sessions.pop(user_alias, None) is not None
+        if existed:
+            self._relogins.append((user_alias, reason))
+        return existed
 
     @property
     def provisioning_mode(self) -> str:

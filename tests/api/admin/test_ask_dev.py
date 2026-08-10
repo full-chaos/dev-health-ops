@@ -571,6 +571,12 @@ async def test_usage_is_ask_dev_only_content_free_aggregation(admin_context):
                     state="failed",
                     input_tokens=3,
                     output_tokens=0,
+                    # CHAOS-3573: no estimated_cost_microusd recorded (and no
+                    # safe_error_code/terminal_error_payload set either, so
+                    # this is NOT a force_terminal_fallback/recover_stale_
+                    # non_terminal_run row) -- a genuine zero-cost terminal.
+                    # The platform allowance aggregate now charges it 0, not
+                    # the worst-case reservation.
                     provider_source="platform",
                     started_at=now,
                 ),
@@ -608,8 +614,11 @@ async def test_usage_is_ask_dev_only_content_free_aggregation(admin_context):
     assert allowance["request_used"] == 2
     assert allowance["request_remaining"] == 998
     assert allowance["cost_limit_microusd"] == 100_000_000
-    assert allowance["cost_used_microusd"] == 5_000_025
-    assert allowance["cost_remaining_microusd"] == 94_999_975
+    # CHAOS-3573: the failed platform run's NULL cost reconciles to its
+    # real cost (0), not the $5 worst-case reservation -- 25 (the
+    # completed run's real cost) + 0, not 5_000_025.
+    assert allowance["cost_used_microusd"] == 25
+    assert allowance["cost_remaining_microusd"] == 99_999_975
     assert allowance["warning"] == "none"
     assert allowance["window_start"].endswith("T00:00:00Z")
     assert allowance["reset_at"].endswith("T00:00:00Z")

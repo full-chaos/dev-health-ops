@@ -730,3 +730,204 @@ class TestTheRunnerAuthenticatesWithSeededWorldCredentials:
             self._login_password_for("primary.ordinary")
             == "sentinel-for-primary.ordinary"
         ), "the runner did not go through production's derivation function"
+
+
+class _MultiPrincipalApi:
+    """Like ``_FakeApi`` but answers a login with the principal that asked.
+
+    Needed because every login hits the same ``(POST, /api/v1/auth/login)``
+    key, so a single canned response cannot distinguish principals -- and
+    "cannot distinguish principals" is precisely the defect the isolation
+    test below exists to catch.
+    """
+
+    def __init__(self, directory: PrincipalDirectory, aliases: list[str]) -> None:
+        self.base_url = "http://fake"
+        self.token: str | None = None
+        self.calls: list[tuple[str, str, Any]] = []
+        self._by_email = {
+            directory.principal_by_alias(a).email: directory.principal_by_alias(a)
+            for a in aliases
+        }
+
+    def request(self, method: str, path: str, payload: Any = None) -> Any:
+        self.calls.append((method, path, payload))
+        if (method, path) != ("POST", "/api/v1/auth/login"):
+            raise AssertionError(f"unexpected call {method} {path}")
+        principal = self._by_email[payload["email"]]
+        return _login_response(
+            str(principal.user_id), str(principal.org_id), principal.email
+        )
+
+    @property
+    def login_count(self) -> int:
+        return sum(1 for c in self.calls if c[1] == "/api/v1/auth/login")
+
+
+class TestLoginBudget:
+    """CHAOS-3529 filed believing this runner logs in once per CASE, and
+    prescribed per-principal session reuse as the fix. That reuse has existed
+    since Lane 2a -- ``PrincipalSessions``' own docstring says it exists so
+    re-login does not "put the login rate limiter in the path of a normal
+    run". The premise was wrong, but nothing ASSERTED the real behaviour at
+    corpus scale, which is how a load-bearing documented property becomes
+    folklore that a ticket can contradict.
+
+    The pre-existing ``test_sessions_are_cached_per_alias`` pins two calls on
+    ONE alias. That is not the property that matters: the property is that a
+    whole corpus spread over a principal POOL costs one login per POOL
+    MEMBER, because the per-IP limiter is 20 per 15 minutes and the corpus is
+    ~90 active cases.
+    """
+
+    ALIASES = ["primary.ordinary", "primary.ordinary-2", "primary.ordinary-3"]
+
+    def _sessions(self) -> tuple[Any, Any]:
+        directory = PrincipalDirectory.from_world(_REAL_MANIFEST)
+        api = _MultiPrincipalApi(directory, self.ALIASES)
+        return api, PrincipalSessions(api_factory=lambda: api, directory=directory)
+
+    def test_n_cases_over_m_principals_costs_exactly_m_logins(self) -> None:
+        api, sessions = self._sessions()
+        # 90 "cases" round-robin over the pool, the real corpus shape.
+        for index in range(90):
+            sessions.session_for_alias(self.ALIASES[index % len(self.ALIASES)])
+
+        assert api.login_count == len(self.ALIASES), (
+            f"90 cases over {len(self.ALIASES)} principals cost "
+            f"{api.login_count} logins; per-principal reuse is not holding, "
+            "and the per-IP limiter (20/15min) is now in the path of a "
+            "normal corpus run"
+        )
+        assert sessions.total_logins == len(self.ALIASES)
+        for alias in self.ALIASES:
+            assert sessions.login_count(alias) == 1
+
+    def test_the_budget_scales_with_principals_not_cases(self) -> None:
+        """The discriminator. If reuse silently broke, login count would
+        track CASE count -- so run the same pool at two very different case
+        counts and require the cost not to move."""
+
+        api_small, sessions_small = self._sessions()
+        for index in range(6):
+            sessions_small.session_for_alias(self.ALIASES[index % len(self.ALIASES)])
+        api_large, sessions_large = self._sessions()
+        for index in range(300):
+            sessions_large.session_for_alias(self.ALIASES[index % len(self.ALIASES)])
+
+        assert api_small.login_count == api_large.login_count == len(self.ALIASES)
+
+
+class TestCrossPrincipalIsolation:
+    """The security-shaped one. A cache keyed wrongly -- on org, on a
+    constant, on the first principal seen -- would hand principal A's bearer
+    token to principal B. Every cross-tenant case in the corpus would then be
+    evaluated as the wrong identity and could PASS while proving the
+    opposite of what it claims.
+    """
+
+    ALIASES = ["primary.ordinary", "primary.ordinary-2", "sibling.ordinary"]
+
+    def test_each_principal_gets_its_own_session_and_never_anothers(self) -> None:
+        directory = PrincipalDirectory.from_world(_REAL_MANIFEST)
+        api = _MultiPrincipalApi(directory, self.ALIASES)
+        sessions = PrincipalSessions(api_factory=lambda: api, directory=directory)
+
+        got = {alias: sessions.session_for_alias(alias) for alias in self.ALIASES}
+
+        # Distinct session objects...
+        assert len({id(s) for s in got.values()}) == len(self.ALIASES)
+        # ...each carrying ITS OWN identity, which is the half that matters:
+        # two distinct objects both holding principal A would still be a leak.
+        for alias, session in got.items():
+            expected = directory.principal_by_alias(alias)
+            assert session.principal.user_alias == alias
+            assert session.principal.email == expected.email
+            assert session.org_id == str(expected.org_id)
+
+        # And a cross-ORG pair must not collapse: sibling.ordinary is a
+        # different tenant entirely.
+        assert got["primary.ordinary"].org_id != got["sibling.ordinary"].org_id
+
+    def test_repeated_interleaved_access_never_swaps_identities(self) -> None:
+        """A cache that returned the most-recently-authenticated session
+        regardless of alias would pass a single-pass test and fail here."""
+
+        directory = PrincipalDirectory.from_world(_REAL_MANIFEST)
+        api = _MultiPrincipalApi(directory, self.ALIASES)
+        sessions = PrincipalSessions(api_factory=lambda: api, directory=directory)
+
+        for _ in range(10):
+            for alias in self.ALIASES:
+                assert sessions.session_for_alias(alias).principal.user_alias == alias
+
+
+class TestSessionExpiryStory:
+    """Access tokens carry a 60-minute TTL and sessions are cached for the
+    whole run, so a run that outlives its token starts failing with 401s that
+    look nothing like their cause.
+
+    MEASURED rather than assumed: the 2026-08-07 armed run took **6.8
+    minutes** wall across 139 receipts (04:55:03 -> 05:01:48) against that
+    60-minute TTL -- roughly 8.8x headroom. So this is deliberately a cheap,
+    explicit invalidation rather than background refresh machinery: it covers
+    a slow or wedged run, not the normal one. Building a refresh loop for a
+    scenario 8.8x away would be speculation dressed as rigour.
+    """
+
+    ALIASES = ["primary.ordinary", "primary.ordinary-2"]
+
+    def _sessions(self) -> tuple[Any, Any]:
+        directory = PrincipalDirectory.from_world(_REAL_MANIFEST)
+        api = _MultiPrincipalApi(directory, self.ALIASES)
+        return api, PrincipalSessions(api_factory=lambda: api, directory=directory)
+
+    def test_invalidate_forces_exactly_one_relogin_and_records_it(self) -> None:
+        api, sessions = self._sessions()
+        first = sessions.session_for_alias("primary.ordinary")
+        assert sessions.invalidate("primary.ordinary", reason="401 from api") is True
+
+        second = sessions.session_for_alias("primary.ordinary")
+        assert second is not first, "invalidate did not force a re-login"
+        assert api.login_count == 2
+        assert sessions.login_count("primary.ordinary") == 2
+        # Recorded, not silent: a refresh nobody can see is indistinguishable
+        # from never having needed one.
+        assert sessions.relogin_events == (("primary.ordinary", "401 from api"),)
+
+    def test_the_refreshed_session_is_still_the_same_principal(self) -> None:
+        """A re-login must not become an identity change."""
+
+        _api, sessions = self._sessions()
+        before = sessions.session_for_alias("primary.ordinary")
+        sessions.invalidate("primary.ordinary", reason="expired")
+        after = sessions.session_for_alias("primary.ordinary")
+        assert after.principal == before.principal
+        assert after.org_id == before.org_id
+
+    def test_invalidating_an_uncached_alias_reports_false(self) -> None:
+        """So a caller cannot mistake 'nothing was cached' for 'a refresh
+        happened' -- and cannot log a refresh that never occurred."""
+
+        _api, sessions = self._sessions()
+        assert sessions.invalidate("primary.ordinary", reason="expired") is False
+        assert sessions.relogin_events == ()
+
+    def test_invalidate_does_not_disturb_other_principals(self) -> None:
+        api, sessions = self._sessions()
+        kept = sessions.session_for_alias("primary.ordinary-2")
+        sessions.session_for_alias("primary.ordinary")
+        sessions.invalidate("primary.ordinary", reason="expired")
+
+        # Re-request BOTH: the invalidated one must re-login, the other
+        # must not. (An earlier draft of this test asserted 3 logins without
+        # ever re-requesting the invalidated alias, so it was asserting
+        # arithmetic rather than behaviour -- caught by it failing 2 != 3.)
+        assert sessions.session_for_alias("primary.ordinary-2") is kept
+        sessions.session_for_alias("primary.ordinary")
+
+        assert sessions.login_count("primary.ordinary-2") == 1, (
+            "untouched alias re-logged in"
+        )
+        assert sessions.login_count("primary.ordinary") == 2
+        assert api.login_count == 3  # 2 initial + 1 re-login, none for -2

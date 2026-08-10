@@ -20,6 +20,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -476,7 +477,7 @@ class TestClickHouseContentOracle:
 
 
 class _DumpResult:
-    def __init__(self, rows: list[list[int]]) -> None:
+    def __init__(self, rows: list[list[Any]]) -> None:
         self.result_rows = rows
 
 
@@ -644,6 +645,77 @@ class TestClickHouseDumpPayloadVerification:
         assert client.raw_query_calls == 1
         assert path.exists()
 
+    @pytest.mark.asyncio
+    async def test_a_malformed_pre_count_result_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-2 finding (MEDIUM, confirmed): `int(pre_count.
+        result_rows[0][0])` used to be unvalidated -- `result_rows == [[]]`
+        (one row, ZERO columns) raised an uncontrolled `IndexError` instead
+        of a named `SnapshotError`. Every count() in this retry loop now
+        goes through `_scalar_count`.
+        """
+
+        class _MalformedPreCountClient:
+            def raw_query(self, q: str, fmt: str | None = None) -> bytes:
+                return b"payload"
+
+            def query(self, q: str, parameters: dict | None = None) -> _DumpResult:
+                return _DumpResult([[]])  # one row, zero columns
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            await _dump_clickhouse(
+                _MalformedPreCountClient(),
+                "feature_flag_event",
+                "MergeTree()",
+                tmp_path / "feature_flag_event.native.gz",
+                raw_source_row_count=1042,
+            )
+
+
+class TestScalarCount:
+    """Codex round-2 finding (MEDIUM, confirmed): a bare `len(result_rows)
+    != 1` check let `result_rows == [[]]` (one row, ZERO columns) through to
+    an unvalidated `[0][0]` -- an uncontrolled IndexError, not a named
+    SnapshotError. `[[0, "extra"]]` (an unexpected extra column) passed
+    silently. `_scalar_count` is the one function every count() call site in
+    this module goes through now.
+    """
+
+    def test_a_single_scalar_row_is_accepted(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        assert _scalar_count(_DumpResult([[7]]), context="test") == 7
+
+    def test_zero_rows_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([]), context="test")
+
+    def test_one_row_zero_columns_is_rejected_not_an_indexerror(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[]]), context="test")
+
+    def test_one_row_two_columns_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[0, "extra"]]), context="test")
+
+    def test_two_rows_is_rejected(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            _scalar_count(_DumpResult([[1], [2]]), context="test")
+
+    def test_a_default_is_returned_instead_of_raising_when_given(self) -> None:
+        from dev_health_ops.fixtures.world_snapshot import _scalar_count
+
+        assert _scalar_count(_DumpResult([]), context="test", default=-1) == -1
+
 
 class _FakeTtlCountClient:
     """Reports a controllable row count for whichever table's TTL-horizon
@@ -701,6 +773,59 @@ class TestTtlHorizonGuard:
         message = str(exc_info.value)
         assert "feature_flag_event" in message
         assert "telemetry_signal_bucket" in message
+
+    @pytest.mark.asyncio
+    async def test_a_broken_ttl_vocabulary_fails_closed_before_any_query(
+        self, monkeypatch
+    ) -> None:
+        """This guard's OWN contract: whatever `assert_ttl_vocabulary_is_
+        consistent` decides, this function must propagate it as a
+        `SnapshotError` before issuing a single per-table query. The
+        vocabulary-consistency logic itself (empty registry, partial
+        registry, a fifth TTL table the precise parser misses via an
+        unmatched syntax variant, a registry extra, a KNOWN_TTL_TABLES
+        entry that's gone stale, ...) is exhaustively covered in
+        `tests/test_ttl_registry.py::TestVocabularyConsistency` -- this
+        test proves this guard actually calls it and wraps its failure
+        correctly, not that the check's own logic is correct.
+        """
+        from dev_health_ops.fixtures import world_snapshot
+
+        def _broken() -> None:
+            raise RuntimeError("synthetic vocabulary break: table_x")
+
+        monkeypatch.setattr(
+            world_snapshot, "assert_ttl_vocabulary_is_consistent", _broken
+        )
+        client = _FakeTtlCountClient(counts={"feature_flag_event": 999999})
+
+        with pytest.raises(SnapshotError, match="synthetic vocabulary break"):
+            await _assert_no_ttl_horizon_rows(client, ["feature_flag_event"])
+
+        assert client.queries == [], (
+            "must fail before issuing a single per-table query once the "
+            "vocabulary check itself fails"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_query_result_fails_closed_instead_of_reading_as_zero(
+        self,
+    ) -> None:
+        """Codex finding (HIGH, confirmed): an empty/malformed
+        `result.result_rows` was folded into `count = 0` -- a driver
+        returning something other than a single scalar count row (a
+        transient response-shape defect, a mocking/wiring bug) silently
+        read as "no violating rows" and let the mint proceed unchecked.
+        """
+
+        class _MalformedResultClient:
+            def query(self, q: str, parameters: dict | None = None) -> _DumpResult:
+                return _DumpResult([])  # no rows at all -- malformed
+
+        with pytest.raises(SnapshotError, match="malformed"):
+            await _assert_no_ttl_horizon_rows(
+                _MalformedResultClient(), ["feature_flag_event"]
+            )
 
 
 class TestContentHashManifestShape:

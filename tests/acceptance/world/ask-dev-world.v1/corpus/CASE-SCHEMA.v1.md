@@ -62,7 +62,20 @@ answers it.
 
   "resolution_profile_ref": "deterministic-v1", // which resolution-profiles/*.json file's `cases[id]` block supplies the matcher-specific expected outcome
 
-  "fault_ref": null,                            // provider-scripts/role-*.json case key, when this id is a provider-fail/adversarial-fault case; null otherwise
+  // "fault_ref" REMOVED (CHAOS-3546): it was never read by anything outside its
+  // own schema doc and this file -- fault/decisions-script selection is
+  // entirely by provider-scripts' own question_fingerprint match, and the
+  // field's value equaled the case's own `id` in all 18 cases that declared
+  // it, with zero exceptions, so it carried no information a reader could not
+  // already get from the id itself. Whether provider-scripts/role-*.json
+  // actually holds a scripted (fault/decisions-kind) entry for a given case id
+  // is now a DERIVED cross-check with no field involved --
+  // tests/acceptance/corpus/test_fixture_field_consumers.py walks the
+  // registry's own case keys and asserts each names a real corpus case, the
+  // opposite direction from the retired field. Residual: the literal key
+  // still appears as `"fault_ref": null` on other case files pending a bulk
+  // cleanup sweep (out of this ticket's scope) -- it is dead JSON, not a
+  // schema requirement; case_schema.py never reads it.
 
   "notes": "free text: fixture provenance, cross-refs, honesty caveats"
 }

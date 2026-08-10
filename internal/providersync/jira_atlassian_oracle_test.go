@@ -55,6 +55,16 @@ func jiraAtlassianOracleCases() []oracleCase {
 				"board_sprints":     []any{map[string]any{"id": "9999", "name": "must-not-fetch", "state": "active"}},
 			},
 		},
+		{
+			ID: "graphql_failure_falls_back_to_rest_worklog",
+			Input: map[string]any{
+				"org_id": "org-acme", "since": "2026-08-01T00:00:00Z", "until": "2026-08-10T00:00:00Z",
+				"project_key": "OPS", "fetch_worklogs": true, "fetch_board_sprints": false,
+				"graphql_fallback": true, "issue": jiraAtlassianOracleIssue("OPS-303"),
+				"worklogs": []any{map[string]any{"id": "wl-303", "author": map[string]any{"accountId": "account-303", "name": "GraphQL Worker"}, "started": "2026-08-03T10:00:00.123456Z", "timeSpentSeconds": 1200, "created": "2026-08-03T10:01:00.123456Z", "updated": "2026-08-03T10:02:00.123456Z"}},
+				"board_sprints": []any{}, "reference_sprints": []any{},
+			},
+		},
 	}
 }
 
@@ -75,6 +85,7 @@ func buildJiraAtlassianOracleSurfaces(t *testing.T, input map[string]any) jiraAt
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_worklogs": jiraBatchBool(input["fetch_worklogs"], false), "fetch_board_sprints": jiraBatchBool(input["fetch_board_sprints"], false),
+		"atlassian_gql_enabled": jiraBatchBool(input["graphql_fallback"], false),
 		"sprint_field": "customfield_10020",
 	}
 	normalizedAt := jiraProducerBatchNormalizedAt()
@@ -91,7 +102,11 @@ func buildJiraAtlassianOracleSurfaces(t *testing.T, input map[string]any) jiraAt
 	}
 	doer := &jiraAtlassianOracleDoer{t: t, issue: issue, worklogs: worklogs, boardSprints: boardSprints}
 	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	batch, err := (JiraAtlassianRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraOracleIdentity, ReferenceSprints: refs, CloudID: "cloud-301"}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
+	var graphqlClient *providerfoundation.HTTPClient
+	if jiraBatchBool(input["graphql_fallback"], false) {
+		graphqlClient = jiraWorkItemsTestClient(t, &jiraAtlassianOracleDoer{t: t, graphqlFailure: true}, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	}
+	batch, err := (JiraAtlassianRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraOracleIdentity, ReferenceSprints: refs, CloudID: "cloud-301", GraphQLClient: graphqlClient}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,12 +136,15 @@ type jiraAtlassianOracleDoer struct {
 	t                      *testing.T
 	issue                  map[string]any
 	worklogs, boardSprints []map[string]any
+	graphqlFailure         bool
 }
 
 func (doer *jiraAtlassianOracleDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.t.Helper()
 	var value any
 	switch {
+	case request.URL.Path == "/graphql" && doer.graphqlFailure:
+		return &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errors":[{"message":"temporary"}]}`)), Request: request}, nil
 	case request.URL.Path == "/rest/api/3/search":
 		value = map[string]any{"issues": []any{doer.issue}, "startAt": 0, "total": 1}
 	case strings.HasSuffix(request.URL.Path, "/changelog"):

@@ -24,7 +24,17 @@ from dev_health_ops.api.services.auth import extract_token_from_header, get_auth
 # incorrectly triggered 429 for legitimate users. The DB-backed login_attempts
 # lockout (login_attempts.py) is the correct primitive for failed-attempt limits.
 AUTH_LOGIN_IP_LIMIT = "20/15minutes"
-AUTH_REGISTER_LIMIT = "3/hour"
+#: CHAOS-3692. A test-environment knob, not a security-posture change: the
+#: production default (no ``AUTH_REGISTER_LIMIT`` env var set) is always
+#: "3/hour", unchanged from before this override existed. Only a workflow
+#: that explicitly sets the env var -- the live-e2e CI job, which runs
+#: several independent self-registering test flows concurrently against
+#: one shared backend process and legitimately needs a higher per-IP
+#: ceiling for ITSELF -- ever sees a different value. Read once at import
+#: time (matches every sibling limit constant here, and the env var is
+#: already set before the API process starts in the one workflow that
+#: uses it, so there is no need for a per-request dynamic lookup).
+AUTH_REGISTER_LIMIT = os.getenv("AUTH_REGISTER_LIMIT", "3/hour")
 AUTH_REFRESH_LIMIT = "10/15minutes"
 AUTH_VALIDATE_LIMIT = "30/15minutes"
 ADMIN_PASSWORD_LIMIT = "5/hour"

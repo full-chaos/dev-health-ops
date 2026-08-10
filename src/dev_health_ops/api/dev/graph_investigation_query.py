@@ -139,6 +139,17 @@ class GraphInvestigationRequest:
     #: this set -- mirrors ``graph_arm.discover_cohort``'s own "authorization
     #: applied on the way IN" invariant.
     authorized_entity_ids: frozenset[str]
+    #: The bounded analytical window the run itself is scoped to --
+    #: CHAOS-3678 follow-up: the graph seam must never invent a product time
+    #: policy of its own, so this is supplied, exactly like
+    #: ``authorized_entity_ids`` above. The orchestrator populates both from
+    #: the SAME ``DevScope.time_range`` that already bounds every other
+    #: tool/metric execution for this run (``StepContext(scope=
+    #: authorized_scope, ...)`` at the plan-executor call site) -- never a
+    #: separately-invented window, so a graph-assisted answer and a
+    #: native-arm answer for the same run are bounded identically.
+    window_start: datetime
+    window_end: datetime
     #: Absolute wall-clock deadline (CHAOS-3631). The query service must
     #: return ``GraphQueryOutcome.DEADLINE_EXCEEDED`` rather than block past
     #: this, under any internal retry/backoff it performs.

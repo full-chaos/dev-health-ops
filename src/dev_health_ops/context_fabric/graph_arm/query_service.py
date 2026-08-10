@@ -12,20 +12,26 @@ decide what kind of question was asked. What stays graph-side is
 :func:`mechanism_for`: given an already-classified job and shape, which
 internal traversal/synthesis mechanism actually answers it.
 
-**Increment 1 scope, stated plainly rather than left to be discovered.**
-The transport/outcome mapping — ``GraphQueryOutcome``'s
+**Increment 1 scope.** The transport/outcome mapping — ``GraphQueryOutcome``'s
 ``DISABLED``/``UNAVAILABLE``/``STALE``/``DEADLINE_EXCEEDED``/``CANCELLED``
 states — is real, live-tested, and composes the absolute request deadline
 with CHAOS-3631's per-operation :class:`~.flags.GraphDeadlines` and
-CHAOS-3679's persisted watermark. The ``COMPLETED`` path — candidate
-resolution, traversal, driver synthesis and packet assembly — is not
-implemented yet: it depends on CHAOS-3660's packet-constructor ruling (a
-production-shaped packet constructor, ``build_production_packet``, not yet
-landed in ``packet_builder.py``, since the existing ``build_packet``
-requires a trial-only ``QuestionFamilyID``). Every mechanism that would
-reach packet assembly returns ``PROVIDER_FAILURE`` with a diagnostic naming
-the pending dependency — an honest "not yet", never a silent wrong answer,
-never a crash a caller has to guard against separately.
+CHAOS-3679's persisted watermark.
+
+**Increment 2 (this revision) implements exactly one COMPLETED path:**
+``GraphMechanism.SEEDED_SINGULAR_SUBJECT``, via
+:func:`~.subject_resolution._resolve_exact_subjects` (EXACT canonical-id/
+display-label match only — see that module's own docstring for why this is
+narrower than the trial's ``discovery.search_candidates``),
+:class:`~.readback.LiveGraphReader` traversal, and
+:func:`~.packet_builder.build_production_packet` with ``drivers=None`` (no
+driver synthesis — mirrors the trial's own PR1 scope, which never
+synthesized drivers either). ``SEEDED_EXPLICIT_COHORT`` and
+``SUBJECTLESS_COHORT_DISCOVERY`` still return ``PROVIDER_FAILURE`` with a
+diagnostic naming the mechanism — both need ``cohort_discovery`` wired in,
+tracked as separate follow-ups (filed on CHAOS-3678) rather than bundled
+here. Every path is an honest "not yet" where it applies, never a silent
+wrong answer, never a crash a caller has to guard against separately.
 """
 
 from __future__ import annotations
@@ -35,22 +41,31 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from dev_health_ops.api.dev.contracts_v2.base import (
     Cardinality,
     QuestionIntentID,
     SourceRequirementState,
 )
+from dev_health_ops.api.dev.evidence_service import EvidenceReferenceSigner
 from dev_health_ops.api.dev.graph_investigation_query import (
     GraphInvestigationQuery,
     GraphInvestigationRequest,
     GraphQueryOutcome,
     GraphQueryResult,
 )
+from dev_health_ops.api.dev.investigation_contract import ComparisonShape
 
 from .flags import graph_read_enabled
+from .packet_builder import (
+    ProductionJobContext,
+    build_production_packet,
+    signer_from_environment,
+)
+from .readback import GraphReader, LiveGraphReader
 from .store import GraphArmStore, StoreUnavailableError
+from .subject_resolution import _resolve_exact_subjects
 from .watermark import DEFAULT_STALENESS_TOLERANCE, IndexWatermark
 
 logger = logging.getLogger(__name__)
@@ -139,6 +154,38 @@ class _WatermarkStore(Protocol):
     async def close(self) -> None: ...
 
 
+class _TraversalStore(Protocol):
+    """What live traversal and subject resolution need directly from a
+    store: partition identity and driver access.
+
+    Kept separate from ``_WatermarkStore`` rather than added to it (each
+    Protocol still states exactly one capability), so none of increment 1's
+    existing fakes -- which implement only ``read_watermark``/``close`` --
+    need to widen to keep passing; this is only reached once a mechanism
+    reaches ``SEEDED_SINGULAR_SUBJECT``'s COMPLETED path.
+
+    Production's default ``store_factory`` (``GraphArmStore.for_org``)
+    satisfies both this and ``_WatermarkStore`` from the very same real
+    instance -- the ``cast`` at the one call site that needs this view says
+    exactly that, rather than claiming a structural guarantee this module
+    does not have.
+    """
+
+    partition: str
+    _driver: Any
+
+
+#: A fixed, closed-vocabulary description -- never ``request.question_text``
+#: verbatim. The Protocol's own docstring bars echoing question text into a
+#: packet field a consumer renders; keying on ``QuestionIntentID`` instead
+#: means this can never emit caller-controlled text.
+_JOB_STATEMENT_TEMPLATE = "Investigate {intent} for the resolved subject."
+
+
+def _job_statement(intent_id: QuestionIntentID) -> str:
+    return _JOB_STATEMENT_TEMPLATE.format(intent=intent_id.value)
+
+
 class ProductionGraphInvestigationQuery:
     """The production implementation of ``GraphInvestigationQuery``.
 
@@ -153,6 +200,8 @@ class ProductionGraphInvestigationQuery:
         *,
         staleness_tolerance: timedelta = DEFAULT_STALENESS_TOLERANCE,
         store_factory: Callable[[str], _WatermarkStore] = GraphArmStore.for_org,
+        reader_factory: Callable[[Any], GraphReader] = LiveGraphReader,
+        signer_factory: Callable[[], EvidenceReferenceSigner] = signer_from_environment,
     ) -> None:
         self._staleness_tolerance = staleness_tolerance
         # Injected rather than hardcoded to `GraphArmStore.for_org` inline,
@@ -161,6 +210,16 @@ class ProductionGraphInvestigationQuery:
         # store without a live FalkorDB for every case; only the
         # live-store positive control needs the real default.
         self._store_factory = store_factory
+        # Same rationale as store_factory: SEEDED_SINGULAR_SUBJECT's tests
+        # supply a fake GraphReader (a canned neighbourhood() result)
+        # instead of needing a live-store-compatible entity/edge fixture
+        # for a test that only exercises transport/outcome mapping.
+        self._reader_factory = reader_factory
+        # Resolved lazily, per call -- see `_complete_seeded_singular_
+        # subject` -- never at construction, so increment 1's existing
+        # tests (none of which reach that far) are unaffected by whether
+        # JWT_SECRET_KEY happens to be set in the test environment.
+        self._signer_factory = signer_factory
 
     async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
         """Bounded by ``request.deadline`` end to end, never past it.
@@ -267,19 +326,22 @@ class ProductionGraphInvestigationQuery:
                         f"cardinality={request.cardinality.value}",
                     ),
                 )
-            # Increment 1: every SUPPORTED mechanism still returns
-            # PROVIDER_FAILURE. Packet assembly needs CHAOS-3660's
-            # production packet constructor, not yet landed -- see the
-            # module docstring. Naming the mechanism and the pending
-            # dependency rather than a bare "not implemented" is what makes
-            # this diagnostic actionable rather than a dead end.
-            return GraphQueryResult(
-                outcome=GraphQueryOutcome.PROVIDER_FAILURE,
-                diagnostic=_diagnostic(
-                    "execution",
-                    f"mechanism {mechanism.value} selected; packet assembly "
-                    "awaits CHAOS-3660's production packet constructor",
-                ),
+            if mechanism is not GraphMechanism.SEEDED_SINGULAR_SUBJECT:
+                # SEEDED_EXPLICIT_COHORT / SUBJECTLESS_COHORT_DISCOVERY:
+                # both still need cohort_discovery wired in -- tracked as
+                # separate follow-ups on CHAOS-3678, not bundled here.
+                # Naming the mechanism rather than a bare "not implemented"
+                # is what makes this diagnostic actionable.
+                return GraphQueryResult(
+                    outcome=GraphQueryOutcome.PROVIDER_FAILURE,
+                    diagnostic=_diagnostic(
+                        "execution",
+                        f"mechanism {mechanism.value} selected; packet "
+                        "assembly for this mechanism is a tracked follow-up",
+                    ),
+                )
+            return await self._complete_seeded_singular_subject(
+                request, store, watermark
             )
         except asyncio.CancelledError:
             return GraphQueryResult(
@@ -303,6 +365,72 @@ class ProductionGraphInvestigationQuery:
                         "for org %r after investigate() completed",
                         request.org_id,
                     )
+
+    async def _complete_seeded_singular_subject(
+        self,
+        request: GraphInvestigationRequest,
+        store: _WatermarkStore,
+        watermark: IndexWatermark,
+    ) -> GraphQueryResult:
+        """The one COMPLETED path this increment implements.
+
+        Resolves the request's first mention (SINGULAR cardinality) by
+        EXACT canonical-id/display-label match only -- see
+        :mod:`.subject_resolution`'s own module docstring for why this is
+        narrower than the trial's ``discovery.search_candidates``. A
+        mention that does not resolve still reaches ``COMPLETED``: the
+        seam's own outcome axis distinguishes "the call completed" from
+        "the investigation found the subject", and an empty seed list
+        produces a packet whose own ``outcome`` honestly discloses no
+        committed subject -- never a guess, and never reported as a
+        transport failure it is not (mirrors the Protocol's own "a
+        completed call may still carry a refusal shape" documentation).
+
+        Any unexpected exception during resolution, traversal or packet
+        assembly is caught and reported as ``PROVIDER_FAILURE`` rather than
+        left to propagate -- the Protocol's docstring reserves an
+        uncaught exception for "a bug in the caller", which this is not.
+        """
+
+        traversal_store = cast(_TraversalStore, store)
+        queries = [mention.normalized_lookup_text for mention in request.mentions[:1]]
+        try:
+            candidates = await _resolve_exact_subjects(
+                traversal_store._driver,
+                traversal_store.partition,
+                queries,
+                request.authorized_entity_ids,
+            )
+            reader = self._reader_factory(traversal_store)
+            readout = await reader.neighbourhood(
+                org_id=request.org_id,
+                seed_canonical_ids=[
+                    candidate.canonical_id for candidate in candidates[:1]
+                ],
+                authorized_entity_ids=tuple(request.authorized_entity_ids),
+            )
+            packet = build_production_packet(
+                readout=readout,
+                job=ProductionJobContext(
+                    job_id=f"graph_query_{request.run_id}",
+                    intent_id=request.intent_id,
+                    run_id=request.run_id,
+                    job_statement=_job_statement(request.intent_id),
+                    comparison_shape=ComparisonShape.SINGULAR_SUBJECT,
+                    window_start=request.window_start,
+                    window_end=request.window_end,
+                ),
+                watermark=watermark,
+                signer=self._signer_factory(),
+                produced_at=datetime.now(UTC),
+                staleness_tolerance=self._staleness_tolerance,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return GraphQueryResult(
+                outcome=GraphQueryOutcome.PROVIDER_FAILURE,
+                diagnostic=_diagnostic("execution", type(exc).__name__),
+            )
+        return GraphQueryResult(outcome=GraphQueryOutcome.COMPLETED, packet=packet)
 
 
 if TYPE_CHECKING:

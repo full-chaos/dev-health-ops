@@ -18,6 +18,7 @@ from dev_health_ops.api.dev.contract_fixtures import (
 from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     DevAnswer,
+    DevAnswerGraphAssistance,
     DevCapabilities,
     DevMessageRequest,
     DevScope,
@@ -83,6 +84,71 @@ def test_answer_rejects_unknown_evidence_and_metric_ids() -> None:
     unknown_metric["claims"][0]["metric_ref_ids"] = ["metric_unknown"]
     with pytest.raises(ValidationError, match="unknown metric"):
         DevAnswer.model_validate(unknown_metric)
+
+
+def test_graph_assisted_is_absent_by_default_on_every_existing_answer() -> None:
+    """CHAOS-3660 §8(b). The canonical answer fixture predates this field
+    and never sets it -- pinning the default explicitly rather than
+    leaving the backward-compatibility proof implicit in the parametrized
+    fixture pass.
+    """
+    answer = DevAnswer.model_validate(positive_fixtures()["dev_answer.v1"])
+    assert answer.graph_assisted is None
+
+
+def test_graph_assisted_driver_evidence_must_reference_the_answers_own_evidence() -> (
+    None
+):
+    """CHAOS-3660 §8(d). ``ranked_drivers[].evidence_ref_ids`` point into
+    THIS answer's own ``evidence[]`` array -- enforced as a real
+    constraint by ``DevAnswer.validate_answer_invariants``, the same way
+    claims/conflicts/metrics already are, not just a naming convention.
+    """
+    payload = deepcopy(positive_fixtures()["dev_answer.v1"])
+    payload["graph_assisted"] = {
+        "schema_version": "dev_answer_graph_assistance.v1",
+        "state": "enabled",
+        "as_of": payload["as_of"],
+        "ranked_drivers": [
+            {"rank": 1, "contribution": 0.5, "evidence_ref_ids": ["ev_unknown"]}
+        ],
+    }
+    with pytest.raises(ValidationError, match="graph-assisted driver"):
+        DevAnswer.model_validate(payload)
+
+    payload["graph_assisted"]["ranked_drivers"][0]["evidence_ref_ids"] = [
+        payload["evidence"][0]["evidence_ref_id"]
+    ]
+    answer = DevAnswer.model_validate(payload)
+    assert answer.graph_assisted is not None
+    assert answer.graph_assisted.ranked_drivers[0].rank == 1
+
+
+def test_graph_state_stream_event_carries_the_graph_assistance_object() -> None:
+    """CHAOS-3660 §8(c). ``graph.state`` requires its own payload (like
+    every other interior event) and rejects payloads meant for a
+    different event type, via the same ``allowed``/``required_payload``
+    machinery every existing event type already goes through.
+    """
+    payload = deepcopy(positive_fixtures()["dev_stream_event.v1"])
+    payload["event"] = "graph.state"
+    with pytest.raises(ValidationError, match="graph.state requires graph_state"):
+        DevStreamEvent.model_validate(payload)
+
+    graph_assistance = {
+        "schema_version": "dev_answer_graph_assistance.v1",
+        "state": "stale",
+        "as_of": payload["occurred_at"],
+    }
+    payload["graph_state"] = graph_assistance
+    event = DevStreamEvent.model_validate(payload)
+    assert event.graph_state == DevAnswerGraphAssistance.model_validate(
+        graph_assistance
+    )
+
+    payload["progress"] = "resolving_scope"
+    with pytest.raises(ValidationError, match="unexpected payloads"):
+        DevStreamEvent.model_validate(payload)
 
 
 def test_stream_sequences_require_exactly_one_terminal_then_done() -> None:

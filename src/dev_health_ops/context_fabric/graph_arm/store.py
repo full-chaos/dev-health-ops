@@ -82,8 +82,15 @@ from .flags import (
     trial_store_config,
 )
 from .identity import assert_partition_matches_org, observation_uuid, partition_for_org
+from .live_snapshot import _split_multivalued
 from .projection import GraphProjection
-from .readback import NODE_COUNT_QUERY
+from .readback import (
+    _OBSERVATION_QUERY,
+    NODE_COUNT_QUERY,
+    _as_datetime,
+    _attributes_from_row,
+    _rows,
+)
 from .vocabulary import GraphObservationKind
 from .watermark import IndexWatermark
 
@@ -94,6 +101,7 @@ __all__ = [
     "EmbeddingBudgetExceededError",
     "GraphArmStore",
     "GraphOperationTimeoutError",
+    "IndexedDocumentSummary",
     "ProjectionDisabledError",
     "partition_exists_for",
     "StoreUnavailableError",
@@ -239,6 +247,34 @@ class WriteResult:
     nodes_written: int
     edges_written: int
     watermark: IndexWatermark
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedDocumentSummary:
+    """One document currently visible in this partition's index -- the
+    audit query's result shape (issue 3632).
+
+    Content-safe by the same construction the write side already commits
+    to: ``title`` is exactly what a live BM25/vector search could already
+    surface (it already passed through ``withheld_if_instruction_shaped``
+    at write time -- see ``backend.to_graphiti_document_nodes``), never
+    ``body``, which this arm never persists as a stored, read-back-able
+    field for any document, approved or not. Listing what a search could
+    already find is not a new disclosure; it is naming it.
+
+    ``trust``/``source_evidence_state`` are read back exactly like every
+    other :data:`~.projection.READBACK_ATTRIBUTE_KEYS` member -- the same
+    trust signal :mod:`.semantic_retrieval`'s read-side gate (issue 3632's
+    read-side follow-up) already keys its own refusal on, not a new
+    vocabulary invented for this query.
+    """
+
+    canonical_id: str
+    title: str
+    observed_at: datetime
+    trust: str | None
+    source_evidence_state: str | None
+    subject_canonical_ids: tuple[str, ...]
 
 
 class GraphArmStore:
@@ -460,10 +496,22 @@ class GraphArmStore:
             ),
             operation="write_projection",
         )
-        # Telemetry only after the write above actually completed -- a raise
-        # from add_nodes_and_edges_bulk must not record documents as indexed
-        # that were never durably written.
+        # Telemetry and per-document audit logging only after the write
+        # above actually completed -- a raise from add_nodes_and_edges_bulk
+        # must not record or log documents as indexed that were never
+        # durably written. One line per document, the same granularity
+        # remove_document already logs at -- an aggregate-only entry log
+        # would leave "which specific documents entered the index" only
+        # answerable by list_indexed_documents()'s current-state snapshot,
+        # never by the log an operator is actually looking at during an
+        # incident.
         record_context_fabric_documents_indexed(len(document_nodes))
+        for document_node in document_nodes:
+            logger.info(
+                "context-fabric graph document %s indexed in partition %s",
+                document_node.attributes.get("cf_canonical_id"),
+                self._partition,
+            )
         indexed_through = max(
             (
                 *(node.observed_at for node in projection.nodes),
@@ -712,6 +760,47 @@ class GraphArmStore:
         if removed:
             record_context_fabric_document_removed(reason.value)
         return removed
+
+    async def list_indexed_documents(self) -> tuple[IndexedDocumentSummary, ...]:
+        """Every document currently indexed in this partition (issue 3632).
+
+        The audit-query half of "add ... audit behavior": "what is
+        currently in the index for this organization", answered directly
+        rather than reconstructed from write/removal logs. Reuses
+        ``readback._OBSERVATION_QUERY`` -- already declared, already
+        read-only -- filtered to document-kind rows client-side; no new
+        Cypher, so no change to the containment guard's declared surface.
+
+        Sorted by canonical id, the same determinism discipline every
+        other multi-row read in this arm already commits to (a store
+        queried twice with nothing changed must return the same order).
+
+        Read-only and cheap: one query, no traversal, no budget -- this is
+        an inventory listing, not an investigation.
+        """
+
+        records = await self._bounded_read(
+            _rows(self._driver, _OBSERVATION_QUERY, partition=self._partition),
+            operation="list_indexed_documents",
+        )
+        summaries: list[IndexedDocumentSummary] = []
+        for record in records:
+            if record.get("observation_kind") != GraphObservationKind.DOCUMENT.value:
+                continue
+            attributes = _attributes_from_row(record)
+            summaries.append(
+                IndexedDocumentSummary(
+                    canonical_id=record["canonical_id"],
+                    title=record["title"],
+                    observed_at=_as_datetime(record["observed_at"]),
+                    trust=attributes.get("corpus_trust"),
+                    source_evidence_state=attributes.get("source_evidence_state"),
+                    subject_canonical_ids=_split_multivalued(
+                        record.get("subject_canonical_ids")
+                    ),
+                )
+            )
+        return tuple(sorted(summaries, key=lambda summary: summary.canonical_id))
 
 
 async def partition_exists_for(

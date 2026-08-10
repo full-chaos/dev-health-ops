@@ -312,6 +312,107 @@ Decision supersession and ACR prior-attempt chains are ingested as explicit
 is current" and "what was tried before" are graph reads rather than
 heuristics over timestamps.
 
+## Embedded documents (issue 3632)
+
+Approved unstructured documents (design notes, comments, threads) become
+graph-searchable through the same structured-observation mechanism every
+other record uses — a document is an observation of kind `document`, not a
+new node type, so no new attachment mechanism and no new read-side
+vocabulary were needed to make one findable.
+
+**Write side (`backend.to_graphiti_document_nodes`).** Reads
+`GraphProjection.approved_documents` only — never `rejected_document_ids`,
+which exists so a caller can account for what was declined, not so the
+writer can decide differently. Three conventions, agreed before
+implementation:
+
+- `name` is the document's `title`, run through the same
+  `withheld_if_instruction_shaped` check (issue 3637) every entity/
+  observation display label already gets before becoming a graph node's
+  name. This did not reach the first version of the write side — a document
+  title is exactly as attacker-controlled as any other display label, and
+  the gap sat unnoticed until a later slice's own adversarial pass found it
+  by reading `projection._entity_node`/`_observation_node` directly rather
+  than assuming that path already covered every node kind.
+- `body` reaches the embedder and nothing else — never a stored attribute,
+  never `summary`. `to_graphiti_document_nodes` is `async` and
+  unconditional for every embedder (unlike `to_graphiti_nodes`, which only
+  pre-embeds for the deterministic case) specifically so `name_embedding`
+  is always a function of `body`: a document is findable by its actual
+  content, not by title text alone.
+- `cf_entity_kind` is never set — a document is an observation, and
+  `cf_subject_canonical_ids` (the same issue-3653 hop contract every other
+  observation uses) is how its subjects are recovered on read.
+
+**Read-side trust re-check (`semantic_retrieval.py`).** The write side only
+ever writes a node for an *approved* document, but approval is a one-time,
+write-time gate. A document-derived observation's named subjects must
+independently clear `TRUSTED_ATTRIBUTION_LEVELS` in the observation→entity
+hop, mirroring `drivers._is_trusted` — this bounds the window between a
+later withdrawal/redaction and the next full reprojection sweep that would
+otherwise purge the stale node. **BM25-sees-body was considered and
+rejected, not left unexamined**: FalkorDB's full-text index covers exactly
+`name`/`summary`, and a document's `summary` is always empty by the write
+side's own design, so BM25 can only ever match a document by title text —
+widening `summary` to include body would store raw, untrusted document
+prose in a queryable field, exactly the surface the approval gate exists to
+keep closed. The lexical-coverage gap this leaves (a query using only
+body-specific terms gets no BM25 support for that node) is a deliberate,
+ratified trust trade-off, not an index-not-ready timing accident.
+
+**Removal (`store.GraphArmStore.remove_document`).** "A document approved
+when a projection was built and later withdrawn" needs to leave the graph
+*promptly*, not wait for the next full reprojection sweep — `purge_org`
+drops an entire organization's keyspace, which is not a routine response to
+one document's status changing. `remove_document` deletes a single
+document's node by its server-derived uuid (`identity.observation_uuid`,
+never a caller-supplied one), and is the arm's **one exception** to "no
+write Cypher anywhere in this package" — `test_chaos_3617_containment.py`'s
+guard widened from asserting zero write queries exist to asserting every
+write query is declared (`store.WRITE_QUERIES`), uuid-parameterized (never
+string-interpolated) and provably single-node scoped (no unscoped
+`MATCH (n)` pattern). Deliberately not `graphiti_core`'s own
+`EntityNode.delete()`: that method only matches nodes labelled `Entity`,
+`Episodic` or `Community` on the FalkorDB driver branch, and a document
+node is labelled `CFObsDocument` — it would silently match nothing.
+
+**Production configuration fails closed.** Two independent mechanisms, both
+already load-bearing before this issue and verified to actually reach the
+document path specifically: `CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED`
+defaults off, and `CloudEmbedder` refuses to degrade to a hash embedder
+silently when no credential is configured. The second one had a real gap a
+document-path check surfaced: `CloudEmbedder._client()` used to pass
+`api_key=None` straight to the OpenAI SDK, which falls back to an *ambient*
+`OPENAI_API_KEY` environment variable whenever the explicit parameter is
+`None` — so a bare, unconfigured `CloudEmbedder()` (reporting
+`semantic=False`, implying "cannot embed") could still embed a document's
+body text via a credential it never explicitly received, because
+`to_graphiti_document_nodes` calls the embedder unconditionally. Confirmed
+live (socket layer blocked, ambient env var set) before the fix, and after:
+`_client()` now refuses before constructing a client at all if `api_key` is
+falsy, making `semantic=False` load-bearing rather than advisory.
+
+**Telemetry and audit.** `devhealth_context_fabric_documents_indexed_total`
+and `devhealth_context_fabric_documents_removed_total{reason}`
+(`metrics/prometheus.py` — the repo's existing shared metrics module, not a
+new framework) are content-safe by construction: `reason` is always one of
+`store.DocumentRemovalReason`'s closed values, never a title, body or
+canonical id. A third counter for documents *excluded* at write time (by
+rejection reason) was proposed and deliberately deferred:
+`UnstructuredDocumentRecord.approved` is a bare boolean with no reason
+taxonomy anywhere upstream, so a reason-coded exclusion counter would have
+no real data source and would need reshaping the moment one exists — left
+for a follow-up once `records.py` grows one, rather than shipped as a
+counter with one hardcoded, meaningless reason. `write_projection`/
+`remove_document` also log one structured line per document on entry/
+removal (never an aggregate-only count), and
+`store.GraphArmStore.list_indexed_documents` answers "what is currently in
+the index for this organization" directly by re-reading the live
+partition — the audit-query interpretation of "audit behavior", not a
+separate audit-log store, since the acceptance text's other reading
+("who/when entered or left the graph") is already answered by the
+structured logs above.
+
 ## Semantic and conversational subject resolution: a second leg
 
 Everything above resolves a subject by **stored text**:
@@ -426,6 +527,9 @@ Two things worth knowing before reading that artifact:
 | Org-deletion registration | `EXTERNAL_DERIVED_STORES` (CHAOS-3566) |
 | Content-safe logs | `IndexWatermark.detail_for` — timestamps and counts only |
 | Exact dependency/projection/query versions | `versions.*` on every packet; `backend.graphiti_version()` reads installed metadata |
+| Single-document, prompt removal | `store.GraphArmStore.remove_document` (issue 3632) — see [Embedded documents](#embedded-documents-issue-3632) |
+| Document indexing/removal metrics | `metrics/prometheus.py`: `devhealth_context_fabric_documents_indexed_total`, `devhealth_context_fabric_documents_removed_total{reason}` |
+| Document index audit query | `store.GraphArmStore.list_indexed_documents` — current-state listing, trust/evidence metadata included, title only |
 
 **Every bound that removes work discloses, and each flag carries its own
 reason.** The trigger for hop-depth disclosure is "the walk declined to

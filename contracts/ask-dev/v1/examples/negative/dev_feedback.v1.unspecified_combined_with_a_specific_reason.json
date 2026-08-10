@@ -1,0 +1,12 @@
+{
+  "answer_id": "answer_01",
+  "comment": "The evidence answered my question.",
+  "created_at": "2026-07-28T12:00:00Z",
+  "feedback_id": "feedback_01",
+  "rating": "helpful",
+  "reasons": [
+    "unclear",
+    "unspecified"
+  ],
+  "schema_version": "dev_feedback.v1"
+}

@@ -550,6 +550,12 @@ class DevCapabilities(ContractModel):
     )
     contextual_entrypoints: bool = False
     evidence_resolver: bool = False
+    #: CHAOS-3660 §8(a). Reserves the capability flag for graph-assisted Ask
+    #: Dev routing (CHAOS-3502 wave), which is still feature-branch-only on
+    #: `main` today -- no runtime path here computes anything but the
+    #: ``False`` default, so no client observes this as ``True`` until the
+    #: wave's routing/answer-shape work itself lands.
+    ask_dev_graph_routing: bool = False
     administrator_safe_failure_reason: ShortText | None = None
 
     @model_validator(mode="after")
@@ -601,6 +607,17 @@ class DevMessageRequest(ContractModel):
     question_class: QuestionClass
     scope: DevScope
     requested_metric_ids: list[MetricID] = Field(default_factory=list, max_length=8)
+    #: CHAOS-3660 §8(k). Request-direction and additive: an old client that
+    #: never sends this key is indistinguishable from one whose absence
+    #: means "declares nothing", so no currently-issued request breaks by
+    #: this field existing. Reserves the slot a client uses to declare the
+    #: newest contract surface it can parse (the same version strings
+    #: ``DevCapabilities.supported_contract_versions`` already advertises).
+    #: Schema-only today: the wave's ``graph.state`` stream event this is
+    #: meant to gate emission of has not landed on `main` yet (CHAOS-3502),
+    #: so nothing here reads this field -- server-side validation and the
+    #: gating it enables are a later PR, once that surface exists to gate.
+    client_contract_version: Version | None = None
 
     @field_validator("question")
     @classmethod
@@ -651,6 +668,20 @@ class DevEvidenceRef(ContractModel):
     ) = None
     repository_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
     valid_entity_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
+    #: CHAOS-3633 / CHAOS-3660 §8(i). Reserves the wire slot for the SOURCE's
+    #: own identity for this specific record, distinct from ``entity_id``
+    #: (the entity the record is *about*). Schema-only on ``main`` today:
+    #: the canonical evidence-admission path that will populate it
+    #: (``EvidenceService.admit``, still feature-branch-only -- see
+    #: CHAOS-3650/3632/3685) has not landed here yet, so nothing on this
+    #: branch sets, reads, or signs it. Additive and optional so every ref
+    #: minted by ``search``/``expand`` today -- and every already-persisted
+    #: ``dev_answer.v1`` evidence ref -- is completely unaffected: no
+    #: current code path constructs a ``DevEvidenceRef`` with this field, so
+    #: it is always its ``None`` default until the admission-path port lands
+    #: (a separate PR) and starts setting it and binding it into the signed
+    #: HMAC.
+    record_locator: OpaqueID | None = None
     flags: DevEvidenceFlags
 
 
@@ -1304,6 +1335,31 @@ class DevToolResult(ContractModel):
         return self
 
 
+#: CHAOS-3660 §8(f)/(j). The 6 members added alongside the original 6:
+#: ``wrong_subject``/``wrong_cohort``/``wrong_driver`` (additive siblings of
+#: the pre-existing, narrower ``wrong_scope`` -- never folded into it),
+#: ``unsafe_certainty``, ``other`` (a specific-but-unlisted reason), and
+#: ``unspecified`` -- a neutral "declined to say" value, distinct from
+#: ``other``, closing the "web fabricates ``unclear``" data-honesty gap on
+#: a one-click thumbs-down. ``max_length`` below is 12 to match this
+#: doubled vocabulary size (was 6, coincidentally equal to the vocabulary
+#: size at the time) -- this is a genuine simultaneous-selection cap, not
+#: an accident of the old count.
+_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA: dict[str, Any] = {
+    # ``reasons`` is either EXACTLY ["unspecified"], or contains no
+    # "unspecified" at all -- a neutral "declined to say" can never sit
+    # alongside a specific reason (that would contradict the "declined"
+    # signal), and it can never be silently dropped from a mixed
+    # selection either. Expressed IN THE SCHEMA (not just the Python-side
+    # validator below) so a client validating locally catches the same
+    # violation the server would.
+    "oneOf": [
+        {"const": ["unspecified"]},
+        {"not": {"contains": {"const": "unspecified"}}},
+    ]
+}
+
+
 class DevFeedback(ContractModel):
     schema_version: Literal["dev_feedback.v1"]
     feedback_id: OpaqueID
@@ -1317,8 +1373,18 @@ class DevFeedback(ContractModel):
             "stale_data",
             "unclear",
             "useful",
+            "wrong_subject",
+            "wrong_cohort",
+            "wrong_driver",
+            "unsafe_certainty",
+            "other",
+            "unspecified",
         ]
-    ] = Field(min_length=1, max_length=6)
+    ] = Field(
+        min_length=1,
+        max_length=12,
+        json_schema_extra=_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA,
+    )
     comment: (
         Annotated[str, StringConstraints(min_length=1, max_length=2_048)] | None
     ) = Field(
@@ -1326,6 +1392,16 @@ class DevFeedback(ContractModel):
         json_schema_extra={"x-max-utf8-bytes": 2_048},
     )
     created_at: AwareDatetime
+
+    @field_validator("reasons")
+    @classmethod
+    def enforce_unspecified_exclusivity(cls, value: list[str]) -> list[str]:
+        if "unspecified" in value and value != ["unspecified"]:
+            raise ValueError(
+                "'unspecified' must be the only reason when present, "
+                "never combined with a specific reason"
+            )
+        return value
 
     @field_validator("comment")
     @classmethod

@@ -16,7 +16,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_capabilities.v1.schema.json",
-        "sha256": "66f9dd47b340f1ca3b3d545761912e69a0833b1550868a8f45a6ab2836ec2050"
+        "sha256": "e213726e709177362829dedf284c8a8118d883725dd5b0b6b45b51197c4b491b"
       },
       "schema_version": "dev_capabilities.v1"
     },
@@ -78,7 +78,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
-        "sha256": "8de30853fb5ae96d1a0a7646ec63a879dbc0d7fdf79e334a6358d9a6012d69c2"
+        "sha256": "85639619c9935096ca2b58920f3152a390b94f93ee9241810d40ec1d8b67e844"
       },
       "schema_version": "dev_conversation_transcript.v1"
     },
@@ -112,7 +112,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_message_request.v1.schema.json",
-        "sha256": "258a495a3ac72ec52164b37164d71b4f01b60d8f1008b046965cd2f002c7b2bc"
+        "sha256": "2ac58a542edcc35e32b0f7a592920b4ab53a588b433ac00b9b224271a76011b5"
       },
       "schema_version": "dev_message_request.v1"
     },
@@ -167,7 +167,7 @@
       ],
       "schema": {
         "path": "schemas/dev_answer.v1.schema.json",
-        "sha256": "db69df56bff01b3b29b2f2961615dbc65fcf27beb6ce6020dea1f880942de2ff"
+        "sha256": "08979fa641ca71a903cc78be67e8dd813bed02233a5ba5b66d82ee5b4f9e9895"
       },
       "schema_version": "dev_answer.v1"
     },
@@ -243,7 +243,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_evidence_ref.v1.schema.json",
-        "sha256": "ec835b4334f2f627a14fbb361244b403fd8faed8825b051122e16780918cdf2b"
+        "sha256": "4f523fa4b63df80da741a75e0483384467b74e082bcd0648f9bd12d863422620"
       },
       "schema_version": "dev_evidence_ref.v1"
     },
@@ -262,7 +262,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_evidence_expansion.v1.schema.json",
-        "sha256": "615e2e20b938e0e1181dcd5681495352f30d515f7a45f3fb0dd6879d6cdc0628"
+        "sha256": "d3ab1a7dfe7c667ab05f58b210f9cf7274d7dc7b34d1c1861baf708e86023d38"
       },
       "schema_version": "dev_evidence_expansion.v1"
     },
@@ -375,7 +375,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_tool_result.v1.schema.json",
-        "sha256": "21698013ea1dac591a15bcd965431c102d5a9e49a108ad97c08db748b5fdfd56"
+        "sha256": "d06aedb5245ea51239d7020e4202a8c9cd97499bd1b7448e05bef4f379c596a2"
       },
       "schema_version": "dev_tool_result.v1"
     },
@@ -385,16 +385,27 @@
           "case": "unsupported_reason",
           "path": "examples/negative/dev_feedback.v1.unsupported_reason.json",
           "sha256": "5f75d350e9d62af9b524fb5b0225f2741375b16cfad38b58b819b85b0509723f"
+        },
+        {
+          "case": "unspecified_combined_with_a_specific_reason",
+          "path": "examples/negative/dev_feedback.v1.unspecified_combined_with_a_specific_reason.json",
+          "sha256": "9a2bc84c5703621fbc95549c99b5cab0fa87054b1a7f355bc7100039237c86e4"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_feedback.v1.json",
         "sha256": "f4e15f005ae9314210900993a791b5ab358375997f7dc28b30d4d76487101ba0"
       },
-      "positive_variants": [],
+      "positive_variants": [
+        {
+          "case": "unspecified_alone",
+          "path": "examples/positive/dev_feedback.v1.unspecified_alone.json",
+          "sha256": "dcc828a05f8b35e522bf62b61a7be0502df2c7ffde041d084ae2494e83226522"
+        }
+      ],
       "schema": {
         "path": "schemas/dev_feedback.v1.schema.json",
-        "sha256": "9c792cd80995e4e6eba066d50e495d77e0337621dffaf12fd59ed468af69b545"
+        "sha256": "f4354fbad987b827bec6a8e0aa753838361758072dc6a656e375a7ce06536185"
       },
       "schema_version": "dev_feedback.v1"
     },
@@ -429,7 +440,7 @@
       ],
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "23495304c0a652fc2846742995b8f7ba7ebd1f1737aca05a1ca7b9c1232da844"
+        "sha256": "9e08ce3b72d9b7b3d92be5189abecbfb749914e0cdcbbebd666b19c3afe9e44c"
       },
       "schema_version": "dev_stream_event.v1"
     },
@@ -477,6 +488,11 @@
       "case": "internal_prose_denylist",
       "path": "vocabulary/internal_prose_denylist.v1.json",
       "sha256": "9b0c5b07612de95c2854abca5c018e98c30e3113262807e8d71872b50722ecbb"
+    },
+    {
+      "case": "source_health_labels",
+      "path": "vocabulary/source_health_labels.v1.json",
+      "sha256": "f141c442d84b55d59d40e5b20deba5ad810ee8d5a7c91f59c68545006d66ef7e"
     }
   ]
 }

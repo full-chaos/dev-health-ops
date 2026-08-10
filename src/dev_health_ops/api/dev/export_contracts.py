@@ -16,9 +16,74 @@ from .contract_fixtures import (
     positive_variant_fixtures,
     stream_fixtures,
 )
-from .contracts import CONTRACT_MODELS, DevStreamEvent, validate_stream
+from .contracts import CONTRACT_MODELS, DevStreamEvent, ToolID, validate_stream
+from .contracts_v2.base import SourceClass
 from .no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from .status_change_service import STATUS_REASON_CODES
+
+#: CHAOS-3660 §8(g). ``DevCoverage.{unavailable,stale,degraded}_required_
+#: sources`` (``contracts.py``) is a free-form ``list[OpaqueID]``, populated
+#: today by exactly two orchestrator-side producers plus one ad-hoc literal
+#: -- traced by reading every assignment site, not guessed:
+#:
+#: * ``Orchestrator._coverage_from_tool_results`` labels each required
+#:   source with the ``ToolID`` value of the tool that was supposed to
+#:   supply it (e.g. ``"query_metric.v1"``) -- already a *disclosed*
+#:   vocabulary, the same reasoning ``no_match_terminal.py`` gives for
+#:   excluding ``ToolID`` from the internal-token denylist.
+#: * ``Orchestrator._coverage_with_plan_sources`` labels each mandatory/
+#:   conditional plan requirement with its ``SourceClass`` value
+#:   (``contracts_v2/base.py``) -- that enum's own docstring: "the same
+#:   token is what ``dev_coverage``'s ... disclose". Deliberately disjoint
+#:   from the ``ToolID`` half (see that function's own docstring), so the
+#:   two vocabularies never collide on one label.
+#: * ``Orchestrator._budget_exhausted_answer`` uses the one hardcoded
+#:   literal ``"tool_results"`` for its single-source budget-exhaustion
+#:   fallback -- not a member of either enum, so listed explicitly.
+#:
+#: No backend label table existed for ANY of this before (confirmed: web's
+#: ``SCOPE_OUTCOME_LABELS`` is the only precedent, and it names a completely
+#: different vocabulary -- scope-resolution outcomes, not source ids -- and
+#: ``data_health_service.NATIVE_EVIDENCE_SOURCES`` is a DIFFERENT wire
+#: surface, ``DevSourceHealth``/``DevDataHealth.source_system``, not this
+#: one -- confirmed by direct string comparison, they don't even share
+#: member spelling, e.g. ``"pull_requests"`` there vs ``"pull_request"``
+#: here).
+#: ``test_source_health_labels_cover_every_known_required_source_producer``
+#: is a totality check against this exact union, not a guess at what
+#: "should" be covered -- see that test's own docstring for what it can and
+#: cannot promise.
+SOURCE_HEALTH_LABELS: dict[str, str] = {
+    # ToolID producers (Orchestrator._coverage_from_tool_results).
+    ToolID.RESOLVE_SCOPE.value: "Scope resolution",
+    ToolID.LIST_METRICS.value: "Metric catalog",
+    ToolID.QUERY_METRIC.value: "Metric query",
+    ToolID.STATUS_SNAPSHOT.value: "Status snapshot",
+    ToolID.CHANGE_SUMMARY.value: "Change summary",
+    ToolID.WORK_GRAPH_NEIGHBORS.value: "Work graph",
+    ToolID.SEARCH_EVIDENCE.value: "Evidence search",
+    ToolID.GET_EVIDENCE.value: "Evidence expansion",
+    ToolID.DATA_HEALTH.value: "Data health",
+    # SourceClass producers (Orchestrator._coverage_with_plan_sources).
+    SourceClass.STATUS_CHANGE.value: "Status changes",
+    SourceClass.WORK_ITEM.value: "Work items",
+    SourceClass.WORK_GRAPH.value: "Work graph",
+    SourceClass.PULL_REQUEST.value: "Pull requests",
+    SourceClass.CODE_CHANGE.value: "Code changes",
+    SourceClass.REVIEW.value: "Reviews",
+    SourceClass.CI_RUN.value: "CI runs",
+    SourceClass.TEST_REPORT.value: "Test reports",
+    SourceClass.DEPLOYMENT.value: "Deployments",
+    SourceClass.INCIDENT.value: "Incidents",
+    SourceClass.OPERATIONAL_CONTROL.value: "Operational controls",
+    SourceClass.SOURCE_HEALTH.value: "Source health",
+    SourceClass.COGNITIVE_LOAD.value: "Cognitive load",
+    SourceClass.INVESTMENT_ALLOCATION.value: "Investment allocation",
+    SourceClass.HEALTH_PROFILE.value: "Health profile",
+    SourceClass.DEFICIENCY_INVENTORY.value: "Deficiency inventory",
+    # Orchestrator._budget_exhausted_answer's one hardcoded literal.
+    "tool_results": "Tool results",
+}
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 ARTIFACT_ROOT = REPOSITORY_ROOT / "contracts" / "ask-dev" / "v1"
@@ -188,6 +253,19 @@ def expected_artifacts() -> dict[str, str]:
         }
     )
     artifacts["vocabulary/internal_prose_denylist.v1.json"] = denylist_contents
+    # CHAOS-3660 §8(g). Published so web has ONE sanctioned source of truth
+    # for rendering a raw DevCoverage required-source id, instead of
+    # inventing its own labels ad hoc the way it does today for scope-
+    # resolution outcomes (``SCOPE_OUTCOME_LABELS``) -- see
+    # ``SOURCE_HEALTH_LABELS``'s own module-level docstring for exactly
+    # which producers this covers and why.
+    source_health_labels_contents = _json(
+        {
+            "schema_version": "ask_dev_source_health_labels.v1",
+            "labels": SOURCE_HEALTH_LABELS,
+        }
+    )
+    artifacts["vocabulary/source_health_labels.v1.json"] = source_health_labels_contents
     manifest = {
         "schema_version": "ask_dev_contract_manifest.v1",
         "compatibility": "additive-within-v1",
@@ -201,7 +279,12 @@ def expected_artifacts() -> dict[str, str]:
                 "case": "internal_prose_denylist",
                 "path": "vocabulary/internal_prose_denylist.v1.json",
                 "sha256": _sha256(denylist_contents),
-            }
+            },
+            {
+                "case": "source_health_labels",
+                "path": "vocabulary/source_health_labels.v1.json",
+                "sha256": _sha256(source_health_labels_contents),
+            },
         ],
     }
     artifacts["manifest.json"] = _json(manifest)

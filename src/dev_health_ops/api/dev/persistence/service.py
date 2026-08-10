@@ -183,6 +183,12 @@ _RUN_STATES = _TERMINAL_RUN_STATES | frozenset(
         "answer_validation",
     }
 )
+#: CHAOS-3660 §8(f)/(j). The 6 members below the blank line are additive
+#: siblings, none folded onto the pre-existing, narrower ``wrong_scope``.
+#: Mirrors ``router.DevFeedbackCreateRequest.reasons`` and
+#: ``contracts.DevFeedback.reasons`` -- all three must widen together, or a
+#: newly-additive reason the contract declares valid gets silently
+#: rejected at whichever of the three gates was not updated.
 _FEEDBACK_REASONS = frozenset(
     {
         "incorrect",
@@ -191,6 +197,12 @@ _FEEDBACK_REASONS = frozenset(
         "stale_data",
         "unclear",
         "useful",
+        "wrong_subject",
+        "wrong_cohort",
+        "wrong_driver",
+        "unsafe_certainty",
+        "other",
+        "unspecified",
     }
 )
 _FORBIDDEN_METADATA_KEYS = frozenset(
@@ -3508,6 +3520,16 @@ class DevPersistenceService:
         normalized_reasons = sorted(set(reasons))
         if not set(normalized_reasons).issubset(_FEEDBACK_REASONS):
             raise DevPersistenceValidationError("invalid feedback reason")
+        # CHAOS-3660 §8(f)/(j) defense in depth: the router's own request
+        # model enforces this first, but this method holds its own
+        # invariant rather than trusting every caller to have gone through
+        # that gate.
+        if "unspecified" in normalized_reasons and normalized_reasons != [
+            "unspecified"
+        ]:
+            raise DevPersistenceValidationError(
+                "'unspecified' feedback reason must stand alone"
+            )
         comment = _bounded_text(comment, field="feedback comment", max_bytes=2048)
         answer = await self.session.scalar(
             select(DevMessage).where(

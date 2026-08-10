@@ -19,7 +19,11 @@ from dev_health_ops.api.admin.schemas import (
     TestConnectionRequest,
     TestConnectionResponse,
 )
-from dev_health_ops.api.services.configuration import IntegrationCredentialsService
+from dev_health_ops.api.services.configuration import (
+    CredentialLookupOutcome,
+    IntegrationCredentialsService,
+)
+from dev_health_ops.api.utils.errors import error_detail
 from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 from dev_health_ops.exceptions import (
     APIException,
@@ -343,9 +347,37 @@ async def test_connection(
     if not creds:
         # Prefer credential_id (UUID) lookup; fall back to provider+name
         if payload.credential_id:
-            creds, stored = await svc.get_decrypted_credentials_by_id(
+            # issue 3694: a by-id lookup can be falsy for three DISTINCT
+            # reasons (see CredentialLookupOutcome) -- only NOT_FOUND
+            # stays 404 (the cross-tenant not-found-as-forbidden posture
+            # is unchanged; get_by_id already scopes to this org). A row
+            # that exists in THIS org but is unusable (no stored payload,
+            # or a decrypt failure) is a distinct, reason-coded 422:
+            # the client asked to test something real that this org
+            # genuinely has, and "not found" would be a lie.
+            (
+                creds,
+                stored,
+                outcome,
+            ) = await svc.get_decrypted_credentials_by_id_with_outcome(
                 payload.credential_id
             )
+            if not creds and outcome is not CredentialLookupOutcome.OK:
+                if outcome is CredentialLookupOutcome.NOT_FOUND:
+                    raise HTTPException(status_code=404, detail="Credential not found")
+                reason_code = (
+                    "credential_missing_payload"
+                    if outcome is CredentialLookupOutcome.NO_PAYLOAD
+                    else "credential_unreadable"
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail=error_detail(
+                        "Stored credential exists but cannot be used for a "
+                        "test connection",
+                        reason_code=reason_code,
+                    ),
+                )
         else:
             creds = await svc.get_decrypted_credentials(payload.provider, payload.name)
         if not creds:

@@ -77,7 +77,13 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from dev_health_ops.api.dev.contracts_v2.base import SourceClass
 from dev_health_ops.api.dev.investigation_contract import SubjectMatchSignal
 
-from .backend import EmbeddingBackend, MatchMechanism, graphiti_module
+from .backend import (
+    OBSERVATION_SUBJECTS_ATTRIBUTE,
+    EmbeddingBackend,
+    MatchMechanism,
+    graphiti_module,
+)
+from .readback import _entities_by_canonical_id
 from .vocabulary import GraphEntityKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -208,6 +214,13 @@ class SemanticCandidate:
     rrf_score: float
     #: Zero-based rank within this query's authorized result.
     rank: int
+    #: CHAOS-3653: set when this candidate was not itself surfaced by BM25
+    #: or cosine, but reached via an authorized observation's own
+    #: ``cf_subject_canonical_ids`` -- retrieval found the right evidence,
+    #: not the entity's own name. ``None`` for a direct hit. Provenance a
+    #: caller needs: "inferred from an attached observation" and "matched
+    #: the entity's own label" are different claims about the same rank.
+    via_observation_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,6 +457,34 @@ def _attribute(node: Any, key: str) -> Any:
     return attributes.get(key)
 
 
+def _subject_canonical_ids(node: Any) -> tuple[str, ...]:
+    """What an observation node declares itself to be about.
+
+    Mirrors :func:`readback._rows`'s own parse of the same attribute
+    exactly (comma-joined, empty items dropped) so the two readers of this
+    property cannot silently disagree about what it means. A node that
+    never carries the attribute at all -- a partition written before
+    CHAOS-3619 (H3) added it -- returns ``()``: absence of the capability,
+    not absence of subjects, and the hop below simply has nothing to do for
+    it, which is the safe default.
+    """
+
+    raw = _attribute(node, OBSERVATION_SUBJECTS_ATTRIBUTE)
+    if not isinstance(raw, str) or not raw:
+        return ()
+    return tuple(item for item in raw.split(",") if item)
+
+
+@dataclass(frozen=True, slots=True)
+class _HopSource:
+    """The authorized observation that earned one subject its hop candidate."""
+
+    observation_id: str
+    matched_text: str
+    score: float
+    methods: frozenset[RetrievalMethod]
+
+
 @dataclass(frozen=True, slots=True)
 class FulltextReadiness:
     """Evidence that the BM25 half of a hybrid leg is actually live."""
@@ -609,6 +650,11 @@ async def retrieve_candidates(
     withheld: dict[str, None] = {}
     authorized = frozenset(authorized_entity_ids)
     candidates: list[SemanticCandidate] = []
+    # CHAOS-3653: the best authorized observation found for each subject a
+    # retrieved observation named. "Best" is the observation with the
+    # higher fused score, so a subject named by several observations hops
+    # via the one retrieval trusted most, not an arbitrary one.
+    hop_sources: dict[str, _HopSource] = {}
 
     for uuid in fused_uuids:
         node = by_uuid[uuid]
@@ -622,6 +668,22 @@ async def retrieve_candidates(
         kind_value = _attribute(node, _ENTITY_KIND_ATTRIBUTE)
         if kind_value is None:
             observations.append(canonical_id)
+            score = float(score_by_uuid[uuid])
+            for subject_id in _subject_canonical_ids(node):
+                if subject_id not in authorized:
+                    # Same disclosure as a direct hit: an unauthorized
+                    # subject named by an observation is withheld, not
+                    # silently absent -- the count is real either way.
+                    withheld.setdefault(subject_id, None)
+                    continue
+                existing = hop_sources.get(subject_id)
+                if existing is None or score > existing.score:
+                    hop_sources[subject_id] = _HopSource(
+                        observation_id=canonical_id,
+                        matched_text=node.name,
+                        score=score,
+                        methods=frozenset(methods[uuid]),
+                    )
             continue
         kind = GraphEntityKind(kind_value)
         if kind is GraphEntityKind.ORGANIZATION:
@@ -660,6 +722,53 @@ async def retrieve_candidates(
                 rank=len(candidates),
             )
         )
+
+    # CHAOS-3653: observation -> entity hop. Only for subjects an authorized
+    # observation named AND that did not already reach ``candidates``
+    # directly -- a direct hit already carries the stronger claim ("this
+    # entity's own name/text matched"), and duplicating it under a weaker
+    # inferred claim would be reporting the same subject twice.
+    already_present = {item.canonical_id for item in candidates}
+    hop_needed = tuple(
+        subject_id for subject_id in hop_sources if subject_id not in already_present
+    )
+    if hop_needed:
+        hop_entities = await _entities_by_canonical_id(driver, partition, hop_needed)
+        # Highest-scoring source observation first, so the hop tail is
+        # ranked exactly as the direct candidates are: strongest evidence
+        # first, ties broken by canonical id for a total, content-derived
+        # order.
+        hop_entities = tuple(
+            sorted(
+                hop_entities,
+                key=lambda item: (
+                    -hop_sources[item.canonical_id].score,
+                    item.canonical_id,
+                ),
+            )
+        )
+        for entity in hop_entities:
+            if entity.kind is GraphEntityKind.ORGANIZATION:
+                continue
+            source = hop_sources[entity.canonical_id]
+            candidates.append(
+                SemanticCandidate(
+                    canonical_id=entity.canonical_id,
+                    kind=entity.kind,
+                    display_label=entity.display_label,
+                    signal=SubjectMatchSignal.FUZZY_LABEL,
+                    mechanism=_mechanism_for(source.methods),
+                    # The observation's own stored text, not the entity's:
+                    # what actually matched was the evidence, and the
+                    # provenance field is what says so.
+                    matched_text=source.matched_text,
+                    source_class=entity.source_class,
+                    methods=source.methods,
+                    rrf_score=source.score,
+                    rank=len(candidates),
+                    via_observation_id=source.observation_id,
+                )
+            )
 
     return SemanticRetrieval(
         query=query,

@@ -12,7 +12,8 @@ import (
 )
 
 var linearWorkItemEffectDestinations = []string{
-	"work_items", "work_item_transitions",
+	"work_items", "work_item_transitions", "work_item_dependencies",
+	"work_item_reopen_events", "work_item_interactions", "sprints",
 }
 
 // LinearWorkItemEffectRows is the provider-owned projection for the first
@@ -22,12 +23,20 @@ var linearWorkItemEffectDestinations = []string{
 type LinearWorkItemEffectRows struct {
 	WorkItems         []json.RawMessage
 	StatusTransitions []json.RawMessage
+	Dependencies      []json.RawMessage
+	ReopenEvents      []json.RawMessage
+	Interactions      []json.RawMessage
+	Sprints           []json.RawMessage
 }
 
 func BuildLinearWorkItemEffects(rows LinearWorkItemEffectRows) ([]EffectBatch, error) {
 	projections := map[string][]json.RawMessage{
-		"work_items":            rows.WorkItems,
-		"work_item_transitions": rows.StatusTransitions,
+		"work_items":              rows.WorkItems,
+		"work_item_transitions":   rows.StatusTransitions,
+		"work_item_dependencies":  rows.Dependencies,
+		"work_item_reopen_events": rows.ReopenEvents,
+		"work_item_interactions":  rows.Interactions,
+		"sprints":                 rows.Sprints,
 	}
 	effects := make([]EffectBatch, 0, len(linearWorkItemEffectDestinations))
 	seen := make(map[string]struct{}, len(linearWorkItemEffectDestinations))
@@ -58,8 +67,26 @@ func buildLinearWorkItemEffectsFromRows(
 	if err != nil {
 		return nil, err
 	}
+	dependencies, err := effectRowsFromValues(rows.Dependencies)
+	if err != nil {
+		return nil, err
+	}
+	reopens, err := effectRowsFromValues(rows.ReopenEvents)
+	if err != nil {
+		return nil, err
+	}
+	interactions, err := effectRowsFromValues(rows.Interactions)
+	if err != nil {
+		return nil, err
+	}
+	sprints, err := effectRowsFromValues(rows.Sprints)
+	if err != nil {
+		return nil, err
+	}
 	return BuildLinearWorkItemEffects(LinearWorkItemEffectRows{
 		WorkItems: workItems, StatusTransitions: transitions,
+		Dependencies: dependencies, ReopenEvents: reopens,
+		Interactions: interactions, Sprints: sprints,
 	})
 }
 
@@ -133,13 +160,17 @@ type LinearWorkItemEffectAdapter interface {
 	) (EffectInspection, error)
 }
 
-// LinearWorkItemClickHouseEffects is a provider-only, two-destination effect
+// LinearWorkItemClickHouseEffects is a provider-only, six-destination effect
 // dispatcher. Its adapters are injected by future worker construction; this
 // file intentionally does not register or activate that construction.
 type LinearWorkItemClickHouseEffects struct {
 	Lease             providerfoundation.LeaseGuard
 	WorkItems         LinearWorkItemEffectAdapter
 	StatusTransitions LinearWorkItemEffectAdapter
+	Dependencies      LinearWorkItemEffectAdapter
+	ReopenEvents      LinearWorkItemEffectAdapter
+	Interactions      LinearWorkItemEffectAdapter
+	Sprints           LinearWorkItemEffectAdapter
 }
 
 func (sink LinearWorkItemClickHouseEffects) WriteEffect(
@@ -202,6 +233,14 @@ func (sink LinearWorkItemClickHouseEffects) adapterForDestination(
 		return sink.WorkItems, true
 	case "work_item_transitions":
 		return sink.StatusTransitions, true
+	case "work_item_dependencies":
+		return sink.Dependencies, true
+	case "work_item_reopen_events":
+		return sink.ReopenEvents, true
+	case "work_item_interactions":
+		return sink.Interactions, true
+	case "sprints":
+		return sink.Sprints, true
 	default:
 		return nil, false
 	}

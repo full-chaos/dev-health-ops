@@ -28,8 +28,8 @@
     {
       "id": "L3-pagination-cap-fails-closed",
       "file": "internal/providersync/linear_work_items_route.go",
-      "find": "if page.CapReached {",
-      "replace": "if false {",
+      "find": "if page.CapReached {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
+      "replace": "if false {\n\t\treturn CompleteRouteBatch{}, ErrPaginationCapExceeded\n\t}",
       "rationale": "a capped GraphQL collection cannot advance the watermark as if the provider result were complete",
       "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemsRouteFailsClosedOnGraphQLErrorsAndCaps$", "./internal/providersync/"]]
     },
@@ -38,7 +38,7 @@
       "file": "internal/providersync/linear_work_items_effects.go",
       "find": "destination, EffectReadbackRequired, projections[destination],",
       "replace": "destination, EffectReplaySafe, projections[destination],",
-      "rationale": "both Linear destinations can be durably written before acknowledgement and therefore require semantic readback recovery",
+      "rationale": "all six Linear raw destinations can be durably written before acknowledgement and therefore require semantic readback recovery",
       "proof": [["go", "test", "-count=1", "-run", "^TestBuildLinearWorkItemEffectsIsDeterministicAndExhaustive$", "./internal/providersync/"]]
     },
     {
@@ -70,7 +70,7 @@
       "file": "internal/providersync/linear_work_items_effects.go",
       "find": "if err != nil || !sink.complete() {",
       "replace": "if err != nil || false {",
-      "rationale": "a partially constructed two-destination sink must fail before any destination can land alone",
+      "rationale": "a partially constructed six-destination sink must fail before any destination can land alone",
       "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemEffectsFenceLeaseTenantAndTampering$", "./internal/providersync/"]]
     },
     {
@@ -104,6 +104,54 @@
       "replace": "if payload.CanceledAt != nil {",
       "rationale": "Python's closed_at uses completed_at or canceled_at, so a completed timestamp must remain authoritative when both provider fields are present",
       "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemClosedAtPrefersCompletedAt$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L13-trusted-scm-host-fences-attachments",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "if _, ok := linearTrustedSCMHosts()[strings.ToLower(parsed.Host)]; !ok {",
+      "replace": "if false {",
+      "rationale": "a user-controlled Linear attachment must not mint a PR or MR edge from an untrusted host",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemsRouteCollectsRawLinearSurfaces$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L14-relation-orientation-is-canonical",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "case \"blocked_by\", \"is_blocked_by\", \"blocked\":\n\t\t\t\tsource, target, relationType = target, source, \"blocks\"",
+      "replace": "case \"blocked_by\", \"is_blocked_by\", \"blocked\":\n\t\t\t\tsource, target, relationType = source, target, \"blocks\"",
+      "rationale": "native Linear relation direction must remain source blocker to target blocked issue in the canonical graph",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemsRouteCollectsRawLinearSurfaces$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L15-empty-comments-are-not-interactions",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "if comment.Body == \"\" {",
+      "replace": "if false {",
+      "rationale": "empty comments do not represent an interaction and must not create a zero-length fact",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemsRouteCollectsRawLinearSurfaces$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L16-interaction-length-is-codepoint-count",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "BodyLength: len([]rune(comment.Body)), LastSynced: normalizedAt.UTC(),",
+      "replace": "BodyLength: len(comment.Body), LastSynced: normalizedAt.UTC(),",
+      "rationale": "the Python interaction contract uses Unicode code-point length, not UTF-8 byte length",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemsRouteCollectsRawLinearSurfaces$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L17-cycle-completion-wins-state",
+      "file": "internal/providersync/linear_work_items_route.go",
+      "find": "if cycle.CompletedAt != nil && parseLinearTimePtr(cycle.CompletedAt) != nil {",
+      "replace": "if false {",
+      "rationale": "a completed Linear cycle must be emitted as closed even if its progress is nonzero",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemsRouteCollectsRawLinearSurfaces$", "./internal/providersync/"]]
+    },
+    {
+      "id": "L18-all-raw-destinations-dispatch",
+      "file": "internal/providersync/linear_work_items_effects.go",
+      "find": "case \"sprints\":\n\t\treturn sink.Sprints, true",
+      "replace": "case \"sprints\":\n\t\treturn sink.WorkItems, true",
+      "rationale": "every declared raw destination must dispatch to its own named adapter rather than silently cross-writing another table",
+      "proof": [["go", "test", "-count=1", "-run", "^TestLinearWorkItemEffectsDispatchEveryRawDestination$", "./internal/providersync/"]]
     }
   ]
 }

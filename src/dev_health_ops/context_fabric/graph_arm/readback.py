@@ -874,6 +874,18 @@ class ProjectionGraphReader:
 #: :data:`~.projection.READBACK_ATTRIBUTE_KEYS`. That drift is caught by
 #: ``test_every_declared_attribute_has_a_column_in_both_queries``, which
 #: fails when a key is declared without a column or a column without a key.
+#:
+#: ``repository_ids``/``valid_from``/``valid_to`` (issue 3689's adapter PR):
+#: ``backend.to_graphiti_nodes`` has always written ``cf_repository_ids``
+#: (both node kinds) and ``cf_valid_from``/``cf_valid_to`` (when the record
+#: carried them), but nothing read them back until
+#: ``live_snapshot.live_graph_snapshot`` needed a faithful, live-store
+#: reconstruction of :class:`~.projection.GraphNode` -- which the temporal
+#: fields matter for directly: :mod:`.cohort_discovery`'s comparability
+#: gates read ``node.valid_from``/``.valid_to`` to decide whether a
+#: measurement is still in force. Purely additive (two/three more nullable
+#: columns on an unchanged ``MATCH``/``WHERE``), so every existing consumer
+#: of these two queries is unaffected.
 
 _ENTITY_QUERY = """
 MATCH (n:Entity)
@@ -883,6 +895,9 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.name AS display_label,
        n.cf_source_class AS source_class,
        n.cf_observed_at AS observed_at,
+       n.cf_repository_ids AS repository_ids,
+       n.cf_valid_from AS valid_from,
+       n.cf_valid_to AS valid_to,
        n.cf_alias_alias AS alias_alias,
        n.cf_alias_acronym AS alias_acronym,
        n.cf_alias_previous_name AS alias_previous_name,
@@ -922,6 +937,8 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_source_class AS source_class,
        n.cf_observed_at AS observed_at,
        n.cf_repository_ids AS repository_ids,
+       n.cf_valid_from AS valid_from,
+       n.cf_valid_to AS valid_to,
        n.cf_subject_canonical_ids AS subject_canonical_ids,
        n.outcome AS outcome,
        n.cf_attr_corpus_is_adversarial AS attr_corpus_is_adversarial,
@@ -941,6 +958,12 @@ RETURN n.cf_canonical_id AS canonical_id,
        n.cf_attr_superseded_by AS attr_superseded_by
 """
 
+#: ``contributor_count`` (issue 3689's adapter PR): ``backend.
+#: to_graphiti_edges`` has always written ``cf_contributor_count`` when the
+#: relationship record carried one (``fixtures.py`` uses real, non-None
+#: values), but nothing read it back until ``live_snapshot`` needed a
+#: faithful reconstruction of :class:`~.projection.GraphEdge`. Purely
+#: additive, same reasoning as the node columns above.
 _EDGE_QUERY = """
 MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity)
 WHERE e.group_id = $partition
@@ -949,7 +972,8 @@ RETURN e.fact AS fact,
        e.created_at AS observed_at,
        e.cf_observation_ids AS observation_ids,
        e.valid_at AS valid_from,
-       e.invalid_at AS valid_to
+       e.invalid_at AS valid_to,
+       e.cf_contributor_count AS contributor_count
 """
 
 #: What the STORE says produced this partition's vectors.

@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 from dev_health_ops.api.dev.investigation_contract import (
     CohortExclusionReason,
@@ -36,7 +37,6 @@ from dev_health_ops.api.dev.investigation_contract import (
     RelationshipType,
 )
 
-from .projection import GraphEdge
 from .vocabulary import GraphEntityKind
 
 __all__ = [
@@ -44,11 +44,38 @@ __all__ = [
     "COHORT_BEARING_RELATIONSHIPS",
     "PEER_RELATIONSHIPS",
     "CohortCandidate",
+    "CohortEdgeLike",
     "CohortEntryMode",
     "CohortExclusionRecord",
     "CohortProposal",
     "build_cohort",
 ]
+
+
+class CohortEdgeLike(Protocol):
+    """The three fields :func:`build_cohort` actually reads off an edge.
+
+    CHAOS-3617's :class:`~.projection.GraphEdge` (the trial's in-memory,
+    fixture-built edge) satisfies this structurally and keeps working
+    unchanged -- this widens the *parameter type*, not the trial's own
+    call site. CHAOS-3688 needs a second, live-store-backed edge shape with
+    none of ``GraphEdge``'s other fields (uuid, org_id, source/target uuid
+    and kind, ...) real to fabricate; this Protocol is what makes passing
+    that shape here honest rather than a synthetic ``GraphEdge`` with
+    placeholder values for fields nothing here reads.
+
+    Declared via ``@property`` (read-only), not plain attributes: frozen
+    dataclasses (both ``GraphEdge`` and CHAOS-3688's live edge shape) have
+    mypy-read-only fields, which a plain-attribute Protocol would reject --
+    same reasoning as ``packet_builder._JobLike``.
+    """
+
+    @property
+    def relationship(self) -> RelationshipType: ...
+    @property
+    def source_canonical_id(self) -> str: ...
+    @property
+    def target_canonical_id(self) -> str: ...
 
 
 class CohortEntryMode(StrEnum):
@@ -215,7 +242,7 @@ class CohortProposal:
 
 def build_cohort(
     subject_id: str,
-    edges: Sequence[GraphEdge],
+    edges: Sequence[CohortEdgeLike],
     entity_labels: Mapping[str, tuple[GraphEntityKind, str]],
     authorized_entity_ids: Sequence[str] | frozenset[str],
     *,

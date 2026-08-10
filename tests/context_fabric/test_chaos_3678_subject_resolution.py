@@ -22,9 +22,16 @@ from typing import Any
 import pytest
 
 from dev_health_ops.api.dev.contracts_v2.base import SourceClass
-from dev_health_ops.api.dev.investigation_contract import SubjectMatchSignal
+from dev_health_ops.api.dev.investigation_contract import (
+    RelationshipType,
+    SubjectMatchSignal,
+)
 from dev_health_ops.context_fabric.graph_arm.backend import MatchMechanism
 from dev_health_ops.context_fabric.graph_arm.subject_resolution import (
+    _live_cohort_edges,
+    _live_entities,
+    _live_entity_labels,
+    _LiveEntity,
     _resolve_exact_subjects,
 )
 from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
@@ -175,3 +182,105 @@ async def test_empty_queries_short_circuits_without_a_round_trip() -> None:
         "an empty query list has nothing to look up; a query sent anyway "
         "is not a query worth sending"
     )
+
+
+# ---- CHAOS-3688: cohort-seeding live helpers -------------------------------
+
+
+async def test_live_entities_skips_rows_with_no_legible_kind() -> None:
+    """Mirrors readback's own rule for a node this arm cannot classify --
+    dropped rather than guessed at.
+    """
+
+    driver = _FakeDriver(
+        rows=[
+            _entity_record("proj_a", "Project A"),
+            {
+                "canonical_id": "proj_b",
+                "entity_kind": None,
+                "display_label": "Project B",
+                "source_class": SourceClass.WORK_GRAPH.value,
+            },
+        ]
+    )
+    entities = await _live_entities(driver, _PARTITION)
+    assert [entity.canonical_id for entity in entities] == ["proj_a"]
+
+
+async def test_live_entity_labels_excludes_organization() -> None:
+    """A pure function (no ``await`` needed) -- ``async def`` only to match
+    the module-level ``pytestmark = pytest.mark.asyncio``, which
+    pytest-asyncio warns about applying to a sync test.
+
+    The partition root must never become a cohort label -- a cohort that
+    could contain it would be a cohort containing the tenant.
+    """
+
+    entities = (
+        _LiveEntity(
+            canonical_id="proj_nightfall_migration",
+            kind=GraphEntityKind.PROJECT,
+            display_label="Nightfall Migration",
+            source_class=SourceClass.WORK_GRAPH,
+        ),
+        _LiveEntity(
+            canonical_id="org_acme",
+            kind=GraphEntityKind.ORGANIZATION,
+            display_label="Acme Corp",
+            source_class=SourceClass.WORK_GRAPH,
+        ),
+    )
+    labels = _live_entity_labels(entities)
+    assert labels == {
+        "proj_nightfall_migration": (GraphEntityKind.PROJECT, "Nightfall Migration")
+    }
+
+
+def _edge_record(source: str, relationship: RelationshipType, target: str) -> dict:
+    return {
+        "fact": f"{source} {relationship.value} {target}",
+        "source_class": SourceClass.WORK_GRAPH.value,
+        "observed_at": "2026-05-01T00:00:00+00:00",
+        "observation_ids": "",
+        "valid_from": None,
+        "valid_to": None,
+    }
+
+
+async def test_live_cohort_edges_parses_the_stored_triple() -> None:
+    driver = _FakeDriver(
+        rows=[
+            _edge_record(
+                "proj_nightfall_migration",
+                RelationshipType.OWNED_BY_TEAM,
+                "team_platform",
+            )
+        ]
+    )
+    edges = await _live_cohort_edges(driver, _PARTITION)
+    assert len(edges) == 1
+    assert edges[0].source_canonical_id == "proj_nightfall_migration"
+    assert edges[0].relationship is RelationshipType.OWNED_BY_TEAM
+    assert edges[0].target_canonical_id == "team_platform"
+
+
+async def test_live_cohort_edges_rejects_a_prose_fact() -> None:
+    """The same detection ``parse_triple_fact`` already gives every other
+    live reader: a stored fact containing prose is caught on read, not
+    quietly presented as evidence.
+    """
+
+    driver = _FakeDriver(
+        rows=[
+            {
+                "fact": "this is not a canonical triple",
+                "source_class": SourceClass.WORK_GRAPH.value,
+                "observed_at": "2026-05-01T00:00:00+00:00",
+                "observation_ids": "",
+                "valid_from": None,
+                "valid_to": None,
+            }
+        ]
+    )
+    with pytest.raises(ValueError, match="not a canonical triple rendering"):
+        await _live_cohort_edges(driver, _PARTITION)

@@ -84,6 +84,16 @@ type GitHubWorkItemEngineDeriver struct {
 	investmentClassifier *InvestmentClassifier
 }
 
+// githubWorkItemEngineRows is the concrete, schema-aligned result of one
+// engine invocation. The legacy GitHub deriver still projects it onto its
+// historical JSON seam, while the GitLab port consumes these typed fields
+// directly so no provider result needs a generic destination map.
+type githubWorkItemEngineRows struct {
+	IssueTypes        []githubIssueTypeMetricsDailyRow
+	Classifications   []githubInvestmentClassificationDailyRow
+	InvestmentMetrics []githubInvestmentMetricsDailyRow
+}
+
 func NewGitHubWorkItemEngineDeriver(
 	statusMapping *StatusMapping,
 	investmentClassifier *InvestmentClassifier,
@@ -108,17 +118,58 @@ func (engine *GitHubWorkItemEngineDeriver) Derive(
 	computedAt time.Time,
 	derived githubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
+	engineRows, err := engine.deriveRowsForProvider(
+		ctx, "github", claim, rows, day, computedAt, derived,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]json.RawMessage, len(githubWorkItemDerivedEngineDestinations))
+	for _, destination := range githubWorkItemDerivedEngineDestinations {
+		var encoded []json.RawMessage
+		var err error
+		switch destination {
+		case githubIssueTypeMetricsDestination:
+			encoded, err = marshalGitHubWorkItemDerivedRows(engineRows.IssueTypes)
+		case githubInvestmentClassificationsDestination:
+			encoded, err = marshalGitHubWorkItemDerivedRows(engineRows.Classifications)
+		case githubInvestmentMetricsDestination:
+			encoded, err = marshalGitHubWorkItemDerivedRows(engineRows.InvestmentMetrics)
+		default:
+			return nil, ErrInvalidConfiguration
+		}
+		if err != nil {
+			return nil, err
+		}
+		result[destination] = encoded
+	}
+	if len(result) != len(githubWorkItemDerivedEngineDestinations) {
+		return nil, ErrInvalidConfiguration
+	}
+	return result, nil
+}
+
+func (engine *GitHubWorkItemEngineDeriver) deriveRowsForProvider(
+	ctx context.Context,
+	provider string,
+	claim Claim,
+	rows githubWorkItemRows,
+	day time.Time,
+	computedAt time.Time,
+	derived githubWorkItemDerivationContext,
+) (githubWorkItemEngineRows, error) {
 	if ctx == nil || engine == nil || engine.statusMapping == nil ||
 		engine.investmentClassifier == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || !isWorkItemFamilyDataset(claim.Dataset) ||
+		claim.Provider != provider || !isWorkItemFamilyDataset(claim.Dataset) ||
 		day.IsZero() || computedAt.IsZero() {
-		return nil, ErrInvalidConfiguration
+		return githubWorkItemEngineRows{}, ErrInvalidConfiguration
 	}
 	for _, item := range rows.WorkItems {
 		// Validate before every time-window skip. A foreign future row is still a
 		// foreign row and must not become harmless merely because it is inactive.
 		if err := assertGitHubWorkItemDerivedTenancy(claim, item); err != nil {
-			return nil, err
+			return githubWorkItemEngineRows{}, err
 		}
 	}
 
@@ -134,30 +185,12 @@ func (engine *GitHubWorkItemEngineDeriver) Derive(
 		claim, rows, dayUTC, end, stamp, derived, engine.investmentClassifier,
 	)
 	if err != nil {
-		return nil, err
+		return githubWorkItemEngineRows{}, err
 	}
-
-	values := map[string]any{
-		githubIssueTypeMetricsDestination:          issueTypes,
-		githubInvestmentClassificationsDestination: classifications,
-		githubInvestmentMetricsDestination:         metrics,
-	}
-	result := make(map[string][]json.RawMessage, len(values))
-	for _, destination := range githubWorkItemDerivedEngineDestinations {
-		value, owned := values[destination]
-		if !owned {
-			return nil, ErrInvalidConfiguration
-		}
-		encoded, err := marshalGitHubWorkItemDerivedRows(value)
-		if err != nil {
-			return nil, err
-		}
-		result[destination] = encoded
-	}
-	if len(result) != len(values) {
-		return nil, ErrInvalidConfiguration
-	}
-	return result, nil
+	return githubWorkItemEngineRows{
+		IssueTypes: issueTypes, Classifications: classifications,
+		InvestmentMetrics: metrics,
+	}, nil
 }
 
 type githubNullableUUIDKey struct {

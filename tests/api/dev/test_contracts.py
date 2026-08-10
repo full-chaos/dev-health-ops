@@ -25,9 +25,12 @@ from dev_health_ops.api.dev.contracts import (
     DevScope,
     DevScopeResolution,
     DevStreamEvent,
+    ToolID,
     validate_stream,
 )
+from dev_health_ops.api.dev.contracts_v2.base import SourceClass
 from dev_health_ops.api.dev.export_contracts import (
+    SOURCE_HEALTH_LABELS,
     check_artifacts,
     expected_artifacts,
 )
@@ -468,6 +471,39 @@ def test_contract_schemas_are_provider_neutral_and_closed() -> None:
     assert 'additionalProperties": false' in schemas
     for provider_specific in ("openai_api_key", "anthropic_api_key", "tool_choice"):
         assert provider_specific not in schemas
+
+
+def test_source_health_labels_cover_every_known_required_source_producer() -> None:
+    """CHAOS-3660 §8(g). ``SOURCE_HEALTH_LABELS`` must have an entry for
+    every id ``DevCoverage.{unavailable,stale,degraded}_required_sources``
+    can actually carry -- derived here from the two live enums that feed
+    it (``ToolID``, ``SourceClass``) plus the one hardcoded literal
+    (``"tool_results"``), not a hand list independently re-typed.
+
+    Honesty about what this proves: it is a totality check against every
+    producer identified by reading ``orchestrator.py``'s
+    ``_coverage_from_tool_results``/``_coverage_with_plan_sources``/
+    ``_budget_exhausted_answer`` -- the only three call sites in the
+    codebase that assign into these three ``DevCoverage`` fields (verified
+    by grep, not assumed). It cannot dynamically catch a hypothetical
+    FUTURE fourth producer emitting a still-different literal; the
+    exact-equality assertion below at least ensures a member removed from
+    either enum (or the union going stale some other way) fails loudly
+    here rather than silently leaving a dead label.
+    """
+    expected = (
+        frozenset(member.value for member in ToolID)
+        | frozenset(member.value for member in SourceClass)
+        | {"tool_results"}
+    )
+    assert set(SOURCE_HEALTH_LABELS) == expected
+
+    published = json.loads(
+        expected_artifacts()["vocabulary/source_health_labels.v1.json"]
+    )
+    assert set(published["labels"]) == expected
+    for source_id, label in SOURCE_HEALTH_LABELS.items():
+        assert label, f"{source_id} has an empty label"
 
 
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)

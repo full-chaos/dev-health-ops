@@ -442,6 +442,11 @@
       "case": "internal_prose_denylist",
       "path": "vocabulary/internal_prose_denylist.v1.json",
       "sha256": "621ed38192bb17f3c9e9f826a3b3572c29cc8cd58865c77e9ea4ad9296990e7a"
+    },
+    {
+      "case": "source_health_labels",
+      "path": "vocabulary/source_health_labels.v1.json",
+      "sha256": "f141c442d84b55d59d40e5b20deba5ad810ee8d5a7c91f59c68545006d66ef7e"
     }
   ]
 }

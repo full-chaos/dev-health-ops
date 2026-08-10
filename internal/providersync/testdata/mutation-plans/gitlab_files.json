@@ -221,6 +221,17 @@
       "proof": [["go", "test", "-run", "^TestGitLabFileContentEligibilityMatchesComplexityScannerConfig$", "./internal/providersync/"]]
     },
     {
+      "id": "scanner-extension-case-sensitivity",
+      "file": "internal/providersync/gitlab_files_route.go",
+      "find": "switch path.Ext(base) {",
+      "replace": "switch strings.ToLower(path.Ext(base)) {",
+      "rationale": "Python's lowercase include_globs are applied by case-sensitive fnmatch on the worker platform; normalizing the source extension would fetch content for Main.GO and mixed.Go that Python leaves paths-only",
+      "proof": [
+        ["bash", "-lc", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1 PYTHONPATH=\"$PWD/src\" DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=\"${DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR:?missing}\" go test -count=1 -run '^TestGenericOracleMatchesLivePythonForGitLabFilesCaseSensitiveExtensions$' ./internal/providersync/"],
+        ["go", "test", "-count=1", "-run", "^TestGitLabFileContentEligibilityMatchesComplexityScannerConfig$", "./internal/providersync/"]
+      ]
+    },
+    {
       "id": "normalized-at-is-clickhouse-precision",
       "file": "internal/providersync/gitlab_files_route.go",
       "find": "LastSynced: normalizedAt.UTC().Truncate(time.Millisecond)",

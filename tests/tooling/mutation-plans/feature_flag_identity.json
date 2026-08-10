@@ -72,7 +72,7 @@
       "expect_occurrences": 2,
       "rationale": "GraphQL must aggregate all physical environment rows back to one logical flag and one totalCount while preserving distinct flag_key values under the same provider/project and the environment-agnostic ID",
       "build": [".venv/bin/python", "-c", "import dev_health_ops.api.graphql.resolvers.feature_flags"],
-      "proof": [[".venv/bin/python", "tests/tooling/run_feature_flag_identity_live_proof.py"]]
+      "proof": [["uv", "run", "--with", "pytest-asyncio", "python", "tests/tooling/run_feature_flag_identity_live_proof.py"]]
     }
   ]
 }

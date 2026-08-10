@@ -1,10 +1,9 @@
-"""CHAOS-3675 PR 1/3: the production review resolver, and the invariant it
-exists to enforce -- the entity a record is about is derived from the
-canonical row, never from ``candidate.entity_id``.
+"""CHAOS-3675 PR 1/3 (review) and PR 2/3 (incident): production resolvers,
+and the invariant they exist to enforce -- the entity a record is about is
+derived from the canonical row, never from ``candidate.entity_id``.
 
 Every test here uses a fake ClickHouse-shaped sink whose ``query_dicts``
-call simulates the real SQL's own ``WHERE org_id = ... AND locator = ...``
-predicate (filtering by BOTH before returning a row), so an org-mismatch
+call simulates the real SQL's own filtering predicates, so an org-mismatch
 test exercises the same filtering discipline the live SQL performs, not
 merely that Python happens to pass the right parameter through. The
 tenant-isolation behaviour of the ACTUAL SQL text is separately proven live
@@ -294,3 +293,285 @@ def test_freshness_policy_governs_staleness(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert record is not None
     assert record.stale is True
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3675 PR 2/3: the incidents resolver. Incidents have NO
+# directly-authorizable entity in the current canonical schema at all --
+# only ever a repository, via a LEFT JOIN that can miss entirely (not just
+# carry a null repo_id) -- so every resolved incident is
+# no_authorizable_entity=True, and a repository-less incident is refused by
+# the resolver itself rather than emitted and left to admit()'s anchor
+# guard alone.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _IncidentRow:
+    org_id: str
+    id: str
+    title: str
+    normalized_status: str
+    observed_at: datetime
+    last_synced: datetime
+
+
+@dataclass(frozen=True)
+class _EdgeRow:
+    org_id: str
+    incident_id: str
+    repo_id: str | None
+
+
+class _IncidentFakeSink:
+    """Simulates ``operational_incidents FINAL LEFT JOIN
+    work_graph_deployment_incident_edges FINAL ON (org_id, incident_id)``:
+    an incident row is returned only when ``org_id``+``id`` match (the
+    ``WHERE`` clause); ``repo_id`` is populated only when a matching edge
+    row exists for the SAME org (the ``LEFT JOIN``'s own predicate) --
+    absent edge, not just a null column, models the real "join misses
+    entirely" case.
+    """
+
+    def __init__(
+        self, incidents: list[_IncidentRow], edges: list[_EdgeRow] | None = None
+    ) -> None:
+        self._incidents = incidents
+        self._edges = edges or []
+        self.calls: list[dict[str, Any]] = []
+
+    async def query_dicts(
+        self, query: str, params: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        self.calls.append(params)
+        for incident in self._incidents:
+            if incident.org_id != params["org_id"] or incident.id != params["locator"]:
+                continue
+            edge = next(
+                (
+                    e
+                    for e in self._edges
+                    if e.org_id == incident.org_id and e.incident_id == incident.id
+                ),
+                None,
+            )
+            return [
+                {
+                    "id": incident.id,
+                    "title": incident.title,
+                    "normalized_status": incident.normalized_status,
+                    "observed_at": incident.observed_at,
+                    "last_synced": incident.last_synced,
+                    "repo_id": edge.repo_id if edge else None,
+                }
+            ]
+        return []
+
+
+def _monkeypatch_incident_query_dicts(
+    monkeypatch: pytest.MonkeyPatch, sink: _IncidentFakeSink
+) -> None:
+    async def _fake_query_dicts(client: Any, query: str, params: dict[str, Any]):
+        assert client is sink
+        return await sink.query_dicts(query, params)
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.native_evidence_resolver.query_dicts",
+        _fake_query_dicts,
+    )
+
+
+def _incident_candidate(
+    *, locator: str = "inc-1", claimed_entity_id: str = "issue-999"
+) -> EvidenceCandidate:
+    return EvidenceCandidate(
+        source_system=ARM_SOURCE_SYSTEM,
+        entity_type="incident",
+        # A claim this resolver must never consult -- incidents never
+        # produce an entity-based authorization at all.
+        entity_id=claimed_entity_id,
+        locator=locator,
+    )
+
+
+def test_incident_with_a_linked_repository_is_admitted_repository_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED-first: before PR 2/3, ``incident``-kind candidates dispatch to
+    nothing and refuse as ``UNCONFIGURED``. With a real linked repository,
+    resolution now succeeds -- always via the entity-less/repository-only
+    mechanism (CHAOS-3675 PR1's prereq), never a directly-authorized
+    entity, because incidents have none in the current schema."""
+
+    sink = _IncidentFakeSink(
+        incidents=[
+            _IncidentRow(
+                org_id=ORG_A,
+                id="inc-1",
+                title="Checkout latency spike",
+                normalized_status="resolved",
+                observed_at=NOW,
+                last_synced=NOW,
+            )
+        ],
+        edges=[_EdgeRow(org_id=ORG_A, incident_id="inc-1", repo_id="repo-1")],
+    )
+    _monkeypatch_incident_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    record = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A, scope=_UNUSED_SCOPE, candidate=_incident_candidate()
+        )
+    )
+
+    assert record is not None
+    assert record.no_authorizable_entity is True
+    assert record.repository_ids == ("repo-1",)
+    assert record.entity_id == "inc-1"
+    # The candidate's claim never leaks anywhere on the resolved record.
+    assert "issue-999" not in (record.display_label, record.raw_excerpt or "")
+
+
+def test_an_incident_with_no_linked_repository_at_all_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No edge row at all (not merely a null ``repo_id`` on an existing
+    edge) -- the resolver refuses outright rather than emitting a record
+    with no authorization anchor at all."""
+
+    sink = _IncidentFakeSink(
+        incidents=[
+            _IncidentRow(
+                org_id=ORG_A,
+                id="inc-2",
+                title="Unlinked incident",
+                normalized_status="open",
+                observed_at=NOW,
+                last_synced=NOW,
+            )
+        ],
+        edges=[],
+    )
+    _monkeypatch_incident_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    record = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A,
+            scope=_UNUSED_SCOPE,
+            candidate=_incident_candidate(locator="inc-2"),
+        )
+    )
+
+    assert record is None
+
+
+def test_an_incident_with_a_null_repo_id_on_its_edge_also_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The edge row EXISTS but its own ``repo_id`` is null -- distinct from
+    the no-edge-at-all case above, and refused for the same reason: no
+    repository to anchor authorization to."""
+
+    sink = _IncidentFakeSink(
+        incidents=[
+            _IncidentRow(
+                org_id=ORG_A,
+                id="inc-3",
+                title="Edge with no repo",
+                normalized_status="open",
+                observed_at=NOW,
+                last_synced=NOW,
+            )
+        ],
+        edges=[_EdgeRow(org_id=ORG_A, incident_id="inc-3", repo_id=None)],
+    )
+    _monkeypatch_incident_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    record = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A,
+            scope=_UNUSED_SCOPE,
+            candidate=_incident_candidate(locator="inc-3"),
+        )
+    )
+
+    assert record is None
+
+
+def test_an_incident_locator_that_exists_only_in_a_different_org_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same cross-tenant control as the review resolver: a real incident
+    id, in a different org, must not resolve."""
+
+    sink = _IncidentFakeSink(
+        incidents=[
+            _IncidentRow(
+                org_id=ORG_B,
+                id="inc-4",
+                title="Org B's incident",
+                normalized_status="open",
+                observed_at=NOW,
+                last_synced=NOW,
+            )
+        ],
+        edges=[_EdgeRow(org_id=ORG_B, incident_id="inc-4", repo_id="repo-1")],
+    )
+    _monkeypatch_incident_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    refused = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A,
+            scope=_UNUSED_SCOPE,
+            candidate=_incident_candidate(locator="inc-4"),
+        )
+    )
+    admitted = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_B,
+            scope=_UNUSED_SCOPE,
+            candidate=_incident_candidate(locator="inc-4"),
+        )
+    )
+
+    assert refused is None
+    assert admitted is not None
+
+
+def test_an_edge_belonging_to_a_different_org_does_not_leak_its_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The incident itself is genuinely in ORG_A, but the only matching
+    edge row (by incident_id alone) belongs to ORG_B -- the join's own
+    ``org_id`` predicate must keep them apart, so ORG_A's incident resolves
+    with NO repository (refused), never ORG_B's repo_id smuggled across."""
+
+    sink = _IncidentFakeSink(
+        incidents=[
+            _IncidentRow(
+                org_id=ORG_A,
+                id="inc-5",
+                title="Org A's incident",
+                normalized_status="open",
+                observed_at=NOW,
+                last_synced=NOW,
+            )
+        ],
+        edges=[_EdgeRow(org_id=ORG_B, incident_id="inc-5", repo_id="org-b-repo")],
+    )
+    _monkeypatch_incident_query_dicts(monkeypatch, sink)
+    resolver = NativeEvidenceCandidateResolver(sink)
+
+    record = asyncio.run(
+        resolver.resolve(
+            org_id=ORG_A,
+            scope=_UNUSED_SCOPE,
+            candidate=_incident_candidate(locator="inc-5"),
+        )
+    )
+
+    assert record is None

@@ -201,7 +201,7 @@ func TestGitLabSecurityRoutePropagatesHeaderQualifiedForbiddenRateLimit(t *testi
 		gitLabSecurityRouteClient(t, doer), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 	)
 	var providerErr *providerfoundation.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorAuthentication {
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
 		t.Fatalf("error=%v", err)
 	}
 	if len(batch.Effects) != 0 || batch.Watermark != nil {

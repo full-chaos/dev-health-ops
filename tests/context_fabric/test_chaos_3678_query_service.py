@@ -45,6 +45,7 @@ from dev_health_ops.api.dev.contracts_v2.base import (
 from dev_health_ops.api.dev.contracts_v2.subject import DevSubjectMention
 from dev_health_ops.api.dev.evidence_service import EvidenceReferenceSigner
 from dev_health_ops.api.dev.graph_investigation_query import (
+    CohortDiscoveryFamily,
     GraphInvestigationRequest,
     GraphQueryOutcome,
 )
@@ -107,6 +108,11 @@ def _request(
     run_id: str = "run_test",
     mentions: tuple[DevSubjectMention, ...] = (),
     authorized_entity_ids: frozenset[str] = frozenset({"proj_nightfall_migration"}),
+    # CHAOS-3689: irrelevant to every test in this file today (none of them
+    # exercise SUBJECTLESS_COHORT_DISCOVERY's still-unwired COMPLETED path,
+    # per the module docstring above) -- a fixed placeholder so the
+    # constructor call stays valid now that the field is required.
+    cohort_discovery_family: CohortDiscoveryFamily = CohortDiscoveryFamily.TEAM_PRESSURE,
 ) -> GraphInvestigationRequest:
     return GraphInvestigationRequest(
         org_id=org_id,
@@ -118,6 +124,7 @@ def _request(
         authorized_entity_ids=authorized_entity_ids,
         window_start=datetime(2026, 5, 12, tzinfo=UTC),
         window_end=datetime(2026, 8, 9, tzinfo=UTC),
+        cohort_discovery_family=cohort_discovery_family,
         deadline=deadline or _soon(),
     )
 
@@ -945,6 +952,7 @@ class TestDiagnosticsAreContentSafe:
             authorized_entity_ids=frozenset(),
             window_start=datetime(2026, 5, 12, tzinfo=UTC),
             window_end=datetime(2026, 8, 9, tzinfo=UTC),
+            cohort_discovery_family=CohortDiscoveryFamily.TEAM_PRESSURE,
             deadline=_soon(),
         )
         result = await service.investigate(request)

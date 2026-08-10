@@ -28,18 +28,38 @@ narrower than the trial's ``discovery.search_candidates``),
 driver synthesis — mirrors the trial's own PR1 scope, which never
 synthesized drivers either).
 
-**Increment 3 (this revision) adds ``SEEDED_EXPLICIT_COHORT``** (CHAOS-3688),
-following the trial's own construction
-(``trials/chaos_3619/graph_leg.py``'s ``assemble_packet``) exactly: every
-mention resolves the same EXACT-only way, the first resolved candidate
-becomes the anchor subject, and :func:`~.cohort.build_cohort` walks two hops
-out from it over live edges (:func:`~.subject_resolution._live_cohort_edges`)
-to discover peers — never a cohort built directly from "the other named
-mentions". ``SUBJECTLESS_COHORT_DISCOVERY`` still returns
-``PROVIDER_FAILURE`` with a diagnostic naming the mechanism — it needs
-``cohort_discovery.discover_cohort`` wired in, tracked as CHAOS-3689. Every
-path is an honest "not yet" where it applies, never a silent wrong answer,
-never a crash a caller has to guard against separately.
+**Increment 3 adds ``SEEDED_EXPLICIT_COHORT``** (CHAOS-3688), following the
+trial's own construction (``trials/chaos_3619/graph_leg.py``'s
+``assemble_packet``) exactly: every mention resolves the same EXACT-only
+way, the first resolved candidate becomes the anchor subject, and
+:func:`~.cohort.build_cohort` walks two hops out from it over live edges
+(:func:`~.subject_resolution._live_cohort_edges`) to discover peers — never
+a cohort built directly from "the other named mentions".
+
+**Increment 4 (this revision) completes CHAOS-3689: ``SUBJECTLESS_COHORT_
+DISCOVERY``.** The request already carries the one production-classified
+signal this mode needs beyond ``(intent_id, cardinality)`` —
+``request.cohort_discovery_family: CohortDiscoveryFamily`` — never derived
+here (mirrors every other classification signal this module reads rather
+than computes). :data:`_COHORT_DISCOVERY_QUESTION_FAMILY` is the closed,
+exhaustively-tested 2-entry table from that wire vocabulary onto
+:class:`~dev_health_ops.api.dev.investigation_contract.QuestionFamilyID`,
+the vocabulary :func:`~.cohort_discovery.discover_cohort` actually speaks —
+a plain dict subscript with no default branch, so a
+``CohortDiscoveryFamily`` value this table does not cover raises rather
+than silently guessing a family.
+
+Following the trial's own second entry mode
+(``trials/chaos_3619/graph_leg.py``'s ``discover_cohort_for``/
+``assemble_cohort_packet``) exactly: :func:`~.live_snapshot.
+_live_graph_snapshot` (CHAOS-3689's adapter PR) supplies the live
+``nodes``/``edges`` :func:`~.cohort_discovery.discover_cohort` — reused
+AS-IS, unmodified — needs; the discovered cohort's own members (canonical-
+id order, the same non-ranking discipline as the trial) become the
+traversal seeds, never a single anchor subject, because there is none.
+Like ``SEEDED_EXPLICIT_COHORT``, this mode attributes no drivers — a scope-
+enumerated cohort has no subject for ``discover_drivers`` to explain, the
+same scope boundary the trial itself already drew and documented.
 """
 
 from __future__ import annotations
@@ -58,15 +78,21 @@ from dev_health_ops.api.dev.contracts_v2.base import (
 )
 from dev_health_ops.api.dev.evidence_service import EvidenceReferenceSigner
 from dev_health_ops.api.dev.graph_investigation_query import (
+    CohortDiscoveryFamily,
     GraphInvestigationQuery,
     GraphInvestigationRequest,
     GraphQueryOutcome,
     GraphQueryResult,
 )
-from dev_health_ops.api.dev.investigation_contract import ComparisonShape
+from dev_health_ops.api.dev.investigation_contract import (
+    ComparisonShape,
+    QuestionFamilyID,
+)
 
 from .cohort import build_cohort
+from .cohort_discovery import discover_cohort
 from .flags import graph_read_enabled
+from .live_snapshot import _live_graph_snapshot
 from .packet_builder import (
     ProductionJobContext,
     build_production_packet,
@@ -89,6 +115,35 @@ __all__ = [
     "ProductionGraphInvestigationQuery",
     "mechanism_for",
 ]
+
+#: CHAOS-3689's closed, exhaustively-tested table from the wire's
+#: classification vocabulary onto the one ``discover_cohort`` actually
+#: speaks. Exactly two entries, mirroring ``CohortDiscoveryFamily``'s own
+#: "there is no 'unclassifiable' member" docstring: every member of that
+#: enum must appear here, and ``test_chaos_3689_query_service.py`` asserts
+#: it against ``CohortDiscoveryFamily.__members__`` directly, not against a
+#: hand-copied list that could drift.
+#:
+#: ``TEAM_PRESSURE`` maps to ``PRESSURE_SIGNALS`` rather than
+#: ``STRUGGLING_TEAMS`` -- both are TEAM-kind, ``DISCOVERED_COHORT``-
+#: eligible families, and ``cohort_discovery.FAMILY_PRESSURE_METRICS``'s own
+#: comment says the two "share one metric set... a reader who asked either
+#: would expect the same evidence to count", so the choice is behaviour-
+#: equivalent either way. ``PRESSURE_SIGNALS`` was picked for the closer
+#: name match to the wire classifier itself, not for any behavioural
+#: reason.
+_COHORT_DISCOVERY_QUESTION_FAMILY: dict[CohortDiscoveryFamily, QuestionFamilyID] = {
+    CohortDiscoveryFamily.TEAM_PRESSURE: QuestionFamilyID.PRESSURE_SIGNALS,
+    CohortDiscoveryFamily.PROJECT_CAPACITY: QuestionFamilyID.PROJECT_CAPACITY,
+}
+
+#: The traversal seed cap for a discovered cohort's readout, mirroring
+#: ``trials/chaos_3619/graph_leg.py``'s ``MAX_COHORT_SEEDS`` exactly (same
+#: reasoning: "read the neighbourhood of every entity in the tenant" is the
+#: sweep the contract refuses, so a cohort larger than this is read
+#: partially -- and that is disclosed by the packet's own truncation
+#: machinery, not silently).
+_MAX_COHORT_SEEDS = 12
 
 
 class GraphMechanism(StrEnum):
@@ -348,18 +403,17 @@ class ProductionGraphInvestigationQuery:
                 return await self._complete_seeded_explicit_cohort(
                     request, store, watermark
                 )
-            # SUBJECTLESS_COHORT_DISCOVERY (CHAOS-3689): still needs
-            # cohort_discovery.discover_cohort wired in -- a separate,
-            # tracked follow-up, not bundled here. Naming the mechanism
-            # rather than a bare "not implemented" is what makes this
-            # diagnostic actionable.
-            return GraphQueryResult(
-                outcome=GraphQueryOutcome.PROVIDER_FAILURE,
-                diagnostic=_diagnostic(
-                    "execution",
-                    f"mechanism {mechanism.value} selected; packet "
-                    "assembly for this mechanism is a tracked follow-up",
-                ),
+            # The only remaining member: GraphMechanism.UNSUPPORTED already
+            # returned above, and SEEDED_SINGULAR_SUBJECT/SEEDED_EXPLICIT_
+            # COHORT are handled above this. Explicit rather than an
+            # unconditional fall-through, so a fifth mechanism added later
+            # fails loudly here instead of silently routing to this path.
+            if mechanism is GraphMechanism.SUBJECTLESS_COHORT_DISCOVERY:
+                return await self._complete_subjectless_cohort_discovery(
+                    request, store, watermark
+                )
+            raise AssertionError(  # pragma: no cover - exhaustiveness guard
+                f"unreachable: mechanism {mechanism!r} has no dispatch arm"
             )
         except asyncio.CancelledError:
             return GraphQueryResult(
@@ -541,6 +595,124 @@ class ProductionGraphInvestigationQuery:
                 diagnostic=_diagnostic(
                     "execution",
                     f"mechanism {GraphMechanism.SEEDED_EXPLICIT_COHORT.value}: "
+                    f"{type(exc).__name__}",
+                ),
+            )
+        return GraphQueryResult(outcome=GraphQueryOutcome.COMPLETED, packet=packet)
+
+    async def _complete_subjectless_cohort_discovery(
+        self,
+        request: GraphInvestigationRequest,
+        store: _WatermarkStore,
+        watermark: IndexWatermark,
+    ) -> GraphQueryResult:
+        """``SUBJECTLESS_COHORT_DISCOVERY``'s COMPLETED path (CHAOS-3689).
+
+        The second entry mode: no mention, no seed, no anchor subject.
+        ``request.cohort_discovery_family`` is the one production-classified
+        signal this mode needs beyond ``(intent_id, cardinality)`` --
+        :data:`_COHORT_DISCOVERY_QUESTION_FAMILY` maps it onto the
+        ``QuestionFamilyID`` :func:`~.cohort_discovery.discover_cohort`
+        speaks, a plain dict subscript with no default: a family this table
+        does not cover is a bug in the table, not a runtime condition to
+        guess through, and ``KeyError`` is caught by the broad ``except``
+        below the same as any other unexpected failure.
+
+        :func:`~.live_snapshot._live_graph_snapshot` (CHAOS-3689's adapter
+        PR) supplies the live ``nodes``/``edges`` -- the first live caller
+        ``discover_cohort`` has ever had; every prior use was the trial's
+        own in-memory ``build_projection`` output.
+        ``discover_cohort`` itself is reused completely unmodified.
+
+        Following the trial's own second entry mode
+        (``trials/chaos_3619/graph_leg.py``'s ``discover_cohort_for``/
+        ``assemble_cohort_packet``) exactly: the discovered cohort's own
+        members, in canonical-id order (never a strength/relevance ranking
+        this arm does not own), become the traversal seeds, capped at
+        :data:`_MAX_COHORT_SEEDS` -- a cohort larger than that is read
+        partially, disclosed by the packet's own truncation machinery
+        rather than by an unbounded neighbourhood read. No drivers are
+        attributed, the same scope boundary ``SEEDED_EXPLICIT_COHORT``
+        already draws: a scope-enumerated cohort has no subject for
+        ``discover_drivers`` to explain.
+
+        An unsupported family (structurally unreachable given the closed
+        table above, but not assumed to be), no comparable cohort
+        (``discovery.is_comparable`` false -- too few members, or no shared
+        comparison dimension), or any other unexpected failure during
+        discovery or packet assembly all reach ``PROVIDER_FAILURE`` with a
+        diagnostic naming the mechanism -- an honest, explicit degradation,
+        never a guess and never an uncaught exception a caller would have
+        to guard against separately.
+        """
+
+        traversal_store = cast(_TraversalStore, store)
+        try:
+            question_family = _COHORT_DISCOVERY_QUESTION_FAMILY[
+                request.cohort_discovery_family
+            ]
+            nodes, edges = await _live_graph_snapshot(
+                traversal_store._driver, request.org_id, traversal_store.partition
+            )
+            discovery = discover_cohort(
+                question_family=question_family,
+                nodes=nodes,
+                edges=edges,
+                authorized_entity_ids=request.authorized_entity_ids,
+                as_of=request.window_end,
+            )
+            if not discovery.is_comparable:
+                return GraphQueryResult(
+                    outcome=GraphQueryOutcome.PROVIDER_FAILURE,
+                    diagnostic=_diagnostic(
+                        "execution",
+                        f"mechanism "
+                        f"{GraphMechanism.SUBJECTLESS_COHORT_DISCOVERY.value}: "
+                        "the discovered cohort has too few members or no "
+                        "shared comparison dimension",
+                    ),
+                )
+            # Sorted explicitly here rather than trusted from
+            # discover_cohort's own output order: discover_cohort DOES
+            # already iterate candidates in canonical-id order internally,
+            # but this wiring's own "never a strength/relevance ranking"
+            # guarantee should not depend on a caller reading that far into
+            # a function this PR reuses unmodified -- an implementation
+            # detail there is free to change without this seam silently
+            # inheriting a different, unintended seed order.
+            seeds = sorted(
+                member.canonical_id for member in discovery.proposal.members
+            )[:_MAX_COHORT_SEEDS]
+            reader = self._reader_factory(traversal_store)
+            readout = await reader.neighbourhood(
+                org_id=request.org_id,
+                seed_canonical_ids=seeds,
+                authorized_entity_ids=tuple(request.authorized_entity_ids),
+            )
+            packet = build_production_packet(
+                readout=readout,
+                job=ProductionJobContext(
+                    job_id=f"graph_query_{request.run_id}",
+                    intent_id=request.intent_id,
+                    run_id=request.run_id,
+                    job_statement=_job_statement(request.intent_id),
+                    comparison_shape=ComparisonShape.DISCOVERED_COHORT,
+                    window_start=request.window_start,
+                    window_end=request.window_end,
+                ),
+                cohort=discovery.proposal,
+                watermark=watermark,
+                signer=self._signer_factory(),
+                produced_at=datetime.now(UTC),
+                staleness_tolerance=self._staleness_tolerance,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return GraphQueryResult(
+                outcome=GraphQueryOutcome.PROVIDER_FAILURE,
+                diagnostic=_diagnostic(
+                    "execution",
+                    f"mechanism "
+                    f"{GraphMechanism.SUBJECTLESS_COHORT_DISCOVERY.value}: "
                     f"{type(exc).__name__}",
                 ),
             )

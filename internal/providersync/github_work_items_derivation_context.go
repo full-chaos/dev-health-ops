@@ -146,8 +146,25 @@ func loadGitHubWorkItemDerivationContext(
 	source githubWorkItemDerivationContextSource,
 	asOf time.Time,
 ) (githubWorkItemDerivationContext, error) {
+	return loadWorkItemDerivationContextForProvider(
+		ctx, "github", claim, rows, source, asOf,
+	)
+}
+
+// loadWorkItemDerivationContextForProvider is the provider-neutral context
+// loader shared by the GitHub and GitLab work-item families. The source facts
+// are already provider-keyed, so the resolver can apply the same canonical
+// precedence without copying or weakening the team-attribution contract.
+func loadWorkItemDerivationContextForProvider(
+	ctx context.Context,
+	provider string,
+	claim Claim,
+	rows githubWorkItemRows,
+	source githubWorkItemDerivationContextSource,
+	asOf time.Time,
+) (githubWorkItemDerivationContext, error) {
 	if ctx == nil || source == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "work-items" || asOf.IsZero() {
+		claim.Provider != provider || claim.Dataset != "work-items" || asOf.IsZero() {
 		return githubWorkItemDerivationContext{}, ErrInvalidConfiguration
 	}
 	for _, row := range rows.WorkItems {
@@ -774,7 +791,8 @@ func (source githubWorkItemClickHouseDerivationContextSource) Load(
 	request githubWorkItemDerivationLoadRequest,
 ) (githubWorkItemDerivationFacts, error) {
 	if ctx == nil || source.Conn == nil || source.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != "work-items" || request.AsOf.IsZero() {
+		(claim.Provider != "github" && claim.Provider != "gitlab") ||
+		claim.Dataset != "work-items" || request.AsOf.IsZero() {
 		return githubWorkItemDerivationFacts{}, ErrInvalidConfiguration
 	}
 	if err := source.Lease.Assert(ctx); err != nil {

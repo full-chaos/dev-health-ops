@@ -167,7 +167,24 @@ func buildGitHubWorkItemMetricTriplet(
 	computedAt time.Time,
 	derived githubWorkItemDerivationContext,
 ) (githubWorkItemMetricTriplet, error) {
-	if claim.Validate() != nil || claim.Provider != "github" ||
+	return buildWorkItemMetricTripletForProvider(
+		"github", claim, rows, day, computedAt, derived,
+	)
+}
+
+// buildWorkItemMetricTripletForProvider keeps the metric computation identical
+// across providers while retaining the provider value on every schema row.
+// GitLab uses the same canonical WorkItem fields and resolver, but must never
+// be made to look like GitHub merely to reuse this arithmetic.
+func buildWorkItemMetricTripletForProvider(
+	provider string,
+	claim Claim,
+	rows githubWorkItemRows,
+	day time.Time,
+	computedAt time.Time,
+	derived githubWorkItemDerivationContext,
+) (githubWorkItemMetricTriplet, error) {
+	if claim.Validate() != nil || claim.Provider != provider ||
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
 		return githubWorkItemMetricTriplet{}, ErrInvalidConfiguration
 	}

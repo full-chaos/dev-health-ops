@@ -151,7 +151,24 @@ func buildGitHubWorkItemDerivedSurfaces(
 	computedAt time.Time,
 	derived githubWorkItemDerivationContext,
 ) (githubWorkItemDerivedSurfaces, error) {
-	if claim.Validate() != nil || claim.Provider != "github" ||
+	return buildWorkItemDerivedSurfacesForProvider(
+		"github", claim, rows, day, computedAt, derived,
+	)
+}
+
+// buildWorkItemDerivedSurfacesForProvider is the provider-neutral implementation
+// for the three resolver-backed daily surfaces. It deliberately leaves the
+// row's provider untouched; the source provider is a tenancy boundary, not a
+// cosmetic label that may be rewritten for code reuse.
+func buildWorkItemDerivedSurfacesForProvider(
+	provider string,
+	claim Claim,
+	rows githubWorkItemRows,
+	day time.Time,
+	computedAt time.Time,
+	derived githubWorkItemDerivationContext,
+) (githubWorkItemDerivedSurfaces, error) {
+	if claim.Validate() != nil || claim.Provider != provider ||
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
 		return githubWorkItemDerivedSurfaces{}, ErrInvalidConfiguration
 	}

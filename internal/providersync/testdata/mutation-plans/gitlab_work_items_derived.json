@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "name": "GitLab canonical work-items derived destinations (CHAOS-3733)",
+  "build": ["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "This provider-local plan proves the typed nine-destination compute/effect boundary, explicit AI producer gap, watermark withholding, canonical effect composition, and GitLab claim fencing. The migration-backed ClickHouse suite separately proves real tenant/replay/lease readback. It deliberately excludes registry, matrix, config, deployment, scheduler, and worker activation wiring.",
+  "mutations": [
+    {
+      "id": "D1-deriver-provider-guard",
+      "file": "internal/providersync/gitlab_work_item_derived.go",
+      "find": "claim.Provider != \"gitlab\" || claim.Dataset != \"work-items\" || normalizedAt.IsZero()",
+      "replace": "claim.Provider == \"gitlab\" || claim.Dataset != \"work-items\" || normalizedAt.IsZero()",
+      "rationale": "the compute boundary must reject a non-GitLab claim rather than derive rows for another provider",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemDerivedResultIsTypedAndWithholdsAIWatermark$", "./internal/providersync/"]]
+    },
+    {
+      "id": "D2-deriver-dataset-guard",
+      "file": "internal/providersync/gitlab_work_item_derived.go",
+      "find": "claim.Provider != \"gitlab\" || claim.Dataset != \"work-items\" || normalizedAt.IsZero()",
+      "replace": "claim.Provider != \"gitlab\" || claim.Dataset == \"work-items\" || normalizedAt.IsZero()",
+      "rationale": "the compute boundary must reject a GitLab claim for a non-work-items dataset",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemDerivedResultIsTypedAndWithholdsAIWatermark$", "./internal/providersync/"]]
+    },
+    {
+      "id": "D3-deriver-watermark-gap",
+      "file": "internal/providersync/gitlab_work_item_derived.go",
+      "find": "Watermark:                      nil,",
+      "replace": "Watermark:                      &normalizedAt,",
+      "rationale": "the explicit AI producer gap must hold the derived watermark rather than acknowledging an incomplete family",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemDerivedResultIsTypedAndWithholdsAIWatermark$", "./internal/providersync/"]]
+    },
+    {
+      "id": "D4-typed-ai-gap-name",
+      "file": "internal/providersync/gitlab_work_item_derived.go",
+      "find": "Destination:           \"ai_attribution\",",
+      "replace": "Destination:           \"work_item_metrics_daily\",",
+      "rationale": "the gap must identify the missing authoritative AI destination, not relabel a landed typed row family",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemDerivedResultIsTypedAndWithholdsAIWatermark$", "./internal/providersync/"]]
+    },
+    {
+      "id": "D5-route-appends-derived-effects",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "effects = append(effects, derivedEffects...)",
+      "replace": "effects = append(effects, derivedEffects[:0]...)",
+      "rationale": "the configured route must carry every typed derived effect into the completion batch",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteComposesNineDerivedEffectsAndLeavesAIGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "D6-route-reports-implemented-destinations",
+      "file": "internal/providersync/gitlab_work_items_route.go",
+      "find": "derivedImplemented = derived.producedDestinations()",
+      "replace": "derivedImplemented = nil",
+      "rationale": "the typed route result must report all nine semantic destinations it actually emitted",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteComposesNineDerivedEffectsAndLeavesAIGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "D7-effect-identity-provider-fence",
+      "file": "internal/providersync/gitlab_work_item_derived.go",
+      "find": "claim.Validate() != nil || claim.Provider != \"gitlab\" ||",
+      "replace": "claim.Validate() != nil || claim.Provider == \"gitlab\" ||",
+      "rationale": "the effect identity must only admit canonical GitLab work-items claims",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemDerivedIdentityRejectsRawAndAIDestinations$", "./internal/providersync/"]]
+    },
+    {
+      "id": "D8-effect-destination-switch",
+      "file": "internal/providersync/gitlab_work_item_derived.go",
+      "find": "effect, err = buildGitLabTypedDerivedEffect(destination, rows.WorkItemMetricsDaily)",
+      "replace": "effect, err = buildGitLabTypedDerivedEffect(destination, rows.WorkItemUserMetricsDaily)",
+      "rationale": "the typed effect builder must retain the canonical destination-to-row projection rather than silently returning an empty or mislabelled effect",
+      "proof": [["env", "GOCACHE=/tmp/gitlab-derived-go-cache", "go", "test", "-count=1", "-run", "^TestBuildGitLabWorkItemDerivedEffectsIsCanonicalAndExcludesAIGap$", "./internal/providersync/"]]
+    }
+  ]
+}

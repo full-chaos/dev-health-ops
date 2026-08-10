@@ -23,9 +23,9 @@ const (
 )
 
 // gitLabWorkItemRawDestinations are the six raw facts emitted by the Python
-// GitLabProvider batch. They are deliberately kept separate from the ten
-// canonical derived destinations; emitting empty derived rows would claim a
-// capability that this slice does not implement.
+// GitLabProvider batch. They are deliberately kept separate from the canonical
+// derived destinations; the unconfigured/raw-only route does not manufacture
+// empty effects for a destination whose producer is not active.
 var gitLabWorkItemRawDestinations = []string{
 	"work_items",
 	"work_item_transitions",
@@ -35,10 +35,11 @@ var gitLabWorkItemRawDestinations = []string{
 	"sprints",
 }
 
-// gitLabWorkItemDerivedGap is the honest remainder of the 16-destination
-// canonical work-item family. AI attribution is a direct Python destination,
-// but it is outside this six-fact slice; the other nine entries are computed
-// metric/attribution surfaces. No empty effect is manufactured for any entry.
+// gitLabWorkItemDerivedGap is the raw-only route's honest remainder of the
+// 16-destination canonical work-item family. Once the typed deriver is injected
+// at the processor boundary, its nine concrete destinations are removed and
+// only the AI producer gap remains. No empty effect is manufactured for that
+// missing producer.
 var gitLabWorkItemDerivedGap = []string{
 	"ai_attribution",
 	"estimate_coverage_metrics_daily",
@@ -73,8 +74,15 @@ type GitLabWorkItemsResult struct {
 	InteractionsSynced               int      `json:"interactions_synced"`
 	SprintsSynced                    int      `json:"sprints_synced"`
 	RawDestinations                  []string `json:"raw_destinations"`
+	DerivedDestinationsImplemented   []string `json:"derived_destinations_implemented"`
 	DerivedDestinationsUnimplemented []string `json:"derived_destinations_unimplemented"`
 	WatermarkHeldForDerivedGap       bool     `json:"watermark_held_for_derived_gap"`
+}
+
+// gitlabWorkItemsDeriver is injected at the processor boundary. It is not a
+// registry/configuration seam: activation remains outside this provider slice.
+type gitlabWorkItemsDeriver interface {
+	Derive(context.Context, Claim, gitlabWorkItemRows, time.Time) (GitLabWorkItemDerivedRows, error)
 }
 
 // GitLabWorkItemsRouteHandler is the canonical provider-only route. It mirrors
@@ -96,6 +104,7 @@ type GitLabWorkItemsRouteHandler struct {
 	FetchLinks      *bool
 	FetchMilestones *bool
 	IncludeMRs      *bool
+	Derived         gitlabWorkItemsDeriver
 }
 
 func gitLabWorkItemsFlag(value *bool) bool { return value == nil || *value }
@@ -351,12 +360,37 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	derivedUnimplemented := append([]string(nil), gitLabWorkItemDerivedGap...)
+	derivedImplemented := []string{}
+	derivedRecords := 0
+	if handler.Derived != nil {
+		derived, deriveErr := handler.Derived.Derive(ctx, claim, rows, normalizedAt)
+		if deriveErr != nil {
+			return CompleteRouteBatch{}, deriveErr
+		}
+		derivedEffects, effectErr := BuildGitLabWorkItemDerivedEffects(derived.EffectRows())
+		if effectErr != nil {
+			return CompleteRouteBatch{}, effectErr
+		}
+		effects = append(effects, derivedEffects...)
+		derivedImplemented = derived.producedDestinations()
+		derivedUnimplemented = make([]string, 0, len(derived.Gaps))
+		for _, gap := range derived.Gaps {
+			derivedUnimplemented = append(derivedUnimplemented, gap.Destination)
+		}
+		derivedRecords = len(derived.EstimateCoverageMetricsDaily) +
+			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
+			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
+			len(derived.WorkItemMetricsDaily) + len(derived.WorkItemStateDurationsDaily) +
+			len(derived.WorkItemTeamAttributions) + len(derived.WorkItemUserMetricsDaily)
+	}
 	summary := GitLabWorkItemsResult{
 		WorkItemsSynced: len(rows.WorkItems), TransitionsSynced: len(rows.StatusTransitions),
 		DependenciesSynced: len(rows.Dependencies), ReopenEventsSynced: len(rows.ReopenEvents),
 		InteractionsSynced: len(rows.Interactions), SprintsSynced: len(rows.Sprints),
 		RawDestinations:                  append([]string(nil), gitLabWorkItemRawDestinations...),
-		DerivedDestinationsUnimplemented: append([]string(nil), gitLabWorkItemDerivedGap...),
+		DerivedDestinationsImplemented:   append([]string(nil), derivedImplemented...),
+		DerivedDestinationsUnimplemented: derivedUnimplemented,
 		WatermarkHeldForDerivedGap:       true,
 	}
 	result := map[string]any{
@@ -367,7 +401,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"interactions_synced":                len(rows.Interactions),
 		"sprints_synced":                     len(rows.Sprints),
 		"raw_destinations":                   append([]string(nil), gitLabWorkItemRawDestinations...),
-		"derived_destinations_unimplemented": append([]string(nil), gitLabWorkItemDerivedGap...),
+		"derived_destinations_implemented":   derivedImplemented,
+		"derived_destinations_unimplemented": derivedUnimplemented,
 		"watermark_held_for_derived_gap":     true,
 		"gitlab_work_items":                  summary,
 	}
@@ -376,7 +411,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
 			Pages: pages, Records: len(rows.WorkItems) + len(rows.StatusTransitions) +
-				len(rows.Dependencies) + len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints),
+				len(rows.Dependencies) + len(rows.ReopenEvents) + len(rows.Interactions) +
+				len(rows.Sprints) + derivedRecords,
 		},
 	}, nil
 }

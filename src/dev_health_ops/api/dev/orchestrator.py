@@ -17,7 +17,7 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
 import annotated_types
@@ -42,6 +42,7 @@ from dev_health_ops.llm.agent.errors import (
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL,
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
     ASK_DEV_QUA_COMMIT_TOTAL,
@@ -105,7 +106,11 @@ from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
 from .evidence_service import EvidenceService
-from .graph_investigation_query import GraphInvestigationQuery
+from .graph_investigation_query import (
+    GraphInvestigationQuery,
+    GraphInvestigationRequest,
+    GraphQueryOutcome,
+)
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .investigation_shadow import (
@@ -128,6 +133,7 @@ from .no_match_terminal import (
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import (
+    GRAPH_ROUTED_QUESTION_INTENTS,
     LEGACY_ONLY_QUESTION_INTENTS,
     TERMINAL_STATE_BY_OUTCOME,
     project_preflight_error,
@@ -2707,6 +2713,11 @@ class DevOrchestrator:
                 if (
                     plan is None
                     and intent.intent_id not in LEGACY_ONLY_QUESTION_INTENTS
+                    # CHAOS-3502: also silent for DISCOVERED_COHORT -- it is
+                    # equally accounted for, just routed to the graph-assisted
+                    # seam below rather than the legacy loop. See
+                    # GRAPH_ROUTED_QUESTION_INTENTS's own docstring.
+                    and intent.intent_id not in GRAPH_ROUTED_QUESTION_INTENTS
                 ):
                     logger.warning(
                         "ask_dev.orchestrator.plan_registry_gap",
@@ -2797,6 +2808,92 @@ class DevOrchestrator:
                             ref.display_label
                             for ref in portfolio_subject_set.committed_entity_refs
                         )
+
+            # CHAOS-3502 (routing-branch design, signed off on CHAOS-3660):
+            # the graph-assisted seam. A sibling of the plan-governed block
+            # above, not nested inside it -- DISCOVERED_COHORT never has a
+            # plan (plan_eligible is always False for it by construction,
+            # since PLAN_ID_BY_INTENT gives it a compat-only token,
+            # CHAOS-3652), so gating this on self._plan_executor being
+            # wired would tie graph routing to an unrelated collaborator.
+            # Both organization opt-in (self._evidence_service/
+            # self._graph_investigation_query only get constructed when the
+            # org feature is on, production_runtime.py's job) and the
+            # runtime kill switch are required -- independent gates, same
+            # shape as every other flag pair in this file.
+            if (
+                preflight_result is not None
+                and preflight_result.interpretation.intent.intent_id
+                is QuestionIntentID.DISCOVERED_COHORT
+                and self._graph_investigation_query is not None
+                and self._evidence_service is not None
+                and graph_routing_runtime_enabled()
+            ):
+                graph_deadline = datetime.now(UTC) + timedelta(
+                    seconds=max(0.0, remaining())
+                )
+                graph_request = GraphInvestigationRequest(
+                    org_id=org_id,
+                    run_id=run_id,
+                    intent_id=preflight_result.interpretation.intent.intent_id,
+                    cardinality=preflight_result.interpretation.intent.cardinality,
+                    mentions=preflight_result.interpretation.mentions,
+                    question_text=request.question,
+                    # CHAOS-3502 known limitation, not silently assumed: no
+                    # code anywhere in this codebase yet derives "every
+                    # entity this principal may see in this org" --
+                    # graph_arm.readback.derive_authorized_entity_ids raises
+                    # AuthorizationDerivationNotImplementedError for the
+                    # identical reason. Empty is the SAFE default here (the
+                    # graph route refuses everything rather than
+                    # over-authorizing), not yet a USEFUL one -- real
+                    # derivation is separate, explicit follow-up work, not
+                    # guessed at in this seam.
+                    authorized_entity_ids=frozenset(),
+                    deadline=graph_deadline,
+                )
+                graph_result = await self._graph_investigation_query.investigate(
+                    graph_request
+                )
+                # Content-safe observability (beta gate 10): the label is
+                # the closed GraphQueryOutcome vocabulary, never question or
+                # entity text, so both the counter and the log are safe to
+                # ship as-is.
+                ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL.labels(
+                    outcome=graph_result.outcome.value
+                ).inc()
+                logger.info(
+                    "ask_dev.orchestrator.graph_routing_outcome",
+                    extra={"run_id": run_id, "outcome": graph_result.outcome.value},
+                )
+                if graph_result.outcome is GraphQueryOutcome.CANCELLED:
+                    # The RUN is cancelled, not just this one call -- unlike
+                    # every other outcome below, this does not fall through
+                    # to the legacy loop (see the CHAOS-3660 fallback table).
+                    return await finish(
+                        RunState.CANCELLED,
+                        error=error("cancelled", "The request was cancelled."),
+                    )
+                if graph_result.outcome is GraphQueryOutcome.COMPLETED:
+                    # CHAOS-3502: assembly (candidate extraction -> canonical
+                    # admission -> _graph_grounded_answer) is not yet wired
+                    # here -- it depends on Lane A's packet refactor and
+                    # Lane C's canonical enrichment type, both still pending
+                    # on CHAOS-3660 as of this landing. The graph result is
+                    # never silently discarded: the outcome counter/log
+                    # above already recorded a real COMPLETED call, distinct
+                    # from every failure/unavailable reason below.
+                    logger.info(
+                        "ask_dev.orchestrator.graph_routing_completed_assembly_deferred",
+                        extra={"run_id": run_id},
+                    )
+                # Every other outcome -- DISABLED, UNAVAILABLE, STALE,
+                # PROVIDER_FAILURE, DEADLINE_EXCEEDED, and
+                # COMPLETED-with-assembly-deferred immediately above -- falls
+                # through to the legacy loop below. Per the Wave 3.2 handoff
+                # §4: graph outage, lag, or unavailability must never break
+                # existing Ask Dev behavior, and this question's legacy
+                # answer is a real, already-working path, not a regression.
 
             for round_index in range(self._limits.model_rounds):
                 del round_index

@@ -50,6 +50,7 @@ from .question_interpreter import INTERPRETER_VERSION
 
 __all__ = [
     "CLARIFICATION_COPY",
+    "GRAPH_ROUTED_QUESTION_INTENTS",
     "LEGACY_ONLY_QUESTION_INTENTS",
     "NOT_FOUND_CLOSE_MATCHES_KEY",
     "PLAN_ID_BY_INTENT",
@@ -120,6 +121,24 @@ if _unregistered:
 #: is a deliberate, reviewed edit here, never implicit.
 LEGACY_ONLY_QUESTION_INTENTS: frozenset[QuestionIntentID] = frozenset(
     {QuestionIntentID.BOUNDED_INVESTIGATION}
+)
+
+#: CHAOS-3502: intents that are correctly, permanently never plan-governed
+#: for the SAME structural reason as ``LEGACY_ONLY_QUESTION_INTENTS`` above
+#: (their ``PLAN_ID_BY_INTENT`` entry is a compat-only token, no
+#: ``DevInvestigationPlan`` exists or should exist for them) -- but that do
+#: NOT fall through to the legacy loop, because ``orchestrator.run()`` routes
+#: them to the graph-assisted seam instead (CHAOS-3660 routing-branch design,
+#: signed off). Kept as a THIRD, distinct set rather than folded into
+#: ``LEGACY_ONLY_QUESTION_INTENTS`` -- that set's own name and docstring both
+#: assert "falling through to the legacy loop is the intended behavior",
+#: which stops being true the moment a real destination exists. An intent in
+#: this set still logs no ``plan_registry_gap`` (checked in the same
+#: ``not in`` condition as the legacy set at the ``orchestrator.py`` call
+#: site), because it is equally accounted for -- just accounted for
+#: elsewhere.
+GRAPH_ROUTED_QUESTION_INTENTS: frozenset[QuestionIntentID] = frozenset(
+    {QuestionIntentID.DISCOVERED_COHORT}
 )
 
 #: Per-mention resolution outcome to the public v2 outcome. ``EXACT_MATCH`` is

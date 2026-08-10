@@ -602,6 +602,8 @@ async def run_preflight_orchestrator(
     qua_shadow: Any = None,
     investigation_shadow: Any = None,
     investigation_packet_producer: Any = None,
+    graph_investigation_query: Any = None,
+    evidence_service: Any = None,
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
@@ -623,6 +625,14 @@ async def run_preflight_orchestrator(
     ``PersistenceRunRecorder`` against a seeded database and assert on the
     actual rows a live run leaves behind, not a fake recorder's captured
     call list.
+
+    ``graph_investigation_query``/``evidence_service`` default to ``None``
+    (flag-off, same as production when the org feature is off) --
+    CHAOS-3502's routing-branch suite passes a real
+    ``FakeGraphInvestigationQuery`` plus a minimal ``EvidenceService`` here
+    so a genuine ``DISCOVERED_COHORT`` ``preflight_result`` (only the real
+    interpreter/preflight pipeline produces one) drives the actual routing
+    branch in ``DevOrchestrator.run()``, not a construction-only smoke test.
     """
 
     catalog = SeededCatalog(entities, fail_search=fail_search)
@@ -670,6 +680,8 @@ async def run_preflight_orchestrator(
         qua_shadow=qua_shadow,
         investigation_shadow=investigation_shadow,
         investigation_packet_producer=investigation_packet_producer,
+        graph_investigation_query=graph_investigation_query,
+        evidence_service=evidence_service,
     )
     result = await orchestrator.run(
         request=request,

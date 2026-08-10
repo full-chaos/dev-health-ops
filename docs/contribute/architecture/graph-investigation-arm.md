@@ -312,6 +312,106 @@ Decision supersession and ACR prior-attempt chains are ingested as explicit
 is current" and "what was tried before" are graph reads rather than
 heuristics over timestamps.
 
+## Semantic and conversational subject resolution: a second leg
+
+Everything above resolves a subject by **stored text**:
+`discovery.search_candidates` does exact canonical-id lookup, exact
+display-name lookup, the curated alias registry, and whole-token containment
+— all deterministic, all offline, all measured against
+`DeterministicEmbedder`'s hash vectors, which carry no similarity. That leg
+is the pinned baseline (`trials/chaos_3619`) and this section does not touch
+it.
+
+`semantic_retrieval.py` is a **second, independent leg**: Graphiti's own
+BM25 full-text search and cosine similarity search over a live store, fused
+with Graphiti's own Reciprocal Rank Fusion, using a real embedding model
+(`CloudEmbedder`, never the deterministic one — `NonSemanticEmbedderError`
+refuses loudly rather than let a hash-vector run wear a "semantic" heading).
+It exists to resolve references curated aliases cannot scale to cover —
+colloquial phrasing, evidence-led references ("the project that kept
+cycling in review"), and conversational pronouns — while preferring a safe
+refusal or a bounded clarification over a confident wrong subject.
+
+**The building blocks, each independently unit-tested:**
+
+- **`retrieve_candidates`** — the hybrid BM25+cosine query itself. Authorization
+  is applied before ranking (a restricted entity occupying a rank, a
+  clarification slot, or a truncation count is a disclosure even if its id
+  never appears), and every returned node's `group_id` is re-asserted on
+  the way out, not just filtered on the way in.
+- **The observation→entity hop** — when retrieval finds the right
+  *evidence* (an observation whose stored text matches) rather than the
+  entity itself, the hop resolves the authorized subject that observation
+  names via `cf_subject_canonical_ids`, ranked by the observation's own
+  fused score. Direct hits are never duplicated through the hop; a subject
+  found both ways keeps only the stronger, direct claim.
+- **`assess_disposition`** — the refusal/clarification policy. A ranked list
+  alone is not a safe answer: a nonexistent entity or an unresolved
+  reference reliably produces a confident-looking cosine ranking with
+  nothing lexical underneath it. Three signals, checked in order — lexical
+  grounding (does BM25 support anything?), rank-1/rank-2 margin (is there a
+  genuine leader?), tie count (do several candidates cluster near the
+  leader?) — decide `PROPOSE` (one candidate), `CLARIFY` (a bounded tied
+  set), or `REFUSE` (nothing). The thresholds (`DEFAULT_MARGIN_RATIO`,
+  `DEFAULT_TIE_RATIO`, `DEFAULT_CLARIFICATION_LIMIT`) are derived from RRF's
+  own score-decay shape and validated against synthetic, held-out cases —
+  never tuned to this arm's own frozen corpus.
+- **`resolve_conversational_reference`** — a deterministic, non-retrieval
+  resolution for a query that is *confidently nothing but* a prior-turn
+  reference ("what about it?", "how's that one doing?"). Deliberately
+  narrow: any token beyond a closed deictic/question-scaffold vocabulary
+  falls through to the legs above instead. Both existence and authorization
+  are rechecked fresh against the current store and grant — a subject
+  resolved last turn is never carried forward as if nothing could have
+  changed.
+- **Document trust re-check** — a document-derived observation
+  (`cf_observation_kind == "document"`) must independently clear
+  `TRUSTED_ATTRIBUTION_LEVELS` in the hop, mirroring `drivers._is_trusted`.
+  The write side (`backend.to_graphiti_document_nodes`) only ever writes an
+  *approved* document, but that approval is a one-time, write-time gate;
+  this re-check bounds the window between a later withdrawal/redaction and
+  the next full reprojection sweep that would otherwise purge it.
+
+**Measured, not asserted.** `trials/chaos_3647` is the live trial: ingest
+under a real embedder, run every leg against eight named ambiguity
+questions, and record what each leg resolved, correctly or not.
+`trials/chaos_3647/results/regeneration-note.md` carries the full,
+dated, cited history of what changed the measured numbers and why each
+change was legitimate rather than drift — read it before trusting any
+number quoted from that artifact. Reproduce with:
+
+```
+CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389 \
+CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1 \
+CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED=1 \
+uv run python -m trials.chaos_3647.runner
+```
+
+Two things worth knowing before reading that artifact:
+
+- **The trial reports what a caller would actually receive, not the raw
+  ranking.** `trials/chaos_3647/legs.py::resolve_semantic` calls
+  `assess_disposition` and records only the disposition-gated result. An
+  earlier version of this trial called `retrieve_candidates` directly and
+  reported the full unbounded candidate list as the leg's answer — which
+  measured a policy that existed but was never exercised. If a
+  regeneration ever shows a case ranking dozens of candidates for a
+  nonexistent entity again, the harness has regressed, not the arm.
+- **The conversational-reference leg is a real, tested capability that this
+  particular trial's corpus cannot exercise.** `resolve_semantic_with_context`
+  (also in `legs.py`) is the seam a caller with real prior-turn state would
+  use, but none of the trial's eight questions are, by their own literal
+  text, a *pure* conversational reference under
+  `_is_pure_conversational_reference` — each carries real content beyond a
+  bare pronoun. Wiring it into the trial's own case loop would move zero
+  measured lines; widening the deictic vocabulary to fit this corpus would
+  be the corpus-specific tuning this whole arm's safety principles forbid.
+  The two `follows_case_id` cases (H04, H05) safely refusing rather than
+  resolving is therefore the correct terminal state for this corpus, not an
+  unfinished capability — see `resolve_semantic_with_context`'s own
+  docstring for the full reasoning, and treat a future flat delta on those
+  two cases as expected, not as evidence the capability regressed.
+
 ## Operational controls
 
 | Control | Where |

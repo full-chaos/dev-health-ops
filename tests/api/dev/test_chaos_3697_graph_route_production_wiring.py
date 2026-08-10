@@ -23,6 +23,10 @@ from dev_health_ops.api.dev import production_runtime
 from dev_health_ops.api.dev import runtime as runtime_module
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevMessageRequest
+from dev_health_ops.api.dev.graph_investigation_query import (
+    CohortDiscoveryFamily,
+    GraphAuthorizationScope,
+)
 from dev_health_ops.api.dev.graph_routing_policy import (
     CanonicalGraphRoutingEntitlementAuthorizer,
     GraphRoutingPolicyDeniedError,
@@ -279,7 +283,7 @@ async def _capture_orchestrator_construction(
     return captured
 
 
-#: The 18 keyword arguments runtime.py's DevOrchestrator(...) call site
+#: The 19 keyword arguments runtime.py's DevOrchestrator(...) call site
 #: passes. Used by the positive control below to prove the capturing harness
 #: genuinely observed the real construction seam.
 _KWARGS_RUNTIME_PY_ACTUALLY_PASSES = frozenset(
@@ -302,6 +306,7 @@ _KWARGS_RUNTIME_PY_ACTUALLY_PASSES = frozenset(
         "evidence_service",
         "canonical_enrichment",
         "graph_routing_entitlement",
+        "graph_authorization_resolver",
     }
 )
 
@@ -321,7 +326,7 @@ async def test_the_capturing_harness_genuinely_observes_a_real_construction(
     construction.
 
     This test asserts the harness actually captured a construction: the
-    exact 18 keyword names ``runtime.py`` passes, populated
+    exact 19 keyword names ``runtime.py`` passes, populated
     with real values (not just present-but-empty) -- ``registry`` is a
     genuine ``AskDevToolRegistry``, and ``provider`` is the exact
     ``_FakeProvider`` instance this test's own stub handed to
@@ -411,6 +416,11 @@ async def test_production_runtime_wires_the_graph_route_collaborators(
         captured["graph_routing_entitlement"]
         is bounded_runtime.graph_routing_entitlement
     )
+    assert captured["graph_authorization_resolver"] is not None
+    assert (
+        captured["graph_authorization_resolver"]
+        is bounded_runtime.graph_authorization_resolver
+    )
 
 
 @pytest.mark.asyncio
@@ -429,6 +439,7 @@ async def test_production_runtime_keeps_graph_collaborators_off_for_policy_off_o
     assert captured["evidence_service"] is None
     assert captured["canonical_enrichment"] is None
     assert captured["graph_routing_entitlement"] is None
+    assert captured["graph_authorization_resolver"] is None
 
 
 def test_graph_routing_runtime_flag_defaults_off_in_a_production_shaped_environment(
@@ -488,6 +499,25 @@ async def test_production_route_checks_persisted_graph_entitlement_before_query(
             )
 
         bounded_runtime = await _build_persisted_runtime(monkeypatch, session, org_id)
+
+        async def route_probe_scope(
+            requested_org_id: str,
+            requested_permission_fingerprint: str,
+            family: CohortDiscoveryFamily,
+            authorized_scope: Any,
+        ) -> GraphAuthorizationScope:
+            # This test isolates the persisted entitlement gate. The separate
+            # production-composition regression owns canonical ClickHouse
+            # candidate derivation; this route probe has no graph catalog.
+            return GraphAuthorizationScope(
+                organization_id=requested_org_id,
+                permission_fingerprint=requested_permission_fingerprint,
+                scope=authorized_scope,
+                cohort_discovery_family=family,
+                authorized_entity_ids=frozenset({"team-probe"}),
+            )
+
+        bounded_runtime.graph_authorization_resolver = route_probe_scope
         if not authorizer_wired:
             bounded_runtime.graph_routing_entitlement = None
         graph_probe = _GraphQueryProbe(bounded_runtime.graph_investigation_query)

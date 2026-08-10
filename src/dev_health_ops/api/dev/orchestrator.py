@@ -111,6 +111,9 @@ from .contracts_v2.subject import DevEntityRefV2
 from .evidence_service import EvidenceService
 from .graph_evidence_admission import extract_evidence_candidates
 from .graph_investigation_query import (
+    CohortDiscoveryFamily,
+    GraphAuthorizationResolver,
+    GraphAuthorizationScope,
     GraphInvestigationQuery,
     GraphInvestigationRequest,
     GraphQueryOutcome,
@@ -1194,6 +1197,7 @@ class DevOrchestrator:
         evidence_service: EvidenceService | None = None,
         canonical_enrichment: CanonicalEnrichmentAccessor | None = None,
         graph_routing_entitlement: GraphRoutingEntitlementAuthorizer | None = None,
+        graph_authorization_resolver: GraphAuthorizationResolver | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -1272,6 +1276,11 @@ class DevOrchestrator:
         # compatibility path; production composition never leaves it unset
         # when the graph collaborators are present.
         self._graph_routing_entitlement = graph_routing_entitlement
+        # The graph route may only receive a complete, server-owned candidate
+        # envelope derived from the canonical tenant catalog.  ``None`` is a
+        # fail-closed compatibility state for direct callers that have not
+        # supplied this production composition seam.
+        self._graph_authorization_resolver = graph_authorization_resolver
         self._composer = PromptComposer(registry)
 
     async def _graph_route_is_entitled(self, *, org_id: str) -> bool:
@@ -1291,6 +1300,51 @@ class DevOrchestrator:
             # entered.
             return False
         return True
+
+    async def _graph_authorization_scope(
+        self,
+        *,
+        org_id: str,
+        permission_fingerprint: str,
+        cohort_discovery_family: CohortDiscoveryFamily,
+        authorized_scope: DevScope,
+    ) -> GraphAuthorizationScope | None:
+        """Resolve a complete server-owned graph candidate envelope.
+
+        A missing resolver, catalog failure, incomplete page, empty roster, or
+        mismatched envelope returns no graph candidate set. The caller
+        terminalizes that state rather than allowing an otherwise eligible
+        subjectless cohort question to fall through to unrestricted legacy
+        execution. Graph data is never consulted to fill a missing
+        authorization set.
+        """
+
+        resolver = self._graph_authorization_resolver
+        if resolver is None:
+            return None
+        try:
+            scope = await resolver(
+                org_id,
+                permission_fingerprint,
+                cohort_discovery_family,
+                authorized_scope,
+            )
+        except Exception:
+            logger.warning(
+                "ask_dev.orchestrator.graph_authorization_unavailable",
+                extra={"reason": "resolver_failure"},
+            )
+            return None
+        if scope is None or not scope.complete or not scope.authorized_entity_ids:
+            return None
+        if (
+            scope.organization_id != org_id
+            or scope.permission_fingerprint != permission_fingerprint
+            or scope.cohort_discovery_family is not cohort_discovery_family
+            or scope.scope != authorized_scope
+        ):
+            return None
+        return scope
 
     async def run(
         self,
@@ -3122,7 +3176,8 @@ class DevOrchestrator:
             # never called at all, exactly like any other gate failure --
             # never a guess passed across the wire.
             cohort_discovery_family = classify_cohort_discovery_family(request.question)
-            if (
+            graph_authorization_scope: GraphAuthorizationScope | None = None
+            graph_route_eligible = (
                 preflight_result is not None
                 and preflight_result.interpretation.intent.intent_id
                 is QuestionIntentID.DISCOVERED_COHORT
@@ -3130,8 +3185,35 @@ class DevOrchestrator:
                 and self._graph_investigation_query is not None
                 and self._evidence_service is not None
                 and graph_routing_runtime_enabled()
-                and await self._graph_route_is_entitled(org_id=org_id)
+            )
+            if graph_route_eligible and await self._graph_route_is_entitled(
+                org_id=org_id
             ):
+                assert cohort_discovery_family is not None
+                graph_authorization_scope = await self._graph_authorization_scope(
+                    org_id=org_id,
+                    permission_fingerprint=permission_fingerprint,
+                    cohort_discovery_family=cohort_discovery_family,
+                    authorized_scope=authorized_scope,
+                )
+                if graph_authorization_scope is None:
+                    # An entitled graph route without a complete server-owned
+                    # candidate envelope has no safe universe to traverse.
+                    # Do not let it fall through to the unrestricted legacy
+                    # model/tool loop for a subjectless cohort question.
+                    return await finish(
+                        RunState.INSUFFICIENT_EVIDENCE,
+                        error=error(
+                            "source_unavailable",
+                            "The authorized graph scope is unavailable.",
+                            retryable=True,
+                        ),
+                    )
+
+            if graph_authorization_scope is not None:
+                assert preflight_result is not None
+                assert cohort_discovery_family is not None
+                assert self._graph_investigation_query is not None
                 graph_deadline = datetime.now(UTC) + timedelta(
                     seconds=max(0.0, remaining())
                 )
@@ -3142,17 +3224,13 @@ class DevOrchestrator:
                     cardinality=preflight_result.interpretation.intent.cardinality,
                     mentions=preflight_result.interpretation.mentions,
                     question_text=request.question,
-                    # CHAOS-3502 known limitation, not silently assumed: no
-                    # code anywhere in this codebase yet derives "every
-                    # entity this principal may see in this org" --
-                    # graph_arm.readback.derive_authorized_entity_ids raises
-                    # AuthorizationDerivationNotImplementedError for the
-                    # identical reason. Empty is the SAFE default here (the
-                    # graph route refuses everything rather than
-                    # over-authorizing), not yet a USEFUL one -- real
-                    # derivation is separate, explicit follow-up work, not
-                    # guessed at in this seam.
-                    authorized_entity_ids=frozenset(),
+                    # CHAOS-3670: the complete candidate universe is derived
+                    # by the production composition root from the canonical,
+                    # tenant-filtered scope catalog. Graph membership never
+                    # supplies or widens this set.
+                    authorized_entity_ids=(
+                        graph_authorization_scope.authorized_entity_ids
+                    ),
                     # CHAOS-3678: the SAME scope every other tool/metric
                     # execution for this run is bounded by -- see
                     # ``StepContext(scope=authorized_scope, ...)`` above.
@@ -3166,6 +3244,7 @@ class DevOrchestrator:
                     # never enters this block when classification failed.
                     cohort_discovery_family=cohort_discovery_family,
                     deadline=graph_deadline,
+                    authorization_scope=graph_authorization_scope,
                 )
                 graph_result = await self._graph_investigation_query.investigate(
                     graph_request

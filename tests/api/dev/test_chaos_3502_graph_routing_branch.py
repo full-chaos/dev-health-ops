@@ -276,6 +276,38 @@ async def test_the_request_carries_the_classified_cohort_discovery_family(
 
 
 @pytest.mark.asyncio
+async def test_missing_server_owned_graph_scope_never_enters_graph_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absent/incomplete canonical candidate envelope fails closed."""
+
+    monkeypatch.setenv(GRAPH_ROUTING_RUNTIME_FLAG, "1")
+    fake = FakeGraphInvestigationQuery(outcome=GraphQueryOutcome.COMPLETED)
+
+    async def no_scope(*_values: object) -> None:
+        return None
+
+    output = await run_preflight_orchestrator(
+        question=_DISCOVERED_COHORT_QUESTION,
+        entities=[],
+        org_id=ORG_ID,
+        script_id="chaos3670-no-scope",
+        graph_investigation_query=fake,
+        evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
+        graph_authorization_resolver=no_scope,
+    )
+
+    assert fake.received_requests == []
+    assert output.calls == []
+    assert output.provider is not None
+    assert output.provider.tool_ids == []
+    assert output.result.state is RunState.INSUFFICIENT_EVIDENCE
+    assert output.result.error is not None
+    assert output.result.error.code == "source_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_an_unclassifiable_cohort_question_never_calls_the_seam(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

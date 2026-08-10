@@ -54,17 +54,21 @@ Why this shape, briefly (full reasoning in the CHAOS-3660 proposal comment):
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
+from .contracts import DevScope
 from .contracts_v2.base import Cardinality, QuestionIntentID
 from .contracts_v2.subject import DevSubjectMention
 from .investigation_contract import AskDevInvestigationPacket
 
 __all__ = [
     "CohortDiscoveryFamily",
+    "GraphAuthorizationScope",
+    "GraphAuthorizationResolver",
     "GraphInvestigationRequest",
     "GraphQueryOutcome",
     "GraphQueryResult",
@@ -109,6 +113,43 @@ class CohortDiscoveryFamily(StrEnum):
     #: PROJECT_CAPACITY. Project-kind candidates, capacity-metric
     #: corroboration.
     PROJECT_CAPACITY = "project_capacity"
+
+
+@dataclass(frozen=True, slots=True)
+class GraphAuthorizationScope:
+    """Server-owned, tenant-scoped candidate envelope for one graph run.
+
+    The graph arm receives this envelope after the canonical organization
+    entitlement has been checked.  Candidate IDs are derived from the same
+    tenant-filtered scope catalog used by Ask Dev's native tools; graph
+    membership never contributes authorization.  ``complete`` is explicit so
+    a bounded page can never be mistaken for the complete authorized universe.
+    """
+
+    organization_id: str
+    permission_fingerprint: str
+    scope: DevScope
+    cohort_discovery_family: CohortDiscoveryFamily
+    authorized_entity_ids: frozenset[str]
+    complete: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.organization_id.strip():
+            raise ValueError("Graph authorization scope requires an organization")
+        if not self.permission_fingerprint.strip():
+            raise ValueError(
+                "Graph authorization scope requires a permission fingerprint"
+            )
+        if self.scope.organization_id != self.organization_id:
+            raise ValueError("Graph authorization scope scope does not match org")
+        if any(not entity_id.strip() for entity_id in self.authorized_entity_ids):
+            raise ValueError("Graph authorization scope contains an empty entity ID")
+
+
+GraphAuthorizationResolver = Callable[
+    [str, str, CohortDiscoveryFamily, DevScope],
+    Awaitable[GraphAuthorizationScope | None],
+]
 
 
 class GraphQueryOutcome(StrEnum):
@@ -215,6 +256,26 @@ class GraphInvestigationRequest:
     #: is exactly the kind of closed vocabulary CHAOS-3500 should define and
     #: own; this proposal does not presume it.
     budget_hints: dict[str, int] = field(default_factory=dict)
+    #: The server-owned envelope that produced ``authorized_entity_ids``.
+    #: Production supplies it for every graph call; keeping the field
+    #: optional preserves the frozen request shape for existing arm-level
+    #: tests and callers that exercise the transport in isolation.
+    authorization_scope: GraphAuthorizationScope | None = None
+
+    def __post_init__(self) -> None:
+        scope = self.authorization_scope
+        if scope is None:
+            return
+        if scope.organization_id != self.org_id:
+            raise ValueError(
+                "Graph authorization scope organization does not match request"
+            )
+        if scope.cohort_discovery_family is not self.cohort_discovery_family:
+            raise ValueError("Graph authorization scope family does not match request")
+        if scope.authorized_entity_ids != self.authorized_entity_ids:
+            raise ValueError(
+                "Graph authorization scope IDs do not match request authorization"
+            )
 
 
 @dataclass(frozen=True, slots=True)

@@ -118,8 +118,22 @@ func (engine *GitHubWorkItemEngineDeriver) Derive(
 	computedAt time.Time,
 	derived githubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
-	engineRows, err := engine.deriveRowsForProvider(
+	return engine.deriveForProvider(
 		ctx, "github", claim, rows, day, computedAt, derived,
+	)
+}
+
+func (engine *GitHubWorkItemEngineDeriver) deriveForProvider(
+	ctx context.Context,
+	provider string,
+	claim Claim,
+	rows githubWorkItemRows,
+	day time.Time,
+	computedAt time.Time,
+	derived githubWorkItemDerivationContext,
+) (map[string][]json.RawMessage, error) {
+	engineRows, err := engine.deriveRowsForProvider(
+		ctx, provider, claim, rows, day, computedAt, derived,
 	)
 	if err != nil {
 		return nil, err

@@ -2850,6 +2850,15 @@ class DevOrchestrator:
                     # derivation is separate, explicit follow-up work, not
                     # guessed at in this seam.
                     authorized_entity_ids=frozenset(),
+                    # CHAOS-3678: the SAME scope every other tool/metric
+                    # execution for this run is bounded by -- see
+                    # ``StepContext(scope=authorized_scope, ...)`` above.
+                    # The graph seam must never invent its own time policy;
+                    # reusing this window is what keeps a graph-assisted
+                    # answer and a native-arm answer for the same run
+                    # bounded identically.
+                    window_start=authorized_scope.time_range.start,
+                    window_end=authorized_scope.time_range.end,
                     deadline=graph_deadline,
                 )
                 graph_result = await self._graph_investigation_query.investigate(

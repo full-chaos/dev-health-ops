@@ -38,6 +38,8 @@ def _request(
         mentions=(),
         question_text="Which teams are currently struggling?",
         authorized_entity_ids=authorized_entity_ids,
+        window_start=datetime(2026, 5, 12, 0, 0, tzinfo=UTC),
+        window_end=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
         deadline=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
     )
 

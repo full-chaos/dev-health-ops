@@ -191,6 +191,23 @@ class TestEveryStoreOperationIsBounded:
         assert elapsed < _FAST_DEADLINES.read_timeout_s + _SLACK_S
 
     async def test_write_projection_times_out(self, monkeypatch) -> None:
+        """The hang is monkeypatched at ``utils.bulk_utils`` only.
+
+        ``write_projection`` builds real ``EntityNode``/``EntityEdge``
+        objects via ``backend.to_graphiti_nodes``/``to_graphiti_edges``
+        *before* the bounded call this test is timing, and those go through
+        ``backend.graphiti_module`` -- a different reference than
+        ``store.graphiti_module``, which is all this test patches. In an
+        environment with no ``context-graph-trial`` extra installed at all
+        (a real CI lane), that node/edge construction raises
+        ``GraphitiUnavailableError`` before the hang is ever reached, which
+        is a real "graphiti missing" condition, not the timeout this test
+        measures -- so it must skip there, exactly like the sibling
+        ``test_chaos_3619_observation_attachment.py`` tests that also build
+        real Graphiti objects.
+        """
+
+        live_gate.require_graphiti_extra()
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED", "1")
 
         class _HangingBulkUtils:

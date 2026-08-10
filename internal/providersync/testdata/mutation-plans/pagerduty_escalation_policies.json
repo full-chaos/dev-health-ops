@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "PagerDuty escalation-policy route, pagination, and identity guards",
+  "build": ["go", "build", "./internal/providersync/"],
+  "$limitation": "This plan covers the provider-owned offset paginator, full-row normalization, and route identity guard. Executor registration, capability/matrix wiring, tombstone reconciliation, and deployment activation remain intentionally outside this provider-only slice.",
+  "mutations": [
+    {
+      "id": "P1-offset-advances-by-returned-page-length",
+      "file": "internal/providerfoundation/pagerduty_pagination.go",
+      "find": "\t\toffset += len(items)",
+      "replace": "\t\toffset += len(items) * 0",
+      "rationale": "PagerDuty's offset is the number of rows returned, not the configured limit; a wrong advancement repeats or skips source rows and is exposed by the second request URI.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyEscalationPoliciesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P2-more-false-terminates-pagination",
+      "file": "internal/providerfoundation/pagerduty_pagination.go",
+      "find": "\t\tif !more {\n\t\t\treturn result, nil\n\t\t}",
+      "replace": "\t\tif false && !more {\n\t\t\treturn result, nil\n\t\t}",
+      "rationale": "The provider's explicit more=false marker is the only authoritative end-of-snapshot signal; ignoring it causes an unnecessary request and cannot report a complete bounded result.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyEscalationPoliciesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "P3-missing-more-fails-closed",
+      "file": "internal/providerfoundation/pagerduty_pagination.go",
+      "find": "\t\trawMore, ok := payload[\"more\"]\n\t\tif !ok || string(rawMore) == \"null\" {\n\t\t\treturn result, ErrPaginationInvalid\n\t\t}",
+      "replace": "\t\trawMore, ok := payload[\"more\"]\n\t\tif !ok {\n\t\t\treturn result, ErrPaginationInvalid\n\t\t}",
+      "rationale": "A missing progress marker is malformed, not an empty successful snapshot; accepting it would erase the distinction between a valid terminal page and an unproven response.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyEscalationPoliciesRouteFailsClosedOnPaginationCapAndMissingInstance$", "./internal/providersync/"], ["go", "test", "-count=1", "-run", "^TestPagerDutyOffsetPaginationRejectsMalformedOrNonProgressingPages$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "P4-empty-more-page-must-fail-closed",
+      "file": "internal/providerfoundation/pagerduty_pagination.go",
+      "find": "\t\tif len(items) == 0 {\n\t\t\treturn result, ErrPaginationInvalid\n\t\t}",
+      "replace": "\t\tif false && len(items) == 0 {\n\t\t\treturn result, ErrPaginationInvalid\n\t\t}",
+      "rationale": "PagerDuty can advertise more pages only when the offset made progress; an empty page with more=true must never spin or be accepted as complete.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOffsetPaginationRejectsMalformedOrNonProgressingPages$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "P5-subdomain-is-required-for-operational-identity",
+      "file": "internal/providersync/pagerduty_escalation_policies_route.go",
+      "find": "\tif instance == \"\" {\n\t\treturn \"\", providerfoundation.ErrNormalizationInvalid\n\t}",
+      "replace": "\tif instance == \"\" {\n\t\tinstance = \"api.pagerduty.com\"\n\t}",
+      "rationale": "Python requires the verified PagerDuty account subdomain for provider_instance_id; falling back to the API host would merge accounts and fork canonical IDs.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyEscalationPoliciesRouteFailsClosedOnPaginationCapAndMissingInstance$", "./internal/providersync/"]]
+    }
+  ]
+}

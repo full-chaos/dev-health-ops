@@ -51,6 +51,18 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
+# Prometheus telemetry for the document lifecycle (issue 3632). Imported
+# from outside context_fabric deliberately: this is the arm depending on
+# shared repo infrastructure, not the reverse -- `test_no_production_module_
+# imports_the_arm_at_module_scope` in test_chaos_3617_containment.py only
+# forbids the OTHER direction. `dev_health_ops.metrics.prometheus` has no
+# dependency on graphiti-core or falkordb, so importing it here does not
+# widen what "the arm is optional and removable" means.
+from dev_health_ops.metrics.prometheus import (
+    record_context_fabric_document_removed,
+    record_context_fabric_documents_indexed,
+)
+
 from .backend import (
     DeterministicEmbedder,
     EmbeddingBackend,
@@ -448,6 +460,10 @@ class GraphArmStore:
             ),
             operation="write_projection",
         )
+        # Telemetry only after the write above actually completed -- a raise
+        # from add_nodes_and_edges_bulk must not record documents as indexed
+        # that were never durably written.
+        record_context_fabric_documents_indexed(len(document_nodes))
         indexed_through = max(
             (
                 *(node.observed_at for node in projection.nodes),
@@ -690,6 +706,11 @@ class GraphArmStore:
             self._partition,
             reason.value,
         )
+        # Telemetry only on an actual deletion -- a no-op (already absent,
+        # never approved) must not inflate a counter that is supposed to
+        # measure real index shrinkage.
+        if removed:
+            record_context_fabric_document_removed(reason.value)
         return removed
 
 

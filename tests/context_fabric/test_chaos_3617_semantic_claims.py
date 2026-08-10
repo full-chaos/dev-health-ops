@@ -441,6 +441,55 @@ class TestEmbedderContracts:
         with pytest.raises(RuntimeError, match="Refusing to fall back"):
             CloudEmbedder.from_environment()
 
+    @pytest.mark.asyncio
+    async def test_a_bare_cloud_embedder_cannot_embed_via_an_ambient_credential(
+        self, monkeypatch
+    ) -> None:
+        """Issue 3632: ``semantic=False`` must be load-bearing, not advisory.
+
+        The gap this closes: ``CloudEmbedder(api_key=None)`` correctly
+        reports ``semantic=False`` -- but the underlying OpenAI SDK falls
+        back to an AMBIENT ``OPENAI_API_KEY`` environment variable whenever
+        an explicit ``api_key=None`` is passed through. Confirmed directly
+        (not assumed): before this guard existed, setting ``OPENAI_API_KEY``
+        in the process environment and calling ``create()`` on a bare,
+        unconfigured ``CloudEmbedder()`` attempted a real outbound
+        connection using that ambient credential -- one this instance never
+        explicitly received through the arm's own credential convention
+        (:meth:`CloudEmbedder.from_environment`).
+
+        This matters specifically for the issue 3632 document path:
+        ``to_graphiti_document_nodes`` calls ``embedder.create()``
+        unconditionally for every embedder (unlike ``to_graphiti_nodes``'s
+        deterministic-only special case), so a bare ``CloudEmbedder()``
+        reaching that path would send a document's body text to a provider
+        under a credential this instance's own state says it does not have
+        -- exactly the "fail closed ... when providers/text indexing are
+        disallowed" acceptance criterion this ticket names.
+
+        Socket-blocked rather than network-mocked, so this proves NO
+        connection is attempted, not merely that one eventually fails.
+        """
+
+        import socket
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-ambient-not-explicitly-passed")
+
+        def _blocked_connect(self, *_args, **_kwargs):
+            raise AssertionError(
+                "CloudEmbedder.create() attempted a real socket connection "
+                "with no api_key configured -- it must refuse before "
+                "constructing a client at all, never after"
+            )
+
+        monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
+
+        embedder = CloudEmbedder()
+        assert embedder.semantic is False
+
+        with pytest.raises(RuntimeError, match="refusing to fall back"):
+            await embedder.create(input_data=["a document's body text"])
+
     def test_the_cloud_embedder_reads_the_repos_credential_convention(
         self, monkeypatch
     ) -> None:

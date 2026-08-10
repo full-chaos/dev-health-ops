@@ -461,6 +461,20 @@ class TestProvenanceIsRefusedRatherThanRepaired:
         with pytest.raises(ProjectionError, match="one half of the source evidence"):
             build_projection(batch)
 
+    def test_an_entity_declaration_without_a_source_handle_is_preserved(self) -> None:
+        """Handle-less records may declare what they are about.
+
+        This is not half of the source-issued handle/id identity pair. The
+        packet builder uses the entity declaration and mints the platform
+        handle later.
+        """
+
+        projection = build_projection(
+            self._observation(source_evidence_entity_id="proj_probe")
+        )
+        observation = next(node for node in projection.nodes if not node.is_entity)
+        assert observation.attributes == {"source_evidence_entity_id": "proj_probe"}
+
     def test_a_handle_outside_the_contracts_grammar_is_refused(self) -> None:
         """Refused, not repaired: a handle is an identity.
 

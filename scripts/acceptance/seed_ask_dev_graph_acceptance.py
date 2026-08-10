@@ -7,7 +7,6 @@ import argparse
 import asyncio
 import json
 import os
-import statistics
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,9 +30,31 @@ from dev_health_ops.fixtures.world import derive_id
 
 _OUTLIER_RATIO = 1.20
 _METRICS = ("work_in_progress", "cycle_time_p90_days")
+_COMPARISON_DAYS = 11
 
 _TEAM_METRICS_SQL = """
-WITH metric_rows AS (
+WITH historical_team_days AS (
+    SELECT
+        day,
+        lowerUTF8(team_name) AS team_key,
+        sum(wip_count_end_of_day) AS work_in_progress,
+        avgOrNull(cycle_time_p90_hours) / 24 AS cycle_time_p90_days
+    FROM work_item_metrics_daily FINAL
+    WHERE org_id = {org_id:String}
+      AND day >= subtractDays({measurement_day:Date}, {comparison_days:UInt16})
+      AND day < {measurement_day:Date}
+      AND lowerUTF8(team_name) IN ('core', 'growth', 'platform')
+    GROUP BY day, team_key
+), cohort_baseline AS (
+    SELECT
+        quantileExactWeightedInterpolated(0.5)(
+            toFloat64(work_in_progress), toUInt64(1)
+        ) AS work_in_progress_cohort_median,
+        quantileExactWeightedInterpolated(0.5)(
+            cycle_time_p90_days, toUInt64(1)
+        ) AS cycle_time_p90_days_cohort_median
+    FROM historical_team_days
+), metric_rows AS (
     SELECT
         lowerUTF8(team_name) AS team_key,
         sum(wip_count_end_of_day) AS work_in_progress,
@@ -48,9 +69,12 @@ SELECT
     toString(id) AS canonical_id,
     name AS label,
     metric_rows.work_in_progress,
-    metric_rows.cycle_time_p90_days
+    metric_rows.cycle_time_p90_days,
+    cohort_baseline.work_in_progress_cohort_median,
+    cohort_baseline.cycle_time_p90_days_cohort_median
 FROM teams FINAL
 INNER JOIN metric_rows ON lowerUTF8(teams.name) = metric_rows.team_key
+CROSS JOIN cohort_baseline
 WHERE org_id = {org_id:String} AND is_active = 1
 ORDER BY canonical_id
 """
@@ -71,10 +95,13 @@ def build_batch(
 ) -> IngestionBatch:
     if len(rows) < 3:
         raise RuntimeError("graph acceptance requires at least three canonical teams")
-    medians = {
-        metric: float(statistics.median(float(row[metric]) for row in rows))
+    medians = {metric: float(rows[0][f"{metric}_cohort_median"]) for metric in _METRICS}
+    if any(
+        float(row[f"{metric}_cohort_median"]) != medians[metric]
+        for row in rows
         for metric in _METRICS
-    }
+    ):
+        raise RuntimeError("graph acceptance requires one shared cohort baseline")
     corroborated = [
         row
         for row in rows
@@ -82,9 +109,9 @@ def build_batch(
             float(row[metric]) > medians[metric] * _OUTLIER_RATIO for metric in _METRICS
         )
     ]
-    if not corroborated:
+    if len(corroborated) < 2:
         raise RuntimeError(
-            "restored world has no team with two canonical pressure signals "
+            "restored world has fewer than two teams with two canonical pressure signals "
             "more than 20% above the cohort median"
         )
 
@@ -121,6 +148,11 @@ def build_batch(
                         ),
                         "measurement_basis": "canonical_service",
                         "measurement_cohort_median": medians[metric],
+                        # The canonical measurement is about this team, but
+                        # ClickHouse did not issue an EvidenceHandle. Declare
+                        # only the entity linkage and leave the production
+                        # packet builder's handle-less path to mint the handle.
+                        "source_evidence_entity_id": canonical_id,
                     },
                 )
             )
@@ -138,7 +170,11 @@ def _query_rows(
     try:
         result = client.query(
             _TEAM_METRICS_SQL,
-            parameters={"org_id": org_id, "measurement_day": measurement_day},
+            parameters={
+                "org_id": org_id,
+                "measurement_day": measurement_day,
+                "comparison_days": _COMPARISON_DAYS,
+            },
         )
         return [
             dict(zip(result.column_names, row, strict=True))

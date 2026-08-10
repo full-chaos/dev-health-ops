@@ -27,15 +27,7 @@ func TestJiraAtlassianSurfacesMatchLivePythonProducer(t *testing.T) {
 		"jira/work-items/atlassian",
 		jiraAtlassianOracleCases(),
 		buildJiraAtlassianOracleSurfaces,
-		map[string]string{
-			"work_items":         "This pair owns the separate Atlassian worklog and board-sprint enrichment boundary.",
-			"status_transitions": "Transition parity is asserted by the canonical Jira family pair; this pair must stay focused on Atlassian enrichment.",
-			"dependencies":       "The Atlassian-client producer currently emits an explicit empty dependency list; legacy dependency parity is covered by the family pair.",
-			"interactions":       "The Atlassian-client producer currently emits an explicit empty interaction list; legacy interaction parity is covered by the family pair.",
-			"reopen_events":      "Reopen parity is asserted by the canonical Jira family pair.",
-			"ai_attributions":    "The Jira provider does not emit AI attribution records.",
-			"observations":       "Usage observations are transport/runtime metadata, not part of the worklog or sprint persistence boundary.",
-		},
+		nil,
 	)
 }
 

@@ -28,6 +28,9 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 from internal.providersync.testdata import oracle_registry
+from internal.providersync.testdata.oracle_pairs._github_work_items_helpers import (
+    install_minimal_oracle_imports,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 SRC_ROOT = REPO_ROOT / "src"
@@ -39,6 +42,7 @@ CLIENT_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/jira/client.py"
 # editable install or an ambient PYTHONPATH must not silently provide another
 # worktree's producer.
 sys.path.insert(0, str(SRC_ROOT))
+install_minimal_oracle_imports()
 
 
 def _source_path(value: Any) -> pathlib.Path:

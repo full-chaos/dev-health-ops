@@ -4,6 +4,7 @@ The transport is deterministic, but the provider method, canonical models,
 identity resolver, worklog/sprint normalizers, reference-sprint guard, and
 ProviderBatch boundary are all loaded from this checkout's production source.
 """
+# noqa: SIZE_OK — one producer oracle keeps transport patches and provenance checks together.
 
 from __future__ import annotations
 
@@ -17,11 +18,15 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 from internal.providersync.testdata import oracle_registry
+from internal.providersync.testdata.oracle_pairs._github_work_items_helpers import (
+    install_minimal_oracle_imports,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 SRC_ROOT = REPO_ROOT / "src"
 PROVIDER_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/jira/provider.py"
 sys.path.insert(0, str(SRC_ROOT))
+install_minimal_oracle_imports()
 
 with (
     contextlib.redirect_stdout(io.StringIO()),
@@ -261,8 +266,19 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     if not client.closed:
         raise RuntimeError("Atlassian Jira producer did not close REST client")
     return {
+        "work_items": [_deterministic(row, org_id) for row in batch.work_items],
+        "status_transitions": [
+            _deterministic(row, org_id) for row in batch.status_transitions
+        ],
+        "dependencies": [_deterministic(row, org_id) for row in batch.dependencies],
+        "interactions": [_deterministic(row, org_id) for row in batch.interactions],
+        "reopen_events": [_deterministic(row, org_id) for row in batch.reopen_events],
         "worklogs": [_deterministic(row, org_id) for row in batch.worklogs],
         "sprints": [_deterministic(row, org_id) for row in batch.sprints],
+        "ai_attributions": [
+            _deterministic(row, org_id) for row in batch.ai_attributions
+        ],
+        "observations": batch.observations,
     }
 
 

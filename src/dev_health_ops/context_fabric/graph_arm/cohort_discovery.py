@@ -57,6 +57,22 @@ A ``scope_enumerated`` proposal therefore commits to no subject, and
 ``packet_builder`` emits no subject candidates for one. The frozen contract
 already permits this -- ``SubjectDiscovery`` says so in its own docstring --
 which is what makes the honest shape available at all.
+
+**CHAOS-3667: comparability is necessary and is no longer sufficient.**
+Sharing a basis with a peer answers "is this candidate part of the same
+comparison" -- it does not answer "is this candidate an instance of the
+thing the question is asking about". A candidate that clears the
+comparability gate above is now also checked for CORROBORATION
+(:func:`_corroboration`): at least two independent measured metrics sitting
+materially outside their own cohort median (:data:`OUTLIER_MARGIN_RATIO`,
+:data:`MIN_CORROBORATING_METRICS`), or a relational signal
+(:func:`_dependency_concentration`) a single metric cannot provide. One
+elevated number is a correlate a canonical service happened to report, not
+struggle or capacity pressure, and treating it as either is the exact fault
+the ticket names. A comparable candidate with no relevant measurement at
+all is kept, not excluded: an absence of DATA is not evidence of health,
+and preserving recall means a coverage gap must never read as a clean bill
+of health.
 """
 
 from __future__ import annotations
@@ -85,8 +101,13 @@ from .vocabulary import SOURCE_EVIDENCE_ENTITY_ATTRIBUTE, GraphEntityKind
 __all__ = [
     "ANCHOR_BASIS_RELATIONSHIPS",
     "FAMILY_CANDIDATE_KINDS",
+    "FAMILY_PRESSURE_METRICS",
+    "HIGHER_IS_WORSE_PRESSURE_METRICS",
+    "MEASUREMENT_COHORT_MEDIAN_ATTRIBUTE",
     "MEASUREMENT_METRIC_ATTRIBUTE",
+    "MEASUREMENT_VALUE_ATTRIBUTE",
     "METRIC_COMPARISON_DIMENSIONS",
+    "MIN_CONCENTRATED_DEPENDENTS",
     "CohortDiscovery",
     "UnsupportedCohortFamilyError",
     "discover_cohort",
@@ -188,6 +209,141 @@ METRIC_COMPARISON_DIMENSIONS: Mapping[str, ComparisonDimension] = {
     "assigned_fte": ComparisonDimension.CAPACITY_LOAD_RATIO,
     "feed_lag_days": ComparisonDimension.DATA_COVERAGE,
 }
+
+#: CHAOS-3667: the projection attributes carrying a canonical measurement's
+#: cited value and its cohort median. Same literals ``drivers.py`` reads
+#: (``measurement_value``, ``measurement_cohort_median``); named here so a
+#: reader can see the two "cite, never compute" callers side by side.
+MEASUREMENT_VALUE_ATTRIBUTE = "measurement_value"
+MEASUREMENT_COHORT_MEDIAN_ATTRIBUTE = "measurement_cohort_median"
+
+#: CHAOS-3667: which metrics corroborate PRESSURE for a subjectless cohort
+#: question in each family -- the arm's own reading, independent of
+#: ``drivers.MEASUREMENT_CATEGORY`` for the same reason
+#: :data:`METRIC_COMPARISON_DIMENSIONS` is independent of the corpus's table:
+#: two tables that could disagree are worth more than one nobody can be wrong
+#: about. Every metric here is drawn from :data:`METRIC_COMPARISON_DIMENSIONS`
+#: -- a metric this module does not already recognise structurally is not
+#: added here either.
+#:
+#: An empty set (``PORTFOLIO_DEPENDENCY_RISK``) means the family's own
+#: comparability basis already IS the pressure signal: a project sharing a
+#: dependency with another authorized project is what "at risk from a shared
+#: dependency" means, and no canonical measurement narrows that further here
+#: -- concentration is read from the relationship itself in
+#: :func:`_dependency_concentration`.
+FAMILY_PRESSURE_METRICS: Mapping[QuestionFamilyID, frozenset[str]] = {
+    # STRUGGLING_TEAMS and PRESSURE_SIGNALS share one metric set: both are
+    # TEAM-kind questions about the same underlying pressure, and a reader
+    # who asked either would expect the same evidence to count.
+    QuestionFamilyID.STRUGGLING_TEAMS: frozenset(
+        {
+            "incidents",
+            "cycle_time_median_days",
+            "cycle_time_p90_days",
+            "median_review_wait_days",
+            "review_cycles_max",
+            "work_in_progress",
+            "outbound_review_share",
+        }
+    ),
+    QuestionFamilyID.PRESSURE_SIGNALS: frozenset(
+        {
+            "incidents",
+            "cycle_time_median_days",
+            "cycle_time_p90_days",
+            "median_review_wait_days",
+            "review_cycles_max",
+            "work_in_progress",
+            "outbound_review_share",
+        }
+    ),
+    QuestionFamilyID.PROJECT_CAPACITY: frozenset(
+        {
+            "arrived_items",
+            "work_in_progress",
+            "cycle_time_median_days",
+        }
+    ),
+    QuestionFamilyID.PORTFOLIO_DEPENDENCY_RISK: frozenset(),
+    QuestionFamilyID.DECLARED_VERSUS_ACTUAL: frozenset(
+        {
+            "open_child_units",
+            "target_date_changes",
+            "open_deficiencies",
+            "missing_controls",
+        }
+    ),
+}
+
+#: CHAOS-3667: every metric in :data:`FAMILY_PRESSURE_METRICS` moves in the
+#: same direction -- higher is worse -- which is why there is one comparison
+#: rule below rather than a per-metric direction table. Stated as its own
+#: constant (rather than left implicit) so a metric moving the other way,
+#: added later, is a deliberate edit here and not a silent wrong-direction
+#: comparison; :func:`_all_pressure_metrics_are_higher_is_worse` in the test
+#: suite pins that this set and the family map never drift apart.
+HIGHER_IS_WORSE_PRESSURE_METRICS: frozenset[str] = frozenset(
+    {
+        "incidents",
+        "cycle_time_median_days",
+        "cycle_time_p90_days",
+        "median_review_wait_days",
+        "review_cycles_max",
+        "work_in_progress",
+        "outbound_review_share",
+        "arrived_items",
+        "open_child_units",
+        "target_date_changes",
+        "open_deficiencies",
+        "missing_controls",
+    }
+)
+
+#: How many other comparable candidates must depend on the same target for
+#: that target's own SHARED_DEPENDENCY membership to read as *concentration*
+#: rather than an incidental pair. Two is the floor at which "shared" starts
+#: meaning "several projects lean on this", which is what a dependency-risk
+#: question is actually asking about.
+MIN_CONCENTRATED_DEPENDENTS = 2
+
+#: CHAOS-3667: how far a cited value must clear its cohort median, as a
+#: fraction of the median, to count as outlying at all.
+#:
+#: **Derivation, stated so it can be checked rather than trusted.** A bare
+#: ``value > median`` -- the comparison ``drivers._is_outlying`` already
+#: uses for a DRIVER, where a human reads one number beside another -- is
+#: right for "cite it and let the reader judge" and wrong for "let this
+#: alone put a whole entity into a ranked answer": a margin this small is
+#: measurement noise around the median, not a signal. 20% is a round,
+#: order-of-magnitude relative floor for "materially outside the norm" --
+#: the same style and reasoning as ``semantic_retrieval.
+#: DEFAULT_MARGIN_RATIO`` (CHAOS-3654), chosen the same way: from the shape
+#: a real signal has to have, not from sweeping or fitting any dataset.
+#: **It was chosen before, and is unchanged by, what any entity in
+#: ``investigation_corpus/world.py`` happens to measure** -- proven in
+#: ``test_chaos_3667_cohort_ranking.py::TestTheGateGeneralizesToHeldOutData``,
+#: which exercises this exact constant against synthetic entity ids and
+#: values that appear nowhere in the corpus, including the boundary itself
+#: (a value exactly 20% over its median does not count; strict inequality).
+OUTLIER_MARGIN_RATIO = 0.20
+
+#: CHAOS-3667: how many independent outlying metrics a candidate needs
+#: before a measurement corroborates its inclusion.
+#:
+#: **Derivation.** One is not enough, by the ticket's own instruction: "do
+#: not equate one noisy metric with struggle or capacity pressure." Two is
+#: not a fitted value -- it is the smallest integer that can express that
+#: instruction at all: any value <= 1 collapses back to "one noisy metric
+#: is enough", which is the exact rule the ticket forbids. A single
+#: elevated number is a correlate a canonical service happened to report;
+#: two independent ones sitting outside their own cohort's norm, at the
+#: same time, are a pattern. Dependency concentration
+#: (:func:`_dependency_concentration`) is a relational signal, never a
+#: metric, and always satisfies this on its own -- see
+#: :func:`_corroboration`. Also proven against held-out synthetic data,
+#: same test class as above.
+MIN_CORROBORATING_METRICS = 2
 
 #: How many enumerated members the cohort may carry.
 #:
@@ -298,10 +454,16 @@ def _measured_metrics(
 ) -> dict[str, set[str]]:
     """Each candidate's measured metric names, from the projection's own nodes.
 
-    The metric NAME only -- never the value. This module decides who is
-    comparable with whom; it does not compare, rank or threshold, and reading
-    a value here is the first step towards an arm that computes a number the
-    canonical service is the only authority on.
+    The metric NAME only -- never the value. This function decides who is
+    comparable with whom; it does not compare, rank or threshold.
+
+    CHAOS-3667 adds a SEPARATE function, :func:`_pressure_readings`, that
+    does read values -- but only to CITE a canonical measurement against its
+    own cohort median, exactly as ``drivers._is_outlying`` already does for
+    the seeded path. Comparing two numbers a canonical service minted is not
+    computing a new one; the boundary this docstring describes has not
+    moved, and the two functions are kept apart so a reader can see which
+    one is which.
     """
 
     metrics: dict[str, set[str]] = {}
@@ -314,6 +476,184 @@ def _measured_metrics(
             continue
         metrics.setdefault(str(entity), set()).add(str(metric))
     return metrics
+
+
+@dataclass(frozen=True, slots=True)
+class _PressureReading:
+    """One candidate's cited value and cohort median for one metric."""
+
+    metric: str
+    value: str
+    cohort_median: str
+
+    @property
+    def is_outlying(self) -> bool:
+        """Whether this citation clears its cohort median by a real margin.
+
+        Every metric :data:`FAMILY_PRESSURE_METRICS` can select is in
+        :data:`HIGHER_IS_WORSE_PRESSURE_METRICS`, so there is one comparison
+        rule rather than a per-metric direction lookup -- see that
+        constant's own docstring for why a metric moving the other way is a
+        deliberate edit, not a silent one.
+
+        Gated by :data:`OUTLIER_MARGIN_RATIO`, not a bare ``value >
+        median``: see that constant's own docstring for why a value one
+        unit over its median must not read the same as one an order of
+        magnitude over it here.
+        """
+
+        try:
+            value, median = float(self.value), float(self.cohort_median)
+        except (TypeError, ValueError):
+            # Non-numeric or absent is not comparable, and guessing is worse
+            # than declining: the caller treats this as "not corroborated",
+            # never as "corroborated by default".
+            return False
+        if median > 0:
+            return value > median * (1 + OUTLIER_MARGIN_RATIO)
+        # A zero-or-negative median has no meaningful percentage margin --
+        # any positive excess over it is already qualitatively different
+        # from the cohort's norm, not a rounding difference.
+        return value > median
+
+
+def _pressure_readings(
+    candidate_ids: frozenset[str], nodes: Iterable[GraphNode], as_of: datetime
+) -> dict[str, dict[str, _PressureReading]]:
+    """Each candidate's cited value/median pairs, keyed by metric name.
+
+    CHAOS-3667. Reads exactly what ``drivers._measurement_candidates``
+    already reads off the same attribute keys -- ``measurement_value`` and
+    ``measurement_cohort_median`` -- and does the same thing with them: cite
+    both, verbatim, never derive a third number. A measurement with no
+    cohort median (drivers.py's own ``INSUFFICIENT_MEASUREMENT`` case) is
+    skipped here for the same reason it cannot say "elevated" there --
+    :meth:`_PressureReading.is_outlying` would refuse it anyway, but
+    skipping keeps a metric with nothing to compare it against from
+    occupying the entry at all.
+    """
+
+    readings: dict[str, dict[str, _PressureReading]] = {}
+    for node in nodes:
+        metric = node.attributes.get(MEASUREMENT_METRIC_ATTRIBUTE)
+        entity = node.attributes.get(SOURCE_EVIDENCE_ENTITY_ATTRIBUTE)
+        if not metric or entity not in candidate_ids:
+            continue
+        if not _valid_at(node.valid_from, node.valid_to, as_of):
+            continue
+        value = node.attributes.get(MEASUREMENT_VALUE_ATTRIBUTE)
+        median = node.attributes.get(MEASUREMENT_COHORT_MEDIAN_ATTRIBUTE)
+        if value is None or median is None:
+            continue
+        readings.setdefault(str(entity), {})[str(metric)] = _PressureReading(
+            metric=str(metric), value=str(value), cohort_median=str(median)
+        )
+    return readings
+
+
+@dataclass(frozen=True, slots=True)
+class _Corroboration:
+    """Whether a candidate's inclusion is corroborated, and by what.
+
+    Three-valued rather than a bare bool, because "checked and found
+    unremarkable" and "nothing to check" are different findings and a
+    reader excluded on the strength of the wrong one would be told a claim
+    the arm never actually verified.
+    """
+
+    #: ``True`` -- keep, corroborated. ``False`` -- keep, no relevant signal
+    #: was available to check (preserve recall on unknown data). ``None`` --
+    #: exclude: relevant signals existed and fewer than
+    #: :data:`MIN_CORROBORATING_METRICS` were outlying.
+    corroborated: bool | None
+    #: The metric names that WERE outlying, whether or not that was enough
+    #: to corroborate. Populated on both ``True`` (>= the threshold) and
+    #: ``None`` (below it, including the single-noisy-metric shape the
+    #: exclusion rationale names by number) -- never on ``False``, where
+    #: nothing was checked at all.
+    outlying_metrics: tuple[str, ...] = ()
+    #: Every metric name that was checked (outlying or not), for the
+    #: exclusion rationale to name everything that was actually looked at,
+    #: not only the unremarkable ones. Populated only when
+    #: ``corroborated is None``.
+    checked_metrics: tuple[str, ...] = ()
+
+
+def _corroboration(
+    *,
+    candidate_id: str,
+    family: QuestionFamilyID,
+    readings: Mapping[str, Mapping[str, _PressureReading]],
+    dependency_concentrated: bool,
+) -> _Corroboration:
+    """Whether canonical evidence backs including this candidate.
+
+    Relational concentration (CHAOS-3667: "dependency criticality") always
+    corroborates on its own -- it is not a measurement, so it never competes
+    with or is overridden by the metric check below.
+
+    A family with no entry in :data:`FAMILY_PRESSURE_METRICS`
+    (``PORTFOLIO_DEPENDENCY_RISK``) has no metric gate at all: its own
+    comparability basis (a shared dependency) already IS the signal.
+    """
+
+    if dependency_concentrated:
+        return _Corroboration(corroborated=True)
+
+    relevant = FAMILY_PRESSURE_METRICS.get(family, frozenset())
+    if not relevant:
+        return _Corroboration(corroborated=True)
+
+    mine = readings.get(candidate_id, {})
+    checked = sorted(name for name in mine if name in relevant)
+    if not checked:
+        # No relevant metric was measured for this candidate at all -- an
+        # absence of DATA, not an absence of PRESSURE. Preserving recall
+        # means not letting a coverage gap read as a clean bill of health.
+        return _Corroboration(corroborated=False)
+
+    outlying = tuple(name for name in checked if mine[name].is_outlying)
+    if len(outlying) >= MIN_CORROBORATING_METRICS:
+        return _Corroboration(corroborated=True, outlying_metrics=outlying)
+    # Fewer than MIN_CORROBORATING_METRICS outlying signals -- including
+    # zero -- is "checked and not corroborated", not "unknown": the metric
+    # WAS measured and compared, and either sat inside its cohort's norm or
+    # was the one noisy signal the ticket names by name ("do not equate one
+    # noisy metric with struggle or capacity pressure"). Both read the same
+    # way to a caller deciding whether this candidate belongs in the
+    # answer, so both share the exclusion rather than one silently
+    # widening to look corroborated.
+    return _Corroboration(
+        corroborated=None,
+        outlying_metrics=outlying,
+        checked_metrics=tuple(checked),
+    )
+
+
+def _dependency_concentration(
+    candidate_ids: frozenset[str],
+    anchors: Mapping[str, Mapping[CohortInclusionBasis, set[str]]],
+) -> frozenset[str]:
+    """Candidates that depend on a target at least
+    :data:`MIN_CONCENTRATED_DEPENDENTS` other candidates also depend on.
+
+    Reads the SAME anchor data :func:`discover_cohort` already computed for
+    the comparability basis -- no new traversal, only a different question
+    asked of it: not "do two candidates share a dependency" but "does one
+    dependency concentrate several of them".
+    """
+
+    depended_by: dict[str, set[str]] = {}
+    for candidate in candidate_ids:
+        for target in anchors.get(candidate, {}).get(
+            CohortInclusionBasis.SHARED_DEPENDENCY, set()
+        ):
+            depended_by.setdefault(target, set()).add(candidate)
+    concentrated: set[str] = set()
+    for dependents in depended_by.values():
+        if len(dependents) >= MIN_CONCENTRATED_DEPENDENTS:
+            concentrated.update(dependents)
+    return frozenset(concentrated)
 
 
 def discover_cohort(
@@ -372,6 +712,12 @@ def discover_cohort(
     anchors = _anchors_by_basis(candidate_ids, edges, as_of)
     parents = _initiative_parents(candidate_ids, edges, as_of)
     metrics = _measured_metrics(candidate_ids, nodes, as_of)
+    # CHAOS-3667. Read once, up front, alongside the comparability inputs
+    # above -- both are consulted per candidate below, after the
+    # comparability gate, to decide whether a comparable candidate also
+    # corroborates the question's own pressure claim.
+    readings = _pressure_readings(candidate_ids, nodes, as_of)
+    concentrated = _dependency_concentration(candidate_ids, anchors)
 
     # peer -> basis -> the anchors it SHARES with at least one other
     # candidate. Shared, not merely held: a portfolio only this candidate
@@ -443,6 +789,46 @@ def discover_cohort(
                         "owning team, dependency, initiative parent or measured "
                         "metric in common -- so there is no stated basis on "
                         "which to compare it"
+                    ),
+                )
+            )
+            continue
+        # CHAOS-3667: comparability alone is no longer inclusion. A
+        # candidate that shares a basis with a peer but shows no evidence of
+        # the pressure the QUESTION is actually asking about is not the
+        # answer to "which teams are struggling" merely for being similar
+        # to one that is.
+        corroboration = _corroboration(
+            candidate_id=peer,
+            family=question_family,
+            readings=readings,
+            dependency_concentrated=peer in concentrated,
+        )
+        if corroboration.corroborated is None:
+            outlying = set(corroboration.outlying_metrics)
+            checked_detail = ", ".join(
+                f"{name} (elevated)" if name in outlying else name
+                for name in corroboration.checked_metrics
+            )
+            single_signal_note = (
+                f"; {', '.join(sorted(outlying))} is elevated on its own, but a "
+                f"single elevated metric is not treated as corroborated pressure"
+                if outlying
+                else ""
+            )
+            exclusions.append(
+                CohortExclusionRecord(
+                    canonical_id=peer,
+                    kind=kind,
+                    reason=CohortExclusionReason.EXCLUDED_BY_QUESTION,
+                    rationale=(
+                        f"this {kind.value} is comparable to other candidates "
+                        f"({', '.join(basis.value for basis in bases)}), and its "
+                        f"metrics relevant to this question were checked -- "
+                        f"{checked_detail} -- but fewer than "
+                        f"{MIN_CORROBORATING_METRICS} sit clearly outside the "
+                        f"cohort's own norm{single_signal_note}, so nothing "
+                        "corroborates including it in this specific answer"
                     ),
                 )
             )

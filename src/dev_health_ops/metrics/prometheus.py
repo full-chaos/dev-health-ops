@@ -226,6 +226,36 @@ if _PROMETHEUS_AVAILABLE:
         ["outcome"],
     )
 
+    # CHAOS-3502/3650: a SEPARATE axis from the routing-outcome counter above.
+    # That counter measures the transport/investigation call
+    # (GraphQueryOutcome); this one measures what the ORCHESTRATOR did with a
+    # COMPLETED result once it tried to assemble a real answer from it. The
+    # two must stay distinct counters -- collapsing them would conflate "the
+    # graph route completed" with "the graph route produced a usable
+    # answer", which is exactly the state-conflation CHAOS-3502's ruling
+    # forbids. Only incremented when assembly is actually attempted (i.e.
+    # canonical_enrichment is wired and the packet's own outcome asserts a
+    # judgment) -- a gate-skip (collaborator not wired, packet not
+    # supported) has no assembly outcome to report and is observable through
+    # the existing log line instead.
+    ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ask_dev_graph_assembly_outcome_total",
+        "Attempts to assemble a graph-grounded DevAnswer from a COMPLETED "
+        "graph-routing packet (CHAOS-3502/3650), by outcome: 'assembled_clean' "
+        "(no evidence refused, no enrichment gap), "
+        "'assembled_degraded_evidence_refused' (the canonical evidence "
+        "service refused at least one candidate -- drop-and-disclose, never "
+        "an abort), 'assembled_degraded_enrichment_gap' (a canonical "
+        "enrichment source was unavailable), 'assembled_degraded_both', "
+        "'no_material' (admission + enrichment together produced nothing to "
+        "ground an answer on -- falls through to the legacy loop, same as "
+        "today), or 'assembly_raised' (an unexpected exception during "
+        "admission/enrichment -- caught, logged at ERROR, never surfaced as "
+        "RunState.FAILED). Content-safe: the label is this closed outcome "
+        "vocabulary, never question or entity text.",
+        ["outcome"],
+    )
+
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _prometheus_client_module.Counter(
         "devhealth_ask_dev_narrative_fallback_total",
         "Ask Dev narrative provider calls that fell back to the deterministic "
@@ -387,6 +417,7 @@ else:
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL = _noop_counter()
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL = _noop_counter()
     ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL = _noop_counter()
+    ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL = _noop_counter()
     ASK_DEV_NARRATIVE_FALLBACK_TOTAL = _noop_counter()
     ASK_DEV_QUA_SHADOW_TOTAL = _noop_counter()
     ASK_DEV_QUA_COMMIT_TOTAL = _noop_counter()

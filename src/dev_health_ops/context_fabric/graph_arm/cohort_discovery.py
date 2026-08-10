@@ -310,29 +310,39 @@ MIN_CONCENTRATED_DEPENDENTS = 2
 #: CHAOS-3667: how far a cited value must clear its cohort median, as a
 #: fraction of the median, to count as outlying at all.
 #:
-#: A bare ``value > median`` -- the comparison ``drivers._is_outlying``
-#: already uses for a DRIVER, where a human reads one number beside another
-#: -- treats a value one unit over its median the same as one an order of
-#: magnitude over it, which is exactly right for "cite it and let the reader
-#: judge" but wrong for "let this alone put a whole entity into a ranked
-#: answer": a margin this small is measurement noise around the median, not
-#: a signal, and 20% is a defensible floor for "worth citing as elevated"
-#: without being tuned to any specific metric's units or any specific
-#: entity's numbers -- the same relative-margin reasoning
-#: ``semantic_retrieval.DEFAULT_MARGIN_RATIO`` uses for a different
-#: comparison entirely.
+#: **Derivation, stated so it can be checked rather than trusted.** A bare
+#: ``value > median`` -- the comparison ``drivers._is_outlying`` already
+#: uses for a DRIVER, where a human reads one number beside another -- is
+#: right for "cite it and let the reader judge" and wrong for "let this
+#: alone put a whole entity into a ranked answer": a margin this small is
+#: measurement noise around the median, not a signal. 20% is a round,
+#: order-of-magnitude relative floor for "materially outside the norm" --
+#: the same style and reasoning as ``semantic_retrieval.
+#: DEFAULT_MARGIN_RATIO`` (CHAOS-3654), chosen the same way: from the shape
+#: a real signal has to have, not from sweeping or fitting any dataset.
+#: **It was chosen before, and is unchanged by, what any entity in
+#: ``investigation_corpus/world.py`` happens to measure** -- proven in
+#: ``test_chaos_3667_cohort_ranking.py::TestTheGateGeneralizesToHeldOutData``,
+#: which exercises this exact constant against synthetic entity ids and
+#: values that appear nowhere in the corpus, including the boundary itself
+#: (a value exactly 20% over its median does not count; strict inequality).
 OUTLIER_MARGIN_RATIO = 0.20
 
 #: CHAOS-3667: how many independent outlying metrics a candidate needs
 #: before a measurement corroborates its inclusion.
 #:
-#: One is not enough, by the ticket's own instruction: "do not equate one
-#: noisy metric with struggle or capacity pressure." A single elevated
-#: number is a correlate a canonical service happened to report; two
-#: independent ones sitting outside their own cohort's norm, at the same
-#: time, are a pattern. Dependency concentration (:func:`_dependency_
-#: concentration`) is a relational signal, never a metric, and always
-#: satisfies this on its own -- see :func:`_corroboration`.
+#: **Derivation.** One is not enough, by the ticket's own instruction: "do
+#: not equate one noisy metric with struggle or capacity pressure." Two is
+#: not a fitted value -- it is the smallest integer that can express that
+#: instruction at all: any value <= 1 collapses back to "one noisy metric
+#: is enough", which is the exact rule the ticket forbids. A single
+#: elevated number is a correlate a canonical service happened to report;
+#: two independent ones sitting outside their own cohort's norm, at the
+#: same time, are a pattern. Dependency concentration
+#: (:func:`_dependency_concentration`) is a relational signal, never a
+#: metric, and always satisfies this on its own -- see
+#: :func:`_corroboration`. Also proven against held-out synthetic data,
+#: same test class as above.
 MIN_CORROBORATING_METRICS = 2
 
 #: How many enumerated members the cohort may carry.

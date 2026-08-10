@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from collections import Counter
@@ -103,6 +104,7 @@ from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
+from .graph_investigation_query import GraphInvestigationQuery
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .investigation_shadow import (
@@ -962,6 +964,31 @@ class EventCancellationSignal:
 
 EventSink = Callable[[OrchestratorEvent], Awaitable[None]]
 
+#: CHAOS-3502: the runtime kill-switch for graph-assisted routing.
+#: Independent of the organization feature-policy gate
+#: (``licensing.registry.ASK_DEV_GRAPH_ROUTING_FEATURE``,
+#: ``production_runtime.py`` evaluates it and decides whether to construct a
+#: real ``GraphInvestigationQuery`` at all) -- same two-flag shape
+#: ``graph_arm.flags`` already uses for projection/read, and for the same
+#: reason: an operator needs a same-process kill switch that does not
+#: require a database round trip or waiting for an org-policy cache to
+#: invalidate, on TOP OF the organization opt-in, not instead of it. Default
+#: OFF, so an unset var is byte-identical to this seam not existing.
+GRAPH_ROUTING_RUNTIME_FLAG = "ASK_DEV_GRAPH_ROUTING_ENABLED"
+
+
+def graph_routing_runtime_enabled() -> bool:
+    """Whether the graph-assisted routing seam may run in this process.
+
+    Both this AND the organization feature-policy gate must be true for the
+    graph route to ever be attempted -- this function is only ever the
+    SECOND check, never a substitute for the org gate. See
+    ``GRAPH_ROUTING_RUNTIME_FLAG``'s own comment for why the two are
+    independent rather than one implying the other.
+    """
+
+    return os.getenv(GRAPH_ROUTING_RUNTIME_FLAG) == "1"
+
 
 class DevOrchestrator:
     """Execute one Ask Dev message as a bounded state machine."""
@@ -986,6 +1013,7 @@ class DevOrchestrator:
         qua_shadow: QuestionUnderstandingShadow | None = None,
         investigation_shadow: InvestigationShadow | None = None,
         investigation_packet_producer: InvestigationPacketProducer | None = None,
+        graph_investigation_query: GraphInvestigationQuery | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -1028,6 +1056,20 @@ class DevOrchestrator:
         # later changes production_runtime.py and nothing here.
         self._investigation_shadow = investigation_shadow
         self._investigation_packet_producer = investigation_packet_producer
+        # CHAOS-3502: ``None`` is the flag-off path -- no graph-assisted
+        # routing branch is attempted, byte-identical to this seam not
+        # existing (see ``test_chaos_3502_graph_routing_seam.py``'s
+        # inertness test). Even when set, ``run()`` also requires
+        # ``graph_routing_runtime_enabled()`` at the call site: the
+        # organization gate that decides whether to construct this at all
+        # (production_runtime.py) and the runtime kill switch are
+        # independent, mirroring ``graph_arm.flags``'s own
+        # projection/read-independence reasoning. As of this landing the
+        # branch only observes -- it does not yet turn a completed graph
+        # investigation into an answer; see the module docstring on
+        # ``graph_investigation_query.py`` and CHAOS-3502/CHAOS-3664 for the
+        # canonical-admission bridge that finishes this seam.
+        self._graph_investigation_query = graph_investigation_query
         self._composer = PromptComposer(registry)
 
     async def run(

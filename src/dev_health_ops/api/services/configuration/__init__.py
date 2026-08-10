@@ -32,6 +32,7 @@ from ._helpers import (
 from .generic import SettingsService
 from .integration_credentials import (
     AmbiguousCredentialError,
+    CredentialLookupOutcome,
     IntegrationCredentialsService,
 )
 from .jira_activity_inference import JiraActivityInferenceService
@@ -41,6 +42,7 @@ from .team_membership import TeamMembershipService
 
 __all__ = [
     "AmbiguousCredentialError",
+    "CredentialLookupOutcome",
     "IntegrationCredentialsService",
     "JiraActivityInferenceService",
     "SettingsService",

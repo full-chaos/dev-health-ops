@@ -4775,36 +4775,41 @@ class DevOrchestrator:
         ``narrative_fallback.build_deterministic_fallback_narrative``'s own
         signature-level guarantee one layer down.
 
+        CHAOS-3502 (terminal-path integration-seam decision, CHAOS-3660):
+        this is now the TOOL-RESULTS-SPECIFIC half of what was previously
+        one function. It extracts canonical material from ``tool_results``
+        and computes the degraded flag, then hands both to
+        :meth:`_assemble_grounded_answer` -- the backend-neutral half,
+        shared with the graph-frame path so there is exactly one place a
+        ``DevAnswer`` gets assembled from server-verified material, not two
+        independent constructions that could quietly drift apart.
+
         Returns ``None`` -- meaning "terminate exactly as the pre-cutover
-        code did" -- in three cases, each of which is a case where shipping
-        would be worse than failing:
+        code did" -- in two cases here (a third, "nothing to ground on",
+        lives in :meth:`_assemble_grounded_answer` now and applies to both
+        frame sources identically):
 
         * the cutover is not active for this run (``ask_dev_wave_3_1`` off);
         * the tool results disagree about a canonical object
           (``_canonical_answer_data`` returns ``None``), which is an
-          integrity failure, not a grounding one;
-        * there is no canonical metric and no canonical evidence. An
-          "answer" built from nothing but this module's own copy would be a
-          substantive-looking shell, which is the precise failure the
-          CHAOS-3290 floor exists to prevent.
+          integrity failure, not a grounding one.
 
-        On that last point, ``investigation_result`` is deliberately NOT
-        part of the predicate, and the parameter is kept only to document
-        that (codex adversarial review, round 1 HIGH -- an earlier revision
-        did count plan findings as sufficient material). The plan's
-        health/deficiency findings are real server-computed content, but
-        ``finish()`` embeds them into the FRAME, and no client surface reads
-        a frame today: ``streaming.py`` sends ``result.answer`` live, and
-        ``router``'s replay prefers the stored v1 answer. So a run demoted
-        on the strength of findings alone would terminate COMPLETED while
-        the client received an answer with no claim, no metric and no
-        evidence -- the exact empty shell this function's third guard
-        exists to refuse, and a worse outcome than the honest
-        ``insufficient_evidence`` it replaced. When canonical material IS
-        present the findings ride along on the frame for free, which is the
-        only case where they add anything a caller can reach. Revisit once
-        CHAOS-3298 puts v2 on the wire and a findings-only frame is
-        genuinely readable.
+        ``investigation_result`` is deliberately NOT part of the predicate,
+        and the parameter is kept only to document that (codex adversarial
+        review, round 1 HIGH -- an earlier revision did count plan findings
+        as sufficient material). The plan's health/deficiency findings are
+        real server-computed content, but ``finish()`` embeds them into the
+        FRAME, and no client surface reads a frame today: ``streaming.py``
+        sends ``result.answer`` live, and ``router``'s replay prefers the
+        stored v1 answer. So a run demoted on the strength of findings
+        alone would terminate COMPLETED while the client received an answer
+        with no claim, no metric and no evidence -- the exact empty shell
+        ``_assemble_grounded_answer``'s guard exists to refuse, and a worse
+        outcome than the honest ``insufficient_evidence`` it replaced. When
+        canonical material IS present the findings ride along on the frame
+        for free, which is the only case where they add anything a caller
+        can reach. Revisit once CHAOS-3298 puts v2 on the wire and a
+        findings-only frame is genuinely readable.
         """
 
         del investigation_result  # see the docstring: documented non-input
@@ -4814,11 +4819,65 @@ class DevOrchestrator:
         if canonical_data is None:
             return None
         canonical_metrics, canonical_evidence = canonical_data
-        if not (canonical_metrics or canonical_evidence):
-            return None
         degraded = any(
             result.status in {"unavailable", "error"} for result in tool_results
         )
+        return self._assemble_grounded_answer(
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            resolution=resolution,
+            coverage=coverage,
+            canonical_metrics=canonical_metrics,
+            canonical_evidence=canonical_evidence,
+            degraded=degraded,
+            model=model,
+            now=now,
+            direct_summary=SERVER_GROUNDED_SUMMARY,
+            warnings=[SERVER_GROUNDED_WARNING],
+        )
+
+    def _assemble_grounded_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        coverage: DevCoverage,
+        canonical_metrics: list[DevMetricRef],
+        canonical_evidence: list[DevEvidenceRef],
+        degraded: bool,
+        model: DevModelMetadata,
+        now: datetime,
+        direct_summary: str,
+        warnings: list[str],
+    ) -> DevAnswer | None:
+        """The backend-neutral core of a server-grounded ``DevAnswer``: no
+        live model prose, ever -- this function takes no ``DevAnswer``/
+        ``claims`` parameter at all, the same signature-level guarantee
+        :meth:`_server_grounded_answer`'s own docstring describes one layer
+        up.
+
+        CHAOS-3502 (terminal-path integration-seam decision, CHAOS-3660):
+        extracted so that BOTH the tool-results path
+        (:meth:`_server_grounded_answer`) and the graph-frame path (the
+        packet-sourced ``_graph_grounded_answer``, landing once the
+        admission-call leg and enrichment type are ready) assemble their
+        ``DevAnswer`` through this ONE core rather than two independent
+        constructions -- exactly the "one terminal path, two frame sources"
+        shape the ruling requires, one level below ``finish()`` itself
+        (which is already shared and needed no change).
+
+        Returns ``None`` when there is no canonical metric and no canonical
+        evidence: an "answer" built from nothing but a caller's own copy
+        would be a substantive-looking shell, which is the precise failure
+        the CHAOS-3290 floor exists to prevent. This guard is deliberately
+        backend-neutral -- it does not know or care whether its caller's
+        material came from a tool loop or a graph packet, only whether real
+        material exists.
+        """
+
+        if not (canonical_metrics or canonical_evidence):
+            return None
         return DevAnswer(
             schema_version="dev_answer.v1",
             answer_id=answer_id,
@@ -4831,13 +4890,13 @@ class DevOrchestrator:
             # COMPLETE additionally asserts every required source was fresh
             # and available (DevAnswer.validate_answer_invariants).
             status=AnswerStatus.DEGRADED if degraded else AnswerStatus.PARTIAL,
-            direct_summary=SERVER_GROUNDED_SUMMARY,
+            direct_summary=direct_summary,
             claims=[],
             metrics=canonical_metrics,
             evidence=canonical_evidence,
             conflicts=[],
             coverage=coverage,
-            warnings=[SERVER_GROUNDED_WARNING],
+            warnings=warnings,
             suggested_follow_up_questions=[],
             versions=self._versions,
             model=model,

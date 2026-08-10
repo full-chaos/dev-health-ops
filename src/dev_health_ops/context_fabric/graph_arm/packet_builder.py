@@ -38,9 +38,11 @@ from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta
+from typing import Protocol
 
 from dev_health_ops.api.dev.contracts import FreshnessState
 from dev_health_ops.api.dev.contracts_v2.base import (
+    QuestionIntentID,
     SourceClass,
     SourceRequirementState,
 )
@@ -79,6 +81,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     MissingSource,
     PacketLimitation,
     PacketLimitationKind,
+    ProductionJobProvenance,
     QuestionFamilyID,
     RelatedContext,
     RelatedEntity,
@@ -135,6 +138,7 @@ __all__ = [
     "IncomparableCohortError",
     "JobContext",
     "PacketTooLargeError",
+    "ProductionJobContext",
     "SubjectMatchFinding",
     "AuthorizationWithheldEvidenceError",
     "CanonicalEvidenceRefusedError",
@@ -142,6 +146,7 @@ __all__ = [
     "TrialContext",
     "UnsupportedComparisonShapeError",
     "build_packet",
+    "build_production_packet",
     "derive_outcome",
     "signer_from_environment",
 ]
@@ -338,6 +343,61 @@ class TrialContext:
     #: the trial artifact by the caller; kept here so a packet and its
     #: artifact cannot disagree about which build produced them.
     dependency_versions: Mapping[str, str] = field(default_factory=dict)
+
+
+class _JobLike(Protocol):
+    """The job fields ``_assemble_core`` needs that neither depend on nor
+    describe trial-vs-production provenance. :class:`JobContext` and
+    :class:`ProductionJobContext` both satisfy this structurally; neither
+    references the other, so this is the only coupling between them.
+
+    Declared as properties, not plain attributes: both implementations are
+    frozen dataclasses, whose fields mypy treats as read-only, so a
+    plain-attribute Protocol (implicitly settable) would reject them.
+    """
+
+    @property
+    def job_id(self) -> str: ...
+    @property
+    def job_statement(self) -> str: ...
+    @property
+    def comparison_shape(self) -> ComparisonShape: ...
+    @property
+    def window_start(self) -> datetime: ...
+    @property
+    def window_end(self) -> datetime: ...
+    @property
+    def timezone(self) -> str: ...
+    @property
+    def job_uncertainty(self) -> JobUncertainty: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionJobContext:
+    """The analytical job production asked this arm to investigate.
+
+    Production's own analog of :class:`JobContext` (CHAOS-3660/CHAOS-3678).
+    It carries an ``intent_id``, never a ``QuestionFamilyID``: per the
+    CHAOS-3678 GO ruling, production classifies its own job and comparison
+    shape before ever calling this arm, so :func:`build_production_packet`
+    performs no family/comparison-shape permission check -- unlike
+    :func:`build_packet`, which still enforces the trial's
+    ``QUESTION_FAMILY_REGISTRY`` rule for ``JobContext.question_family``.
+
+    ``run_id`` is production's analog of ``TrialContext.run_id``: the
+    identifier the calling ``GraphInvestigationRequest`` already carries.
+    There is no corpus/fixture concept here at all, unlike ``TrialContext``.
+    """
+
+    job_id: str
+    intent_id: QuestionIntentID
+    run_id: str
+    job_statement: str
+    comparison_shape: ComparisonShape
+    window_start: datetime
+    window_end: datetime
+    timezone: str = "UTC"
+    job_uncertainty: JobUncertainty = JobUncertainty.PRECISE
 
 
 def signer_from_environment() -> EvidenceReferenceSigner:
@@ -1092,13 +1152,17 @@ def _lineage_path(
     )
 
 
-def build_packet(
+def _assemble_core(
     *,
     readout: InvestigationReadout,
-    job: JobContext,
+    job: _JobLike,
+    run_id: str,
+    question_family: QuestionFamilyID | None,
+    production_job: ProductionJobProvenance | None,
+    corpus_version: str | None,
+    trial_metadata: TrialMetadata | None,
     watermark: IndexWatermark,
     signer: EvidenceReferenceSigner,
-    trial: TrialContext,
     produced_at: datetime,
     embedder: EmbeddingBackend | None = None,
     subject_matches: Sequence[SubjectMatchFinding] | None = None,
@@ -1110,6 +1174,16 @@ def build_packet(
     admitted_evidence: Mapping[str, DevEvidenceRefV2] | None = None,
 ) -> AskDevInvestigationPacket:
     """Turn one bounded traversal into the frozen investigation packet.
+
+    Shared by :func:`build_packet` (trial, byte-stable) and
+    :func:`build_production_packet` (CHAOS-3678). Exactly one of
+    ``question_family``/``production_job`` must be non-``None`` --
+    ``AnalyticalJob``'s own exactly-one-of validator is what actually
+    enforces this, deliberately not duplicated here. ``question_family``
+    also controls whether the trial's family/comparison-shape permission
+    check runs at all: ``None`` (the production path) skips it entirely,
+    because production classifies its own job/shape before calling this arm
+    (CHAOS-3678 GO ruling) and has no family for the check to consult.
 
     ``admitted_evidence`` (CHAOS-3646) is the canonical evidence service's
     answer to this run's admission round, keyed by the SOURCE's own record
@@ -1191,10 +1265,21 @@ def build_packet(
         else set()
     )
 
-    family = QUESTION_FAMILY_REGISTRY[job.question_family]
-    if job.comparison_shape not in family.permitted_comparison_shapes:
+    # Trial-only: production has no question family, and classifies its own
+    # job/comparison-shape before calling this arm (CHAOS-3678 GO ruling),
+    # so there is no family here for a permission check to consult, and no
+    # family-declared required source classes below either.
+    family = (
+        QUESTION_FAMILY_REGISTRY[question_family]
+        if question_family is not None
+        else None
+    )
+    if (
+        family is not None
+        and job.comparison_shape not in family.permitted_comparison_shapes
+    ):
         raise ValueError(
-            f"family {job.question_family} does not permit the "
+            f"family {question_family} does not permit the "
             f"{job.comparison_shape} comparison shape"
         )
 
@@ -1723,7 +1808,14 @@ def build_packet(
             ),
         )
         for source_class in sorted(
-            set(family.required_source_classes) - set(observed_classes),
+            (
+                set(family.required_source_classes) - set(observed_classes)
+                if family is not None
+                # Production declares no family-required source-class set at
+                # this arm's level; nothing is disclosed MISSING on that
+                # basis alone.
+                else set()
+            ),
             key=lambda item: item.value,
         )
     )
@@ -1980,9 +2072,14 @@ def build_packet(
         edge_validity_basis=EdgeValidityBasis.NOT_REQUIRED,
     )
     analytical_job = AnalyticalJob(
-        schema_version="ask_dev_analytical_job.v1",
+        schema_version=(
+            "ask_dev_analytical_job.v1"
+            if question_family is not None
+            else "ask_dev_analytical_job.v2"
+        ),
         job_id=job.job_id,
-        question_family=job.question_family,
+        question_family=question_family,
+        production_job=production_job,
         job_uncertainty=job.job_uncertainty,
         job_statement=job.job_statement,
         comparison_shape=job.comparison_shape,
@@ -2155,18 +2252,13 @@ def build_packet(
             )
             for source_class in (observed_classes or [SourceClass.WORK_GRAPH])
         ),
-        corpus_version=trial.corpus_version,
-        trial=TrialMetadata(
-            arm_id=ARM_ID,
-            producer_id=PRODUCER_ID,
-            fixture_version=trial.fixture_version,
-            run_id=trial.run_id,
-        ),
+        corpus_version=corpus_version,
+        trial=trial_metadata,
     )
 
     packet = AskDevInvestigationPacket(
         schema_version="ask_dev_investigation_packet.v1",
-        packet_id=_packet_id(trial.run_id, job.job_id),
+        packet_id=_packet_id(run_id, job.job_id),
         organization_id=readout.org_id,
         produced_at=produced_at,
         # Derived, never passed in: an arm that could be told its own outcome
@@ -2208,3 +2300,113 @@ def build_packet(
             "than emitting a packet nobody bounded"
         )
     return packet
+
+
+def build_packet(
+    *,
+    readout: InvestigationReadout,
+    job: JobContext,
+    watermark: IndexWatermark,
+    signer: EvidenceReferenceSigner,
+    trial: TrialContext,
+    produced_at: datetime,
+    embedder: EmbeddingBackend | None = None,
+    subject_matches: Sequence[SubjectMatchFinding] | None = None,
+    cohort: CohortProposal | None = None,
+    drivers: Sequence[DriverFinding] | None = None,
+    drivers_truncated: bool = False,
+    budgets: TrialBudgets = DEFAULT_BUDGETS,
+    staleness_tolerance: timedelta = DEFAULT_STALENESS_TOLERANCE,
+    admitted_evidence: Mapping[str, DevEvidenceRefV2] | None = None,
+) -> AskDevInvestigationPacket:
+    """The trial's constructor (CHAOS-3617). Byte-stable: this is a thin
+    wrapper over :func:`_assemble_core` that supplies exactly the values the
+    original single-function ``build_packet`` computed inline, so every
+    existing caller sees zero output difference from the CHAOS-3678
+    extraction. See :func:`_assemble_core` for the parameter semantics this
+    delegates.
+    """
+
+    return _assemble_core(
+        readout=readout,
+        job=job,
+        run_id=trial.run_id,
+        question_family=job.question_family,
+        production_job=None,
+        corpus_version=trial.corpus_version,
+        trial_metadata=TrialMetadata(
+            arm_id=ARM_ID,
+            producer_id=PRODUCER_ID,
+            fixture_version=trial.fixture_version,
+            run_id=trial.run_id,
+        ),
+        watermark=watermark,
+        signer=signer,
+        produced_at=produced_at,
+        embedder=embedder,
+        subject_matches=subject_matches,
+        cohort=cohort,
+        drivers=drivers,
+        drivers_truncated=drivers_truncated,
+        budgets=budgets,
+        staleness_tolerance=staleness_tolerance,
+        admitted_evidence=admitted_evidence,
+    )
+
+
+def build_production_packet(
+    *,
+    readout: InvestigationReadout,
+    job: ProductionJobContext,
+    watermark: IndexWatermark,
+    signer: EvidenceReferenceSigner,
+    produced_at: datetime,
+    embedder: EmbeddingBackend | None = None,
+    subject_matches: Sequence[SubjectMatchFinding] | None = None,
+    cohort: CohortProposal | None = None,
+    drivers: Sequence[DriverFinding] | None = None,
+    drivers_truncated: bool = False,
+    budgets: TrialBudgets = DEFAULT_BUDGETS,
+    staleness_tolerance: timedelta = DEFAULT_STALENESS_TOLERANCE,
+    admitted_evidence: Mapping[str, DevEvidenceRefV2] | None = None,
+) -> AskDevInvestigationPacket:
+    """Production's constructor (CHAOS-3660/CHAOS-3678).
+
+    No ``TrialContext``, no ``QuestionFamilyID``, no fixture/corpus concept:
+    ``job.intent_id`` is production's own vocabulary (typed as the real
+    ``QuestionIntentID`` enum, so an invalid intent cannot reach this
+    function -- there is no separate runtime check to keep in sync with the
+    enum). The emitted ``AnalyticalJob`` carries ``production_job`` instead
+    of ``question_family``, and the emitted packet's ``versions.trial`` and
+    ``versions.corpus_version`` are both ``None``: per
+    ``investigation_contract/__init__.py``, ``TrialMetadata`` is optional
+    "evaluation metadata, never product truth", and production has none.
+
+    See :func:`_assemble_core` for the parameter semantics this delegates,
+    including ``admitted_evidence``, ``embedder`` and ``cohort``.
+    """
+
+    return _assemble_core(
+        readout=readout,
+        job=job,
+        run_id=job.run_id,
+        question_family=None,
+        production_job=ProductionJobProvenance(
+            schema_version="ask_dev_production_job_provenance.v1",
+            intent_id=job.intent_id.value,
+            run_id=job.run_id,
+        ),
+        corpus_version=None,
+        trial_metadata=None,
+        watermark=watermark,
+        signer=signer,
+        produced_at=produced_at,
+        embedder=embedder,
+        subject_matches=subject_matches,
+        cohort=cohort,
+        drivers=drivers,
+        drivers_truncated=drivers_truncated,
+        budgets=budgets,
+        staleness_tolerance=staleness_tolerance,
+        admitted_evidence=admitted_evidence,
+    )

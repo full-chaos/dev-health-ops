@@ -330,7 +330,7 @@ class ContractChangelogEntry:
 CONTRACT_CHANGELOG: tuple[ContractChangelogEntry, ...] = (
     ContractChangelogEntry(
         ticket="CHAOS-3660",
-        pull_request="TBD",
+        pull_request="#1657",
         landed_on="2026-08-10",
         schema="ask_dev_analytical_job",
         from_version="v1",

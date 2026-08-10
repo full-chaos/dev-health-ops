@@ -81,9 +81,40 @@ func validateGitHubWorkItemDerivedEffect[T any](
 		if err := json.Unmarshal(raw, &row); err != nil {
 			return nil, ErrInvalidConfiguration
 		}
+		if !validGitHubWorkItemDerivedRowTenancy(row, identity) {
+			return nil, ErrInvalidConfiguration
+		}
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+// validGitHubWorkItemDerivedRowTenancy is shared by the GitHub and GitLab
+// adapters. The JSON effect ledger is not allowed to become a bypass around
+// the provider and tenant fences that the typed compute rows already carry.
+func validGitHubWorkItemDerivedRowTenancy[T any](
+	row T,
+	identity GitHubWorkItemEffectIdentity,
+) bool {
+	switch value := any(row).(type) {
+	case githubEstimateCoverageMetricsDailyRow:
+		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
+	case githubWorkItemTeamAttributionRow:
+		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
+	case githubWorkItemStateDurationDailyRow:
+		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
+	case githubIssueTypeMetricsDailyRow:
+		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
+	case githubInvestmentClassificationDailyRow:
+		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
+	case githubInvestmentMetricsDailyRow:
+		// investment_metrics_daily's production schema has no provider column;
+		// its natural key is tenant/repo/day/team/investment tuple. The provider
+		// is already fenced at the typed compute claim and effect identity.
+		return value.OrgID == identity.OrgID
+	default:
+		return true
+	}
 }
 
 // inspectGitHubWorkItemDerivedRows returns the WEAKEST verdict across rows:

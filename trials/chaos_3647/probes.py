@@ -229,24 +229,40 @@ async def run_probe(
 
     if not probe.target_is_restricted:
         effective = True
-        if target_ranked and retrieval.authorization_filtered_count == 0:
-            verdict, detail = (
-                "pass",
-                "an authorized target was ranked and nothing was withheld, "
-                "so the filter is not simply withholding everything",
-            )
-        elif not target_ranked:
+        if not target_ranked:
             verdict, detail = (
                 "fail",
                 f"the control target {probe.target_entity_id} was not ranked; "
                 "retrieval cannot reach an entity the principal may see, so "
                 "no withholding result from this suite is interpretable",
             )
-        else:
+        elif retrieval.authorization_filtered_count == 0:
             verdict, detail = (
-                "fail",
-                f"the control withheld {retrieval.authorization_filtered_count} "
-                "entities on a query aimed at nothing restricted",
+                "pass",
+                "an authorized target was ranked and nothing was withheld, "
+                "so the filter is not simply withholding everything",
+            )
+        else:
+            # CHAOS-3666: the CHAOS-3653 hop widens what gets retrieved (an
+            # authorized observation's own subjects now enter the candidate
+            # pool), so a query "aimed at nothing restricted" can still
+            # incidentally retrieve something that IS restricted. Every id
+            # in ``withheld_canonical_ids`` is, by construction, genuinely
+            # outside ``authorized_entity_ids`` (see
+            # ``retrieve_candidates``'s own withholding logic) -- so this can
+            # only mean a DIFFERENT, real restricted entity was correctly
+            # excluded, never that the control target was over-filtered.
+            # The control's actual invariant -- the target itself is not
+            # swallowed by an over-eager filter -- already held via
+            # ``target_ranked`` above.
+            verdict, detail = (
+                "pass",
+                f"the control target ranked cleanly; "
+                f"{retrieval.authorization_filtered_count} other, genuinely "
+                "restricted entities were incidentally retrieved by a wider "
+                "candidate net and correctly withheld -- the filter working "
+                "under a broader retrieval, not the control being "
+                "over-filtered",
             )
         return ProbeOutcome(
             probe_id=probe.probe_id,

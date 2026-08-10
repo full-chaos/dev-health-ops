@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "name": "Linear reference catalog typed routes, live parity, tenancy, and effects",
+  "$limitation": "This plan proves the provider claim/client guards, complete project retirement and lifecycle normalization, strict pagination shape, archived-project discovery, member identity serialization through the live Python producer, concrete destination coverage, tenant-scoped row/cache validation, and lead enrichment. It does not claim credentialed Linear traffic, scheduler/registry/config/deployment activation, or a live ClickHouse container run; the integration-tagged migrated-schema readback, lease, and shared EffectCommitter recovery tests are present separately and require Docker.",
+  "build": ["go", "test", "-mod=readonly", "-run", "^$", "./internal/providersync/"],
+  "mutations": [
+    {
+      "id": "LRC1-claim-provider-guard",
+      "file": "internal/providersync/linear_reference_catalog_route.go",
+      "find": "claim.Provider != \"linear\" ||",
+      "replace": "false ||",
+      "rationale": "The reference catalog must reject a claim owned by another provider before issuing Linear requests or effects.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogRejectsCrossScopeInputs/wrong_claim_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC2-credential-provider-guard",
+      "file": "internal/providersync/linear_reference_catalog_route.go",
+      "find": "credential.Provider != \"linear\" ||",
+      "replace": "false ||",
+      "rationale": "A Linear catalog walk must not accept a credential object owned by another provider.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogRejectsCrossScopeInputs/wrong_credential_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC3-client-provider-guard",
+      "file": "internal/providersync/linear_reference_catalog_route.go",
+      "find": "client.Provider != \"linear\" ||",
+      "replace": "false ||",
+      "rationale": "The catalog route must only issue requests through a Linear-configured HTTP client.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogRejectsCrossScopeInputs/wrong_client_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC4-trashed-project-retirement",
+      "file": "internal/providersync/linear_reference_catalog.go",
+      "find": "if payload.Trashed || payload.ArchivedAt != nil && strings.TrimSpace(*payload.ArchivedAt) != \"\" {",
+      "replace": "if payload.ArchivedAt != nil && strings.TrimSpace(*payload.ArchivedAt) != \"\" {",
+      "rationale": "Linear soft-deleted projects are retired even when archivedAt is empty; completed/canceled lifecycle remains separate from retirement.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogTreatsTrashedProjectAsRetired$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC5-pagination-page-info-fail-closed",
+      "file": "internal/providersync/linear_reference_catalog_route.go",
+      "find": "if page.Nodes == nil || !hasNextPagePresent {",
+      "replace": "if page.Nodes == nil {",
+      "rationale": "A catalog page without an explicit pageInfo completion signal must fail closed rather than dereferencing an incomplete response as a complete snapshot.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects/malformed_project_page$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC6-include-archived-projects",
+      "file": "internal/providersync/linear_reference_catalog_route.go",
+      "find": "linearReferenceConnectionVariables{First: perPage, IncludeArchived: true},",
+      "replace": "linearReferenceConnectionVariables{First: perPage},",
+      "rationale": "Retirement can only be observed when the projects query explicitly includes archived Linear projects.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC7-project-lifecycle-state",
+      "file": "internal/providersync/linear_reference_catalog.go",
+      "find": "IsActive: isActive, State: strings.TrimSpace(payload.Status.Type), TargetDate: targetDate,",
+      "replace": "IsActive: isActive, State: \"\", TargetDate: targetDate,",
+      "rationale": "The native project status.type is a concrete lifecycle column and must not be dropped while is_active remains retirement-only.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogNormalizesRetiredProjectAndLeadTeams$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC8-member-identities-live-python",
+      "file": "internal/providersync/linear_reference_catalog.go",
+      "find": "identityJSON := `{\"linear\": [` + string(identityValue) + `]}`",
+      "replace": "identityJSON := string(identityValue)",
+      "rationale": "The durable provider_identities string must match Python's real json.dumps producer shape; a compact scalar is not the same member catalog row.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=../../.mutation-harness", "PYTHON=../../.venv/bin/python", "PYTHONPATH=../../src", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceMemberMatchesLivePythonProducer$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC9-all-concrete-destinations",
+      "file": "internal/providersync/linear_reference_catalog.go",
+      "find": "projects, err := effectBatchFromValues(linearReferenceCatalogProjectsDestination, EffectReadbackRequired, rows.Projects)",
+      "replace": "projects, err := effectBatchFromValues(linearReferenceCatalogProjectsDestination, EffectReplaySafe, rows.Projects)",
+      "rationale": "Every typed reference dimension is durable and must be represented by a readback-required effect; one replay-safe destination weakens the shared recovery contract.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogBuildsConcreteEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC10-project-tenant-fence",
+      "file": "internal/providersync/linear_reference_catalog.go",
+      "find": "row.OrgID != claim.OrgID || strings.TrimSpace(row.ID) == \"\" ||",
+      "replace": "false || strings.TrimSpace(row.ID) == \"\" ||",
+      "rationale": "A typed project effect carrying another tenant's org_id must be rejected before it reaches a ClickHouse sink.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogRejectsForeignProjectEffectRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC11-reference-cache-tenant-fence",
+      "file": "internal/providersync/linear_reference_catalog.go",
+      "find": "strings.TrimSpace(row.OrgID) != orgID",
+      "replace": "false",
+      "rationale": "A tenant-scoped Linear reference cache must not resolve a same-key team from a different organization.",
+      "proof": [["go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceCatalogRejectsForeignTenantCache$", "./internal/providersync/"]]
+    },
+    {
+      "id": "LRC12-project-lead-enrichment",
+      "file": "internal/providersync/linear_reference_catalog.go",
+      "find": "if payload.Lead != nil {",
+      "replace": "if false {",
+      "rationale": "Lead id, name, and email are selected native project dimensions and must survive normalization into the typed catalog row.",
+      "proof": [["env", "DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=../../.mutation-harness", "PYTHON=../../.venv/bin/python", "PYTHONPATH=../../src", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestLinearReferenceProjectMatchesLivePythonProducer$", "./internal/providersync/"]]
+    }
+  ]
+}

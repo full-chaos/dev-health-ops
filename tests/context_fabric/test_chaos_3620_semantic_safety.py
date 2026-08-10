@@ -30,9 +30,12 @@ import pytest
 
 from dev_health_ops.api.dev import investigation_shadow as shadow
 from dev_health_ops.api.dev.investigation_contract import (
+    ConfidenceQualifier,
     DriverCategory,
     DriverRole,
     DriverStanding,
+    PacketLimitationKind,
+    StaffingDenominatorState,
 )
 from dev_health_ops.api.dev.investigation_contract.vocabulary import (
     ASSERTED_DRIVER_STANDINGS,
@@ -67,12 +70,14 @@ BANNED_BACKEND_TOKENS = (
 )
 
 
-#: Same denial-of-packet exemption the authorization sweep carries, and for
-#: the same reason: ``team_atlas`` cannot produce a driver-bearing packet at
-#: all (CHAOS-3634). Driver DISCOVERY still runs for it — only packet
-#: emission is refused — so the finding sweep below loses nothing, which is
-#: why it uses ``discover_drivers`` output rather than packets.
-PACKET_UNCONSTRUCTIBLE_WITH_DRIVERS = {"team_atlas"}
+#: Same (now empty) denial-of-packet exemption the authorization sweep
+#: carries. CHAOS-3634/3643 closed the defect: ``team_atlas`` builds a
+#: driver-bearing packet like any other seed now that capacity/staffing
+#: findings carry a ``staffing_qualification``. Kept named and empty, not
+#: deleted, for the same reason as ``test_chaos_3620_authorization.py``'s
+#: ``UNCONSTRUCTIBLE_WITH_DRIVERS`` — a live regression guard, not a
+#: historical note.
+PACKET_UNCONSTRUCTIBLE_WITH_DRIVERS: frozenset[str] = frozenset()
 
 
 def _every_authorized_subject() -> tuple[str, ...]:
@@ -160,30 +165,83 @@ class TestNoCanonicalTruthIsCreated:
             f"a capacity/staffing finding reached asserted standing: {offenders}"
         )
 
-    def test_an_unqualified_capacity_finding_cannot_be_EMITTED_at_all(self) -> None:
-        """The second, independent refusal — and a denial-of-packet.
+    def test_an_unqualified_capacity_finding_now_constructs_a_safe_packet(
+        self,
+    ) -> None:
+        """CHAOS-3634/3643, fixed: qualified, never a denial-of-packet.
 
-        Beyond the standing cap, the frozen contract refuses a
-        capacity/staffing driver carrying no ``staffing_qualification``: "a
-        staffing claim that says nothing about its denominator is an
-        unsupported claim". On ``team_atlas`` that refusal aborts packet
-        construction entirely.
+        The frozen contract refuses a capacity/staffing driver carrying no
+        ``staffing_qualification`` at all: "a staffing claim that says
+        nothing about its denominator is an unsupported claim". Before this
+        fix, ``team_atlas`` hit exactly that refusal and packet construction
+        aborted outright — recorded as a permanent, ticketed disposition
+        while CHAOS-3634 was descoped from the CHAOS-3619 trial's fix train.
 
-        Recorded as its own disposition rather than absorbed as a skip. It is
-        a real safety refusal working, *and* a denial of service for that
-        subject. Both halves are true and a reader needs both.
+        Now that the ticket's fix has landed (post-ADR CHAOS-3621
+        acceptance), ``drivers._qualify_staffing`` attaches a
+        ``DENOMINATOR_ABSENT`` disclosure to every capacity/staffing
+        finding, so the packet constructs. This test pins the two halves
+        that make that safe rather than merely unblocked:
 
-        **CHAOS-3634 is DESCOPED from the fix train — the abort stays.** The
-        ticket is the owner of record for the disposition, not a pending fix,
-        so this test is not waiting for anything: it pins a permanent
-        property of the current design. If the abort ever stops happening
-        that is a deliberate change and this goes red to say so.
+        1. the disclosure is honest — ``DENOMINATOR_ABSENT``, because this
+           arm has no allocation/headcount feed, only an operational
+           workload measurement;
+        2. the certainty stays bounded — ``QUALIFIED``, never
+           ``MEASURED_CERTAIN`` — which is the other half of the same rule
+           and the one CHAOS-3643's P06 case is about: a missing denominator
+           must never be presented as confident.
+
+        If either half regresses -- the finding goes back to raising, or the
+        disclosure quietly claims more certainty than the evidence
+        supports -- this goes red.
         """
 
-        from pydantic import ValidationError
+        investigation = spine.investigate("team_atlas", with_drivers=True)
+        packet = investigation.packet
 
-        with pytest.raises(ValidationError, match="staffing_qualification"):
-            spine.investigate("team_atlas", with_drivers=True)
+        capacity_drivers = [
+            candidate
+            for candidate in packet.driver_analysis.candidates
+            if candidate.category is DriverCategory.CAPACITY_OR_STAFFING
+        ]
+        assert capacity_drivers, (
+            "team_atlas produced no capacity/staffing candidate at all, so "
+            "this test is no longer exercising the case it is named for"
+        )
+        for candidate in capacity_drivers:
+            assert candidate.staffing_qualification is not None, (
+                f"{candidate.driver_id} carries no staffing_qualification; "
+                "this packet should never have been constructible"
+            )
+            assert (
+                candidate.staffing_qualification.denominator_state
+                is StaffingDenominatorState.DENOMINATOR_ABSENT
+            ), (
+                f"{candidate.driver_id} claims a denominator state of "
+                f"{candidate.staffing_qualification.denominator_state}, but "
+                "this arm has no allocation/headcount feed to support "
+                "anything stronger"
+            )
+            assert (
+                candidate.confidence_qualifier
+                is not ConfidenceQualifier.MEASURED_CERTAIN
+            ), (
+                f"{candidate.driver_id} presents staffing certainty with no "
+                "supporting denominator -- the exact CHAOS-3643 defect"
+            )
+            assert candidate.standing not in ASSERTED_DRIVER_STANDINGS, (
+                f"{candidate.driver_id} was asserted despite an absent "
+                "staffing denominator"
+            )
+
+        assert any(
+            limitation.kind is PacketLimitationKind.ABSENT_STAFFING_DENOMINATOR
+            for limitation in packet.evidence_coverage.limitations
+        ), (
+            "the packet carries a weak-denominator staffing finding but "
+            "does not disclose ABSENT_STAFFING_DENOMINATOR at the packet "
+            "level -- the frozen contract requires both"
+        )
 
     def test_no_measurement_only_category_reaches_asserted_standing(self) -> None:
         """The general rule the staffing ban is one instance of."""

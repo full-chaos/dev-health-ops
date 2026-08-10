@@ -85,6 +85,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     RelevanceState,
     SourceContractVersion,
     SourceHealthObservation,
+    StaffingQualification,
     SubjectCandidate,
     SubjectCommitmentState,
     SubjectDiscovery,
@@ -95,6 +96,7 @@ from dev_health_ops.api.dev.investigation_contract import (
 )
 from dev_health_ops.api.dev.investigation_contract.vocabulary import (
     ASSERTED_DRIVER_STANDINGS,
+    UNQUALIFIED_DENOMINATOR_STATES,
     EdgeValidityBasis,
 )
 
@@ -633,6 +635,37 @@ def _driver_candidate(
             ]
         ),
         exclusion_reason=finding.exclusion_reason,
+        staffing_qualification=_staffing_qualification(finding),
+    )
+
+
+def _staffing_qualification(finding: DriverFinding) -> StaffingQualification | None:
+    """CHAOS-3634/3643: the frozen contract's disclosure for a capacity claim.
+
+    ``None`` for every non-staffing finding, which is what
+    ``DriverCandidate.validate_staffing_claims_are_qualified`` requires:
+    that validator refuses a qualification on a driver categorised anything
+    but ``CAPACITY_OR_STAFFING`` just as firmly as it refuses a staffing
+    driver with none at all. ``drivers._qualify_staffing`` is the one place
+    that sets ``finding.staffing_denominator_state``, and it only ever does
+    so alongside a non-empty note -- so a staffing finding reaching here
+    with no note is an internal inconsistency between discovery and
+    emission, not a value to paper over with a placeholder string.
+    """
+
+    if finding.staffing_denominator_state is None:
+        return None
+    if not finding.staffing_qualification_note:
+        raise ValueError(
+            f"driver {finding.driver_id} sets a staffing denominator state "
+            f"({finding.staffing_denominator_state}) with no qualification "
+            "note; a staffing disclosure that says nothing about its "
+            "denominator explains nothing"
+        )
+    return StaffingQualification(
+        denominator_state=finding.staffing_denominator_state,
+        denominator_source_classes=finding.staffing_denominator_source_classes,
+        qualification_note=finding.staffing_qualification_note,
     )
 
 
@@ -1802,6 +1835,30 @@ def build_packet(
                     f"{filtered_total} candidate results were outside the "
                     f"caller's authorized scope and were removed before "
                     f"ranking{admission_clause}"
+                ),
+            )
+        )
+    # CHAOS-3634/3643. The frozen contract's
+    # ``validate_staffing_absence_is_disclosed`` requires this limitation
+    # whenever ANY driver's denominator is weak (partial or absent) --
+    # checked against the raw findings, not ``driver_candidates`` (built
+    # below), because every finding this arm can currently produce in
+    # ``CAPACITY_OR_STAFFING`` carries exactly that denominator state (see
+    # ``drivers._qualify_staffing``), and the packet-level disclosure is
+    # required independently of whether any one such finding reaches
+    # asserted standing.
+    if drivers and any(
+        finding.staffing_denominator_state in UNQUALIFIED_DENOMINATOR_STATES
+        for finding in drivers
+    ):
+        limitations.append(
+            PacketLimitation(
+                kind=PacketLimitationKind.ABSENT_STAFFING_DENOMINATOR,
+                detail=(
+                    "one or more capacity/staffing findings rest on a "
+                    "partial or absent allocation denominator; see each "
+                    "driver's own staffing_qualification for what evidence "
+                    "was and was not available"
                 ),
             )
         )

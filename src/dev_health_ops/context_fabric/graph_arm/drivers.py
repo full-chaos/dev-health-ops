@@ -63,6 +63,7 @@ from dev_health_ops.api.dev.investigation_contract import (
     DriverStanding,
     RelationshipDirection,
     RelationshipType,
+    StaffingDenominatorState,
 )
 
 from .readback import (
@@ -236,6 +237,16 @@ class DriverFinding:
     confidence_qualifier: ConfidenceQualifier = ConfidenceQualifier.QUALIFIED
     conflicting_evidence_ids: tuple[str, ...] = ()
     conflict_detail: str | None = None
+    #: CHAOS-3634/3643: set only when ``category`` is
+    #: ``CAPACITY_OR_STAFFING``, and always set THEN — see
+    #: :func:`_qualify_staffing`. ``None`` on every other category, which
+    #: ``packet_builder`` relies on to decide whether to build a
+    #: ``StaffingQualification`` at all: the frozen contract refuses one on
+    #: a non-staffing driver just as firmly as it refuses a staffing driver
+    #: without one.
+    staffing_denominator_state: StaffingDenominatorState | None = None
+    staffing_denominator_source_classes: tuple[SourceClass, ...] = ()
+    staffing_qualification_note: str | None = None
 
     @property
     def is_asserted(self) -> bool:
@@ -999,6 +1010,58 @@ def _promote(findings: Sequence[DriverFinding]) -> list[DriverFinding]:
     ]
 
 
+#: CHAOS-3634/3643: what this arm can currently say about a capacity/
+#: staffing denominator. Every ``CAPACITY_OR_STAFFING`` finding today is
+#: built from ``interruption_load_percentile`` (the only entry
+#: :data:`MEASUREMENT_CATEGORY` maps to that category) -- an operational
+#: workload signal, not a planned-allocation, headcount, or contributor-
+#: availability feed. The note is arm-wide rather than per-finding
+#: deliberately: it is honest about what this arm can source today, and a
+#: future metric that genuinely IS an allocation feed changes
+#: ``MEASUREMENT_CATEGORY`` and this sentence together, rather than leaving
+#: a per-finding note that quietly stops being true.
+_NO_ALLOCATION_EVIDENCE_NOTE = (
+    "based on operational workload measurement (interruption/incident load "
+    "percentile); no planned-allocation, headcount, or contributor-"
+    "availability feed is available to this arm, so the denominator behind "
+    "any capacity/staffing claim here is absent"
+)
+
+
+def _qualify_staffing(finding: DriverFinding) -> DriverFinding:
+    """Attach a staffing-denominator disclosure to a capacity/staffing finding.
+
+    The frozen contract's ``validate_staffing_claims_are_qualified`` refuses
+    to construct a ``DriverCandidate`` in ``DriverCategory.CAPACITY_OR_STAFFING``
+    with no ``staffing_qualification`` at all -- "a staffing claim that says
+    nothing about its denominator is an unsupported claim" -- which is what
+    made ``team_atlas`` abort packet construction outright (CHAOS-3634).
+    ``DENOMINATOR_ABSENT`` is correct for every finding this arm produces
+    today; see :data:`_NO_ALLOCATION_EVIDENCE_NOTE`.
+
+    This does not touch ``confidence_qualifier``: ``_measurement_candidates``
+    never sets it above the ``QUALIFIED`` default for a capacity finding, so
+    there is nothing here to downgrade, and the frozen contract independently
+    refuses ``MEASURED_CERTAIN`` paired with a weak denominator
+    (CHAOS-3643) -- this function's job is only to make the denominator
+    disclosure exist, not to police the certainty claim a second time.
+
+    A no-op for every other category. The wire contract's mutual-exclusion
+    rule -- a NON-staffing driver may not carry a qualification either -- is
+    upheld by never setting these fields on one in the first place, not by
+    clearing them here for a category that never reaches this function with
+    them set.
+    """
+
+    if finding.category is not DriverCategory.CAPACITY_OR_STAFFING:
+        return finding
+    return replace(
+        finding,
+        staffing_denominator_state=StaffingDenominatorState.DENOMINATOR_ABSENT,
+        staffing_qualification_note=_NO_ALLOCATION_EVIDENCE_NOTE,
+    )
+
+
 def _mark_symptoms_of_drivers(
     findings: Sequence[DriverFinding],
 ) -> list[DriverFinding]:
@@ -1074,11 +1137,14 @@ def discover_drivers(
         observation_attachment_available=readout.observation_attachment_available,
     )
 
-    findings = (
-        _blocking_candidates(context, readout)
-        + _open_child_candidates(context, readout)
-        + _symptom_candidates(context, readout)
-        + _measurement_candidates(context, readout)
+    findings = tuple(
+        _qualify_staffing(item)
+        for item in (
+            _blocking_candidates(context, readout)
+            + _open_child_candidates(context, readout)
+            + _symptom_candidates(context, readout)
+            + _measurement_candidates(context, readout)
+        )
     )
     # Deduplicate by driver_id, keeping the first: the same blocker can be
     # reached by several paths, and reporting it twice would make one cause

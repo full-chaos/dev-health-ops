@@ -58,17 +58,18 @@ def _analyst_grant() -> frozenset[str]:
 
 
 #: Seeds whose driver-bearing packet cannot be constructed at all.
-#: ``team_atlas`` produces a capacity driver with no staffing qualification,
-#: which the frozen contract refuses.
 #:
-#: **CHAOS-3634 is DESCOPED — the abort is the design, not a pending fix.**
-#: The ticket owns the disposition of record. This exemption is therefore
-#: permanent rather than temporary, which makes pinning it *more* important,
-#: not less: a permanent exemption is exactly the kind that quietly widens.
-#: ``test_the_only_unconstructible_seed_is_the_one_we_named`` keeps it
-#: honest, and a second unconstructible seed appearing is a finding rather
-#: than a quiet gap in the sweep.
-UNCONSTRUCTIBLE_WITH_DRIVERS = {"team_atlas"}
+#: **CHAOS-3634/3643, fixed.** ``team_atlas`` used to produce a capacity
+#: driver with no ``staffing_qualification``, which the frozen contract
+#: refused outright. ``drivers._qualify_staffing`` now attaches a
+#: ``DENOMINATOR_ABSENT`` disclosure to every capacity/staffing finding this
+#: arm produces, so the set is empty. Kept as a named, empty set rather than
+#: deleted: the exhaustiveness check below (``test_the_only_unconstructible_
+#: seed_is_the_one_we_named``) is a live regression guard, not a historical
+#: note — if some future defect makes another seed unconstructible again,
+#: that test goes red and this is where the exemption gets named, not a
+#: silent widening of the sweep's skip.
+UNCONSTRUCTIBLE_WITH_DRIVERS: frozenset[str] = frozenset()
 
 
 def _subject_seeds() -> tuple[str, ...]:

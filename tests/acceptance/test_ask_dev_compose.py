@@ -252,6 +252,50 @@ def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     assert "completed successfully" in launcher
 
 
+def test_graph_gate_uses_the_seeded_primary_platform_admin() -> None:
+    """The graph seed and browser gate must address one org partition.
+
+    The ordinary acceptance admin belongs to the generated fixture org. Using
+    it for the graph browser leg would leave the graph seed healthy while the
+    browser queried a different org, invalidating the graph-partition proof.
+    The launcher therefore derives the canonical platform-admin credential
+    from world.json, prepares readiness for that same org, and uses it only for
+    the graph-specific Playwright invocation.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert 'graph_primary_user_alias="primary.platform-admin"' in launcher
+    assert "password_for_alias" in launcher
+    assert 'graph_primary_org_alias="$(read_world_user_field' in launcher
+    assert 'graph_primary_org_alias}" != "primary"' in launcher
+    assert "load_world_manifest" in launcher
+    assert "ASK_DEV_GRAPH_PRIMARY_READINESS=PASSED" in launcher
+
+    seed_index = launcher.index("seed_ask_dev_graph_acceptance.py")
+    readiness_index = launcher.index("ASK_DEV_GRAPH_PRIMARY_READINESS=PASSED")
+    graph_gate_index = launcher.index("W3_GRAPH_ACCEPTANCE=RUNNING")
+    assert seed_index < readiness_index < graph_gate_index
+
+    graph_block = launcher[graph_gate_index:]
+    assert 'TEST_SUPERUSER_EMAIL="${graph_primary_user_email}"' in graph_block
+    assert 'TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}"' in graph_block
+
+
+def test_launcher_bypasses_ambient_proxies_for_host_loopback_calls() -> None:
+    """Host urllib calls must not route the discovered API port through a proxy."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert 'export NO_PROXY="${NO_PROXY},127.0.0.1,localhost"' in launcher
+    assert 'export NO_PROXY="127.0.0.1,localhost"' in launcher
+    assert 'export no_proxy="${no_proxy},127.0.0.1,localhost"' in launcher
+    assert 'export no_proxy="127.0.0.1,localhost"' in launcher
+
+    port_index = launcher.index('acceptance_api_port="$("${compose[@]}" port')
+    no_proxy_index = launcher.index("export NO_PROXY=")
+    first_host_api_call = launcher.index("assert_world_principals_can_log_in.py")
+    assert port_index < no_proxy_index < first_host_api_call
+
+
 def test_launcher_runs_the_not_found_smoke_before_bringing_up_web() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
     assert "smoke_ask_dev_not_found.py" in launcher

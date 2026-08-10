@@ -272,7 +272,9 @@ async def get_dev_capability_runtime(
         evidence_ready = bool(os.getenv("JWT_SECRET_KEY"))
         graph_routing_enabled = True
         try:
-            await CanonicalGraphRoutingEntitlementAuthorizer(session).require(user.org_id)
+            await CanonicalGraphRoutingEntitlementAuthorizer(session).require(
+                user.org_id
+            )
         except GraphRoutingPolicyDeniedError:
             graph_routing_enabled = False
         return DevCapabilityRuntime(
@@ -1131,6 +1133,11 @@ async def create_conversation(
             user_id=user_id,
             conversation_id=conversation.id,
         )
+        # The response can be sent before FastAPI finishes the yielded session
+        # dependency.  Commit here so an immediate follow-up request cannot
+        # race that dependency finalizer and observe a conversation that the
+        # successful 201 response says already exists.
+        await service.session.commit()
     except Exception as exc:
         _raise_persistence(exc, request_id)
         raise AssertionError("unreachable")
@@ -1273,6 +1280,7 @@ async def rename_conversation(
             user_id=user_id,
             conversation_id=conversation.id,
         )
+        await service.session.commit()
     except Exception as exc:
         _raise_persistence(exc, request_id)
         raise AssertionError("unreachable")
@@ -1297,6 +1305,8 @@ async def delete_conversation(
             user_id=user_id,
             conversation_id=conversation_id,
         )
+        if deleted:
+            await service.session.commit()
     except Exception as exc:
         _raise_persistence(exc, request_id)
         raise AssertionError("unreachable")

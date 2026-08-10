@@ -526,7 +526,10 @@ async def test_capability_runtime_projects_graph_entitlement(
     monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt")
     result = await dev_router_module.get_dev_capability_runtime(
         AuthenticatedUser(
-            user_id="user_01", email="member@example.com", org_id="org_01", role="member"
+            user_id="user_01",
+            email="member@example.com",
+            org_id="org_01",
+            role="member",
         ),
         cast(AsyncSession, object()),
     )
@@ -569,7 +572,10 @@ async def test_capability_runtime_graph_storage_failure_fails_closed(
     monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt")
     result = await dev_router_module.get_dev_capability_runtime(
         AuthenticatedUser(
-            user_id="user_01", email="member@example.com", org_id="org_01", role="member"
+            user_id="user_01",
+            email="member@example.com",
+            org_id="org_01",
+            role="member",
         ),
         cast(AsyncSession, object()),
     )
@@ -777,6 +783,54 @@ async def test_dev_capabilities_and_conversation_lifecycle(dev_api_context):
     empty_list = await client.get("/api/v1/dev/conversations")
     assert empty_list.status_code == 200
     assert empty_list.json() == {"items": [], "next_cursor": None}
+
+
+@pytest.mark.asyncio
+async def test_create_conversation_commits_before_the_response_returns(
+    dev_api_context,
+):
+    """A 201 conversation must be visible without a dependency-finalizer commit."""
+
+    async def _session_without_finalizer_commit():
+        async with dev_api_context.maker() as session:
+            yield session
+
+    dev_api_context.app.dependency_overrides[
+        dev_router_module.get_postgres_session_dep
+    ] = _session_without_finalizer_commit
+
+    created = await dev_api_context.client.post(
+        "/api/v1/dev/conversations",
+        json={"current_scope": _scope_payload(dev_api_context.org_id)},
+    )
+    assert created.status_code == 201
+
+    listed = await dev_api_context.client.get("/api/v1/dev/conversations")
+    assert listed.status_code == 200
+    assert [item["conversation_id"] for item in listed.json()["items"]] == [
+        created.json()["conversation_id"]
+    ]
+
+    conversation_id = created.json()["conversation_id"]
+    renamed = await dev_api_context.client.patch(
+        f"/api/v1/dev/conversations/{conversation_id}",
+        json={"title": "Committed title"},
+    )
+    assert renamed.status_code == 200
+    fetched = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["title"] == "Committed title"
+
+    deleted = await dev_api_context.client.delete(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert deleted.status_code == 204
+    missing = await dev_api_context.client.get(
+        f"/api/v1/dev/conversations/{conversation_id}"
+    )
+    assert missing.status_code == 404
 
 
 @pytest.mark.asyncio

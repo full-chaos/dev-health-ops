@@ -102,6 +102,7 @@ project_name="dev-health-ask-dev-acceptance"
 fixture_org_id="0a155cab-8833-42ac-a4ef-0d121725a7b0"
 oracle_file="${ops_root}/tests/acceptance/ask-dev-oracle.v1.json"
 graph_oracle_file="${ops_root}/tests/acceptance/ask-dev-graph-oracle.v1.json"
+world_manifest="${ops_root}/tests/acceptance/world/ask-dev-world.v1/world.json"
 # CHAOS-3219 D3: ACR (Agent Context Runtime) evidence-adapter services are
 # OFF by default -- arm with ASK_DEV_ACCEPTANCE_ACR=1. See
 # tests/acceptance/compose.ask-dev-acr.yml for the wiring rationale and the
@@ -129,11 +130,43 @@ read_graph_oracle_field() {
     'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
     "${graph_oracle_file}" "$1"
 }
+read_world_user_field() {
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+    "${ops_root}/.venv/bin/python" -c \
+    'import json, sys; user = next(item for item in json.load(open(sys.argv[1], encoding="utf-8"))["users"] if item["alias"] == sys.argv[2]); print(user[sys.argv[3]])' \
+    "${world_manifest}" "$1" "$2"
+}
 export DEV_HEALTH_BUILD_SHA="$(git -C "${ops_root}" rev-parse HEAD)"
 acceptance_question="$(read_oracle_field question)"
 expected_metric_id="$(read_oracle_field expected_metric_id)"
 expected_evidence_entity_fragment="$(read_oracle_field expected_evidence_entity_fragment)"
 expected_claim_kind="$(read_oracle_field expected_claim_kind)"
+
+# The graph seed writes the primary partition for this exact world principal.
+# Derive the browser credentials and expected org from the committed manifest,
+# rather than reusing the generated fixture admin (which belongs to a
+# different org and can make the graph gate prove an empty partition).
+graph_primary_user_alias="primary.platform-admin"
+graph_primary_user_email="$(read_world_user_field "${graph_primary_user_alias}" email)"
+graph_primary_org_alias="$(read_world_user_field "${graph_primary_user_alias}" org_alias)"
+if [[ "${graph_primary_org_alias}" != "primary" ]]; then
+  echo "${graph_primary_user_alias} must belong to world org primary, got ${graph_primary_org_alias}" >&2
+  exit 70
+fi
+graph_primary_user_password="$({
+  OTEL_ENABLED=false \
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+    "${ops_root}/.venv/bin/python" -c \
+    'from dev_health_ops.fixtures.world import password_for_alias; import sys; print(password_for_alias(sys.argv[1]))' \
+    "${graph_primary_user_alias}"
+})"
+graph_primary_org_id="$({
+  OTEL_ENABLED=false \
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+    "${ops_root}/.venv/bin/python" -c \
+    'from dev_health_ops.fixtures.world import load_world_manifest; import sys; manifest = load_world_manifest(sys.argv[1]); print(manifest.org_id("primary"))' \
+    "${world_manifest}"
+})"
 
 export ASK_DEV_WEB_CONTEXT="${web_root}"
 # Let Docker allocate a free loopback port by default. Local development runs
@@ -209,6 +242,20 @@ if [[ ! "${acceptance_api_port}" =~ ^[0-9]+$ ]] || [[ "${acceptance_api_port}" =
   exit 70
 fi
 acceptance_api_url="http://127.0.0.1:${acceptance_api_port}"
+
+# urllib honors both spellings when resolving ambient HTTP(S) proxies. Local
+# acceptance API calls must bypass them: a proxy on this host can route
+# 127.0.0.1 back into itself and consume the whole 20-second request timeout.
+if [[ -n "${NO_PROXY:-}" ]]; then
+  export NO_PROXY="${NO_PROXY},127.0.0.1,localhost"
+else
+  export NO_PROXY="127.0.0.1,localhost"
+fi
+if [[ -n "${no_proxy:-}" ]]; then
+  export no_proxy="${no_proxy},127.0.0.1,localhost"
+else
+  export no_proxy="127.0.0.1,localhost"
+fi
 
 # CHAOS-3572: refuse to proceed unless the api container we just booted is
 # serving THIS checkout. Runs immediately after boot and before anything --
@@ -322,6 +369,30 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT="${org_ids_output}" \
   "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/prepare_ask_dev_acceptance.py"
+
+# The graph seed targets the canonical primary world org, while the ordinary
+# acceptance preparation above intentionally provisions a separate generated
+# fixture org and two Wave 4 tenants. Prepare readiness for the same canonical
+# principal before the graph browser gate, and fail if the login resolves to a
+# different org than the seed's partition.
+graph_prepared_org_id="$({
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+  ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+  TEST_SUPERUSER_EMAIL="${graph_primary_user_email}" \
+  TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}" \
+    "${ops_root}/.venv/bin/python" -c '
+import os
+from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi, prepare
+
+api = AcceptanceApi(os.environ["ASK_DEV_ACCEPTANCE_API_URL"])
+print(prepare(api, email=os.environ["TEST_SUPERUSER_EMAIL"], password=os.environ["TEST_SUPERUSER_PASSWORD"]))
+'
+})"
+if [[ "${graph_prepared_org_id}" != "${graph_primary_org_id}" ]]; then
+  echo "graph readiness prepared org ${graph_prepared_org_id}, expected seeded org ${graph_primary_org_id}" >&2
+  exit 70
+fi
+echo "ASK_DEV_GRAPH_PRIMARY_READINESS=PASSED org_id=${graph_prepared_org_id}"
 
 # CHAOS-3300: the "Ask Dev" not-found original defect reproduction, proven
 # through the real HTTP/SSE API surface (no Playwright/web needed for this
@@ -515,8 +586,8 @@ ASK_DEV_GRAPH_ACCEPTANCE_EXPECTED_GRAPH_STATE="${graph_expected_state}" \
 ASK_DEV_GRAPH_ACCEPTANCE_EXPECTED_FALLBACK_STATE="${graph_expected_fallback_state}" \
 ASK_DEV_GRAPH_ACCEPTANCE_BACKEND_SHA="${DEV_HEALTH_BUILD_SHA}" \
 PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
-TEST_SUPERUSER_EMAIL=admin@devhealth.example \
-TEST_SUPERUSER_PASSWORD=devhealth123 \
+TEST_SUPERUSER_EMAIL="${graph_primary_user_email}" \
+TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}" \
   "${web_root}/node_modules/.bin/playwright" test \
   -c "${web_root}/playwright.ask-dev-graph-acceptance.config.ts"
 

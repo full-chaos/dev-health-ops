@@ -62,6 +62,11 @@ SCHEMA_CATCHABLE: dict[str, str] = {
     "ask_dev_evidence_coverage.v1::graph_native_field_smuggled_as_extra": (
         "additionalProperties"
     ),
+    # CHAOS-3660/CHAOS-3678: ProductionJobProvenance.run_id is a required,
+    # pattern-constrained field (the same ServerHandle UUID shape
+    # TrialMetadata.run_id uses) -- both structural, both schema-catchable.
+    "ask_dev_production_job_provenance.v1::missing_run_id": "required",
+    "ask_dev_production_job_provenance.v1::malformed_run_id": "pattern",
 }
 
 

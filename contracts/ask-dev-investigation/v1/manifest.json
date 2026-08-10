@@ -92,7 +92,7 @@
       ],
       "schema": {
         "path": "schemas/ask_dev_investigation_packet.v1.schema.json",
-        "sha256": "4be6588398a055b0ba9ef2fd891df2c7cfe230f1c4d25ffbe2ba2db8536d6567"
+        "sha256": "582b75b30dbb41c1f66994bccef3ca7f141407c7c588b1299a7a960e52d32a6d"
       },
       "schema_version": "ask_dev_investigation_packet.v1"
     },
@@ -131,9 +131,57 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/ask_dev_analytical_job.v1.schema.json",
-        "sha256": "b30ea7667adb697f3776508e3558fe48cf2e6c755da5dd6ca3418b272015ecef"
+        "sha256": "251cfe8d0f076ac41181e9c5675bd531b723f06874dc2f40accf572cccfa0ce2"
       },
       "schema_version": "ask_dev_analytical_job.v1"
+    },
+    {
+      "negative": [
+        {
+          "case": "both_provenances_set",
+          "path": "examples/negative/ask_dev_analytical_job.v2.both_provenances_set.json",
+          "sha256": "a32c6186679045e5de5fb67b3007c8bbd77342bfbf7c656dd2b004503af7fa73"
+        },
+        {
+          "case": "production_job_declares_v1_schema",
+          "path": "examples/negative/ask_dev_analytical_job.v2.production_job_declares_v1_schema.json",
+          "sha256": "e699bf8402c167b444fae335fdef8bf8f6af631807bcfdd65936516b6c9284ad"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/ask_dev_analytical_job.v2.json",
+        "sha256": "fe3bda372a5cf2c26064eac7f724af184ad21a57f8eaf4add71a2f2849d35753"
+      },
+      "positive_variants": [],
+      "schema": {
+        "path": "schemas/ask_dev_analytical_job.v2.schema.json",
+        "sha256": "53609be9bf165dd9eef7fac94eb057294fcfe5cb0d762d680413fc3db64eca66"
+      },
+      "schema_version": "ask_dev_analytical_job.v2"
+    },
+    {
+      "negative": [
+        {
+          "case": "missing_run_id",
+          "path": "examples/negative/ask_dev_production_job_provenance.v1.missing_run_id.json",
+          "sha256": "6fc682e88ab2dd97112e63253bc9d5afb002aa9ff0d81a902af280197e92ca6c"
+        },
+        {
+          "case": "malformed_run_id",
+          "path": "examples/negative/ask_dev_production_job_provenance.v1.malformed_run_id.json",
+          "sha256": "c3cbec5e5cfae0fc7dcd7b52d09e294572af24ec16148328dfcee098680892b4"
+        }
+      ],
+      "positive": {
+        "path": "examples/positive/ask_dev_production_job_provenance.v1.json",
+        "sha256": "b9c29137bc8baaaf1cc42e9304ad803db3a3b5e4e2b09fbb49b5bc90aca8df14"
+      },
+      "positive_variants": [],
+      "schema": {
+        "path": "schemas/ask_dev_production_job_provenance.v1.schema.json",
+        "sha256": "1b217b8f10dad4819c23ce0fb2b74b9b4a596214fd1711722dda357a641fe30a"
+      },
+      "schema_version": "ask_dev_production_job_provenance.v1"
     },
     {
       "negative": [

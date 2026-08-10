@@ -134,13 +134,29 @@ def test_fixture_coverage_matches_the_registry_exactly() -> None:
 
 
 def test_every_registered_contract_declares_its_schema_version() -> None:
-    """No contract may be identified by position or by convention alone."""
+    """No contract may be identified by position or by convention alone.
+
+    Almost every registry name maps to its own model, one ``const`` value
+    each. CHAOS-3660/CHAOS-3678's ``AnalyticalJob`` is the one deliberate
+    exception: the SAME class now serves two registry entries
+    (``ask_dev_analytical_job.v1``/``.v2``, the trial and production
+    provenance shapes), so its ``schema_version`` field is a two-member
+    ``enum`` rather than a single ``const`` -- and every registered name
+    must still be a value that field can actually take.
+    """
 
     for name, model in INVESTIGATION_CONTRACT_MODELS.items():
         field = model.model_fields["schema_version"]
         assert field.is_required(), f"{name} lets schema_version default"
         schema = model.model_json_schema(mode="validation")
-        assert schema["properties"]["schema_version"]["const"] == name
+        declared = schema["properties"]["schema_version"]
+        if "const" in declared:
+            assert declared["const"] == name
+        else:
+            assert name in declared["enum"], (
+                f"{name} is registered against {model.__name__}, but its "
+                f"schema_version field cannot take that value: {declared}"
+            )
 
 
 def test_section_goldens_are_the_packet_goldens() -> None:

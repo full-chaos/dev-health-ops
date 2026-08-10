@@ -546,6 +546,7 @@ def test_an_unresolved_reference_never_widens_into_a_substantive_answer() -> Non
     assert packet is not None
     _validate(packet)
     assert packet.analytical_job.comparison_shape is ComparisonShape.ORGANIZATION_WIDE
+    assert packet.analytical_job.question_family is not None
     assert packet.analytical_job.question_family.value == "clarification_and_no_match"
     assert packet.outcome is InvestigationOutcome.NEEDS_CLARIFICATION
     assert packet.evidence_coverage.clarification_needs

@@ -1873,6 +1873,14 @@ _NON_HANDLE_IDENTIFIER_REASONS: dict[str, str] = {
     # the frozen question-family registry, whose ids are asserted globally
     # unique by test_chaos_3615_registries.py.
     "QuestionVariant.variant_id": "registry token",
+    # CHAOS-3660/CHAOS-3678: production's job-intent vocabulary token. A
+    # validated STRING deliberately, not the QuestionIntentID enum imported
+    # into this frozen contract (investigation_contract must not depend on
+    # production's vocabulary -- see ProductionJobProvenance's own
+    # docstring); the producer (packet_builder.build_production_packet)
+    # validates it against the real QuestionIntentID member set one layer
+    # up, where that import is legitimate.
+    "ProductionJobProvenance.intent_id": "production intent vocabulary token",
 }
 
 

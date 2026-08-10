@@ -140,6 +140,26 @@ def _analytical_job() -> dict[str, Any]:
     }
 
 
+def _production_job_provenance() -> dict[str, Any]:
+    """CHAOS-3660/CHAOS-3678: production's job identity. No trial family."""
+
+    return {
+        "schema_version": "ask_dev_production_job_provenance.v1",
+        "intent_id": "project_health",
+        "run_id": "4f9a2c1e-1111-4222-8333-444455556666",
+    }
+
+
+def _analytical_job_production() -> dict[str, Any]:
+    """The production-shaped ``AnalyticalJob``: no ``question_family``."""
+
+    job = _analytical_job()
+    job["schema_version"] = "ask_dev_analytical_job.v2"
+    del job["question_family"]
+    job["production_job"] = _production_job_provenance()
+    return job
+
+
 def _subject_discovery() -> dict[str, Any]:
     return {
         "schema_version": "ask_dev_subject_discovery.v1",
@@ -616,6 +636,12 @@ def positive_fixtures() -> dict[str, dict[str, Any]]:
     return {
         "ask_dev_investigation_packet.v1": packet,
         "ask_dev_analytical_job.v1": deepcopy(packet["analytical_job"]),
+        # CHAOS-3660/CHAOS-3678: production's AnalyticalJob shape and its
+        # provenance sub-model. Not derived from `_packet()` -- the trial
+        # packet's analytical_job is always the byte-stable ".v1" shape --
+        # so these are their own standalone goldens.
+        "ask_dev_analytical_job.v2": _analytical_job_production(),
+        "ask_dev_production_job_provenance.v1": _production_job_provenance(),
         "ask_dev_subject_discovery.v1": deepcopy(packet["subject_discovery"]),
         "ask_dev_comparison_cohort.v1": deepcopy(packet["comparison_cohort"]),
         "ask_dev_related_context.v1": deepcopy(packet["related_context"]),
@@ -1186,6 +1212,49 @@ def _fault_uncertain_job_without_limitations() -> dict[str, Any]:
     return job
 
 
+def _fault_production_job_both_provenances_set() -> dict[str, Any]:
+    """CHAOS-3660/CHAOS-3678: a production job that also claims a trial family.
+
+    ``validate_provenance_matches_schema_version``'s refusal -- a packet
+    cannot be both the byte-stable trial shape and production's.
+    """
+
+    job = _analytical_job_production()
+    job["question_family"] = "project_status_drivers"
+    return job
+
+
+def _fault_production_job_declares_v1_schema() -> dict[str, Any]:
+    """A ``production_job`` present under the ``.v1`` (trial) schema version.
+
+    Distinct from the both-set fault above: this one has NO
+    ``question_family`` at all, so it would pass the exactly-one-of check
+    and must be caught by the schema-version/provenance agreement check
+    instead -- pinning that the two checks are not redundant.
+    """
+
+    job = _analytical_job_production()
+    job["schema_version"] = "ask_dev_analytical_job.v1"
+    return job
+
+
+def _fault_production_provenance_missing_run_id() -> dict[str, Any]:
+    provenance = _production_job_provenance()
+    del provenance["run_id"]
+    return provenance
+
+
+def _fault_production_provenance_malformed_run_id() -> dict[str, Any]:
+    """``run_id`` uses the same ``ServerHandle`` UUID shape as
+    ``TrialMetadata.run_id`` -- a non-UUID string must be refused the same
+    way.
+    """
+
+    provenance = _production_job_provenance()
+    provenance["run_id"] = "not-a-uuid"
+    return provenance
+
+
 def _fault_current_slice_with_as_of() -> dict[str, Any]:
     job = _analytical_job()
     job["time_context"]["as_of"] = AS_OF
@@ -1443,6 +1512,23 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
             (
                 "unavailable_edge_validity_mislabelled",
                 _fault_unavailable_edge_validity_claimed_comparable(),
+            ),
+        ],
+        "ask_dev_analytical_job.v2": [
+            (
+                "both_provenances_set",
+                _fault_production_job_both_provenances_set(),
+            ),
+            (
+                "production_job_declares_v1_schema",
+                _fault_production_job_declares_v1_schema(),
+            ),
+        ],
+        "ask_dev_production_job_provenance.v1": [
+            ("missing_run_id", _fault_production_provenance_missing_run_id()),
+            (
+                "malformed_run_id",
+                _fault_production_provenance_malformed_run_id(),
             ),
         ],
         "ask_dev_subject_discovery.v1": [

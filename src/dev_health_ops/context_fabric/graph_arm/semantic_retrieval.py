@@ -84,15 +84,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
 __all__ = [
+    "DEFAULT_CLARIFICATION_LIMIT",
+    "DEFAULT_MARGIN_RATIO",
     "DEFAULT_SEMANTIC_LIMIT",
+    "DEFAULT_TIE_RATIO",
     "CrossPartitionRetrievalError",
     "FulltextIndexNotReadyError",
     "FulltextReadiness",
     "RetrievalMethod",
     "RetrievalStore",
     "SemanticCandidate",
+    "SemanticDisposition",
+    "SemanticDispositionResult",
     "SemanticRetrieval",
     "NonSemanticEmbedderError",
+    "assess_disposition",
     "retrieve_candidates",
     "wait_for_fulltext_index",
 ]
@@ -235,6 +241,202 @@ class SemanticRetrieval:
     @property
     def resolved(self) -> bool:
         return bool(self.candidates)
+
+
+class SemanticDisposition(StrEnum):
+    """What this leg is willing to do with its own ranked result.
+
+    **Not** a contract-level ``SubjectCommitmentState``. Every candidate this
+    leg produces carries :attr:`SubjectMatchSignal.FUZZY_LABEL` — see
+    :class:`SemanticCandidate` — and ``WEAK_SUBJECT_MATCH_SIGNALS`` already
+    forbids a candidate from reaching ``COMMITTED`` on that signal alone
+    (``vocabulary.py:191-199``). This leg cannot commit a subject and was
+    never going to; what varies here is how confidently its own ranking is
+    worth handing to whatever resolves the subject: as a single lead, as a
+    bounded set that needs disambiguating, or not at all.
+
+    ``PROPOSE`` is therefore "worth proposing as the lead candidate", never
+    "resolved". A caller that reads ``PROPOSE`` as commitment has made the
+    same mistake ``WEAK_SUBJECT_MATCH_SIGNALS`` exists to catch.
+    """
+
+    PROPOSE = "propose"
+    CLARIFY = "clarify"
+    REFUSE = "refuse"
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticDispositionResult:
+    """The disposition this leg's own result earns, and what to show for it."""
+
+    disposition: SemanticDisposition
+    #: Bounded to ``clarification_limit`` on CLARIFY, one candidate on
+    #: PROPOSE, empty on REFUSE. Never longer than what a caller may present.
+    presented: tuple[SemanticCandidate, ...]
+    #: Trial/operator diagnostic. Never packet content -- see
+    #: :func:`_canonical_ids` for why a rationale channel here is not a wire
+    #: field.
+    reason: str
+
+
+#: Rank-1 must beat rank-2 by at least this fraction of rank-1's own score to
+#: read as a genuine leader rather than noise. Derived from Reciprocal Rank
+#: Fusion's own decay curve -- ``score = sum(1 / (k + rank))`` per method,
+#: which drops fastest between the first few ranks -- so a real front-runner
+#: separates from its nearest competitor by a wide margin on that curve and a
+#: coincidental one does not. The constant describes that curve's shape, not
+#: any corpus's query text, and is validated in
+#: ``test_chaos_3654_refusal_threshold.py`` against synthetic cases built to
+#: exercise the shape rather than reproduce a measured question.
+DEFAULT_MARGIN_RATIO = 0.20
+
+#: A candidate scoring at or above this fraction of the leader's own score is
+#: "tied" with it for disambiguation purposes -- close enough on the RRF
+#: curve that picking one over the other is not defensible without more
+#: information.
+DEFAULT_TIE_RATIO = 0.85
+
+#: How many tied candidates a CLARIFY disposition will present. Matches the
+#: contract's own clarification-candidate bound in spirit: past a small
+#: number, "clarify" has degraded into "here is the authorized world",
+#: exactly what REFUSE exists to prevent.
+DEFAULT_CLARIFICATION_LIMIT = 5
+
+
+def _tied_candidates(
+    candidates: Sequence[SemanticCandidate], *, tie_ratio: float
+) -> list[SemanticCandidate]:
+    """Every candidate within ``tie_ratio`` of the leader's own score.
+
+    Always includes the leader itself (ratio 1.0 of itself). A guard against
+    ``top_score <= 0`` falls back to exact equality, since a ratio against a
+    non-positive score is not a meaningful fraction.
+    """
+
+    top_score = candidates[0].rrf_score
+    if top_score <= 0:
+        return [item for item in candidates if item.rrf_score == top_score]
+    return [item for item in candidates if item.rrf_score >= tie_ratio * top_score]
+
+
+def assess_disposition(
+    retrieval: SemanticRetrieval,
+    *,
+    clarification_limit: int = DEFAULT_CLARIFICATION_LIMIT,
+    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+    tie_ratio: float = DEFAULT_TIE_RATIO,
+) -> SemanticDispositionResult:
+    """Whether this leg's own ranking is safe to propose, clarify, or refuse.
+
+    **The measured failure this closes.** "How is Halcyon doing?" — no such
+    entity exists — returned 20 confidently ranked candidates, because
+    cosine similarity against a real embedding model is rarely exactly zero
+    for *any* query, and nothing in :func:`retrieve_candidates` ever refused
+    on that basis. "What's holding it up?" with no conversational referent
+    returned 11. Both runs had one thing in common: no lexical evidence
+    anywhere in the corpus for the query text, and a leading candidate whose
+    only support was a vector nearest-neighbour guess.
+
+    **The rule is about the fused result's own shape, not about any query's
+    content.** Three signals, checked in order:
+
+    1. *Lexical grounding.* If ``retrieval.bm25_order`` is empty — BM25 found
+       nothing for this query anywhere in the authorized partition — and the
+       leading candidate has no BM25 support of its own, there is no
+       evidence anyone ever wrote this term near a real node. That is
+       exactly the shape a nonexistent entity or an orphan pronoun produces,
+       and it refuses regardless of how confident the cosine ranking looks.
+    2. *Rank-1/rank-2 margin.* A genuine front-runner separates from its
+       nearest competitor on RRF's own score-decay curve; noise does not.
+       ``DEFAULT_MARGIN_RATIO`` reads that separation, not any absolute
+       score.
+    3. *Tie count.* When several candidates cluster near the leader, the
+       honest answer is "these look similar" (CLARIFY, bounded) rather than
+       an arbitrary pick — and past ``clarification_limit`` tied candidates,
+       clarification has degraded into an enumeration, which REFUSE exists
+       to prevent.
+
+    Authorization has already run inside :func:`retrieve_candidates`, so
+    every candidate reaching this function is one the caller may see; this
+    function only decides how much of that authorized ranking to trust.
+    """
+
+    if not retrieval.candidates:
+        return SemanticDispositionResult(
+            disposition=SemanticDisposition.REFUSE,
+            presented=(),
+            reason="no authorized candidate survived retrieval and fusion",
+        )
+
+    candidates = retrieval.candidates
+    top = candidates[0]
+    top_corroborated = RetrievalMethod.BM25 in top.methods
+    lexically_grounded = bool(retrieval.bm25_order)
+
+    if not lexically_grounded and not top_corroborated:
+        return SemanticDispositionResult(
+            disposition=SemanticDisposition.REFUSE,
+            presented=(),
+            reason=(
+                "no lexical evidence for this query anywhere in the "
+                "authorized partition, and the leading candidate has only "
+                "vector-similarity support: the shape a nonexistent entity "
+                "or an unresolved reference produces"
+            ),
+        )
+
+    tied = _tied_candidates(candidates, tie_ratio=tie_ratio)
+
+    if len(candidates) == 1:
+        if top_corroborated:
+            return SemanticDispositionResult(
+                disposition=SemanticDisposition.PROPOSE,
+                presented=(top,),
+                reason="one authorized candidate, with lexical support",
+            )
+        return SemanticDispositionResult(
+            disposition=SemanticDisposition.REFUSE,
+            presented=(),
+            reason=(
+                "one authorized candidate with only vector-similarity "
+                "support and no competing candidate to weigh it against"
+            ),
+        )
+
+    second_score = candidates[1].rrf_score
+    top_score = top.rrf_score
+    margin = (top_score - second_score) / top_score if top_score > 0 else 0.0
+
+    if top_corroborated and len(tied) == 1 and margin >= margin_ratio:
+        return SemanticDispositionResult(
+            disposition=SemanticDisposition.PROPOSE,
+            presented=(top,),
+            reason=(
+                f"leader has lexical support and clears the next candidate "
+                f"by {margin:.0%}, at or above the {margin_ratio:.0%} margin"
+            ),
+        )
+
+    if len(tied) <= clarification_limit:
+        return SemanticDispositionResult(
+            disposition=SemanticDisposition.CLARIFY,
+            presented=tuple(tied[:clarification_limit]),
+            reason=(
+                f"{len(tied)} candidate(s) within {tie_ratio:.0%} of the "
+                "leader's own score; no defensible single pick"
+            ),
+        )
+
+    return SemanticDispositionResult(
+        disposition=SemanticDisposition.REFUSE,
+        presented=(),
+        reason=(
+            f"{len(tied)} candidates cluster near the leader's own score, "
+            f"past the {clarification_limit}-candidate clarification bound: "
+            "a diffuse ranking with no defensible subject, not a genuine "
+            "field of finalists"
+        ),
+    )
 
 
 def _attribute(node: Any, key: str) -> Any:

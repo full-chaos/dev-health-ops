@@ -1,17 +1,20 @@
 """CHAOS-3502: the graph-assisted routing seam's flag scaffolding.
 
-Landed ahead of the actual routing branch (which is blocked on a
-cross-lane design question about the packet -> canonical-frame bridge, see
-CHAOS-3660) -- mirrors CHAOS-3567's own "flag-off scaffolding first,
-consuming logic later" pattern. Covers only what exists today:
+Landed ahead of the actual routing branch (which gets its own design note
+on CHAOS-3660 -- exact hook point in ``run()``, ``ScopeResolveRequest``
+derivation, per-``GraphQueryOutcome`` fallback semantics, interaction with
+the ``plan_executor`` branch -- for sign-off before implementation) --
+mirrors CHAOS-3567's own "flag-off scaffolding first, consuming logic
+later" pattern. Covers only what exists today:
 
 * the runtime kill switch (``orchestrator.graph_routing_runtime_enabled``),
   independent of the organization feature-policy gate;
 * the organization feature-policy gate itself
   (``licensing.registry.ASK_DEV_GRAPH_ROUTING_FEATURE``), denied by default
   on every tier;
-* ``DevOrchestrator`` accepting ``graph_investigation_query`` without any
-  behavior change -- ``run()`` does not read the attribute yet, so there is
+* ``DevOrchestrator`` accepting ``graph_investigation_query`` and
+  ``evidence_service`` (CHAOS-3502 increment 2c) without any behavior
+  change -- ``run()`` does not read either attribute yet, so there is
   nothing for it to change.
 """
 
@@ -26,6 +29,10 @@ from dev_health_ops.api.dev.contracts import (
     DevToolResult,
     ToolID,
 )
+from dev_health_ops.api.dev.evidence_service import (
+    EvidenceReferenceSigner,
+    EvidenceService,
+)
 from dev_health_ops.api.dev.orchestrator import (
     GRAPH_ROUTING_RUNTIME_FLAG,
     DevOrchestrator,
@@ -39,6 +46,27 @@ from dev_health_ops.licensing.registry import (
 )
 from dev_health_ops.licensing.types import LicenseTier
 from tests._chaos_3502_graph_investigation_fake import FakeGraphInvestigationQuery
+
+_EVIDENCE_SIGNING_SECRET = "chaos-3683-test-secret-at-least-thirty-two-bytes-long"
+
+
+class _Entitlement:
+    async def require(self, _org_id: str) -> None:
+        return None
+
+
+class _Authorizer:
+    async def resolve(self, _org_id: str, _permission_fingerprint: str, _request):
+        raise NotImplementedError("construction-only smoke test; never called")
+
+
+def _minimal_evidence_service() -> EvidenceService:
+    return EvidenceService(
+        entitlement=_Entitlement(),
+        authorizer=_Authorizer(),
+        signer=EvidenceReferenceSigner(_EVIDENCE_SIGNING_SECRET),
+        native_adapters=(),
+    )
 
 
 def _minimal_registry() -> AskDevToolRegistry:
@@ -120,3 +148,22 @@ def test_orchestrator_accepts_a_graph_investigation_query_collaborator() -> None
     assert isinstance(
         with_query._graph_investigation_query, FakeGraphInvestigationQuery
     )
+
+
+def test_orchestrator_accepts_an_evidence_service_collaborator() -> None:
+    """Construction-only smoke test, same shape as the
+    ``graph_investigation_query`` one above (CHAOS-3502 increment 2c):
+    the parameter exists, defaults to ``None`` (flag-off), and accepting a
+    real ``EvidenceService`` does not raise. ``run()`` does not read
+    ``self._evidence_service`` yet -- that lands with the routing branch
+    that calls ``evidence_service.admit()`` on packet-extracted candidates,
+    which gets its own design note on CHAOS-3660 before implementation.
+    """
+
+    kwargs = _minimal_orchestrator_kwargs()
+    default = DevOrchestrator(**kwargs)
+    assert default._evidence_service is None
+
+    service = _minimal_evidence_service()
+    with_service = DevOrchestrator(**kwargs, evidence_service=service)
+    assert with_service._evidence_service is service

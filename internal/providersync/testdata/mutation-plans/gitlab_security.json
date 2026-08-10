@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "name": "GitLab security provider parity (CHAOS-3124)",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "Provider-local proof only: the route, concrete security_alerts row normalization, lease-fenced ClickHouse effects, migrated-schema integration test, and live Python differential oracle. This slice deliberately excludes registry, capability matrix, config, worker construction, scheduler, deployment activation, and unrelated provider behavior.",
+  "mutations": [
+    {
+      "id": "R1-claim-provider-guard",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "claim.Provider != \"gitlab\"",
+      "replace": "false",
+      "rationale": "the security route must reject a claim owned by another provider before project resolution",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests$/wrong_claim_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R2-claim-dataset-guard",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "claim.Dataset != \"security\"",
+      "replace": "false",
+      "rationale": "security credentials must not be reused for another GitLab dataset",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests$/wrong_claim_dataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R3-client-provider-guard",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "client.Provider != \"gitlab\"",
+      "replace": "false",
+      "rationale": "the request semantics require a GitLab-resolved HTTP client",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests$/wrong_client_provider$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R4-base-url-guard",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "client.BaseURL == nil",
+      "replace": "false",
+      "rationale": "path construction must not run without an authority URL",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests$/nil_client_base_URL$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R5-normalized-at-guard",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "client.BaseURL == nil || normalizedAt.IsZero()",
+      "replace": "client.BaseURL == nil || false",
+      "rationale": "retry-stable last_synced requires an executor-supplied normalization instant",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests$/zero_normalized_at$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R6-positive-cap-guard",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "if maxAlerts < 1 {",
+      "replace": "if false {",
+      "rationale": "non-positive caps are invalid configuration, not an empty fetch",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteRejectsInvalidConfigurationBeforeRequests$/negative_max_alerts$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R7-project-binding",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "strconv.FormatInt(parsedProjectID, 10) != projectID",
+      "replace": "false",
+      "rationale": "the fetched project must be the exact numeric project claimed by the unit",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteRejectsProjectMismatchAndLeaseBeforeRequests$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R8-physical-request-evidence",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "(*doer.observe.attempts)++",
+      "replace": "(*doer.observe.attempts) += 0",
+      "rationale": "accepted evidence must count every physical project and endpoint request",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteMirrorsPythonSinglePageWindowAndEvidence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R9-millisecond-normalization",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)\n\n\tfindings",
+      "replace": "normalizedAt = normalizedAt.UTC()\n\n\tfindings",
+      "rationale": "rows must match Python/DateTime64 millisecond precision across retries",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteMirrorsPythonSinglePageWindowAndEvidence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R10-optional-findings-degrade",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "if providerErr.StatusCode == http.StatusForbidden || providerErr.StatusCode == http.StatusNotFound {",
+      "replace": "if false {",
+      "rationale": "a plain forbidden/not-found optional endpoint must degrade while the other source remains usable",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteDegradesPlainOptionalErrors$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R11-combined-cap-before-window",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "if len(combined) > maxAlerts {",
+      "replace": "if false {",
+      "rationale": "the real GitLab client caps the combined source list before processor window filtering",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteSlicesCombinedAlertsBeforeWindowFiltering$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R12-vulnerability-alert-id",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "row.AlertID = \"gitlab_vuln:\" + id",
+      "replace": "row.AlertID = id",
+      "rationale": "source-qualified alert identity is part of the migrated natural key",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteMirrorsPythonSinglePageWindowAndEvidence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R13-cve-normalization",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "row.CVEID = gitLabSecurityOptionalString(item[\"name\"])",
+      "replace": "row.CVEID = nil",
+      "rationale": "the first identifier of type cve must populate the concrete cve_id column",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteMirrorsPythonSinglePageWindowAndEvidence$", "./internal/providersync/"]]
+    },
+    {
+      "id": "R14-dependency-created-at",
+      "file": "internal/providersync/gitlab_security_route.go",
+      "find": "row.CreatedAt = normalizedAt",
+      "replace": "row.CreatedAt = time.Time{}",
+      "rationale": "dependency findings have no provider timestamp and use the stable route normalization instant",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityRouteNormalizesDependencyCreatedAtAndPackage$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E1-duplicate-natural-key",
+      "file": "internal/providersync/gitlab_security_effects_clickhouse.go",
+      "find": "return nil, errors.Join(providerfoundation.ErrSinkDuplicate, ErrEffectRecoveryUnsafe)",
+      "replace": "return nil, errors.New(\"duplicate row\")",
+      "rationale": "recovery cannot safely acknowledge an effect containing duplicate physical natural keys",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityEffectsRejectCrossTenantAndDuplicateRowsBeforeClickHouse$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E2-newer-version-conflict",
+      "file": "internal/providersync/gitlab_security_effects_clickhouse.go",
+      "find": "actual.LastSynced.UTC().After(expected.LastSynced.UTC())",
+      "replace": "false",
+      "rationale": "readback must reject an older effect after a newer persisted version wins",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitLabSecurityAlertVersionChecksFullPayloadAndTimestamp$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E3-tenant-payload-comparison",
+      "file": "internal/providersync/gitlab_security_effects_clickhouse.go",
+      "find": "actual.OrgID != expected.OrgID",
+      "replace": "false",
+      "rationale": "readback must compare every concrete tenant-scoped row field, not just the timestamp",
+      "proof": [["go", "test", "-count=1", "-run", "^TestCompareGitLabSecurityAlertVersionChecksFullPayloadAndTimestamp$", "./internal/providersync/"]]
+    },
+    {
+      "id": "E4-duplicate-final-row",
+      "file": "internal/providersync/gitlab_security_effects_clickhouse.go",
+      "find": "if found > 1 {",
+      "replace": "if false {",
+      "rationale": "ambiguous FINAL readback must not be treated as an exact acknowledgement",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabSecurityReadbackRejectsAmbiguousRows$", "./internal/providersync/"]]
+    }
+  ]
+}

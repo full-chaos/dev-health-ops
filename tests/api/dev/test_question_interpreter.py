@@ -95,6 +95,60 @@ async def test_an_unrecognized_question_degrades_rather_than_refusing() -> None:
     assert interpreted.intent.confidence < FALLBACK_CONFIDENCE_FLOOR
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which teams are currently struggling?",
+        "Which projects are capacity-constrained?",
+    ],
+)
+@pytest.mark.asyncio
+async def test_subjectless_cohort_question_routes_to_discovered_cohort(
+    question: str,
+) -> None:
+    """CHAOS-3652: a zero-mention, bounded cohort-discovery question is
+    recognized as ``QuestionIntentID.DISCOVERED_COHORT`` (approved on
+    CHAOS-3660), distinct from a genuinely unbounded question, so it can be
+    routed to graph-assisted cohort discovery instead of the legacy loop
+    (routing itself is CHAOS-3502's job; this only proves the intent is
+    reachable). Was RED before the ``contracts_v2`` enum + this recognizer
+    landed -- see git history for the failing form.
+    """
+
+    interpreted = await _interpreter().interpret(request_for(question))
+    assert interpreted.intent.intent_id is QuestionIntentID.DISCOVERED_COHORT
+    assert interpreted.intent.cardinality is Cardinality.ORGANIZATION_WIDE
+    assert interpreted.intent.interpretation_reasons[0] != "recognizer.none"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Is the Payments team currently struggling?",
+        "Is Nightfall capacity-constrained right now?",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_named_subject_never_routes_to_discovered_cohort(
+    question: str,
+) -> None:
+    """CHAOS-3652 guardrail (team-lead condition, load-bearing): a question
+    that names a subject -- even one lexically shaped exactly like a
+    cohort-discovery question -- must never route to ``DISCOVERED_COHORT``.
+    That would be exactly the "unresolved named subject widens to
+    organization/cohort scope" shape Wave 3.2 forbids. Enforced lexically
+    here (the recognizer requires ``mention_count == 0``); enforced
+    structurally at the contract level by
+    ``test_discovered_cohort_rejects_singular_cardinality`` /
+    ``test_discovered_cohort_rejects_plural_cohort_cardinality`` in
+    ``test_contracts_v2.py``.
+    """
+
+    interpreted = await _interpreter().interpret(request_for(question))
+    assert interpreted.intent.intent_id is not QuestionIntentID.DISCOVERED_COHORT
+    assert interpreted.mentions, "expected a named subject to be extracted"
+
+
 @pytest.mark.asyncio
 async def test_recognizer_order_is_a_stable_tiebreak() -> None:
     """A question satisfying two recognizers always resolves the same way."""

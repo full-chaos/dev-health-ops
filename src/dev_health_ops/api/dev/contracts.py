@@ -1189,6 +1189,31 @@ class DevToolResult(ContractModel):
         return self
 
 
+#: CHAOS-3660 §8(f)/(j). The 6 members added alongside the original 6:
+#: ``wrong_subject``/``wrong_cohort``/``wrong_driver`` (additive siblings of
+#: the pre-existing, narrower ``wrong_scope`` -- never folded into it),
+#: ``unsafe_certainty``, ``other`` (a specific-but-unlisted reason), and
+#: ``unspecified`` -- a neutral "declined to say" value, distinct from
+#: ``other``, closing the "web fabricates ``unclear``" data-honesty gap on
+#: a one-click thumbs-down. ``max_length`` below is 12 to match this
+#: doubled vocabulary size (was 6, coincidentally equal to the vocabulary
+#: size at the time) -- this is a genuine simultaneous-selection cap, not
+#: an accident of the old count.
+_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA: dict[str, Any] = {
+    # ``reasons`` is either EXACTLY ["unspecified"], or contains no
+    # "unspecified" at all -- a neutral "declined to say" can never sit
+    # alongside a specific reason (that would contradict the "declined"
+    # signal), and it can never be silently dropped from a mixed
+    # selection either. Expressed IN THE SCHEMA (not just the Python-side
+    # validator below) so a client validating locally catches the same
+    # violation the server would.
+    "oneOf": [
+        {"const": ["unspecified"]},
+        {"not": {"contains": {"const": "unspecified"}}},
+    ]
+}
+
+
 class DevFeedback(ContractModel):
     schema_version: Literal["dev_feedback.v1"]
     feedback_id: OpaqueID
@@ -1202,8 +1227,18 @@ class DevFeedback(ContractModel):
             "stale_data",
             "unclear",
             "useful",
+            "wrong_subject",
+            "wrong_cohort",
+            "wrong_driver",
+            "unsafe_certainty",
+            "other",
+            "unspecified",
         ]
-    ] = Field(min_length=1, max_length=6)
+    ] = Field(
+        min_length=1,
+        max_length=12,
+        json_schema_extra=_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA,
+    )
     comment: (
         Annotated[str, StringConstraints(min_length=1, max_length=2_048)] | None
     ) = Field(
@@ -1211,6 +1246,16 @@ class DevFeedback(ContractModel):
         json_schema_extra={"x-max-utf8-bytes": 2_048},
     )
     created_at: AwareDatetime
+
+    @field_validator("reasons")
+    @classmethod
+    def enforce_unspecified_exclusivity(cls, value: list[str]) -> list[str]:
+        if "unspecified" in value and value != ["unspecified"]:
+            raise ValueError(
+                "'unspecified' must be the only reason when present, "
+                "never combined with a specific reason"
+            )
+        return value
 
     @field_validator("comment")
     @classmethod

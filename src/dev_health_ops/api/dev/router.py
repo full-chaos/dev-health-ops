@@ -27,7 +27,14 @@ from fastapi import (
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api._health import _analytics_db_url
@@ -137,6 +144,14 @@ class DevConversationRenameRequest(StrictRequestModel):
 
 
 class DevFeedbackCreateRequest(StrictRequestModel):
+    """CHAOS-3660 §8(f)/(j). ``reasons`` mirrors ``contracts.DevFeedback.
+    reasons`` -- request-body validation gate, not the wire response model
+    itself -- so this list and ``persistence.service._FEEDBACK_REASONS``
+    (the third, persistence-layer gate) must be widened in lockstep with
+    the contract, or a client sending a newly-additive reason gets
+    rejected here despite the contract declaring it valid.
+    """
+
     rating: Literal["helpful", "not_helpful"]
     reasons: list[
         Literal[
@@ -146,11 +161,27 @@ class DevFeedbackCreateRequest(StrictRequestModel):
             "stale_data",
             "unclear",
             "useful",
+            "wrong_subject",
+            "wrong_cohort",
+            "wrong_driver",
+            "unsafe_certainty",
+            "other",
+            "unspecified",
         ]
-    ] = Field(min_length=1, max_length=6)
+    ] = Field(min_length=1, max_length=12)
     comment: (
         Annotated[str, StringConstraints(min_length=1, max_length=2_048)] | None
     ) = None
+
+    @field_validator("reasons")
+    @classmethod
+    def enforce_unspecified_exclusivity(cls, value: list[str]) -> list[str]:
+        if "unspecified" in value and value != ["unspecified"]:
+            raise ValueError(
+                "'unspecified' must be the only reason when present, "
+                "never combined with a specific reason"
+            )
+        return value
 
 
 class DevConversationListResponse(StrictRequestModel):

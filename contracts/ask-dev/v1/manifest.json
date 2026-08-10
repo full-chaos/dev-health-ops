@@ -355,16 +355,27 @@
           "case": "unsupported_reason",
           "path": "examples/negative/dev_feedback.v1.unsupported_reason.json",
           "sha256": "5f75d350e9d62af9b524fb5b0225f2741375b16cfad38b58b819b85b0509723f"
+        },
+        {
+          "case": "unspecified_combined_with_a_specific_reason",
+          "path": "examples/negative/dev_feedback.v1.unspecified_combined_with_a_specific_reason.json",
+          "sha256": "9a2bc84c5703621fbc95549c99b5cab0fa87054b1a7f355bc7100039237c86e4"
         }
       ],
       "positive": {
         "path": "examples/positive/dev_feedback.v1.json",
         "sha256": "f4e15f005ae9314210900993a791b5ab358375997f7dc28b30d4d76487101ba0"
       },
-      "positive_variants": [],
+      "positive_variants": [
+        {
+          "case": "unspecified_alone",
+          "path": "examples/positive/dev_feedback.v1.unspecified_alone.json",
+          "sha256": "dcc828a05f8b35e522bf62b61a7be0502df2c7ffde041d084ae2494e83226522"
+        }
+      ],
       "schema": {
         "path": "schemas/dev_feedback.v1.schema.json",
-        "sha256": "9c792cd80995e4e6eba066d50e495d77e0337621dffaf12fd59ed468af69b545"
+        "sha256": "f4354fbad987b827bec6a8e0aa753838361758072dc6a656e375a7ce06536185"
       },
       "schema_version": "dev_feedback.v1"
     },

@@ -20,6 +20,7 @@ from dev_health_ops.api.dev.contracts import (
     DevAnswer,
     DevCapabilities,
     DevEvidenceRef,
+    DevFeedback,
     DevMessageRequest,
     DevScope,
     DevScopeResolution,
@@ -161,6 +162,50 @@ def test_client_contract_version_is_absent_by_default_and_accepted_when_declared
     payload["client_contract_version"] = "dev_stream_event.v2"
     declared = DevMessageRequest.model_validate(payload)
     assert declared.client_contract_version == "dev_stream_event.v2"
+
+
+def test_feedback_reasons_accepts_the_six_new_additive_members() -> None:
+    """CHAOS-3660 §8(f)/(j). None of the 6 new reasons were folded onto the
+    pre-existing, narrower ``wrong_scope`` -- each validates as its own
+    sibling value.
+    """
+    payload = deepcopy(positive_fixtures()["dev_feedback.v1"])
+    for reason in (
+        "wrong_subject",
+        "wrong_cohort",
+        "wrong_driver",
+        "unsafe_certainty",
+        "other",
+    ):
+        feedback = DevFeedback.model_validate({**payload, "reasons": [reason]})
+        assert feedback.reasons == [reason]
+
+
+def test_feedback_unspecified_reason_must_stand_alone() -> None:
+    """CHAOS-3660 §8(f)/(j). 'unspecified' is exactly ["unspecified"] or
+    contains no "unspecified" at all -- the constraint the server actually
+    enforces at runtime (pydantic), asserted here directly.
+
+    The exported JSON Schema's ``reasons`` property carries the SAME
+    constraint as a real ``oneOf``/``not``/``contains`` combinator (see
+    ``_DEV_FEEDBACK_REASONS_JSON_SCHEMA_EXTRA`` in contracts.py), so a
+    client validating locally catches the same violation -- hand-verified
+    during implementation against a real Draft 2020-12 validator
+    (``jsonschema==4.26.0``, not a project dependency, so not re-asserted
+    here as a permanent test) over exactly these cases:
+    ``["unspecified"]`` valid, ``["unclear", "wrong_subject"]`` valid,
+    ``["unclear", "unspecified"]`` and ``["unspecified", "unclear"]``
+    invalid, ``[]`` invalid (``minItems``).
+    """
+    payload = deepcopy(positive_fixtures()["dev_feedback.v1"])
+
+    alone = DevFeedback.model_validate({**payload, "reasons": ["unspecified"]})
+    assert alone.reasons == ["unspecified"]
+
+    with pytest.raises(ValidationError, match="only reason"):
+        DevFeedback.model_validate({**payload, "reasons": ["unclear", "unspecified"]})
+    with pytest.raises(ValidationError, match="only reason"):
+        DevFeedback.model_validate({**payload, "reasons": ["unspecified", "unclear"]})
 
 
 @pytest.mark.parametrize("route_id", ["deployment_detail", "incident_detail"])

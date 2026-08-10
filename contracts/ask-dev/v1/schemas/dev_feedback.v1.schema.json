@@ -53,12 +53,32 @@
           "wrong_scope",
           "stale_data",
           "unclear",
-          "useful"
+          "useful",
+          "wrong_subject",
+          "wrong_cohort",
+          "wrong_driver",
+          "unsafe_certainty",
+          "other",
+          "unspecified"
         ],
         "type": "string"
       },
-      "maxItems": 6,
+      "maxItems": 12,
       "minItems": 1,
+      "oneOf": [
+        {
+          "const": [
+            "unspecified"
+          ]
+        },
+        {
+          "not": {
+            "contains": {
+              "const": "unspecified"
+            }
+          }
+        }
+      ],
       "title": "Reasons",
       "type": "array"
     },

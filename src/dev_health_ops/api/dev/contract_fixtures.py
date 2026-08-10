@@ -424,6 +424,20 @@ def positive_variant_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
     return {
         "dev_scope.v1": [("team_direct_scope", _team_scope())],
         "dev_scope_resolution.v1": [("team_direct_scope", _team_scope_resolution())],
+        "dev_feedback.v1": [
+            (
+                "unspecified_alone",
+                {
+                    "schema_version": "dev_feedback.v1",
+                    "feedback_id": "feedback_02",
+                    "answer_id": "answer_01",
+                    "rating": "not_helpful",
+                    "reasons": ["unspecified"],
+                    "comment": None,
+                    "created_at": NOW,
+                },
+            )
+        ],
     }
 
 
@@ -729,7 +743,16 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     "dev_feedback.v1",
                     lambda value: value.__setitem__("reasons", ["train_model"]),
                 ),
-            )
+            ),
+            (
+                "unspecified_combined_with_a_specific_reason",
+                changed(
+                    "dev_feedback.v1",
+                    lambda value: value.__setitem__(
+                        "reasons", ["unclear", "unspecified"]
+                    ),
+                ),
+            ),
         ],
         "dev_stream_event.v1": [
             (

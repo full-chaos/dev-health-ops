@@ -196,6 +196,9 @@ type LinearPageOptions struct {
 	ConnectionPath []string
 	PerPage        int
 	MaxPages       int
+	// InitialCursor resumes a connection after a cursor already embedded in a
+	// parent object. A zero value preserves the ordinary first-page request.
+	InitialCursor string
 }
 
 // CollectLinearGraphQLPages mirrors Linear's first/after connection contract.
@@ -212,7 +215,7 @@ func CollectLinearGraphQLPages(
 		return PageCollection{}, ErrPaginationInvalid
 	}
 	result := PageCollection{}
-	cursor := ""
+	cursor := strings.TrimSpace(options.InitialCursor)
 	for {
 		if result.Pages >= options.MaxPages {
 			result.CapReached = true

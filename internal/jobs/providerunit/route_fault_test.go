@@ -235,6 +235,122 @@ func TestGitHubWorkItemFamilyClaimReconcilesBeforeExecutorCredentialsOrEffects(t
 	}
 }
 
+func TestEnabledProviderNeutralWorkItemFamilyReconcilesBeforeExecutorCredentialsOrEffects(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	completeFlags := map[string]bool{
+		"family_dataset_work_items":         true,
+		"family_dataset_work_item_labels":   true,
+		"family_dataset_work_item_projects": true,
+		"family_dataset_work_item_history":  true,
+		"family_dataset_work_item_comments": true,
+	}
+	claims := map[string]struct {
+		dataset string
+		flags   map[string]bool
+	}{
+		"direct alias": {
+			dataset: "work-item-comments", flags: completeFlags,
+		},
+		"missing flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+			},
+		},
+		"false flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": false,
+			},
+		},
+		"unknown flag": {
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": true,
+				"family_dataset_unknown":            true,
+			},
+		},
+	}
+	providers := map[string]providersync.CompleteRouteSwitches{
+		"jira":   {JiraWorkItems: true},
+		"linear": {LinearWorkItems: true},
+	}
+	for provider, switches := range providers {
+		provider, switches := provider, switches
+		for name, claim := range claims {
+			name, claim := name, claim
+			t.Run(provider+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				unit := providerUnit()
+				capability, ok := providersync.Capability(provider, claim.dataset)
+				if !ok {
+					t.Fatalf("%s/%s capability missing", provider, claim.dataset)
+				}
+				unit.Provider, unit.Dataset, unit.CostClass = provider, claim.dataset, capability.CostClass
+				unit.ProcessorFlags = maps.Clone(claim.flags)
+				repository := newMemoryUnitRepository(unit)
+				builds := 0
+				handler := &Handler{
+					Repository:    repository,
+					Switches:      switches,
+					LeaseDuration: time.Minute,
+					Heartbeat:     10 * time.Second,
+					Now:           func() time.Time { return now },
+					BuildExecutor: func(
+						*providersync.LeaseSession,
+					) (providersync.CompleteRouteExecutor, error) {
+						builds++
+						t.Fatal("invalid family claim reached executor/credential/I/O construction")
+						return providersync.CompleteRouteExecutor{}, nil
+					},
+				}
+
+				err := handler.Work(context.Background(), providerExecution(unit, now, 1))
+
+				if !errors.Is(err, providersync.ErrInvalidConfiguration) {
+					t.Fatalf("error=%v want ErrInvalidConfiguration", err)
+				}
+				if !errors.Is(err, ErrRouteReconciliationRequired) || err.Error() != retryableCategory {
+					t.Fatalf("error=%v want retryable route reconciliation", err)
+				}
+				if builds != 0 {
+					t.Fatalf("executor constructions=%d want 0", builds)
+				}
+			})
+		}
+	}
+}
+
+func TestDefaultOffProviderNeutralWorkItemFamilyKeepsLegacyClaimAdmissible(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"gitlab", "jira", "linear"} {
+		unit := providerUnit()
+		unit.Provider = provider
+		unit.Dataset = "work-items"
+		unit.ProcessorFlags = map[string]bool{"family_dataset_work_items": true}
+		claim := providersync.Claim{
+			Unit: unit,
+		}
+		if err := validateProviderFamilyExecutionClaim(
+			claim, providersync.CompleteRouteSwitches{},
+		); err != nil {
+			t.Fatalf("provider=%s error=%v", provider, err)
+		}
+	}
+}
+
 func TestGitHubWorkItemCompleteFamilyClaimReachesExecutorFactory(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)

@@ -116,11 +116,12 @@ from dev_health_ops.workers.job_routes import (
     resolve_worker_job_route,
 )
 from dev_health_ops.workers.post_sync_dispatch import build_post_sync_dispatch_payload
+from dev_health_ops.workers.provider_family_contract import (
+    validate_provider_family_claim,
+)
 from dev_health_ops.workers.provider_unit_route import (
     ProviderUnitRouteSwitches,
-    is_complete_github_work_item_family_claim,
-    is_github_work_item_direct_alias,
-    is_github_work_item_family_dataset,
+    provider_family_strict_admission_enabled,
 )
 from dev_health_ops.workers.queues import _cost_class_queues_enabled
 from dev_health_ops.workers.rate_limit_defer import (
@@ -999,27 +1000,22 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
         for unit in units:
             unit_provider = str(unit.provider)
             unit_dataset = str(unit.dataset_key)
-            # Planner never emits a direct sibling alias. Reject a malformed
-            # persisted one before choosing any transport, including rollback
-            # Celery, so it cannot become a partial legacy writer.
-            if is_github_work_item_direct_alias(unit_provider, unit_dataset):
-                raise WorkerJobRouteError(
-                    "github work-item provider-unit claim requires the canonical dataset"
-                )
-            # The five GitHub aliases are one indivisible family, regardless of
-            # which writer the durable route currently selects. A stale partial
-            # canonical unit cannot be handed to rollback Celery any more than it
-            # can enter the River outbox: the planner now emits all five literal
-            # flags even when one sibling window is caught up. Reject it before
-            # transport selection so neither writer can produce a subset effect
-            # batch or watermark outcome.
-            if is_github_work_item_family_dataset(
+            # Atomic provider families are admitted before transport selection,
+            # so a malformed claim can reach neither River nor rollback Celery.
+            # GitHub retains its already-landed always-exact ownership contract;
+            # the other work-item providers become strict only with their Go
+            # family switch enabled, preserving default-off D16 legacy claims.
+            strict_family = provider_family_strict_admission_enabled(
                 unit_provider, unit_dataset
-            ) and not is_complete_github_work_item_family_claim(
-                unit_provider, unit_dataset, unit.processor_flags
+            )
+            if not validate_provider_family_claim(
+                unit_provider,
+                unit_dataset,
+                unit.processor_flags,
+                strict_atomic=strict_family,
             ):
                 raise WorkerJobRouteError(
-                    "github work-item provider-unit claim requires the complete canonical family"
+                    "provider-unit claim requires the complete canonical family"
                 )
             # Routability is decided per pair, not per run: the matrix
             # (ProviderUnitRouteSwitches.is_route_ready) is the only source of

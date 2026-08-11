@@ -33,6 +33,11 @@ from dev_health_ops.sync.planner import (
     _WORK_ITEM_FAMILY_DATASET_ORDER,
     _family_dataset_flag,
 )
+from dev_health_ops.workers.provider_family_contract import (
+    FamilyExecutionMode,
+    provider_family_policy,
+    validate_provider_family_claim,
+)
 
 _FALSE = frozenset({"", "0", "false", "no", "off"})
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -170,23 +175,39 @@ def is_complete_github_work_item_family_claim(
     and is refused before the producer enqueues either runtime.
     """
 
-    if (
-        provider.strip().lower() != "github"
-        or dataset.strip().lower() != _FAMILY_CANONICAL_DATASET_KEY
-    ):
+    return (
+        provider.strip().lower() == "github"
+        and dataset.strip().lower() == _FAMILY_CANONICAL_DATASET_KEY
+        and validate_provider_family_claim(
+            provider, dataset, processor_flags, strict_atomic=True
+        )
+    )
+
+
+def provider_family_strict_admission_enabled(
+    provider: str,
+    dataset: str,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    """Return whether the provider's atomic Go family switch is enabled.
+
+    GitHub keeps its already-landed always-exact producer contract because its
+    planner always emits all five ownership flags. Other providers remain on
+    their D16 legacy claim shape while default-off; enabling their Go family
+    switch makes strict validation apply before either transport stages work.
+    """
+
+    normalized_provider = provider.strip().lower()
+    policy = provider_family_policy(normalized_provider, dataset.strip().lower())
+    if policy is None or policy.mode is not FamilyExecutionMode.ATOMIC_CANONICAL:
         return False
-    flags = processor_flags or {}
-    # Persisted flag JSON is untyped at this boundary. Truthiness is unsafe:
-    # e.g. the string "false" must not acquire the Go writer. Reject unknown
-    # family flags too, matching completion's reconciliation contract while
-    # allowing unrelated canonical flags such as sync_prs.
-    if any(
-        name.startswith("family_dataset_")
-        and name not in _GITHUB_WORK_ITEM_FAMILY_FLAGS
-        for name in flags
-    ):
+    if normalized_provider == "github":
+        return True
+    switch_name = policy.switch_environment_name(normalized_provider)
+    if switch_name is None:
         return False
-    return all(flags.get(name) is True for name in _GITHUB_WORK_ITEM_FAMILY_FLAGS)
+    source = os.environ if environment is None else environment
+    return _flag(source, switch_name)
 
 
 @dataclass(frozen=True, slots=True)

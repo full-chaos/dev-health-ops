@@ -86,6 +86,7 @@ from dev_health_ops.sync.pagerduty_repair import (
     PagerDutyOperationalTargetError,
     repair_pagerduty_operational_integration,
 )
+from dev_health_ops.sync.planner import BackfillSelector as SyncBackfillSelector
 from dev_health_ops.sync.trigger_routing import (
     mark_sync_run_failed,
 )
@@ -2564,7 +2565,9 @@ async def trigger_sync_config_backfill(
             detail="Sync configuration is paused and cannot be backfilled",
         )
 
-    requested_days = (payload.before - payload.since).days
+    selector = payload.resolved_selector()
+    structured_selector = payload.selector
+    requested_days = (selector.before - selector.since).days
 
     def _check_backfill_limit(sync_session) -> tuple[bool, str | None]:
         tier_svc = TierLimitService(sync_session)
@@ -2592,12 +2595,32 @@ async def trigger_sync_config_backfill(
                     org_id,
                     triggered_by="backfill",
                     mode="backfill",
+                    backfill_selector=SyncBackfillSelector(
+                        since=datetime.combine(
+                            selector.since, datetime.min.time(), tzinfo=timezone.utc
+                        ),
+                        before=datetime.combine(
+                            selector.before, datetime.max.time(), tzinfo=timezone.utc
+                        ),
+                        source_ids=tuple(selector.source_ids)
+                        if selector.source_ids is not None
+                        else None,
+                        dataset_keys=tuple(selector.dataset_keys)
+                        if selector.dataset_keys is not None
+                        else None,
+                    )
+                    if structured_selector is not None
+                    else None,
                     since=datetime.combine(
-                        payload.since, datetime.min.time(), tzinfo=timezone.utc
-                    ),
+                        selector.since, datetime.min.time(), tzinfo=timezone.utc
+                    )
+                    if structured_selector is None
+                    else None,
                     before=datetime.combine(
-                        payload.before, datetime.max.time(), tzinfo=timezone.utc
-                    ),
+                        selector.before, datetime.max.time(), tzinfo=timezone.utc
+                    )
+                    if structured_selector is None
+                    else None,
                     initial_job_result={"planner_managed": True},
                 )
             )
@@ -2631,8 +2654,8 @@ async def trigger_sync_config_backfill(
             org_id=org_id,
             sync_config_id=uuid.UUID(config_id),
             status="pending",
-            since_date=payload.since,
-            before_date=payload.before,
+            since_date=selector.since,
+            before_date=selector.before,
             total_chunks=0,
         )
         session.add(backfill_job)
@@ -2684,8 +2707,8 @@ async def trigger_sync_config_backfill(
             "backfill_job_id": backfill_job_id,
             "sync_run_id": trigger.sync_run_id,
             "mode": "fanout",
-            "since": payload.since.isoformat(),
-            "before": payload.before.isoformat(),
+            "since": selector.since.isoformat(),
+            "before": selector.before.isoformat(),
         }
     except HTTPException:
         raise

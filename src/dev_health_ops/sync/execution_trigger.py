@@ -23,7 +23,7 @@ from dev_health_ops.sync.canonical_incident_gate import (
     sync_targets_require_canonical_incident_feature,
 )
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
-from dev_health_ops.sync.planner import plan_sync_run
+from dev_health_ops.sync.planner import BackfillSelector, plan_sync_run
 from dev_health_ops.sync.trigger_routing import planner_request_for_config_if_routed
 
 SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION = "sync_scheduler_occurrence_v1"
@@ -262,6 +262,7 @@ def create_sync_execution_trigger(
     mode: str,
     since: datetime | None = None,
     before: datetime | None = None,
+    backfill_selector: BackfillSelector | None = None,
     initial_job_result: dict[str, Any] | None = None,
 ) -> SyncExecutionTriggerResult | None:
     sync_targets = [str(target) for target in (config.sync_targets or [])]
@@ -272,7 +273,16 @@ def create_sync_execution_trigger(
     )
     if request is None:
         return None
-    if since is not None or before is not None:
+    if backfill_selector is not None:
+        request = replace(
+            request,
+            backfill_selector=backfill_selector,
+            source_ids=None,
+            dataset_keys=None,
+            since=None,
+            before=None,
+        )
+    elif since is not None or before is not None:
         request = replace(request, since=since, before=before)
 
     job_run_id = ensure_pending_sync_job_run(

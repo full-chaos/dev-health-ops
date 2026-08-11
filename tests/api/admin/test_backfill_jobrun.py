@@ -286,6 +286,60 @@ async def test_backfill_config_created_via_plain_endpoint_succeeds(
     assert len(backfill_jobs) == 1
 
 
+@pytest.mark.asyncio
+async def test_sync_config_backfill_accepts_nested_selector_and_resolves_integration(
+    client, session_maker, seeded_state
+):
+    """The web-facing config route forwards focused scope to its integration."""
+    ac, _ = client
+    create_resp = await _create_sync_config(
+        ac, name="bf-focused-selector", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+    integration_id = await _link_migrated_integration(
+        session_maker, seeded_state["org_id"], config_id
+    )
+    source_id = str(uuid.uuid4())
+    captured: dict[str, object] = {}
+
+    def _fake_trigger(session, config, org_id, **kwargs):
+        captured["integration_id"] = getattr(config, "integration_id")
+        captured["backfill_selector"] = kwargs.get("backfill_selector")
+        return MagicMock(
+            sync_run_id=str(uuid.uuid4()),
+            job_run_id=str(uuid.uuid4()),
+            total_units=1,
+            dispatch_required=True,
+        )
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.sync.create_sync_execution_trigger",
+            side_effect=_fake_trigger,
+        ),
+        _patch_dispatch(),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/sync-configs/{config_id}/backfill",
+            json={
+                "selector": {
+                    "since": "2026-01-01",
+                    "before": "2026-01-08",
+                    "source_ids": [source_id],
+                    "dataset_keys": ["commits"],
+                }
+            },
+        )
+
+    assert resp.status_code == 202, resp.text
+    assert captured["integration_id"] == integration_id
+    selector = captured["backfill_selector"]
+    assert selector is not None
+    assert getattr(selector, "source_ids") == (source_id,)
+    assert getattr(selector, "dataset_keys") == ("commits",)
+
+
 # ---------------------------------------------------------------------------
 # Endpoint tests — fanout (planner) path
 # ---------------------------------------------------------------------------

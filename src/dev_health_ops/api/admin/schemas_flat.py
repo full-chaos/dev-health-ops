@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class SettingResponse(BaseModel):
@@ -273,9 +280,38 @@ class DiscoveredReposResponse(BaseModel):
     total: int
 
 
-class BackfillRequest(BaseModel):
+class BackfillSelectorRequest(BaseModel):
     since: date
     before: date
+    source_ids: list[str] | None = None
+    dataset_keys: list[str] | None = None
+
+
+class BackfillRequest(BaseModel):
+    selector: BackfillSelectorRequest | None = None
+    since: date | None = None
+    before: date | None = None
+
+    @model_validator(mode="after")
+    def _validate_selector(self) -> BackfillRequest:
+        if self.selector is not None and (
+            self.since is not None or self.before is not None
+        ):
+            raise ValueError(
+                "backfill selector cannot be mixed with legacy flat fields"
+            )
+        if self.selector is None and (self.since is None or self.before is None):
+            raise ValueError(
+                "backfill requires since and before, either top-level or in selector"
+            )
+        return self
+
+    def resolved_selector(self) -> BackfillSelectorRequest:
+        if self.selector is not None:
+            return self.selector
+        assert self.since is not None
+        assert self.before is not None
+        return BackfillSelectorRequest(since=self.since, before=self.before)
 
 
 JOB_RUN_STATUS_LABELS: dict[int, str] = {

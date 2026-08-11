@@ -37,7 +37,13 @@ from dev_health_ops.sync.canonical_incident_gate import (
 )
 from dev_health_ops.sync.datasets import get_dataset_spec
 from dev_health_ops.sync.discovery import discover_sources_for_integration
-from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from dev_health_ops.sync.planner import (
+    BackfillSelector as SyncBackfillSelector,
+)
+from dev_health_ops.sync.planner import (
+    SyncPlanRequest,
+    plan_sync_run,
+)
 from dev_health_ops.sync.trigger_routing import map_sync_mode
 from dev_health_ops.workers.sync_units import dispatch_sync_run
 
@@ -510,19 +516,30 @@ async def trigger_integration_backfill(
     if await int_svc.get_by_id(integration_id) is None:
         raise HTTPException(status_code=404, detail="Integration not found")
 
+    selector = payload.resolved_selector()
     request = SyncPlanRequest(
         integration_id=integration_id,
         org_id=org_id,
         mode="backfill",
         triggered_by="admin-api",
-        source_ids=tuple(payload.source_ids)
-        if payload.source_ids is not None
+        backfill_selector=SyncBackfillSelector(
+            since=selector.since,
+            before=selector.before,
+            source_ids=tuple(selector.source_ids)
+            if selector.source_ids is not None
+            else None,
+            dataset_keys=tuple(selector.dataset_keys)
+            if selector.dataset_keys is not None
+            else None,
+        ),
+        source_ids=tuple(selector.source_ids)
+        if selector.source_ids is not None
         else None,
-        dataset_keys=tuple(payload.dataset_keys)
-        if payload.dataset_keys is not None
+        dataset_keys=tuple(selector.dataset_keys)
+        if selector.dataset_keys is not None
         else None,
-        since=payload.since,
-        before=payload.before,
+        since=selector.since,
+        before=selector.before,
     )
 
     try:

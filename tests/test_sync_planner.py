@@ -30,7 +30,7 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     OUTBOX_STATUS_PENDING,
 )
-from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
+from dev_health_ops.sync.planner import BackfillSelector, SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
 _POSTGRES_TEST_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
@@ -327,6 +327,47 @@ def test_backfill_creates_one_unit_per_source_dataset_window(db_session):
     assert windows == {
         (datetime(2026, 6, 1).date(), datetime(2026, 6, 7).date()),
         (datetime(2026, 6, 8).date(), datetime(2026, 6, 14).date()),
+    }
+
+
+def test_backfill_selector_object_collapses_family_and_preserves_source_order(
+    db_session,
+):
+    integration = _create_integration(db_session, provider="linear")
+    source_z = _create_source(db_session, integration, external_id="full-chaos/z-repo")
+    source_a = _create_source(db_session, integration, external_id="full-chaos/a-repo")
+    _create_dataset(db_session, integration, "work-item-comments")
+    _create_dataset(db_session, integration, "work-item-labels")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="manual",
+            backfill_selector=BackfillSelector(
+                since=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                before=datetime(2026, 6, 2, tzinfo=timezone.utc),
+                source_ids=(str(source_z.id), str(source_a.id)),
+                dataset_keys=("work-item-labels", "work-item-comments"),
+            ),
+        ),
+    )
+
+    units = [
+        db_session.get(SyncRunUnit, uuid.UUID(unit_id)) for unit_id in plan.unit_ids
+    ]
+
+    assert plan.total_units == 2
+    assert all(unit is not None for unit in units)
+    assert [str(unit.source_id) for unit in units if unit is not None] == [
+        str(source_a.id),
+        str(source_z.id),
+    ]
+    assert {unit.dataset_key for unit in units if unit is not None} == {"work-items"}
+    assert {unit.mode for unit in units if unit is not None} == {
+        SyncRunMode.BACKFILL.value
     }
 
 

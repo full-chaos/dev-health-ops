@@ -78,7 +78,7 @@ import logging
 import os
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -162,17 +162,30 @@ class WatermarkKey:
 
 
 @dataclass(frozen=True)
+class BackfillSelector:
+    """Explicit backfill scope for date and repository/unit selectors."""
+
+    since: datetime
+    before: datetime
+    source_ids: tuple[str, ...] | None = None
+    dataset_keys: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class SyncPlanRequest:
     """Input to :func:`plan_sync_run`.
 
     ``source_ids`` / ``dataset_keys`` of ``None`` mean "all enabled". Explicit
     tuples filter to the given subset (still intersected with enabled rows).
+    ``backfill_selector`` is the newer structured form used by partial
+    backfill callers; the flat fields remain as compatibility aliases.
     """
 
     integration_id: str
     org_id: str
     mode: str  # one of models.integrations.SyncRunMode
     triggered_by: str
+    backfill_selector: BackfillSelector | None = None
     source_ids: tuple[str, ...] | None = None
     dataset_keys: tuple[str, ...] | None = None
     since: datetime | None = None
@@ -242,6 +255,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     repair_outcome = repair_pagerduty_operational_integration(session, integration)
     _repair_github_work_item_runtime_options(session, integration)
     mode = _validate_mode(request.mode)
+    request = _normalize_backfill_selector(request)
     if repair_outcome is not None:
         return _terminalize_pagerduty_disabled_plan(
             session=session,
@@ -383,6 +397,20 @@ def _terminalize_pagerduty_disabled_plan(
         unit_ids=(),
         dispatch_required=False,
         terminal_reason=reason,
+    )
+
+
+def _normalize_backfill_selector(request: SyncPlanRequest) -> SyncPlanRequest:
+    """Project the structured backfill selector onto the legacy flat fields."""
+    selector = request.backfill_selector
+    if selector is None:
+        return request
+    return replace(
+        request,
+        source_ids=selector.source_ids,
+        dataset_keys=selector.dataset_keys,
+        since=selector.since,
+        before=selector.before,
     )
 
 

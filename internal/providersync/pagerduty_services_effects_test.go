@@ -68,7 +68,7 @@ func TestPagerDutyServicesEffectsRejectForeignScopeOrderingTamperAndMixedInstanc
 		t.Fatalf("mapping instance structural validation: %v", err)
 	}
 	badMapping := mapping
-	badMapping.RelationshipProvenance = stringPtr("admin_configuration")
+	badMapping.RelationshipProvenance = pagerDutyStringPtr("admin_configuration")
 	if err := fillPagerDutyServiceMappingOrdering(&badMapping); err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ func TestPagerDutySchedulesEffectRejectsForeignScopeOrderingTamperAndMixedInstan
 	claim := nativeTestClaim("pagerduty", "schedules")
 	row, err := normalizePagerDutySchedule(
 		claim, "acme", pagerDutySchedulePayload{
-			ID: "PS1", Name: "Primary", TimeZone: stringPtr("UTC"),
+			ID: "PS1", Name: "Primary", TimeZone: pagerDutyStringPtr("UTC"),
 		}, time.Date(2026, 8, 9, 19, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -38,7 +38,7 @@ func TestPagerDutySchedulesEffectRejectsForeignScopeOrderingTamperAndMixedInstan
 		t.Fatalf("mixed instance error=%v", err)
 	}
 	tampered := row
-	tampered.Timezone = stringPtr("America/New_York")
+	tampered.Timezone = pagerDutyStringPtr("America/New_York")
 	if err := validatePagerDutyScheduleRows(claim, []pagerDutyScheduleRow{tampered}); !errors.Is(err, providerfoundation.ErrInvalidScope) {
 		t.Fatalf("ordering tamper error=%v", err)
 	}

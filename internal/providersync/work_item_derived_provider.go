@@ -5,5 +5,5 @@ package providersync
 // validation seams. Collection and raw effect routes remain provider-owned;
 // callers of the builders still pass an exact expected provider.
 func isDerivedWorkItemProvider(provider string) bool {
-	return provider == "github" || provider == "gitlab" || provider == "linear"
+	return provider == "github" || provider == "gitlab" || provider == "jira" || provider == "linear"
 }

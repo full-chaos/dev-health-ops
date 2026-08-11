@@ -17,8 +17,9 @@ import (
 // sprint contract and invokes JiraAtlassianRouteHandler.Collect, including its
 // real REST pagination and reference-cache branch.
 type jiraAtlassianOracleSurfaces struct {
-	Worklogs []jiraWorklogRow `json:"worklogs"`
-	Sprints  []jiraSprintRow  `json:"sprints"`
+	Worklogs       []jiraWorklogRow  `json:"worklogs"`
+	Sprints        []jiraSprintRow   `json:"sprints"`
+	AIAttributions []json.RawMessage `json:"ai_attributions"`
 }
 
 func TestJiraAtlassianSurfacesMatchLivePythonProducer(t *testing.T) {
@@ -106,12 +107,25 @@ func buildJiraAtlassianOracleSurfaces(t *testing.T, input map[string]any) jiraAt
 	if jiraBatchBool(input["graphql_fallback"], false) {
 		graphqlClient = jiraWorkItemsTestClient(t, &jiraAtlassianOracleDoer{t: t, graphqlFailure: true}, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	}
-	batch, err := (JiraAtlassianRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraOracleIdentity, ReferenceSprints: refs, CloudID: "cloud-301", GraphQLClient: graphqlClient}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.Identity = jiraOracleIdentity
+	handler.ReferenceSprints = refs
+	handler.CloudID = "cloud-301"
+	handler.GraphQLClient = graphqlClient
+	batch, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := jiraAtlassianOracleSurfaces{Worklogs: make([]jiraWorklogRow, 0), Sprints: make([]jiraSprintRow, 0)}
+	result := jiraAtlassianOracleSurfaces{
+		Worklogs: make([]jiraWorklogRow, 0), Sprints: make([]jiraSprintRow, 0),
+		AIAttributions: make([]json.RawMessage, 0),
+	}
+	foundAI := false
 	for _, effect := range batch.Effects {
+		if effect.Destination == "ai_attribution" {
+			foundAI = true
+			result.AIAttributions = append(result.AIAttributions, effect.Rows...)
+		}
 		for _, raw := range effect.Rows {
 			switch effect.Destination {
 			case "worklogs":
@@ -128,6 +142,9 @@ func buildJiraAtlassianOracleSurfaces(t *testing.T, input map[string]any) jiraAt
 				result.Sprints = append(result.Sprints, row)
 			}
 		}
+	}
+	if !foundAI {
+		t.Fatal("Jira route did not record the live producer's evaluated-empty AI disposition")
 	}
 	return result
 }

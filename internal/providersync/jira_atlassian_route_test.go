@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -61,11 +62,29 @@ func jiraAtlassianClaim() Claim {
 	return claim
 }
 
+func jiraAtlassianCompleteHandler(t *testing.T) JiraAtlassianRouteHandler {
+	t.Helper()
+	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusMapping := loadRealStatusMapping(t)
+	return JiraAtlassianRouteHandler{
+		StatusMapping: statusMapping,
+		Identity:      jiraRouteIdentity,
+		Derived: JiraWorkItemDeriver{
+			Source:               &githubMultiDayOracleSource{},
+			statusMapping:        statusMapping,
+			investmentClassifier: classifier,
+		},
+	}
+}
+
 func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	doer := &jiraAtlassianDoer{t: t}
 	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	batch, err := (JiraAtlassianRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity}).Collect(
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
 	)
@@ -75,8 +94,8 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 	}
-	if len(batch.Effects) != 7 {
-		t.Fatalf("effects=%d want=7", len(batch.Effects))
+	if len(batch.Effects) != 17 {
+		t.Fatalf("effects=%d want=17 (six canonical facts, worklogs, and ten derived)", len(batch.Effects))
 	}
 	if batch.Result["worklogs_synced"] != 1 || batch.Result["sprints_synced"] != 1 || batch.Result["dependencies_synced"] != 1 || batch.Result["interactions_synced"] != 1 {
 		t.Fatalf("result=%#v", batch.Result)
@@ -123,7 +142,9 @@ func TestJiraAtlassianRouteReferenceCacheSkipsBoardEnumeration(t *testing.T) {
 	refName, refState := "August", "active"
 	refs := []jiraSprintRow{{Provider: "jira", SprintID: "9001", Name: &refName, State: &refState, LastSynced: normalizedAt, OrgID: claim.OrgID}}
 	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	batch, err := (JiraAtlassianRouteHandler{StatusMapping: loadRealStatusMapping(t), ReferenceSprints: refs}).Collect(
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.ReferenceSprints = refs
+	batch, err := handler.Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt,
 	)
 	if err != nil {
@@ -146,7 +167,7 @@ func TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark(t *testing
 		return (&jiraAtlassianDoer{t: t}).Do(request)
 	})
 	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	batch, err := (JiraAtlassianRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity}).Collect(
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
 	)
 	if err != nil {
@@ -155,8 +176,39 @@ func TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark(t *testing
 	if batch.Watermark != nil {
 		t.Fatalf("optional worklog failure advanced watermark: %v", batch.Watermark)
 	}
+	if len(batch.Effects) != 17 {
+		t.Fatalf("optional worklog failure dropped recoverable effects: %d", len(batch.Effects))
+	}
 	incomplete, ok := batch.Result["incomplete"].([]string)
 	if !ok || len(incomplete) != 1 || incomplete[0] != "worklogs:jira:OPS-201" {
+		t.Fatalf("incomplete=%#v", batch.Result["incomplete"])
+	}
+}
+
+func TestJiraAtlassianReferenceSinkFailureLandsEffectsAndWithholdsWatermark(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	client := jiraWorkItemsTestClient(
+		t,
+		&jiraAtlassianDoer{t: t},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.ReferenceSink = func([]jiraSprintRow) error { return errors.New("reference unavailable") }
+	batch, err := handler.Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("reference sink failure advanced watermark: %v", batch.Watermark)
+	}
+	if len(batch.Effects) != 17 {
+		t.Fatalf("reference sink failure dropped recoverable effects: %d", len(batch.Effects))
+	}
+	incomplete, ok := batch.Result["incomplete"].([]string)
+	if !ok || len(incomplete) != 1 || incomplete[0] != "reference_sink" {
 		t.Fatalf("incomplete=%#v", batch.Result["incomplete"])
 	}
 }
@@ -178,10 +230,9 @@ func TestJiraAtlassianGraphQLWorklogPreservesNameIdentity(t *testing.T) {
 	})
 	client := jiraWorkItemsTestClient(t, rest, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	graphqlClient := jiraWorkItemsTestClient(t, graphql, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	batch, err := (JiraAtlassianRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
-		CloudID: "cloud-301", GraphQLClient: graphqlClient,
-	}).Collect(
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.CloudID, handler.GraphQLClient = "cloud-301", graphqlClient
+	batch, err := handler.Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
 	)
@@ -195,8 +246,8 @@ func TestJiraAtlassianGraphQLWorklogPreservesNameIdentity(t *testing.T) {
 	if !observation.GraphQLAttempted || !observation.GraphQLSucceeded || observation.RESTFallbackUsed || observation.GraphQLRequests != 1 || observation.RESTRequests != 0 {
 		t.Fatalf("GraphQL observation=%+v", observation)
 	}
-	if len(batch.Effects) != 7 {
-		t.Fatalf("effects=%d want=7", len(batch.Effects))
+	if len(batch.Effects) != 17 {
+		t.Fatalf("effects=%d want=17", len(batch.Effects))
 	}
 	var worklog jiraWorklogRow
 	for _, effect := range batch.Effects {
@@ -228,10 +279,9 @@ func TestJiraAtlassianGraphQLFailureRecordsRESTFallbackObservation(t *testing.T)
 	})
 	client := jiraWorkItemsTestClient(t, rest, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	graphqlClient := jiraWorkItemsTestClient(t, graphql, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	batch, err := (JiraAtlassianRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
-		CloudID: "cloud-301", GraphQLClient: graphqlClient,
-	}).Collect(
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.CloudID, handler.GraphQLClient = "cloud-301", graphqlClient
+	batch, err := handler.Collect(
 		context.Background(), claim, providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
 	)

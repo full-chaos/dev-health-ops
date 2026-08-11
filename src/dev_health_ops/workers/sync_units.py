@@ -1022,21 +1022,15 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
             # which pairs are even candidates, so a run mixing a route-ready
             # pair with 58 pairs the matrix has not marked ready dispatches a
             # mix of river and celery units in the same pass, by design.
-            if provider_unit_routes is not None and (
-                ProviderUnitRouteSwitches.is_route_ready(unit_provider, unit_dataset)
+            if (
+                provider_unit_routes is not None
+                and provider_unit_routes.routes_to_river(unit_provider, unit_dataset)
             ):
-                if not provider_unit_routes.routes_to_river(
-                    unit_provider, unit_dataset
-                ):
-                    # The matrix marks this pair complete and the durable
-                    # route makes the outbox transport live, but this pair's
-                    # own switch is off. That combination is an ownership
-                    # fault -- readiness and enablement fell out of step --
-                    # never a reason to silently fall back to legacy Celery
-                    # dispatch for a pair the matrix says is done.
-                    raise WorkerJobRouteError(
-                        "sync provider canary capability is unavailable"
-                    )
+                # Readiness and the pair/family switch must both select River.
+                # The `continue` is the one-writer fence: an admitted unit is
+                # staged in the durable outbox and never receives a Celery
+                # signature. A not-ready or default-off pair falls through to
+                # the existing Python writer, preserving mixed-run rollback.
                 enqueue_worker_job(
                     session,
                     ProviderUnitPayload(unit_id=str(unit.id)),

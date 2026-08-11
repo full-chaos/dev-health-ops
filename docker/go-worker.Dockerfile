@@ -26,6 +26,8 @@ COPY cmd ./cmd
 COPY contracts ./contracts
 COPY deploy/go-workers ./deploy/go-workers
 COPY internal ./internal
+COPY src/dev_health_ops/config/status_mapping.yaml ./src/dev_health_ops/config/status_mapping.yaml
+COPY src/dev_health_ops/config/investment_areas.yaml ./src/dev_health_ops/config/investment_areas.yaml
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -51,6 +53,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     mkdir -p \
       /runtime/worker/usr/local/bin \
       /runtime/worker/app/contracts/jobs \
+      /runtime/worker/app/config \
       /runtime/worker/app/deploy/go-workers \
       /runtime/scheduler/usr/local/bin \
       /runtime/scheduler/app/contracts/jobs \
@@ -78,6 +81,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /out/worker-contractcheck /runtime/contractcheck/usr/local/bin/worker-contractcheck; \
     cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/profiles.json /runtime/worker/app/deploy/go-workers/profiles.json; \
+    cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/worker/app/config/status_mapping.yaml; \
+    cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/worker/app/config/investment_areas.yaml; \
     cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/profiles.json /runtime/operator/app/deploy/go-workers/profiles.json; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \

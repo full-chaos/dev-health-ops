@@ -31,6 +31,11 @@ _GO_SWARM_ONLY = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers-only
 _GO_KUBERNETES = _KUBERNETES / "go-workers.yaml"
 _GO_KUBERNETES_ONLY = _KUBERNETES / "go-workers-only.yaml"
 
+_PACKAGED_WORK_ITEM_CONFIG = {
+    "status_mapping.yaml": "/app/config/status_mapping.yaml",
+    "investment_areas.yaml": "/app/config/investment_areas.yaml",
+}
+
 _MIGRATION_CONFIG_DEFAULTS = {
     "RIVER_DATABASE_SCHEMA": "river",
     "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
@@ -281,6 +286,17 @@ def test_go_profiles_are_disabled_future_topology() -> None:
             "WORKER_OPERATOR_TOKEN",
         ],
     }
+
+
+def test_go_worker_image_packages_work_item_semantic_config() -> None:
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    for filename, runtime_path in _PACKAGED_WORK_ITEM_CONFIG.items():
+        source = f"src/dev_health_ops/config/{filename}"
+        staged = f"/runtime/worker{runtime_path}"
+        assert (_REPO_ROOT / source).is_file()
+        assert f"COPY {source} ./src/dev_health_ops/config/{filename}" in dockerfile
+        assert staged in dockerfile
 
 
 def test_go_deployment_surfaces_are_additive_default_off_and_profile_complete() -> None:

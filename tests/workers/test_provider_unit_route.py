@@ -36,6 +36,54 @@ def test_route_switch_is_exact_and_independent() -> None:
     assert not switches.routes_to_river("gitlab", "feature-flags")
 
 
+def test_local_all_routes_preset_enables_every_compatible_family() -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"DEV_HEALTH_ENV": "local", "GO_PROVIDER_ROUTES": "all"}
+    )
+
+    disabled_aliases = {
+        "github_pr_reviews",
+        "github_pr_comments",
+        "github_tests",
+        "gitlab_pr_reviews",
+        "gitlab_pr_comments",
+        "gitlab_tests",
+    }
+    for field_name in switches.__dataclass_fields__:
+        assert getattr(switches, field_name) is (field_name not in disabled_aliases)
+
+
+def test_local_all_routes_preset_preserves_explicit_switch_override() -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {
+            "DEV_HEALTH_ENV": "local",
+            "GO_PROVIDER_ROUTES": "all",
+            "WORKER_GITHUB_FILES_ENABLED": "false",
+            "WORKER_GITLAB_PR_REVIEWS_ENABLED": "true",
+        }
+    )
+
+    assert switches.github_files is False
+    assert switches.github_commits is True
+    assert switches.gitlab_pr_reviews is True
+    assert switches.gitlab_prs is False
+
+
+@pytest.mark.parametrize(
+    "environment",
+    (
+        {"GO_PROVIDER_ROUTES": "all"},
+        {"DEV_HEALTH_ENV": "production", "GO_PROVIDER_ROUTES": "all"},
+        {"DEV_HEALTH_ENV": "local", "GO_PROVIDER_ROUTES": "some"},
+    ),
+)
+def test_routes_preset_rejects_nonlocal_or_unknown_configuration(
+    environment: dict[str, str],
+) -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(environment)
+
+
 _AGGREGATE_ROUTE_SWITCH_CASES = (
     (
         "gitlab",

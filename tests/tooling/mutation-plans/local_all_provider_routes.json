@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "local-only all-provider-routes preset",
+  "$limitation": "Pins the local-environment guard and canonical alias selection in both runtime configuration readers. Docker artifact packaging is covered by a static deployment-contract test because mutating Dockerfile staging without a platform build cannot distinguish a behavioral kill from invalid image construction.",
+  "mutations": [
+    {
+      "id": "LAR01-go-local-environment-guard",
+      "file": "internal/platform/config/config.go",
+      "find": "\tif strings.ToLower(strings.TrimSpace(environment)) != \"local\" {",
+      "replace": "\tif strings.ToLower(strings.TrimSpace(environment)) == \"local\" {",
+      "expect_occurrences": 1,
+      "rationale": "The all-routes shorthand must be rejected outside an explicitly local environment and admitted in local development.",
+      "build": ["go", "test", "-run", "^$", "./internal/platform/config/"],
+      "proof": [["go", "test", "-count=1", "-run", "^Test(LocalAllProviderRoutesPreset|ProviderRoutesPresetRejectsNonLocalAndUnknownValues)$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "LAR02-go-canonical-testops-alias",
+      "file": "internal/platform/config/config.go",
+      "find": "\t\t\"WORKER_GITHUB_TESTS_ENABLED\",",
+      "replace": "\t\t\"WORKER_GITHUB_TESTS_DISABLED\",",
+      "expect_occurrences": 1,
+      "rationale": "The local preset chooses CICD as the sole GitHub TestOps alias and must leave TESTS disabled.",
+      "build": ["go", "test", "-run", "^$", "./internal/platform/config/"],
+      "proof": [["go", "test", "-count=1", "-run", "^TestLocalAllProviderRoutesPreset$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "LAR03-python-local-environment-guard",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": "    if environment.get(_DEV_HEALTH_ENV, \"\").strip().lower() != \"local\":",
+      "replace": "    if environment.get(_DEV_HEALTH_ENV, \"\").strip().lower() == \"local\":",
+      "expect_occurrences": 1,
+      "rationale": "Python producer admission must enforce the same local-only boundary as the Go executor.",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/workers/provider_unit_route.py"],
+      "proof": [["pytest", "-q", "tests/workers/test_provider_unit_route.py", "-k", "local_all_routes or routes_preset"]]
+    },
+    {
+      "id": "LAR04-python-canonical-pr-alias",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": "        \"gitlab_pr_reviews\",",
+      "replace": "        \"gitlab_pr_reviews_disabled\",",
+      "expect_occurrences": 1,
+      "rationale": "The local preset chooses PRS as the sole GitLab PR-social alias and must leave PR_REVIEWS disabled.",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/workers/provider_unit_route.py"],
+      "proof": [["pytest", "-q", "tests/workers/test_provider_unit_route.py::test_local_all_routes_preset_enables_every_compatible_family"]]
+    }
+  ]
+}

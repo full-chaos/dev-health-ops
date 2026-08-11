@@ -102,6 +102,30 @@
       "rationale": "GraphQL must aggregate all physical environment rows back to one logical flag and one totalCount while preserving distinct flag_key values under the same provider/project and the environment-agnostic ID",
       "build": [".venv/bin/python", "-c", "import dev_health_ops.api.graphql.resolvers.feature_flags"],
       "proof": [[".venv/bin/python", "tests/tooling/run_feature_flag_identity_live_proof.py"]]
+    },
+    {
+      "id": "M10-missing-source-fails-closed",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "raise RuntimeError(\n            f\"{table}: required source table is missing; cannot apply migration 074\"\n        )",
+      "replace": "log.warning(\"  %s: table does not exist, skipping\", table)\n        return",
+      "rationale": "a missing required feature_flag table must fail the migration rather than let the runner ledger a skipped rebuild",
+      "proof": [[".venv/bin/python", "-m", "pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "missing_feature_flag_table"]]
+    },
+    {
+      "id": "M11-metadata-failure-fails-closed",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "result = client.query(\n        \"SELECT count() FROM system.tables \"\n        \"WHERE database = currentDatabase() AND name = {name:String}\",\n        parameters={\"name\": table},\n    )",
+      "replace": "return False",
+      "rationale": "a ClickHouse metadata query failure must propagate instead of becoming a false absent-table skip",
+      "proof": [[".venv/bin/python", "-m", "pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "metadata_failure"]]
+    },
+    {
+      "id": "M12-target-shadow-is-disposable",
+      "file": "src/dev_health_ops/migrations/clickhouse/074_feature_flag_environment_identity.py",
+      "find": "                if shadow_key == LEGACY_KEY:\n                    log.info(",
+      "replace": "                if True:\n                    log.info(",
+      "rationale": "a stale target-key pre-exchange snapshot must be dropped without replaying duplicate data; only a legacy-key exchanged shadow is recoverable",
+      "proof": [[".venv/bin/python", "-m", "pytest", "-q", "tests/test_migration_074_feature_flag_identity.py", "-k", "stale_target_key_shadow"]]
     }
   ]
 }

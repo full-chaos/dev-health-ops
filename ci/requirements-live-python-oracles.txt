@@ -5,6 +5,7 @@ annotated-types==0.7.0
 anyio==4.13.0
 atlassian-gen-client==0.1.0b3
 certifi==2026.4.22
+colorama==0.4.6
 defusedxml==0.7.1
 gitdb==4.0.12
 GitPython==3.1.54
@@ -15,6 +16,7 @@ httpcore==1.0.9
 httpx==0.28.1
 idna==3.15
 iniconfig==2.3.0
+mando==0.7.1
 packaging==26.2
 pluggy==1.6.0
 pydantic==2.13.4
@@ -22,6 +24,8 @@ pydantic-core==2.46.4
 pygments==2.20.0
 pytest==9.0.3
 PyYAML==6.0.3
+radon==6.0.1
+six==1.17.0
 smmap==5.0.3
 SQLAlchemy==2.0.49
 typing-extensions==4.15.0

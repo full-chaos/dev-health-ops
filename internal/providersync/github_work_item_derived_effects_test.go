@@ -1,11 +1,107 @@
 package providersync
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+type inertGitHubDerivedConn struct{ driver.Conn }
+
+func TestGitHubEstimateCoverageWrite_rejectsForeignTenantBeforeLease(t *testing.T) {
+	// Given: a foreign-tenant effect and a connection/lease that would expose a
+	// write if row tenancy validation were bypassed.
+	row := githubDerivedEffectCoverageRow()
+	row.OrgID = "org-other"
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect, err := BuildEffectBatch(
+		githubEstimateCoverageDestination, EffectReadbackRequired,
+		[]json.RawMessage{raw},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubEstimateCoverageDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	leaseCalls := 0
+	sink := GitHubEstimateCoverageClickHouseEffects{
+		Conn: &inertGitHubDerivedConn{},
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error {
+			leaseCalls++
+			return errors.New("lease reached")
+		}),
+	}
+
+	// When: the public write entrypoint receives the effect.
+	err = sink.WriteGitHubWorkItemEffect(context.Background(), identity, effect)
+
+	// Then: it rejects the payload before using the lease or connection.
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("write error = %v, want ErrInvalidConfiguration", err)
+	}
+	if leaseCalls != 0 {
+		t.Fatalf("lease assertions = %d, want 0", leaseCalls)
+	}
+}
+
+func TestValidateGitHubWorkItemDerivedEffect_allowsForeignTenantForReadback(t *testing.T) {
+	// Given: a persisted effect row from another tenant and an identity for the
+	// tenant whose ClickHouse fence will be queried.
+	row := githubDerivedEffectCoverageRow()
+	row.OrgID = "org-other"
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect, err := BuildEffectBatch(
+		githubEstimateCoverageDestination, EffectReadbackRequired,
+		[]json.RawMessage{raw},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubEstimateCoverageDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+
+	// When: the effect is decoded for a readback.
+	_, err = validateGitHubWorkItemDerivedEffect[githubEstimateCoverageMetricsDailyRow](
+		identity, effect, githubEstimateCoverageDestination,
+	)
+
+	// Then: the SQL tenant fence gets the chance to return EffectAbsent.
+	if err != nil {
+		t.Fatalf("readback validation rejected a foreign tenant row: %v", err)
+	}
+}
+
+func TestGitHubWorkItemDerivedWriteRows_rejectsForeignTenant(t *testing.T) {
+	// Given: a decoded effect row whose tenant does not match the write identity.
+	row := githubDerivedEffectCoverageRow()
+	row.OrgID = "org-other"
+	identity := GitHubWorkItemEffectIdentity{OrgID: "org-acme", Provider: "github"}
+
+	// When: rows are checked before a write.
+	valid := validGitHubWorkItemDerivedWriteRows([]githubEstimateCoverageMetricsDailyRow{row}, identity)
+
+	// Then: the write path rejects the cross-tenant payload.
+	if valid {
+		t.Fatal("foreign tenant row passed write validation")
+	}
+}
 
 // These are fast, synthetic-data unit tests of the three comparators' own
 // logic. Each clause gets a case that exercises ONLY that clause, so a

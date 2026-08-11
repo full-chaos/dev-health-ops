@@ -60,11 +60,10 @@ type GitHubWorkItemStateDurationsClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-// validateGitHubWorkItemDerivedEffect re-derives the typed rows from the
-// frozen effect and refuses anything whose destination, tenancy or recovery
-// posture does not match the identity. Decoding from effect.Rows rather than
-// from a builder result is deliberate: recovery replays a persisted manifest
-// that no builder run produced.
+// validateGitHubWorkItemDerivedEffect decodes the typed rows from the frozen
+// effect and validates its destination and recovery posture. Readback callers
+// must allow a row from another tenant through to the SQL fence so it can
+// return EffectAbsent; write callers apply row-tenancy validation separately.
 func validateGitHubWorkItemDerivedEffect[T any](
 	identity GitHubWorkItemEffectIdentity,
 	effect EffectBatch,
@@ -81,12 +80,21 @@ func validateGitHubWorkItemDerivedEffect[T any](
 		if err := json.Unmarshal(raw, &row); err != nil {
 			return nil, ErrInvalidConfiguration
 		}
-		if !validGitHubWorkItemDerivedRowTenancy(row, identity) {
-			return nil, ErrInvalidConfiguration
-		}
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+func validGitHubWorkItemDerivedWriteRows[T any](
+	rows []T,
+	identity GitHubWorkItemEffectIdentity,
+) bool {
+	for _, row := range rows {
+		if !validGitHubWorkItemDerivedRowTenancy(row, identity) {
+			return false
+		}
+	}
+	return true
 }
 
 // validGitHubWorkItemDerivedRowTenancy is shared by the GitHub and GitLab
@@ -269,7 +277,8 @@ func (sink GitHubEstimateCoverageClickHouseEffects) WriteGitHubWorkItemEffect(
 	rows, err := validateGitHubWorkItemDerivedEffect[githubEstimateCoverageMetricsDailyRow](
 		identity, effect, githubEstimateCoverageDestination,
 	)
-	if err != nil || ctx == nil || sink.Lease == nil || sink.Conn == nil {
+	if err != nil || !validGitHubWorkItemDerivedWriteRows(rows, identity) ||
+		ctx == nil || sink.Lease == nil || sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
@@ -395,7 +404,8 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	rows, err := validateGitHubWorkItemDerivedEffect[githubWorkItemTeamAttributionRow](
 		identity, effect, githubTeamAttributionsDestination,
 	)
-	if err != nil || ctx == nil || sink.Lease == nil || sink.Conn == nil {
+	if err != nil || !validGitHubWorkItemDerivedWriteRows(rows, identity) ||
+		ctx == nil || sink.Lease == nil || sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
@@ -514,7 +524,8 @@ func (sink GitHubWorkItemStateDurationsClickHouseEffects) WriteGitHubWorkItemEff
 	rows, err := validateGitHubWorkItemDerivedEffect[githubWorkItemStateDurationDailyRow](
 		identity, effect, githubStateDurationsDestination,
 	)
-	if err != nil || ctx == nil || sink.Lease == nil || sink.Conn == nil {
+	if err != nil || !validGitHubWorkItemDerivedWriteRows(rows, identity) ||
+		ctx == nil || sink.Lease == nil || sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {

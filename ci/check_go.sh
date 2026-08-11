@@ -13,6 +13,7 @@ export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.tsv}"
+DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
 
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
@@ -62,10 +63,12 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
-  integration-shard SHARD [--dry-run]
-         Run exactly one validated integration shard. `--dry-run` prints the
-         exact package selection without starting Docker-backed tests; CI never
-         passes that option.
+  integration-shard TARGET SHARD [--dry-run]
+         Run exactly one validated integration shard. TARGET is `packages` for
+         a package-level shard or `providersync` for a top-level test shard of
+         the dominant internal/providersync package. `--dry-run` prints the
+         exact selection without starting Docker-backed tests; CI never passes
+         that option.
   integration
          Discover and run EVERY integration-tagged package'\''s suite against
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
@@ -380,7 +383,20 @@ declare -A INTEGRATION_SHARD_WEIGHTS=()
 declare -A INTEGRATION_SHARD_BY_KEY=()
 declare -a INTEGRATION_SHARD_TOTALS=()
 declare -a INTEGRATION_SHARD_PACKAGE_COUNTS=()
+declare -a INTEGRATION_SHARD_NON_PROVIDER_COUNTS=()
 INTEGRATION_SHARD_COUNT=0
+PROVIDER_INTEGRATION_PACKAGE_KEY="internal/providersync"
+declare -A PROVIDER_INTEGRATION_TEST_NAMES=()
+declare -A PROVIDER_TEST_WEIGHTS=()
+declare -A PROVIDER_TEST_CLASS=()
+declare -A PROVIDER_TEST_SHARD_BY_NAME=()
+declare -a PROVIDER_TEST_NAMES=()
+declare -a PROVIDER_TEST_SHARD_TOTALS=()
+declare -a PROVIDER_TEST_SHARD_COUNTS=()
+declare -a PROVIDER_TEST_SHARD_INTEGRATION_COUNTS=()
+PROVIDER_TEST_SHARD_COUNT=0
+PROVIDER_INTEGRATION_TEST_WEIGHT=0
+PROVIDER_ORDINARY_TEST_WEIGHT=0
 
 # discover_integration_packages populates parallel module/package arrays with
 # every module-relative "./pkg/dir" entry that has at least one tracked or
@@ -577,9 +593,11 @@ plan_integration_shards() {
   INTEGRATION_SHARD_BY_KEY=()
   INTEGRATION_SHARD_TOTALS=()
   INTEGRATION_SHARD_PACKAGE_COUNTS=()
+  INTEGRATION_SHARD_NON_PROVIDER_COUNTS=()
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
     INTEGRATION_SHARD_TOTALS[shard]=0
     INTEGRATION_SHARD_PACKAGE_COUNTS[shard]=0
+    INTEGRATION_SHARD_NON_PROVIDER_COUNTS[shard]=0
   done
 
   while IFS=$'\t' read -r weight key; do
@@ -598,6 +616,11 @@ plan_integration_shards() {
     INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard]=$((
       INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard] + 1
     ))
+    if [ "${key}" != "${PROVIDER_INTEGRATION_PACKAGE_KEY}" ]; then
+      INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard]=$((
+        INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard] + 1
+      ))
+    fi
   done < <(
     for key in "${!INTEGRATION_SHARD_WEIGHTS[@]}"; do
       printf '%s\t%s\n' "${INTEGRATION_SHARD_WEIGHTS[${key}]}" "${key}"
@@ -624,10 +647,234 @@ plan_integration_shards() {
   done
 }
 
+# The providersync manifest owns only the number of test shards and the two
+# source-derived relative weights. The complete test-name set always comes
+# from the current Go package, so a checked-in list cannot silently drift.
+load_providersync_test_shard_manifest() {
+  local manifest="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST}"
+  local line_number=0 key value extra
+  local shards_seen=0 integration_weight_seen=0 ordinary_weight_seen=0
+
+  [ -f "${manifest}" ] \
+    || die "provider test shard manifest not found: ${manifest}"
+
+  PROVIDER_TEST_SHARD_COUNT=0
+  PROVIDER_INTEGRATION_TEST_WEIGHT=0
+  PROVIDER_ORDINARY_TEST_WEIGHT=0
+  while IFS=$'\t ' read -r key value extra; do
+    line_number=$((line_number + 1))
+    case "${key}" in
+      ""|\#*) continue ;;
+    esac
+    if [ -n "${extra}" ]; then
+      die "provider test shard manifest ${manifest}:${line_number} must contain exactly two fields"
+    fi
+    case "${value}" in
+      ""|*[!0-9]*)
+        die "provider test shard manifest ${manifest}:${line_number} has non-numeric value '${value}'"
+        ;;
+    esac
+    if [ "${value}" -le 0 ]; then
+      die "provider test shard manifest ${manifest}:${line_number} values must be positive"
+    fi
+
+    case "${key}" in
+      shards)
+        [ "${shards_seen}" -eq 0 ] \
+          || die "provider test shard manifest declares 'shards' more than once"
+        shards_seen=1
+        PROVIDER_TEST_SHARD_COUNT="${value}"
+        ;;
+      integration-test-weight)
+        [ "${integration_weight_seen}" -eq 0 ] \
+          || die "provider test shard manifest declares 'integration-test-weight' more than once"
+        integration_weight_seen=1
+        PROVIDER_INTEGRATION_TEST_WEIGHT="${value}"
+        ;;
+      ordinary-test-weight)
+        [ "${ordinary_weight_seen}" -eq 0 ] \
+          || die "provider test shard manifest declares 'ordinary-test-weight' more than once"
+        ordinary_weight_seen=1
+        PROVIDER_ORDINARY_TEST_WEIGHT="${value}"
+        ;;
+      *)
+        die "provider test shard manifest ${manifest}:${line_number} has unknown key '${key}'"
+        ;;
+    esac
+  done < "${manifest}"
+
+  [ "${shards_seen}" -eq 1 ] \
+    || die "provider test shard manifest must declare one 'shards' row"
+  [ "${integration_weight_seen}" -eq 1 ] \
+    || die "provider test shard manifest must declare one 'integration-test-weight' row"
+  [ "${ordinary_weight_seen}" -eq 1 ] \
+    || die "provider test shard manifest must declare one 'ordinary-test-weight' row"
+  [ "${PROVIDER_TEST_SHARD_COUNT}" -ge 2 ] \
+    || die "provider test shard manifest must declare at least two shards"
+}
+
+# Go's own test listing is the executable-name authority. Source inspection is
+# used only to classify those names by cost, and only across files `go list`
+# says are active for the integration build tag on this runner.
+discover_providersync_tests() {
+  local list_output files_output go_file source_file test_name
+  declare -A discovered_names=()
+
+  if ! list_output="$(
+    cd "${ROOT}"
+    GOWORK=off go test -mod=readonly -tags=integration -count=1 -run '^$' -list '^Test' ./internal/providersync
+  )"; then
+    die "failed to discover providersync top-level tests with go test -list"
+  fi
+
+  PROVIDER_TEST_NAMES=()
+  while IFS= read -r test_name; do
+    case "${test_name}" in
+      Test*[![:alnum:]_]*)
+        die "providersync test discovery returned unsupported top-level test name '${test_name}'"
+        ;;
+      Test*) ;;
+      *) continue ;;
+    esac
+    [ -z "${discovered_names[${test_name}]+set}" ] \
+      || die "providersync test discovery returned '${test_name}' more than once"
+    discovered_names["${test_name}"]=1
+    PROVIDER_TEST_NAMES+=("${test_name}")
+  done < <(printf '%s\n' "${list_output}" | LC_ALL=C sort)
+
+  [ "${#PROVIDER_TEST_NAMES[@]}" -gt 0 ] \
+    || die "providersync test discovery returned zero top-level tests"
+  [ "${PROVIDER_TEST_SHARD_COUNT}" -le "${#PROVIDER_TEST_NAMES[@]}" ] \
+    || die "provider test shard manifest declares more shards than discovered tests"
+
+  if ! files_output="$(
+    cd "${ROOT}"
+    GOWORK=off go list -mod=readonly -tags=integration \
+      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
+      ./internal/providersync
+  )"; then
+    die "failed to discover active providersync test files with go list"
+  fi
+
+  PROVIDER_INTEGRATION_TEST_NAMES=()
+  while IFS= read -r go_file; do
+    [ -n "${go_file}" ] || continue
+    case "${go_file}" in
+      */*|..*) die "go list returned unsafe providersync test filename '${go_file}'" ;;
+    esac
+    source_file="${ROOT}/${PROVIDER_INTEGRATION_PACKAGE_KEY}/${go_file}"
+    [ -f "${source_file}" ] \
+      || die "go list returned missing providersync test file '${go_file}'"
+    grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
+      "${source_file}" || continue
+    while IFS= read -r test_name; do
+      [ -n "${test_name}" ] || continue
+      [ -z "${PROVIDER_INTEGRATION_TEST_NAMES[${test_name}]+set}" ] \
+        || die "integration-tagged providersync source declares '${test_name}' more than once"
+      PROVIDER_INTEGRATION_TEST_NAMES["${test_name}"]=1
+    done < <(
+      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' \
+        "${source_file}"
+    )
+  done <<< "${files_output}"
+
+  [ "${#PROVIDER_INTEGRATION_TEST_NAMES[@]}" -gt 0 ] \
+    || die "providersync source discovery returned zero integration-tagged top-level tests"
+  for test_name in "${!PROVIDER_INTEGRATION_TEST_NAMES[@]}"; do
+    [ -n "${discovered_names[${test_name}]+set}" ] \
+      || die "integration-tagged providersync source test '${test_name}' is absent from go test -list"
+  done
+
+  PROVIDER_TEST_WEIGHTS=()
+  PROVIDER_TEST_CLASS=()
+  for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
+    if [ -n "${PROVIDER_INTEGRATION_TEST_NAMES[${test_name}]+set}" ]; then
+      PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_INTEGRATION_TEST_WEIGHT}"
+      PROVIDER_TEST_CLASS["${test_name}"]="integration"
+    else
+      PROVIDER_TEST_WEIGHTS["${test_name}"]="${PROVIDER_ORDINARY_TEST_WEIGHT}"
+      PROVIDER_TEST_CLASS["${test_name}"]="ordinary"
+    fi
+  done
+}
+
+# Deterministic longest-processing-time-first assignment balances the costly
+# integration-tagged top-level tests first. Test names and lowest shard number
+# are the stable tie-breakers, matching the package-level plan above.
+plan_providersync_test_shards() {
+  local test_name weight shard selected_shard selected_total
+
+  load_providersync_test_shard_manifest
+  discover_providersync_tests
+
+  PROVIDER_TEST_SHARD_BY_NAME=()
+  PROVIDER_TEST_SHARD_TOTALS=()
+  PROVIDER_TEST_SHARD_COUNTS=()
+  PROVIDER_TEST_SHARD_INTEGRATION_COUNTS=()
+  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
+    PROVIDER_TEST_SHARD_TOTALS[shard]=0
+    PROVIDER_TEST_SHARD_COUNTS[shard]=0
+    PROVIDER_TEST_SHARD_INTEGRATION_COUNTS[shard]=0
+  done
+
+  while IFS=$'\t' read -r weight test_name; do
+    selected_shard=1
+    selected_total="${PROVIDER_TEST_SHARD_TOTALS[1]}"
+    for ((shard = 2; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
+      if [ "${PROVIDER_TEST_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
+        selected_shard="${shard}"
+        selected_total="${PROVIDER_TEST_SHARD_TOTALS[${shard}]}"
+      fi
+    done
+    PROVIDER_TEST_SHARD_BY_NAME["${test_name}"]="${selected_shard}"
+    PROVIDER_TEST_SHARD_TOTALS[selected_shard]=$((
+      PROVIDER_TEST_SHARD_TOTALS[selected_shard] + weight
+    ))
+    PROVIDER_TEST_SHARD_COUNTS[selected_shard]=$((
+      PROVIDER_TEST_SHARD_COUNTS[selected_shard] + 1
+    ))
+    if [ "${PROVIDER_TEST_CLASS[${test_name}]}" = "integration" ]; then
+      PROVIDER_TEST_SHARD_INTEGRATION_COUNTS[selected_shard]=$((
+        PROVIDER_TEST_SHARD_INTEGRATION_COUNTS[selected_shard] + 1
+      ))
+    fi
+  done < <(
+    for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
+      printf '%s\t%s\n' "${PROVIDER_TEST_WEIGHTS[${test_name}]}" "${test_name}"
+    done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
+  )
+
+  printf 'providersync test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
+    "${PROVIDER_TEST_SHARD_COUNT}" \
+    "${#PROVIDER_TEST_NAMES[@]}" \
+    "${#PROVIDER_INTEGRATION_TEST_NAMES[@]}"
+  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
+    printf 'providersync test shard %d: relative weight %d, %d test(s), %d integration-tagged\n' \
+      "${shard}" \
+      "${PROVIDER_TEST_SHARD_TOTALS[${shard}]}" \
+      "${PROVIDER_TEST_SHARD_COUNTS[${shard}]}" \
+      "${PROVIDER_TEST_SHARD_INTEGRATION_COUNTS[${shard}]}"
+    for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
+      if [ "${PROVIDER_TEST_SHARD_BY_NAME[${test_name}]:-0}" -eq "${shard}" ]; then
+        printf '  PROVIDER-SHARD %d %s weight=%d class=%s\n' \
+          "${shard}" \
+          "${test_name}" \
+          "${PROVIDER_TEST_WEIGHTS[${test_name}]}" \
+          "${PROVIDER_TEST_CLASS[${test_name}]}"
+      fi
+    done
+  done
+}
+
 emit_integration_shard_matrix() {
   local matrix='{"include":[' separator="" shard
+  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
+    matrix+="${separator}{\"target\":\"providersync\",\"shard\":${shard}}"
+    separator=","
+  done
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"shard\":${shard}}"
+    [ "${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}" -gt 0 ] || continue
+    matrix+="${separator}{\"target\":\"packages\",\"shard\":${shard}}"
     separator=","
   done
   matrix+=']}'
@@ -639,27 +886,19 @@ emit_integration_shard_matrix() {
 
 check_integration_shard_plan() {
   plan_integration_shards
+  plan_providersync_test_shards
   emit_integration_shard_matrix
 }
 
-check_integration_shard() {
-  local shard="${1:-}" mode="${2:-}"
+check_integration_package_shard() {
+  local shard="$1" mode="$2"
   local index module_dir pkg key
   local selected_count=0
   local -a run_pkgs=()
   local -a run_keys=()
 
-  case "${shard}" in
-    ""|*[!0-9]*) die "integration-shard requires a numeric shard id" ;;
-  esac
-  case "${mode}" in
-    ""|--dry-run) ;;
-    *) die "integration-shard accepts only the optional --dry-run flag" ;;
-  esac
-
-  plan_integration_shards
   if [ "${shard}" -lt 1 ] || [ "${shard}" -gt "${INTEGRATION_SHARD_COUNT}" ]; then
-    die "integration shard ${shard} is outside 1..${INTEGRATION_SHARD_COUNT}"
+    die "integration package shard ${shard} is outside 1..${INTEGRATION_SHARD_COUNT}"
   fi
 
   for module_dir in "${MODULE_DIRS[@]}"; do
@@ -670,6 +909,7 @@ check_integration_shard() {
       pkg="${INTEGRATION_PACKAGES[${index}]}"
       key="${module_dir}/${pkg#./}"
       key="${key#./}"
+      [ "${key}" != "${PROVIDER_INTEGRATION_PACKAGE_KEY}" ] || continue
       [ "${INTEGRATION_SHARD_BY_KEY[${key}]:-0}" -eq "${shard}" ] || continue
       run_pkgs+=("${pkg}")
       run_keys+=("${key}")
@@ -677,7 +917,7 @@ check_integration_shard() {
     done
     [ "${#run_pkgs[@]}" -gt 0 ] || continue
 
-    printf 'go test integration shard %s: %s -> %s\n' \
+    printf 'go test integration package shard %s: %s -> %s\n' \
       "${shard}" "${module_dir}" "${run_pkgs[*]}"
     for key in "${run_keys[@]}"; do
       printf '  SHARD-RUN %s\n' "${key}"
@@ -692,18 +932,79 @@ check_integration_shard() {
   done
 
   [ "${selected_count}" -gt 0 ] \
-    || die "integration shard ${shard} selected zero packages"
-  if [ "${selected_count}" -ne "${INTEGRATION_SHARD_PACKAGE_COUNTS[${shard}]}" ]; then
-    die "integration shard ${shard} selected ${selected_count} packages but plan declared ${INTEGRATION_SHARD_PACKAGE_COUNTS[${shard}]}"
+    || die "integration package shard ${shard} selected zero packages"
+  if [ "${selected_count}" -ne "${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}" ]; then
+    die "integration package shard ${shard} selected ${selected_count} packages but plan declared ${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}"
   fi
   if [ "${mode}" = "--dry-run" ]; then
-    printf 'integration shard %s: DRY RUN selected %d package(s); no tests executed\n' \
+    printf 'integration package shard %s: DRY RUN selected %d package(s); no tests executed\n' \
       "${shard}" "${selected_count}"
   fi
 }
 
+check_providersync_test_shard() {
+  local shard="$1" mode="$2"
+  local test_name separator="" test_regex='^('
+  local selected_count=0
+
+  if [ "${shard}" -lt 1 ] || [ "${shard}" -gt "${PROVIDER_TEST_SHARD_COUNT}" ]; then
+    die "providersync test shard ${shard} is outside 1..${PROVIDER_TEST_SHARD_COUNT}"
+  fi
+
+  for test_name in "${PROVIDER_TEST_NAMES[@]}"; do
+    [ "${PROVIDER_TEST_SHARD_BY_NAME[${test_name}]:-0}" -eq "${shard}" ] || continue
+    printf '  PROVIDER-TEST-RUN %s\n' "${test_name}"
+    test_regex+="${separator}${test_name}"
+    separator="|"
+    selected_count=$((selected_count + 1))
+  done
+  test_regex+=')$'
+
+  [ "${selected_count}" -gt 0 ] \
+    || die "providersync test shard ${shard} selected zero tests"
+  if [ "${selected_count}" -ne "${PROVIDER_TEST_SHARD_COUNTS[${shard}]}" ]; then
+    die "providersync test shard ${shard} selected ${selected_count} tests but plan declared ${PROVIDER_TEST_SHARD_COUNTS[${shard}]}"
+  fi
+  if [ "${mode}" = "--dry-run" ]; then
+    printf 'providersync test shard %s: DRY RUN selected %d top-level test(s); no tests executed\n' \
+      "${shard}" "${selected_count}"
+    return 0
+  fi
+
+  printf 'go test providersync test shard %s: %d top-level test(s)\n' \
+    "${shard}" "${selected_count}"
+  (
+    cd "${ROOT}"
+    GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+  )
+}
+
+check_integration_shard() {
+  local target="${1:-}" shard="${2:-}" mode="${3:-}"
+
+  case "${target}" in
+    packages|providersync) ;;
+    *) die "integration-shard TARGET must be 'packages' or 'providersync'" ;;
+  esac
+  case "${shard}" in
+    ""|*[!0-9]*) die "integration-shard requires a numeric shard id" ;;
+  esac
+  case "${mode}" in
+    ""|--dry-run) ;;
+    *) die "integration-shard accepts only the optional --dry-run flag" ;;
+  esac
+
+  plan_integration_shards
+  plan_providersync_test_shards
+  case "${target}" in
+    packages) check_integration_package_shard "${shard}" "${mode}" ;;
+    providersync) check_providersync_test_shard "${shard}" "${mode}" ;;
+  esac
+}
+
 check_integration() {
   plan_integration_shards
+  plan_providersync_test_shards
   local index module_dir pkg key reason
   local -a run_pkgs=()
 
@@ -783,9 +1084,9 @@ case "${1:-all}" in
     check_integration_shard_plan
     ;;
   integration-shard)
-    [ "$#" -ge 2 ] && [ "$#" -le 3 ] \
-      || die "integration-shard requires SHARD and accepts only optional --dry-run"
-    check_integration_shard "$2" "${3:-}"
+    [ "$#" -ge 3 ] && [ "$#" -le 4 ] \
+      || die "integration-shard requires TARGET SHARD and accepts only optional --dry-run"
+    check_integration_shard "$2" "$3" "${4:-}"
     ;;
   integration)
     check_integration
@@ -799,6 +1100,7 @@ case "${1:-all}" in
     check_contract
     check_integration_vet
     plan_integration_shards
+    plan_providersync_test_shards
     check_grant_advisory
     ;;
   all)
@@ -811,6 +1113,7 @@ case "${1:-all}" in
     check_contract
     check_integration_vet
     plan_integration_shards
+    plan_providersync_test_shards
     check_grant_advisory
     ;;
   -h|--help|help)

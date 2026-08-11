@@ -95,7 +95,7 @@ async def resolve_feature_flags(
     if not include_archived:
         where_clauses.append("archived_at IS NULL")
 
-    # Migration 074 makes environment part of the physical RMT identity, but
+    # Migration 075 makes environment part of the physical RMT identity, but
     # the GraphQL registry contract remains one logical item per
     # (provider, project, flag).  Aggregate after FINAL and choose every
     # surfaced field from the same deterministic latest environment.  The

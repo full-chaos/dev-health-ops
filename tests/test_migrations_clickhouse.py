@@ -18,7 +18,7 @@ async def test_clickhouse_migrations_dry_run_non_default_db():
     # Mock ClickHouse client
     mock_client = MagicMock()
     # Mock query result for schema_migrations (empty, so all migrations run).
-    # Migration 074 also fail-closes unless the database engine supports
+    # Migration 075 also fail-closes unless the database engine supports
     # EXCHANGE TABLES; model the production Atomic database explicitly.
     mock_client.query.return_value.result_rows = []
 

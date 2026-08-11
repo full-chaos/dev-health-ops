@@ -5,6 +5,61 @@ import (
 	"testing"
 )
 
+func TestAggregateProviderDescriptorsAreNativeReadyAndDefaultOff(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		provider     string
+		dataset      string
+		destinations []string
+	}{
+		{"gitlab", "deployments", []string{"deployments"}},
+		{"gitlab", "feature-flags", []string{"feature_flag", "feature_flag_event", "work_graph_edges"}},
+		{"gitlab", "files", []string{"git_files"}},
+		{"gitlab", "blame", []string{"git_blame"}},
+		{"gitlab", "prs", []string{"git_pull_requests", "git_pull_request_reviews"}},
+		{"gitlab", "pr-reviews", []string{"git_pull_requests", "git_pull_request_reviews"}},
+		{"gitlab", "pr-comments", []string{"git_pull_requests", "git_pull_request_reviews"}},
+		{"gitlab", "security", []string{"security_alerts"}},
+		{"gitlab", "work-items", workItemRouteDestinations()},
+		{"gitlab", "work-item-labels", workItemRouteDestinations()},
+		{"gitlab", "work-item-projects", workItemRouteDestinations()},
+		{"gitlab", "work-item-history", workItemRouteDestinations()},
+		{"gitlab", "work-item-comments", workItemRouteDestinations()},
+		{"jira", "work-items", append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-labels", append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-projects", append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-history", append(workItemRouteDestinations(), "worklogs")},
+		{"jira", "work-item-comments", append(workItemRouteDestinations(), "worklogs")},
+		{"linear", "work-items", workItemRouteDestinations()},
+		{"linear", "work-item-labels", workItemRouteDestinations()},
+		{"linear", "work-item-projects", workItemRouteDestinations()},
+		{"linear", "work-item-history", workItemRouteDestinations()},
+		{"linear", "work-item-comments", workItemRouteDestinations()},
+		{"pagerduty", "services", []string{"operational_services", "operational_service_repository_mappings"}},
+		{"pagerduty", "business-services", []string{"operational_services"}},
+		{"pagerduty", "escalation-policies", []string{"operational_escalation_policies"}},
+		{"pagerduty", "schedules", []string{"operational_on_call_schedules"}},
+		{"pagerduty", "on-calls", []string{"operational_on_call_assignments"}},
+		{"pagerduty", "users", []string{"operational_users"}},
+		{"pagerduty", "teams", []string{"operational_teams"}},
+		{"pagerduty", "incidents", []string{"operational_incidents"}},
+		{"pagerduty", "incident-alerts", []string{"operational_alerts"}},
+		{"pagerduty", "incident-log-entries", []string{"operational_incident_timeline_events"}},
+		{"pagerduty", "incident-notes", []string{"operational_incident_notes"}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.provider+"/"+test.dataset, func(t *testing.T) {
+			t.Parallel()
+			descriptor, ok := (CompleteRouteSwitches{}).Descriptor(test.provider, test.dataset)
+			if !ok || descriptor.Executor != ExecutorNativeGo || !descriptor.RouteReady ||
+				descriptor.RouteEnabled || !slices.Equal(descriptor.Destinations, test.destinations) {
+				t.Fatalf("descriptor=%+v known=%t want destinations=%v", descriptor, ok, test.destinations)
+			}
+		})
+	}
+}
+
 // TestCanonicalDescriptorRecognisesEveryCapability proves the unification: the
 // production route descriptor and the dataset capability registry recognise
 // exactly the same provider/dataset set, so no slice can be wired to a
@@ -35,13 +90,13 @@ func TestCanonicalDescriptorRecognisesEveryCapability(t *testing.T) {
 	}
 }
 
-func TestCompleteRouteSwitchesCollapseWorkItemAliasesAndRemainIndependent(t *testing.T) {
+func TestCompleteRouteSwitchesKeepWorkItemAliasesCanonicalOnlyAndIndependent(t *testing.T) {
 	t.Parallel()
 	switches := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraIncidents: true,
 	}
 	linear, ok := switches.Descriptor("linear", "work-items")
-	if !ok || linear.RouteReady || linear.RouteEnabled ||
+	if !ok || !linear.RouteReady || !linear.RouteEnabled ||
 		linear.RouteDataset != "work-items" ||
 		len(linear.Destinations) != len(workItemRouteDestinations()) {
 		t.Fatalf("linear route=%+v ok=%v", linear, ok)
@@ -51,7 +106,7 @@ func TestCompleteRouteSwitchesCollapseWorkItemAliasesAndRemainIndependent(t *tes
 		"work-item-history", "work-item-comments",
 	} {
 		descriptor, ok := switches.Descriptor("linear", alias)
-		if !ok || descriptor.RouteReady || descriptor.RouteEnabled ||
+		if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
 			descriptor.RouteDataset != "work-items" {
 			t.Fatalf("linear alias %s=%+v ok=%v", alias, descriptor, ok)
 		}
@@ -133,14 +188,14 @@ func TestShadowProjectionIsDerivedAndNarrow(t *testing.T) {
 }
 
 // TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly pins CHAOS-3606's
-// all-five-alias activation boundary: GitHub now has one complete native
-// family, while GitLab's still-unported fixture collectors remain closed.
+// all-five-alias activation boundary: each completed provider has one native
+// family while direct aliases remain closed claims.
 func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 	t.Parallel()
 	switches := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true,
-		GithubWorkItems:          true,
+		GithubWorkItems:          true, GitlabWorkItems: true,
 	}
 	for _, dataset := range []string{
 		"work-items", "work-item-labels", "work-item-projects",
@@ -170,21 +225,36 @@ func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 			t.Fatalf("direct alias github/%s descriptor=%+v", dataset, descriptor)
 		}
 	}
-	for _, dataset := range []string{
-		"work-items", "work-item-labels", "work-item-projects",
-		"work-item-history", "work-item-comments",
-	} {
-		descriptor, ok := switches.Descriptor("gitlab", dataset)
-		if !ok || descriptor.NativeShadow || descriptor.RouteReady ||
-			descriptor.RouteEnabled || descriptor.Executor != ExecutorNone {
-			t.Fatalf("gitlab/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
+	for _, provider := range []string{"gitlab", "jira", "linear"} {
+		wantDestinations := workItemRouteDestinations()
+		if provider == "jira" {
+			wantDestinations = append(wantDestinations, "worklogs")
+		}
+		for _, dataset := range []string{
+			"work-items", "work-item-labels", "work-item-projects",
+			"work-item-history", "work-item-comments",
+		} {
+			descriptor, ok := switches.Descriptor(provider, dataset)
+			wantRouteDataset := dataset
+			if provider == "jira" || provider == "linear" {
+				wantRouteDataset = "work-items"
+			}
+			if !ok || descriptor.NativeShadow || !descriptor.RouteReady ||
+				descriptor.Executor != ExecutorNativeGo ||
+				descriptor.RouteDataset != wantRouteDataset ||
+				!slices.Equal(descriptor.Destinations, wantDestinations) {
+				t.Fatalf("%s/%s descriptor=%+v ok=%v", provider, dataset, descriptor, ok)
+			}
+			if descriptor.RouteEnabled != (dataset == "work-items") {
+				t.Fatalf("%s/%s enabled=%t", provider, dataset, descriptor.RouteEnabled)
+			}
 		}
 	}
 }
 
 // TestPagerDutyIsCoveredByTheSameContract closes the largest CUT-08 gap: every
 // PagerDuty dataset now resolves the same descriptor type as every other
-// provider, with honest false readiness.
+// provider, with native readiness and default-off activation.
 func TestPagerDutyIsCoveredByTheSameContract(t *testing.T) {
 	t.Parallel()
 	datasets := []string{
@@ -192,14 +262,11 @@ func TestPagerDutyIsCoveredByTheSameContract(t *testing.T) {
 		"on-calls", "users", "teams", "incidents", "incident-alerts",
 		"incident-log-entries", "incident-notes",
 	}
-	switches := CompleteRouteSwitches{
-		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
-		LaunchDarklyFeatureFlags: true,
-	}
+	switches := CompleteRouteSwitches{}
 	for _, dataset := range datasets {
 		descriptor, ok := switches.Descriptor("pagerduty", dataset)
-		if !ok || descriptor.RouteReady || descriptor.RouteEnabled ||
-			descriptor.Executor != ExecutorNone {
+		if !ok || !descriptor.RouteReady || descriptor.RouteEnabled ||
+			descriptor.Executor != ExecutorNativeGo || len(descriptor.Destinations) == 0 {
 			t.Fatalf("pagerduty/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
 		}
 		capability, ok := Capability("pagerduty", dataset)
@@ -210,5 +277,48 @@ func TestPagerDutyIsCoveredByTheSameContract(t *testing.T) {
 	}
 	if len(Capabilities("pagerduty")) != len(datasets) {
 		t.Fatalf("pagerduty capabilities=%d", len(Capabilities("pagerduty")))
+	}
+}
+
+func TestPagerDutyDescriptorSwitchesArePerDataset(t *testing.T) {
+	t.Parallel()
+	datasets := []string{
+		"services", "business-services", "escalation-policies", "schedules",
+		"on-calls", "users", "teams", "incidents", "incident-alerts",
+		"incident-log-entries", "incident-notes",
+	}
+	probes := []struct {
+		dataset  string
+		switches CompleteRouteSwitches
+	}{
+		{"services", CompleteRouteSwitches{PagerDutyServices: true}},
+		{"business-services", CompleteRouteSwitches{PagerDutyBusinessServices: true}},
+		{"escalation-policies", CompleteRouteSwitches{PagerDutyEscalationPolicies: true}},
+		{"schedules", CompleteRouteSwitches{PagerDutySchedules: true}},
+		{"on-calls", CompleteRouteSwitches{PagerDutyOnCalls: true}},
+		{"users", CompleteRouteSwitches{PagerDutyUsers: true}},
+		{"teams", CompleteRouteSwitches{PagerDutyTeams: true}},
+		{"incidents", CompleteRouteSwitches{PagerDutyIncidents: true}},
+		{"incident-alerts", CompleteRouteSwitches{PagerDutyIncidentAlerts: true}},
+		{"incident-log-entries", CompleteRouteSwitches{PagerDutyIncidentLogEntries: true}},
+		{"incident-notes", CompleteRouteSwitches{PagerDutyIncidentNotes: true}},
+	}
+	for _, probe := range probes {
+		probe := probe
+		t.Run(probe.dataset, func(t *testing.T) {
+			t.Parallel()
+			for _, dataset := range datasets {
+				descriptor, ok := probe.switches.Descriptor("pagerduty", dataset)
+				if !ok || !descriptor.RouteReady {
+					t.Fatalf("pagerduty/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
+				}
+				if descriptor.RouteEnabled != (dataset == probe.dataset) {
+					t.Fatalf(
+						"switch %s enabled pagerduty/%s=%t",
+						probe.dataset, dataset, descriptor.RouteEnabled,
+					)
+				}
+			}
+		})
 	}
 }

@@ -12,6 +12,31 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestExecutorConstructsPagerDutyClientBeforeProviderIO(t *testing.T) {
+	t.Parallel()
+	credential, err := (providerfoundation.Credential{
+		Provider: "pagerduty",
+		Config:   map[string]string{"auth_mode": "api_token", "region": "us"},
+	}).WithEphemeralSecret("api_token", secrets.NewValue("fixture-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := (Executor{
+		Doer:  noRequestDoer{},
+		Retry: providerfoundation.DefaultRetryPolicy(),
+	}).newClient(
+		credential,
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Provider != "pagerduty" || client.BaseURL == nil ||
+		client.BaseURL.Hostname() != "api.pagerduty.com" {
+		t.Fatalf("client=%+v", client)
+	}
+}
+
 func TestExecutorUsesCredentialLeaseShadowBudgetJournalAndGenerationSink(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)

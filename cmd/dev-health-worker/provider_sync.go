@@ -122,6 +122,62 @@ type providerSyncWorkerConstructor func(
 
 var constructProviderSyncWorker providerSyncWorkerConstructor = constructProviderSyncWorkerWithDependencies
 
+func pagerDutyEffectsFactory(
+	dataset string,
+	conn driver.Conn,
+	lease providerfoundation.LeaseGuard,
+) providersync.CompleteRouteEffectsFactory {
+	return func(
+		credential providerfoundation.Credential,
+	) (providersync.EffectSink, providersync.EffectReadback, error) {
+		providerInstance, err := providersync.PagerDutyProviderInstance(credential)
+		if err != nil {
+			return nil, nil, err
+		}
+		var effects interface {
+			providersync.EffectSink
+			providersync.EffectReadback
+		}
+		switch dataset {
+		case "services":
+			effects = providersync.PagerDutyServicesClickHouseEffects{
+				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
+			}
+		case "business-services":
+			effects = providersync.PagerDutyBusinessServicesClickHouseEffects{
+				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
+			}
+		case "escalation-policies":
+			effects = providersync.PagerDutyEscalationPoliciesClickHouseEffects{
+				Conn: conn, Lease: lease,
+			}
+		case "schedules":
+			effects = providersync.PagerDutySchedulesClickHouseEffects{
+				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
+			}
+		case "on-calls":
+			effects = providersync.PagerDutyOnCallsClickHouseEffects{
+				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
+			}
+		case "users":
+			effects = providersync.PagerDutyUsersClickHouseEffects{
+				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
+			}
+		case "teams":
+			effects = providersync.PagerDutyTeamsClickHouseEffects{
+				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
+			}
+		case "incidents", "incident-alerts", "incident-log-entries", "incident-notes":
+			effects = providersync.PagerDutyIncidentFamilyClickHouseEffects{
+				Conn: conn, Lease: lease, ProviderInstanceID: providerInstance,
+			}
+		default:
+			return nil, nil, providersync.ErrInvalidConfiguration
+		}
+		return effects, effects, nil
+	}
+}
+
 // buildProviderSyncHandler constructs the provider-unit handler and the one
 // providerfoundation.Metrics instance its executor is wired to reference.
 //
@@ -146,18 +202,16 @@ func buildProviderSyncHandler(
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
-	return buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 		repository, switches, decryptor, clickhouseConnection, valkeyClient,
 		domainPool, jiraIncidentEntitlement, collector, logger,
-		githubWorkItemsRuntimeConfig{},
+		workItemsRuntimeConfig{},
 	)
 }
 
-// buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig is the production
-// construction seam for the GitHub work-items route. The zero-value wrapper
-// above intentionally leaves the route unavailable for older focused handler
-// tests; the real worker validates and supplies both explicit D19 paths before
-// it can construct this closure.
+// buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig remains a narrow
+// compatibility seam for existing focused tests. Production construction uses
+// the provider-neutral work-item runtime below.
 func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 	repository providerSyncRepository,
 	switches providersync.CompleteRouteSwitches,
@@ -169,6 +223,25 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 	githubWorkItemsRuntime githubWorkItemsRuntimeConfig,
+) (*providerunit.Handler, *providerfoundation.Metrics) {
+	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
+		repository, switches, decryptor, clickhouseConnection, valkeyClient,
+		domainPool, jiraIncidentEntitlement, collector, logger,
+		githubWorkItemsRuntime,
+	)
+}
+
+func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
+	repository providerSyncRepository,
+	switches providersync.CompleteRouteSwitches,
+	decryptor providerfoundation.CredentialDecryptor,
+	clickhouseConnection driver.Conn,
+	valkeyClient valkeygo.Client,
+	domainPool *pgxpool.Pool,
+	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
+	collector *jobruntime.MetricsCollector,
+	logger *slog.Logger,
+	workItemsRuntime workItemsRuntimeConfig,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	// providerMetrics is constructed exactly once per worker process and
 	// referenced by every claim's executor, so dev_health_provider_* actually
@@ -238,9 +311,10 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 			// claim.Provider != "launchdarkly") the moment the switch was
 			// flipped on.
 			var (
-				routeHandler providersync.CompleteRouteHandler
-				sink         providersync.EffectSink
-				readback     providersync.EffectReadback
+				routeHandler   providersync.CompleteRouteHandler
+				sink           providersync.EffectSink
+				readback       providersync.EffectReadback
+				effectsFactory providersync.CompleteRouteEffectsFactory
 			)
 			switch {
 			case session.Claim.Provider == "launchdarkly" &&
@@ -263,7 +337,7 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 				sink, readback = ghSink, ghSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "work-items":
-				if !githubWorkItemsRuntime.configured() {
+				if !workItemsRuntime.configured() {
 					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
 				}
 				ghSink, err := providersync.NewGitHubWorkItemClickHouseEffects(
@@ -274,8 +348,8 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 				}
 				ghDeriver, err := providersync.NewGitHubWorkItemDeriver(
 					clickhouseConnection, session,
-					githubWorkItemsRuntime.statusMappingPath,
-					githubWorkItemsRuntime.investmentConfigPath,
+					workItemsRuntime.statusMappingPath,
+					workItemsRuntime.investmentConfigPath,
 				)
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
@@ -285,6 +359,78 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 					Deriver:  ghDeriver,
 				}
 				sink, readback = ghSink, ghSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "work-items":
+				if !workItemsRuntime.configured() {
+					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
+				}
+				glSink, err := providersync.NewGitLabWorkItemFamilyClickHouseEffects(
+					clickhouseConnection, session,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				glDeriver, err := providersync.NewGitLabWorkItemDeriver(
+					clickhouseConnection, session,
+					workItemsRuntime.statusMappingPath,
+					workItemsRuntime.investmentConfigPath,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				routeHandler = providersync.GitLabWorkItemsRouteHandler{
+					StatusMapping: workItemsRuntime.statusMapping,
+					Derived:       glDeriver,
+				}
+				sink, readback = glSink, glSink
+			case session.Claim.Provider == "jira" &&
+				session.Claim.Dataset == "work-items":
+				if !workItemsRuntime.configured() {
+					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
+				}
+				jiraSink, err := providersync.NewJiraWorkItemCompositeClickHouseEffects(
+					clickhouseConnection, session,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				jiraDeriver, err := providersync.NewJiraWorkItemDeriver(
+					clickhouseConnection, session,
+					workItemsRuntime.statusMappingPath,
+					workItemsRuntime.investmentConfigPath,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				routeHandler = providersync.JiraAtlassianRouteHandler{
+					StatusMapping: workItemsRuntime.statusMapping,
+					Derived:       jiraDeriver,
+				}
+				sink, readback = jiraSink, jiraSink
+			case session.Claim.Provider == "linear" &&
+				session.Claim.Dataset == "work-items":
+				if !workItemsRuntime.configured() {
+					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
+				}
+				linearSink, err := providersync.NewLinearWorkItemFamilyClickHouseEffects(
+					clickhouseConnection, session,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				linearDeriver, err := providersync.NewLinearWorkItemDeriver(
+					clickhouseConnection, session,
+					workItemsRuntime.statusMappingPath,
+					workItemsRuntime.investmentConfigPath,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				routeHandler = providersync.LinearWorkItemFamilyRouteHandler{
+					Direct:  providersync.LinearWorkItemsRouteHandler{},
+					Derived: linearDeriver,
+				}
+				sink, readback = linearSink, linearSink
 			case session.Claim.Provider == "gitlab" &&
 				session.Claim.Dataset == "repo-metadata":
 				glSink := providersync.GitLabRepositoryClickHouseEffects{
@@ -320,6 +466,54 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 				}
 				routeHandler = providersync.GitLabIncidentsRouteHandler{}
 				sink, readback = glIncidentsSink, glIncidentsSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "deployments":
+				glDeploymentsSink := providersync.GitLabDeploymentsClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabDeploymentsRouteHandler{}
+				sink, readback = glDeploymentsSink, glDeploymentsSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "feature-flags":
+				glFeatureFlagsSink := providersync.GitLabFeatureFlagsClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabFeatureFlagsRouteHandler{}
+				sink, readback = glFeatureFlagsSink, glFeatureFlagsSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "files":
+				glFilesSink := providersync.GitLabFilesClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabFilesRouteHandler{}
+				sink, readback = glFilesSink, glFilesSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "blame":
+				glBlameSink := providersync.GitLabBlameClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabBlameRouteHandler{
+					Coverage: providersync.GitLabBlameClickHouseCoverage{
+						Conn: clickhouseConnection, Lease: session,
+					},
+				}
+				sink, readback = glBlameSink, glBlameSink
+			case session.Claim.Provider == "gitlab" &&
+				(session.Claim.Dataset == "prs" ||
+					session.Claim.Dataset == "pr-reviews" ||
+					session.Claim.Dataset == "pr-comments"):
+				glPRSink := providersync.GitLabPullRequestSocialClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabPullRequestRouteHandler{}
+				sink, readback = glPRSink, glPRSink
+			case session.Claim.Provider == "gitlab" &&
+				session.Claim.Dataset == "security":
+				glSecuritySink := providersync.GitLabSecurityClickHouseEffects{
+					Conn: clickhouseConnection, Lease: session,
+				}
+				routeHandler = providersync.GitLabSecurityRouteHandler{}
+				sink, readback = glSecuritySink, glSecuritySink
 			case session.Claim.Provider == "github" &&
 				(session.Claim.Dataset == "prs" ||
 					session.Claim.Dataset == "pr-reviews" ||
@@ -406,6 +600,30 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 				}
 				routeHandler = providersync.GitHubTestsRouteHandler{}
 				sink, readback = ghTestsSink, ghTestsSink
+			case session.Claim.Provider == "pagerduty":
+				switch session.Claim.Dataset {
+				case "services":
+					routeHandler = providersync.PagerDutyServicesRouteHandler{}
+				case "business-services":
+					routeHandler = providersync.PagerDutyBusinessServicesRouteHandler{}
+				case "escalation-policies":
+					routeHandler = providersync.PagerDutyEscalationPoliciesRouteHandler{}
+				case "schedules":
+					routeHandler = providersync.PagerDutySchedulesRouteHandler{}
+				case "on-calls":
+					routeHandler = providersync.PagerDutyOnCallsRouteHandler{}
+				case "users":
+					routeHandler = providersync.PagerDutyUsersRouteHandler{}
+				case "teams":
+					routeHandler = providersync.PagerDutyTeamsRouteHandler{}
+				case "incidents", "incident-alerts", "incident-log-entries", "incident-notes":
+					routeHandler = providersync.PagerDutyIncidentFamilyRouteHandler{}
+				default:
+					return providersync.CompleteRouteExecutor{}, errWorkerDependencyUnavailable
+				}
+				effectsFactory = pagerDutyEffectsFactory(
+					session.Claim.Dataset, clickhouseConnection, session,
+				)
 			default:
 				// Unreachable in production: providerunit.Handler.Work only
 				// invokes BuildExecutor for a claim whose descriptor already
@@ -464,6 +682,7 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 				Committer: providersync.EffectCommitter{
 					Ledger: repository, Sink: sink, Readback: readback,
 				},
+				EffectsFactory:    effectsFactory,
 				HeartbeatInterval: providerUnitHeartbeat,
 			}, nil
 		},
@@ -519,7 +738,7 @@ func constructProviderSyncWorkerWithDependencies(
 	// This value is then captured by BuildExecutor, so startup/readiness and
 	// claim construction cannot drift onto different StatusMapping/classifier
 	// artifacts (D19).
-	githubWorkItemsRuntime, err := githubWorkItemsRuntimeConfigFrom(cfg)
+	workItemsRuntime, err := workItemsRuntimeConfigFrom(cfg)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
@@ -557,11 +776,11 @@ func constructProviderSyncWorkerWithDependencies(
 	// types below are then safe no-ops) for any other Observer implementation,
 	// such as a test double.
 	collector, _ := observer.(*jobruntime.MetricsCollector)
-	handler, providerMetrics := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+	handler, providerMetrics := buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 		repository, workerRouteSwitches(cfg), decryptor, clickhouseConnection,
 		valkeyClient, postgresDatabase.pools.Domain,
 		providersync.PostgresJiraIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
-		collector, logger, githubWorkItemsRuntime,
+		collector, logger, workItemsRuntime,
 	)
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](
 		registry, spec, handler, jobruntime.Dependencies{
@@ -610,13 +829,29 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGitlabCICDEnabled ||
 		cfg.WorkerGitlabTestsEnabled ||
 		cfg.WorkerGitlabIncidentsEnabled ||
+		cfg.WorkerGitlabDeploymentsEnabled ||
+		cfg.WorkerGitlabFeatureFlagsEnabled ||
+		cfg.WorkerGitlabFilesEnabled ||
+		cfg.WorkerGitlabBlameEnabled ||
+		cfg.WorkerGitlabPRsEnabled ||
+		cfg.WorkerGitlabPRReviewsEnabled ||
+		cfg.WorkerGitlabPRCommentsEnabled ||
+		cfg.WorkerGitlabSecurityEnabled ||
+		cfg.WorkerGitlabWorkItemsEnabled ||
 		cfg.WorkerGithubPRsEnabled || cfg.WorkerGithubPRReviewsEnabled ||
 		cfg.WorkerGithubPRCommentsEnabled || cfg.WorkerGithubCICDEnabled ||
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
 		cfg.WorkerGithubCommitStatsEnabled || cfg.WorkerJiraIncidentsEnabled ||
+		cfg.WorkerJiraWorkItemsEnabled || cfg.WorkerLinearWorkItemsEnabled ||
 		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled ||
-		cfg.WorkerGithubWorkItemsEnabled
+		cfg.WorkerGithubWorkItemsEnabled ||
+		cfg.WorkerPagerDutyServicesEnabled ||
+		cfg.WorkerPagerDutyBusinessServicesEnabled ||
+		cfg.WorkerPagerDutyEscalationPoliciesEnabled ||
+		cfg.WorkerPagerDutySchedulesEnabled ||
+		cfg.WorkerPagerDutyOnCallsEnabled || cfg.WorkerPagerDutyUsersEnabled ||
+		cfg.WorkerPagerDutyTeamsEnabled || cfg.WorkerPagerDutyIncidentsEnabled
 }
 
 func providerSyncRiverConfig(

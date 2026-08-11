@@ -122,6 +122,20 @@ type Config struct {
 	WorkerGitlabTestsEnabled bool
 	// WorkerGitlabIncidentsEnabled gates the canonical operational incident route.
 	WorkerGitlabIncidentsEnabled bool
+	// The remaining GitLab flags gate independently completed native routes.
+	// PR aliases are the exception: all three delegate to one complete PR-social
+	// writer and Load rejects enabling more than one alias at a time.
+	WorkerGitlabDeploymentsEnabled  bool
+	WorkerGitlabFeatureFlagsEnabled bool
+	WorkerGitlabFilesEnabled        bool
+	WorkerGitlabBlameEnabled        bool
+	WorkerGitlabPRsEnabled          bool
+	WorkerGitlabPRReviewsEnabled    bool
+	WorkerGitlabPRCommentsEnabled   bool
+	WorkerGitlabSecurityEnabled     bool
+	// WorkerGitlabWorkItemsEnabled gates the one complete five-alias GitLab
+	// work-item family; sibling alias identities are not independent routes.
+	WorkerGitlabWorkItemsEnabled bool
 	// WorkerGithubPRsEnabled is the (github, prs) half of the two-key route
 	// gate (CHAOS-3122, following CHAOS-3123's precedent). The matrix marking
 	// the pair route_ready is the other half; neither alone moves traffic.
@@ -160,6 +174,18 @@ type Config struct {
 	// validates both paths and rejects ambient STATUS_MAPPING_PATH overrides.
 	WorkerGithubWorkItemsStatusMappingPath    string
 	WorkerGithubWorkItemsInvestmentConfigPath string
+
+	// PagerDuty route switches are default-off and independent. The incidents
+	// switch owns the complete incidents family, including alert, log-entry,
+	// and note alias datasets; those aliases are not separately activatable.
+	WorkerPagerDutyServicesEnabled           bool
+	WorkerPagerDutyBusinessServicesEnabled   bool
+	WorkerPagerDutyEscalationPoliciesEnabled bool
+	WorkerPagerDutySchedulesEnabled          bool
+	WorkerPagerDutyOnCallsEnabled            bool
+	WorkerPagerDutyUsersEnabled              bool
+	WorkerPagerDutyTeamsEnabled              bool
+	WorkerPagerDutyIncidentsEnabled          bool
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -261,6 +287,74 @@ func Load(spec Spec) (Config, error) {
 			target: &cfg.WorkerGitlabIncidentsEnabled,
 		},
 		{
+			name:   "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
+			target: &cfg.WorkerGitlabDeploymentsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
+			target: &cfg.WorkerGitlabFeatureFlagsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_FILES_ENABLED",
+			target: &cfg.WorkerGitlabFilesEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_BLAME_ENABLED",
+			target: &cfg.WorkerGitlabBlameEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_PRS_ENABLED",
+			target: &cfg.WorkerGitlabPRsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_PR_REVIEWS_ENABLED",
+			target: &cfg.WorkerGitlabPRReviewsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_PR_COMMENTS_ENABLED",
+			target: &cfg.WorkerGitlabPRCommentsEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_SECURITY_ENABLED",
+			target: &cfg.WorkerGitlabSecurityEnabled,
+		},
+		{
+			name:   "WORKER_GITLAB_WORK_ITEMS_ENABLED",
+			target: &cfg.WorkerGitlabWorkItemsEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_SERVICES_ENABLED",
+			target: &cfg.WorkerPagerDutyServicesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
+			target: &cfg.WorkerPagerDutyBusinessServicesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
+			target: &cfg.WorkerPagerDutyEscalationPoliciesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
+			target: &cfg.WorkerPagerDutySchedulesEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
+			target: &cfg.WorkerPagerDutyOnCallsEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_USERS_ENABLED",
+			target: &cfg.WorkerPagerDutyUsersEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_TEAMS_ENABLED",
+			target: &cfg.WorkerPagerDutyTeamsEnabled,
+		},
+		{
+			name:   "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+			target: &cfg.WorkerPagerDutyIncidentsEnabled,
+		},
+		{
 			name:   "WORKER_GITHUB_PRS_ENABLED",
 			target: &cfg.WorkerGithubPRsEnabled,
 		},
@@ -332,6 +426,19 @@ func Load(spec Spec) (Config, error) {
 	}
 	if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {
 		return Config{}, fmt.Errorf("WORKER_GITLAB_CICD_ENABLED and WORKER_GITLAB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
+	}
+	gitlabPRSocialAliases := 0
+	for _, enabled := range []bool{
+		cfg.WorkerGitlabPRsEnabled,
+		cfg.WorkerGitlabPRReviewsEnabled,
+		cfg.WorkerGitlabPRCommentsEnabled,
+	} {
+		if enabled {
+			gitlabPRSocialAliases++
+		}
+	}
+	if gitlabPRSocialAliases > 1 {
+		return Config{}, fmt.Errorf("WORKER_GITLAB_PRS_ENABLED, WORKER_GITLAB_PR_REVIEWS_ENABLED, and WORKER_GITLAB_PR_COMMENTS_ENABLED are mutually exclusive: all delegate to one complete PR-social writer")
 	}
 	cfg.WorkerGithubWorkItemsStatusMappingPath = envOrDefault(
 		lookup, "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH", "",
@@ -602,6 +709,23 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_gitlab_cicd_enabled", c.WorkerGitlabCICDEnabled),
 		slog.Bool("worker_gitlab_tests_enabled", c.WorkerGitlabTestsEnabled),
 		slog.Bool("worker_gitlab_incidents_enabled", c.WorkerGitlabIncidentsEnabled),
+		slog.Bool("worker_gitlab_deployments_enabled", c.WorkerGitlabDeploymentsEnabled),
+		slog.Bool("worker_gitlab_feature_flags_enabled", c.WorkerGitlabFeatureFlagsEnabled),
+		slog.Bool("worker_gitlab_files_enabled", c.WorkerGitlabFilesEnabled),
+		slog.Bool("worker_gitlab_blame_enabled", c.WorkerGitlabBlameEnabled),
+		slog.Bool("worker_gitlab_prs_enabled", c.WorkerGitlabPRsEnabled),
+		slog.Bool("worker_gitlab_pr_reviews_enabled", c.WorkerGitlabPRReviewsEnabled),
+		slog.Bool("worker_gitlab_pr_comments_enabled", c.WorkerGitlabPRCommentsEnabled),
+		slog.Bool("worker_gitlab_security_enabled", c.WorkerGitlabSecurityEnabled),
+		slog.Bool("worker_gitlab_work_items_enabled", c.WorkerGitlabWorkItemsEnabled),
+		slog.Bool("worker_pagerduty_services_enabled", c.WorkerPagerDutyServicesEnabled),
+		slog.Bool("worker_pagerduty_business_services_enabled", c.WorkerPagerDutyBusinessServicesEnabled),
+		slog.Bool("worker_pagerduty_escalation_policies_enabled", c.WorkerPagerDutyEscalationPoliciesEnabled),
+		slog.Bool("worker_pagerduty_schedules_enabled", c.WorkerPagerDutySchedulesEnabled),
+		slog.Bool("worker_pagerduty_on_calls_enabled", c.WorkerPagerDutyOnCallsEnabled),
+		slog.Bool("worker_pagerduty_users_enabled", c.WorkerPagerDutyUsersEnabled),
+		slog.Bool("worker_pagerduty_teams_enabled", c.WorkerPagerDutyTeamsEnabled),
+		slog.Bool("worker_pagerduty_incidents_enabled", c.WorkerPagerDutyIncidentsEnabled),
 		slog.Bool("worker_github_prs_enabled", c.WorkerGithubPRsEnabled),
 		slog.Bool("worker_github_pr_reviews_enabled", c.WorkerGithubPRReviewsEnabled),
 		slog.Bool("worker_github_pr_comments_enabled", c.WorkerGithubPRCommentsEnabled),

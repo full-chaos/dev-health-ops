@@ -37,6 +37,13 @@ const (
 	// scripts/worker/provision_river_roles.sql (deployed environments).
 	defaultCoordinatorDatabaseRole = "devhealth_coordinator"
 	defaultStreamReplicas          = 1
+	localStatusMappingPath         = "/app/config/status_mapping.yaml"
+	localInvestmentAreasPath       = "/app/config/investment_areas.yaml"
+)
+
+const (
+	providerRoutesPresetEnv = "GO_PROVIDER_ROUTES"
+	devHealthEnv            = "DEV_HEALTH_ENV"
 )
 
 // QueueControlMode describes the endpoint semantics promised by the operator.
@@ -169,9 +176,10 @@ type Config struct {
 	WorkerGithubWorkItemsEnabled bool
 	// WorkerGithubWorkItemsStatusMappingPath and
 	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
-	// for the two Python-parity config engines. There is intentionally no
-	// source-relative default: when the route is enabled, cmd/dev-health-worker
-	// validates both paths and rejects ambient STATUS_MAPPING_PATH overrides.
+	// for the two Python-parity config engines. Production has no source-relative
+	// default; the local-only all-routes preset selects artifacts packaged at
+	// fixed image paths. When the route is enabled, cmd/dev-health-worker validates
+	// both paths and rejects ambient STATUS_MAPPING_PATH overrides.
 	WorkerGithubWorkItemsStatusMappingPath    string
 	WorkerGithubWorkItemsInvestmentConfigPath string
 
@@ -235,6 +243,10 @@ func Load(spec Spec) (Config, error) {
 	cfg.OperationalBridgeAllowInsecure, err = boolEnv(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", false,
 	)
+	if err != nil {
+		return Config{}, err
+	}
+	allProviderRoutes, err := localAllProviderRoutes(lookup)
 	if err != nil {
 		return Config{}, err
 	}
@@ -403,7 +415,14 @@ func Load(spec Spec) (Config, error) {
 			target: &cfg.WorkerGithubWorkItemsEnabled,
 		},
 	} {
-		*item.target, err = boolEnv(lookup, item.name, false)
+		fallback := false
+		if allProviderRoutes {
+			fallback, err = providerRoutePresetDefault(lookup, item.name)
+			if err != nil {
+				return Config{}, err
+			}
+		}
+		*item.target, err = boolEnv(lookup, item.name, fallback)
 		if err != nil {
 			return Config{}, err
 		}
@@ -441,10 +460,14 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, fmt.Errorf("WORKER_GITLAB_PRS_ENABLED, WORKER_GITLAB_PR_REVIEWS_ENABLED, and WORKER_GITLAB_PR_COMMENTS_ENABLED are mutually exclusive: all delegate to one complete PR-social writer")
 	}
 	cfg.WorkerGithubWorkItemsStatusMappingPath = envOrDefault(
-		lookup, "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH", "",
+		lookup,
+		"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
+		conditionalDefault(allProviderRoutes, localStatusMappingPath),
 	)
 	cfg.WorkerGithubWorkItemsInvestmentConfigPath = envOrDefault(
-		lookup, "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH", "",
+		lookup,
+		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
+		conditionalDefault(allProviderRoutes, localInvestmentAreasPath),
 	)
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
@@ -666,6 +689,71 @@ func Load(spec Spec) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func localAllProviderRoutes(lookup secrets.LookupEnv) (bool, error) {
+	preset, _ := lookup(providerRoutesPresetEnv)
+	preset = strings.ToLower(strings.TrimSpace(preset))
+	if preset == "" {
+		return false, nil
+	}
+	if preset != "all" {
+		return false, fmt.Errorf("%s must be empty or all", providerRoutesPresetEnv)
+	}
+	environment, _ := lookup(devHealthEnv)
+	if strings.ToLower(strings.TrimSpace(environment)) != "local" {
+		return false, fmt.Errorf("%s=all requires %s=local", providerRoutesPresetEnv, devHealthEnv)
+	}
+	return true, nil
+}
+
+func providerRoutePresetDisabledAlias(name string) bool {
+	switch name {
+	case "WORKER_GITHUB_PR_REVIEWS_ENABLED",
+		"WORKER_GITHUB_PR_COMMENTS_ENABLED",
+		"WORKER_GITHUB_TESTS_ENABLED",
+		"WORKER_GITLAB_PR_REVIEWS_ENABLED",
+		"WORKER_GITLAB_PR_COMMENTS_ENABLED",
+		"WORKER_GITLAB_TESTS_ENABLED":
+		return true
+	default:
+		return false
+	}
+}
+
+func providerRoutePresetDefault(lookup secrets.LookupEnv, name string) (bool, error) {
+	if providerRoutePresetDisabledAlias(name) {
+		return false, nil
+	}
+	alternatives := map[string][]string{
+		"WORKER_GITHUB_PRS_ENABLED": {
+			"WORKER_GITHUB_PR_REVIEWS_ENABLED",
+			"WORKER_GITHUB_PR_COMMENTS_ENABLED",
+		},
+		"WORKER_GITHUB_CICD_ENABLED": {"WORKER_GITHUB_TESTS_ENABLED"},
+		"WORKER_GITLAB_PRS_ENABLED": {
+			"WORKER_GITLAB_PR_REVIEWS_ENABLED",
+			"WORKER_GITLAB_PR_COMMENTS_ENABLED",
+		},
+		"WORKER_GITLAB_CICD_ENABLED": {"WORKER_GITLAB_TESTS_ENABLED"},
+	}
+	for _, alternative := range alternatives[name] {
+		enabled, err := boolEnv(lookup, alternative, false)
+		if err != nil {
+			return false, err
+		}
+		if enabled {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func conditionalDefault(enabled bool, value string) string {
+	if enabled {
+		return value
+	}
+	return ""
 }
 
 // SafeAttrs is the only supported startup-config logging surface. It includes

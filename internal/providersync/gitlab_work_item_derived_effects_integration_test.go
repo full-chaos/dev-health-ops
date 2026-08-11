@@ -119,8 +119,19 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 
 			foreign := claim
 			foreign.OrgID = "org-other"
-			if inspection, inspectErr := sink.InspectEffect(ctx, foreign, effect); inspectErr == nil || inspection == EffectExact {
-				t.Fatalf("foreign tenant was not rejected: inspection=%v error=%v", inspection, inspectErr)
+			inspection, inspectErr := sink.InspectEffect(ctx, foreign, effect)
+			switch effect.Destination {
+			case "estimate_coverage_metrics_daily", "work_item_state_durations_daily", "work_item_team_attributions":
+				if inspectErr != nil || inspection != EffectAbsent {
+					t.Fatalf("foreign tenant readback: inspection=%v error=%v", inspection, inspectErr)
+				}
+				if writeErr := sink.WriteEffect(ctx, foreign, effect); !errors.Is(writeErr, ErrInvalidConfiguration) {
+					t.Fatalf("foreign tenant write error=%v want=%v", writeErr, ErrInvalidConfiguration)
+				}
+			default:
+				if inspectErr == nil || inspection == EffectExact {
+					t.Fatalf("foreign tenant was not rejected: inspection=%v error=%v", inspection, inspectErr)
+				}
 			}
 		})
 	}

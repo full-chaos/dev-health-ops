@@ -137,6 +137,11 @@ async def test_purge_records_cancel_once(monkeypatch) -> None:
         return False
 
     cast(Any, store).partition_exists = absent
+
+    async def delete_watermark() -> None:
+        pass
+
+    cast(Any, store)._delete_watermark = delete_watermark
     assert await store.purge_org() == 0
     assert outcomes[-1] == ("absent", False)
 

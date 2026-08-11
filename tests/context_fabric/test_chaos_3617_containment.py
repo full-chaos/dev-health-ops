@@ -521,9 +521,16 @@ class TestOrgDeletionRegistration:
             checked.append(org_id)
             return False
 
+        cleaned: list[str] = []
+
+        async def _cleanup(org_id: str, _config: object) -> None:
+            cleaned.append(org_id)
+
         monkeypatch.setattr(store_module, "partition_exists_for", _absent)
+        monkeypatch.setattr(store_module, "_delete_watermark_for", _cleanup)
         assert await store_module.org_deletion_visit("org_alpha", False) == 0
         assert checked == ["org_alpha"], "zero was reported without checking"
+        assert cleaned == ["org_alpha"], "absent retries must clean the watermark"
         assert (
             CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
                 outcome="absent", dry_run="false"

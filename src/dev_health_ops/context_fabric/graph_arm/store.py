@@ -177,6 +177,49 @@ def _watermark_key(partition: str) -> str:
     return f"{_WATERMARK_KEY_PREFIX}{partition}"
 
 
+def _bare_falkor_client(config: TrialStoreConfig, deadlines: GraphDeadlines) -> Any:
+    """Open FalkorDB without constructing a Graphiti driver or keyspace."""
+
+    return graphiti_module("driver.falkordb_driver").FalkorDB(
+        host=config.host,
+        port=config.port,
+        password=config.password,
+        socket_connect_timeout=deadlines.connect_timeout_s,
+        socket_timeout=deadlines.socket_timeout_s,
+        max_connections=deadlines.max_connections,
+    )
+
+
+async def _delete_watermark_for(
+    org_id: str,
+    config: TrialStoreConfig,
+    *,
+    deadlines: GraphDeadlines | None = None,
+) -> None:
+    """Delete an organization's raw watermark without recreating its graph.
+
+    ``partition_exists_for`` deliberately avoids ``FalkorDriver`` because
+    driver construction schedules index creation for a missing partition.
+    The same rule applies to retrying an org deletion after the graph drop
+    already succeeded: only the raw Redis key remains, so use the bare client
+    and never recreate the graph keyspace just to remove its watermark.
+    """
+
+    resolved_deadlines = deadlines or graph_deadlines()
+    client = _bare_falkor_client(config, resolved_deadlines)
+    try:
+        await _await_with_deadline(
+            client.connection.delete(_watermark_key(partition_for_org(org_id))),
+            timeout_s=resolved_deadlines.read_timeout_s,
+            operation="purge_watermark",
+            detail=f"org {org_id!r}",
+        )
+    finally:
+        aclose = getattr(client, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
 class StoreUnavailableError(RuntimeError):
     """The trial store is not configured or not reachable."""
 
@@ -656,6 +699,20 @@ class GraphArmStore:
         )
         return self._partition in set(graphs or ())
 
+    async def _delete_watermark(self) -> None:
+        """Remove this partition's raw watermark key.
+
+        The graph keyspace and watermark are separate Redis state. Keeping
+        this cleanup as one operation lets a retry repair a watermark left
+        behind after a graph drop succeeded but the first key deletion did
+        not.
+        """
+
+        await self._bounded_read(
+            self._driver.client.connection.delete(_watermark_key(self._partition)),
+            operation="purge_watermark",
+        )
+
     async def count_nodes(self) -> int:
         if not await self.partition_exists():
             return 0
@@ -693,6 +750,13 @@ class GraphArmStore:
 
         try:
             if not await self.partition_exists():
+                # A previous attempt may have dropped the graph and failed
+                # before its separate watermark key was deleted. An absent
+                # graph is therefore not necessarily a clean partition; the
+                # retry must still remove the key before reporting absent.
+                # Dry-run remains read-only and deliberately leaves it alone.
+                if not dry_run:
+                    await self._delete_watermark()
                 record_context_fabric_graph_purge(outcome="absent", dry_run=dry_run)
                 return 0
             total = await self.count_nodes()
@@ -708,10 +772,7 @@ class GraphArmStore:
                 self._driver.client.select_graph(self._partition).delete(),
                 operation="purge_org",
             )
-            await self._bounded_read(
-                self._driver.client.connection.delete(_watermark_key(self._partition)),
-                operation="purge_watermark",
-            )
+            await self._delete_watermark()
             record_context_fabric_graph_purge(outcome="completed", dry_run=False)
             return total
         except asyncio.CancelledError:
@@ -873,14 +934,7 @@ async def partition_exists_for(
     """
 
     resolved_deadlines = deadlines or graph_deadlines()
-    client = graphiti_module("driver.falkordb_driver").FalkorDB(
-        host=config.host,
-        port=config.port,
-        password=config.password,
-        socket_connect_timeout=resolved_deadlines.connect_timeout_s,
-        socket_timeout=resolved_deadlines.socket_timeout_s,
-        max_connections=resolved_deadlines.max_connections,
-    )
+    client = _bare_falkor_client(config, resolved_deadlines)
     try:
         graphs = await _await_with_deadline(
             client.list_graphs(),
@@ -924,7 +978,8 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
     :class:`DeletionCompletenessUnknownError` — a missing graphiti-core does
     not make the data disappear, and an unreachable endpoint is an unknown
     rather than an absence. ``0`` is returned only after a positive existence
-    check proved the partition absent.
+    check proved the partition absent and, for a real deletion, its separate
+    watermark key was cleaned up.
 
     The **one** exception is a store that is not configured at all, which is
     the production default and returns ``0`` with a logged warning rather
@@ -1013,11 +1068,32 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
             "was neither verified absent nor purged"
         ) from exc
     if not exists:
-        # Positively checked, and absent. This is the only path that may
-        # report zero -- and it constructs no store, which is what keeps the
-        # preview read-only (see partition_exists_for).
+        # Positively checked, and absent. A previous attempt can have dropped
+        # the graph and failed before deleting its separate watermark key, so
+        # a real retry must clean that raw key without constructing a
+        # Graphiti/FalkorDriver (which would recreate the missing keyspace).
+        # Dry-run deliberately skips this write and remains read-only.
+        if not dry_run:
+            try:
+                await _delete_watermark_for(org_id, config)
+            except asyncio.CancelledError:
+                record_context_fabric_graph_org_deletion_visit(
+                    outcome="cancelled", dry_run=dry_run
+                )
+                raise
+            except Exception as exc:
+                record_context_fabric_graph_org_deletion_visit(
+                    outcome="failed", dry_run=dry_run
+                )
+                raise DeletionCompletenessUnknownError(
+                    f"deletion completeness unknown for org {org_id}: the "
+                    "graph partition is absent but its watermark cleanup "
+                    f"could not be completed ({type(exc).__name__}: {exc})"
+                ) from exc
         logger.info(
-            "context-fabric graph trial store holds no partition for org %s", org_id
+            "context-fabric graph trial store holds no partition for org %s%s",
+            org_id,
+            "; watermark cleanup completed" if not dry_run else "",
         )
         record_context_fabric_graph_org_deletion_visit(
             outcome="absent", dry_run=dry_run

@@ -11,17 +11,17 @@
   "mutations": [
     {
       "id": "E1-all-sixteen-destinations-are-unique",
-      "file": "internal/providersync/github_work_items_effects_clickhouse.go",
-      "find": "{\"work_items\", rows.WorkItems},",
-      "replace": "{\"work_item_user_metrics_daily\", rows.WorkItems},",
-      "rationale": "the complete work-item unit must account for all sixteen unique Python write surfaces",
+      "file": "internal/workitemcontract/manifest.go",
+      "find": "\t{Name: \"work_items\", GitHubEffect: true, LinearExpiredLeaseRetry: true},",
+      "replace": "\t{Name: \"work_item_user_metrics_daily\", GitHubEffect: true, LinearExpiredLeaseRetry: true},",
+      "rationale": "the neutral semantic manifest must expose sixteen unique GitHub effect destinations; duplicate identities must fail before a partial route can be constructed",
       "proof": [
         [
           "go",
           "test",
           "-count=1",
           "-run",
-          "^TestBuildGitHubWorkItemEffectsIsDeterministicAndExhaustive$",
+          "^TestGitHubWorkItemRouteDestinationManifest$",
           "./internal/providersync/"
         ]
       ]
@@ -30,7 +30,7 @@
       "id": "E2-conditional-empty-effects-remain-accounted-for",
       "file": "internal/providersync/github_work_items_effects_clickhouse.go",
       "find": "effects = append(effects, effect)",
-      "replace": "if len(value.rows) > 0 { effects = append(effects, effect) }",
+      "replace": "if len(effect.Rows) > 0 { effects = append(effects, effect) }",
       "rationale": "an empty destination is a durable evaluated outcome, not permission to omit it from the effect manifest",
       "proof": [
         [
@@ -46,8 +46,8 @@
     {
       "id": "E3-every-surface-requires-semantic-readback",
       "file": "internal/providersync/github_work_items_effects_clickhouse.go",
-      "find": "value.destination, EffectReadbackRequired, value.rows,",
-      "replace": "value.destination, EffectReplaySafe, value.rows,",
+      "find": "destination, EffectReadbackRequired, rowProjection(rows),",
+      "replace": "destination, EffectReplaySafe, rowProjection(rows),",
       "rationale": "none of the sixteen multi-table effects may blind-replay after an ambiguous write acknowledgement",
       "proof": [
         [

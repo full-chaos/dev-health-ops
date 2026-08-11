@@ -1107,11 +1107,11 @@ see below).
 | `commits` | **Low-Medium** | `_sync_github_commits` → REST list, one destination table (`git_commits`). Straightforward, but confirm the commit-window/pagination semantics (`since`) exactly — GitHub's commits endpoint DOES support server-side `since`, unlike `/pulls`. |
 | `security` | **Medium** | `_fetch_github_security_alerts_async`, one destination (`insert_security_alerts`, gated behind a `getattr` — confirm the sink actually implements it in production, not just in the fixture path). Likely several distinct GitHub alert types (Dependabot/CodeQL/secret-scanning) behind one dataset — read this one carefully before estimating further. |
 | `commit-stats` | **Medium** | `_fetch_github_commit_stats_async` → REST list **plus per-commit stat fetch** (N+1, same shape as `prs`'s list+detail). One destination (`git_commit_stats`). Reuse the `prs` N+1 pagination pattern directly. |
-| `work-items` | **High; canonical five-alias family** | D16 resolved the ownership boundary: this and the four sibling aliases are one Python-parity execution, not independently scoped ports. The complete manifest has **sixteen** destinations: seven direct facts (`work_items`, transitions, dependencies, reopen events, interactions, sprints, and conditional `ai_attribution`) plus nine derived work-item/investment surfaces. `NativeRESTHandler` is only shallow fixture groundwork. Keep every intermediate stack layer unregistered; the family becomes `route_ready` only after the complete fetch, all sixteen crash-safe effects, derived computations, alias watermark/audit fan-out, and production wiring are present. |
-| `work-item-comments` | **Alias of canonical work-items family** | Comments contribute interactions and trusted Linear-bot dependency edges inside the same composite crawl. They do not own an independent writer or reduced destination set. Preserve the alias only for planner flags, audit, and watermark identity. |
-| `work-item-history` | **Alias of canonical work-items family** | Issue/PR events contribute transitions, reopen events, and status timestamps inside the same composite crawl; no independent route is permitted. |
-| `work-item-labels` | **Alias of canonical work-items family** | Labels are embedded in `work_items` and drive status/type/priority normalization. They are not a standalone label-table write in this unit. |
-| `work-item-projects` | **Alias of canonical work-items family** | Milestones produce sprints and optional Projects v2 data contributes work items/transitions inside the same composite crawl. |
+| `work-items` | **Ported; canonical five-alias family (CHAOS-3606).** | D16's ownership boundary remains: this and the four sibling aliases are one Python-parity execution, not independently scoped ports. The complete manifest has **sixteen** destinations: seven direct facts (`work_items`, transitions, dependencies, reopen events, interactions, sprints, and conditional `ai_attribution`) plus nine derived work-item/investment surfaces. All five matrix identities are `native_go` / `route_ready`; only this canonical claim is executable, and only when all five exact family flags are present. Direct aliases reconcile before I/O rather than becoming partial writers. The switch remains default-off, so this does not activate deployment/cutover ownership. |
+| `work-item-comments` | **Ported alias of canonical work-items family (CHAOS-3606).** | Comments contribute interactions and trusted Linear-bot dependency edges inside the same composite crawl. They report the complete manifest for planner/audit/watermark truth but cannot own an independent writer or reduced destination set. |
+| `work-item-history` | **Ported alias of canonical work-items family (CHAOS-3606).** | Issue/PR events contribute transitions, reopen events, and status timestamps inside the same composite crawl; no independent route is permitted. |
+| `work-item-labels` | **Ported alias of canonical work-items family (CHAOS-3606).** | Labels are embedded in `work_items` and drive status/type/priority normalization. They are not a standalone label-table write in this unit. |
+| `work-item-projects` | **Ported alias of canonical work-items family (CHAOS-3606).** | Milestones produce sprints and optional Projects v2 data contributes work items/transitions inside the same composite crawl. Projects v2 is durable integration/claim configuration only; environment-only configuration produces a startup warning. |
 | `pr-reviews` | **Ported (CHAOS-3123).** | The route composes the shared PR REST collector with the production GraphQL review batch, enriches the complete PR row, and writes `git_pull_request_reviews` in one crash-recoverable manifest. |
 | `pr-comments` | **Ported as a PR-social alias (CHAOS-3123).** | Python has no distinct raw PR-comments fetch/table in this execution: REST PR detail supplies `comments_count`. The alias therefore emits the same complete PR and review effects while preserving its independent claim ledger and watermark identity. Startup rejects enabling multiple PR-social aliases because they delegate to one writer. |
 | `files` | **Unclear / needs investigation first** | No `insert_git_files` call site was found anywhere under `src/dev_health_ops/processors/github.py` in this pass — either the write path lives in a different module (a local-clone git-walk processor, not the REST GitHub client) or this capability has no active production caller today. Confirm which before estimating; per repo convention, "no caller found" is a finding to verify, not a conclusion. |
@@ -1141,11 +1141,12 @@ Follow `github/prs`'s own additions as the template:
 
 ## Commit boundary
 
-Each provider/dataset pair is one sync unit and is independently executable
-and testable through its claim — no scheduler, no job-route activation, no
-occurrence materialization required. That makes the pair the right commit
-boundary: land one pair (code, tests, mutation plan, matrix/registry
-wiring, this document's updates) as its own commit before starting the
-next, rather than batching multiple pairs into one diff. A 17-pair diff is
-unreviewable, and one defective pair in a large batch blocks every good one
-alongside it.
+Each independently scoped provider/dataset pair is one sync unit and is
+independently executable and testable through its claim — no scheduler,
+job-route activation, or occurrence materialization required. The GitHub
+work-item five-alias family is the deliberate exception: its atomic canonical
+claim is the unit and its whole family is the commit boundary. Land each unit
+(code, tests, mutation plan, matrix/registry wiring, this document's updates)
+as its own commit before starting the next, rather than batching unrelated
+pairs into one diff. A 17-pair diff is unreviewable, and one defective pair in
+a large batch blocks every good one alongside it.

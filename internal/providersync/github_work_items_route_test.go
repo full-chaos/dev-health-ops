@@ -151,8 +151,8 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if batch.Watermark != nil {
-		t.Fatalf("unregistered route advanced watermark: %v", batch.Watermark)
+	if batch.Watermark == nil || claim.BeforeAt == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("complete route watermark=%v want claim.BeforeAt=%v", batch.Watermark, claim.BeforeAt)
 	}
 	if projects.calls != 1 || doer.graphqlCalls != 1 {
 		t.Fatalf("project calls=%d social GraphQL calls=%d", projects.calls, doer.graphqlCalls)

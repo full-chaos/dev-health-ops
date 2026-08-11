@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
 
@@ -66,10 +69,23 @@ func TestPreparedRouteSnapshotRejectsTamperTenantGenerationAndSensitiveResult(t 
 	}
 	state.SchemaVersion, state.PreparedSnapshot = "v2", &reference
 
-	tampered := bytes.Replace(
-		payload, []byte(`"result":{"records":16}`),
-		[]byte(`"result":{"records":17}`), 1,
-	)
+	var tamperedSnapshot storedPreparedRouteSnapshot
+	if err := json.Unmarshal(payload, &tamperedSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	var tamperedResult map[string]any
+	if err := json.Unmarshal(tamperedSnapshot.Result, &tamperedResult); err != nil {
+		t.Fatal(err)
+	}
+	tamperedResult["records"] = 17
+	tamperedSnapshot.Result, err = json.Marshal(tamperedResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered, err := json.Marshal(tamperedSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if bytes.Equal(tampered, payload) {
 		t.Fatal("tamper fixture did not change the encoded result")
 	}
@@ -141,8 +157,8 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	ledger.state = prepared
 
 	descriptor, ok := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
-	if !ok || !descriptor.PreparedManifestRecovery || descriptor.RouteReady || descriptor.RouteEnabled {
-		t.Fatalf("unregistered descriptor=%+v ok=%v", descriptor, ok)
+	if !ok || !descriptor.PreparedManifestRecovery || !descriptor.RouteReady || descriptor.RouteEnabled {
+		t.Fatalf("inactive recovery descriptor=%+v ok=%v", descriptor, ok)
 	}
 	descriptor.Destinations = workItemRouteDestinations()
 	descriptor.RouteReady = true
@@ -152,6 +168,12 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	}
 	sink := &memoryEffectSink{}
 	executor := completeRouteExecutor(now.Add(10*time.Minute), handler, ledger, sink)
+	credentials := &forbiddenCredentialRepository{}
+	decryptor := &forbiddenCredentialDecryptor{}
+	doer := &trackingCompleteRouteDoer{}
+	executor.Credentials.Repository = credentials
+	executor.Credentials.Decryptor = decryptor
+	executor.Doer = doer
 	executor.Committer.Readback = staticEffectReadback{inspections: map[string]EffectInspection{
 		prepared.Effects[1].Destination: EffectExact,
 	}}
@@ -165,13 +187,14 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 	// quietly rewrote the manifest it was supposed to be replaying.
 	if !handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
 		ledger.preparedPrepares != 1 ||
+		credentials.calls != 0 || decryptor.calls != 0 || doer.requests != 0 ||
 		result.Effects.Skipped != 1 || result.Effects.MarkedCommitted != 1 ||
 		result.Effects.Written != len(workItemRouteDestinations())-2 ||
 		result.Result["records"] != float64(16) {
 		t.Fatalf(
-			"handler_at=%s loads=%d prepares=%d result=%+v stored_result=%v",
+			"handler_at=%s loads=%d prepares=%d credential_calls=%d decrypt_calls=%d requests=%d result=%+v stored_result=%v",
 			handler.normalizedAt, ledger.preparedLoads, ledger.preparedPrepares,
-			result, result.Result,
+			credentials.calls, decryptor.calls, doer.requests, result, result.Result,
 		)
 	}
 	secondSink := &memoryEffectSink{}
@@ -184,6 +207,96 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 		secondResult.Effects.Written != 0 || len(secondSink.destinations) != 0 ||
 		ledger.preparedPrepares != 1 || !handler.normalizedAt.IsZero() {
 		t.Fatalf("all-committed recovery result=%+v writes=%v", secondResult, secondSink.destinations)
+	}
+}
+
+func TestCompleteRouteExecutorRecoversDurableIncompleteManifestWithoutRefetch(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	claim, session := preparedGitHubWorkItemsSession(t, now)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	batch.Result[githubWorkItemsIncompleteResultKey] = []GitHubWorkItemsIncomplete{{
+		Component: "issue_comments", SubjectID: "42", Cause: "transient",
+	}}
+	// Stage a hostile/legacy candidate watermark in the durable payload. The
+	// recovery reader, not trust in the original collector, owns suppression.
+	if batch.Watermark == nil {
+		t.Fatal("fixture must carry a candidate watermark")
+	}
+	ledger := &memoryEffectLedger{}
+	if _, err := ledger.PrepareRouteSnapshot(
+		context.Background(), claim, batch, ShadowComparison{Match: true}, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{
+		Result: map[string]any{"live_provider": "changed"},
+	}}
+	sink := &memoryEffectSink{}
+	executor := completeRouteExecutor(now.Add(time.Hour), handler, ledger, sink)
+	credentials := &forbiddenCredentialRepository{}
+	decryptor := &forbiddenCredentialDecryptor{}
+	doer := &trackingCompleteRouteDoer{}
+	executor.Credentials.Repository = credentials
+	executor.Credentials.Decryptor = decryptor
+	executor.Doer = doer
+
+	result, err := executor.Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Watermark != nil || !handler.normalizedAt.IsZero() ||
+		credentials.calls != 0 || decryptor.calls != 0 || doer.requests != 0 ||
+		result.Effects.Written != len(workItemRouteDestinations()) {
+		t.Fatalf(
+			"watermark=%v handler_at=%s credential_calls=%d decrypt_calls=%d requests=%d result=%+v",
+			result.Watermark, handler.normalizedAt, credentials.calls, decryptor.calls,
+			doer.requests, result,
+		)
+	}
+	want := []GitHubWorkItemsIncomplete{{
+		Component: "issue_comments", SubjectID: "42", Cause: "transient",
+	}}
+	if got, ok := result.Result[githubWorkItemsIncompleteResultKey].([]GitHubWorkItemsIncomplete); !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("recovered incomplete=%#v want=%+v", result.Result[githubWorkItemsIncompleteResultKey], want)
+	}
+}
+
+func TestCompleteRouteExecutorSuppressesForgedLiveIncompleteWatermark(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	claim, session := preparedGitHubWorkItemsSession(t, now)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	batch.Result[githubWorkItemsIncompleteResultKey] = []GitHubWorkItemsIncomplete{{
+		Component: "milestones", Cause: "transient",
+	}}
+	if batch.Watermark == nil {
+		t.Fatal("fixture must carry a forged candidate watermark")
+	}
+
+	descriptor, _ := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	descriptor.Destinations = workItemRouteDestinations()
+	descriptor.RouteReady, descriptor.RouteEnabled = true, true
+	handler := &staticCompleteRouteHandler{batch: batch}
+	ledger := &memoryEffectLedger{}
+	executor := completeRouteExecutor(now, handler, ledger, &memoryEffectSink{})
+	executor.Credentials.Repository = executorCredentialRepository{}
+	executor.Credentials.Decryptor = executorCredentialDecryptor{}
+
+	result, err := executor.Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Watermark != nil || handler.normalizedAt.IsZero() ||
+		ledger.preparedPrepares != 1 {
+		t.Fatalf(
+			"watermark=%v handler_at=%s prepared=%d",
+			result.Watermark, handler.normalizedAt, ledger.preparedPrepares,
+		)
 	}
 }
 
@@ -271,12 +384,33 @@ func preparedGitHubWorkItemsFixture(t *testing.T, claim Claim) CompleteRouteBatc
 	}
 	watermark := time.Date(2026, 8, 4, 11, 59, 0, 0, time.UTC)
 	return CompleteRouteBatch{
-		Effects: effects, Result: map[string]any{"records": 16}, Watermark: &watermark,
+		Effects: effects, Result: map[string]any{
+			"records": 16, githubWorkItemsIncompleteResultKey: []GitHubWorkItemsIncomplete{},
+		}, Watermark: &watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
 			Requests: 6, Pages: 6, Records: 16,
 		},
 	}
+}
+
+type forbiddenCredentialRepository struct{ calls int }
+
+func (repository *forbiddenCredentialRepository) ResolveEncrypted(
+	context.Context,
+	providerfoundation.TenantScope,
+) (providerfoundation.EncryptedCredential, error) {
+	repository.calls++
+	return providerfoundation.EncryptedCredential{}, errors.New("credential access during recovery")
+}
+
+type forbiddenCredentialDecryptor struct{ calls int }
+
+func (decryptor *forbiddenCredentialDecryptor) Decrypt(
+	secrets.Value,
+) ([]byte, error) {
+	decryptor.calls++
+	return nil, errors.New("credential decrypt during recovery")
 }
 
 func preparedGitHubWorkItemsSession(

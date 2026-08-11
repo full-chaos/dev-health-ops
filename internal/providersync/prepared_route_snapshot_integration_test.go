@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -43,7 +44,12 @@ func TestPostgresPreparedRouteSnapshotLifecycleAndFences(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	unitID := uuid.NewString()
 	seedWorkItemAliasUnit(t, ctx, pool, unitID, "incremental", `{
-		"sync_prs":true,"family_dataset_work_items":true
+		"sync_prs":true,
+		"family_dataset_work_items":true,
+		"family_dataset_work_item_labels":true,
+		"family_dataset_work_item_projects":true,
+		"family_dataset_work_item_history":true,
+		"family_dataset_work_item_comments":true
 	}`)
 	claim, err := repository.Claim(ctx, ClaimRequest{
 		UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
@@ -305,7 +311,10 @@ VALUES ($1, $2, $3, 'github', 'work-items', $4, $5, $6, $7, $8)`,
 		t.Fatal(err)
 	}
 	if err := repository.Complete(
-		ctx, reclaimed, map[string]any{"records": 16}, nil,
+		ctx, reclaimed, map[string]any{
+			"records":    16,
+			"incomplete": []GitHubWorkItemsIncomplete{},
+		}, nil,
 		now.Add(3*time.Second), now.Add(4*time.Second),
 	); err != nil {
 		t.Fatal(err)
@@ -349,7 +358,12 @@ DROP FUNCTION reject_snapshot_ledger_update()`); err != nil {
 
 	rollbackUnitID := uuid.NewString()
 	seedWorkItemAliasUnit(t, ctx, pool, rollbackUnitID, "incremental", `{
-		"sync_prs":true,"family_dataset_work_items":true
+		"sync_prs":true,
+		"family_dataset_work_items":true,
+		"family_dataset_work_item_labels":true,
+		"family_dataset_work_item_projects":true,
+		"family_dataset_work_item_history":true,
+		"family_dataset_work_item_comments":true
 	}`)
 	rollbackClaim, err := repository.Claim(ctx, ClaimRequest{
 		UnitID: rollbackUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now.Add(6 * time.Second),
@@ -368,7 +382,10 @@ DROP FUNCTION reject_snapshot_ledger_update()`); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.Complete(
-		ctx, rollbackClaim, map[string]any{"records": 16}, nil,
+		ctx, rollbackClaim, map[string]any{
+			"records":    16,
+			"incomplete": []GitHubWorkItemsIncomplete{},
+		}, nil,
 		now.Add(6*time.Second), now.Add(7*time.Second),
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("rollback completion error=%v", err)
@@ -507,14 +524,18 @@ func TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole(t *testin
 	defer ownerPool.Close()
 	createProviderSyncFixture(t, ctx, ownerPool)
 	seedProviderSyncFixture(t, ctx, ownerPool)
+	if _, err := ownerPool.Exec(ctx, `
+CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY);
+INSERT INTO public.alembic_version (version_num) VALUES ('0093')`); err != nil {
+		t.Fatal(err)
+	}
 
-	// The venue isolates ONE property: the snapshot table carries no
-	// UPDATE-class privilege. Everything else is granted broadly on purpose --
-	// this test is not a posture audit (internal/domaingrants owns that), and
-	// a venue that also under-grants unrelated tables would fail for reasons
-	// that say nothing about the defect class under test. Granting wide and
-	// revoking exactly UPDATE on the snapshot table makes any failure here
-	// attributable to that single missing privilege.
+	// The venue isolates the runtime snapshot contract: the snapshot table has
+	// no UPDATE-class privilege and the domain role cannot read Alembic's
+	// privileged migration ledger. Everything else is granted broadly on
+	// purpose -- internal/domaingrants owns the full posture audit. Successful
+	// prepare/load/complete below is therefore readiness evidence derived from
+	// the domain-accessible snapshot surface, not public.alembic_version.
 	const role = "providersync_domain_probe"
 	for _, statement := range []string{
 		`DROP ROLE IF EXISTS ` + role,
@@ -522,6 +543,7 @@ func TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole(t *testin
 		`GRANT USAGE ON SCHEMA public TO ` + role,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ` + role,
 		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ` + role,
+		`REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM ` + role,
 		`REVOKE UPDATE ON TABLE public.sync_run_unit_effect_snapshots FROM ` + role,
 	} {
 		if _, err := ownerPool.Exec(ctx, statement); err != nil {
@@ -544,6 +566,11 @@ func TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole(t *testin
 	if current != role {
 		t.Fatalf("connected as %q, want the restricted role %q", current, role)
 	}
+	if _, err := restrictedPool.Exec(
+		ctx, "SELECT version_num FROM public.alembic_version",
+	); err == nil {
+		t.Fatal("domain role unexpectedly gained SELECT on public.alembic_version")
+	}
 
 	repository, err := NewPostgresRepository(restrictedPool)
 	if err != nil {
@@ -552,7 +579,12 @@ func TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole(t *testin
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	unitID := uuid.NewString()
 	seedWorkItemAliasUnit(t, ctx, ownerPool, unitID, "incremental", `{
-		"sync_prs":true,"family_dataset_work_items":true
+		"sync_prs":true,
+		"family_dataset_work_items":true,
+		"family_dataset_work_item_labels":true,
+		"family_dataset_work_item_projects":true,
+		"family_dataset_work_item_history":true,
+		"family_dataset_work_item_comments":true
 	}`)
 	claim, err := repository.Claim(ctx, ClaimRequest{
 		UnitID: unitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
@@ -587,7 +619,10 @@ func TestPostgresPreparedRouteSnapshotRunsUnderTheRestrictedDomainRole(t *testin
 		t.Fatalf("load under the restricted role: %v", err)
 	}
 	if err := repository.Complete(
-		ctx, claim, map[string]any{"records": 16}, nil, now, now.Add(time.Second),
+		ctx, claim, map[string]any{
+			"records":    16,
+			"incomplete": []GitHubWorkItemsIncomplete{},
+		}, nil, now, now.Add(time.Second),
 	); err != nil {
 		t.Fatalf("complete under the restricted role: %v", err)
 	}
@@ -729,24 +764,10 @@ FROM public.sync_run_units AS unit WHERE unit.id = $1`, claim.ID,
 	}
 }
 
-// TestPostgresSnapshotTenancyIsEnforcedByReadsNotByStructure pins a KNOWN and
-// currently accepted gap, so it is a measured fact rather than an assumption.
-//
-// The table's FK is (sync_run_unit_id) -> sync_run_units(id), which says
-// nothing about org_id. So a row can be INSERTED claiming an org that does not
-// own the unit. Nothing in production can write one -- the route is
-// unregistered and the only writer derives org_id from the claim -- but the
-// schema does not prevent it.
-//
-// Reads are safe, and that is what this test proves rather than asserts: the
-// load joins on BOTH unit.id and unit.org_id, so a mismatched row is
-// unreachable no matter how it got there.
-//
-// Making it structural needs a composite FK to sync_run_units(org_id, id) and
-// therefore a UNIQUE index on that pair -- a CONCURRENTLY build plus a
-// NOT VALID/VALIDATE FK against a hot table. That is deliberately NOT done in
-// this PR, which activates nothing; it is recorded as pre-activation debt.
-func TestPostgresSnapshotTenancyIsEnforcedByReadsNotByStructure(t *testing.T) {
+// TestPostgresSnapshotTenancyIsEnforcedByCompositeForeignKey proves the Go
+// integration schema carries 0093's structural tenant fence, not merely the
+// reader's defensive join.
+func TestPostgresSnapshotTenancyIsEnforcedByCompositeForeignKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -792,10 +813,8 @@ func TestPostgresSnapshotTenancyIsEnforcedByReadsNotByStructure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The gap, executed: a second row for the SAME unit under a DIFFERENT org.
-	// If a future migration makes this structural, this INSERT starts failing
-	// and this test is the thing that tells you the debt was paid.
-	if _, err := pool.Exec(ctx, `
+	// The same globally unique unit UUID cannot be borrowed by another org.
+	_, err = pool.Exec(ctx, `
 INSERT INTO public.sync_run_unit_effect_snapshots (
     org_id, sync_run_unit_id, generation, provider, dataset_key,
     schema_version, content_digest, payload_bytes, payload, created_at)
@@ -804,19 +823,17 @@ SELECT 'org-intruder', sync_run_unit_id, generation, provider, dataset_key,
 FROM public.sync_run_unit_effect_snapshots
 WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
-	); err != nil {
-		t.Fatalf(
-			"cross-tenant insert was refused: %v -- if a composite FK landed, "+
-				"delete this test and the debt note in the PR body", err,
-		)
+	)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+		t.Fatalf("cross-tenant insert error=%v, want 23503 foreign_key_violation", err)
 	}
 
-	// Reads stay correct: the owning tenant still loads its own row...
+	// The rejected insert does not disturb the owning tenant's durable row.
 	if _, err := repository.LoadRouteSnapshot(ctx, claim, state, now.Add(time.Second)); err != nil {
 		t.Fatalf("owning tenant load: %v", err)
 	}
-	// ...and the intruder's row is unreachable, because the join requires the
-	// unit's org_id to match the snapshot's.
+	// The reader independently retains its tenant join as defense in depth.
 	intruder := claim
 	intruder.OrgID = "org-intruder"
 	if _, err := repository.LoadRouteSnapshot(

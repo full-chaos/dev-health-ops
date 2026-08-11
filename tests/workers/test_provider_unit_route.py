@@ -452,6 +452,98 @@ def test_github_cicd_and_tests_complete_unit_aliases_are_mutually_exclusive() ->
 
 
 # ---------------------------------------------------------------------------
+# CHAOS-3606: GitHub's five planner-collapsed work-item aliases are one Go
+# family. Matrix readiness remains visible for every alias; only canonical
+# work-items can be admitted to the Go producer route.
+# ---------------------------------------------------------------------------
+
+
+_GITHUB_WORK_ITEM_FAMILY_FLAGS = {
+    "family_dataset_work_items": True,
+    "family_dataset_work_item_labels": True,
+    "family_dataset_work_item_projects": True,
+    "family_dataset_work_item_history": True,
+    "family_dataset_work_item_comments": True,
+}
+
+
+def test_github_work_items_switch_routes_only_the_canonical_claim() -> None:
+    off = ProviderUnitRouteSwitches.from_environment({})
+    on = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_WORK_ITEMS_ENABLED": "true"}
+    )
+    datasets = (
+        "work-items",
+        "work-item-labels",
+        "work-item-projects",
+        "work-item-history",
+        "work-item-comments",
+    )
+    for dataset in datasets:
+        assert ProviderUnitRouteSwitches.is_route_ready("github", dataset)
+        assert not off.routes_to_river("github", dataset)
+    assert on.routes_to_river("github", "work-items")
+    for alias in datasets[1:]:
+        assert not on.routes_to_river("github", alias)
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._TRUE))
+def test_github_work_items_switch_parses_true_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_WORK_ITEMS_ENABLED": value}
+    )
+    assert switches.github_work_items is True
+    assert switches.routes_to_river("github", "work-items")
+
+
+@pytest.mark.parametrize("value", sorted(provider_unit_route._FALSE))
+def test_github_work_items_switch_parses_false_spellings(value: str) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_WORK_ITEMS_ENABLED": value}
+    )
+    assert switches.github_work_items is False
+    assert not switches.routes_to_river("github", "work-items")
+
+
+def test_github_work_items_switch_invalid_value_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_GITHUB_WORK_ITEMS_ENABLED": "sometimes"}
+        )
+
+
+def test_github_work_item_family_admission_requires_exact_boolean_flags() -> None:
+    assert provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "work-items", _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+    for missing in _GITHUB_WORK_ITEM_FAMILY_FLAGS:
+        flags = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+        del flags[missing]
+        assert not provider_unit_route.is_complete_github_work_item_family_claim(
+            "github", "work-items", flags
+        )
+        flags = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+        flags[missing] = False
+        assert not provider_unit_route.is_complete_github_work_item_family_claim(
+            "github", "work-items", flags
+        )
+    for value in ("true", "false", 1, 0):
+        malformed_flags: dict[str, object] = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+        malformed_flags["family_dataset_work_items"] = value
+        assert not provider_unit_route.is_complete_github_work_item_family_claim(
+            "github", "work-items", malformed_flags
+        )
+    flags = dict(_GITHUB_WORK_ITEM_FAMILY_FLAGS)
+    flags["family_dataset_unexpected"] = True
+    assert not provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "work-items", flags
+    )
+    assert not provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "work-item-comments", _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+
+
+# ---------------------------------------------------------------------------
 # CHAOS-3131: routability is derived from the checked-in matrix, not from a
 # hardcoded provider/dataset literal.
 # ---------------------------------------------------------------------------

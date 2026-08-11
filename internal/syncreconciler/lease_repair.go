@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -21,33 +22,6 @@ const (
 	leaseRepairWorkerLostCategory           = "worker_lost"
 	leaseRepairRetryExhaustedCategory       = "worker_lost_retry_exhausted"
 )
-
-var linearBackfillWorkItemDatasets = map[string]struct{}{
-	"work_items":         {},
-	"work_item_labels":   {},
-	"work_item_projects": {},
-	"work_item_history":  {},
-	"work_item_comments": {},
-}
-
-var linearBackfillRetrySurfaces = []string{
-	"ai_attribution",
-	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
-	"issue_type_metrics_daily",
-	"sprints",
-	"work_item_cycle_times",
-	"work_item_dependencies",
-	"work_item_interactions",
-	"work_item_metrics_daily",
-	"work_item_reopen_events",
-	"work_item_state_durations_daily",
-	"work_item_team_attributions",
-	"work_item_transitions",
-	"work_item_user_metrics_daily",
-	"work_items",
-}
 
 type leaseRepairBeginFunc func(context.Context) (pgx.Tx, error)
 
@@ -184,8 +158,8 @@ type expiredLeaseDecision struct {
 }
 
 func decideExpiredLeaseRepair(candidate expiredLeaseCandidate, config LeaseRepairConfig) expiredLeaseDecision {
-	_, eligibleDataset := linearBackfillWorkItemDatasets[candidate.datasetKey]
-	eligible := candidate.provider == "linear" && candidate.mode == "backfill" && eligibleDataset
+	eligible := candidate.provider == "linear" && candidate.mode == "backfill" &&
+		workitemcontract.IsLinearBackfillWorkItemDatasetKey(candidate.datasetKey)
 	return expiredLeaseDecision{
 		retry:     eligible && candidate.retryCount < config.MaximumRetries,
 		exhausted: eligible && candidate.retryCount >= config.MaximumRetries,
@@ -248,7 +222,8 @@ func markExpiredLeaseRetrying(
 ) (int64, error) {
 	retryAt := now.Add(config.RetryBackoff)
 	command, err := tx.Exec(ctx, markExpiredLeaseRetryingSQL,
-		candidate.id, candidate.leaseOwner, now, retryAt, linearBackfillRetrySurfaces)
+		candidate.id, candidate.leaseOwner, now, retryAt,
+		workitemcontract.LinearExpiredLeaseRetryDestinations())
 	if err != nil {
 		return 0, ErrUnavailable
 	}
@@ -266,7 +241,7 @@ func markExpiredLeaseFailed(
 	surfaces := []string{}
 	if exhausted {
 		category = leaseRepairRetryExhaustedCategory
-		surfaces = linearBackfillRetrySurfaces
+		surfaces = workitemcontract.LinearExpiredLeaseRetryDestinations()
 	}
 	command, err := tx.Exec(ctx, markExpiredLeaseFailedSQL,
 		candidate.id, candidate.leaseOwner, now, category, exhausted, surfaces)

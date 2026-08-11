@@ -146,6 +146,30 @@ func buildProviderSyncHandler(
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
+	return buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+		repository, switches, decryptor, clickhouseConnection, valkeyClient,
+		domainPool, jiraIncidentEntitlement, collector, logger,
+		githubWorkItemsRuntimeConfig{},
+	)
+}
+
+// buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig is the production
+// construction seam for the GitHub work-items route. The zero-value wrapper
+// above intentionally leaves the route unavailable for older focused handler
+// tests; the real worker validates and supplies both explicit D19 paths before
+// it can construct this closure.
+func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+	repository providerSyncRepository,
+	switches providersync.CompleteRouteSwitches,
+	decryptor providerfoundation.CredentialDecryptor,
+	clickhouseConnection driver.Conn,
+	valkeyClient valkeygo.Client,
+	domainPool *pgxpool.Pool,
+	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
+	collector *jobruntime.MetricsCollector,
+	logger *slog.Logger,
+	githubWorkItemsRuntime githubWorkItemsRuntimeConfig,
+) (*providerunit.Handler, *providerfoundation.Metrics) {
 	// providerMetrics is constructed exactly once per worker process and
 	// referenced by every claim's executor, so dev_health_provider_* actually
 	// accumulates across dispatches instead of being built and discarded per
@@ -193,13 +217,16 @@ func buildProviderSyncHandler(
 				return providersync.CompleteRouteExecutor{},
 					errWorkerDependencyUnavailable
 			}
-			// Sixteen route-ready pairs can reach this closure today:
+			// Twenty-one canonical route-ready claims can reach this closure today:
 			// launchdarkly/feature-flags plus github/repo-metadata, cicd,
 			// tests, commits, deployments, security, files, commit-stats, and
-			// blame, plus jira/incidents and gitlab/repo-metadata, commits,
-			// commit-stats, cicd, and tests. The GitHub cicd/tests aliases and
-			// the GitLab cicd/tests aliases intentionally share one complete
-			// handler and effect sink; every other route has its own.
+			// blame, work-items, plus jira/incidents and gitlab/repo-metadata,
+			// commits, commit-stats, cicd, and tests. The four direct GitHub
+			// work-item aliases are matrix-ready identities but are rejected by
+			// providerunit before BuildExecutor, so they never become partial
+			// writers. The GitHub cicd/tests aliases and the GitLab cicd/tests
+			// aliases intentionally share one complete handler and effect sink;
+			// every other route has its own.
 			// session.Claim
 			// is already known here — providerunit.Handler.Work only calls
 			// BuildExecutor after its own descriptor gate passed for THIS
@@ -233,6 +260,30 @@ func buildProviderSyncHandler(
 					Conn: clickhouseConnection, Lease: session,
 				}
 				routeHandler = providersync.GitHubRepositoryRouteHandler{}
+				sink, readback = ghSink, ghSink
+			case session.Claim.Provider == "github" &&
+				session.Claim.Dataset == "work-items":
+				if !githubWorkItemsRuntime.configured() {
+					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
+				}
+				ghSink, err := providersync.NewGitHubWorkItemClickHouseEffects(
+					clickhouseConnection, session,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				ghDeriver, err := providersync.NewGitHubWorkItemDeriver(
+					clickhouseConnection, session,
+					githubWorkItemsRuntime.statusMappingPath,
+					githubWorkItemsRuntime.investmentConfigPath,
+				)
+				if err != nil {
+					return providersync.CompleteRouteExecutor{}, err
+				}
+				routeHandler = providersync.GitHubWorkItemsRouteHandler{
+					Projects: providersync.GitHubProjectV2Fetcher{},
+					Deriver:  ghDeriver,
+				}
 				sink, readback = ghSink, ghSink
 			case session.Claim.Provider == "gitlab" &&
 				session.Claim.Dataset == "repo-metadata":
@@ -464,6 +515,14 @@ func constructProviderSyncWorkerWithDependencies(
 	if !ok || postgresDatabase.pools == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// Validate the exact config paths before opening any outbound dependency.
+	// This value is then captured by BuildExecutor, so startup/readiness and
+	// claim construction cannot drift onto different StatusMapping/classifier
+	// artifacts (D19).
+	githubWorkItemsRuntime, err := githubWorkItemsRuntimeConfigFrom(cfg)
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
 	repository, err := providersync.NewPostgresRepository(
 		postgresDatabase.pools.Domain,
 	)
@@ -498,11 +557,11 @@ func constructProviderSyncWorkerWithDependencies(
 	// types below are then safe no-ops) for any other Observer implementation,
 	// such as a test double.
 	collector, _ := observer.(*jobruntime.MetricsCollector)
-	handler, providerMetrics := buildProviderSyncHandler(
+	handler, providerMetrics := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 		repository, workerRouteSwitches(cfg), decryptor, clickhouseConnection,
 		valkeyClient, postgresDatabase.pools.Domain,
 		providersync.PostgresJiraIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
-		collector, logger,
+		collector, logger, githubWorkItemsRuntime,
 	)
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](
 		registry, spec, handler, jobruntime.Dependencies{
@@ -556,7 +615,8 @@ func providerSyncWorkerEnabled(cfg config.Config) bool {
 		cfg.WorkerGithubCommitsEnabled || cfg.WorkerGithubDeploymentsEnabled ||
 		cfg.WorkerGithubSecurityEnabled || cfg.WorkerGithubFilesEnabled ||
 		cfg.WorkerGithubCommitStatsEnabled || cfg.WorkerJiraIncidentsEnabled ||
-		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled
+		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled ||
+		cfg.WorkerGithubWorkItemsEnabled
 }
 
 func providerSyncRiverConfig(

@@ -58,6 +58,7 @@ from dev_health_ops.api.dev.investigation_corpus.reference import reference_pack
 from dev_health_ops.api.dev.orchestrator import (
     GRAPH_ASSISTED_GROUNDING_STATUS,
     GRAPH_GROUNDED_WARNING_ENRICHMENT_GAP,
+    GRAPH_GROUNDED_WARNING_EVIDENCE_GAP,
     GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED,
     GRAPH_ROUTING_RUNTIME_FLAG,
 )
@@ -322,7 +323,7 @@ async def test_completed_with_admissible_evidence_produces_a_graph_grounded_answ
     assert output.result.state is RunState.COMPLETED
     answer = output.result.answer
     assert answer is not None
-    assert answer.status is AnswerStatus.PARTIAL
+    assert answer.status is AnswerStatus.DEGRADED
     assert answer.graph_assisted is not None
     assert answer.graph_assisted.state is GraphAssistedAvailability.LAGGING
     assert answer.graph_assisted.cohort is None
@@ -334,7 +335,7 @@ async def test_completed_with_admissible_evidence_produces_a_graph_grounded_answ
     ]
     assert "graphiti" not in answer.model_dump_json().casefold()
     assert len(answer.evidence) == 1
-    assert answer.warnings == []
+    assert answer.warnings == [GRAPH_GROUNDED_WARNING_EVIDENCE_GAP]
     assert recorder.grounding_validation_statuses[-1] == GRAPH_ASSISTED_GROUNDING_STATUS
     # The legacy model-tool-choice loop must never even start: the graph
     # path returned directly through finish().
@@ -412,7 +413,10 @@ async def test_clean_graph_answer_exposes_enabled_state_without_backend_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(GRAPH_ROUTING_RUNTIME_FLAG, "1")
-    packet = _graph_arm_packet([_ADMIT_LOCATOR])
+    entry_count = len(_graph_arm_packet([]).evidence_coverage.evidence_index)
+    packet = _graph_arm_packet(
+        [f"graph-clean-state-{index}" for index in range(entry_count)]
+    )
     clean_coverage = packet.evidence_coverage.model_copy(update={"limitations": ()})
     packet = packet.model_copy(update={"evidence_coverage": clean_coverage})
 

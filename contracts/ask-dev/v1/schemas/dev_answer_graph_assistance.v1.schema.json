@@ -296,15 +296,84 @@
       "title": "DevAnswerCohortSlot",
       "type": "object"
     },
+    "DevAnswerDriverCategory": {
+      "description": "Closed, product-safe driver categories; no packet prose crosses over.",
+      "enum": [
+        "delivery_pressure",
+        "review_pressure",
+        "operational_pressure",
+        "dependency_pressure",
+        "investment_mix",
+        "capacity_or_staffing",
+        "scope_change",
+        "quality_or_defect",
+        "external_blocker",
+        "data_coverage"
+      ],
+      "title": "DevAnswerDriverCategory",
+      "type": "string"
+    },
+    "DevAnswerDriverConfidence": {
+      "description": "The packet's qualification, not a fabricated numeric score.",
+      "enum": [
+        "measured_certain",
+        "qualified",
+        "uncertain",
+        "unsupported"
+      ],
+      "title": "DevAnswerDriverConfidence",
+      "type": "string"
+    },
     "DevAnswerDriverEntry": {
       "additionalProperties": false,
-      "description": "CHAOS-3660 \u00a78(d). ``evidence_ref_ids`` point into the SAME answer's\nown ``evidence[]`` array -- see ``DevAnswer.validate_answer_invariants``\nbelow, which enforces that as a real constraint, not just a naming\nconvention.",
+      "description": "One evidence-closed, qualified public driver judgment.\n\n``rank`` is an ordinal presentation order from the packet's deterministic\ncandidate order.  It is not a contribution or importance score, so\n``contribution`` is optional and remains ``None`` for the production\nprojection until a canonical scoring contract exists.  ``evidence_ref_ids``\npoint into the SAME answer's own ``evidence[]`` array -- see\n``DevAnswer.validate_answer_invariants`` below, which enforces that as a\nreal constraint, not just a naming convention.",
       "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerDriverCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerDriverConfidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "conflicting_evidence_ref_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Conflicting Evidence Ref Ids",
+          "type": "array"
+        },
         "contribution": {
-          "maximum": 1.0,
-          "minimum": 0.0,
-          "title": "Contribution",
-          "type": "number"
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contribution"
         },
         "evidence_ref_ids": {
           "items": {
@@ -318,19 +387,149 @@
           "title": "Evidence Ref Ids",
           "type": "array"
         },
+        "exclusion_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerDriverExclusionReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "freshness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "rank": {
           "minimum": 1,
           "title": "Rank",
           "type": "integer"
+        },
+        "relevance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerDriverRelevance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerDriverRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "staffing_qualification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerStaffingQualification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "standing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerDriverStanding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "withheld_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerDriverWithheldReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
         "rank",
-        "contribution",
         "evidence_ref_ids"
       ],
       "title": "DevAnswerDriverEntry",
       "type": "object"
+    },
+    "DevAnswerDriverExclusionReason": {
+      "description": "Why W4 excluded a candidate from asserted driver standing.",
+      "enum": [
+        "no_supporting_path",
+        "evidence_conflict_unresolved",
+        "not_currently_relevant",
+        "symptom_of_another_candidate",
+        "unauthorized_evidence",
+        "insufficient_measurement"
+      ],
+      "title": "DevAnswerDriverExclusionReason",
+      "type": "string"
+    },
+    "DevAnswerDriverRelevance": {
+      "enum": [
+        "current",
+        "recently_current",
+        "historical_only",
+        "unknown"
+      ],
+      "title": "DevAnswerDriverRelevance",
+      "type": "string"
+    },
+    "DevAnswerDriverRole": {
+      "description": "The bounded public distinction between causes and effects.",
+      "enum": [
+        "driver",
+        "symptom",
+        "contextual_correlate"
+      ],
+      "title": "DevAnswerDriverRole",
+      "type": "string"
+    },
+    "DevAnswerDriverStanding": {
+      "description": "How strongly the investigation supports one driver candidate.",
+      "enum": [
+        "principal_driver",
+        "contributing_driver",
+        "candidate_only",
+        "excluded"
+      ],
+      "title": "DevAnswerDriverStanding",
+      "type": "string"
+    },
+    "DevAnswerDriverWithheldReason": {
+      "description": "Why some packet support did not become canonical answer evidence.",
+      "enum": [
+        "evidence_refused",
+        "evidence_unavailable",
+        "authorization_filtered"
+      ],
+      "title": "DevAnswerDriverWithheldReason",
+      "type": "string"
     },
     "DevAnswerEnrichmentGap": {
       "enum": [
@@ -423,6 +622,37 @@
       "title": "DevAnswerSourceRequirementState",
       "type": "string"
     },
+    "DevAnswerStaffingDenominatorState": {
+      "enum": [
+        "allocation_evidence_available",
+        "partial_allocation_evidence",
+        "denominator_absent"
+      ],
+      "title": "DevAnswerStaffingDenominatorState",
+      "type": "string"
+    },
+    "DevAnswerStaffingQualification": {
+      "additionalProperties": false,
+      "description": "Bounded denominator disclosure for a capacity/staffing driver.\n\nThe packet's qualification note is intentionally not copied to the public\nanswer: it is arm prose, not a canonical fact.  The denominator state and\nclosed source classes are sufficient for a client to label the judgment\nhonestly and keep a missing denominator visible.",
+      "properties": {
+        "denominator_source_classes": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerEvidenceSourceClass"
+          },
+          "maxItems": 10,
+          "title": "Denominator Source Classes",
+          "type": "array"
+        },
+        "denominator_state": {
+          "$ref": "#/$defs/DevAnswerStaffingDenominatorState"
+        }
+      },
+      "required": [
+        "denominator_state"
+      ],
+      "title": "DevAnswerStaffingQualification",
+      "type": "object"
+    },
     "EntityType": {
       "enum": [
         "repository",
@@ -459,7 +689,7 @@
       "type": "string"
     },
     "PacketLimitationKind": {
-      "description": "CHAOS-3660 \u00a78(d)/(h). Reserved fresh here for the same reason as the\ntwo enums above -- the owning module\n(``investigation_contract/vocabulary.py``) is feature-branch-only\ntoday; must be reconciled to that module's definition when it lands on\n``main``.",
+      "description": "Closed public mirror of the investigation packet limitations.\n\nKeep this vocabulary aligned with\n``investigation_contract.vocabulary.PacketLimitationKind``.  The graph\nroute converts packet limitations at the public boundary, so every\ninternal limitation that can reach a production packet must be declared\nhere rather than silently dropped or raising during answer assembly.",
       "enum": [
         "missing_source",
         "stale_source",

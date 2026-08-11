@@ -78,7 +78,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_conversation_transcript.v1.schema.json",
-        "sha256": "248d1075aa99da9424c5242e9691fdd2943d9b04b11218cd9cb2e322ce566db1"
+        "sha256": "cf0fe9afc11d5d529f116ff857727738d3545cfad76a010a0144f0a53c25bc31"
       },
       "schema_version": "dev_conversation_transcript.v1"
     },
@@ -167,7 +167,7 @@
       ],
       "schema": {
         "path": "schemas/dev_answer.v1.schema.json",
-        "sha256": "ba4020ba258c7b13359af1a9feb48276962c700c0aa0d12e9422150ecb13438e"
+        "sha256": "61ea8ea026ae401f86683d9c0f6a17bfc57a88607d30b65672de601f452c82f3"
       },
       "schema_version": "dev_answer.v1"
     },
@@ -186,7 +186,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer_graph_assistance.v1.schema.json",
-        "sha256": "74504d5a246dec800432d9ee1136ad008f0f6292f650417151fbdeccd7837c39"
+        "sha256": "4eb3955abd33da096d8b51cab7059ea46585bc18fa952690beb634b1a8d429a8"
       },
       "schema_version": "dev_answer_graph_assistance.v1"
     },
@@ -440,7 +440,7 @@
       ],
       "schema": {
         "path": "schemas/dev_stream_event.v1.schema.json",
-        "sha256": "b183846008dc5859db39393f9a4d227b301191af142672ad6ea968591e97ed19"
+        "sha256": "284ec561c391caf51ea4cbeb6a5a7c360a195fa4b26f3124e3c09e326aa0540d"
       },
       "schema_version": "dev_stream_event.v1"
     },

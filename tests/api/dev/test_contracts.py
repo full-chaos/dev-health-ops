@@ -18,6 +18,7 @@ from dev_health_ops.api.dev.contract_fixtures import (
 from dev_health_ops.api.dev.contracts import (
     CONTRACT_MODELS,
     DevAnswer,
+    DevAnswerDriverEntry,
     DevAnswerGraphAssistance,
     DevCapabilities,
     DevEvidenceRef,
@@ -146,6 +147,63 @@ def test_graph_assisted_driver_evidence_must_reference_the_answers_own_evidence(
     answer = DevAnswer.model_validate(payload)
     assert answer.graph_assisted is not None
     assert answer.graph_assisted.ranked_drivers[0].rank == 1
+
+    payload["graph_assisted"]["ranked_drivers"][0]["conflicting_evidence_ref_ids"] = [
+        "ev_unknown"
+    ]
+    with pytest.raises(ValidationError, match="driver conflict references unknown"):
+        DevAnswer.model_validate(payload)
+
+
+def test_public_driver_staffing_qualification_keeps_denominator_semantics() -> None:
+    base = {
+        "rank": 1,
+        "evidence_ref_ids": ["ev_driver"],
+        "category": "capacity_or_staffing",
+        "confidence": "qualified",
+        "staffing_qualification": {"denominator_state": "denominator_absent"},
+    }
+    entry = DevAnswerDriverEntry.model_validate(base)
+    assert entry.contribution is None
+
+    missing = deepcopy(base)
+    missing.pop("staffing_qualification")
+    with pytest.raises(ValidationError, match="denominator qualification"):
+        DevAnswerDriverEntry.model_validate(missing)
+
+    certain = deepcopy(base)
+    certain["confidence"] = "measured_certain"
+    with pytest.raises(ValidationError, match="weak staffing denominator"):
+        DevAnswerDriverEntry.model_validate(certain)
+
+    available_without_sources = deepcopy(base)
+    available_without_sources["staffing_qualification"] = {
+        "denominator_state": "allocation_evidence_available"
+    }
+    with pytest.raises(ValidationError, match="must name its source classes"):
+        DevAnswerDriverEntry.model_validate(available_without_sources)
+
+
+def test_public_driver_exclusion_reason_matches_w4_standing() -> None:
+    base = {
+        "rank": 4,
+        "contribution": None,
+        "evidence_ref_ids": ["ev_driver"],
+        "standing": "excluded",
+        "exclusion_reason": "not_currently_relevant",
+    }
+    entry = DevAnswerDriverEntry.model_validate(base)
+    assert entry.exclusion_reason is not None
+
+    missing = deepcopy(base)
+    missing.pop("exclusion_reason")
+    with pytest.raises(ValidationError, match="must disclose its exclusion reason"):
+        DevAnswerDriverEntry.model_validate(missing)
+
+    asserted = deepcopy(base)
+    asserted["standing"] = "principal_driver"
+    with pytest.raises(ValidationError, match="only an excluded driver"):
+        DevAnswerDriverEntry.model_validate(asserted)
 
 
 def test_graph_state_stream_event_carries_the_graph_assistance_object() -> None:

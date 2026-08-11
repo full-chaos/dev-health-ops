@@ -1,0 +1,276 @@
+{
+  "schema_version": 1,
+  "name": "Go provider aggregate wiring",
+  "$limitation": "This plan pins only the Go worker's aggregate construction and admission wiring: provider-family selection, concrete GitLab and PagerDuty route selection, descriptor readiness/default-off behavior, config-to-switch/readiness translation, PagerDuty's one incidents config flag projected onto four independent claim switches, and provider-worker construction. It does not retest provider fetch/normalize algorithms, effects or readback semantics, Python producer routing, packaging or deployment, matrix census counts, live services, Docker, or cutover activation; those remain owned by their dedicated plans and gates.",
+  "build": [
+    "env",
+    "GOTOOLCHAIN=go1.25.9",
+    "GOWORK=off",
+    "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache",
+    "go",
+    "test",
+    "-count=1",
+    "-run",
+    "^$",
+    "./cmd/dev-health-worker/",
+    "./internal/providersync/"
+  ],
+  "mutations": [
+    {
+      "id": "GW01-gitlab-work-items-selects-its-family-constructor",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"gitlab\" &&\n\t\t\t\tsession.Claim.Dataset == \"work-items\":",
+      "replace": "case session.Claim.Provider == \"gitlab-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"work-items\":",
+      "rationale": "a canonical GitLab work-items claim must reach the GitLab family handler, deriver, and composite ClickHouse effects instead of falling through to an unavailable or foreign provider route",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateWorkItemRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW02-jira-work-items-selects-its-family-constructor",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"jira\" &&\n\t\t\t\tsession.Claim.Dataset == \"work-items\":",
+      "replace": "case session.Claim.Provider == \"jira-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"work-items\":",
+      "rationale": "a canonical Jira work-items claim must reach the Jira handler, deriver, and worklog-aware composite effects instead of falling through to an unavailable or foreign provider route",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateWorkItemRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW03-linear-work-items-selects-its-family-constructor",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"linear\" &&\n\t\t\t\tsession.Claim.Dataset == \"work-items\":",
+      "replace": "case session.Claim.Provider == \"linear-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"work-items\":",
+      "rationale": "a canonical Linear work-items claim must reach the composed direct-plus-derived family handler and family effects instead of falling through to an unavailable or foreign provider route",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateWorkItemRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW04-gitlab-work-item-family-remains-route-ready",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "case provider == \"gitlab\" && workItemAlias:\n\t\tdescriptor.Destinations = workItemRouteDestinations()\n\t\tdescriptor.RouteReady = true",
+      "replace": "case provider == \"gitlab\" && workItemAlias:\n\t\tdescriptor.Destinations = workItemRouteDestinations()\n\t\tdescriptor.RouteReady = false",
+      "rationale": "the completed GitLab five-alias family must remain represented as native route-ready rather than existing only as unreachable constructor code",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestAggregateProviderDescriptorsAreNativeReadyAndDefaultOff$", "./internal/providersync/"]]
+    },
+    {
+      "id": "GW05-gitlab-work-item-family-defaults-off",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\t\tdescriptor.RouteEnabled = switches.GitlabWorkItems",
+      "replace": "\t\t\tdescriptor.RouteEnabled = true",
+      "rationale": "native readiness must not activate the GitLab work-item writer without its explicit process switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestAggregateProviderDescriptorsAreNativeReadyAndDefaultOff$", "./internal/providersync/"]]
+    },
+    {
+      "id": "GW06-config-reaches-gitlab-work-item-switch",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tGitlabWorkItems:             cfg.WorkerGitlabWorkItemsEnabled,",
+      "replace": "\t\tGitlabWorkItems:             false,",
+      "rationale": "the explicit GitLab work-items configuration flag must reach the canonical descriptor rather than leave the completed family permanently disabled",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW07-config-reaches-jira-work-item-switch",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tJiraWorkItems:               cfg.WorkerJiraWorkItemsEnabled,",
+      "replace": "\t\tJiraWorkItems:               false,",
+      "rationale": "the explicit Jira work-items configuration flag must reach the canonical descriptor rather than leave the completed family permanently disabled",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW08-config-reaches-linear-work-item-switch",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tLinearWorkItems:             cfg.WorkerLinearWorkItemsEnabled,",
+      "replace": "\t\tLinearWorkItems:             false,",
+      "rationale": "the explicit Linear work-items configuration flag must reach the canonical descriptor rather than leave the completed family permanently disabled",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW09-gitlab-deployments-reaches-concrete-route",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"gitlab\" &&\n\t\t\t\tsession.Claim.Dataset == \"deployments\":",
+      "replace": "case session.Claim.Provider == \"gitlab-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"deployments\":",
+      "rationale": "GitLab deployments claims must select the GitLab deployments handler and effects in the production provider-unit constructor",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW10-gitlab-feature-flags-reaches-concrete-route",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"gitlab\" &&\n\t\t\t\tsession.Claim.Dataset == \"feature-flags\":",
+      "replace": "case session.Claim.Provider == \"gitlab-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"feature-flags\":",
+      "rationale": "GitLab feature-flag claims must select the GitLab feature-flag handler and effects rather than another provider's similarly named capability",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW11-gitlab-files-reaches-concrete-route",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"gitlab\" &&\n\t\t\t\tsession.Claim.Dataset == \"files\":",
+      "replace": "case session.Claim.Provider == \"gitlab-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"files\":",
+      "rationale": "GitLab files claims must select the GitLab tree traversal handler and GitLab-scoped effects rather than a foreign provider route",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW12-gitlab-blame-reaches-concrete-route",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"gitlab\" &&\n\t\t\t\tsession.Claim.Dataset == \"blame\":",
+      "replace": "case session.Claim.Provider == \"gitlab-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"blame\":",
+      "rationale": "GitLab blame claims must select the GitLab blame handler, coverage reader, and effects rather than a foreign provider route",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW13-gitlab-pr-family-reaches-concrete-route",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"gitlab\" &&\n\t\t\t\t(session.Claim.Dataset == \"prs\" ||\n\t\t\t\t\tsession.Claim.Dataset == \"pr-reviews\" ||\n\t\t\t\t\tsession.Claim.Dataset == \"pr-comments\"):",
+      "replace": "case session.Claim.Provider == \"gitlab-disabled\" &&\n\t\t\t\t(session.Claim.Dataset == \"prs\" ||\n\t\t\t\t\tsession.Claim.Dataset == \"pr-reviews\" ||\n\t\t\t\t\tsession.Claim.Dataset == \"pr-comments\"):",
+      "rationale": "all three GitLab PR-social claim identities must select the GitLab PR handler and composite social effects while retaining their independent claims",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW14-gitlab-security-reaches-concrete-route",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "case session.Claim.Provider == \"gitlab\" &&\n\t\t\t\tsession.Claim.Dataset == \"security\":",
+      "replace": "case session.Claim.Provider == \"gitlab-disabled\" &&\n\t\t\t\tsession.Claim.Dataset == \"security\":",
+      "rationale": "GitLab security claims must select the GitLab security handler and provider-fenced effects rather than another provider's similarly named capability",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW15-pagerduty-incident-claims-select-family-handler",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "\t\t\t\t\trouteHandler = providersync.PagerDutyIncidentFamilyRouteHandler{}",
+      "replace": "\t\t\t\t\trouteHandler = providersync.PagerDutyServicesRouteHandler{}",
+      "rationale": "each PagerDuty incident-family claim must retain its dataset while using the incident family collector rather than the unrelated services collector",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEffects$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW16-pagerduty-claim-dataset-selects-concrete-effects",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "\t\t\t\teffectsFactory = pagerDutyEffectsFactory(\n\t\t\t\t\tsession.Claim.Dataset, clickhouseConnection, session,\n\t\t\t\t)",
+      "replace": "\t\t\t\teffectsFactory = pagerDutyEffectsFactory(\n\t\t\t\t\t\"services\", clickhouseConnection, session,\n\t\t\t\t)",
+      "rationale": "the credential-bound factory must select effects from the current claim dataset instead of hardcoding one PagerDuty dataset for every route",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEffects$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW17-pagerduty-shared-flag-enables-incidents-claim",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tPagerDutyIncidents:          cfg.WorkerPagerDutyIncidentsEnabled,",
+      "replace": "\t\tPagerDutyIncidents:          false,",
+      "rationale": "the single PagerDuty incidents configuration flag must project onto the independent incidents claim switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW18-pagerduty-shared-flag-enables-alerts-claim",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tPagerDutyIncidentAlerts:     cfg.WorkerPagerDutyIncidentsEnabled,",
+      "replace": "\t\tPagerDutyIncidentAlerts:     false,",
+      "rationale": "the single PagerDuty incidents configuration flag must project onto the independent incident-alerts claim switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW19-pagerduty-shared-flag-enables-log-entries-claim",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tPagerDutyIncidentLogEntries: cfg.WorkerPagerDutyIncidentsEnabled,",
+      "replace": "\t\tPagerDutyIncidentLogEntries: false,",
+      "rationale": "the single PagerDuty incidents configuration flag must project onto the independent incident-log-entries claim switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW20-pagerduty-shared-flag-enables-notes-claim",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tPagerDutyIncidentNotes:      cfg.WorkerPagerDutyIncidentsEnabled,",
+      "replace": "\t\tPagerDutyIncidentNotes:      false,",
+      "rationale": "the single PagerDuty incidents configuration flag must project onto the independent incident-notes claim switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW21-pagerduty-incidents-descriptor-keeps-own-claim-switch",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidents",
+      "replace": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidentAlerts",
+      "rationale": "the shared configuration flag must not collapse incidents onto another claim's descriptor switch; each D16 identity remains independently admitted",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyDescriptorSwitchesArePerDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "GW22-pagerduty-alerts-descriptor-keeps-own-claim-switch",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidentAlerts",
+      "replace": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidents",
+      "rationale": "incident-alerts must remain its own claim identity instead of being directly fanned out by the incidents descriptor switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyDescriptorSwitchesArePerDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "GW23-pagerduty-log-entries-descriptor-keeps-own-claim-switch",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidentLogEntries",
+      "replace": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidents",
+      "rationale": "incident-log-entries must remain its own claim identity instead of being directly fanned out by the incidents descriptor switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyDescriptorSwitchesArePerDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "GW24-pagerduty-notes-descriptor-keeps-own-claim-switch",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidentNotes",
+      "replace": "\t\tdescriptor.RouteEnabled = switches.PagerDutyIncidents",
+      "rationale": "incident-notes must remain its own claim identity instead of being directly fanned out by the incidents descriptor switch",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyDescriptorSwitchesArePerDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "GW25-pagerduty-incidents-switch-constructs-provider-worker",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "\t\tcfg.WorkerPagerDutyTeamsEnabled || cfg.WorkerPagerDutyIncidentsEnabled",
+      "replace": "\t\tcfg.WorkerPagerDutyTeamsEnabled || false",
+      "rationale": "enabling only the shared PagerDuty incidents flag must construct the provider-unit worker family that serves all four independent incident claims",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderSyncWorkerEnabledForEveryRouteReadySwitch$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW26-linear-family-is-present-in-readiness-census",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\t{\"linear\", \"work-items\", cfg.WorkerLinearWorkItemsEnabled},",
+      "replace": "\t\t{\"linear\", \"work-items-disabled\", cfg.WorkerLinearWorkItemsEnabled},",
+      "rationale": "readiness must validate an enabled Linear work-item route against the exact descriptor the production handler serves",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW27-jira-family-is-present-in-readiness-census",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\t{\"jira\", \"work-items\", cfg.WorkerJiraWorkItemsEnabled},",
+      "replace": "\t\t{\"jira\", \"work-items-disabled\", cfg.WorkerJiraWorkItemsEnabled},",
+      "rationale": "readiness must validate an enabled Jira work-item route against the exact descriptor the production handler serves",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW28-gitlab-family-is-present-in-readiness-census",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\t{\"gitlab\", \"work-items\", cfg.WorkerGitlabWorkItemsEnabled},",
+      "replace": "\t\t{\"gitlab\", \"work-items-disabled\", cfg.WorkerGitlabWorkItemsEnabled},",
+      "rationale": "readiness must validate an enabled GitLab work-item route against the exact descriptor the production handler serves",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW29-pagerduty-incidents-claim-is-present-in-readiness-census",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\t{\"pagerduty\", \"incidents\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "replace": "\t\t{\"pagerduty\", \"incidents-disabled\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "rationale": "readiness must validate the independent PagerDuty incidents claim whenever the shared incident-family config flag is enabled",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW30-pagerduty-alerts-claim-is-present-in-readiness-census",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\t{\"pagerduty\", \"incident-alerts\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "replace": "\t\t{\"pagerduty\", \"incident-alerts-disabled\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "rationale": "readiness must validate the independent PagerDuty incident-alerts claim whenever the shared incident-family config flag is enabled",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW31-pagerduty-log-entries-claim-is-present-in-readiness-census",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\t{\"pagerduty\", \"incident-log-entries\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "replace": "\t\t{\"pagerduty\", \"incident-log-entries-disabled\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "rationale": "readiness must validate the independent PagerDuty incident-log-entries claim whenever the shared incident-family config flag is enabled",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW32-pagerduty-notes-claim-is-present-in-readiness-census",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\t{\"pagerduty\", \"incident-notes\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "replace": "\t\t{\"pagerduty\", \"incident-notes-disabled\", cfg.WorkerPagerDutyIncidentsEnabled},",
+      "rationale": "readiness must validate the independent PagerDuty incident-notes claim whenever the shared incident-family config flag is enabled",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    }
+  ]
+}

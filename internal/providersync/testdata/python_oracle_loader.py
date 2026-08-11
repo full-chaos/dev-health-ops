@@ -860,6 +860,8 @@ def _target_pagerduty_normalize() -> None:
     _load_source_module(
         "dev_health_ops.providers.pagerduty.models", _PAGERDUTY_MODELS_SOURCE
     )
+
+
 def _target_feature_policy() -> None:
     """Load the policy's real type and registry inputs without licensing init."""
     _load_source_module("dev_health_ops.licensing.types", _LICENSE_TYPES_SOURCE)

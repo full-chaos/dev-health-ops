@@ -15,7 +15,7 @@ import io
 import pathlib
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from internal.providersync.testdata import oracle_registry
@@ -99,7 +99,9 @@ def _fetch(
     issue = _object(case["raw_issue"])
     label_events = [_object(event) for event in case.get("label_events", [])]
     client = _Client(issue, label_events)
-    work_items_module.get_metrics_dependencies = lambda: _Dependencies(client)
+    work_items_module.get_metrics_dependencies = cast(
+        Any, lambda: _Dependencies(client)
+    )
     repo = work_items_module.DiscoveredRepo(
         repo_id=UUID(case["repo_id"]),
         full_name=case["repo_full_name"],

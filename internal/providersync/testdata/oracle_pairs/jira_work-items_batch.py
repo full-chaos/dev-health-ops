@@ -25,6 +25,8 @@ import os
 import pathlib
 import sys
 from datetime import datetime, timezone
+from importlib.machinery import ModuleSpec
+from types import ModuleType
 from typing import Any, cast
 
 from internal.providersync.testdata import oracle_registry
@@ -43,6 +45,16 @@ CLIENT_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/jira/client.py"
 # worktree's producer.
 sys.path.insert(0, str(SRC_ROOT))
 install_minimal_oracle_imports()
+
+# This oracle injects its dependency bundle below; importing the production
+# module must not construct the application's provider/client graph first.
+_metrics_dependencies = ModuleType("dev_health_ops.metrics.dependencies")
+setattr(_metrics_dependencies, "get_metrics_dependencies", None)
+sys.modules[_metrics_dependencies.__name__] = _metrics_dependencies
+_connectors = ModuleType("dev_health_ops.connectors")
+setattr(_connectors, "__path__", [str(SRC_ROOT / "dev_health_ops/connectors")])
+_connectors.__spec__ = ModuleSpec(_connectors.__name__, loader=None, is_package=True)
+sys.modules[_connectors.__name__] = _connectors
 
 
 def _source_path(value: Any) -> pathlib.Path:

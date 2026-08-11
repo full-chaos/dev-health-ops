@@ -98,8 +98,8 @@
     {
       "id": "D2-derivation-context-reloaded-per-day",
       "file": "internal/providersync/github_work_items_composition.go",
-      "find": "\tderivationContext, err := loadGitHubWorkItemDerivationContext(\n\t\tctx, claim, rows, deriver.Source, normalizedAt,\n\t)\n\tif err != nil {\n\t\treturn nil, err\n\t}",
-      "replace": "\tderivationContext, err := loadGitHubWorkItemDerivationContext(\n\t\tctx, claim, rows, deriver.Source, normalizedAt,\n\t)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tfor range days {\n\t\tif _, err := loadGitHubWorkItemDerivationContext(\n\t\t\tctx, claim, rows, deriver.Source, normalizedAt,\n\t\t); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}",
+      "find": "\tderivationContext, err := loadWorkItemDerivationContextForProvider(\n\t\tctx, provider, claim, rows, deriver.Source, normalizedAt,\n\t)\n\tif err != nil {\n\t\treturn nil, err\n\t}",
+      "replace": "\tderivationContext, err := loadWorkItemDerivationContextForProvider(\n\t\tctx, provider, claim, rows, deriver.Source, normalizedAt,\n\t)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tfor range days {\n\t\tif _, err := loadWorkItemDerivationContextForProvider(\n\t\t\tctx, provider, claim, rows, deriver.Source, normalizedAt,\n\t\t); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t}",
       "rationale": "The derivation context is loaded ONCE outside the day loop, matching job_work_items.py:1216-1236 which builds the resolver cascade before its loop. A per-day reload re-reads donor facts that cannot change within a run and can give two days of one run different attribution.",
       "proof": [
         [
@@ -132,8 +132,8 @@
     {
       "id": "D4-engine-destinations-pre-opened",
       "file": "internal/providersync/github_work_items_composition.go",
-      "find": "\tfor _, day := range days {\n\t\ttriplet, err := buildGitHubWorkItemMetricTriplet(",
-      "replace": "\tif deriver.engine != nil {\n\t\tfor _, destination := range githubWorkItemDerivedEngineDestinations {\n\t\t\tderived[destination] = []json.RawMessage{}\n\t\t}\n\t}\n\tfor _, day := range days {\n\t\ttriplet, err := buildGitHubWorkItemMetricTriplet(",
+      "find": "\tfor _, day := range days {\n\t\ttriplet, err := buildWorkItemMetricTripletForProvider(",
+      "replace": "\tif deriver.engine != nil {\n\t\tfor _, destination := range githubWorkItemDerivedEngineDestinations {\n\t\t\tderived[destination] = []json.RawMessage{}\n\t\t}\n\t}\n\tfor _, day := range days {\n\t\ttriplet, err := buildWorkItemMetricTripletForProvider(",
       "rationale": "REGRESSION GUARD for a defect this PR introduced and caught: pre-opening the engine's destination keys so the merge would accept them made a PARTIAL engine -- one covering some destinations and not others -- pass the missing-destination check with empty slices. The keys must be created only by an engine that actually emitted for them.",
       "proof": [
         [

@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -10,13 +11,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// The GitLab derived family is the nine schema-backed projections that can be
-// computed from the six normalized work-item facts. ai_attribution is kept out
-// of this set intentionally: the authoritative producer consumes the original
-// merge-request payload (including source branch and bot/author signals), but
-// those fields are not part of the six raw ClickHouse projections. An empty
-// AI effect would falsely claim that producer ran.
+var ErrGitLabWorkItemDerivedProducerUnavailable = errors.New(
+	"gitlab work-item authoritative derived producer is unavailable",
+)
+
+// The GitLab derived family is the ten schema-backed projections emitted by
+// Python's work-item job. AI attribution is normalized while the route still
+// owns the original merge-request payload; the other nine projections are
+// computed from the six normalized work-item facts below.
 var gitlabWorkItemDerivedDestinations = []string{
+	"ai_attribution",
 	"estimate_coverage_metrics_daily",
 	"investment_classifications_daily",
 	"investment_metrics_daily",
@@ -40,8 +44,8 @@ type gitlabInvestmentClassificationDailyRow = githubInvestmentClassificationDail
 type gitlabInvestmentMetricsDailyRow = githubInvestmentMetricsDailyRow
 
 // GitLabWorkItemDerivedGap is a typed explanation of a destination that was
-// evaluated and deliberately withheld because its authoritative producer is
-// not reconstructible from the raw fact contract.
+// evaluated and deliberately withheld because its authoritative producer did
+// not complete. A complete result carries no gaps and may advance watermark.
 type GitLabWorkItemDerivedGap struct {
 	Destination           string `json:"destination"`
 	AuthoritativeProducer string `json:"authoritative_producer"`
@@ -51,9 +55,9 @@ type GitLabWorkItemDerivedGap struct {
 // GitLabWorkItemDerivedRows is the provider result at the compute boundary.
 // Every destination is a concrete ClickHouse row slice, so callers cannot
 // accidentally smuggle an untyped map or generic evidence envelope into the
-// effect ledger. AIAttribution is represented by the explicit typed gap below,
-// never by an empty slice.
+// effect ledger.
 type GitLabWorkItemDerivedRows struct {
+	AIAttributions                 []gitlabAIAttributionRow
 	EstimateCoverageMetricsDaily   []gitlabEstimateCoverageMetricsDailyRow
 	InvestmentClassificationsDaily []gitlabInvestmentClassificationDailyRow
 	InvestmentMetricsDaily         []gitlabInvestmentMetricsDailyRow
@@ -68,6 +72,9 @@ type GitLabWorkItemDerivedRows struct {
 }
 
 func (rows GitLabWorkItemDerivedRows) producedDestinations() []string {
+	if len(rows.Gaps) > 0 {
+		return nil
+	}
 	return append([]string(nil), gitlabWorkItemDerivedDestinations...)
 }
 
@@ -79,6 +86,7 @@ func gitlabWorkItemRowsAsGitHub(rows gitlabWorkItemRows) githubWorkItemRows {
 		ReopenEvents:      rows.ReopenEvents,
 		Interactions:      rows.Interactions,
 		Sprints:           rows.Sprints,
+		AIAttributions:    rows.AIAttributions,
 	}
 }
 
@@ -117,10 +125,11 @@ func NewGitLabWorkItemDeriver(
 	}, nil
 }
 
-// Derive computes all nine available destinations for every UTC day in the
-// claim window. Context is loaded once, before the day loop, matching the
-// Python job's donor/ownership snapshot semantics. Since AI attribution is a
-// declared producer gap, Watermark remains nil and no AI effect is emitted.
+// Derive computes all ten destinations for the claim window. AI attribution
+// was already produced at the provider normalization boundary from the raw MR
+// payload; this compute boundary passes those rows through and derives the
+// other nine surfaces. Context is loaded once, before the day loop, matching
+// the Python job's donor/ownership snapshot semantics.
 func (deriver GitLabWorkItemDeriver) Derive(
 	ctx context.Context,
 	claim Claim,
@@ -142,7 +151,13 @@ func (deriver GitLabWorkItemDeriver) Derive(
 	if err != nil {
 		return GitLabWorkItemDerivedRows{}, err
 	}
+	var watermark *time.Time
+	if claim.BeforeAt != nil {
+		value := claim.BeforeAt.UTC()
+		watermark = &value
+	}
 	result := GitLabWorkItemDerivedRows{
+		AIAttributions:                 append([]gitlabAIAttributionRow(nil), rows.AIAttributions...),
 		EstimateCoverageMetricsDaily:   []gitlabEstimateCoverageMetricsDailyRow{},
 		InvestmentClassificationsDaily: []gitlabInvestmentClassificationDailyRow{},
 		InvestmentMetricsDaily:         []gitlabInvestmentMetricsDailyRow{},
@@ -152,13 +167,8 @@ func (deriver GitLabWorkItemDeriver) Derive(
 		WorkItemStateDurationsDaily:    []gitlabWorkItemStateDurationDailyRow{},
 		WorkItemTeamAttributions:       []gitlabWorkItemTeamAttributionRow{},
 		WorkItemUserMetricsDaily:       []gitlabWorkItemUserMetricsDailyRow{},
-		Watermark:                      nil,
-		Gaps: []GitLabWorkItemDerivedGap{{
-			Destination:           "ai_attribution",
-			AuthoritativeProducer: "gitlab_mr_ai_attributions",
-			Reason: "the six raw work-item facts do not retain source_branch, bot-author, " +
-				"or the original merge-request signal payload required by the producer",
-		}},
+		Watermark:                      watermark,
+		Gaps:                           []GitLabWorkItemDerivedGap{},
 	}
 	for _, day := range days {
 		triplet, err := buildWorkItemMetricTripletForProvider(
@@ -204,6 +214,7 @@ func (deriver GitLabWorkItemDeriver) Derive(
 // one field per landed destination and therefore cannot silently omit a row
 // family through a string-keyed map.
 type GitLabWorkItemDerivedEffectRows struct {
+	AIAttributions                 []gitlabAIAttributionRow
 	EstimateCoverageMetricsDaily   []gitlabEstimateCoverageMetricsDailyRow
 	InvestmentClassificationsDaily []gitlabInvestmentClassificationDailyRow
 	InvestmentMetricsDaily         []gitlabInvestmentMetricsDailyRow
@@ -217,6 +228,7 @@ type GitLabWorkItemDerivedEffectRows struct {
 
 func (rows GitLabWorkItemDerivedRows) EffectRows() GitLabWorkItemDerivedEffectRows {
 	return GitLabWorkItemDerivedEffectRows{
+		AIAttributions:                 rows.AIAttributions,
 		EstimateCoverageMetricsDaily:   rows.EstimateCoverageMetricsDaily,
 		InvestmentClassificationsDaily: rows.InvestmentClassificationsDaily,
 		InvestmentMetricsDaily:         rows.InvestmentMetricsDaily,
@@ -230,14 +242,15 @@ func (rows GitLabWorkItemDerivedRows) EffectRows() GitLabWorkItemDerivedEffectRo
 }
 
 // BuildGitLabWorkItemDerivedEffects serializes only concrete typed row slices,
-// in canonical destination order. The AI gap is not represented as an empty
-// effect and is therefore impossible to mistake for successful computation.
+// in canonical destination order.
 func BuildGitLabWorkItemDerivedEffects(rows GitLabWorkItemDerivedEffectRows) ([]EffectBatch, error) {
 	effects := make([]EffectBatch, 0, len(gitlabWorkItemDerivedDestinations))
 	for _, destination := range gitlabWorkItemDerivedDestinations {
 		var effect EffectBatch
 		var err error
 		switch destination {
+		case "ai_attribution":
+			effect, err = buildGitLabTypedDerivedEffect(destination, rows.AIAttributions)
 		case "estimate_coverage_metrics_daily":
 			effect, err = buildGitLabTypedDerivedEffect(destination, rows.EstimateCoverageMetricsDaily)
 		case "investment_classifications_daily":
@@ -327,12 +340,13 @@ func gitlabDerivedGitHubIdentity(
 	}
 }
 
-// GitLabWorkItemDerivedClickHouseEffects is the nine-destination provider
+// GitLabWorkItemDerivedClickHouseEffects is the ten-destination provider
 // sink. Its fields are concrete adapter types and its dispatcher is an
 // explicit switch, so a destination cannot be accepted without a corresponding
 // schema-specific write/readback implementation.
 type GitLabWorkItemDerivedClickHouseEffects struct {
 	Lease                          providerfoundation.LeaseGuard
+	AIAttribution                  GitLabAIAttributionClickHouseAdapter
 	EstimateCoverageMetricsDaily   GitHubEstimateCoverageClickHouseEffects
 	InvestmentClassificationsDaily GitHubInvestmentClassificationsClickHouseEffects
 	InvestmentMetricsDaily         GitHubInvestmentMetricsClickHouseEffects
@@ -353,6 +367,7 @@ func NewGitLabWorkItemDerivedClickHouseEffects(
 	}
 	sink := GitLabWorkItemDerivedClickHouseEffects{
 		Lease:                          lease,
+		AIAttribution:                  GitLabAIAttributionClickHouseAdapter{Conn: conn},
 		EstimateCoverageMetricsDaily:   GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: lease},
 		InvestmentClassificationsDaily: GitHubInvestmentClassificationsClickHouseEffects{Conn: conn, Lease: lease},
 		InvestmentMetricsDaily:         GitHubInvestmentMetricsClickHouseEffects{Conn: conn, Lease: lease},
@@ -376,6 +391,7 @@ func (sink GitLabWorkItemDerivedClickHouseEffects) MissingDestinations() []strin
 		conn  driver.Conn
 		lease providerfoundation.LeaseGuard
 	}{
+		{"ai_attribution", sink.AIAttribution.Conn, sink.Lease},
 		{"estimate_coverage_metrics_daily", sink.EstimateCoverageMetricsDaily.Conn, sink.EstimateCoverageMetricsDaily.Lease},
 		{"investment_classifications_daily", sink.InvestmentClassificationsDaily.Conn, sink.InvestmentClassificationsDaily.Lease},
 		{"investment_metrics_daily", sink.InvestmentMetricsDaily.Conn, sink.InvestmentMetricsDaily.Lease},
@@ -408,6 +424,8 @@ func (sink GitLabWorkItemDerivedClickHouseEffects) WriteEffect(
 	}
 	gitHubIdentity := gitlabDerivedGitHubIdentity(identity)
 	switch effect.Destination {
+	case "ai_attribution":
+		err = sink.AIAttribution.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
 	case "estimate_coverage_metrics_daily":
 		err = sink.EstimateCoverageMetricsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
 	case "investment_classifications_daily":
@@ -450,6 +468,8 @@ func (sink GitLabWorkItemDerivedClickHouseEffects) InspectEffect(
 	gitHubIdentity := gitlabDerivedGitHubIdentity(identity)
 	var inspection EffectInspection
 	switch effect.Destination {
+	case "ai_attribution":
+		inspection, err = sink.AIAttribution.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
 	case "estimate_coverage_metrics_daily":
 		inspection, err = sink.EstimateCoverageMetricsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
 	case "investment_classifications_daily":
@@ -487,3 +507,59 @@ func (sink GitLabWorkItemDerivedClickHouseEffects) InspectEffect(
 
 var _ EffectSink = GitLabWorkItemDerivedClickHouseEffects{}
 var _ EffectReadback = GitLabWorkItemDerivedClickHouseEffects{}
+
+// GitLabAIAttributionClickHouseAdapter preserves the provider fence before
+// delegating the shared ai_attribution column projection. The shared adapter
+// correctly fences tenant UUIDs but intentionally serves multiple providers,
+// so this provider-local boundary must reject a recovered or forged GitHub row
+// carried by a GitLab effect.
+type GitLabAIAttributionClickHouseAdapter struct{ Conn driver.Conn }
+
+func (adapter GitLabAIAttributionClickHouseAdapter) WriteGitHubWorkItemEffect(
+	ctx context.Context,
+	identity GitHubWorkItemEffectIdentity,
+	effect EffectBatch,
+) error {
+	if !validGitLabAIAttributionEffect(identity, effect) {
+		return ErrInvalidConfiguration
+	}
+	return (GitHubAIAttributionClickHouseAdapter{Conn: adapter.Conn}).
+		WriteGitHubWorkItemEffect(ctx, identity, effect)
+}
+
+func (adapter GitLabAIAttributionClickHouseAdapter) InspectGitHubWorkItemEffect(
+	ctx context.Context,
+	identity GitHubWorkItemEffectIdentity,
+	effect EffectBatch,
+) (EffectInspection, error) {
+	if !validGitLabAIAttributionEffect(identity, effect) {
+		return EffectConflict, ErrInvalidConfiguration
+	}
+	return (GitHubAIAttributionClickHouseAdapter{Conn: adapter.Conn}).
+		InspectGitHubWorkItemEffect(ctx, identity, effect)
+}
+
+func validGitLabAIAttributionEffect(
+	identity GitHubWorkItemEffectIdentity,
+	effect EffectBatch,
+) bool {
+	if identity.Provider != "gitlab" || identity.Dataset != "work-items" ||
+		identity.Destination != "ai_attribution" || effect.Destination != "ai_attribution" {
+		return false
+	}
+	rows, err := decodeEffectRows[gitlabAIAttributionRow](effect)
+	if err != nil || identity.RowCount != len(rows) {
+		return false
+	}
+	claim := Claim{Unit: Unit{
+		OrgID: identity.OrgID, Provider: identity.Provider, Dataset: identity.Dataset,
+	}}
+	for _, row := range rows {
+		if validateGitLabAIAttributionRow(row, claim) != nil {
+			return false
+		}
+	}
+	return true
+}
+
+var _ GitHubWorkItemEffectAdapter = GitLabAIAttributionClickHouseAdapter{}

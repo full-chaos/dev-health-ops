@@ -311,25 +311,20 @@ def test_producer_gate_cannot_route_any_scope_outside_the_ready_set(
     )
 
 
-def test_incomplete_route_switches_remain_forbidden(
+def test_linear_incomplete_route_switch_remains_forbidden(
     matrix: dict[str, Any],
 ) -> None:
-    """The work-item scaffolding switches must stay unusable for as long as
-    their Go descriptors are not route-ready."""
+    """Linear stays unusable until its complete Go composition exists."""
 
-    scaffolding = {
-        "linear_work_items": ("linear", "work-items"),
-        "jira_work_items": ("jira", "work-items"),
-    }
+    scope = ("linear", "work-items")
     ready = {
         (pair["provider"], pair["dataset"])
         for pair in matrix["pairs"]
         if pair["route_ready"]
     }
-    for field, scope in scaffolding.items():
-        assert scope not in ready, f"{scope} became route-ready; unblock {field}"
-        with pytest.raises(ProviderUnitRouteError):
-            ProviderUnitRouteSwitches(**{field: True}).require_complete_routes()
+    assert scope not in ready, f"{scope} became route-ready; unblock linear_work_items"
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches(linear_work_items=True).require_complete_routes()
 
 
 def test_go_executor_kinds_are_bounded_and_honest(

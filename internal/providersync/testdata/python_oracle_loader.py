@@ -622,7 +622,7 @@ def _target_gitlab_processor() -> None:
     # review class used by the PR-family row oracle. Its kwargs-shaped output
     # preserves the pair's field projection (without SQLAlchemy's private
     # instance state) while security continues to exercise the typed model.
-    git_models.GitPullRequestReview = _GitPullRequestReview
+    setattr(git_models, "GitPullRequestReview", _GitPullRequestReview)
     _install_module(
         "dev_health_ops.processors.base_git",
         {

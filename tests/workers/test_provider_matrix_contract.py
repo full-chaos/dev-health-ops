@@ -45,11 +45,11 @@ EXPECTED_PAIR_COUNTS = {
 # It catches deleting a GitHub alias from both registry and matrix generation.
 EXPECTED_ROUTE_READY_COUNTS = {
     "github": 17,
-    "gitlab": 6,
-    "jira": 1,
+    "gitlab": 19,
+    "jira": 6,
     "launchdarkly": 1,
-    "linear": 0,
-    "pagerduty": 0,
+    "linear": 5,
+    "pagerduty": 11,
 }
 
 
@@ -125,7 +125,7 @@ def test_every_provider_pair_count_matches_the_audit(
     assert counts == EXPECTED_PAIR_COUNTS
 
 
-def test_route_ready_census_matches_chaos_3606_acceptance(
+def test_route_ready_census_matches_aggregate_acceptance(
     matrix: dict[str, Any],
 ) -> None:
     counts: dict[str, int] = {provider: 0 for provider in EXPECTED_PAIR_COUNTS}
@@ -134,7 +134,8 @@ def test_route_ready_census_matches_chaos_3606_acceptance(
             counts[pair["provider"]] += 1
     assert counts == EXPECTED_ROUTE_READY_COUNTS
     assert counts["github"] == EXPECTED_PAIR_COUNTS["github"] == 17
-    assert sum(counts.values()) == 25
+    assert counts == EXPECTED_PAIR_COUNTS
+    assert sum(counts.values()) == 59
 
 
 def test_transitional_inventory_route_readiness_notes_follow_matrix(
@@ -146,7 +147,7 @@ def test_transitional_inventory_route_readiness_notes_follow_matrix(
 
     This derives both numbers from the checked-in artifact. A later intentional
     matrix update therefore makes the inventory wording fail until it is
-    refreshed, while the independent 25/59 acceptance census above prevents a
+    refreshed, while the independent 59/59 acceptance census above prevents a
     coordinated deletion from laundering either number.
     """
 
@@ -321,3 +322,5 @@ def test_go_executor_kinds_are_bounded_and_honest(
         if pair["route_ready"]:
             assert pair["go_executor"] == "native_go", pair
             assert pair["route_destinations"], pair
+    assert all(pair["route_ready"] for pair in matrix["pairs"])
+    assert all(pair["go_executor"] == "native_go" for pair in matrix["pairs"])

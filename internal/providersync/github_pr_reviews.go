@@ -64,7 +64,7 @@ func normalizeGitHubPullRequestReview(
 }
 
 func (row pullRequestReviewRow) validate(claim Claim) error {
-	if claim.Provider != "github" || !isGitHubPRSocialDataset(claim.Dataset) ||
+	if (claim.Provider != "github" && claim.Provider != "gitlab") || !isPRSocialDataset(claim.Dataset) ||
 		row.OrgID == "" || row.OrgID != claim.OrgID || len(row.RepoID) != 36 ||
 		row.Number < 1 || row.ReviewID == "" || row.Reviewer == "" ||
 		row.State == "" || row.SubmittedAt.IsZero() || row.LastSynced.IsZero() ||

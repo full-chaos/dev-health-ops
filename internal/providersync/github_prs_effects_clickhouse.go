@@ -15,8 +15,16 @@ import (
 // asynchronous, so recovery is readback-fenced rather than blind-replayed --
 // the identical discipline GitHubRepositoryClickHouseEffects (`repos`) uses.
 type GitHubPullRequestClickHouseEffects struct {
-	Conn  driver.Conn
-	Lease providerfoundation.LeaseGuard
+	Conn     driver.Conn
+	Lease    providerfoundation.LeaseGuard
+	Provider string
+}
+
+func (sink GitHubPullRequestClickHouseEffects) provider() string {
+	if sink.Provider == "" {
+		return "github"
+	}
+	return sink.Provider
 }
 
 func (sink GitHubPullRequestClickHouseEffects) WriteEffect(
@@ -40,7 +48,7 @@ func (sink GitHubPullRequestClickHouseEffects) writePullRequestEffect(
 	dataset string,
 ) error {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != dataset ||
+		claim.Provider != sink.provider() || claim.Dataset != dataset ||
 		effect.Destination != "git_pull_requests" {
 		return ErrInvalidConfiguration
 	}
@@ -118,7 +126,7 @@ func (sink GitHubPullRequestClickHouseEffects) inspectPullRequestEffect(
 	dataset string,
 ) (EffectInspection, error) {
 	if ctx == nil || sink.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "github" || claim.Dataset != dataset ||
+		claim.Provider != sink.provider() || claim.Dataset != dataset ||
 		effect.Destination != "git_pull_requests" {
 		return EffectConflict, ErrInvalidConfiguration
 	}

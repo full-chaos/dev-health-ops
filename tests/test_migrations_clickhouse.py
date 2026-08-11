@@ -24,7 +24,17 @@ async def test_clickhouse_migrations_dry_run_non_default_db():
 
     def mock_query(query, parameters=None):
         result = MagicMock()
-        result.result_rows = [["Atomic"]] if "FROM system.databases" in query else []
+        if "FROM system.databases" in query:
+            result.result_rows = [["Atomic"]]
+        elif "count() FROM system.tables" in query:
+            assert parameters is not None
+            result.result_rows = [[1 if parameters["name"] == "feature_flag" else 0]]
+        elif "sorting_key FROM system.tables" in query:
+            result.result_rows = [
+                ["org_id, provider, project_key, flag_key, environment"]
+            ]
+        else:
+            result.result_rows = []
         return result
 
     mock_client.query.side_effect = mock_query

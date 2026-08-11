@@ -83,8 +83,26 @@ async def test_clickhouse_store_teams():
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
+        def migration_query(query, parameters=None):
+            result = MagicMock(result_rows=[])
+            if "FROM system.databases" in query:
+                result.result_rows = [["Atomic"]]
+            elif "count() FROM system.tables" in query:
+                assert parameters is not None
+                result.result_rows = [
+                    [1 if parameters["name"] == "feature_flag" else 0]
+                ]
+            elif "sorting_key FROM system.tables" in query:
+                result.result_rows = [
+                    ["org_id, provider, project_key, flag_key, environment"]
+                ]
+            return result
+
+        mock_client.query.side_effect = migration_query
+
         store = ClickHouseStore("clickhouse://localhost")
         await store.__aenter__()
+        mock_client.query.side_effect = None
 
         # Mock insert_teams
         teams = [Team(id="t1", name="Team 1")]

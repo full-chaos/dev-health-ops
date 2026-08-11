@@ -133,7 +133,23 @@ def test_clean_install_migration_creates_each_canonical_operational_table() -> N
 def test_clean_install_runner_applies_migration_066() -> None:
     # Given: a fresh non-default ClickHouse database with no recorded migrations.
     client = MagicMock()
-    client.query.return_value.result_rows = [("067_operational_ordering_contract.py",)]
+
+    def migration_query(query, parameters=None):
+        result = MagicMock(result_rows=[])
+        if "SELECT version FROM schema_migrations" in query:
+            result.result_rows = [("067_operational_ordering_contract.py",)]
+        elif "FROM system.databases" in query:
+            result.result_rows = [["Atomic"]]
+        elif "count() FROM system.tables" in query:
+            assert parameters is not None
+            result.result_rows = [[1 if parameters["name"] == "feature_flag" else 0]]
+        elif "sorting_key FROM system.tables" in query:
+            result.result_rows = [
+                ["org_id, provider, project_key, flag_key, environment"]
+            ]
+        return result
+
+    client.query.side_effect = migration_query
     store = ClickHouseStore("clickhouse://localhost:8123/operational_contract_test")
 
     # When: the standard migration runner initializes the store.

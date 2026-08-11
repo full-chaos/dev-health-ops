@@ -18,6 +18,18 @@ from dev_health_ops.storage import (
 )
 
 
+def _migration_ready_clickhouse_query(query, parameters=None):
+    result = MagicMock(result_rows=[])
+    if "FROM system.databases" in query:
+        result.result_rows = [["Atomic"]]
+    elif "count() FROM system.tables" in query:
+        assert parameters is not None
+        result.result_rows = [[1 if parameters["name"] == "feature_flag" else 0]]
+    elif "sorting_key FROM system.tables" in query:
+        result.result_rows = [["org_id, provider, project_key, flag_key, environment"]]
+    return result
+
+
 class TestDetectDbType:
     """Tests for the detect_db_type function."""
 
@@ -791,7 +803,7 @@ async def test_clickhouse_store_context_manager_initializes_and_creates_tables()
     mock_client = MagicMock()
     mock_client.command = MagicMock()
     mock_client.insert = MagicMock()
-    mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    mock_client.query = MagicMock(side_effect=_migration_ready_clickhouse_query)
     mock_client.close = MagicMock()
 
     # Mock filesystem operations
@@ -865,7 +877,7 @@ async def test_clickhouse_store_insert_git_file_data_calls_insert():
     mock_client = MagicMock()
     mock_client.command = MagicMock()
     mock_client.insert = MagicMock()
-    mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    mock_client.query = MagicMock(side_effect=_migration_ready_clickhouse_query)
     mock_client.close = MagicMock()
 
     import sys
@@ -908,7 +920,7 @@ async def test_clickhouse_store_insert_repo_refreshes_org_id_on_existing_row():
     mock_client.insert = MagicMock()
     # ``query`` is only invoked during migration init (SHOW TABLES, etc.).
     # The post-fix ``insert_repo`` no longer performs an existence query.
-    mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    mock_client.query = MagicMock(side_effect=_migration_ready_clickhouse_query)
     mock_client.close = MagicMock()
 
     import sys
@@ -956,7 +968,7 @@ async def test_clickhouse_store_insert_repo_writes_under_self_org_id():
     mock_client = MagicMock()
     mock_client.command = MagicMock()
     mock_client.insert = MagicMock()
-    mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    mock_client.query = MagicMock(side_effect=_migration_ready_clickhouse_query)
     mock_client.close = MagicMock()
 
     import sys

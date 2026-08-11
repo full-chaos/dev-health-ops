@@ -1148,8 +1148,9 @@ case "${1:-all}" in
     check_integration_prepull
     ;;
   integration-shard)
-    [ "$#" -ge 3 ] && [ "$#" -le 4 ] \
-      || die "integration-shard requires TARGET SHARD and accepts only optional --dry-run"
+    if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
+      die "integration-shard requires TARGET SHARD and accepts only optional --dry-run"
+    fi
     check_integration_shard "$2" "$3" "${4:-}"
     ;;
   integration)

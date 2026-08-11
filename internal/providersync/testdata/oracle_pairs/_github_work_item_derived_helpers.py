@@ -25,12 +25,13 @@ lands second collapses the two modules into one.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import io
 import pathlib
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from internal.providersync.testdata.oracle_pairs._github_work_items_helpers import (
@@ -43,6 +44,7 @@ with (
     contextlib.redirect_stdout(io.StringIO()),
     contextlib.redirect_stderr(io.StringIO()),
 ):
+    from dev_health_ops.analytics.investment import InvestmentClassifier
     from dev_health_ops.metrics.compute_work_item_state_durations import (
         compute_work_item_state_durations_daily,
     )
@@ -52,28 +54,31 @@ with (
         compute_work_item_team_attributions,
     )
     from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
+    from dev_health_ops.metrics.work_item_engine_destinations import (
+        compute_work_item_engine_destinations_daily,
+    )
     from dev_health_ops.models.work_items import (
         WorkItem,
         WorkItemDependency,
         WorkItemStatusTransition,
     )
+    from dev_health_ops.providers.status_mapping import load_status_mapping
     from dev_health_ops.providers.teams import build_project_key_resolver
+    from dev_health_ops.utils.cli import resolve_date_range
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 SCHEMA_SOURCE = REPO_ROOT / "src/dev_health_ops/metrics/schemas.py"
+STATUS_MAPPING_SOURCE = REPO_ROOT / "src/dev_health_ops/config/status_mapping.yaml"
+INVESTMENT_CONFIG_SOURCE = REPO_ROOT / "src/dev_health_ops/config/investment_areas.yaml"
+JOB_WORK_ITEMS_SOURCE = REPO_ROOT / "src/dev_health_ops/metrics/job_work_items.py"
 
-# Every record dataclass in this family defaults org_id to "" and relies on the
-# ClickHouse sink to inject the tenant from sink context at insert time
-# (sinks/clickhouse/core.py). The Go port has no sink-level context to inject
-# from, so it stamps the frozen claim's OrgID at compute time. The persisted
-# value is compared for real by the ClickHouse readback integration test, not
-# here. Declared in one place so the three pairs cannot drift in their reason.
+# The older derived-surface producers still leave org_id blank and rely on the
+# ClickHouse sink to inject it. The three engine destinations added by this lane
+# pass org_id explicitly and therefore do not use this exclusion.
 ORG_ID_EXCLUSION = (
-    "the Python compute functions never set org_id: the record dataclasses "
-    "default it to '' and the ClickHouse sink injects the tenant from sink "
-    "context at insert time. The Go port stamps the frozen claim's OrgID at "
-    "compute time instead, and the persisted value is proved equal by the "
-    "ClickHouse readback integration test rather than by this comparison."
+    "the Python compute function leaves org_id blank and the ClickHouse sink "
+    "injects the tenant from sink context at insert time; its Go peer stamps "
+    "the frozen claim tenant before persistence"
 )
 
 
@@ -264,7 +269,8 @@ class DerivedCase:
         self.org_id = str(case.get("OrgID") or "")
         self.as_of = _required_time(case.get("AsOf") or case["ComputedAt"])
         self.computed_at = _required_time(case["ComputedAt"])
-        self.day = date.fromisoformat(str(case["Day"]))
+        self.days = _case_days(case)
+        self.day = self.days[0]
         self.work_items = [_work_item(raw) for raw in case.get("WorkItems") or []]
         self.transitions = [_transition(raw) for raw in case.get("Transitions") or []]
         dependencies = [_dependency(raw) for raw in case.get("Dependencies") or []]
@@ -341,6 +347,85 @@ class DerivedCase:
             computed_at=self.computed_at,
             **self._resolver_kwargs(),
         )
+
+    def engine_destinations(self) -> tuple[list[Any], list[Any], list[Any]]:
+        """Execute the exact production helper called by job_work_items."""
+
+        return compute_work_item_engine_destinations_daily(
+            day=self.day,
+            work_items=self.work_items,
+            computed_at=self.computed_at,
+            org_id=self.org_id,
+            status_mapping=load_status_mapping(STATUS_MAPPING_SOURCE),
+            investment_classifier=InvestmentClassifier(INVESTMENT_CONFIG_SOURCE),
+            **self._resolver_kwargs(),
+        )
+
+    def engine_destinations_all_days(
+        self,
+    ) -> tuple[list[Any], list[Any], list[Any]]:
+        """Mirror the live job's per-day call while reusing one resolver context."""
+
+        _assert_engine_helper_called_inside_job_loop()
+        issue_types: list[Any] = []
+        classifications: list[Any] = []
+        metrics: list[Any] = []
+        for day in self.days:
+            self.day = day
+            daily_issue_types, daily_classifications, daily_metrics = (
+                self.engine_destinations()
+            )
+            issue_types.extend(daily_issue_types)
+            classifications.extend(daily_classifications)
+            metrics.extend(daily_metrics)
+        return issue_types, classifications, metrics
+
+
+def _case_days(case: dict[str, Any]) -> list[date]:
+    raw_days = case.get("Days")
+    if raw_days:
+        return [date.fromisoformat(str(value)) for value in raw_days]
+    if case.get("SinceAt") and case.get("BeforeAt"):
+        since = _required_time(case["SinceAt"])
+        before = _required_time(case["BeforeAt"])
+        if since.time() != datetime.min.time() or before.time() != datetime.min.time():
+            raise AssertionError("window oracle requires midnight-aligned date flags")
+        end_day, backfill_days = resolve_date_range(
+            argparse.Namespace(
+                since=since.date(),
+                before=before.date(),
+                backfill=1,
+                day=None,
+                date=None,
+            )
+        )
+        start_day = end_day - timedelta(days=backfill_days - 1)
+        return [start_day + timedelta(days=index) for index in range(backfill_days)]
+    return [date.fromisoformat(str(case["Day"]))]
+
+
+def _assert_engine_helper_called_inside_job_loop() -> None:
+    """Fail if the production job stops calling the compared helper per day."""
+
+    lines = JOB_WORK_ITEMS_SOURCE.read_text().splitlines()
+    loop_indices = [
+        index for index, line in enumerate(lines) if line.strip() == "for d in days:"
+    ]
+    if len(loop_indices) != 1:
+        raise AssertionError(
+            f"expected exactly one work-item day loop, found {len(loop_indices)}"
+        )
+    loop_index = loop_indices[0]
+    loop_indent = len(lines[loop_index]) - len(lines[loop_index].lstrip())
+    for line in lines[loop_index + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= loop_indent:
+            break
+        if "compute_work_item_engine_destinations_daily(" in line:
+            return
+    raise AssertionError(
+        "compute_work_item_engine_destinations_daily is no longer called inside "
+        "job_work_items.py's per-day loop"
+    )
 
 
 def columns(records: list[Any], fields: frozenset[str]) -> dict[str, list[Any]]:

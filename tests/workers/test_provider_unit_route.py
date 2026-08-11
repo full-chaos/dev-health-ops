@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from dev_health_ops.workers import provider_unit_route
+from dev_health_ops.workers.provider_family_contract import WORK_ITEM_DATASETS
 from dev_health_ops.workers.provider_unit_route import (
     ProviderUnitRouteError,
     ProviderUnitRouteSwitches,
@@ -540,6 +541,116 @@ def test_github_work_item_family_admission_requires_exact_boolean_flags() -> Non
     )
     assert not provider_unit_route.is_complete_github_work_item_family_claim(
         "github", "work-item-comments", _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+    assert not provider_unit_route.is_complete_github_work_item_family_claim(
+        "github", "prs", _GITHUB_WORK_ITEM_FAMILY_FLAGS
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "canonical", "aliases", "complete_flags"),
+    (
+        pytest.param(
+            provider,
+            "work-items",
+            (
+                "work-item-labels",
+                "work-item-projects",
+                "work-item-history",
+                "work-item-comments",
+            ),
+            _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+            id=f"{provider}-work-items",
+        )
+        for provider in ("github", "gitlab", "jira", "linear")
+    ),
+)
+def test_provider_work_item_family_policy_is_exact_and_provider_neutral(
+    provider: str,
+    canonical: str,
+    aliases: tuple[str, ...],
+    complete_flags: dict[str, bool],
+) -> None:
+    assert provider_unit_route.validate_provider_family_claim(
+        provider, canonical, complete_flags, strict_atomic=True
+    )
+    for alias in aliases:
+        assert not provider_unit_route.validate_provider_family_claim(
+            provider, alias, complete_flags, strict_atomic=True
+        )
+    for flag in complete_flags:
+        missing = dict(complete_flags)
+        del missing[flag]
+        assert not provider_unit_route.validate_provider_family_claim(
+            provider, canonical, missing, strict_atomic=True
+        )
+        false = dict(complete_flags)
+        false[flag] = False
+        assert not provider_unit_route.validate_provider_family_claim(
+            provider, canonical, false, strict_atomic=True
+        )
+    unknown = dict(complete_flags)
+    unknown["family_dataset_unknown"] = True
+    assert not provider_unit_route.validate_provider_family_claim(
+        provider, canonical, unknown, strict_atomic=True
+    )
+
+
+def test_neutral_work_item_family_matches_the_live_planner_boundary() -> None:
+    assert (
+        set(WORK_ITEM_DATASETS) == provider_unit_route._GITHUB_WORK_ITEM_FAMILY_DATASETS
+    )
+
+
+@pytest.mark.parametrize(
+    "dataset",
+    (
+        "incidents",
+        "incident-alerts",
+        "incident-log-entries",
+        "incident-notes",
+    ),
+)
+def test_pagerduty_incident_family_preserves_d16_independent_claims(
+    dataset: str,
+) -> None:
+    # PagerDuty currently plans four independent units. D16 forbids collapsing
+    # that boundary inside the baseline port, so the neutral family catalog
+    # identifies the relationship without imposing canonical/flag admission.
+    assert provider_unit_route.validate_provider_family_claim(
+        "pagerduty", dataset, {}, strict_atomic=True
+    )
+
+
+@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
+def test_default_off_work_item_family_keeps_legacy_claims_admissible(
+    provider: str,
+) -> None:
+    assert provider_unit_route.validate_provider_family_claim(
+        provider,
+        "work-items",
+        {"family_dataset_work_items": True},
+        strict_atomic=False,
+    )
+
+
+def test_gitlab_family_catalog_does_not_invent_an_activation_switch() -> None:
+    assert not provider_unit_route.provider_family_strict_admission_enabled(
+        "gitlab",
+        "work-items",
+        {"WORKER_GITLAB_WORK_ITEMS_ENABLED": "true"},
+    )
+
+
+def test_provider_family_policy_leaves_independent_routes_unchanged() -> None:
+    assert provider_unit_route.validate_provider_family_claim(
+        "github", "prs", {"sync_prs": True}, strict_atomic=True
+    )
+    assert provider_unit_route.validate_provider_family_claim(
+        "github", "cicd", {"sync_cicd": True}, strict_atomic=True
+    )
+    assert provider_unit_route.validate_provider_family_claim(
+        "github", "tests", {"sync_tests": True}, strict_atomic=True
     )
 
 

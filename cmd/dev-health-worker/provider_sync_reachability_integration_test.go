@@ -57,6 +57,15 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForEveryRouteReadySwit
 		"github_commit_stats":        func(cfg *config.Config) { cfg.WorkerGithubCommitStatsEnabled = true },
 		"github_blame":               func(cfg *config.Config) { cfg.WorkerGithubBlameEnabled = true },
 		"github_tests":               func(cfg *config.Config) { cfg.WorkerGithubTestsEnabled = true },
+		"github_work_items": func(cfg *config.Config) {
+			cfg.WorkerGithubWorkItemsEnabled = true
+			cfg.WorkerGithubWorkItemsStatusMappingPath = filepath.Join(
+				"src", "dev_health_ops", "config", "status_mapping.yaml",
+			)
+			cfg.WorkerGithubWorkItemsInvestmentConfigPath = filepath.Join(
+				"src", "dev_health_ops", "config", "investment_areas.yaml",
+			)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := config.Config{

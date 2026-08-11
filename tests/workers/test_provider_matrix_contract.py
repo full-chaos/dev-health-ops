@@ -27,6 +27,9 @@ from dev_health_ops.workers.provider_unit_route import (
 )
 
 CONTRACT = Path(__file__).parents[2] / "contracts/provider-matrix/v1/matrix.json"
+TRANSITIONAL_INVENTORY = (
+    Path(__file__).parents[2] / "contracts/jobs/v1/transitional-inventory.json"
+)
 
 # Independently asserted census from the CUT-08 audit. Hard-coding it means a
 # silent registry deletion cannot be laundered through a contract regeneration.
@@ -37,6 +40,17 @@ EXPECTED_PAIR_COUNTS = {
     "launchdarkly": 1,
     "linear": 5,
     "pagerduty": 11,
+}
+
+# This is an acceptance census, not a projection of the generated registry.
+# It catches deleting a GitHub alias from both registry and matrix generation.
+EXPECTED_ROUTE_READY_COUNTS = {
+    "github": 17,
+    "gitlab": 6,
+    "jira": 1,
+    "launchdarkly": 1,
+    "linear": 0,
+    "pagerduty": 0,
 }
 
 
@@ -55,6 +69,34 @@ def _python_pairs() -> set[tuple[str, str]]:
 
 def _contract_pairs(matrix: dict[str, Any]) -> set[tuple[str, str]]:
     return {(pair["provider"], pair["dataset"]) for pair in matrix["pairs"]}
+
+
+def _inventory_row_by_identity(
+    inventory: dict[str, Any],
+    *,
+    surface_class: str,
+    surface: str,
+    target_kind_id: str,
+) -> dict[str, Any]:
+    """Find one inventory row without coupling this matrix test to source lines.
+
+    The transitional-inventory checker owns source-line discovery. This test
+    owns the factual capability wording on the two provider-unit surfaces,
+    whose stable identities are their class, declared surface, and target kind.
+    """
+
+    matches = [
+        row
+        for row in inventory["rows"]
+        if row["class"] == surface_class
+        and row["surface"] == surface
+        and row["target_kind_id"] == target_kind_id
+    ]
+    assert len(matches) == 1, (
+        "expected exactly one transitional inventory row for "
+        f"{surface_class}/{surface}/{target_kind_id}, got {len(matches)}"
+    )
+    return matches[0]
 
 
 def test_contract_shape_is_frozen(matrix: dict[str, Any]) -> None:
@@ -82,6 +124,62 @@ def test_every_provider_pair_count_matches_the_audit(
     for pair in matrix["pairs"]:
         counts[pair["provider"]] = counts.get(pair["provider"], 0) + 1
     assert counts == EXPECTED_PAIR_COUNTS
+
+
+def test_route_ready_census_matches_chaos_3606_acceptance(
+    matrix: dict[str, Any],
+) -> None:
+    counts: dict[str, int] = {provider: 0 for provider in EXPECTED_PAIR_COUNTS}
+    for pair in matrix["pairs"]:
+        if pair["route_ready"]:
+            counts[pair["provider"]] += 1
+    assert counts == EXPECTED_ROUTE_READY_COUNTS
+    assert counts["github"] == EXPECTED_PAIR_COUNTS["github"] == 17
+    assert sum(counts.values()) == 25
+
+
+def test_transitional_inventory_route_readiness_notes_follow_matrix(
+    matrix: dict[str, Any],
+) -> None:
+    """The inventory remains Python-compatible/deployment-inactive, but its
+    factual note must track the generated capability matrix rather than retain
+    the old "only LaunchDarkly" claim.
+
+    This derives both numbers from the checked-in artifact. A later intentional
+    matrix update therefore makes the inventory wording fail until it is
+    refreshed, while the independent 25/59 acceptance census above prevents a
+    coordinated deletion from laundering either number.
+    """
+
+    pairs = matrix["pairs"]
+    ready = sum(pair["route_ready"] for pair in pairs)
+    github_pairs = [pair for pair in pairs if pair["provider"] == "github"]
+    github_ready = sum(pair["route_ready"] for pair in github_pairs)
+    summary = f"{ready}/{len(pairs)}"
+    github_summary = f"GitHub {github_ready}/{len(github_pairs)}"
+
+    inventory = json.loads(TRANSITIONAL_INVENTORY.read_text())
+    for row in (
+        _inventory_row_by_identity(
+            inventory,
+            surface_class="celery_task",
+            surface="run_sync_unit",
+            target_kind_id="kind:sync.provider_unit",
+        ),
+        _inventory_row_by_identity(
+            inventory,
+            surface_class="registry_kind",
+            surface="sync.provider_unit",
+            target_kind_id="kind:sync.provider_unit",
+        ),
+    ):
+        notes = row["notes"]
+        assert summary in notes
+        assert github_summary in notes
+        assert "only launchdarkly" not in notes.lower()
+        # Matrix readiness does not transfer runtime ownership. This is the
+        # no-cutover invariant the corrected prose must retain.
+        assert row["current_implementation_state"] == "python_compatibility"
 
 
 def test_pagerduty_is_covered_by_the_same_contract(
@@ -194,6 +292,16 @@ def test_producer_gate_cannot_route_any_scope_outside_the_ready_set(
     }
     assert routed <= route_ready
     assert routed == {("launchdarkly", "feature-flags")}
+
+    github_work_items = ProviderUnitRouteSwitches(github_work_items=True)
+    github_routed = {
+        (provider, dataset)
+        for provider, dataset in _python_pairs()
+        if github_work_items.routes_to_river(provider, dataset)
+    }
+    # Matrix readiness is a five-alias capability/audit surface; direct
+    # siblings cannot become Python producer routes just by sharing a switch.
+    assert github_routed == {("github", "work-items")}
 
     # With every allowed switch off, nothing routes.
     closed = ProviderUnitRouteSwitches()

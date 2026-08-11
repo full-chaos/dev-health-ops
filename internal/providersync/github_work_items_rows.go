@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
 )
 
@@ -1107,12 +1108,7 @@ func detectGitHubAITextPattern(
 }
 
 func isWorkItemFamilyDataset(dataset string) bool {
-	switch dataset {
-	case "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments":
-		return true
-	default:
-		return false
-	}
+	return workitemcontract.IsFamilyDataset(dataset)
 }
 
 func resolveGitHubWorkItemIdentity(user githubWorkItemUserPayload, resolver githubIdentityResolver) string {

@@ -148,7 +148,10 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 		cfg.WorkerGithubCICDEnabled || cfg.WorkerGithubCommitsEnabled ||
 		cfg.WorkerGithubDeploymentsEnabled || cfg.WorkerGithubSecurityEnabled ||
 		cfg.WorkerGithubFilesEnabled || cfg.WorkerGithubCommitStatsEnabled ||
-		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled {
+		cfg.WorkerGithubBlameEnabled || cfg.WorkerGithubTestsEnabled ||
+		cfg.WorkerGithubWorkItemsEnabled ||
+		cfg.WorkerGithubWorkItemsStatusMappingPath != "" ||
+		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "" {
 		t.Fatal("provider route switches must default off")
 	}
 }
@@ -224,40 +227,43 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := Load(workerSpec(map[string]string{
-		"WORKER_DATABASE_MODE":                      "transaction",
-		"PGBOUNCER_TRANSACTION_MODE":                "true",
-		"RIVER_DATABASE_SCHEMA":                     "worker_queue",
-		"RIVER_DOMAIN_DATABASE_ROLE":                "worker_domain",
-		"RIVER_QUEUE_DATABASE_ROLE":                 "worker_queue",
-		"WORKER_DATABASE_MAX_CONNS":                 "4",
-		"WORKER_DOMAIN_DATABASE_MAX_CONNS":          "12",
-		"RIVER_COMPLETED_JOB_RETENTION":             "48h",
-		"RIVER_CANCELLED_JOB_RETENTION":             "240h",
-		"RIVER_DISCARDED_JOB_RETENTION":             "336h",
-		"RIVER_JOB_CLEANER_TIMEOUT":                 "45s",
-		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE":  "true",
-		"DEV_HEALTH_STREAM_REPLICAS":                "3",
-		"WORKER_LINEAR_WORK_ITEMS_ENABLED":          "true",
-		"WORKER_JIRA_WORK_ITEMS_ENABLED":            "true",
-		"WORKER_JIRA_INCIDENTS_ENABLED":             "true",
-		"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "true",
-		"WORKER_GITHUB_REPO_METADATA_ENABLED":       "true",
-		"WORKER_GITLAB_REPO_METADATA_ENABLED":       "true",
-		"WORKER_GITLAB_COMMITS_ENABLED":             "true",
-		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "true",
-		"WORKER_GITLAB_CICD_ENABLED":                "true",
-		"WORKER_GITLAB_INCIDENTS_ENABLED":           "true",
-		"WORKER_GITHUB_PRS_ENABLED":                 "true",
-		"WORKER_GITHUB_PR_REVIEWS_ENABLED":          "false",
-		"WORKER_GITHUB_PR_COMMENTS_ENABLED":         "false",
-		"WORKER_GITHUB_CICD_ENABLED":                "false",
-		"WORKER_GITHUB_COMMITS_ENABLED":             "true",
-		"WORKER_GITHUB_DEPLOYMENTS_ENABLED":         "true",
-		"WORKER_GITHUB_SECURITY_ENABLED":            "true",
-		"WORKER_GITHUB_FILES_ENABLED":               "true",
-		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "true",
-		"WORKER_GITHUB_BLAME_ENABLED":               "true",
-		"WORKER_GITHUB_TESTS_ENABLED":               "true",
+		"WORKER_DATABASE_MODE":                            "transaction",
+		"PGBOUNCER_TRANSACTION_MODE":                      "true",
+		"RIVER_DATABASE_SCHEMA":                           "worker_queue",
+		"RIVER_DOMAIN_DATABASE_ROLE":                      "worker_domain",
+		"RIVER_QUEUE_DATABASE_ROLE":                       "worker_queue",
+		"WORKER_DATABASE_MAX_CONNS":                       "4",
+		"WORKER_DOMAIN_DATABASE_MAX_CONNS":                "12",
+		"RIVER_COMPLETED_JOB_RETENTION":                   "48h",
+		"RIVER_CANCELLED_JOB_RETENTION":                   "240h",
+		"RIVER_DISCARDED_JOB_RETENTION":                   "336h",
+		"RIVER_JOB_CLEANER_TIMEOUT":                       "45s",
+		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE":        "true",
+		"DEV_HEALTH_STREAM_REPLICAS":                      "3",
+		"WORKER_LINEAR_WORK_ITEMS_ENABLED":                "true",
+		"WORKER_JIRA_WORK_ITEMS_ENABLED":                  "true",
+		"WORKER_JIRA_INCIDENTS_ENABLED":                   "true",
+		"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED":       "true",
+		"WORKER_GITHUB_REPO_METADATA_ENABLED":             "true",
+		"WORKER_GITLAB_REPO_METADATA_ENABLED":             "true",
+		"WORKER_GITLAB_COMMITS_ENABLED":                   "true",
+		"WORKER_GITLAB_COMMIT_STATS_ENABLED":              "true",
+		"WORKER_GITLAB_CICD_ENABLED":                      "true",
+		"WORKER_GITLAB_INCIDENTS_ENABLED":                 "true",
+		"WORKER_GITHUB_PRS_ENABLED":                       "true",
+		"WORKER_GITHUB_PR_REVIEWS_ENABLED":                "false",
+		"WORKER_GITHUB_PR_COMMENTS_ENABLED":               "false",
+		"WORKER_GITHUB_CICD_ENABLED":                      "false",
+		"WORKER_GITHUB_COMMITS_ENABLED":                   "true",
+		"WORKER_GITHUB_DEPLOYMENTS_ENABLED":               "true",
+		"WORKER_GITHUB_SECURITY_ENABLED":                  "true",
+		"WORKER_GITHUB_FILES_ENABLED":                     "true",
+		"WORKER_GITHUB_COMMIT_STATS_ENABLED":              "true",
+		"WORKER_GITHUB_BLAME_ENABLED":                     "true",
+		"WORKER_GITHUB_TESTS_ENABLED":                     "true",
+		"WORKER_GITHUB_WORK_ITEMS_ENABLED":                "true",
+		"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH":    "/config/status.yaml",
+		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH": "/config/investment.yaml",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +303,10 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		cfg.WorkerGithubCICDEnabled || !cfg.WorkerGithubCommitsEnabled ||
 		!cfg.WorkerGithubDeploymentsEnabled || !cfg.WorkerGithubSecurityEnabled ||
 		!cfg.WorkerGithubFilesEnabled || !cfg.WorkerGithubCommitStatsEnabled ||
-		!cfg.WorkerGithubBlameEnabled || !cfg.WorkerGithubTestsEnabled {
+		!cfg.WorkerGithubBlameEnabled || !cfg.WorkerGithubTestsEnabled ||
+		!cfg.WorkerGithubWorkItemsEnabled ||
+		cfg.WorkerGithubWorkItemsStatusMappingPath != "/config/status.yaml" ||
+		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "/config/investment.yaml" {
 		t.Fatal("expected independent provider route opt-ins")
 	}
 
@@ -330,6 +339,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
 		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "sometimes",
 		"WORKER_GITHUB_BLAME_ENABLED":               "sometimes",
+		"WORKER_GITHUB_WORK_ITEMS_ENABLED":          "sometimes",
 	} {
 		if _, err := Load(workerSpec(map[string]string{key: value})); err == nil {
 			t.Fatalf("expected %s=%q to fail", key, value)

@@ -2575,13 +2575,15 @@ def test_cold_start_with_before_older_than_depth_plans_no_unit(db_session):
     assert _planned_units(db_session, plan.sync_run_id) == []
 
 
-def test_family_dataset_with_empty_window_does_not_break_the_merge(db_session):
-    """A partially-caught-up work-item family must still plan its composite.
+def test_github_family_empty_window_keeps_atomic_route_ownership(db_session):
+    """A partially-caught-up GitHub family still plans one all-five unit.
 
     ``_merge_family_windows`` raises on mismatched window counts. Once an
     already-caught-up dataset resolves to ZERO windows, that guard would fire on
     an ordinary partially-synced family and take the whole plan down, so empty
-    datasets are dropped before the merge.
+    datasets are dropped before the merge. CHAOS-3606 keeps that window behavior
+    while making all five flags literal ``True``: they describe the activated
+    native writer's atomic ownership, not which inputs were non-empty.
     """
     from datetime import timedelta
 
@@ -2625,11 +2627,10 @@ def test_family_dataset_with_empty_window_does_not_break_the_merge(db_session):
     composite = units[0]
     assert composite.dataset_key == "work-items"
     flags = composite.processor_flags or {}
-    assert flags.get("family_dataset_work_items") is True
-    assert flags.get("family_dataset_work_item_labels") is not True, (
-        "a dataset that resolved to no window must not be marked as covered by "
-        "the composite crawl"
-    )
+    assert {
+        key: flags.get("family_dataset_" + key.replace("-", "_"))
+        for key in _FAMILY_DATASETS
+    } == {key: True for key in _FAMILY_DATASETS}
 
 
 # ---------------------------------------------------------------------------

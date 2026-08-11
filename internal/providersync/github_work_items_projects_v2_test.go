@@ -33,21 +33,31 @@ func TestGitHubProjectV2TargetsComeOnlyFromClaimIntegrationConfig(t *testing.T) 
 	}
 }
 
-// D18 ratified the Projects v2 COLLECTOR contract. It did not activate the
-// route, and the two are easy to conflate now that nothing in the source says
-// "pending" any more. This pins the distinction: the collector is decided, the
-// five-alias family is still off, and activation remains the composite
-// all-or-nothing layer's job.
-func TestGitHubProjectV2RatificationIsNotActivation(t *testing.T) {
-	if got := ProviderExecutor("github", "work-items"); got != ExecutorNone {
-		t.Fatalf("ratifying the Projects v2 collector must not register the route: %s", got)
+// D18 ratified the Projects v2 collector and CHAOS-3606 activates the complete
+// five-alias family. The two contracts remain separate: the canonical route is
+// native and matrix-ready, but it stays default-off until its single writer
+// switch is enabled. D18 also retired the old policy_pending degradation: a
+// missing collector is a fail-closed construction error (covered by
+// TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollector), never an
+// incomplete provider result.
+func TestGitHubProjectV2RatificationCompletesActivatedRouteContract(t *testing.T) {
+	if got := ProviderExecutor("github", "work-items"); got != ExecutorNativeGo {
+		t.Fatalf("github/work-items executor=%s want native_go", got)
 	}
-	descriptor, known := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
+	defaultDescriptor, known := (CompleteRouteSwitches{}).Descriptor("github", "work-items")
 	if !known {
 		t.Fatal("github/work-items capability disappeared")
 	}
-	if descriptor.RouteReady || descriptor.RouteEnabled || len(descriptor.Destinations) != 0 {
-		t.Fatalf("ratifying the Projects v2 collector activated the route: %+v", descriptor)
+	if !defaultDescriptor.RouteReady || defaultDescriptor.RouteEnabled ||
+		!reflect.DeepEqual(defaultDescriptor.Destinations, workItemRouteDestinations()) {
+		t.Fatalf("default-off github/work-items descriptor=%+v", defaultDescriptor)
+	}
+	enabledDescriptor, known := (CompleteRouteSwitches{GithubWorkItems: true}).Descriptor("github", "work-items")
+	if !known || !enabledDescriptor.RouteEnabled || !enabledDescriptor.PreparedManifestRecovery {
+		t.Fatalf("enabled github/work-items descriptor=%+v known=%t", enabledDescriptor, known)
+	}
+	if _, policyPending := githubWorkItemsOptionalIncompleteComponents["projects_v2"]; policyPending {
+		t.Fatal("projects_v2 still has a policy_pending-style incomplete fallback")
 	}
 }
 

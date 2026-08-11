@@ -393,12 +393,12 @@
       "notes": "Beat entry prune-external-ingest-batches, crontab(5,15) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:761",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:766",
       "surface": "dispatch_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 761
+        "line": 766
       },
       "queue_or_cadence": "sync",
       "dispatches": "run_sync_unit (per unit)",
@@ -417,12 +417,12 @@
       "notes": "transport-routes.json kind dispatch_sync_run, route=celery"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1152",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1194",
       "surface": "run_sync_unit",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1165
+        "line": 1194
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -438,15 +438,15 @@
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
       "deletion_evidence_requirement": "Deleted once registry kind `sync.provider_unit` no longer routes through the HTTP compatibility bridge.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "only launchdarkly/feature-flags route-ready in Go"
+      "notes": "matrix inventory: 25/59 provider/dataset pairs route-ready in Go, including GitHub 17/17; all deployment switches remain default-off and Celery/Python ownership remains active"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1999",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:2049",
       "surface": "finalize_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2020
+        "line": 2049
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -2289,12 +2289,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1048",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1090",
       "surface": "getattr(signature,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1061
+        "line": 1090
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic per-provider signature",
@@ -2313,12 +2313,12 @@
       "notes": "grep-evading form; internal to dispatch_sync_run fan-out"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1630",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1680",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1651
+        "line": 1680
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2337,12 +2337,12 @@
       "notes": "grep-evading form; internal to unit completion"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2450",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2500",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2471
+        "line": 2500
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",
@@ -3254,7 +3254,7 @@
       "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
       "deletion_evidence_requirement": "registry.json kind `sync.provider_unit` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "only non-celery route (river_canary); only launchdarkly/feature-flags route-ready | Only launchdarkly/feature-flags is route-ready natively in Go today (river_canary); every other provider still routes through the Celery/Python compatibility path."
+      "notes": "only non-celery route transport is river_canary; matrix inventory: 25/59 provider/dataset pairs route-ready natively in Go, including GitHub 17/17. All checked-in deployment switches remain default-off, so every non-enabled scope continues through the Celery/Python compatibility path."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:331",

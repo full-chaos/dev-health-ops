@@ -5,6 +5,7 @@ package providerunit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -169,6 +170,70 @@ func (handler *Handler) now() time.Time {
 	return time.Now().UTC()
 }
 
+// reconcileRouteFault preserves a claimed unit for the producer/reconciler
+// when either route enablement or the activated GitHub work-item family shape
+// is invalid. The latter carries ErrInvalidConfiguration as its cause while
+// retaining the existing durable route-reconciliation lifecycle: a malformed
+// persisted unit is real work that must be repaired, not silently dropped.
+func (handler *Handler) reconcileRouteFault(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	descriptor providersync.CompleteRouteDescriptor,
+	descriptorPresent bool,
+	startedAt time.Time,
+	configurationErr error,
+) error {
+	// TRD non-negotiable #3: a provider unit delivered to River must never
+	// terminalize as route_disabled. A unit only reaches here when the Python
+	// producer gate routed a scope the Go descriptor does not serve, or a
+	// persisted GitHub family claim is malformed. The sync data is real and the
+	// gate or stored claim needs reconciliation. Terminalizing it as
+	// route_disabled would silently discard that scope's data for the whole run.
+	fault := RouteFault{
+		Provider: claim.Provider, Dataset: claim.Dataset,
+		DescriptorPresent: descriptorPresent, RouteReady: descriptor.RouteReady,
+		RouteEnabled: descriptor.RouteEnabled,
+		Attempt:      execution.Attempt,
+		MaxAttempts:  execution.Definition.MaxAttempts,
+	}
+	// Releasing on the terminal attempt would strand the unit: River discards
+	// the job after the last attempt, leaving the unit `dispatching` with no
+	// live consumer, and the producer outbox dedupe row makes a stale
+	// redispatch report "queued" without enqueueing anything. Record an explicit
+	// durable reconciliation-required state instead — terminal and alertable,
+	// but never the silent route_disabled drop.
+	if execution.Attempt >= execution.Definition.MaxAttempts {
+		fault.Terminal = true
+		handler.observeRouteFault(fault)
+		if failErr := handler.Repository.Fail(
+			context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
+			startedAt, handler.now(),
+		); failErr != nil {
+			return jobruntime.Retryable(failErr)
+		}
+		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
+		return jobruntime.Retryable(routeReconciliationError(configurationErr))
+	}
+	releaseErr := handler.Repository.ReleaseForRetry(
+		context.WithoutCancel(ctx), claim, handler.now(),
+	)
+	fault.Released = releaseErr == nil
+	handler.observeRouteFault(fault)
+	if releaseErr != nil {
+		return jobruntime.Retryable(releaseErr)
+	}
+	handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
+	return jobruntime.Retryable(routeReconciliationError(configurationErr))
+}
+
+func routeReconciliationError(configurationErr error) error {
+	if configurationErr == nil {
+		return ErrRouteReconciliationRequired
+	}
+	return fmt.Errorf("%w: %w", ErrRouteReconciliationRequired, configurationErr)
+}
+
 func (handler *Handler) Work(
 	ctx context.Context,
 	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
@@ -197,51 +262,19 @@ func (handler *Handler) Work(
 		}
 		return jobruntime.Permanent(err)
 	}
-	descriptor, ok := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
-	if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
-		// TRD non-negotiable #3: a provider unit delivered to River must never
-		// terminalize as route_disabled. A unit only reaches here when the
-		// Python producer gate routed a scope the Go descriptor does not
-		// serve, so the sync data is real and the gate is wrong. Terminalizing
-		// would silently discard that scope's data for the whole run. Instead
-		// hand the claim back to dispatching, alert, and fail retryably so the
-		// unit stays recoverable by the Celery route or the reconciler.
-		fault := RouteFault{
-			Provider: claim.Provider, Dataset: claim.Dataset,
-			DescriptorPresent: ok, RouteReady: descriptor.RouteReady,
-			RouteEnabled: descriptor.RouteEnabled,
-			Attempt:      execution.Attempt,
-			MaxAttempts:  execution.Definition.MaxAttempts,
-		}
-		// Releasing on the terminal attempt would strand the unit: River
-		// discards the job after the last attempt, leaving the unit
-		// `dispatching` with no live consumer, and the producer outbox dedupe
-		// row makes a stale redispatch report "queued" without enqueueing
-		// anything. The sync run would then never finalize. Record an explicit
-		// durable reconciliation-required state instead — terminal and
-		// alertable, but never the silent route_disabled drop.
-		if execution.Attempt >= execution.Definition.MaxAttempts {
-			fault.Terminal = true
-			handler.observeRouteFault(fault)
-			if failErr := handler.Repository.Fail(
-				context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
-				startedAt, handler.now(),
-			); failErr != nil {
-				return jobruntime.Retryable(failErr)
-			}
-			handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
-			return jobruntime.Retryable(ErrRouteReconciliationRequired)
-		}
-		releaseErr := handler.Repository.ReleaseForRetry(
-			context.WithoutCancel(ctx), claim, handler.now(),
+	descriptor, descriptorPresent := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
+	// This admission boundary is intentionally before LeaseSession and
+	// BuildExecutor. A stale River unit can otherwise fetch credentials and
+	// commit an incomplete work-item family before the completion-side
+	// defense-in-depth check observes its flags.
+	familyClaimErr := providersync.ValidateGitHubWorkItemExecutionClaim(
+		claim.Provider, claim.Dataset, claim.ProcessorFlags,
+	)
+	if familyClaimErr != nil || !descriptorPresent ||
+		!descriptor.RouteReady || !descriptor.RouteEnabled {
+		return handler.reconcileRouteFault(
+			ctx, execution, claim, descriptor, descriptorPresent, startedAt, familyClaimErr,
 		)
-		fault.Released = releaseErr == nil
-		handler.observeRouteFault(fault)
-		if releaseErr != nil {
-			return jobruntime.Retryable(releaseErr)
-		}
-		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
-		return jobruntime.Retryable(ErrRouteReconciliationRequired)
 	}
 	session := &providersync.LeaseSession{
 		Repository: handler.Repository,

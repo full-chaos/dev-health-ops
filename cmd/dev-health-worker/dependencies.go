@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -53,6 +54,15 @@ type postgresWorkerDatabase struct {
 	riverSchema string
 }
 
+// githubProjectsV2DurableConfigReader is deliberately narrower than
+// workerDatabase: Projects v2 configuration is a startup advisory, not a
+// per-claim collector dependency. Production obtains it from the domain pool
+// only after CheckDomainAuthorization has proven the 0088 snapshot-table
+// posture; tests can provide the same small query seam without widening roles.
+type githubProjectsV2DurableConfigReader interface {
+	GitHubProjectsV2Configured(context.Context) (bool, error)
+}
+
 func openWorkerDatabase(ctx context.Context, cfg config.Config) (workerDatabase, error) {
 	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg)
 	pools, err := postgres.NewRuntimePools(ctx, runtimeConfig)
@@ -69,6 +79,30 @@ func (database *postgresWorkerDatabase) DomainReady(ctx context.Context) error {
 		return errWorkerDependencyUnavailable
 	}
 	return postgres.CheckDomainAuthorization(ctx, database.pools.Domain, database.domainRole, database.riverSchema)
+}
+
+// GitHubProjectsV2Configured reports whether any enabled GitHub integration
+// has the durable D18 target key. Presence is intentional: an explicit empty
+// list is durable configuration (and means no Projects v2 targets), while a
+// malformed value is handled later as ErrInvalidConfiguration for its claim.
+// This is a startup-only census, never a route/collector environment fallback.
+func (database *postgresWorkerDatabase) GitHubProjectsV2Configured(ctx context.Context) (bool, error) {
+	if database == nil || database.pools == nil || database.pools.Domain == nil || ctx == nil {
+		return false, errWorkerDependencyUnavailable
+	}
+	const query = `
+SELECT EXISTS (
+	SELECT 1
+	FROM public.integrations
+	WHERE lower(provider) = 'github'
+		AND is_active
+		AND config::jsonb ? 'github_projects_v2'
+)`
+	var configured bool
+	if err := database.pools.Domain.QueryRow(ctx, query).Scan(&configured); err != nil {
+		return false, err
+	}
+	return configured, nil
 }
 
 func (database *postgresWorkerDatabase) QueueReady(ctx context.Context) error {
@@ -264,6 +298,7 @@ func configureWorkerDependenciesWithSources(
 		check health.CheckFunc
 	}{
 		{name: "domain_postgres", check: dependencies.domainReady},
+		{name: "github_projects_v2_startup_config", check: githubProjectsV2StartupReadiness(dependencies.database, logger)},
 		{name: "job_registry", check: dependencies.jobRegistryReady},
 		{name: "profile_completeness", check: dependencies.profileReady},
 		{name: "provider_route_switches", check: providerRouteSwitchesReady(cfg, &providerRuntimeConstructed)},
@@ -367,6 +402,54 @@ func configureWorkerDependenciesWithSources(
 	return components, nil
 }
 
+// githubProjectsV2StartupReadiness implements CHAOS-3506's one warning-only
+// D18 bridge. It first executes the existing domain authorization check (which
+// proves migration 0088's snapshot-table posture without selecting Alembic
+// state), then asks whether any enabled integration owns the durable target
+// key. The environment value itself is never logged or read by the hot route.
+func githubProjectsV2StartupReadiness(
+	database workerDatabase,
+	logger *slog.Logger,
+) health.CheckFunc {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	var warned sync.Once
+	return func(ctx context.Context) error {
+		orphaned, err := githubProjectsV2EnvironmentNeedsStartupWarning(
+			ctx,
+			func(ctx context.Context) (bool, error) {
+				if database == nil {
+					return false, errWorkerDependencyUnavailable
+				}
+				// Keep migration/least-privilege verification ahead of the
+				// advisory query. DomainReady intentionally reaches only
+				// postgres.CheckDomainAuthorization, never public.alembic_version.
+				if err := database.DomainReady(ctx); err != nil {
+					return false, errWorkerDependencyUnavailable
+				}
+				reader, ok := database.(githubProjectsV2DurableConfigReader)
+				if !ok {
+					return false, errWorkerDependencyUnavailable
+				}
+				return reader.GitHubProjectsV2Configured(ctx)
+			},
+		)
+		if err != nil {
+			return errWorkerDependencyUnavailable
+		}
+		if orphaned {
+			warned.Do(func() {
+				logger.Warn(
+					"GITHUB_PROJECTS_V2 is set but no enabled GitHub integration has durable github_projects_v2 configuration; Go ignores the environment setting",
+					"environment", "GITHUB_PROJECTS_V2",
+				)
+			})
+		}
+		return nil
+	}
+}
+
 func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error) {
 	result := workerFamily{
 		handlers:      append([]jobruntime.HandlerSpec(nil), existing.handlers...),
@@ -447,6 +530,7 @@ func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
 		GithubCommitStats:        cfg.WorkerGithubCommitStatsEnabled,
 		GithubBlame:              cfg.WorkerGithubBlameEnabled,
 		GithubTests:              cfg.WorkerGithubTestsEnabled,
+		GithubWorkItems:          cfg.WorkerGithubWorkItemsEnabled,
 	}
 }
 
@@ -482,8 +566,16 @@ func providerRouteSwitchesReady(
 		{"github", "commit-stats", cfg.WorkerGithubCommitStatsEnabled},
 		{"github", "blame", cfg.WorkerGithubBlameEnabled},
 		{"github", "tests", cfg.WorkerGithubTestsEnabled},
+		{"github", "work-items", cfg.WorkerGithubWorkItemsEnabled},
 	}
 	return func(context.Context) error {
+		// The same helper feeds the production BuildExecutor closure below.
+		// A route cannot report ready for one pair of config files and construct
+		// the handler with another, and ambient STATUS_MAPPING_PATH is rejected
+		// before either side opens a provider connection (D19).
+		if _, err := githubWorkItemsRuntimeConfigFrom(cfg); err != nil {
+			return errWorkerDependencyUnavailable
+		}
 		for _, route := range routes {
 			if !route.enabled {
 				continue

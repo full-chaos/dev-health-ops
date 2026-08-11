@@ -1,37 +1,14 @@
 package providersync
 
-import "slices"
+import (
+	"slices"
 
-var linearBackfillWorkItemDatasets = []string{
-	"work-item-comments",
-	"work-item-history",
-	"work-item-labels",
-	"work-item-projects",
-	"work-items",
-}
-
-var linearBackfillWorkItemRetrySurfaces = []string{
-	"ai_attribution",
-	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
-	"issue_type_metrics_daily",
-	"sprints",
-	"work_item_cycle_times",
-	"work_item_dependencies",
-	"work_item_interactions",
-	"work_item_metrics_daily",
-	"work_item_reopen_events",
-	"work_item_state_durations_daily",
-	"work_item_team_attributions",
-	"work_item_transitions",
-	"work_item_user_metrics_daily",
-	"work_items",
-}
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
+)
 
 var clickHouseRetryProvenSafeSurfaces = func() []string {
 	surfaces := append(
-		slices.Clone(linearBackfillWorkItemRetrySurfaces),
+		workitemcontract.LinearExpiredLeaseRetryDestinations(),
 		"manual_attribution_fallbacks",
 	)
 	slices.Sort(surfaces)
@@ -66,9 +43,9 @@ func LinearExpiredLeaseRetryDecision(
 	surfaces := []string(nil)
 	baseEligible := unit.Provider == "linear" &&
 		unit.Mode == "backfill" &&
-		slices.Contains(linearBackfillWorkItemDatasets, unit.Dataset)
+		slices.Contains(workitemcontract.LinearBackfillWorkItemDatasets(), unit.Dataset)
 	if baseEligible {
-		surfaces = slices.Clone(linearBackfillWorkItemRetrySurfaces)
+		surfaces = workitemcontract.LinearExpiredLeaseRetryDestinations()
 		baseEligible = len(surfaces) > 0
 		for _, surface := range surfaces {
 			if !slices.Contains(clickHouseRetryProvenSafeSurfaces, surface) {

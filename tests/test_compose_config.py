@@ -1089,8 +1089,8 @@ def test_local_postgres_image_pinned_and_pgdata_is_subdirectory() -> None:
 
 
 def test_route_switches_default_off_for_producer_gate() -> None:
-    """CHAOS-3142/CHAOS-3123: WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED and
-    WORKER_GITHUB_REPO_METADATA_ENABLED must default to "false" wherever
+    """CHAOS-3142/CHAOS-3123/CHAOS-3606: route switches, including the
+    GitHub work-item family, must default to "false" wherever
     this file wires them -- the shared &env anchor (api, inherited by
     worker/worker-heavy/beat via <<: *env / <<: *worker-base). This is the
     Python producer gate's half of the CHAOS-3123 route gate
@@ -1099,13 +1099,14 @@ def test_route_switches_default_off_for_producer_gate() -> None:
     variable names with the same default so a unit the Python gate routes
     to River never finds no handler.
 
-    Mutation coverage (manually verified): changing either default from
+    Mutation coverage (manually verified): changing any default from
     "false" to "true" makes the corresponding assertion fail.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     switch_names = (
         "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
         "WORKER_GITHUB_REPO_METADATA_ENABLED",
+        "WORKER_GITHUB_WORK_ITEMS_ENABLED",
         "WORKER_GITLAB_REPO_METADATA_ENABLED",
     )
 
@@ -1123,6 +1124,30 @@ def test_route_switches_default_off_for_producer_gate() -> None:
             assert env[switch] == f"${{{switch}:-false}}", (
                 f"{switch} must reach {name} through the shared env anchor"
             )
+
+    # The GitHub work-item route rejects guessed filesystem defaults. These are
+    # deliberately explicit deployment inputs and stay empty until a reviewed
+    # activation supplies mounted/runtime paths.
+    for name in (
+        "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
+        "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
+    ):
+        assert shared_env[name] == f"${{{name}:-}}"
+
+    # The additive Go profile carries the exact same inactive switch and the
+    # two worker-only paths. This is deliberately configuration, not a profile
+    # enablement: the `go` profile itself stays opt-in.
+    go_worker_env = _load_yaml(_GO_PROFILE_OVERLAY)["services"]["go-worker"][
+        "environment"
+    ]
+    assert go_worker_env["WORKER_GITHUB_WORK_ITEMS_ENABLED"] == (
+        "${WORKER_GITHUB_WORK_ITEMS_ENABLED:-false}"
+    )
+    for name in (
+        "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
+        "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
+    ):
+        assert go_worker_env[name] == f"${{{name}:-}}"
 
 
 def test_go_profile_overlay_never_depends_on_python_migrate() -> None:

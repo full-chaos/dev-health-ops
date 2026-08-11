@@ -68,17 +68,35 @@ func TestCompleteRouteSwitchesCollapseWorkItemAliasesAndRemainIndependent(t *tes
 	}
 }
 
-// TestWorkItemRouteDestinationsMatchTheRetrySafePythonUnitSurface prevents the
-// route manifest from silently dropping an in-band Python write. The work-item
-// job emits AI attribution beside the other raw and derived rows, and recovery
-// already treats that table as part of the same indivisible unit.
-func TestWorkItemRouteDestinationsMatchTheRetrySafePythonUnitSurface(t *testing.T) {
+// TestGitHubWorkItemRouteDestinationManifest pins the semantic family contract
+// independently of Linear expired-lease recovery. A missing or reordered entry
+// would alter descriptor/snapshot identity and must fail before a route can be
+// declared ready.
+func TestGitHubWorkItemRouteDestinationManifest(t *testing.T) {
 	t.Parallel()
-	want := slices.Clone(linearBackfillWorkItemRetrySurfaces)
-	slices.Sort(want)
+	want := []string{
+		"ai_attribution", "estimate_coverage_metrics_daily",
+		"investment_classifications_daily", "investment_metrics_daily",
+		"issue_type_metrics_daily", "sprints", "work_item_cycle_times",
+		"work_item_dependencies", "work_item_interactions",
+		"work_item_metrics_daily", "work_item_reopen_events",
+		"work_item_state_durations_daily", "work_item_team_attributions",
+		"work_item_transitions", "work_item_user_metrics_daily", "work_items",
+	}
 	got := workItemRouteDestinations()
 	if !slices.Equal(got, want) {
-		t.Fatalf("work-item destinations=%v want exact Python unit surfaces=%v", got, want)
+		t.Fatalf("github work-item destinations=%v want=%v", got, want)
+	}
+	effects, err := BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = got[:0]
+	for _, effect := range effects {
+		got = append(got, effect.Destination)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("effect destinations=%v want=%v", got, want)
 	}
 }
 
@@ -114,29 +132,52 @@ func TestShadowProjectionIsDerivedAndNarrow(t *testing.T) {
 	}
 }
 
-// TestPartialWorkItemCollectorsCannotBeEnabledAsNativeRoutes preserves the
-// pre-CUT-08 guarantee: the GitHub/GitLab work-item fixture collectors are not
-// independent sink semantics and may never route or shadow.
-func TestPartialWorkItemCollectorsCannotBeEnabledAsNativeRoutes(t *testing.T) {
+// TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly pins CHAOS-3606's
+// all-five-alias activation boundary: GitHub now has one complete native
+// family, while GitLab's still-unported fixture collectors remain closed.
+func TestGitHubWorkItemFamilyIsAtomicAndCanonicalClaimOnly(t *testing.T) {
 	t.Parallel()
 	switches := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true,
+		GithubWorkItems:          true,
 	}
-	for _, provider := range []string{"github", "gitlab"} {
-		for _, dataset := range []string{
-			"work-items",
-			"work-item-labels",
-			"work-item-projects",
-			"work-item-history",
-			"work-item-comments",
-		} {
-			descriptor, ok := switches.Descriptor(provider, dataset)
-			if !ok || descriptor.NativeShadow || descriptor.RouteReady ||
-				descriptor.RouteEnabled ||
-				descriptor.Executor != ExecutorNone {
-				t.Fatalf("%s/%s descriptor=%+v ok=%v", provider, dataset, descriptor, ok)
+	for _, dataset := range []string{
+		"work-items", "work-item-labels", "work-item-projects",
+		"work-item-history", "work-item-comments",
+	} {
+		descriptor, ok := switches.Descriptor("github", dataset)
+		if !ok || descriptor.NativeShadow || !descriptor.RouteReady ||
+			descriptor.Executor != ExecutorNativeGo ||
+			!slices.Equal(descriptor.Destinations, workItemRouteDestinations()) {
+			t.Fatalf("github/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
+		}
+		if dataset == "work-items" {
+			if !descriptor.RouteEnabled || !descriptor.PreparedManifestRecovery ||
+				descriptor.RouteDataset != "work-items" {
+				t.Fatalf("canonical github/%s descriptor=%+v", dataset, descriptor)
 			}
+			continue
+		}
+		// This is the direct-alias guard, not a missing capability. The Python
+		// planner collapses aliases into the canonical claim and exposes them
+		// only through family_dataset_* flags; letting a malformed direct alias
+		// through here would run a partial writer. providerunit.Handler observes
+		// this disabled descriptor before BuildExecutor can resolve credentials,
+		// make HTTP calls, write effects, or advance a watermark.
+		if descriptor.RouteEnabled || descriptor.PreparedManifestRecovery ||
+			descriptor.RouteDataset != dataset {
+			t.Fatalf("direct alias github/%s descriptor=%+v", dataset, descriptor)
+		}
+	}
+	for _, dataset := range []string{
+		"work-items", "work-item-labels", "work-item-projects",
+		"work-item-history", "work-item-comments",
+	} {
+		descriptor, ok := switches.Descriptor("gitlab", dataset)
+		if !ok || descriptor.NativeShadow || descriptor.RouteReady ||
+			descriptor.RouteEnabled || descriptor.Executor != ExecutorNone {
+			t.Fatalf("gitlab/%s descriptor=%+v ok=%v", dataset, descriptor, ok)
 		}
 	}
 }

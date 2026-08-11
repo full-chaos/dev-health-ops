@@ -10,98 +10,16 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// The DDL below is the three tables AS PRODUCTION HAS THEM after migrations
-// 001 (create), 002/003/006 (added columns), 024 (org_id), 027 (org_id-first
-// sorting keys) and 055 (MergeTree -> ReplacingMergeTree(computed_at)). It runs
-// against a throwaway container, never a developer's `default` database.
-//
-// Three details are load-bearing and deliberately not simplified:
-//   - the engines are ReplacingMergeTree(computed_at), which is what makes
-//     "an older version", "a newer version" and "this version" different
-//     answers rather than the same row;
-//   - work_item_cycle_times keeps active_time_hours/wait_time_hours/
-//     flow_efficiency with their DEFAULT 0, because that is exactly what the
-//     Python sink leaves behind and what the Go writer must also leave behind;
-//   - team_id/team_name are Nullable on work_item_cycle_times and plain
-//     LowCardinality(String) on the two rollups, which is the asymmetry the
-//     readback has to survive.
-const (
-	githubWorkItemMetricsDailyDDL = `CREATE TABLE work_item_metrics_daily (
-  day Date,
-  provider LowCardinality(String),
-  work_scope_id LowCardinality(String),
-  team_id LowCardinality(String),
-  team_name String,
-  items_started UInt32,
-  items_completed UInt32,
-  items_started_unassigned UInt32,
-  items_completed_unassigned UInt32,
-  wip_count_end_of_day UInt32,
-  wip_unassigned_end_of_day UInt32,
-  cycle_time_p50_hours Nullable(Float64),
-  cycle_time_p90_hours Nullable(Float64),
-  lead_time_p50_hours Nullable(Float64),
-  lead_time_p90_hours Nullable(Float64),
-  wip_age_p50_hours Nullable(Float64),
-  wip_age_p90_hours Nullable(Float64),
-  bug_completed_ratio Float64,
-  story_points_completed Float64,
-  new_bugs_count UInt32 DEFAULT 0,
-  new_items_count UInt32 DEFAULT 0,
-  defect_intro_rate Float64 DEFAULT 0.0,
-  wip_congestion_ratio Float64 DEFAULT 0.0,
-  predictability_score Float64 DEFAULT 0.0,
-  computed_at DateTime('UTC'),
-  org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, provider, day, work_scope_id, team_id)`
-
-	githubWorkItemUserMetricsDailyDDL = `CREATE TABLE work_item_user_metrics_daily (
-  day Date,
-  provider LowCardinality(String),
-  work_scope_id LowCardinality(String),
-  user_identity String,
-  team_id LowCardinality(String),
-  team_name String,
-  items_started UInt32,
-  items_completed UInt32,
-  wip_count_end_of_day UInt32,
-  cycle_time_p50_hours Nullable(Float64),
-  cycle_time_p90_hours Nullable(Float64),
-  computed_at DateTime('UTC'),
-  org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, provider, work_scope_id, user_identity, day)`
-
-	githubWorkItemCycleTimesDDL = `CREATE TABLE work_item_cycle_times (
-  work_item_id String,
-  provider LowCardinality(String),
-  day Date,
-  work_scope_id LowCardinality(String),
-  team_id Nullable(String),
-  team_name Nullable(String),
-  assignee Nullable(String),
-  type LowCardinality(String),
-  status LowCardinality(String),
-  created_at DateTime('UTC'),
-  started_at Nullable(DateTime('UTC')),
-  completed_at Nullable(DateTime('UTC')),
-  cycle_time_hours Nullable(Float64),
-  lead_time_hours Nullable(Float64),
-  active_time_hours Float64 DEFAULT 0,
-  wait_time_hours Float64 DEFAULT 0,
-  flow_efficiency Float64 DEFAULT 0,
-  computed_at DateTime('UTC'),
-  org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, provider, work_item_id)`
-)
+// This fixture authors no schema. It applies the real ClickHouse migration
+// chain before opening the Go connection, including the Python rebuilds that
+// put org_id first in each sorting key and convert the daily rollups to
+// ReplacingMergeTree(computed_at). That keeps the metric-triplet readbacks
+// coupled to the exact schema production uses rather than a second, stale DDL
+// copy in this package.
 
 func githubWorkItemMetricIntegrationConn(t *testing.T, ctx context.Context) driver.Conn {
 	t.Helper()
@@ -116,20 +34,12 @@ func githubWorkItemMetricIntegrationConn(t *testing.T, ctx context.Context) driv
 			t.Errorf("terminate ClickHouse: %v", err)
 		}
 	})
+	chschema.Apply(ctx, t, instance)
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	for _, statement := range []string{
-		githubWorkItemMetricsDailyDDL,
-		githubWorkItemUserMetricsDailyDDL,
-		githubWorkItemCycleTimesDDL,
-	} {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return conn
 }
 

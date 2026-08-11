@@ -104,6 +104,13 @@ func (repository *PostgresRepository) Complete(
 		completedAt.Before(startedAt) {
 		return ErrInvalidConfiguration
 	}
+	var err error
+	result, watermark, err = applyGitHubWorkItemsIncompletePolicy(
+		claim.Provider, claim.Dataset, result, watermark,
+	)
+	if err != nil {
+		return err
+	}
 	datasetKeys, auditedResult, err := workItemAliasCompletionMetadata(
 		claim.Provider, claim.Dataset, claim.ProcessorFlags, result,
 	)

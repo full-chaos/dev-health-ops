@@ -370,7 +370,7 @@ func assertLeaseRepairState(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}
 	wantSurfaces := []string{}
 	if wantStatus == "retrying" || wantCategory == leaseRepairRetryExhaustedCategory {
-		wantSurfaces = linearBackfillRetrySurfaces
+		wantSurfaces = wantLinearExpiredLeaseRetrySurfaces()
 	}
 	gotSurfaces, ok := result["retry_surfaces"].([]any)
 	if !ok || len(gotSurfaces) != len(wantSurfaces) {

@@ -219,12 +219,13 @@ services:
       # SAME change. Bare-image deployments must follow the two-phase rollout
       # in workers/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
-      # Route-ready provider/dataset switches (including CHAOS-3342).
+      # Route-ready provider/dataset switches (including CHAOS-3606).
       # Read by BOTH this Python producer gate
       # (ProviderUnitRouteSwitches.from_environment,
       # src/dev_health_ops/workers/provider_unit_route.py) and the Go worker
       # (config.Config.WorkerLaunchDarklyFeatureFlagsEnabled /
-      # WorkerGithubRepoMetadataEnabled / WorkerGitlabRepoMetadataEnabled,
+      # WorkerGithubRepoMetadataEnabled / WorkerGithubWorkItemsEnabled /
+      # WorkerGitlabRepoMetadataEnabled,
       # cmd/dev-health-worker/dependencies.go
       # workerRouteSwitches) from the SAME env var names, so one override
       # flips both sides coherently wherever the Go worker runs -- a unit
@@ -233,6 +234,14 @@ services:
       # "false"; only flip alongside a reviewed route release.
       WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
       WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
+      # GitHub work-items is a five-alias matrix family, but only its canonical
+      # work-items claim may execute. Its Go route also requires these two
+      # explicit, validated config paths. They intentionally have no guessed
+      # source-relative default; turning the switch on without both inputs
+      # fails Go readiness before a provider request or write.
+      WORKER_GITHUB_WORK_ITEMS_ENABLED: ${WORKER_GITHUB_WORK_ITEMS_ENABLED:-false}
+      WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH: ${WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH:-}
+      WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH: ${WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH:-}
       WORKER_GITLAB_REPO_METADATA_ENABLED: ${WORKER_GITLAB_REPO_METADATA_ENABLED:-false}
       WORKER_GITLAB_INCIDENTS_ENABLED: ${WORKER_GITLAB_INCIDENTS_ENABLED:-false}
       AUTO_RUN_MIGRATIONS: "false"

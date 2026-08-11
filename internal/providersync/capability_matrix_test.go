@@ -12,6 +12,12 @@ import (
 
 const providerMatrixContractPath = "../../contracts/provider-matrix/v1/matrix.json"
 
+const (
+	expectedProviderMatrixPairs   = 59
+	expectedRouteReadyPairs       = 25
+	expectedGitHubRouteReadyPairs = 17
+)
+
 // expectedMatrixPairCounts is the independently asserted provider/dataset
 // census from the CUT-08 audit. It exists so a silent registry deletion cannot
 // be "fixed" by regenerating the contract.
@@ -51,8 +57,37 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 		}
 		total += want
 	}
-	if len(matrix.Pairs) != total {
+	if total != expectedProviderMatrixPairs {
+		t.Fatalf("configured expected matrix census=%d want %d", total, expectedProviderMatrixPairs)
+	}
+	if len(matrix.Pairs) != expectedProviderMatrixPairs {
 		t.Fatalf("matrix pairs=%d want %d", len(matrix.Pairs), total)
+	}
+}
+
+// TestProviderMatrixRouteReadyCensus is intentionally independent from
+// routeReadyPairs. A registry/matrix edit that deletes a ready identity from
+// both the implementation and that explanatory set must still fail CHAOS-3606's
+// 25/59 and GitHub 17/17 acceptance census.
+func TestProviderMatrixRouteReadyCensus(t *testing.T) {
+	t.Parallel()
+	matrix := BuildProviderMatrix()
+	ready, githubReady := 0, 0
+	for _, pair := range matrix.Pairs {
+		if !pair.RouteReady {
+			continue
+		}
+		ready++
+		if pair.Provider == "github" {
+			githubReady++
+		}
+	}
+	if got, want := len(matrix.Pairs), expectedProviderMatrixPairs; got != want {
+		t.Fatalf("matrix pairs=%d want %d", got, want)
+	}
+	if ready != expectedRouteReadyPairs || githubReady != expectedGitHubRouteReadyPairs {
+		t.Fatalf("route-ready total=%d github=%d want total=%d github=%d",
+			ready, githubReady, expectedRouteReadyPairs, expectedGitHubRouteReadyPairs)
 	}
 }
 
@@ -106,6 +141,12 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 //     unit matching Python's _sync_github_prs_to_store_async boundary, with
 //     REST comment counts, GraphQL review enrichment, two exact readback
 //     effects, alias-preserving claim identity, and crash recovery.
+//
+//   - github/work-items plus work-item-labels, work-item-projects,
+//     work-item-history, and work-item-comments: CHAOS-3606's one complete
+//     sixteen-destination work-item family. Matrix readiness is atomic across
+//     all five aliases, while the planner admits only canonical work-items
+//     claims; direct sibling aliases deliberately route-reconcile before I/O.
 var routeReadyPairs = map[string]struct{}{
 	"launchdarkly/feature-flags": {},
 	"github/repo-metadata":       {},
@@ -127,6 +168,11 @@ var routeReadyPairs = map[string]struct{}{
 	"github/prs":                 {},
 	"github/pr-reviews":          {},
 	"github/pr-comments":         {},
+	"github/work-items":          {},
+	"github/work-item-labels":    {},
+	"github/work-item-projects":  {},
+	"github/work-item-history":   {},
+	"github/work-item-comments":  {},
 }
 
 // TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
@@ -144,6 +190,11 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		t.Fatalf("route-ready pairs=%v want %v", ready, routeReadyPairs)
 	}
 	// Enabling every declared switch may not make an unready pair routable.
+	// The four noncanonical GitHub work-item aliases are the intentional
+	// exception among ready rows: they describe matrix/watermark identities,
+	// not valid direct claims. planner.py collapses all five into one canonical
+	// github/work-items claim, so a direct alias must stay disabled and enter
+	// route reconciliation before credential or provider construction.
 	// The literal below must name every field of CompleteRouteSwitches: a new
 	// switch left out of it would leave its pair unexercised here.
 	all := CompleteRouteSwitches{
@@ -161,8 +212,9 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GithubCommitStats: true,
 		GithubBlame:       true,
 		GithubTests:       true,
+		GithubWorkItems:   true,
 	}
-	if reflect.TypeOf(all).NumField() != 22 {
+	if reflect.TypeOf(all).NumField() != 23 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -175,6 +227,10 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 			t.Fatalf("%s has no descriptor", key)
 		}
 		_, wantRoutable := routeReadyPairs[key]
+		if pair.Provider == "github" && isWorkItemFamilyDataset(pair.Dataset) &&
+			pair.Dataset != "work-items" {
+			wantRoutable = false
+		}
 		if routable := descriptor.RouteReady && descriptor.RouteEnabled; routable != wantRoutable {
 			t.Fatalf("%s routable=%v want %v descriptor=%+v", key, routable, wantRoutable, descriptor)
 		}
@@ -375,6 +431,11 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 		"gitlab/incidents":           GitLabIncidentsRouteHandler{},
 		"github/blame":               GitHubBlameRouteHandler{},
 		"github/tests":               GitHubTestsRouteHandler{},
+		"github/work-items":          GitHubWorkItemsRouteHandler{},
+		"github/work-item-labels":    GitHubWorkItemsRouteHandler{},
+		"github/work-item-projects":  GitHubWorkItemsRouteHandler{},
+		"github/work-item-history":   GitHubWorkItemsRouteHandler{},
+		"github/work-item-comments":  GitHubWorkItemsRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

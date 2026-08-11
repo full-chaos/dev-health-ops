@@ -24,6 +24,7 @@ with (
 ):
     from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitGate
     from dev_health_ops.providers.github.client import (
+        GitHubAuth,
         GitHubWorkClient,
         ProjectItemChanges,
     )
@@ -113,9 +114,12 @@ class _OracleGitHubWorkClient(GitHubWorkClient):
     def __init__(self, harness: _Harness) -> None:
         # The oracle exercises only iter_project_v2_items, whose concrete
         # dependencies are the gate and the two query methods below. Avoid
-        # constructing live PyGithub/GraphQL transports while retaining the
-        # production class and method dispatch mypy verifies.
-        self.gate = RateLimitGate()
+        # making live PyGithub/GraphQL requests while retaining the production
+        # initialization contract and method dispatch mypy verifies.
+        super().__init__(
+            auth=GitHubAuth(token="oracle-token"),
+            gate=RateLimitGate(),
+        )
         self._harness = harness
 
     def _query_graphql(

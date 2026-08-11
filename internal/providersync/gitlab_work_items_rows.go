@@ -24,6 +24,7 @@ type gitlabWorkItemDependencyRow = githubWorkItemDependencyRow
 type gitlabWorkItemReopenRow = githubWorkItemReopenRow
 type gitlabWorkItemInteractionRow = githubWorkItemInteractionRow
 type gitlabSprintRow = githubSprintRow
+type gitlabAIAttributionRow = githubAIAttributionRow
 
 type gitlabWorkItemRows struct {
 	WorkItems         []gitlabWorkItemRow
@@ -32,12 +33,14 @@ type gitlabWorkItemRows struct {
 	ReopenEvents      []gitlabWorkItemReopenRow
 	Interactions      []gitlabWorkItemInteractionRow
 	Sprints           []gitlabSprintRow
+	AIAttributions    []gitlabAIAttributionRow
 }
 
 type gitlabWorkItemUserPayload struct {
 	Email    *string `json:"email"`
 	Username *string `json:"username"`
 	Name     *string `json:"name"`
+	Bot      bool    `json:"bot"`
 }
 
 type gitlabIssueMilestonePayload struct {
@@ -66,21 +69,22 @@ type gitlabIssueWorkItemPayload struct {
 }
 
 type gitlabMergeRequestWorkItemPayload struct {
-	IID         int                          `json:"iid"`
-	Title       string                       `json:"title"`
-	Description *string                      `json:"description"`
-	State       string                       `json:"state"`
-	CreatedAt   *string                      `json:"created_at"`
-	UpdatedAt   *string                      `json:"updated_at"`
-	ClosedAt    *string                      `json:"closed_at"`
-	MergedAt    *string                      `json:"merged_at"`
-	Labels      []string                     `json:"labels"`
-	Assignees   []gitlabWorkItemUserPayload  `json:"assignees"`
-	Author      *gitlabWorkItemUserPayload   `json:"author"`
-	WebURL      *string                      `json:"web_url"`
-	URL         *string                      `json:"url"`
-	Weight      *float64                     `json:"weight"`
-	Milestone   *gitlabIssueMilestonePayload `json:"milestone"`
+	IID          int                          `json:"iid"`
+	Title        string                       `json:"title"`
+	Description  *string                      `json:"description"`
+	State        string                       `json:"state"`
+	CreatedAt    *string                      `json:"created_at"`
+	UpdatedAt    *string                      `json:"updated_at"`
+	ClosedAt     *string                      `json:"closed_at"`
+	MergedAt     *string                      `json:"merged_at"`
+	Labels       []string                     `json:"labels"`
+	Assignees    []gitlabWorkItemUserPayload  `json:"assignees"`
+	Author       *gitlabWorkItemUserPayload   `json:"author"`
+	WebURL       *string                      `json:"web_url"`
+	URL          *string                      `json:"url"`
+	Weight       *float64                     `json:"weight"`
+	Milestone    *gitlabIssueMilestonePayload `json:"milestone"`
+	SourceBranch string                       `json:"source_branch"`
 }
 
 type gitlabLabelEventPayload struct {
@@ -382,6 +386,69 @@ func normalizeGitLabMergeRequestWorkItem(
 		return gitlabWorkItemRow{}, nil, nil, err
 	}
 	return row, transitions, reopens, nil
+}
+
+// normalizeGitLabMRAIAttributions mirrors gitlab_mr_ai_attributions at the
+// same provider-normalization boundary that still owns the original merge
+// request payload. The six raw ClickHouse facts deliberately do not retain
+// source_branch or author.bot, so postponing this producer until the derived
+// compute boundary would lose authoritative signals.
+func normalizeGitLabMRAIAttributions(
+	claim Claim,
+	repoID uuid.UUID,
+	payload gitlabMergeRequestWorkItemPayload,
+	normalizedAt time.Time,
+) ([]gitlabAIAttributionRow, error) {
+	if claim.Validate() != nil || claim.Provider != "gitlab" ||
+		claim.Dataset != "work-items" || repoID == uuid.Nil || payload.IID < 1 ||
+		normalizedAt.IsZero() {
+		return nil, ErrInvalidConfiguration
+	}
+	pull := githubPullRequestWorkItemPayload{}
+	pull.Number = payload.IID
+	pull.Body = payload.Description
+	pull.CreatedAt = payload.CreatedAt
+	if parseGitLabWorkItemTime(pull.CreatedAt) == nil {
+		pull.CreatedAt = payload.UpdatedAt
+	}
+	pull.UpdatedAt = payload.UpdatedAt
+	pull.Head.Ref = payload.SourceBranch
+	pull.Labels = make([]githubWorkItemLabelPayload, 0, len(payload.Labels))
+	for _, label := range payload.Labels {
+		if label != "" {
+			pull.Labels = append(pull.Labels, githubWorkItemLabelPayload{Name: label})
+		}
+	}
+	if payload.Author != nil {
+		user := githubWorkItemUserPayload{Login: payload.Author.Username}
+		if payload.Author.Bot {
+			user.Type = stringPointer("Bot")
+		}
+		pull.User = &user
+	}
+	rows, err := detectGitHubPullRequestAttributions(claim, repoID, pull, normalizedAt)
+	if err != nil {
+		return nil, err
+	}
+	for index := range rows {
+		rows[index].Provider = "gitlab"
+		if err := validateGitLabAIAttributionRow(rows[index], claim); err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
+func validateGitLabAIAttributionRow(row gitlabAIAttributionRow, claim Claim) error {
+	if claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
+		row.RecordID == uuid.Nil || row.OrgID == uuid.Nil || row.OrgID.String() != claim.OrgID ||
+		row.Provider != "gitlab" || row.SubjectType != "pull_request" || row.SubjectID == "" ||
+		row.RepoID == nil || *row.RepoID == uuid.Nil || row.Kind == "" || row.Source == "" ||
+		row.Confidence < 0 || row.Confidence > 1 || row.Evidence == nil ||
+		row.ObservedAt.IsZero() || row.IngestedAt.IsZero() {
+		return providerfoundation.ErrInvalidScope
+	}
+	return nil
 }
 
 func normalizeGitLabMRStateEvents(

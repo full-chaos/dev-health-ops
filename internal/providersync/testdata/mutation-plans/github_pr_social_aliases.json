@@ -23,16 +23,16 @@
     {
       "id": "D16-social-sink-accepts-comments-ledger-claim",
       "file": "internal/providersync/github_pr_reviews_effects_clickhouse.go",
-      "find": "func (sink GitHubPullRequestSocialClickHouseEffects) WriteEffect(\n\tctx context.Context, claim Claim, effect EffectBatch,\n) error {\n\tif ctx == nil || sink.Lease == nil || claim.Validate() != nil ||\n\t\tclaim.Provider != \"github\" || !isGitHubPRSocialDataset(claim.Dataset)",
-      "replace": "func (sink GitHubPullRequestSocialClickHouseEffects) WriteEffect(\n\tctx context.Context, claim Claim, effect EffectBatch,\n) error {\n\tif ctx == nil || sink.Lease == nil || claim.Validate() != nil ||\n\t\tclaim.Provider != \"github\" || claim.Dataset != \"pr-reviews\"",
+      "find": "claim.Provider != sink.provider() || !isPRSocialDataset(claim.Dataset)",
+      "replace": "claim.Provider != \"github\" || claim.Dataset != \"pr-reviews\"",
       "rationale": "The composite sink must accept the original pr-comments claim for both effects so EffectCommitter records the caller's ledger identity rather than requiring callers to substitute pr-reviews.",
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPullRequestSocialEffectsAcceptEveryAliasClaim/pr-comments$", "./internal/providersync/"]]
     },
     {
       "id": "D16-review-row-validation-uses-social-claim",
       "file": "internal/providersync/github_pr_reviews.go",
-      "find": "claim.Provider != \"github\" || !isGitHubPRSocialDataset(claim.Dataset) ||",
-      "replace": "claim.Provider != \"github\" || claim.Dataset != \"pr-reviews\" ||",
+      "find": "(claim.Provider != \"github\" && claim.Provider != \"gitlab\") || !isPRSocialDataset(claim.Dataset) ||",
+      "replace": "(claim.Provider != \"github\" && claim.Provider != \"gitlab\") || claim.Dataset != \"pr-reviews\" ||",
       "rationale": "Raw review rows are written under the enclosing social unit claim, so row validation must not reject a pr-comments ledger recovery after the row was already durably written.",
       "proof": [["go", "test", "-count=1", "-run", "^TestGitHubPullRequestSocialEffectsAcceptEveryAliasClaim/pr-comments$", "./internal/providersync/"]]
     }

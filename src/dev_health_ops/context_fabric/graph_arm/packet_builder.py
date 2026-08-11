@@ -7,11 +7,14 @@ against the JSON Schema, because the manifest is explicit that
 ``schema_only_validation_is_sufficient`` is ``false`` and a schema-valid
 packet has had none of its cross-field rules checked.
 
-**What this revision does and does not claim.** PR1 of the arm performs
+**What this revision does and does not claim.** The seeded paths perform
 subject resolution over canonical ids, bounded authorized traversal, related
-entity and lineage-path discovery, and evidence indexing. It performs **no
-driver synthesis**. So :func:`build_packet` never emits a supported outcome:
-a packet with no asserted driver is, by the contract's own
+entity and lineage-path discovery, and evidence indexing; those callers pass
+no drivers. The subjectless production path additionally supplies bounded
+structural findings discovered independently for each cohort member. Those
+findings are still checked here for packet-local lineage/evidence closure,
+and canonical measurements remain candidate-only context. A packet with no
+asserted driver is, by the contract's own
 ``validate_supported_outcome_asserts_a_judgment``, a redirect rather than an
 answer, and claiming ``SUPPORTED`` for one would be precisely the
 "dashboard redirect without a direct judgment" fault mode. The outcome is
@@ -608,11 +611,13 @@ def derive_outcome(
     makes that rule mean what it appears to mean is
     :func:`_assert_support_is_closed`, which runs first and refuses any
     asserted driver whose support is not actually in this packet. This
-    revision synthesizes no drivers, so it reaches ``UNSUPPORTED`` every
-    time — but it reaches it by evaluating the rule, not by asserting the
-    answer. Written as a function precisely so both branches can be observed:
-    a constant here would make "the arm never over-claims" untestable, which
-    is the same thing as unproven.
+    An empty driver set reaches ``UNSUPPORTED`` — but it reaches it by
+    evaluating the rule, not by asserting the answer. A structural driver
+    with closed support can reach ``SUPPORTED`` (or ``SUPPORTED_WITH_GAPS``
+    when a disclosed bound bites), while candidate-only measurements cannot.
+    Written as a function precisely so both branches can be observed: a
+    constant here would make "the arm never over-claims" untestable, which is
+    the same thing as unproven.
 
     ``gaps`` is whether the run was degraded (stale, truncated or missing a
     required source). It only ever weakens a supported outcome; it can never
@@ -1944,14 +1949,24 @@ def _assemble_core(
             )
 
     # ---- limitations ---------------------------------------------------
+    if scope_enumerated and drivers:
+        interpretation_detail = (
+            "this production path performs subjectless cohort discovery, "
+            "authorized traversal and evidence indexing, then synthesizes "
+            "bounded structural driver candidates independently for each "
+            "cohort member; canonical measurements remain candidate-only "
+            "context"
+        )
+    else:
+        interpretation_detail = (
+            "this arm revision performs subject resolution, authorized "
+            "traversal and evidence indexing only; it synthesizes no "
+            "drivers, so it asserts no judgment about causes"
+        )
     limitations: list[PacketLimitation] = [
         PacketLimitation(
             kind=PacketLimitationKind.INTERPRETATION_UNCERTAINTY,
-            detail=(
-                "this arm revision performs subject resolution, authorized "
-                "traversal and evidence indexing only; it synthesizes no "
-                "drivers, so it asserts no judgment about causes"
-            ),
+            detail=interpretation_detail,
         )
     ]
     if missing:
@@ -2262,10 +2277,11 @@ def _assemble_core(
         organization_id=readout.org_id,
         produced_at=produced_at,
         # Derived, never passed in: an arm that could be told its own outcome
-        # could claim one it did not earn. This revision synthesizes no
-        # drivers, so the rule below always lands on UNSUPPORTED -- but it
-        # lands there by evaluating the contract's own standing rule against
-        # what was produced, which is what makes "the arm cannot over-claim"
+        # could claim one it did not earn. Seeded paths still supply no
+        # drivers; the subjectless production path supplies only the bounded
+        # structural findings it discovered per cohort member. In either
+        # case, the rule below evaluates the contract's own standing rule
+        # against what was produced, which makes "the arm cannot over-claim"
         # a checked property rather than a constant.
         outcome=derive_outcome(
             driver_analysis.candidates,

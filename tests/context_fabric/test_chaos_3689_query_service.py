@@ -25,7 +25,7 @@ Two halves:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -42,8 +42,19 @@ from dev_health_ops.api.dev.graph_investigation_query import (
     GraphQueryOutcome,
 )
 from dev_health_ops.api.dev.investigation_contract import (
+    AssertionBasis,
+    CohortCompleteness,
     CohortInclusionBasis,
     ComparisonDimension,
+    ConfidenceQualifier,
+    DriverCategory,
+    DriverExclusionReason,
+    DriverRole,
+    DriverStanding,
+    InvestigationOutcome,
+    PacketLimitationKind,
+    RelationshipDirection,
+    RelationshipType,
 )
 from dev_health_ops.context_fabric.graph_arm import (
     query_service as query_service_module,
@@ -57,13 +68,27 @@ from dev_health_ops.context_fabric.graph_arm.cohort_discovery import (
     FAMILY_CANDIDATE_KINDS,
     CohortDiscovery,
 )
+from dev_health_ops.context_fabric.graph_arm.drivers import (
+    DriverFinding,
+    StandingMechanism,
+)
 from dev_health_ops.context_fabric.graph_arm.query_service import (
     _COHORT_DISCOVERY_QUESTION_FAMILY,
     _MAX_COHORT_SEEDS,
     ProductionGraphInvestigationQuery,
+    _subjectless_drivers,
 )
-from dev_health_ops.context_fabric.graph_arm.readback import InvestigationReadout
-from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
+from dev_health_ops.context_fabric.graph_arm.readback import (
+    DiscoveredEntity,
+    DiscoveredObservation,
+    DiscoveredPath,
+    InvestigationReadout,
+    PathStep,
+)
+from dev_health_ops.context_fabric.graph_arm.vocabulary import (
+    GraphEntityKind,
+    GraphObservationKind,
+)
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 
 _TEST_SIGNING_SECRET = "chaos-3689-query-service-test-signing-secret-not-real"
@@ -236,6 +261,98 @@ def _empty_readout() -> InvestigationReadout:
     )
 
 
+def _capped_readout(members: tuple[str, ...]) -> InvestigationReadout:
+    """A bounded readout with one real driver on the first seeded member.
+
+    The proposal may contain more members than the reader seeds. The reader
+    therefore returns the seeded project entities plus the blocker they reach,
+    while the authorization envelope still names the complete proposal.
+    """
+
+    observed_at = datetime(2026, 8, 8, tzinfo=UTC)
+    seeds = tuple(sorted(members)[:_MAX_COHORT_SEEDS])
+    blocker_id = "wu_blocker"
+    entities = tuple(
+        DiscoveredEntity(
+            canonical_id=member_id,
+            kind=GraphEntityKind.PROJECT,
+            display_label=member_id,
+            source_class=SourceClass.WORK_GRAPH,
+            observed_at=observed_at,
+        )
+        for member_id in seeds
+    ) + (
+        DiscoveredEntity(
+            canonical_id=blocker_id,
+            kind=GraphEntityKind.WORK_UNIT,
+            display_label="Open blocker",
+            source_class=SourceClass.WORK_GRAPH,
+            observed_at=observed_at,
+        ),
+    )
+    observation_id = "obs_blocker"
+    path = DiscoveredPath(
+        path_id="p0001",
+        origin_canonical_id=seeds[0],
+        terminal_canonical_id=blocker_id,
+        steps=(
+            PathStep(
+                from_canonical_id=seeds[0],
+                from_kind=GraphEntityKind.PROJECT,
+                relationship=RelationshipType.BLOCKED_BY,
+                direction=RelationshipDirection.FORWARD,
+                to_canonical_id=blocker_id,
+                to_kind=GraphEntityKind.WORK_UNIT,
+                source_class=SourceClass.WORK_GRAPH,
+                observed_at=observed_at,
+                observation_ids=(observation_id,),
+            ),
+        ),
+    )
+    observation = DiscoveredObservation(
+        canonical_id=observation_id,
+        kind=GraphObservationKind.CI_RUN,
+        title="Canonical CI blocker record",
+        source_class=SourceClass.WORK_GRAPH,
+        observed_at=observed_at,
+        subject_canonical_ids=(seeds[0], blocker_id),
+        attributes={"corpus_trust": "canonical"},
+    )
+    return InvestigationReadout(
+        org_id="org_query_service_test",
+        partition="cf_query_service_test",
+        seed_canonical_ids=seeds,
+        entities=entities,
+        paths=(path,),
+        observations=(observation,),
+        authorized_entity_ids=tuple(sorted((*members, blocker_id))),
+    )
+
+
+def _excluded_finding(driver_id: str, subject_id: str) -> DriverFinding:
+    """A candidate with no support, for exercising the aggregation bound.
+
+    Excluded candidates are still part of the packet's truthful accounting,
+    but they do not require a fabricated path/evidence fixture merely to test
+    ordering, duplicate-id handling or truncation disclosure.
+    """
+
+    return DriverFinding(
+        driver_id=driver_id,
+        subject_id=subject_id,
+        cause_id=f"cause_{driver_id}",
+        category=DriverCategory.EXTERNAL_BLOCKER,
+        role=DriverRole.DRIVER,
+        standing=DriverStanding.EXCLUDED,
+        mechanism=StandingMechanism.STRUCTURAL,
+        summary_subject=f"cause_{driver_id}",
+        summary_detail="was considered but lacked canonical support",
+        exclusion_reason=DriverExclusionReason.EVIDENCE_CONFLICT_UNRESOLVED,
+        assertion_basis=AssertionBasis.SOURCE_ASSERTED,
+        confidence_qualifier=ConfidenceQualifier.QUALIFIED,
+    )
+
+
 class TestSubjectlessCohortDiscoveryRefuses:
     """The real (unmocked) path: an empty live snapshot -> an empty,
     incomparable discovery -> PROVIDER_FAILURE naming the mechanism.
@@ -345,7 +462,75 @@ class TestSubjectlessCohortDiscoveryCompletes:
             org_id="org_query_service_test",
             partition="cf_query_service_test",
             seed_canonical_ids=("proj_a", "proj_b"),
-            authorized_entity_ids=("proj_a", "proj_b", "team_x"),
+            authorized_entity_ids=("proj_a", "proj_b", "team_x", "wu_blocker"),
+            entities=(
+                DiscoveredEntity(
+                    canonical_id="proj_a",
+                    kind=GraphEntityKind.PROJECT,
+                    display_label="Project A",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=datetime(2026, 5, 1, tzinfo=UTC),
+                ),
+                DiscoveredEntity(
+                    canonical_id="proj_b",
+                    kind=GraphEntityKind.PROJECT,
+                    display_label="Project B",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=datetime(2026, 5, 1, tzinfo=UTC),
+                ),
+                DiscoveredEntity(
+                    canonical_id="wu_blocker",
+                    kind=GraphEntityKind.WORK_UNIT,
+                    display_label="Open blocker",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=datetime(2026, 5, 1, tzinfo=UTC),
+                ),
+            ),
+            paths=(
+                DiscoveredPath(
+                    path_id="p0001",
+                    origin_canonical_id="proj_a",
+                    terminal_canonical_id="wu_blocker",
+                    steps=(
+                        PathStep(
+                            from_canonical_id="proj_a",
+                            from_kind=GraphEntityKind.PROJECT,
+                            relationship=RelationshipType.BLOCKED_BY,
+                            direction=RelationshipDirection.FORWARD,
+                            to_canonical_id="wu_blocker",
+                            to_kind=GraphEntityKind.WORK_UNIT,
+                            source_class=SourceClass.WORK_GRAPH,
+                            observed_at=datetime(2026, 5, 1, tzinfo=UTC),
+                            observation_ids=("obs_blocker",),
+                        ),
+                    ),
+                ),
+            ),
+            observations=(
+                DiscoveredObservation(
+                    canonical_id="obs_blocker",
+                    kind=GraphObservationKind.CI_RUN,
+                    title="Canonical CI blocker record",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=datetime(2026, 5, 1, tzinfo=UTC),
+                    subject_canonical_ids=("proj_a", "wu_blocker"),
+                    attributes={"corpus_trust": "canonical"},
+                ),
+                DiscoveredObservation(
+                    canonical_id="obs_measurement",
+                    kind=GraphObservationKind.MEASUREMENT,
+                    title="Canonical work in progress measurement",
+                    source_class=SourceClass.WORK_GRAPH,
+                    observed_at=datetime(2026, 5, 1, tzinfo=UTC),
+                    subject_canonical_ids=("proj_a",),
+                    attributes={
+                        "corpus_trust": "canonical",
+                        "measurement_metric": "work_in_progress",
+                        "measurement_value": "10",
+                        "measurement_cohort_median": "5",
+                    },
+                ),
+            ),
         )
         reader = _FakeReader(readout=readout)
         service = _service(driver=driver, reader=reader)
@@ -355,19 +540,46 @@ class TestSubjectlessCohortDiscoveryCompletes:
             query_service_module, "discover_cohort", lambda **_kwargs: discovery
         )
 
-        result = await service.investigate(_request())
+        result = await service.investigate(
+            _request(
+                authorized_entity_ids=frozenset(
+                    {"proj_a", "proj_b", "team_x", "wu_blocker"}
+                )
+            )
+        )
 
         assert result.outcome is GraphQueryOutcome.COMPLETED
         assert result.packet is not None
+        assert result.packet.outcome is InvestigationOutcome.SUPPORTED
         assert result.packet.comparison_cohort.comparison_shape.value == (
             "discovered_cohort"
         )
         assert sorted(
             member.canonical_id for member in result.packet.comparison_cohort.members
         ) == ["proj_a", "proj_b"]
-        # No drivers attributed -- the same scope boundary
-        # SEEDED_EXPLICIT_COHORT already draws (no subject to explain).
-        assert not result.packet.driver_analysis.candidates
+        # W4: scope enumeration still has no committed subject, but every
+        # cohort member can contribute its own structurally evidenced driver.
+        # ``proj_a`` is blocked by a current work unit with a canonical
+        # edge-level observation; its measurement is retained as context but
+        # may not become an asserted driver; ``proj_b`` has no such path.
+        assert [
+            candidate.driver_id
+            for candidate in result.packet.driver_analysis.candidates
+        ] == ["drv_block_wu_blocker", "drv_metric_obs_measurement"]
+        assert (
+            result.packet.driver_analysis.candidates[0].standing
+            is DriverStanding.PRINCIPAL_DRIVER
+        )
+        assert (
+            result.packet.driver_analysis.candidates[1].standing
+            is DriverStanding.CANDIDATE_ONLY
+        )
+        assert any(
+            limitation.kind is PacketLimitationKind.INTERPRETATION_UNCERTAINTY
+            and "canonical measurements remain candidate-only context"
+            in limitation.detail
+            for limitation in result.packet.evidence_coverage.limitations
+        )
         assert len(reader.calls) == 1
         assert sorted(reader.calls[0]["seed_canonical_ids"]) == ["proj_a", "proj_b"]
 
@@ -375,38 +587,143 @@ class TestSubjectlessCohortDiscoveryCompletes:
     async def test_seeds_are_capped_at_max_cohort_seeds_in_canonical_id_order(
         self, monkeypatch
     ) -> None:
-        """Never a strength/relevance ranking this arm does not own --
-        canonical-id order, capped, mirroring the trial's own
-        ``cohort_seeds_from`` exactly.
+        """The readback cap bounds both traversal and driver synthesis.
+
+        Never a strength/relevance ranking this arm does not own -- canonical-
+        id order, capped, mirroring the trial's own ``cohort_seeds_from``
+        exactly. The cap is a partial result, so a structurally supported
+        finding is weakened rather than presented as complete.
         """
 
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
         many_members = tuple(f"proj_{i:02d}" for i in range(_MAX_COHORT_SEEDS + 5))
         driver = _FakeDriver(entity_rows=[_entity_row(m, m) for m in many_members])
-        readout = InvestigationReadout(
-            org_id="org_query_service_test",
-            partition="cf_query_service_test",
-            seed_canonical_ids=many_members[:_MAX_COHORT_SEEDS],
-            authorized_entity_ids=many_members,
-        )
+        readout = _capped_readout(many_members)
         reader = _FakeReader(readout=readout)
         service = _service(driver=driver, reader=reader)
+
+        driver_calls: list[str] = []
+        real_discover_drivers = query_service_module.discover_drivers
+
+        def tracked_discover_drivers(readout, member_id, *, as_of):
+            driver_calls.append(member_id)
+            return real_discover_drivers(readout, member_id, as_of=as_of)
+
+        monkeypatch.setattr(
+            query_service_module, "discover_drivers", tracked_discover_drivers
+        )
 
         # Shuffle the discovery's own member order to prove the CAP+ORDER
         # comes from this wiring's own slicing, not from an
         # already-sorted discover_cohort output it happens to inherit.
         shuffled = tuple(reversed(many_members))
         discovery = _canned_discovery(members=shuffled)
+        discovery = replace(
+            discovery,
+            proposal=replace(
+                discovery.proposal,
+                truncated=True,
+                truncated_count=4,
+            ),
+        )
+        captured_cohorts: list[CohortProposal] = []
+        real_build_production_packet = query_service_module.build_production_packet
+
+        def capture_cohort(**kwargs):
+            captured_cohorts.append(kwargs["cohort"])
+            return real_build_production_packet(**kwargs)
+
+        monkeypatch.setattr(
+            query_service_module, "build_production_packet", capture_cohort
+        )
         monkeypatch.setattr(
             query_service_module, "discover_cohort", lambda **_kwargs: discovery
         )
 
         result = await service.investigate(
-            _request(authorized_entity_ids=frozenset(many_members))
+            _request(authorized_entity_ids=frozenset((*many_members, "wu_blocker")))
         )
 
         assert result.outcome is GraphQueryOutcome.COMPLETED
+        assert result.packet is not None
+        assert len(captured_cohorts) == 1
+        assert captured_cohorts[0].truncated_count == 4 + 5
+        assert result.packet.outcome is InvestigationOutcome.SUPPORTED_WITH_GAPS
+        assert (
+            result.packet.comparison_cohort.completeness is CohortCompleteness.TRUNCATED
+        )
+        assert result.packet.comparison_cohort.truncation_reason is not None
+        assert any(
+            limitation.kind is PacketLimitationKind.TRUNCATED_TRAVERSAL
+            for limitation in result.packet.evidence_coverage.limitations
+        )
         assert len(reader.calls) == 1
         seeds = reader.calls[0]["seed_canonical_ids"]
         assert len(seeds) == _MAX_COHORT_SEEDS
         assert seeds == sorted(many_members)[:_MAX_COHORT_SEEDS]
+        assert driver_calls == seeds
+        assert [
+            candidate.driver_id
+            for candidate in result.packet.driver_analysis.candidates
+            if candidate.standing
+            in {
+                DriverStanding.CONTRIBUTING_DRIVER,
+                DriverStanding.PRINCIPAL_DRIVER,
+            }
+        ] == ["drv_block_wu_blocker"]
+        assert all(
+            candidate.affected_subject_ids[0] in seeds
+            for candidate in result.packet.driver_analysis.candidates
+        )
+
+
+class TestSubjectlessDriverAggregation:
+    def test_each_member_is_discovered_in_canonical_order_without_ranking(
+        self, monkeypatch
+    ) -> None:
+        calls: list[str] = []
+
+        def fake_discover(readout, member_id, *, as_of):
+            del readout, as_of
+            calls.append(member_id)
+            return (_excluded_finding("drv_same", member_id),), False
+
+        monkeypatch.setattr(query_service_module, "discover_drivers", fake_discover)
+
+        findings, truncated = _subjectless_drivers(
+            _empty_readout(),
+            ("proj_b", "proj_a", "proj_b"),
+            as_of=datetime(2026, 8, 9, tzinfo=UTC),
+        )
+
+        assert calls == ["proj_a", "proj_b"]
+        assert not truncated
+        assert [(item.subject_id, item.driver_id) for item in findings] == [
+            ("proj_a", "drv_same"),
+            ("proj_b", "drv_same__proj_b"),
+        ]
+
+    def test_member_driver_bound_is_disclosed_as_truncation(self, monkeypatch) -> None:
+        def fake_discover(readout, member_id, *, as_of):
+            del readout, as_of
+            return (
+                tuple(
+                    _excluded_finding(f"drv_{index:02d}", member_id)
+                    for index in range(51)
+                ),
+                True,
+            )
+
+        monkeypatch.setattr(query_service_module, "discover_drivers", fake_discover)
+
+        findings, truncated = _subjectless_drivers(
+            _empty_readout(),
+            ("proj_a",),
+            as_of=datetime(2026, 8, 9, tzinfo=UTC),
+        )
+
+        assert len(findings) == 50
+        assert [item.driver_id for item in findings] == [
+            f"drv_{index:02d}" for index in range(50)
+        ]
+        assert truncated

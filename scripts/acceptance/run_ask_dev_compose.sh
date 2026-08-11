@@ -120,6 +120,11 @@ export ASK_DEV_ACCEPTANCE_ACR="${acr_armed}"
 # repo state -- a fresh runtime artifact per acceptance run, same lifecycle
 # as the containers themselves.
 org_ids_output="${ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT:-/tmp/ask-dev-acceptance-org-ids.json}"
+# A retained stack is consumed by a second process (for example the Wave 4
+# corpus), so the dynamically assigned API port must survive this shell. Keep
+# the path overrideable for CI, and namespace the default by Compose project so
+# two local acceptance projects do not overwrite each other's URL artifact.
+api_url_output="${ASK_DEV_ACCEPTANCE_API_URL_OUTPUT:-/tmp/ask-dev-acceptance-api-url-${project_name}.env}"
 read_oracle_field() {
   "${ops_root}/.venv/bin/python" -c \
     'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
@@ -242,6 +247,7 @@ if [[ ! "${acceptance_api_port}" =~ ^[0-9]+$ ]] || [[ "${acceptance_api_port}" =
   exit 70
 fi
 acceptance_api_url="http://127.0.0.1:${acceptance_api_port}"
+export ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}"
 
 # urllib honors both spellings when resolving ambient HTTP(S) proxies. Local
 # acceptance API calls must bypass them: a proxy on this host can route
@@ -607,9 +613,16 @@ TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}" \
 # ask-dev-acceptance.yml does it in an `if: always()` step, so a cancelled or
 # failed job still releases the runner's disk.
 if [[ "${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1" ]]; then
+  mkdir -p "$(dirname -- "${api_url_output}")"
+  printf 'export ASK_DEV_ACCEPTANCE_API_URL=%q\n' "${acceptance_api_url}" > "${api_url_output}"
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'ASK_DEV_ACCEPTANCE_API_URL=%s\n' "${acceptance_api_url}" >> "${GITHUB_ENV}"
+  fi
   trap - EXIT
   echo "Ask Dev Compose acceptance completed successfully; stack retained (ASK_DEV_ACCEPTANCE_KEEP_STACK=1)."
   echo "ASK_DEV_ACCEPTANCE_API_URL=${acceptance_api_url}"
+  echo "ASK_DEV_ACCEPTANCE_API_URL_FILE=${api_url_output}"
+  echo "Source it before an external corpus invocation: source ${api_url_output}"
   # Deliberately NOT spelled with the same literal as the real teardown command
   # below. Adversarial review 2026-08-06 (HIGH): the first version of this hint
   # printed `down --volumes --remove-orphans` verbatim, which put a SECOND

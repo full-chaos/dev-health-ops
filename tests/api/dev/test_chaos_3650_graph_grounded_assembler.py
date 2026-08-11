@@ -38,7 +38,9 @@ from dev_health_ops.api.dev.contract_fixtures import (
 )
 from dev_health_ops.api.dev.contracts import (
     AnswerStatus,
+    DevAnswerCohortDisposition,
     DevMetricRef,
+    EntityType,
     FreshnessState,
     GraphAssistedAvailability,
     PacketLimitationKind,
@@ -52,6 +54,7 @@ from dev_health_ops.api.dev.investigation_contract import AskDevInvestigationPac
 from dev_health_ops.api.dev.investigation_contract.fixtures import (
     positive_fixtures as packet_positive_fixtures,
 )
+from dev_health_ops.api.dev.investigation_corpus.reference import reference_packet
 from dev_health_ops.api.dev.orchestrator import (
     GRAPH_ASSISTED_GROUNDING_STATUS,
     GRAPH_GROUNDED_WARNING_ENRICHMENT_GAP,
@@ -336,6 +339,72 @@ async def test_completed_with_admissible_evidence_produces_a_graph_grounded_answ
     # The legacy model-tool-choice loop must never even start: the graph
     # path returned directly through finish().
     assert output.calls == []
+
+
+@pytest.mark.asyncio
+async def test_discovered_project_cohort_is_ranked_and_projected_publicly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real graph-answer seam must publish the W4 ranking, not just state."""
+
+    monkeypatch.setenv(GRAPH_ROUTING_RUNTIME_FLAG, "1")
+    payload = reference_packet("S03_shared_dependency_portfolio_risk")
+    payload["organization_id"] = ORG_ID
+    packet = AskDevInvestigationPacket.model_validate(payload)
+    # Deliberately authorize only two of the packet's three names. The packet
+    # is evidence, never authorization authority; the third project must not
+    # cross the public projection boundary.
+    authorized_packet_members = packet.comparison_cohort.members[:2]
+    project_entities = [
+        (
+            ORG_ID,
+            AuthorizedEntity(
+                EntityKind.PROJECT, member.canonical_id, member.display_label
+            ),
+        )
+        for member in authorized_packet_members
+    ]
+    metric_payload = deepcopy(v1_positive_fixtures()["dev_metric_ref.v1"])
+    metric_payload["metric_ref_id"] = "metric_graph_cohort_projection_01"
+    metric_payload["value"] = 24681357.0
+    metric_ref = DevMetricRef.model_validate(metric_payload)
+
+    output = await run_preflight_orchestrator(
+        question="Which projects are capacity-constrained right now?",
+        entities=project_entities,
+        org_id=ORG_ID,
+        script_id="chaos3669-public-cohort",
+        graph_investigation_query=FakeGraphInvestigationQuery(packet=packet),
+        evidence_service=_evidence_service(),
+        graph_routing_entitlement=_Entitlement(),
+        canonical_enrichment=_canonical_enrichment(metric_refs=(metric_ref,)),
+    )
+
+    assert output.result.state is RunState.COMPLETED
+    assert output.calls == []
+    answer = output.result.answer
+    assert answer is not None
+    assert [item.metric_ref_id for item in answer.metrics] == [
+        "metric_graph_cohort_projection_01"
+    ]
+    graph = answer.graph_assisted
+    assert graph is not None
+    assert graph.cohort is not None
+    assert graph.cohort.entity_kind is EntityType.PROJECT
+    assert graph.cohort.cohort_complete is True
+    assert [member.entity_id for member in graph.cohort.members] == sorted(
+        member.canonical_id for member in authorized_packet_members
+    )
+    assert [member.rank for member in graph.cohort.members] == [1, 2]
+    assert packet.comparison_cohort.members[2].canonical_id not in {
+        member.entity_id for member in graph.cohort.members
+    }
+    assert graph.cohort.warnings == ["1 cohort candidate was hidden by authorization."]
+    assert all(
+        member.disposition is DevAnswerCohortDisposition.UNKNOWN
+        for member in graph.cohort.members
+    )
+    assert graph.ranked_drivers == []
 
 
 @pytest.mark.asyncio

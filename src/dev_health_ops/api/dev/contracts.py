@@ -236,6 +236,79 @@ class CohortDiscoveryFamily(StrEnum):
     PROJECT_CAPACITY = "project_capacity"
 
 
+class DevAnswerCohortDisposition(StrEnum):
+    INCLUDED = "included"
+    UNKNOWN = "unknown"
+
+
+class DevAnswerCohortSignalSource(StrEnum):
+    STATUS = "status"
+    HEALTH = "health"
+    WORKLOAD = "workload"
+    READINESS = "readiness"
+    METRICS = "metrics"
+    CANONICAL_ENRICHMENT = "canonical_enrichment"
+
+
+class DevAnswerEvidenceSourceClass(StrEnum):
+    STATUS_CHANGE = "status_change"
+    WORK_ITEM = "work_item"
+    WORK_GRAPH = "work_graph"
+    PULL_REQUEST = "pull_request"
+    CODE_CHANGE = "code_change"
+    REVIEW = "review"
+    CI_RUN = "ci_run"
+    TEST_REPORT = "test_report"
+    DEPLOYMENT = "deployment"
+    INCIDENT = "incident"
+    OPERATIONAL_CONTROL = "operational_control"
+    SOURCE_HEALTH = "source_health"
+    COGNITIVE_LOAD = "cognitive_load"
+    INVESTMENT_ALLOCATION = "investment_allocation"
+    HEALTH_PROFILE = "health_profile"
+    DEFICIENCY_INVENTORY = "deficiency_inventory"
+    TEMPORAL_CONTEXT = "temporal_context"
+
+
+class DevAnswerSourceRequirementState(StrEnum):
+    AVAILABLE_CURRENT = "available_current"
+    AVAILABLE_STALE = "available_stale"
+    AVAILABLE_UNKNOWN = "available_unknown"
+    UNCONFIGURED = "unconfigured"
+    UNAVAILABLE = "unavailable"
+    UNAUTHORIZED_OR_NOT_VISIBLE = "unauthorized_or_not_visible"
+    NOT_APPLICABLE = "not_applicable"
+    TRUNCATED = "truncated"
+
+
+class DevAnswerPressureDimension(StrEnum):
+    EXECUTION_COMPLETION = "execution_completion"
+    DELIVERY_FLOW = "delivery_flow"
+    RELIABILITY_RELEASE = "reliability_release"
+    REVIEW_CI_PRESSURE = "review_ci_pressure"
+    CODE_OWNERSHIP_RISK = "code_ownership_risk"
+    COGNITIVE_WORKLOAD_PRESSURE = "cognitive_workload_pressure"
+    INVESTMENT_BALANCE = "investment_balance"
+    DEPENDENCIES_BLOCKERS = "dependencies_blockers"
+    DATA_TRUST = "data_trust"
+
+
+class DevAnswerPressureState(StrEnum):
+    HEALTHY = "healthy"
+    WATCH = "watch"
+    AT_RISK = "at_risk"
+    CRITICAL = "critical"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class DevAnswerEnrichmentGap(StrEnum):
+    NOT_APPLICABLE = "not_applicable"
+    UNAUTHORIZED = "unauthorized"
+    UNAVAILABLE = "unavailable"
+    NO_DATA = "no_data"
+
+
 class PacketLimitationKind(StrEnum):
     """CHAOS-3660 §8(d)/(h). Reserved fresh here for the same reason as the
     two enums above -- the owning module
@@ -871,6 +944,33 @@ class DevAnswerCohortMember(ContractModel):
     entity_id: OpaqueID
     display_label: Label
     inclusion_basis: CohortDiscoveryFamily
+    rank: int | None = Field(default=None, ge=1)
+    disposition: DevAnswerCohortDisposition | None = None
+    inclusion_rationale: ShortText | None = None
+    pressure_dimensions: list[DevAnswerPressureDimension] = Field(
+        default_factory=list, max_length=12
+    )
+    signals: list[DevAnswerCohortSignal] = Field(default_factory=list, max_length=50)
+
+
+class DevAnswerCohortSignal(ContractModel):
+    signal_id: OpaqueID
+    source: DevAnswerCohortSignalSource
+    observed_states: list[DevAnswerSourceRequirementState] = Field(
+        min_length=1, max_length=8
+    )
+    data_semantics: Literal["measured_zero", "no_data", "not_measured"]
+    freshness: FreshnessState | None = None
+    coverage: FiniteFloat | None = Field(default=None, ge=0, le=1)
+    denominator_present: bool | None = None
+    attribution_present: bool | None = None
+    dimension: DevAnswerPressureDimension | None = None
+    state: DevAnswerPressureState | None = None
+    evidence_source_classes: list[DevAnswerEvidenceSourceClass] = Field(
+        default_factory=list, max_length=12
+    )
+    limitation: ShortText | None = None
+    gap: DevAnswerEnrichmentGap | None = None
 
 
 class DevAnswerCohortSlot(ContractModel):

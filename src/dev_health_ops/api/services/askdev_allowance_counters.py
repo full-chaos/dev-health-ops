@@ -581,8 +581,8 @@ async def reconcile_terminal_cost(
                 "askdev allowance counter missing at finalize for org=%s key=%s; "
                 "skipping reconcile (will heal on next cold-key read/admit or "
                 "explicit reconcile)",
-                org_id,
-                key,
+                sanitize_for_log(org_id),
+                sanitize_for_log(key),
             )
             return
         await client.hincrby(key, "cost_microusd", delta)
@@ -590,7 +590,7 @@ async def reconcile_terminal_cost(
         _trip_circuit(exc)
         logger.warning(
             "askdev allowance counter reconcile failed for org=%s: %s",
-            org_id,
+            sanitize_for_log(org_id),
             sanitize_for_log(str(exc)),
         )
 
@@ -728,7 +728,7 @@ async def force_reconcile(
         _trip_circuit(exc)
         logger.warning(
             "askdev allowance force_reconcile write failed for org=%s: %s",
-            org_id,
+            sanitize_for_log(org_id),
             sanitize_for_log(str(exc)),
         )
 

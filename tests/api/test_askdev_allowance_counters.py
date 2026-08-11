@@ -709,7 +709,7 @@ async def test_force_reconcile_returns_accurate_value_even_if_valkey_write_fails
 
     result, _window_start, _reset_at = await force_reconcile(
         _fake_session(),
-        org_id=_ORG,
+        org_id="org\r\nforged org",
         per_run_reservation_microusd=_RESERVATION,
         now=_NOW,
     )
@@ -717,6 +717,7 @@ async def test_force_reconcile_returns_accurate_value_even_if_valkey_write_fails
     assert caplog.records
     assert all("\r" not in record.getMessage() for record in caplog.records)
     assert all("\n" not in record.getMessage() for record in caplog.records)
+    assert "org forged org" in caplog.records[-1].getMessage()
     assert "valkey down forged log entry" in caplog.records[-1].getMessage()
 
 

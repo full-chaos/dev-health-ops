@@ -592,6 +592,26 @@ func encodeJiraOperationalValue(value any) (string, byte, []byte, error) {
 		return "datetime", 1, []byte(typed.UTC().Format("2006-01-02T15:04:05.000000Z")), nil
 	case uuid.UUID:
 		return "uuid", 1, []byte(strings.ToLower(typed.String())), nil
+	case int:
+		return "integer", 1, []byte(strconv.FormatInt(int64(typed), 10)), nil
+	case int8:
+		return "integer", 1, []byte(strconv.FormatInt(int64(typed), 10)), nil
+	case int16:
+		return "integer", 1, []byte(strconv.FormatInt(int64(typed), 10)), nil
+	case int32:
+		return "integer", 1, []byte(strconv.FormatInt(int64(typed), 10)), nil
+	case int64:
+		return "integer", 1, []byte(strconv.FormatInt(typed, 10)), nil
+	case uint:
+		return "integer", 1, []byte(strconv.FormatUint(uint64(typed), 10)), nil
+	case uint8:
+		return "integer", 1, []byte(strconv.FormatUint(uint64(typed), 10)), nil
+	case uint16:
+		return "integer", 1, []byte(strconv.FormatUint(uint64(typed), 10)), nil
+	case uint32:
+		return "integer", 1, []byte(strconv.FormatUint(uint64(typed), 10)), nil
+	case uint64:
+		return "integer", 1, []byte(strconv.FormatUint(typed, 10)), nil
 	case float64:
 		encoded := make([]byte, 8)
 		binary.BigEndian.PutUint64(encoded, math.Float64bits(typed))

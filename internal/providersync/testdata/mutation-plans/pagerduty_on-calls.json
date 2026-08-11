@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "name": "PagerDuty on-call assignment route, typed normalization, upsert effects, and readback fencing",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "This provider-only plan covers PagerDuty on-calls source selection, stable composite identities, complete typed row normalization, migrated assignment writes, upsert replay, and account fencing. It does not cover schedules, registry, matrix, config, deployment, cutover, or activation wiring. The ClickHouse entries require Docker and run against migration 066 through the real integration test.",
+  "mutations": [
+    {
+      "id": "OC1-route-rejects-other-dataset",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "claim.Dataset != \"on-calls\"",
+      "replace": "false",
+      "rationale": "The on-calls handler must not consume a schedules claim; removing this clause would send the wrong dataset to /oncalls and emit assignment effects under the wrong contract.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsRouteRejectsAnotherPagerDutyDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "OC2-route-uses-oncalls-path",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "Path: \"/oncalls\"",
+      "replace": "Path: \"/schedules\"",
+      "rationale": "PagerDuty on-call assignments are selected from the /oncalls endpoint; a sibling resource endpoint would silently collect the wrong provider resource family.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsRouteUsesOffsetPaginationAndCanonicalAssignment$", "./internal/providersync/"]]
+    },
+    {
+      "id": "OC3-route-uses-oncalls-response-key",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "DataKey: \"oncalls\"",
+      "replace": "DataKey: \"schedules\"",
+      "rationale": "The response collection key is part of the PagerDuty REST contract; reading a sibling key must fail closed instead of returning an empty successful assignment batch.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsRouteUsesOffsetPaginationAndCanonicalAssignment$", "./internal/providersync/"]]
+    },
+    {
+      "id": "OC4-composite-external-id-keeps-all-dimensions",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "payload.EscalationPolicy.ID, scheduleID, payload.User.ID,",
+      "replace": "payload.User.ID, scheduleID, payload.User.ID,",
+      "rationale": "The live Python normalizer's no-provider-id fallback is keyed by policy, schedule, user, level, and window. Dropping the policy dimension makes distinct assignments collide and diverges from the producer.",
+      "proof": [["bash", "-c", "set -euo pipefail; root=\"$(pwd -P)\"; proof_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-python.XXXXXX\")\"; cache_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-go.XXXXXX\")\"; trap 'rm -rf -- \"$proof_dir\" \"$cache_dir\"' EXIT; PYTHON=\"$(command -v python3)\" PYTHONPATH=\"$root/src${PYTHONPATH:+:$PYTHONPATH}\" DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=\"$proof_dir\" GOCACHE=\"$cache_dir\" go test -count=1 -run '^TestGenericOracleMatchesLivePythonForPagerDutyOnCallRow$' ./internal/providersync/; test \"$(cat \"$proof_dir/pagerduty_on-calls_row.py\")\" = executed"]]
+    },
+    {
+      "id": "OC5-composite-external-id-preserves-python-time-format",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "return value.Format(\"2006-01-02T15:04:05-07:00\")",
+      "replace": "return value.Format(\"2006-01-02T15:04:05Z07:00\")",
+      "rationale": "Python datetime.isoformat emits +00:00 for UTC permanent-window dimensions. Replacing it with a Z-formatted value changes the stable external identity and must be caught by the live oracle.",
+      "proof": [["bash", "-c", "set -euo pipefail; root=\"$(pwd -P)\"; proof_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-python.XXXXXX\")\"; cache_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-go.XXXXXX\")\"; trap 'rm -rf -- \"$proof_dir\" \"$cache_dir\"' EXIT; PYTHON=\"$(command -v python3)\" PYTHONPATH=\"$root/src${PYTHONPATH:+:$PYTHONPATH}\" DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=\"$proof_dir\" GOCACHE=\"$cache_dir\" go test -count=1 -run '^TestGenericOracleMatchesLivePythonForPagerDutyOnCallRow$' ./internal/providersync/; test \"$(cat \"$proof_dir/pagerduty_on-calls_row.py\")\" = executed"]]
+    },
+    {
+      "id": "OC6-reference-id-uses-schedule-family",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "\"operational_on_call_schedule\"",
+      "replace": "\"operational_on_call_assignment\"",
+      "rationale": "Nested schedule references use the canonical operational_on_call_schedule entity family. Reusing the assignment family produces a different ID and breaks cross-provider relationship parity.",
+      "proof": [["bash", "-c", "set -euo pipefail; root=\"$(pwd -P)\"; proof_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-python.XXXXXX\")\"; cache_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-go.XXXXXX\")\"; trap 'rm -rf -- \"$proof_dir\" \"$cache_dir\"' EXIT; PYTHON=\"$(command -v python3)\" PYTHONPATH=\"$root/src${PYTHONPATH:+:$PYTHONPATH}\" DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=\"$proof_dir\" GOCACHE=\"$cache_dir\" go test -count=1 -run '^TestGenericOracleMatchesLivePythonForPagerDutyOnCallRow$' ./internal/providersync/; test \"$(cat \"$proof_dir/pagerduty_on-calls_row.py\")\" = executed"]]
+    },
+    {
+      "id": "OC7-source-url-prefers-html-url",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "value := payload.HTMLURL\n\tif value == \"\" {\n\t\tvalue = payload.SelfURL\n\t}",
+      "replace": "value := payload.SelfURL\n\tif value == \"\" {\n\t\tvalue = payload.HTMLURL\n\t}",
+      "rationale": "The Python producer emits html_url before self. Reversing the precedence changes persisted source evidence whenever both provider URLs are present.",
+      "proof": [["bash", "-c", "set -euo pipefail; root=\"$(pwd -P)\"; proof_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-python.XXXXXX\")\"; cache_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/pagerduty-oncalls-go.XXXXXX\")\"; trap 'rm -rf -- \"$proof_dir\" \"$cache_dir\"' EXIT; PYTHON=\"$(command -v python3)\" PYTHONPATH=\"$root/src${PYTHONPATH:+:$PYTHONPATH}\" DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=\"$proof_dir\" GOCACHE=\"$cache_dir\" go test -count=1 -run '^TestGenericOracleMatchesLivePythonForPagerDutyOnCallRow$' ./internal/providersync/; test \"$(cat \"$proof_dir/pagerduty_on-calls_row.py\")\" = executed"]]
+    },
+    {
+      "id": "OC8-effect-fences-mixed-provider-instances",
+      "file": "internal/providersync/pagerduty_oncalls_effects_clickhouse.go",
+      "find": "if instance != rowInstance {",
+      "replace": "if false {",
+      "rationale": "One effect batch must belong to one PagerDuty account. Accepting rows from mixed instances would make the sink's account fence arbitrary and unsafe.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsEffectRejectsForeignScopeOrderingTamperAndDuplicates$", "./internal/providersync/"]]
+    },
+    {
+      "id": "OC9-effect-rejects-source-conflict-tamper",
+      "file": "internal/providersync/pagerduty_oncalls_effects_clickhouse.go",
+      "find": "canonical.ID != row.ID || canonical.SourceConflictKey != row.SourceConflictKey ||",
+      "replace": "canonical.ID != row.ID || false ||",
+      "rationale": "The durable effect must reject forged source conflict keys even when the semantic row fields and derived revision otherwise look unchanged; otherwise readback identity can be falsified.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsEffectRejectsForeignScopeOrderingTamperAndDuplicates$", "./internal/providersync/"]]
+    },
+    {
+      "id": "OC10-effect-writes-migrated-assignment-table",
+      "file": "internal/providersync/pagerduty_oncalls_effects_clickhouse.go",
+      "find": "INSERT INTO operational_on_call_assignments (",
+      "replace": "INSERT INTO operational_on_call_schedules (",
+      "rationale": "The effect must write the migrated operational_on_call_assignments schema, not the separate schedules table. A table-family mutation must fail the real migration-backed write before any success claim.",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyOnCallsEffectUsesMigratedClickHouseUpsertsAndExactReplay$", "./internal/providersync/"]]
+    }
+  ]
+}

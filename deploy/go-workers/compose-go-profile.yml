@@ -194,7 +194,7 @@ services:
   #
   #   WORKER_GITHUB_REPO_METADATA_ENABLED=true
   #
-  # The matrix now records 25 of 59 provider/dataset pairs as route-ready, but
+  # The matrix now records 59 of 59 provider/dataset pairs as route-ready, but
   # EVERY switch remains false here on purpose. Each must be flipped only with
   # a reviewed route release; this does not activate a deployment profile or
   # change cutover ownership. The SAME switch names are read by the Python

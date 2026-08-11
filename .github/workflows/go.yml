@@ -29,6 +29,7 @@ on:
   #     - 'tests/compatibility/river/**'
   #     - 'ci/check_go.sh'
   #     - 'ci/go_integration_shards.tsv'
+  #     - 'ci/go_providersync_test_shards.tsv'
   #     - 'ci/requirements-live-python-oracles.txt'
   #     - 'ci/check_go_containers.sh'
   #     - 'ci/check_river_compat_static.sh'
@@ -65,6 +66,7 @@ on:
   #     - 'tests/compatibility/river/**'
   #     - 'ci/check_go.sh'
   #     - 'ci/go_integration_shards.tsv'
+  #     - 'ci/go_providersync_test_shards.tsv'
   #     - 'ci/requirements-live-python-oracles.txt'
   #     - 'ci/check_go_containers.sh'
   #     - 'ci/check_river_compat_static.sh'
@@ -155,7 +157,7 @@ jobs:
         run: bash ci/check_go.sh integration-shard-plan
 
   go-storage-integration-shard:
-    name: go-storage-integration-shard-${{ matrix.shard }}
+    name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
     needs: go-storage-integration-plan
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -186,8 +188,8 @@ jobs:
       - name: Install locked ClickHouse migration dependencies
         run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
 
-      - name: Run isolated storage integration shard ${{ matrix.shard }}
-        run: bash ci/check_go.sh integration-shard "${{ matrix.shard }}"
+      - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
+        run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
   # Preserve the existing required-check contract while the implementation
   # fans out behind it. fail-fast is disabled above, so this job observes the

@@ -29,6 +29,19 @@ MAX_CACHE_ENTRIES = 128
 MAX_RESULT_BYTES = 65_536
 MAX_RESULT_ROWS = 12
 
+# These are the only metric sources whose ClickHouse projections bind a
+# repository-free work scope directly (through ``work_scope_id``). Every other
+# non-organization projection is repository-bounded; exposing it from
+# ``list_metrics(scope)`` when the committed scope carries no repository would
+# make callers enter the validator only to fail, and would tempt a caller to
+# widen the scope to make the query pass.
+_WORK_SCOPE_METRIC_SOURCES = frozenset(
+    {
+        "work_item_metrics_daily",
+        "work_item_state_durations_daily",
+    }
+)
+
 
 class MetricDataState(StrEnum):
     VALUE = "value"
@@ -234,6 +247,28 @@ class MetricQueryService:
             for definition in definitions
             if scope.direct_scope in definition.supported_scopes
             and (not scope.team_ids or definition.supports_team_filter)
+            and self._scope_resolves_definition(definition, scope)
+        )
+
+    @staticmethod
+    def _scope_resolves_definition(
+        definition: MetricDefinition, scope: DevScope
+    ) -> bool:
+        """Return whether the source can honor ``scope`` without widening it.
+
+        Organization reads are bounded by the source's server-owned
+        authorization query. Work-item rollups carry ``work_scope_id`` and
+        therefore remain queryable for project/work-unit subjects that have no
+        repository dimension. Repository-backed projections require a
+        repository on the committed scope.
+        """
+
+        if scope.direct_scope is DirectScope.ORGANIZATION:
+            return True
+        if definition.source_table in _WORK_SCOPE_METRIC_SOURCES:
+            return True
+        return bool(
+            scope.repositories or any(ref.repository_id for ref in scope.entity_refs)
         )
 
     async def query(
@@ -319,20 +354,7 @@ class MetricQueryService:
             raise ValueError(
                 "Compounding-risk team filters require organization direct scope"
             )
-        if (
-            definition.source_table
-            not in {
-                "work_item_metrics_daily",
-                "work_item_state_durations_daily",
-            }
-            and request.scope.direct_scope is not DirectScope.ORGANIZATION
-            and not (
-                definition.source_table == "compounding_risk_daily"
-                and request.scope.team_ids
-            )
-            and not request.scope.repositories
-            and not any(ref.repository_id for ref in request.scope.entity_refs)
-        ):
+        if not MetricQueryService._scope_resolves_definition(definition, request.scope):
             raise ValueError("Metric scope does not resolve to a repository")
         unknown_dimensions = set(request.dimensions) - set(
             definition.supported_dimensions

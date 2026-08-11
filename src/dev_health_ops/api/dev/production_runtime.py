@@ -185,6 +185,16 @@ from .work_graph_neighbors_service import (
     SCHEMA_VERSION as _WORK_GRAPH_SCHEMA_VERSION,
 )
 
+# ``MetricQueryService`` uses machine-readable warning codes internally.  The
+# production tool result is also handed to the model, so change-summary
+# warnings must use the same safe-copy boundary as every other user-visible
+# field.  Keep this translation local to the runtime adapter: the domain
+# result remains useful to typed callers and telemetry, while no internal
+# ``source_unavailable`` token crosses the public Ask Dev tool boundary.
+_CHANGE_SUMMARY_WARNING_COPY = {
+    "source_unavailable": "Some metric data was temporarily unavailable.",
+}
+
 logger = logging.getLogger(__name__)
 
 _LLM_CATEGORY = SettingCategory.LLM.value
@@ -2478,7 +2488,10 @@ async def _assemble_production_runtime(
             status_facts=facts,
             source_health=source_health,
             evidence=list(minted.values()),
-            warnings=list(result.warnings),
+            warnings=[
+                _CHANGE_SUMMARY_WARNING_COPY.get(warning, warning)
+                for warning in result.warnings
+            ],
         )
 
     async def work_graph(context, request):

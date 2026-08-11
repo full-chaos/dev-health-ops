@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from typing import Any, cast
 
 import pytest
 
@@ -37,6 +38,33 @@ def _scope(
         schema_version="dev_scope.v1",
         organization_id=org_id,
         direct_scope=DirectScope.ORGANIZATION,
+        time_range=DevTimeRange(start=start, end=end, timezone="UTC"),
+        comparison_range=DevTimeRange(
+            start=start - duration,
+            end=start,
+            timezone="UTC",
+        ),
+    )
+
+
+def _work_scope(
+    *,
+    org_id: str = "org-1",
+    start: datetime = datetime(2026, 7, 1, tzinfo=UTC),
+    end: datetime = datetime(2026, 7, 8, tzinfo=UTC),
+) -> DevScope:
+    duration = end - start
+    return DevScope(
+        schema_version="dev_scope.v1",
+        organization_id=org_id,
+        direct_scope=DirectScope.WORK_UNIT,
+        entity_refs=[
+            DevEntityRef(
+                entity_type=EntityType.WORK_UNIT,
+                entity_id="work-scope-1",
+                display_label="Work scope 1",
+            )
+        ],
         time_range=DevTimeRange(start=start, end=end, timezone="UTC"),
         comparison_range=DevTimeRange(
             start=start - duration,
@@ -108,6 +136,16 @@ def test_registry_is_exactly_the_eight_authorized_ids() -> None:
     assert len(list_metrics()) == 8
     with pytest.raises(ValueError, match="Unsupported Ask Dev V1 metric"):
         get_metric("lead_time_p50_hours")
+
+
+def test_repository_free_work_scope_lists_only_work_scope_metrics() -> None:
+    definitions = MetricQueryService(cast(Any, object())).list_metrics(_work_scope())
+
+    assert tuple(item.metric_id for item in definitions) == (
+        MetricID.ITEMS_COMPLETED,
+        MetricID.CYCLE_TIME_P50_HOURS,
+        MetricID.AVG_WIP,
+    )
 
 
 def test_metric_05_registry_uses_deployment_weighted_ratio_only() -> None:

@@ -91,6 +91,31 @@ def _pinned_clickhouse_image() -> str:
     return image
 
 
+def test_integration_shard_arity_guard_uses_an_explicit_conditional() -> None:
+    """Keep the public CLI guard compatible with the hosted ShellCheck gate."""
+
+    source = CHECK_GO.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^  integration-shard\)\n(?P<body>.*?^    ;;)$",
+        source,
+    )
+    assert match is not None
+    assert (
+        'if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then\n'
+        '      die "integration-shard requires TARGET SHARD and accepts only '
+        'optional --dry-run"\n'
+        "    fi"
+    ) in match.group("body")
+
+    for args in (("packages",), ("packages", "2", "--dry-run", "extra")):
+        result = _run_check_go("integration-shard", *args)
+        assert result.returncode == 2
+        assert (
+            "integration-shard requires TARGET SHARD and accepts only optional "
+            "--dry-run" in result.stderr
+        )
+
+
 def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
     env["GOTOOLCHAIN"] = "go1.25.9"

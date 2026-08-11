@@ -97,9 +97,10 @@ func validGitHubWorkItemDerivedWriteRows[T any](
 	return true
 }
 
-// validGitHubWorkItemDerivedRowTenancy is shared by the GitHub and GitLab
-// adapters. The JSON effect ledger is not allowed to become a bypass around
-// the provider and tenant fences that the typed compute rows already carry.
+// validGitHubWorkItemDerivedRowTenancy is shared by the GitHub, GitLab, and
+// Jira adapters. The JSON effect ledger is not allowed to become a bypass
+// around the provider and tenant fences that the typed compute rows already
+// carry.
 func validGitHubWorkItemDerivedRowTenancy[T any](
 	row T,
 	identity GitHubWorkItemEffectIdentity,

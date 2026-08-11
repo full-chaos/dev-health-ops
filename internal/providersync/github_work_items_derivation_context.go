@@ -152,9 +152,10 @@ func loadGitHubWorkItemDerivationContext(
 }
 
 // loadWorkItemDerivationContextForProvider is the provider-neutral context
-// loader shared by the GitHub and GitLab work-item families. The source facts
-// are already provider-keyed, so the resolver can apply the same canonical
-// precedence without copying or weakening the team-attribution contract.
+// loader shared by the GitHub, GitLab, and Jira work-item families. The source
+// facts are already provider-keyed, so the resolver can apply the same
+// canonical precedence without copying or weakening the team-attribution
+// contract.
 func loadWorkItemDerivationContextForProvider(
 	ctx context.Context,
 	provider string,

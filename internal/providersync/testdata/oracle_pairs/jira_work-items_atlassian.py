@@ -329,7 +329,6 @@ oracle_registry.register(
             "dependencies": "The Atlassian provider returns explicit empty dependencies; legacy parity is covered elsewhere.",
             "interactions": "The Atlassian provider returns explicit empty interactions; legacy parity is covered elsewhere.",
             "reopen_events": "This pair owns Atlassian enrichment only.",
-            "ai_attributions": "The Jira provider does not emit AI attribution records.",
             "observations": "Usage observations are transport metadata, not the worklog/sprint persistence contract.",
         },
     )

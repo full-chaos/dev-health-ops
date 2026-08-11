@@ -75,9 +75,18 @@ func Apply(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	if err != nil {
 		t.Fatalf("chschema: %v", err)
 	}
-	command := exec.CommandContext(ctx, python, "-c", applyScript, dsn)
+	var command *exec.Cmd
+	switch filepath.Base(python) {
+	case "python":
+		command = exec.CommandContext(ctx, "python", "-c", applyScript, dsn)
+	case "python3":
+		command = exec.CommandContext(ctx, "python3", "-c", applyScript, dsn)
+	default:
+		t.Fatalf("chschema: unsupported Python executable %q", python)
+	}
 	command.Dir = root
 	command.Env = append(os.Environ(),
+		"PATH="+filepath.Dir(python)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"),
 	)
 	output, err := command.CombinedOutput()

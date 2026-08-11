@@ -26,6 +26,7 @@ with (
     contextlib.redirect_stdout(io.StringIO()),
     contextlib.redirect_stderr(io.StringIO()),
 ):
+    from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitGate
     from dev_health_ops.processors.dataset_adapters import _github_work_item_options
     from dev_health_ops.providers.base import (
         IngestionContext,
@@ -33,6 +34,7 @@ with (
         WorkItemIngestionOptions,
     )
     from dev_health_ops.providers.github.client import (
+        GitHubAuth,
         GitHubWorkClient,
         _GitHubCommentLike,
         _GitHubEventLike,
@@ -113,6 +115,10 @@ class _OracleGitHubWorkClient(GitHubWorkClient):
     """Network-free client that preserves production issue selection."""
 
     def __init__(self) -> None:
+        super().__init__(
+            auth=GitHubAuth(token="oracle-token"),
+            gate=RateLimitGate(),
+        )
         self.issue_calls = 0
         self.pr_calls = 0
         self.milestone_calls = 0

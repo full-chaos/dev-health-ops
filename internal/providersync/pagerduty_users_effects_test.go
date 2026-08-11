@@ -12,7 +12,7 @@ import (
 func TestPagerDutyUsersEffectRejectsForeignScopeOrderingTamperAndMixedInstances(t *testing.T) {
 	claim := nativeTestClaim("pagerduty", "users")
 	row, err := normalizePagerDutyUser(
-		claim, "acme", pagerDutyUserPayload{ID: "PU1", Name: "Alice", Email: stringPtr("alice@example.com")},
+		claim, "acme", pagerDutyUserPayload{ID: "PU1", Name: "Alice", Email: pagerDutyStringPtr("alice@example.com")},
 		time.Date(2026, 8, 9, 19, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -98,4 +98,4 @@ func TestPagerDutyUsersEffectRejectsWrongRequestBeforeSinkAccess(t *testing.T) {
 	}
 }
 
-func stringPtr(value string) *string { return &value }
+func pagerDutyStringPtr(value string) *string { return &value }

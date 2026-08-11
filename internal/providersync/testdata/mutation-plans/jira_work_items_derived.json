@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "name": "Jira canonical work-items derived composition",
+  "build": ["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "This provider-local plan proves the Jira provider fence, five-alias canonicalization, ten-effect composition, evaluated-empty AI no-I/O disposition, watermark withholding, and typed destination projection. The migration-backed ClickHouse suite separately proves real writes and readback. Registry, matrix, shared constructors, admission, deployment, and activation are intentionally excluded.",
+  "mutations": [
+    {
+      "id": "J2-alias-canonical-cost",
+      "file": "internal/providersync/jira_work_item_derived.go",
+      "find": "canonicalClaim.CostClass = canonicalCapability.CostClass",
+      "replace": "canonicalClaim.CostClass = claim.CostClass\n\t_ = canonicalCapability.CostClass",
+      "rationale": "lightweight labels/projects claims must canonicalize their internal context load without invalidating the frozen alias claim",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J3-route-appends-derived-effects",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "effects = append(effects, derivedEffects...)",
+      "replace": "effects = append(effects, derivedEffects[:0]...)",
+      "rationale": "a configured Jira route must carry all ten derived effects into the same recoverable batch as direct facts and worklogs",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J4-route-reports-implemented-destinations",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "derivedImplemented = derived.producedDestinations()",
+      "replace": "derivedImplemented = nil",
+      "rationale": "the typed completion result must report the ten destinations the route actually evaluated",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J5-raw-only-watermark-withheld",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "var derivedWatermark *time.Time",
+      "replace": "derivedWatermark := claim.BeforeAt",
+      "rationale": "the direct-only route must not acknowledge a unit whose ten derived destinations were never evaluated",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraAtlassianRawOnlyRouteHoldsWatermarkForDerivedGap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J6-typed-metric-effect-projection",
+      "file": "internal/providersync/jira_work_item_derived.go",
+      "find": "effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemMetricsDaily)",
+      "replace": "effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemUserMetricsDaily)",
+      "rationale": "work_item_metrics_daily must retain its concrete row family rather than serialize a different valid schema under the right destination name",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestBuildJiraWorkItemDerivedEffectsKeepsTenTypedDestinations$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J7-ai-rejects-fabricated-rows",
+      "file": "internal/providersync/jira_work_item_derived.go",
+      "find": "if len(effect.Rows) != 0 {",
+      "replace": "if len(effect.Rows) < 0 {",
+      "rationale": "the no-producer Jira AI disposition admits only an empty effect and rejects fabricated attribution rows",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraEvaluatedEmptyAIIsNoIOAndReadsAbsent$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J8-ai-write-is-no-io",
+      "file": "internal/providersync/jira_work_item_derived.go",
+      "find": "if adapter.destination == \"ai_attribution\" {\n\t\treturn nil\n\t}\n\tif adapter.delegate == nil",
+      "replace": "if adapter.destination == \"not_ai_attribution\" {\n\t\treturn nil\n\t}\n\tif adapter.delegate == nil",
+      "rationale": "an evaluated-empty AI effect must not call any ClickHouse delegate",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraEvaluatedEmptyAIIsNoIOAndReadsAbsent$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J9-ai-readback-remains-absent",
+      "file": "internal/providersync/jira_work_item_derived.go",
+      "find": "return EffectAbsent, nil",
+      "replace": "return EffectExact, nil",
+      "rationale": "no durable AI row exists to read back; the explicit empty effect must remain Absent rather than claim a ClickHouse match",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraEvaluatedEmptyAIIsNoIOAndReadsAbsent$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J10-metric-triplet-provider-family",
+      "file": "internal/providersync/work_item_derived_provider.go",
+      "find": "return provider == \"github\" || provider == \"gitlab\" || provider == \"jira\" || provider == \"linear\"",
+      "replace": "return provider == \"github\" || provider == \"gitlab\" || provider == \"linear\"",
+      "rationale": "all three Jira metric-triplet effects must pass the provider-neutral typed validator and reach their migrated stores",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraMetricTripletEffectsReachTheirMigratedStores$", "./internal/providersync/"]]
+    },
+    {
+      "id": "J11-reference-incomplete-watermark",
+      "file": "internal/providersync/jira_atlassian_route.go",
+      "find": "len(optionalIncomplete) == 0 &&",
+      "replace": "len(optionalIncomplete) >= 0 &&",
+      "rationale": "a reference-cache write failure may land recoverable effects but must withhold the claim watermark",
+      "proof": [["env", "GOCACHE=/tmp/jira-derived-go-cache", "GOWORK=off", "go", "test", "-mod=readonly", "-count=1", "-run", "^TestJiraAtlassianReferenceSinkFailureLandsEffectsAndWithholdsWatermark$", "./internal/providersync/"]]
+    }
+  ]
+}

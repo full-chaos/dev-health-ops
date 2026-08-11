@@ -1,4 +1,4 @@
-"""Migration 074: keep feature-flag environments in the RMT identity.
+"""Migration 075: keep feature-flag environments in the RMT identity.
 
 The feature-flag producer emits one row for every environment scope.  Before
 this migration, ``feature_flag`` was a ``ReplacingMergeTree`` keyed by
@@ -30,7 +30,7 @@ key does not rewrite values or collapse rows that differ by environment.
 
 The migration is forward-only for application compatibility: once this schema
 is deployed, application binaries must use the registry's logical
-environment aggregation. A pre-074 registry reader would expose one row per
+environment aggregation. A pre-075 registry reader would expose one row per
 environment and is not a safe rollback target, although old writers remain
 able to insert rows because the original columns are unchanged.
 
@@ -106,11 +106,11 @@ def _table_exists(client, table: str) -> bool:
 
 def _shadow_name(table: str) -> str:
     """Return a per-run shadow name so concurrent runners never share DDL."""
-    return f"{table}_074_new_{uuid.uuid4().hex}"
+    return f"{table}_075_new_{uuid.uuid4().hex}"
 
 
 def _shadow_tables(client, table: str) -> list[str]:
-    prefix = f"{table}_074_new_"
+    prefix = f"{table}_075_new_"
     result = client.query(
         "SELECT name FROM system.tables "
         "WHERE database = currentDatabase() AND name LIKE {prefix:String}",
@@ -128,7 +128,7 @@ def _assert_exchange_supported(client) -> None:
     engine = str(rows[0][0]) if rows and rows[0] else ""
     if engine not in _EXCHANGE_DATABASE_ENGINES:
         raise RuntimeError(
-            "feature_flag migration 074 requires an Atomic or Shared database "
+            "feature_flag migration 075 requires an Atomic or Shared database "
             f"for EXCHANGE TABLES; current engine={engine or '<unknown>'!r}"
         )
 
@@ -328,11 +328,11 @@ def _rebuild_table(
 
 def upgrade(client):
     """Rebuild feature_flag so environment scopes survive RMT merges."""
-    log.info("=== Migration 074: feature_flag environment identity (CHAOS-3737) ===")
+    log.info("=== Migration 075: feature_flag environment identity (CHAOS-3737) ===")
     for table, new_order_by in TABLES.items():
         if not _table_exists(client, table):
             log.warning("  %s: table does not exist, skipping", table)
             continue
         _assert_exchange_supported(client)
         _rebuild_table(client, table, new_order_by)
-    log.info("=== Migration 074: Complete ===")
+    log.info("=== Migration 075: Complete ===")

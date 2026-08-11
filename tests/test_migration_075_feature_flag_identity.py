@@ -1,4 +1,4 @@
-"""Contract and failure-recovery tests for ClickHouse migration 074."""
+"""Contract and failure-recovery tests for ClickHouse migration 075."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ MIGRATIONS_DIR = (
     / "migrations"
     / "clickhouse"
 )
-MIGRATION = "074_feature_flag_environment_identity.py"
+MIGRATION = "075_feature_flag_environment_identity.py"
 LEGACY_KEY = "org_id, provider, project_key, flag_key"
 TARGET_KEY = "org_id, provider, project_key, flag_key, environment"
 
@@ -32,7 +32,7 @@ def _load_migration(filename: str = MIGRATION) -> ModuleType:
     return module
 
 
-def test_migration_074_declares_the_deployed_feature_flag_identity() -> None:
+def test_migration_075_declares_the_deployed_feature_flag_identity() -> None:
     migration = _load_migration()
 
     assert callable(getattr(migration, "upgrade", None))
@@ -47,17 +47,17 @@ def test_default_shadow_names_are_unique_per_invocation() -> None:
     names = {migration._shadow_name("feature_flag") for _ in range(8)}
 
     assert len(names) == 8
-    assert all(name.startswith("feature_flag_074_new_") for name in names)
+    assert all(name.startswith("feature_flag_075_new_") for name in names)
 
 
-def test_migration_074_runs_after_the_feature_flag_table_exists() -> None:
+def test_migration_075_runs_after_the_feature_flag_table_exists() -> None:
     assert (MIGRATIONS_DIR / "034_feature_flag_user_impact_tables.sql").exists()
     assert "034_feature_flag_user_impact_tables.sql" < MIGRATION
     assert (MIGRATIONS_DIR / "073_linear_project_lifecycle.sql").exists()
     assert "073_linear_project_lifecycle.sql" < MIGRATION
 
 
-def test_migration_034_declares_the_legacy_key_that_074_rebuilds() -> None:
+def test_migration_034_declares_the_legacy_key_that_075_rebuilds() -> None:
     ddl = (MIGRATIONS_DIR / "034_feature_flag_user_impact_tables.sql").read_text(
         encoding="utf-8"
     )
@@ -286,7 +286,7 @@ def test_rerun_converges_leftover_old_table_after_exchange() -> None:
     # Model a crash after EXCHANGE: main has the target key and the old table
     # remains as feature_flag_new.  The second run must catch it up and drop it.
     old_rows = [_row("staging")]
-    leftover = "feature_flag_074_new_crashed"
+    leftover = "feature_flag_075_new_crashed"
     client.tables[leftover] = {
         "ddl": f"CREATE TABLE {leftover} ...",
         "sorting_key": LEGACY_KEY,
@@ -348,7 +348,7 @@ def test_concurrent_interleaving_of_two_unique_shadows_never_restores_legacy_key
             client,
             "feature_flag",
             migration.TABLES["feature_flag"],
-            shadow="feature_flag_074_new_runner_b",
+            shadow="feature_flag_075_new_runner_b",
         )
 
     client.before_exchange = run_second_runner
@@ -356,12 +356,12 @@ def test_concurrent_interleaving_of_two_unique_shadows_never_restores_legacy_key
         client,
         "feature_flag",
         migration.TABLES["feature_flag"],
-        shadow="feature_flag_074_new_runner_a",
+        shadow="feature_flag_075_new_runner_a",
     )
 
     assert client.tables["feature_flag"]["sorting_key"] == TARGET_KEY
-    assert "feature_flag_074_new_runner_a" not in client.tables
-    assert "feature_flag_074_new_runner_b" not in client.tables
+    assert "feature_flag_075_new_runner_a" not in client.tables
+    assert "feature_flag_075_new_runner_b" not in client.tables
     assert sum("EXCHANGE TABLES" in command for command in client.commands) == 2
 
 
@@ -372,12 +372,12 @@ def test_target_runner_drains_failed_peer_legacy_shadow_before_success() -> None
     can catch up a canary in A's old-side shadow.  B observes A's target key
     after its snapshot and must drain both its own snapshot and A's recoverable
     legacy shadow before it can return successfully (and let the ledger record
-    074).
+    075).
     """
     migration = _load_migration()
     client = _FeatureFlagClient(rows=[_row("production"), _row("staging")])
-    peer_shadow = "feature_flag_074_new_runner_a"
-    runner_shadow = "feature_flag_074_new_runner_b"
+    peer_shadow = "feature_flag_075_new_runner_a"
+    runner_shadow = "feature_flag_075_new_runner_b"
     client.tables[peer_shadow] = {
         "ddl": f"CREATE TABLE {peer_shadow} ...",
         "sorting_key": TARGET_KEY,

@@ -101,6 +101,7 @@ class _FeatureFlagClient:
         after_shadow_copy: Callable[[_FeatureFlagClient], None] | None = None,
         distinct_counts: dict[str, int] | None = None,
         database_engine: str = "Atomic",
+        query_fail_on: str | None = None,
     ) -> None:
         old_ddl = (
             "CREATE TABLE feature_flag ("
@@ -123,9 +124,13 @@ class _FeatureFlagClient:
         self.after_shadow_copy = after_shadow_copy
         self.distinct_counts = distinct_counts or {}
         self.database_engine = database_engine
+        self.query_fail_on = query_fail_on
         self.commands: list[str] = []
 
     def query(self, query: str, parameters: dict[str, str] | None = None) -> _Result:
+        if self.query_fail_on and self.query_fail_on in query:
+            self.query_fail_on = None
+            raise RuntimeError(f"injected query failure on: {query}")
         if "FROM system.databases" in query:
             return _Result([[self.database_engine]])
         if "name LIKE" in query:
@@ -239,6 +244,36 @@ def test_rebuild_preserves_same_flag_in_multiple_environments() -> None:
     }
 
 
+def test_missing_feature_flag_table_fails_instead_of_recording_a_skip() -> None:
+    migration = _load_migration()
+    client = _FeatureFlagClient(rows=[])
+    client.tables.pop("feature_flag")
+
+    with pytest.raises(RuntimeError, match="required source table is missing"):
+        migration._rebuild_table(
+            client,
+            "feature_flag",
+            migration.TABLES["feature_flag"],
+            shadow="feature_flag_new",
+        )
+
+
+def test_feature_flag_metadata_failure_fails_instead_of_recording_a_skip() -> None:
+    migration = _load_migration()
+    client = _FeatureFlagClient(
+        rows=[_row("production")],
+        query_fail_on="count() FROM system.tables",
+    )
+
+    with pytest.raises(RuntimeError, match="injected query failure"):
+        migration._rebuild_table(
+            client,
+            "feature_flag",
+            migration.TABLES["feature_flag"],
+            shadow="feature_flag_new",
+        )
+
+
 def test_rebuild_catches_up_a_row_written_between_snapshot_and_exchange() -> None:
     migration = _load_migration()
 
@@ -331,6 +366,35 @@ def test_post_exchange_failure_leaves_shadow_for_rerun() -> None:
 
     assert "feature_flag_new" in client.tables
     assert client.tables["feature_flag"]["sorting_key"] == TARGET_KEY
+
+
+def test_rerun_drops_stale_target_key_shadow_without_replaying_snapshot() -> None:
+    migration = _load_migration()
+    client = _FeatureFlagClient(rows=[_row("production")])
+    migration._rebuild_table(
+        client,
+        "feature_flag",
+        migration.TABLES["feature_flag"],
+        shadow="feature_flag_new",
+    )
+
+    stale_target_shadow = "feature_flag_074_new_before_exchange"
+    client.tables[stale_target_shadow] = {
+        "ddl": f"CREATE TABLE {stale_target_shadow} ...",
+        "sorting_key": TARGET_KEY,
+        "rows": [_row("production")],
+    }
+    before = len(client.commands)
+
+    migration._rebuild_table(
+        client,
+        "feature_flag",
+        migration.TABLES["feature_flag"],
+        shadow="feature_flag_new",
+    )
+
+    assert stale_target_shadow not in client.tables
+    assert client.commands[before:] == [f"DROP TABLE `{stale_target_shadow}`"]
 
 
 def test_concurrent_interleaving_of_two_unique_shadows_never_restores_legacy_key() -> (

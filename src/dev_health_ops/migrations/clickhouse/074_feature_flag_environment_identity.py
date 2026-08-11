@@ -92,16 +92,13 @@ def _replace_table_name(ddl: str, old_name: str, new_name: str) -> str:
 
 
 def _table_exists(client, table: str) -> bool:
-    try:
-        result = client.query(
-            "SELECT count() FROM system.tables "
-            "WHERE database = currentDatabase() AND name = {name:String}",
-            parameters={"name": table},
-        )
-        rows = getattr(result, "result_rows", None) or []
-        return bool(rows and rows[0] and rows[0][0] > 0)
-    except Exception:
-        return False
+    result = client.query(
+        "SELECT count() FROM system.tables "
+        "WHERE database = currentDatabase() AND name = {name:String}",
+        parameters={"name": table},
+    )
+    rows = getattr(result, "result_rows", None) or []
+    return bool(rows and rows[0] and rows[0][0] > 0)
 
 
 def _shadow_name(table: str) -> str:
@@ -218,8 +215,9 @@ def _rebuild_table(
     target_key = _normalize_sorting_key(new_order_by)
 
     if not _table_exists(client, table):
-        log.warning("  %s: table does not exist, skipping", table)
-        return
+        raise RuntimeError(
+            f"{table}: required source table is missing; cannot apply migration 074"
+        )
 
     current_key = _normalize_sorting_key(_sorting_key(client, table))
     if current_key == target_key:
@@ -234,12 +232,21 @@ def _rebuild_table(
                         f"{table}: migration shadow `{leftover}` has unexpected "
                         f"sorting key {shadow_key!r}"
                     )
-                log.info(
-                    "  %s: target key already present with leftover `%s`; converging",
-                    table,
-                    leftover,
-                )
-                _catch_up_and_drop(client, table, leftover)
+                if shadow_key == LEGACY_KEY:
+                    log.info(
+                        "  %s: target key already present with legacy leftover `%s`; "
+                        "catching up",
+                        table,
+                        leftover,
+                    )
+                    _catch_up_and_drop(client, table, leftover)
+                else:
+                    log.info(
+                        "  %s: dropping stale pre-exchange target shadow `%s`",
+                        table,
+                        leftover,
+                    )
+                    client.command(f"DROP TABLE `{leftover}`")
         else:
             log.info("  %s: target key already present, skipping", table)
         _drain_legacy_shadows(client, table)

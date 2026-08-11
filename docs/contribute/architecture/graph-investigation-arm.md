@@ -430,11 +430,11 @@ covers every registered org-deletion visit, including unconfigured, unknown,
 failure, cancellation and close failure. None carries an organization,
 partition, document, question, title, body or prompt label.
 
-Known follow-up (not fixed in W7): `purge_org` drops the graph keyspace before
-deleting the separate raw watermark key. If the watermark delete fails after
-the graph drop, an orphan freshness key can remain; the deletion warning and
-visit outcome make that failure visible, but cleanup/reconciliation of orphan
-watermarks needs a separate change.
+`purge_org` drops the graph keyspace and clears the separate raw watermark key.
+If the key deletion fails after the graph drop, the failed attempt is visible
+through the purge and deletion-visit outcomes; a retry explicitly clears the
+watermark before reporting the already-absent partition. Dry-run remains
+non-mutating, so it does not clear a key while previewing deletion.
 
 ## Semantic and conversational subject resolution: a second leg
 
@@ -549,7 +549,7 @@ Two things worth knowing before reading that artifact:
 | Every bound paired with the contract's `TruncationReason` | `budgets.py` |
 | Indexed-through watermark, stale / partial / never-projected | `watermark.py` |
 | Canonical writes never wait on graph indexing | `projection.py` is pure and synchronous; the store write happens strictly after |
-| Deterministic cleanup | `store.purge_org` drops the keyspace |
+| Deterministic cleanup | `store.purge_org` drops the keyspace and clears its separate watermark key, including on retries after a partial drop |
 | Read-only deletion preview | `store.partition_exists_for` — no driver, so no keyspace is created |
 | Org-deletion registration | `EXTERNAL_DERIVED_STORES` (CHAOS-3566) |
 | Content-safe logs | `IndexWatermark.detail_for` — timestamps and counts only |

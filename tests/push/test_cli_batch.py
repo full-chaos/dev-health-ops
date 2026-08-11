@@ -105,6 +105,17 @@ async def test_batch_without_poll_exits_0_on_accept(
 async def test_batch_poll_completed_zero_rejected_exits_0(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
+    class _DeterministicClock:
+        current = 0.0
+
+        @classmethod
+        def now(cls) -> float:
+            return cls.current
+
+        @classmethod
+        async def sleep(cls, delay: float) -> None:
+            cls.current += delay
+
     handler, _state = _sequenced_handler(
         [
             {"ingestionId": "batch-1", "status": "accepted"},
@@ -118,6 +129,13 @@ async def test_batch_poll_completed_zero_rejected_exits_0(
         ]
     )
     _patch_async_client(monkeypatch, httpx.MockTransport(handler))
+    real_poll_until_terminal = push_cli.poll_until_terminal
+
+    async def _poll_with_deterministic_clock(*args, **kwargs):
+        kwargs["clock"] = _DeterministicClock()
+        return await real_poll_until_terminal(*args, **kwargs)
+
+    monkeypatch.setattr(push_cli, "poll_until_terminal", _poll_with_deterministic_clock)
     ns = _batch_ns(_sample_payload_file(tmp_path), poll=True)
 
     exit_code = await push_cli._cmd_batch(ns)

@@ -693,11 +693,11 @@ async def test_force_reconcile_overwrites_unconditionally(valkey_client, monkeyp
 
 @pytest.mark.asyncio
 async def test_force_reconcile_returns_accurate_value_even_if_valkey_write_fails(
-    monkeypatch,
+    monkeypatch, caplog
 ):
     class _BrokenClient:
         async def hset(self, *_a, **_k):
-            raise ConnectionError("valkey down")
+            raise ConnectionError("valkey down\r\nforged log entry")
 
     monkeypatch.setattr(counters, "_client", _BrokenClient())
     monkeypatch.setattr(counters, "_circuit_open_until", 0.0)
@@ -714,6 +714,10 @@ async def test_force_reconcile_returns_accurate_value_even_if_valkey_write_fails
         now=_NOW,
     )
     assert result == AllowanceCounts(requests=3, cost_microusd=750_000)
+    assert caplog.records
+    assert all("\r" not in record.getMessage() for record in caplog.records)
+    assert all("\n" not in record.getMessage() for record in caplog.records)
+    assert "valkey down forged log entry" in caplog.records[-1].getMessage()
 
 
 # -- read_counts(): the admin usage surface -----------------------------------

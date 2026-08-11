@@ -2913,7 +2913,7 @@ def test_dispatch_sync_run_github_work_items_rejects_partial_canonical_claim(
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
-@pytest.mark.parametrize("provider", ("jira", "linear"))
+@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
 @pytest.mark.parametrize("transport", ("river_canary", "celery"))
 @pytest.mark.parametrize(
     ("dataset_key", "processor_flags"),
@@ -3073,11 +3073,184 @@ def test_dispatch_pagerduty_incident_family_preserves_independent_d16_claims(
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
-def test_dispatch_sync_run_river_canary_requires_enabled_capability(
+_AGGREGATE_ROUTE_DISPATCH_CASES = (
+    pytest.param(
+        "gitlab",
+        "deployments",
+        {},
+        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
+        id="gitlab-deployments",
+    ),
+    pytest.param(
+        "gitlab",
+        "work-items",
+        _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
+        id="gitlab-work-items",
+    ),
+    pytest.param(
+        "jira",
+        "work-items",
+        _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+        "WORKER_JIRA_WORK_ITEMS_ENABLED",
+        id="jira-work-items",
+    ),
+    pytest.param(
+        "pagerduty",
+        "services",
+        {},
+        "WORKER_PAGERDUTY_SERVICES_ENABLED",
+        id="pagerduty-services",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incidents",
+        {"sync_incidents": True},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incidents",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incident-alerts",
+        {},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incident-alerts",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incident-log-entries",
+        {},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incident-log-entries",
+    ),
+    pytest.param(
+        "pagerduty",
+        "incident-notes",
+        {},
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        id="pagerduty-incident-notes",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset_key", "processor_flags", "environment_name"),
+    _AGGREGATE_ROUTE_DISPATCH_CASES,
+)
+def test_dispatch_enabled_aggregate_route_has_only_the_river_writer(
+    db_session,
+    monkeypatch,
+    provider: str,
+    dataset_key: str,
+    processor_flags: dict[str, bool],
+    environment_name: str,
+) -> None:
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+
+    run, unit = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key=dataset_key,
+        processor_flags=processor_flags,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv(environment_name, "true")
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                (
+                    candidate_provider.strip().lower(),
+                    candidate_dataset.strip().lower(),
+                )
+                == (provider, dataset_key)
+            )
+        ),
+    )
+    if provider == "pagerduty":
+        monkeypatch.setattr(
+            sync_units,
+            "require_canonical_incident_feature_for_update_sync",
+            lambda *_args: None,
+        )
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    rows = db_session.query(WorkerJobOutbox).all()
+    assert unit_publish_calls == []
+    assert len(rows) == 1
+    assert rows[0].dedupe_key == f"sync.provider_unit:{unit.id}"
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset_key", "processor_flags", "environment_name"),
+    _AGGREGATE_ROUTE_DISPATCH_CASES,
+)
+def test_dispatch_default_off_aggregate_route_has_only_the_celery_writer(
+    db_session,
+    monkeypatch,
+    provider: str,
+    dataset_key: str,
+    processor_flags: dict[str, bool],
+    environment_name: str,
+) -> None:
+    from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
+
+    run, _ = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key=dataset_key,
+        processor_flags=processor_flags,
+    )
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.delenv(environment_name, raising=False)
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                (
+                    candidate_provider.strip().lower(),
+                    candidate_dataset.strip().lower(),
+                )
+                == (provider, dataset_key)
+            )
+        ),
+    )
+    if provider == "pagerduty":
+        monkeypatch.setattr(
+            sync_units,
+            "require_canonical_incident_feature_for_update_sync",
+            lambda *_args: None,
+        )
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+    assert len(unit_publish_calls) == 1
+    assert db_session.query(WorkerJobOutbox).count() == 0
+
+
+def test_dispatch_sync_run_river_canary_default_off_keeps_celery_writer(
     db_session, monkeypatch
 ):
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(
         db_session,
@@ -3093,12 +3266,14 @@ def test_dispatch_sync_run_river_canary_requires_enabled_capability(
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED", "false")
 
-    with pytest.raises(WorkerJobRouteError, match="capability"):
-        sync_units.dispatch_sync_run(str(run.id))
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
 
     db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.PLANNED.value
-    assert len(unit_publish_calls) == 0
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert len(unit_publish_calls) == 1
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 

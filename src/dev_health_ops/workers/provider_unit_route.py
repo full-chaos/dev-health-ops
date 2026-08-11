@@ -127,17 +127,19 @@ def _switch_field_name(provider: str, dataset: str) -> str:
     True. A provider/dataset combination with no matching field derives a
     name that resolves to nothing, so it fails closed by construction rather
     than through an explicit denylist. The one deliberate family mapping is
-    GitHub work-items: all five matrix identities share one switch because
-    they are one planner-collapsed complete execution, never five writers.
+    Atomic work-item families: all five matrix identities share one switch,
+    while only the canonical claim may acquire the Go writer. PagerDuty's
+    incident datasets also share one rollout switch, but retain their four
+    independent D16 claims.
     """
 
     normalized_provider = provider.strip().lower()
     normalized_dataset = dataset.strip().lower()
-    if (
-        normalized_provider == "github"
-        and normalized_dataset in _GITHUB_WORK_ITEM_FAMILY_DATASETS
-    ):
-        return "github_work_items"
+    policy = provider_family_policy(normalized_provider, normalized_dataset)
+    if policy is not None and policy.mode is FamilyExecutionMode.ATOMIC_CANONICAL:
+        return f"{normalized_provider}_{policy.canonical_dataset}".replace("-", "_")
+    if normalized_provider == "pagerduty" and policy is not None:
+        return "pagerduty_incidents"
     return f"{normalized_provider}_{normalized_dataset}".replace("-", "_")
 
 
@@ -148,6 +150,19 @@ def is_github_work_item_direct_alias(provider: str, dataset: str) -> bool:
         provider.strip().lower() == "github"
         and dataset.strip().lower() in _GITHUB_WORK_ITEM_FAMILY_DATASETS
         and dataset.strip().lower() != _FAMILY_CANONICAL_DATASET_KEY
+    )
+
+
+def is_atomic_provider_family_direct_alias(provider: str, dataset: str) -> bool:
+    """Whether a persisted claim is a non-canonical atomic-family alias."""
+
+    normalized_provider = provider.strip().lower()
+    normalized_dataset = dataset.strip().lower()
+    policy = provider_family_policy(normalized_provider, normalized_dataset)
+    return (
+        policy is not None
+        and policy.mode is FamilyExecutionMode.ATOMIC_CANONICAL
+        and normalized_dataset != policy.canonical_dataset
     )
 
 
@@ -203,9 +218,10 @@ def provider_family_strict_admission_enabled(
         return False
     if normalized_provider == "github":
         return True
-    switch_name = policy.switch_environment_name(normalized_provider)
-    if switch_name is None:
-        return False
+    switch_name = (
+        policy.switch_environment_name(normalized_provider)
+        or f"WORKER_{normalized_provider.upper()}_WORK_ITEMS_ENABLED"
+    )
     source = os.environ if environment is None else environment
     return _flag(source, switch_name)
 
@@ -233,6 +249,27 @@ class ProviderUnitRouteSwitches:
     gitlab_cicd: bool = False
     gitlab_tests: bool = False
     gitlab_incidents: bool = False
+    gitlab_deployments: bool = False
+    gitlab_feature_flags: bool = False
+    gitlab_files: bool = False
+    gitlab_blame: bool = False
+    gitlab_prs: bool = False
+    gitlab_pr_reviews: bool = False
+    gitlab_pr_comments: bool = False
+    gitlab_security: bool = False
+    # One switch for the canonical GitLab work-item claim. Direct aliases are
+    # matrix identities only and cannot acquire a partial writer.
+    gitlab_work_items: bool = False
+    # PagerDuty catalog datasets retain independent claims. The incident
+    # quartet shares a rollout switch without being collapsed into one claim.
+    pagerduty_services: bool = False
+    pagerduty_business_services: bool = False
+    pagerduty_escalation_policies: bool = False
+    pagerduty_schedules: bool = False
+    pagerduty_on_calls: bool = False
+    pagerduty_users: bool = False
+    pagerduty_teams: bool = False
+    pagerduty_incidents: bool = False
     # github_prs is the producer half of the (github, prs) gate (CHAOS-3122,
     # following CHAOS-3123's precedent). Its Go counterpart is
     # config.Config.WorkerGithubPRsEnabled, read from the same
@@ -273,6 +310,27 @@ class ProviderUnitRouteSwitches:
             gitlab_cicd=_flag(source, "WORKER_GITLAB_CICD_ENABLED"),
             gitlab_tests=_flag(source, "WORKER_GITLAB_TESTS_ENABLED"),
             gitlab_incidents=_flag(source, "WORKER_GITLAB_INCIDENTS_ENABLED"),
+            gitlab_deployments=_flag(source, "WORKER_GITLAB_DEPLOYMENTS_ENABLED"),
+            gitlab_feature_flags=_flag(source, "WORKER_GITLAB_FEATURE_FLAGS_ENABLED"),
+            gitlab_files=_flag(source, "WORKER_GITLAB_FILES_ENABLED"),
+            gitlab_blame=_flag(source, "WORKER_GITLAB_BLAME_ENABLED"),
+            gitlab_prs=_flag(source, "WORKER_GITLAB_PRS_ENABLED"),
+            gitlab_pr_reviews=_flag(source, "WORKER_GITLAB_PR_REVIEWS_ENABLED"),
+            gitlab_pr_comments=_flag(source, "WORKER_GITLAB_PR_COMMENTS_ENABLED"),
+            gitlab_security=_flag(source, "WORKER_GITLAB_SECURITY_ENABLED"),
+            gitlab_work_items=_flag(source, "WORKER_GITLAB_WORK_ITEMS_ENABLED"),
+            pagerduty_services=_flag(source, "WORKER_PAGERDUTY_SERVICES_ENABLED"),
+            pagerduty_business_services=_flag(
+                source, "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED"
+            ),
+            pagerduty_escalation_policies=_flag(
+                source, "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED"
+            ),
+            pagerduty_schedules=_flag(source, "WORKER_PAGERDUTY_SCHEDULES_ENABLED"),
+            pagerduty_on_calls=_flag(source, "WORKER_PAGERDUTY_ON_CALLS_ENABLED"),
+            pagerduty_users=_flag(source, "WORKER_PAGERDUTY_USERS_ENABLED"),
+            pagerduty_teams=_flag(source, "WORKER_PAGERDUTY_TEAMS_ENABLED"),
+            pagerduty_incidents=_flag(source, "WORKER_PAGERDUTY_INCIDENTS_ENABLED"),
             github_prs=_flag(source, "WORKER_GITHUB_PRS_ENABLED"),
             github_pr_reviews=_flag(source, "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
             github_pr_comments=_flag(source, "WORKER_GITHUB_PR_COMMENTS_ENABLED"),
@@ -290,7 +348,7 @@ class ProviderUnitRouteSwitches:
         return switches
 
     def require_complete_routes(self) -> None:
-        if self.linear_work_items or self.jira_work_items:
+        if self.linear_work_items:
             raise ProviderUnitRouteError("enabled provider unit route is incomplete")
         if self.github_cicd and self.github_tests:
             raise ProviderUnitRouteError(
@@ -304,6 +362,10 @@ class ProviderUnitRouteSwitches:
             raise ProviderUnitRouteError(
                 "gitlab cicd and tests switches are mutually exclusive complete-unit aliases"
             )
+        if sum((self.gitlab_prs, self.gitlab_pr_reviews, self.gitlab_pr_comments)) > 1:
+            raise ProviderUnitRouteError(
+                "gitlab PR-social switches are mutually exclusive complete-unit aliases"
+            )
 
     def routes_to_river(self, provider: str, dataset: str) -> bool:
         self.require_complete_routes()
@@ -315,7 +377,7 @@ class ProviderUnitRouteSwitches:
         # getattr's default is what makes "no field declared for this pair"
         # resolve to False instead of raising -- the mechanism behind "a pair
         # can never be enabled by omission".
-        if is_github_work_item_direct_alias(provider, dataset):
+        if is_atomic_provider_family_direct_alias(provider, dataset):
             # Matrix readiness describes the all-five logical family. A direct
             # alias cannot be planned by the Python producer and cannot safely
             # execute the composite Go handler, so keep it at reconciliation

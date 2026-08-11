@@ -269,6 +269,11 @@ async def create_credential(
         name=payload.name,
         config=payload.config,
     )
+    # Commit before responding (CHAOS-3739): ``svc.set`` only flushes, while
+    # the yielded request-session dependency commits during teardown after
+    # FastAPI has already sent the response. A following request that links
+    # this credential would otherwise fail its foreign-key check.
+    await session.commit()
     return _integration_credential_response(cred)
 
 

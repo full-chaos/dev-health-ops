@@ -242,10 +242,33 @@ def graphiti_module(dotted: str = "") -> Any:
 
     import importlib
 
+    loaders = {
+        "": lambda: importlib.import_module("graphiti_core"),
+        "driver.falkordb_driver": lambda: importlib.import_module(
+            "graphiti_core.driver.falkordb_driver"
+        ),
+        "edges": lambda: importlib.import_module("graphiti_core.edges"),
+        "embedder.openai": lambda: importlib.import_module(
+            "graphiti_core.embedder.openai"
+        ),
+        "nodes": lambda: importlib.import_module("graphiti_core.nodes"),
+        "search.search_filters": lambda: importlib.import_module(
+            "graphiti_core.search.search_filters"
+        ),
+        "search.search_utils": lambda: importlib.import_module(
+            "graphiti_core.search.search_utils"
+        ),
+        "utils.bulk_utils": lambda: importlib.import_module(
+            "graphiti_core.utils.bulk_utils"
+        ),
+    }
+    loader = loaders.get(dotted)
+    if loader is None:
+        raise ValueError(f"unsupported graphiti-core submodule: {dotted!r}")
+
     os.environ[TELEMETRY_ENV_VAR] = "false"
-    name = f"graphiti_core.{dotted}" if dotted else "graphiti_core"
     try:
-        return importlib.import_module(name)
+        return loader()
     except ModuleNotFoundError as exc:  # pragma: no cover - env dependent
         if exc.name is not None and not exc.name.startswith("graphiti_core"):
             raise

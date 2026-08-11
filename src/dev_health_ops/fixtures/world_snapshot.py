@@ -415,15 +415,17 @@ _PG_BASE_TABLES_SQL = (
 
 
 async def _postgres_row_counts(conn: Any) -> dict[str, int]:
-    from sqlalchemy import text
+    from sqlalchemy import MetaData, func, select, text
 
     names = [
         row[0] for row in (await conn.execute(text(_PG_BASE_TABLES_SQL))).fetchall()
     ]
+    metadata = MetaData()
     counts: dict[str, int] = {}
     for name in names:
+        reflected = await _reflect(conn, str(name), metadata)
         value = (
-            await conn.execute(text(f'SELECT count(*) FROM public."{name}"'))
+            await conn.execute(select(func.count()).select_from(reflected))
         ).scalar_one()
         counts[str(name)] = int(value)
     return counts
@@ -1516,7 +1518,7 @@ async def _align_reference_ids(
     or an existing referencing row -- refuses; nothing is silently skipped.
     """
 
-    from sqlalchemy import select, text, update
+    from sqlalchemy import func, select, update
 
     for table, spec in sorted(reference_tables.items()):
         reflected = await _reflect(conn, table, metadata)
@@ -1528,8 +1530,9 @@ async def _align_reference_ids(
         # this runs, and a stray pre-existing referrer would silently
         # re-target.
         for referrer in await _tables_referencing(conn, table):
+            referrer_table = await _reflect(conn, referrer, metadata)
             existing = (
-                await conn.execute(text(f'SELECT count(*) FROM public."{referrer}"'))
+                await conn.execute(select(func.count()).select_from(referrer_table))
             ).scalar_one()
             if existing:
                 raise RestoreRefusedError(

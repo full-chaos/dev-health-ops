@@ -1408,6 +1408,12 @@ class TestADegradedBackendIsLoudNotEmpty:
         with pytest.raises(GraphitiUnavailableError):
             backend.graphiti_module("nodes")
 
+    def test_the_dynamic_import_boundary_rejects_unregistered_modules(self) -> None:
+        from dev_health_ops.context_fabric.graph_arm import backend
+
+        with pytest.raises(ValueError, match="unsupported graphiti-core submodule"):
+            backend.graphiti_module("os")
+
 
 # --------------------------------------------------------------------------
 # 11. Person-level productivity and staffing bait

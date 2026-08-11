@@ -34,3 +34,25 @@ f3b6feeba:tests/test_ingest_api.py:generic-api-key:71
 # forms are required for gitleaks matcher compatibility.
 e586dede374a01e80414f7960ab72fdd5ee93f41:tests/api/dev/test_production_runtime.py:generic-api-key:113
 e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113
+
+# Context Fabric corpus identifiers. These are deterministic fixture keys,
+# never credentials; the final feature-to-main PR scans their historical
+# addition commits, so both full and short fingerprints are required.
+534aa02991f4d210cd19a8e7b4fa4ebd57f6cbc1:contracts/ask-dev-investigation-corpus/v1/world/measurements.json:generic-api-key:233
+534aa0299:contracts/ask-dev-investigation-corpus/v1/world/measurements.json:generic-api-key:233
+534aa02991f4d210cd19a8e7b4fa4ebd57f6cbc1:contracts/ask-dev-investigation-corpus/v1/world/relationships.json:generic-api-key:861
+534aa0299:contracts/ask-dev-investigation-corpus/v1/world/relationships.json:generic-api-key:861
+7f4134ce5370602fbab64c03b3c174de48ad6119:trials/chaos_3499/corpus/ground_truth.py:generic-api-key:387
+7f4134ce5:trials/chaos_3499/corpus/ground_truth.py:generic-api-key:387
+
+# Deterministic test-only JWT/evidence signing inputs from the feature history.
+a0cf10f111c4926e68ddb39c08960334ace7e1cd:tests/api/dev/test_chaos_3697_graph_route_production_wiring.py:generic-api-key:229
+a0cf10f11:tests/api/dev/test_chaos_3697_graph_route_production_wiring.py:generic-api-key:229
+aa214f8d40efe7abb88b49e5cb078d363410c104:tests/api/dev/test_production_runtime.py:generic-api-key:2048
+aa214f8d4:tests/api/dev/test_production_runtime.py:generic-api-key:2048
+96b85b0c9a68334feed35e8106b078778a4bf38a:tests/api/dev/test_chaos_3697_graph_route_production_wiring.py:generic-api-key:114
+96b85b0c9:tests/api/dev/test_chaos_3697_graph_route_production_wiring.py:generic-api-key:114
+7a79d46ec25c87ac7a397f68f2ea2e358c727e1d:tests/api/dev/test_chaos_3650_graph_grounded_assembler.py:generic-api-key:73
+7a79d46ec:tests/api/dev/test_chaos_3650_graph_grounded_assembler.py:generic-api-key:73
+7ff48de7cc87f348ba7784f6eecaf01797f8a2c8:tests/api/dev/test_chaos_3502_graph_routing_seam.py:generic-api-key:50
+7ff48de7c:tests/api/dev/test_chaos_3502_graph_routing_seam.py:generic-api-key:50

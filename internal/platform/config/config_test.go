@@ -223,6 +223,89 @@ func TestGitLabCompleteUnitAliasesAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestGitLabPRSocialAliasesAreMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	aliases := []string{
+		"WORKER_GITLAB_PRS_ENABLED",
+		"WORKER_GITLAB_PR_REVIEWS_ENABLED",
+		"WORKER_GITLAB_PR_COMMENTS_ENABLED",
+	}
+	for left := 0; left < len(aliases); left++ {
+		for right := left + 1; right < len(aliases); right++ {
+			_, err := Load(workerSpec(map[string]string{
+				aliases[left]:  "true",
+				aliases[right]: "true",
+			}))
+			if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Fatalf("aliases=(%s,%s) error=%v", aliases[left], aliases[right], err)
+			}
+		}
+	}
+}
+
+func TestProviderCompletionRouteSwitchesDefaultOffParseAndLogSafely(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		env  string
+		attr string
+		pick func(Config) bool
+	}{
+		{"linear work items", "WORKER_LINEAR_WORK_ITEMS_ENABLED", "worker_linear_work_items_enabled", func(cfg Config) bool { return cfg.WorkerLinearWorkItemsEnabled }},
+		{"jira work items", "WORKER_JIRA_WORK_ITEMS_ENABLED", "worker_jira_work_items_enabled", func(cfg Config) bool { return cfg.WorkerJiraWorkItemsEnabled }},
+		{"jira incidents", "WORKER_JIRA_INCIDENTS_ENABLED", "worker_jira_incidents_enabled", func(cfg Config) bool { return cfg.WorkerJiraIncidentsEnabled }},
+		{"gitlab repo metadata", "WORKER_GITLAB_REPO_METADATA_ENABLED", "worker_gitlab_repo_metadata_enabled", func(cfg Config) bool { return cfg.WorkerGitlabRepoMetadataEnabled }},
+		{"gitlab commits", "WORKER_GITLAB_COMMITS_ENABLED", "worker_gitlab_commits_enabled", func(cfg Config) bool { return cfg.WorkerGitlabCommitsEnabled }},
+		{"gitlab commit stats", "WORKER_GITLAB_COMMIT_STATS_ENABLED", "worker_gitlab_commit_stats_enabled", func(cfg Config) bool { return cfg.WorkerGitlabCommitStatsEnabled }},
+		{"gitlab cicd", "WORKER_GITLAB_CICD_ENABLED", "worker_gitlab_cicd_enabled", func(cfg Config) bool { return cfg.WorkerGitlabCICDEnabled }},
+		{"gitlab tests", "WORKER_GITLAB_TESTS_ENABLED", "worker_gitlab_tests_enabled", func(cfg Config) bool { return cfg.WorkerGitlabTestsEnabled }},
+		{"gitlab incidents", "WORKER_GITLAB_INCIDENTS_ENABLED", "worker_gitlab_incidents_enabled", func(cfg Config) bool { return cfg.WorkerGitlabIncidentsEnabled }},
+		{"gitlab deployments", "WORKER_GITLAB_DEPLOYMENTS_ENABLED", "worker_gitlab_deployments_enabled", func(cfg Config) bool { return cfg.WorkerGitlabDeploymentsEnabled }},
+		{"gitlab feature flags", "WORKER_GITLAB_FEATURE_FLAGS_ENABLED", "worker_gitlab_feature_flags_enabled", func(cfg Config) bool { return cfg.WorkerGitlabFeatureFlagsEnabled }},
+		{"gitlab files", "WORKER_GITLAB_FILES_ENABLED", "worker_gitlab_files_enabled", func(cfg Config) bool { return cfg.WorkerGitlabFilesEnabled }},
+		{"gitlab blame", "WORKER_GITLAB_BLAME_ENABLED", "worker_gitlab_blame_enabled", func(cfg Config) bool { return cfg.WorkerGitlabBlameEnabled }},
+		{"gitlab prs", "WORKER_GITLAB_PRS_ENABLED", "worker_gitlab_prs_enabled", func(cfg Config) bool { return cfg.WorkerGitlabPRsEnabled }},
+		{"gitlab pr reviews", "WORKER_GITLAB_PR_REVIEWS_ENABLED", "worker_gitlab_pr_reviews_enabled", func(cfg Config) bool { return cfg.WorkerGitlabPRReviewsEnabled }},
+		{"gitlab pr comments", "WORKER_GITLAB_PR_COMMENTS_ENABLED", "worker_gitlab_pr_comments_enabled", func(cfg Config) bool { return cfg.WorkerGitlabPRCommentsEnabled }},
+		{"gitlab security", "WORKER_GITLAB_SECURITY_ENABLED", "worker_gitlab_security_enabled", func(cfg Config) bool { return cfg.WorkerGitlabSecurityEnabled }},
+		{"gitlab work items", "WORKER_GITLAB_WORK_ITEMS_ENABLED", "worker_gitlab_work_items_enabled", func(cfg Config) bool { return cfg.WorkerGitlabWorkItemsEnabled }},
+		{"pagerduty services", "WORKER_PAGERDUTY_SERVICES_ENABLED", "worker_pagerduty_services_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutyServicesEnabled }},
+		{"pagerduty business services", "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED", "worker_pagerduty_business_services_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutyBusinessServicesEnabled }},
+		{"pagerduty escalation policies", "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED", "worker_pagerduty_escalation_policies_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutyEscalationPoliciesEnabled }},
+		{"pagerduty schedules", "WORKER_PAGERDUTY_SCHEDULES_ENABLED", "worker_pagerduty_schedules_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutySchedulesEnabled }},
+		{"pagerduty on calls", "WORKER_PAGERDUTY_ON_CALLS_ENABLED", "worker_pagerduty_on_calls_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutyOnCallsEnabled }},
+		{"pagerduty users", "WORKER_PAGERDUTY_USERS_ENABLED", "worker_pagerduty_users_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutyUsersEnabled }},
+		{"pagerduty teams", "WORKER_PAGERDUTY_TEAMS_ENABLED", "worker_pagerduty_teams_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutyTeamsEnabled }},
+		{"pagerduty incidents", "WORKER_PAGERDUTY_INCIDENTS_ENABLED", "worker_pagerduty_incidents_enabled", func(cfg Config) bool { return cfg.WorkerPagerDutyIncidentsEnabled }},
+	}
+
+	defaults, err := Load(workerSpec(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range tests {
+		if test.pick(defaults) {
+			t.Fatalf("%s must default off", test.env)
+		}
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(workerSpec(map[string]string{test.env: "true"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.pick(cfg) {
+				t.Fatalf("%s did not enable its route switch", test.env)
+			}
+			if attrs := fmt.Sprint(cfg.SafeAttrs()); !strings.Contains(attrs, test.attr+"=true") {
+				t.Fatalf("safe attrs missing %s=true: %s", test.attr, attrs)
+			}
+		})
+	}
+}
+
 func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 	t.Parallel()
 
@@ -311,35 +394,52 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 	}
 
 	for key, value := range map[string]string{
-		"WORKER_DATABASE_MODE":                      "arbitrary",
-		"WORKER_DATABASE_MAX_CONNS":                 "5",
-		"WORKER_DOMAIN_DATABASE_MAX_CONNS":          "0",
-		"RIVER_COMPLETED_JOB_RETENTION":             "23h",
-		"RIVER_JOB_CLEANER_TIMEOUT":                 "4s",
-		"RIVER_DATABASE_SCHEMA":                     "River-Bad",
-		"RIVER_DOMAIN_DATABASE_ROLE":                "Domain-Bad",
-		"RIVER_QUEUE_DATABASE_ROLE":                 "Queue-Bad",
-		"PGBOUNCER_TRANSACTION_MODE":                "sometimes",
-		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE":  "sometimes",
-		"DEV_HEALTH_STREAM_REPLICAS":                "9",
-		"WORKER_LINEAR_WORK_ITEMS_ENABLED":          "sometimes",
-		"WORKER_JIRA_WORK_ITEMS_ENABLED":            "sometimes",
-		"WORKER_JIRA_INCIDENTS_ENABLED":             "sometimes",
-		"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED": "sometimes",
-		"WORKER_GITHUB_REPO_METADATA_ENABLED":       "sometimes",
-		"WORKER_GITLAB_REPO_METADATA_ENABLED":       "sometimes",
-		"WORKER_GITLAB_COMMITS_ENABLED":             "sometimes",
-		"WORKER_GITLAB_COMMIT_STATS_ENABLED":        "sometimes",
-		"WORKER_GITLAB_CICD_ENABLED":                "sometimes",
-		"WORKER_GITLAB_TESTS_ENABLED":               "sometimes",
-		"WORKER_GITLAB_INCIDENTS_ENABLED":           "sometimes",
-		"WORKER_GITHUB_PRS_ENABLED":                 "sometimes",
-		"WORKER_GITHUB_PR_REVIEWS_ENABLED":          "sometimes",
-		"WORKER_GITHUB_PR_COMMENTS_ENABLED":         "sometimes",
-		"WORKER_GITHUB_COMMITS_ENABLED":             "sometimes",
-		"WORKER_GITHUB_COMMIT_STATS_ENABLED":        "sometimes",
-		"WORKER_GITHUB_BLAME_ENABLED":               "sometimes",
-		"WORKER_GITHUB_WORK_ITEMS_ENABLED":          "sometimes",
+		"WORKER_DATABASE_MODE":                         "arbitrary",
+		"WORKER_DATABASE_MAX_CONNS":                    "5",
+		"WORKER_DOMAIN_DATABASE_MAX_CONNS":             "0",
+		"RIVER_COMPLETED_JOB_RETENTION":                "23h",
+		"RIVER_JOB_CLEANER_TIMEOUT":                    "4s",
+		"RIVER_DATABASE_SCHEMA":                        "River-Bad",
+		"RIVER_DOMAIN_DATABASE_ROLE":                   "Domain-Bad",
+		"RIVER_QUEUE_DATABASE_ROLE":                    "Queue-Bad",
+		"PGBOUNCER_TRANSACTION_MODE":                   "sometimes",
+		"WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE":     "sometimes",
+		"DEV_HEALTH_STREAM_REPLICAS":                   "9",
+		"WORKER_LINEAR_WORK_ITEMS_ENABLED":             "sometimes",
+		"WORKER_JIRA_WORK_ITEMS_ENABLED":               "sometimes",
+		"WORKER_JIRA_INCIDENTS_ENABLED":                "sometimes",
+		"WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED":    "sometimes",
+		"WORKER_GITHUB_REPO_METADATA_ENABLED":          "sometimes",
+		"WORKER_GITLAB_REPO_METADATA_ENABLED":          "sometimes",
+		"WORKER_GITLAB_COMMITS_ENABLED":                "sometimes",
+		"WORKER_GITLAB_COMMIT_STATS_ENABLED":           "sometimes",
+		"WORKER_GITLAB_CICD_ENABLED":                   "sometimes",
+		"WORKER_GITLAB_TESTS_ENABLED":                  "sometimes",
+		"WORKER_GITLAB_INCIDENTS_ENABLED":              "sometimes",
+		"WORKER_GITLAB_DEPLOYMENTS_ENABLED":            "sometimes",
+		"WORKER_GITLAB_FEATURE_FLAGS_ENABLED":          "sometimes",
+		"WORKER_GITLAB_FILES_ENABLED":                  "sometimes",
+		"WORKER_GITLAB_BLAME_ENABLED":                  "sometimes",
+		"WORKER_GITLAB_PRS_ENABLED":                    "sometimes",
+		"WORKER_GITLAB_PR_REVIEWS_ENABLED":             "sometimes",
+		"WORKER_GITLAB_PR_COMMENTS_ENABLED":            "sometimes",
+		"WORKER_GITLAB_SECURITY_ENABLED":               "sometimes",
+		"WORKER_GITLAB_WORK_ITEMS_ENABLED":             "sometimes",
+		"WORKER_PAGERDUTY_SERVICES_ENABLED":            "sometimes",
+		"WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED":   "sometimes",
+		"WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED": "sometimes",
+		"WORKER_PAGERDUTY_SCHEDULES_ENABLED":           "sometimes",
+		"WORKER_PAGERDUTY_ON_CALLS_ENABLED":            "sometimes",
+		"WORKER_PAGERDUTY_USERS_ENABLED":               "sometimes",
+		"WORKER_PAGERDUTY_TEAMS_ENABLED":               "sometimes",
+		"WORKER_PAGERDUTY_INCIDENTS_ENABLED":           "sometimes",
+		"WORKER_GITHUB_PRS_ENABLED":                    "sometimes",
+		"WORKER_GITHUB_PR_REVIEWS_ENABLED":             "sometimes",
+		"WORKER_GITHUB_PR_COMMENTS_ENABLED":            "sometimes",
+		"WORKER_GITHUB_COMMITS_ENABLED":                "sometimes",
+		"WORKER_GITHUB_COMMIT_STATS_ENABLED":           "sometimes",
+		"WORKER_GITHUB_BLAME_ENABLED":                  "sometimes",
+		"WORKER_GITHUB_WORK_ITEMS_ENABLED":             "sometimes",
 	} {
 		if _, err := Load(workerSpec(map[string]string{key: value})); err == nil {
 			t.Fatalf("expected %s=%q to fail", key, value)

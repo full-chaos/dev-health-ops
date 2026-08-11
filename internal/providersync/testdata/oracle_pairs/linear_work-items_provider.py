@@ -66,12 +66,17 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
     )
     batches = list(provider.iter_ingest(context))
     work_items = [item for batch in batches for item in batch.work_items]
-    if len(work_items) != 1 or not dataclasses.is_dataclass(work_items[0]):
+    work_item = work_items[0] if len(work_items) == 1 else None
+    if (
+        work_item is None
+        or not dataclasses.is_dataclass(work_item)
+        or isinstance(work_item, type)
+    ):
         raise AssertionError(
             f"real LinearProvider returned {len(work_items)} work items of "
             f"type {type(work_items[0]) if work_items else None!r}"
         )
-    return dataclasses.asdict(dataclasses.replace(work_items[0], org_id=case["org_id"]))
+    return dataclasses.asdict(dataclasses.replace(work_item, org_id=case["org_id"]))
 
 
 oracle_registry.register(

@@ -15,6 +15,8 @@ import os
 import pathlib
 import sys
 from datetime import datetime, timezone
+from importlib.machinery import ModuleSpec
+from types import ModuleType
 from typing import Any, cast
 
 from internal.providersync.testdata import oracle_registry
@@ -27,6 +29,12 @@ SRC_ROOT = REPO_ROOT / "src"
 PROVIDER_SOURCE = REPO_ROOT / "src/dev_health_ops/providers/jira/provider.py"
 sys.path.insert(0, str(SRC_ROOT))
 install_minimal_oracle_imports()
+
+# Import the real connector utility without executing unrelated connector clients.
+_connectors = ModuleType("dev_health_ops.connectors")
+setattr(_connectors, "__path__", [str(SRC_ROOT / "dev_health_ops/connectors")])
+_connectors.__spec__ = ModuleSpec(_connectors.__name__, loader=None, is_package=True)
+sys.modules[_connectors.__name__] = _connectors
 
 with (
     contextlib.redirect_stdout(io.StringIO()),

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "provider completion route-switch configuration",
+  "build": ["go", "test", "-run", "^$", "./internal/platform/config/"],
+  "$limitation": "This config-only plan pins default-off parsing, representative exact field mappings, safe boolean startup attributes, and GitLab PR-family exclusivity. CompleteRouteSwitches mapping and worker readiness remain dependency-blocked on registry closure and require a separate cmd plan.",
+  "mutations": [
+    {
+      "id": "C1-provider-switches-default-off",
+      "file": "internal/platform/config/config.go",
+      "find": "\t} {\n\t\t*item.target, err = boolEnv(lookup, item.name, false)",
+      "replace": "\t} {\n\t\t*item.target, err = boolEnv(lookup, item.name, item.name == \"WORKER_PAGERDUTY_SERVICES_ENABLED\")",
+      "rationale": "every provider route is an explicit opt-in; an absent PagerDuty services environment value must leave that switch off",
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderCompletionRouteSwitchesDefaultOffParseAndLogSafely$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "C2-gitlab-deployments-field-mapping",
+      "file": "internal/platform/config/config.go",
+      "find": "target: &cfg.WorkerGitlabDeploymentsEnabled,",
+      "replace": "target: &cfg.WorkerGitlabFeatureFlagsEnabled,",
+      "rationale": "the GitLab deployments environment switch must enable only its dedicated route field",
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderCompletionRouteSwitchesDefaultOffParseAndLogSafely$/^gitlab_deployments$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "C3-pagerduty-incidents-family-field-mapping",
+      "file": "internal/platform/config/config.go",
+      "find": "target: &cfg.WorkerPagerDutyIncidentsEnabled,",
+      "replace": "target: &cfg.WorkerPagerDutyTeamsEnabled,",
+      "rationale": "the one complete PagerDuty incident-family switch must map to its incidents field instead of another independent route",
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderCompletionRouteSwitchesDefaultOffParseAndLogSafely$/^pagerduty_incidents$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "C4-pagerduty-safe-attribute-binding",
+      "file": "internal/platform/config/config.go",
+      "find": "slog.Bool(\"worker_pagerduty_escalation_policies_enabled\", c.WorkerPagerDutyEscalationPoliciesEnabled),",
+      "replace": "slog.Bool(\"worker_pagerduty_escalation_policies_enabled\", c.WorkerPagerDutySchedulesEnabled),",
+      "rationale": "startup diagnostics must expose the enabled state of the named PagerDuty route without logging configuration payloads",
+      "proof": [["go", "test", "-count=1", "-run", "^TestProviderCompletionRouteSwitchesDefaultOffParseAndLogSafely$/^pagerduty_escalation_policies$", "./internal/platform/config/"]]
+    },
+    {
+      "id": "C5-gitlab-pr-family-mutual-exclusion",
+      "file": "internal/platform/config/config.go",
+      "find": "if gitlabPRSocialAliases > 1 {",
+      "replace": "if gitlabPRSocialAliases > 3 {",
+      "rationale": "any two GitLab PR-family alias switches would activate the same complete writer under different claim identities and must be rejected at startup",
+      "proof": [["go", "test", "-count=1", "-run", "^TestGitLabPRSocialAliasesAreMutuallyExclusive$", "./internal/platform/config/"]]
+    }
+  ]
+}

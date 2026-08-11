@@ -18,7 +18,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import annotated_types
 from pydantic import ValidationError
@@ -36,6 +36,12 @@ from dev_health_ops.llm.agent.contracts import (
     AgentToolRequest,
     AgentUsage,
 )
+
+if TYPE_CHECKING:
+    from dev_health_ops.context_fabric.graph_arm.cohort import CohortProposal
+    from dev_health_ops.context_fabric.graph_arm.cohort_ranking import (
+        CohortRankingResult,
+    )
 from dev_health_ops.llm.agent.errors import (
     AgentProviderError,
     AgentProviderErrorCode,
@@ -71,7 +77,17 @@ from .contracts import (
     V1_SCOPE_LIST_LIMIT,
     AnswerStatus,
     DevAnswer,
+    DevAnswerCohortDisposition,
+    DevAnswerCohortMember,
+    DevAnswerCohortSignal,
+    DevAnswerCohortSignalSource,
+    DevAnswerCohortSlot,
+    DevAnswerEnrichmentGap,
+    DevAnswerEvidenceSourceClass,
     DevAnswerGraphAssistance,
+    DevAnswerPressureDimension,
+    DevAnswerPressureState,
+    DevAnswerSourceRequirementState,
     DevClaim,
     DevContractVersions,
     DevCoverage,
@@ -94,6 +110,9 @@ from .contracts import (
     ScopeResolutionOutcome,
     ToolID,
     dev_error_remediation,
+)
+from .contracts import (
+    CohortDiscoveryFamily as ContractCohortDiscoveryFamily,
 )
 from .contracts import (
     GraphAssistedAvailability as ContractGraphAssistedAvailability,
@@ -131,7 +150,11 @@ from .graph_routing_policy import (
     describe_availability,
     limitation_kinds_of,
 )
-from .investigation_contract import AskDevInvestigationPacket, InvestigationOutcome
+from .investigation_contract import (
+    AskDevInvestigationPacket,
+    CohortCompleteness,
+    InvestigationOutcome,
+)
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
 from .investigation_shadow import (
@@ -579,10 +602,147 @@ class OrchestratorEvent:
     graph_state: DevAnswerGraphAssistance | None = None
 
 
+def _cohort_proposal_from_packet(packet: AskDevInvestigationPacket) -> CohortProposal:
+    """Rehydrate only the graph-discovered membership the canonical ranker reads."""
+
+    from dev_health_ops.context_fabric.graph_arm.cohort import (
+        CohortCandidate,
+        CohortEntryMode,
+        CohortProposal,
+    )
+    from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
+
+    cohort = packet.comparison_cohort
+    return CohortProposal(
+        subject_id="",
+        members=tuple(
+            CohortCandidate(
+                canonical_id=member.canonical_id,
+                kind=GraphEntityKind(member.subject_kind.value),
+                display_label=member.display_label,
+                basis_anchors=tuple((basis, ()) for basis in member.inclusion_basis),
+            )
+            for member in cohort.members
+        ),
+        exclusions=(),
+        dimensions=cohort.supported_comparison_dimensions,
+        truncated=cohort.completeness is CohortCompleteness.TRUNCATED,
+        truncated_count=0,
+        authorization_filtered_count=cohort.authorization_filtered_count,
+        entry_mode=CohortEntryMode.SCOPE_ENUMERATED,
+    )
+
+
+def _public_cohort_slot(
+    *,
+    packet: AskDevInvestigationPacket,
+    family: CohortDiscoveryFamily,
+    ranking: CohortRankingResult,
+) -> DevAnswerCohortSlot | None:
+    """Project canonical ranking facts without inventing a scalar score."""
+
+    if not ranking.ranked_members:
+        return None
+    packet_members = {
+        member.canonical_id: member for member in packet.comparison_cohort.members
+    }
+    members: list[DevAnswerCohortMember] = []
+    for rank, ranked in enumerate(ranking.ranked_members, start=1):
+        packet_member = packet_members[ranked.candidate.canonical_id]
+        members.append(
+            DevAnswerCohortMember(
+                entity_id=ranked.candidate.canonical_id,
+                display_label=ranked.candidate.display_label,
+                inclusion_basis=ContractCohortDiscoveryFamily(family.value),
+                rank=rank,
+                disposition=DevAnswerCohortDisposition(ranked.disposition.value),
+                inclusion_rationale=packet_member.inclusion_rationale,
+                pressure_dimensions=[
+                    DevAnswerPressureDimension(item.value)
+                    for item in ranked.pressure_dimensions
+                ],
+                signals=[
+                    DevAnswerCohortSignal(
+                        signal_id=signal.signal_id,
+                        source=DevAnswerCohortSignalSource(signal.source),
+                        observed_states=[
+                            DevAnswerSourceRequirementState(item.value)
+                            for item in signal.observed_states
+                        ],
+                        data_semantics=signal.data_semantics,
+                        freshness=signal.freshness,
+                        coverage=signal.coverage,
+                        denominator_present=signal.denominator_present,
+                        attribution_present=signal.attribution_present,
+                        dimension=(
+                            DevAnswerPressureDimension(signal.dimension.value)
+                            if signal.dimension is not None
+                            else None
+                        ),
+                        state=(
+                            DevAnswerPressureState(signal.state.value)
+                            if signal.state is not None
+                            else None
+                        ),
+                        evidence_source_classes=[
+                            DevAnswerEvidenceSourceClass(item.value)
+                            for item in signal.evidence_source_classes
+                        ],
+                        limitation=signal.limitation,
+                        gap=(
+                            DevAnswerEnrichmentGap(signal.gap.value)
+                            if signal.gap is not None
+                            else None
+                        ),
+                    )
+                    for signal in ranked.signals
+                ],
+            )
+        )
+    warnings: list[str] = []
+    if ranking.authorization_filtered_count:
+        noun = (
+            "candidate" if ranking.authorization_filtered_count == 1 else "candidates"
+        )
+        verb = "was" if ranking.authorization_filtered_count == 1 else "were"
+        warnings.append(
+            f"{ranking.authorization_filtered_count} cohort {noun} "
+            f"{verb} hidden by authorization."
+        )
+    if packet.comparison_cohort.exclusions:
+        warnings.append(
+            f"{len(packet.comparison_cohort.exclusions)} graph-discovered "
+            "candidate was excluded before canonical ranking."
+            if len(packet.comparison_cohort.exclusions) == 1
+            else f"{len(packet.comparison_cohort.exclusions)} graph-discovered "
+            "candidates were excluded before canonical ranking."
+        )
+    if packet.comparison_cohort.completeness is CohortCompleteness.TRUNCATED:
+        warnings.append("The discovered cohort was truncated.")
+    elif (
+        packet.comparison_cohort.completeness
+        is CohortCompleteness.BEST_EFFORT_UNCERTAIN
+    ):
+        warnings.append("The discovered cohort is best-effort and may be incomplete.")
+    if ranking.exclusions:
+        warnings.append(
+            f"{len(ranking.exclusions)} candidates did not meet this question's inclusion rule."
+        )
+    return DevAnswerCohortSlot(
+        entity_kind=EntityType(ranking.ranked_members[0].candidate.kind.value),
+        members=members,
+        cohort_complete=(
+            packet.comparison_cohort.completeness is CohortCompleteness.COMPLETE
+        ),
+        warnings=warnings,
+    )
+
+
 def _graph_assistance_for_result(
     result: GraphQueryResult,
     *,
     graph_answered: bool,
+    cohort: DevAnswerCohortSlot | None = None,
 ) -> DevAnswerGraphAssistance:
     """Project one graph attempt into the public answer/event contract.
 
@@ -612,6 +772,7 @@ def _graph_assistance_for_result(
         schema_version="dev_answer_graph_assistance.v1",
         state=ContractGraphAssistedAvailability(availability.value),
         as_of=(packet.produced_at if packet is not None else datetime.now(UTC)),
+        cohort=cohort,
         limitations=limitations,
     )
 
@@ -1201,6 +1362,7 @@ class GraphAssemblyOutcome:
     answer: DevAnswer | None
     evidence_refused: bool
     enrichment_gap: bool
+    cohort: DevAnswerCohortSlot | None = None
 
 
 def _graph_assembly_outcome_label(evidence_refused: bool, enrichment_gap: bool) -> str:
@@ -3365,7 +3527,7 @@ class DevOrchestrator:
                     # ``packet is not None`` iff ``outcome is COMPLETED`` --
                     # narrowed here for mypy, not a new runtime check.
                     assert graph_result.packet is not None
-                    graph_answer = await self._attempt_graph_grounded_answer(
+                    graph_assembly = await self._attempt_graph_grounded_answer(
                         run_id=run_id,
                         answer_id=answer_id,
                         conversation_id=conversation_id,
@@ -3374,15 +3536,21 @@ class DevOrchestrator:
                         org_id=org_id,
                         permission_fingerprint=permission_fingerprint,
                         packet=graph_result.packet,
+                        cohort_discovery_family=cohort_discovery_family,
+                        authorized_entity_ids=(
+                            graph_authorization_scope.authorized_entity_ids
+                        ),
                     )
-                    if graph_answer is not None:
+                    if graph_assembly is not None:
                         graph_assistance = _graph_assistance_for_result(
-                            graph_result, graph_answered=True
+                            graph_result,
+                            graph_answered=True,
+                            cohort=graph_assembly.cohort,
                         )
                         await emit_graph_state(graph_assistance)
                         return await finish(
                             RunState.COMPLETED,
-                            answer=graph_answer,
+                            answer=graph_assembly.answer,
                             grounding_validation_status=(
                                 GRAPH_ASSISTED_GROUNDING_STATUS
                             ),
@@ -5410,7 +5578,9 @@ class DevOrchestrator:
         org_id: str,
         permission_fingerprint: str,
         packet: AskDevInvestigationPacket,
-    ) -> DevAnswer | None:
+        cohort_discovery_family: CohortDiscoveryFamily,
+        authorized_entity_ids: frozenset[str],
+    ) -> GraphAssemblyOutcome | None:
         """The gate, observability and exception-containment wrapper around
         :meth:`_graph_grounded_answer` -- CHAOS-3502/3650.
 
@@ -5501,6 +5671,8 @@ class DevOrchestrator:
                 org_id=org_id,
                 permission_fingerprint=permission_fingerprint,
                 packet=packet,
+                cohort_discovery_family=cohort_discovery_family,
+                authorized_entity_ids=authorized_entity_ids,
                 now=datetime.now(UTC),
             )
         except Exception as exc:  # noqa: BLE001 -- see docstring: contained and counted, never re-raised
@@ -5530,7 +5702,7 @@ class DevOrchestrator:
             },
         )
         ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome=label).inc()
-        return outcome.answer
+        return outcome
 
     async def _graph_grounded_answer(
         self,
@@ -5542,6 +5714,8 @@ class DevOrchestrator:
         org_id: str,
         permission_fingerprint: str,
         packet: AskDevInvestigationPacket,
+        cohort_discovery_family: CohortDiscoveryFamily,
+        authorized_entity_ids: frozenset[str],
         now: datetime,
     ) -> GraphAssemblyOutcome:
         """The graph-frame path's own assembler -- CHAOS-3502/3650.
@@ -5638,6 +5812,23 @@ class DevOrchestrator:
             for metric in enrichment.metrics
         ]
 
+        from dev_health_ops.context_fabric.graph_arm.cohort_ranking import (
+            CanonicalCohortRankingAdapter,
+        )
+
+        ranking = await CanonicalCohortRankingAdapter(self._canonical_enrichment).rank(
+            proposal=_cohort_proposal_from_packet(packet),
+            authorized_entity_ids=authorized_entity_ids,
+            scope=scope,
+            permission_fingerprint=permission_fingerprint,
+            now=now,
+        )
+        public_cohort = _public_cohort_slot(
+            packet=packet,
+            family=cohort_discovery_family,
+            ranking=ranking,
+        )
+
         enrichment_gap = any(
             isinstance(value, EnrichmentGap)
             and value is not EnrichmentGap.NOT_APPLICABLE
@@ -5690,6 +5881,7 @@ class DevOrchestrator:
             answer=answer,
             evidence_refused=evidence_refused,
             enrichment_gap=enrichment_gap,
+            cohort=public_cohort,
         )
 
     def _server_grounded_answer(

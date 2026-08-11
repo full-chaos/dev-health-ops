@@ -174,8 +174,8 @@ func buildGitHubWorkItemMetricTriplet(
 
 // buildWorkItemMetricTripletForProvider keeps the metric computation identical
 // across providers while retaining the provider value on every schema row.
-// GitLab uses the same canonical WorkItem fields and resolver, but must never
-// be made to look like GitHub merely to reuse this arithmetic.
+// GitLab and Jira use the same canonical WorkItem fields and resolver, but
+// must never be made to look like GitHub merely to reuse this arithmetic.
 func buildWorkItemMetricTripletForProvider(
 	provider string,
 	claim Claim,

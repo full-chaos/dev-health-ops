@@ -23,4 +23,3 @@ oracle_registry.register(
         },
     )
 )
-

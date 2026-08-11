@@ -28,6 +28,7 @@ on:
   #     - 'docker/go-worker.Dockerfile'
   #     - 'tests/compatibility/river/**'
   #     - 'ci/check_go.sh'
+  #     - 'ci/go_integration_shards.tsv'
   #     - 'ci/requirements-live-python-oracles.txt'
   #     - 'ci/check_go_containers.sh'
   #     - 'ci/check_river_compat_static.sh'
@@ -63,6 +64,7 @@ on:
   #     - 'docker/go-worker.Dockerfile'
   #     - 'tests/compatibility/river/**'
   #     - 'ci/check_go.sh'
+  #     - 'ci/go_integration_shards.tsv'
   #     - 'ci/requirements-live-python-oracles.txt'
   #     - 'ci/check_go_containers.sh'
   #     - 'ci/check_river_compat_static.sh'
@@ -134,9 +136,32 @@ jobs:
       - name: Validate River compatibility harness
         run: bash ci/check_river_compat_static.sh
 
-  go-storage-integration:
+  go-storage-integration-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Validate and emit deterministic integration shards
+        id: plan
+        run: bash ci/check_go.sh integration-shard-plan
+
+  go-storage-integration-shard:
+    name: go-storage-integration-shard-${{ matrix.shard }}
+    needs: go-storage-integration-plan
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -161,8 +186,33 @@ jobs:
       - name: Install locked ClickHouse migration dependencies
         run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
 
-      - name: Run isolated storage integration suite
-        run: bash ci/check_go.sh integration
+      - name: Run isolated storage integration shard ${{ matrix.shard }}
+        run: bash ci/check_go.sh integration-shard "${{ matrix.shard }}"
+
+  # Preserve the existing required-check contract while the implementation
+  # fans out behind it. fail-fast is disabled above, so this job observes the
+  # aggregate result only after every shard has reached a terminal state.
+  go-storage-integration:
+    name: go-storage-integration
+    if: ${{ always() }}
+    needs:
+      - go-storage-integration-plan
+      - go-storage-integration-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
+      SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
+    steps:
+      - name: Require the plan and every integration shard to pass
+        run: |
+          set -euo pipefail
+          if [ "${PLAN_RESULT}" != "success" ] || [ "${SHARD_RESULT}" != "success" ]; then
+            echo "integration plan result: ${PLAN_RESULT}" >&2
+            echo "integration shard aggregate result: ${SHARD_RESULT}" >&2
+            exit 1
+          fi
+          echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
     runs-on: ubuntu-latest

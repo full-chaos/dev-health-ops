@@ -36,16 +36,199 @@ def test_route_switch_is_exact_and_independent() -> None:
     assert not switches.routes_to_river("gitlab", "feature-flags")
 
 
-@pytest.mark.parametrize(
-    "name",
+def test_incomplete_linear_route_fails_closed() -> None:
+    with pytest.raises(ProviderUnitRouteError, match="incomplete"):
+        ProviderUnitRouteSwitches.from_environment(
+            {"WORKER_LINEAR_WORK_ITEMS_ENABLED": "true"}
+        )
+
+
+_AGGREGATE_ROUTE_SWITCH_CASES = (
     (
-        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
-        "WORKER_JIRA_WORK_ITEMS_ENABLED",
+        "gitlab",
+        "deployments",
+        "gitlab_deployments",
+        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
+    ),
+    (
+        "gitlab",
+        "feature-flags",
+        "gitlab_feature_flags",
+        "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
+    ),
+    ("gitlab", "files", "gitlab_files", "WORKER_GITLAB_FILES_ENABLED"),
+    ("gitlab", "blame", "gitlab_blame", "WORKER_GITLAB_BLAME_ENABLED"),
+    ("gitlab", "prs", "gitlab_prs", "WORKER_GITLAB_PRS_ENABLED"),
+    (
+        "gitlab",
+        "pr-reviews",
+        "gitlab_pr_reviews",
+        "WORKER_GITLAB_PR_REVIEWS_ENABLED",
+    ),
+    (
+        "gitlab",
+        "pr-comments",
+        "gitlab_pr_comments",
+        "WORKER_GITLAB_PR_COMMENTS_ENABLED",
+    ),
+    ("gitlab", "security", "gitlab_security", "WORKER_GITLAB_SECURITY_ENABLED"),
+    (
+        "gitlab",
+        "work-items",
+        "gitlab_work_items",
+        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
+    ),
+    ("jira", "work-items", "jira_work_items", "WORKER_JIRA_WORK_ITEMS_ENABLED"),
+    (
+        "pagerduty",
+        "services",
+        "pagerduty_services",
+        "WORKER_PAGERDUTY_SERVICES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "business-services",
+        "pagerduty_business_services",
+        "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "escalation-policies",
+        "pagerduty_escalation_policies",
+        "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "schedules",
+        "pagerduty_schedules",
+        "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "on-calls",
+        "pagerduty_on_calls",
+        "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "users",
+        "pagerduty_users",
+        "WORKER_PAGERDUTY_USERS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "teams",
+        "pagerduty_teams",
+        "WORKER_PAGERDUTY_TEAMS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incidents",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incident-alerts",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incident-log-entries",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+    ),
+    (
+        "pagerduty",
+        "incident-notes",
+        "pagerduty_incidents",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
     ),
 )
-def test_incomplete_routes_fail_closed(name: str) -> None:
-    with pytest.raises(ProviderUnitRouteError, match="incomplete"):
-        ProviderUnitRouteSwitches.from_environment({name: "true"})
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset", "field", "environment_name"),
+    _AGGREGATE_ROUTE_SWITCH_CASES,
+)
+def test_aggregate_route_switches_are_exact_and_default_off(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    dataset: str,
+    field: str,
+    environment_name: str,
+) -> None:
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                (
+                    candidate_provider.strip().lower(),
+                    candidate_dataset.strip().lower(),
+                )
+                == (provider, dataset)
+            )
+        ),
+    )
+
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert getattr(off, field) is False
+    assert not off.routes_to_river(provider, dataset)
+
+    on = ProviderUnitRouteSwitches.from_environment({environment_name: "true"})
+    assert getattr(on, field) is True
+    assert on.routes_to_river(provider, dataset)
+
+
+@pytest.mark.parametrize(
+    "environment_name",
+    sorted({case[3] for case in _AGGREGATE_ROUTE_SWITCH_CASES}),
+)
+def test_aggregate_route_switches_reject_invalid_values(
+    environment_name: str,
+) -> None:
+    with pytest.raises(ProviderUnitRouteError):
+        ProviderUnitRouteSwitches.from_environment({environment_name: "sometimes"})
+
+
+@pytest.mark.parametrize("provider", ("gitlab", "jira"))
+def test_aggregate_work_item_families_have_one_canonical_writer(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    environment_name = f"WORKER_{provider.upper()}_WORK_ITEMS_ENABLED"
+    monkeypatch.setattr(
+        ProviderUnitRouteSwitches,
+        "is_route_ready",
+        staticmethod(
+            lambda candidate_provider, candidate_dataset: (
+                candidate_provider.strip().lower() == provider
+                and candidate_dataset.strip().lower() in WORK_ITEM_DATASETS
+            )
+        ),
+    )
+
+    off = ProviderUnitRouteSwitches.from_environment({})
+    assert not off.routes_to_river(provider, "work-items")
+
+    on = ProviderUnitRouteSwitches.from_environment({environment_name: "true"})
+    assert provider_unit_route.provider_family_strict_admission_enabled(
+        provider, "work-items", {environment_name: "true"}
+    )
+    assert on.routes_to_river(provider, "work-items")
+    for alias in set(WORK_ITEM_DATASETS) - {"work-items"}:
+        assert not on.routes_to_river(provider, alias)
+
+
+def test_gitlab_pr_social_aliases_are_mutually_exclusive() -> None:
+    with pytest.raises(ProviderUnitRouteError, match="mutually exclusive"):
+        ProviderUnitRouteSwitches.from_environment(
+            {
+                "WORKER_GITLAB_PRS_ENABLED": "true",
+                "WORKER_GITLAB_PR_REVIEWS_ENABLED": "true",
+            }
+        )
 
 
 def test_invalid_switch_fails_closed_without_echoing_value() -> None:
@@ -634,11 +817,16 @@ def test_default_off_work_item_family_keeps_legacy_claims_admissible(
     )
 
 
-def test_gitlab_family_catalog_does_not_invent_an_activation_switch() -> None:
-    assert not provider_unit_route.provider_family_strict_admission_enabled(
+def test_gitlab_family_catalog_uses_the_family_activation_switch() -> None:
+    assert provider_unit_route.provider_family_strict_admission_enabled(
         "gitlab",
         "work-items",
         {"WORKER_GITLAB_WORK_ITEMS_ENABLED": "true"},
+    )
+    assert not provider_unit_route.provider_family_strict_admission_enabled(
+        "gitlab",
+        "work-items",
+        {},
     )
 
 

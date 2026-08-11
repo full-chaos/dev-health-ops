@@ -863,7 +863,7 @@ func githubDerivedOracleGoItem(t *testing.T, raw map[string]any) githubWorkItemR
 		WorkItemID: raw["work_item_id"].(string),
 		Provider:   raw["provider"].(string),
 		Title:      raw["title"].(string),
-		Type:       "issue",
+		Type:       githubDerivedOracleString(raw, "type", "issue"),
 		Status:     githubDerivedOracleString(raw, "status", "todo"),
 		ProjectID:  stringPointer(raw["project_id"].(string)),
 		CreatedAt:  githubDerivedOracleTime(t, raw["created_at"].(string)),
@@ -874,12 +874,26 @@ func githubDerivedOracleGoItem(t *testing.T, raw map[string]any) githubWorkItemR
 		parsed := githubDerivedOracleTime(t, value)
 		row.CompletedAt = &parsed
 	}
+	if value, ok := raw["started_at"].(string); ok {
+		parsed := githubDerivedOracleTime(t, value)
+		row.StartedAt = &parsed
+	}
 	if value, ok := raw["closed_at"].(string); ok {
 		parsed := githubDerivedOracleTime(t, value)
 		row.ClosedAt = &parsed
 	}
-	if value, ok := raw["story_points"].(int); ok {
-		points := float64(value)
+	if value, ok := raw["story_points"]; ok && value != nil {
+		var points float64
+		switch typed := value.(type) {
+		case int:
+			points = float64(typed)
+		case int64:
+			points = float64(typed)
+		case float64:
+			points = typed
+		default:
+			t.Fatalf("story_points has unsupported oracle type %T", value)
+		}
 		row.StoryPoints = &points
 	}
 	if value, ok := raw["project_key"].(string); ok {
@@ -888,6 +902,11 @@ func githubDerivedOracleGoItem(t *testing.T, raw map[string]any) githubWorkItemR
 	if values, ok := raw["assignees"].([]any); ok {
 		for _, value := range values {
 			row.Assignees = append(row.Assignees, value.(string))
+		}
+	}
+	if values, ok := raw["labels"].([]any); ok {
+		for _, value := range values {
+			row.Labels = append(row.Labels, value.(string))
 		}
 	}
 	if value, ok := raw["repo_id"].(string); ok {

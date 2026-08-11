@@ -22,11 +22,11 @@ func TestLinearClickHouseAdaptersWriteAndReadBackTenantFencedRows(t *testing.T) 
 		NativeTeamKey: stringPtr("ENG"), ProjectID: stringPtr("project-platform"),
 		ProjectName: stringPtr("Platform"), Assignees: []string{"alice@example.com"},
 		Reporter: stringPtr("bob@example.com"), CreatedAt: now, UpdatedAt: now,
-		StartedAt: &now, Labels: []string{"delivery"}, StoryPoints: floatPtr(3),
+		StartedAt: &now, Labels: []string{"delivery"}, StoryPoints: linearFloatPtr(3),
 		SprintID: stringPtr("linear:cycle:7"), SprintName: stringPtr("Sprint 7"),
 		ParentID: stringPtr("linear:ENG-1"), URL: stringPtr("https://linear.app/ENG-100"),
 		PriorityRaw: stringPtr("medium"), ServiceClass: stringPtr("standard"),
-		DueAt: timePtr(now.Add(24 * time.Hour)), OrgID: claim.OrgID, LastSynced: now,
+		DueAt: linearTimePtr(now.Add(24 * time.Hour)), OrgID: claim.OrgID, LastSynced: now,
 	}
 	itemRaw, err := json.Marshal(item)
 	if err != nil {
@@ -170,9 +170,9 @@ func TestLinearClickHouseAdaptersWriteAndReadBackTenantFencedRows(t *testing.T) 
 
 func stringPtr(value string) *string { return &value }
 
-func floatPtr(value float64) *float64 { return &value }
+func linearFloatPtr(value float64) *float64 { return &value }
 
-func timePtr(value time.Time) *time.Time { return &value }
+func linearTimePtr(value time.Time) *time.Time { return &value }
 
 func linearIntegrationEffect(t *testing.T, destination string, row any) EffectBatch {
 	t.Helper()

@@ -141,7 +141,16 @@ class BackfillTriggerRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_selector(self) -> BackfillTriggerRequest:
-        if self.selector is None and (self.since is None or self.before is None):
+        selector_present = self.selector is not None
+        flat_fields_present = any(
+            value is not None
+            for value in (self.since, self.before, self.source_ids, self.dataset_keys)
+        )
+        if selector_present and flat_fields_present:
+            raise ValueError(
+                "backfill selector cannot be mixed with legacy flat fields"
+            )
+        if not selector_present and (self.since is None or self.before is None):
             raise ValueError(
                 "backfill requires since and before, either top-level or in selector"
             )

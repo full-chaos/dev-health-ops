@@ -371,6 +371,28 @@ def test_backfill_selector_object_collapses_family_and_preserves_source_order(
     }
 
 
+def test_backfill_selector_object_rejects_legacy_flat_fields(db_session):
+    integration = _create_integration(db_session)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "commits")
+
+    with pytest.raises(ValueError, match="backfill selector cannot be mixed"):
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.BACKFILL.value,
+                triggered_by="manual",
+                backfill_selector=BackfillSelector(
+                    since=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    before=datetime(2026, 6, 2, tzinfo=timezone.utc),
+                ),
+                source_ids=(str(uuid.uuid4()),),
+            ),
+        )
+
+
 def test_disabled_source_produces_zero_units_without_hydrating_credentials(
     db_session, monkeypatch: pytest.MonkeyPatch
 ):

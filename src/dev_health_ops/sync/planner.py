@@ -255,6 +255,7 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     repair_outcome = repair_pagerduty_operational_integration(session, integration)
     _repair_github_work_item_runtime_options(session, integration)
     mode = _validate_mode(request.mode)
+    _validate_backfill_selector_compatibility(request)
     request = _normalize_backfill_selector(request)
     if repair_outcome is not None:
         return _terminalize_pagerduty_disabled_plan(
@@ -398,6 +399,23 @@ def _terminalize_pagerduty_disabled_plan(
         dispatch_required=False,
         terminal_reason=reason,
     )
+
+
+def _validate_backfill_selector_compatibility(request: SyncPlanRequest) -> None:
+    """Reject mixed structured/legacy backfill scopes before planning."""
+    selector = request.backfill_selector
+    if selector is None:
+        return
+    if any(
+        value is not None
+        for value in (
+            request.since,
+            request.before,
+            request.source_ids,
+            request.dataset_keys,
+        )
+    ):
+        raise ValueError("backfill selector cannot be mixed with legacy flat fields")
 
 
 def _normalize_backfill_selector(request: SyncPlanRequest) -> SyncPlanRequest:

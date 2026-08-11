@@ -1,8 +1,9 @@
 # Provider/dataset capability matrix — v1
 
 `matrix.json` is the frozen provider × dataset contract required by CUT-08 of
-the Go worker cutover (`docs/plans/go-worker-cutover-implementation-plan.md`
-§9, `docs/architecture/go-worker-cutover-trd.md` §10).
+the Go worker cutover. The Go Worker Runtime Migration project documents in
+Linear remain the plan and design authority; this artifact is the checked-in,
+source-generated capability record.
 
 It exists because the matrix previously lived only as hand-maintained code in
 two languages, with no test asserting the sets were identical.
@@ -19,6 +20,48 @@ All **59** configured pairs across the six providers in TRD §10.1:
 | launchdarkly | 1 |
 | linear | 5 |
 | pagerduty | 11 |
+
+## Aggregate closure census
+
+The frozen aggregate head `1c5ba95536adb4e7752df5f40c9e2a4d098847d6`
+started at **25/59** route-ready pairs:
+
+| Provider | Frozen ready | Aggregate ready |
+|---|---:|---:|
+| github | 17/17 | 17/17 |
+| gitlab | 6/19 | 19/19 |
+| jira | 1/6 | 6/6 |
+| launchdarkly | 1/1 | 1/1 |
+| linear | 0/5 | 5/5 |
+| pagerduty | 0/11 | 11/11 |
+| **Total** | **25/59** | **59/59** |
+
+The 34-row delta was treated as an activation dependency, not as 34 provider
+defects. A row moved to `native_go` / `route_ready: true` only after the
+aggregate source contained all four parts of the route: a complete handler and
+sink/readback boundary, production worker construction, a typed default-off Go
+switch with startup admission, and Python producer admission with a one-writer
+River/Celery fence. The generated JSON and independent Go/Python census tests
+then close on the same 59 identities.
+
+Family boundaries remain explicit:
+
+- GitLab, Jira, Linear, and GitHub work-item aliases are audit identities for
+  one canonical `work-items` writer per provider. Direct sibling aliases never
+  acquire a partial writer. GitLab and Linear expose the canonical 16-effect
+  manifest; Jira additionally owns `worklogs` for 17 effects.
+- PagerDuty's 11 rows are scheduled provider-unit routes in
+  `dev-health-worker`. The incident quartet remains four independent claims
+  with four descriptors and no canonicalization or fan-out; the quartet shares
+  the one frozen incidents rollout flag. `dev-health-stream-runner` remains a
+  separate webhook-only surface and is not evidence for these rows.
+- GitLab's three PR-social identities share one complete handler/sink while
+  retaining independent claims and mutually exclusive rollout switches.
+
+This is capability publication, not deployment cutover. Every checked-in
+switch remains default-off, the transitional inventory remains
+`python_compatibility`, and non-enabled scopes continue through the existing
+Celery/Python path.
 
 Per pair: the Python source anchor, cost class, watermark behavior, legacy
 targets, processor flags, the fixed Go executor kind, shadow eligibility, the
@@ -42,7 +85,7 @@ Both languages regenerate their own side and fail on divergence:
 - Python — `tests/workers/test_provider_matrix_contract.py`, which rebuilds the
   pair set and per-pair metadata from `src/dev_health_ops/sync/datasets.py` and
   additionally binds producer route eligibility
-  (`ProviderUnitRouteSwitches.is_canary_scope`) to `route_ready`.
+  (`ProviderUnitRouteSwitches.is_route_ready`) to `route_ready`.
 
 Regenerate after an intentional registry change:
 

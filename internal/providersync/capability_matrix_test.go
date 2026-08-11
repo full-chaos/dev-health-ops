@@ -14,7 +14,7 @@ const providerMatrixContractPath = "../../contracts/provider-matrix/v1/matrix.js
 
 const (
 	expectedProviderMatrixPairs   = 59
-	expectedRouteReadyPairs       = 25
+	expectedRouteReadyPairs       = 59
 	expectedGitHubRouteReadyPairs = 17
 )
 
@@ -22,6 +22,16 @@ const (
 // census from the CUT-08 audit. It exists so a silent registry deletion cannot
 // be "fixed" by regenerating the contract.
 var expectedMatrixPairCounts = map[string]int{
+	"github": 17, "gitlab": 19, "jira": 6, "launchdarkly": 1,
+	"linear": 5, "pagerduty": 11,
+}
+
+// expectedRouteReadyPairCounts is deliberately a second literal rather than
+// an alias of expectedMatrixPairCounts. The aggregate acceptance contract is
+// that every one of the independently audited 59 pairs is native and ready;
+// deleting a pair from both the capability registry and one expected map must
+// not silently reduce that target.
+var expectedRouteReadyPairCounts = map[string]int{
 	"github": 17, "gitlab": 19, "jira": 6, "launchdarkly": 1,
 	"linear": 5, "pagerduty": 11,
 }
@@ -67,17 +77,19 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 
 // TestProviderMatrixRouteReadyCensus is intentionally independent from
 // routeReadyPairs. A registry/matrix edit that deletes a ready identity from
-// both the implementation and that explanatory set must still fail CHAOS-3606's
-// 25/59 and GitHub 17/17 acceptance census.
+// both the implementation and that explanatory set must still fail the
+// aggregate 59/59 acceptance census.
 func TestProviderMatrixRouteReadyCensus(t *testing.T) {
 	t.Parallel()
 	matrix := BuildProviderMatrix()
 	ready, githubReady := 0, 0
+	readyCounts := map[string]int{}
 	for _, pair := range matrix.Pairs {
 		if !pair.RouteReady {
 			continue
 		}
 		ready++
+		readyCounts[pair.Provider]++
 		if pair.Provider == "github" {
 			githubReady++
 		}
@@ -89,11 +101,16 @@ func TestProviderMatrixRouteReadyCensus(t *testing.T) {
 		t.Fatalf("route-ready total=%d github=%d want total=%d github=%d",
 			ready, githubReady, expectedRouteReadyPairs, expectedGitHubRouteReadyPairs)
 	}
+	if !maps.Equal(readyCounts, expectedRouteReadyPairCounts) {
+		t.Fatalf("route-ready provider census=%v want %v", readyCounts, expectedRouteReadyPairCounts)
+	}
 }
 
-// routeReadyPairs is the complete, explicitly enumerated set of pairs that may
-// carry live traffic. Every entry needs its own parity evidence; adding one
-// here without it is the failure this guard exists to prevent.
+// routeReadyPairs is the complete, explicitly enumerated set of capability
+// identities whose native route may be admitted through its default-off
+// rollout switch. Route readiness does not itself activate live traffic. Every
+// entry needs its own parity evidence; adding one here without it is the failure
+// this guard exists to prevent.
 //
 //   - launchdarkly/feature-flags: CUT-08, native handler + live parity.
 //
@@ -148,36 +165,71 @@ func TestProviderMatrixRouteReadyCensus(t *testing.T) {
 //     all five aliases, while the planner admits only canonical work-items
 //     claims; direct sibling aliases deliberately route-reconcile before I/O.
 var routeReadyPairs = map[string]struct{}{
-	"launchdarkly/feature-flags": {},
-	"github/repo-metadata":       {},
-	"github/cicd":                {},
-	"github/commits":             {},
-	"github/deployments":         {},
-	"github/security":            {},
-	"github/files":               {},
-	"github/commit-stats":        {},
-	"jira/incidents":             {},
-	"gitlab/repo-metadata":       {},
-	"gitlab/commits":             {},
-	"gitlab/commit-stats":        {},
-	"gitlab/cicd":                {},
-	"gitlab/tests":               {},
-	"gitlab/incidents":           {},
-	"github/blame":               {},
-	"github/tests":               {},
-	"github/prs":                 {},
-	"github/pr-reviews":          {},
-	"github/pr-comments":         {},
-	"github/work-items":          {},
-	"github/work-item-labels":    {},
-	"github/work-item-projects":  {},
-	"github/work-item-history":   {},
-	"github/work-item-comments":  {},
+	"launchdarkly/feature-flags":     {},
+	"github/repo-metadata":           {},
+	"github/cicd":                    {},
+	"github/commits":                 {},
+	"github/deployments":             {},
+	"github/security":                {},
+	"github/files":                   {},
+	"github/commit-stats":            {},
+	"jira/incidents":                 {},
+	"gitlab/repo-metadata":           {},
+	"gitlab/commits":                 {},
+	"gitlab/commit-stats":            {},
+	"gitlab/cicd":                    {},
+	"gitlab/tests":                   {},
+	"gitlab/incidents":               {},
+	"gitlab/deployments":             {},
+	"gitlab/feature-flags":           {},
+	"gitlab/files":                   {},
+	"gitlab/blame":                   {},
+	"gitlab/prs":                     {},
+	"gitlab/pr-reviews":              {},
+	"gitlab/pr-comments":             {},
+	"gitlab/security":                {},
+	"gitlab/work-items":              {},
+	"gitlab/work-item-labels":        {},
+	"gitlab/work-item-projects":      {},
+	"gitlab/work-item-history":       {},
+	"gitlab/work-item-comments":      {},
+	"jira/work-items":                {},
+	"jira/work-item-labels":          {},
+	"jira/work-item-projects":        {},
+	"jira/work-item-history":         {},
+	"jira/work-item-comments":        {},
+	"linear/work-items":              {},
+	"linear/work-item-labels":        {},
+	"linear/work-item-projects":      {},
+	"linear/work-item-history":       {},
+	"linear/work-item-comments":      {},
+	"pagerduty/services":             {},
+	"pagerduty/business-services":    {},
+	"pagerduty/escalation-policies":  {},
+	"pagerduty/schedules":            {},
+	"pagerduty/on-calls":             {},
+	"pagerduty/users":                {},
+	"pagerduty/teams":                {},
+	"pagerduty/incidents":            {},
+	"pagerduty/incident-alerts":      {},
+	"pagerduty/incident-log-entries": {},
+	"pagerduty/incident-notes":       {},
+	"github/blame":                   {},
+	"github/tests":                   {},
+	"github/prs":                     {},
+	"github/pr-reviews":              {},
+	"github/pr-comments":             {},
+	"github/work-items":              {},
+	"github/work-item-labels":        {},
+	"github/work-item-projects":      {},
+	"github/work-item-history":       {},
+	"github/work-item-comments":      {},
 }
 
-// TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the freeze guard:
-// descriptors exist for github, gitlab, and pagerduty since CUT-08, and having
-// a descriptor must never by itself widen the routable surface.
+// TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs is the default-off
+// and canonical-family guard. Readiness describes a compiled capability; only
+// the pair's own switch may enable it, and a noncanonical atomic work-item
+// alias must remain non-routable even though its audit identity is ready.
 func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	t.Parallel()
 	ready := map[string]struct{}{}
@@ -189,24 +241,42 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	if !maps.Equal(ready, routeReadyPairs) {
 		t.Fatalf("route-ready pairs=%v want %v", ready, routeReadyPairs)
 	}
-	// Enabling every declared switch may not make an unready pair routable.
-	// The four noncanonical GitHub work-item aliases are the intentional
-	// exception among ready rows: they describe matrix/watermark identities,
-	// not valid direct claims. planner.py collapses all five into one canonical
-	// github/work-items claim, so a direct alias must stay disabled and enter
-	// route reconciliation before credential or provider construction.
+	// The four noncanonical aliases in each atomic work-item family describe
+	// matrix/watermark identities, not valid direct claims. planner.py collapses
+	// each family into one canonical work-items claim, so direct aliases stay
+	// disabled and enter route reconciliation before construction or I/O.
 	// The literal below must name every field of CompleteRouteSwitches: a new
 	// switch left out of it would leave its pair unexercised here.
 	all := CompleteRouteSwitches{
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
-		GitlabRepoMetadata: true,
-		GitlabCommits:      true,
-		GitlabCommitStats:  true,
-		GitlabCICD:         true,
-		GitlabTests:        true,
-		GitlabIncidents:    true,
-		GithubPRs:          true, GithubPRReviews: true, GithubPRComments: true,
+		GitlabRepoMetadata:          true,
+		GitlabCommits:               true,
+		GitlabCommitStats:           true,
+		GitlabCICD:                  true,
+		GitlabTests:                 true,
+		GitlabIncidents:             true,
+		GitlabDeployments:           true,
+		GitlabFeatureFlags:          true,
+		GitlabFiles:                 true,
+		GitlabBlame:                 true,
+		GitlabPRs:                   true,
+		GitlabPRReviews:             true,
+		GitlabPRComments:            true,
+		GitlabSecurity:              true,
+		GitlabWorkItems:             true,
+		PagerDutyServices:           true,
+		PagerDutyBusinessServices:   true,
+		PagerDutyEscalationPolicies: true,
+		PagerDutySchedules:          true,
+		PagerDutyOnCalls:            true,
+		PagerDutyUsers:              true,
+		PagerDutyTeams:              true,
+		PagerDutyIncidents:          true,
+		PagerDutyIncidentAlerts:     true,
+		PagerDutyIncidentLogEntries: true,
+		PagerDutyIncidentNotes:      true,
+		GithubPRs:                   true, GithubPRReviews: true, GithubPRComments: true,
 		GithubCICD: true, GithubCommits: true,
 		GithubDeployments: true, GithubSecurity: true, GithubFiles: true,
 		GithubCommitStats: true,
@@ -214,7 +284,7 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GithubTests:       true,
 		GithubWorkItems:   true,
 	}
-	if reflect.TypeOf(all).NumField() != 23 {
+	if reflect.TypeOf(all).NumField() != 43 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",
@@ -227,7 +297,8 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 			t.Fatalf("%s has no descriptor", key)
 		}
 		_, wantRoutable := routeReadyPairs[key]
-		if pair.Provider == "github" && isWorkItemFamilyDataset(pair.Dataset) &&
+		if slices.Contains([]string{"github", "gitlab", "jira", "linear"}, pair.Provider) &&
+			isWorkItemFamilyDataset(pair.Dataset) &&
 			pair.Dataset != "work-items" {
 			wantRoutable = false
 		}
@@ -411,31 +482,65 @@ func TestProviderMatrixMatchesCheckedInContract(t *testing.T) {
 func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 	t.Parallel()
 	handlers := map[string]CompleteRouteHandler{
-		"launchdarkly/feature-flags": LaunchDarklyRouteHandler{},
-		"github/repo-metadata":       GitHubRepositoryRouteHandler{},
-		"github/prs":                 GitHubPullRequestSocialRouteHandler{},
-		"github/pr-reviews":          GitHubPullRequestSocialRouteHandler{},
-		"github/pr-comments":         GitHubPullRequestSocialRouteHandler{},
-		"github/cicd":                GitHubTestsRouteHandler{},
-		"github/commits":             GitHubCommitsRouteHandler{},
-		"github/deployments":         GitHubDeploymentsRouteHandler{},
-		"github/security":            GitHubSecurityRouteHandler{},
-		"github/files":               GitHubFilesRouteHandler{},
-		"github/commit-stats":        GitHubCommitStatsRouteHandler{},
-		"jira/incidents":             JiraIncidentRouteHandler{},
-		"gitlab/repo-metadata":       GitLabRepositoryRouteHandler{},
-		"gitlab/commits":             GitLabCommitsRouteHandler{},
-		"gitlab/commit-stats":        GitLabCommitStatsRouteHandler{},
-		"gitlab/cicd":                GitLabTestsRouteHandler{},
-		"gitlab/tests":               GitLabTestsRouteHandler{},
-		"gitlab/incidents":           GitLabIncidentsRouteHandler{},
-		"github/blame":               GitHubBlameRouteHandler{},
-		"github/tests":               GitHubTestsRouteHandler{},
-		"github/work-items":          GitHubWorkItemsRouteHandler{},
-		"github/work-item-labels":    GitHubWorkItemsRouteHandler{},
-		"github/work-item-projects":  GitHubWorkItemsRouteHandler{},
-		"github/work-item-history":   GitHubWorkItemsRouteHandler{},
-		"github/work-item-comments":  GitHubWorkItemsRouteHandler{},
+		"launchdarkly/feature-flags":     LaunchDarklyRouteHandler{},
+		"github/repo-metadata":           GitHubRepositoryRouteHandler{},
+		"github/prs":                     GitHubPullRequestSocialRouteHandler{},
+		"github/pr-reviews":              GitHubPullRequestSocialRouteHandler{},
+		"github/pr-comments":             GitHubPullRequestSocialRouteHandler{},
+		"github/cicd":                    GitHubTestsRouteHandler{},
+		"github/commits":                 GitHubCommitsRouteHandler{},
+		"github/deployments":             GitHubDeploymentsRouteHandler{},
+		"github/security":                GitHubSecurityRouteHandler{},
+		"github/files":                   GitHubFilesRouteHandler{},
+		"github/commit-stats":            GitHubCommitStatsRouteHandler{},
+		"jira/incidents":                 JiraIncidentRouteHandler{},
+		"gitlab/repo-metadata":           GitLabRepositoryRouteHandler{},
+		"gitlab/commits":                 GitLabCommitsRouteHandler{},
+		"gitlab/commit-stats":            GitLabCommitStatsRouteHandler{},
+		"gitlab/cicd":                    GitLabTestsRouteHandler{},
+		"gitlab/tests":                   GitLabTestsRouteHandler{},
+		"gitlab/incidents":               GitLabIncidentsRouteHandler{},
+		"gitlab/deployments":             GitLabDeploymentsRouteHandler{},
+		"gitlab/feature-flags":           GitLabFeatureFlagsRouteHandler{},
+		"gitlab/files":                   GitLabFilesRouteHandler{},
+		"gitlab/blame":                   GitLabBlameRouteHandler{},
+		"gitlab/prs":                     GitLabPullRequestRouteHandler{},
+		"gitlab/pr-reviews":              GitLabPullRequestRouteHandler{},
+		"gitlab/pr-comments":             GitLabPullRequestRouteHandler{},
+		"gitlab/security":                GitLabSecurityRouteHandler{},
+		"gitlab/work-items":              GitLabWorkItemsRouteHandler{},
+		"gitlab/work-item-labels":        GitLabWorkItemsRouteHandler{},
+		"gitlab/work-item-projects":      GitLabWorkItemsRouteHandler{},
+		"gitlab/work-item-history":       GitLabWorkItemsRouteHandler{},
+		"gitlab/work-item-comments":      GitLabWorkItemsRouteHandler{},
+		"jira/work-items":                JiraAtlassianRouteHandler{},
+		"jira/work-item-labels":          JiraAtlassianRouteHandler{},
+		"jira/work-item-projects":        JiraAtlassianRouteHandler{},
+		"jira/work-item-history":         JiraAtlassianRouteHandler{},
+		"jira/work-item-comments":        JiraAtlassianRouteHandler{},
+		"linear/work-items":              LinearWorkItemFamilyRouteHandler{},
+		"linear/work-item-labels":        LinearWorkItemFamilyRouteHandler{},
+		"linear/work-item-projects":      LinearWorkItemFamilyRouteHandler{},
+		"linear/work-item-history":       LinearWorkItemFamilyRouteHandler{},
+		"linear/work-item-comments":      LinearWorkItemFamilyRouteHandler{},
+		"pagerduty/services":             PagerDutyServicesRouteHandler{},
+		"pagerduty/business-services":    PagerDutyBusinessServicesRouteHandler{},
+		"pagerduty/escalation-policies":  PagerDutyEscalationPoliciesRouteHandler{},
+		"pagerduty/schedules":            PagerDutySchedulesRouteHandler{},
+		"pagerduty/on-calls":             PagerDutyOnCallsRouteHandler{},
+		"pagerduty/users":                PagerDutyUsersRouteHandler{},
+		"pagerduty/teams":                PagerDutyTeamsRouteHandler{},
+		"pagerduty/incidents":            PagerDutyIncidentFamilyRouteHandler{},
+		"pagerduty/incident-alerts":      PagerDutyIncidentFamilyRouteHandler{},
+		"pagerduty/incident-log-entries": PagerDutyIncidentFamilyRouteHandler{},
+		"pagerduty/incident-notes":       PagerDutyIncidentFamilyRouteHandler{},
+		"github/blame":                   GitHubBlameRouteHandler{},
+		"github/tests":                   GitHubTestsRouteHandler{},
+		"github/work-items":              GitHubWorkItemsRouteHandler{},
+		"github/work-item-labels":        GitHubWorkItemsRouteHandler{},
+		"github/work-item-projects":      GitHubWorkItemsRouteHandler{},
+		"github/work-item-history":       GitHubWorkItemsRouteHandler{},
+		"github/work-item-comments":      GitHubWorkItemsRouteHandler{},
 	}
 	native := map[string]struct{}{}
 	for _, pair := range BuildProviderMatrix().Pairs {

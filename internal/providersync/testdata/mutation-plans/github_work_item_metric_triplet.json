@@ -612,8 +612,8 @@
     {
       "id": "M41-the-identity-tenant-is-non-blank",
       "file": "internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go",
-      "find": "\tif strings.TrimSpace(identity.OrgID) == \"\" ||\n\t\t(identity.Provider != \"github\" && identity.Provider != \"gitlab\") ||",
-      "replace": "\tif (identity.Provider != \"github\" && identity.Provider != \"gitlab\") ||",
+      "find": "\tif strings.TrimSpace(identity.OrgID) == \"\" || !isDerivedWorkItemProvider(identity.Provider) ||",
+      "replace": "\tif !isDerivedWorkItemProvider(identity.Provider) ||",
       "rationale": "a blank tenant fences nothing; the readback would compare against every tenant's rows",
       "proof": [
         [

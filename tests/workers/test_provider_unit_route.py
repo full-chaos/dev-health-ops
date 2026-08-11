@@ -849,10 +849,13 @@ def test_provider_family_policy_leaves_independent_routes_unchanged() -> None:
 
 def test_is_route_ready_reflects_the_checked_in_matrix() -> None:
     assert ProviderUnitRouteSwitches.is_route_ready("launchdarkly", "feature-flags")
-    # Same dataset name, different provider: the matrix marks gitlab's
-    # feature-flags pair route_ready=false, so it must stay closed even
-    # though the string "feature-flags" matches.
-    assert not ProviderUnitRouteSwitches.is_route_ready("gitlab", "feature-flags")
+    # Same dataset name, different provider: both independently constructed
+    # routes are ready in the aggregate matrix. Readiness is still exact pair
+    # membership rather than a dataset-name wildcard.
+    assert ProviderUnitRouteSwitches.is_route_ready("gitlab", "feature-flags")
+    assert not ProviderUnitRouteSwitches.is_route_ready(
+        "not-a-provider", "feature-flags"
+    )
     # Case/whitespace must not matter -- callers pass live DB column values.
     assert ProviderUnitRouteSwitches.is_route_ready(" LaunchDarkly ", "Feature-Flags")
 

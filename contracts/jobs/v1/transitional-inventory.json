@@ -438,7 +438,7 @@
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
       "deletion_evidence_requirement": "Deleted once registry kind `sync.provider_unit` no longer routes through the HTTP compatibility bridge.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "matrix inventory: 25/59 provider/dataset pairs route-ready in Go, including GitHub 17/17; all deployment switches remain default-off and Celery/Python ownership remains active"
+      "notes": "matrix inventory: 59/59 provider/dataset pairs route-ready in Go, including GitHub 17/17; all deployment switches remain default-off and Celery/Python ownership remains active"
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/sync_units.py:2045",
@@ -3254,7 +3254,7 @@
       "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
       "deletion_evidence_requirement": "registry.json kind `sync.provider_unit` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "only non-celery route transport is river_canary; matrix inventory: 25/59 provider/dataset pairs route-ready natively in Go, including GitHub 17/17. All checked-in deployment switches remain default-off, so every non-enabled scope continues through the Celery/Python compatibility path."
+      "notes": "only non-celery route transport is river_canary; matrix inventory: 59/59 provider/dataset pairs route-ready natively in Go, including GitHub 17/17. All checked-in deployment switches remain default-off, so every non-enabled scope continues through the Celery/Python compatibility path."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:331",

@@ -511,11 +511,13 @@
         "blame_only": true,
         "sync_blame": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "blame",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "git_blame"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -608,11 +610,13 @@
       "processor_flags": {
         "sync_deployments": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "deployments",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "deployments"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -627,11 +631,15 @@
         "feature-flags"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "feature-flags",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "feature_flag",
+        "feature_flag_event",
+        "work_graph_edges"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -649,11 +657,13 @@
         "sync_files": true,
         "sync_git": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "files",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "git_files"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -695,11 +705,14 @@
       "processor_flags": {
         "sync_prs": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "pr-comments",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "git_pull_request_reviews",
+        "git_pull_requests"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -716,11 +729,14 @@
       "processor_flags": {
         "sync_prs": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "pr-reviews",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "git_pull_request_reviews",
+        "git_pull_requests"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -737,11 +753,14 @@
       "processor_flags": {
         "sync_prs": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "prs",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "git_pull_request_reviews",
+        "git_pull_requests"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -779,11 +798,13 @@
       "processor_flags": {
         "sync_security": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "security",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "security_alerts"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -826,11 +847,28 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-item-comments",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "ai_attribution",
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -845,11 +883,28 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-item-history",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "ai_attribution",
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -864,11 +919,28 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-item-labels",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "ai_attribution",
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -883,11 +955,28 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-item-projects",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "ai_attribution",
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -902,11 +991,28 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "ai_attribution",
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "personal_access_token"
       ]
@@ -944,7 +1050,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -963,9 +1069,10 @@
         "work_item_team_attributions",
         "work_item_transitions",
         "work_item_user_metrics_daily",
-        "work_items"
+        "work_items",
+        "worklogs"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -982,7 +1089,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1001,9 +1108,10 @@
         "work_item_team_attributions",
         "work_item_transitions",
         "work_item_user_metrics_daily",
-        "work_items"
+        "work_items",
+        "worklogs"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1020,7 +1128,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1039,9 +1147,10 @@
         "work_item_team_attributions",
         "work_item_transitions",
         "work_item_user_metrics_daily",
-        "work_items"
+        "work_items",
+        "worklogs"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1058,7 +1167,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1077,9 +1186,10 @@
         "work_item_team_attributions",
         "work_item_transitions",
         "work_item_user_metrics_daily",
-        "work_items"
+        "work_items",
+        "worklogs"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1096,7 +1206,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1115,9 +1225,10 @@
         "work_item_team_attributions",
         "work_item_transitions",
         "work_item_user_metrics_daily",
-        "work_items"
+        "work_items",
+        "worklogs"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "basic_api_token",
         "oauth_bearer_token",
@@ -1158,7 +1269,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1179,7 +1290,7 @@
         "work_item_user_metrics_daily",
         "work_items"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "api_key"
       ]
@@ -1194,7 +1305,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1215,7 +1326,7 @@
         "work_item_user_metrics_daily",
         "work_items"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "api_key"
       ]
@@ -1230,7 +1341,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1251,7 +1362,7 @@
         "work_item_user_metrics_daily",
         "work_items"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "api_key"
       ]
@@ -1266,7 +1377,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1287,7 +1398,7 @@
         "work_item_user_metrics_daily",
         "work_items"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "api_key"
       ]
@@ -1302,7 +1413,7 @@
         "work-items"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "work-items",
       "route_destinations": [
@@ -1323,7 +1434,7 @@
         "work_item_user_metrics_daily",
         "work_items"
       ],
-      "route_ready": false,
+      "route_ready": true,
       "credential_modes": [
         "api_key"
       ]
@@ -1338,11 +1449,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "business-services",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_services"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1359,11 +1472,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "escalation-policies",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_escalation_policies"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1380,11 +1495,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "incident-alerts",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_alerts"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1401,11 +1518,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "incident-log-entries",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_incident_timeline_events"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1422,11 +1541,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "incident-notes",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_incident_notes"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1445,11 +1566,13 @@
       "processor_flags": {
         "sync_incidents": true
       },
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "incidents",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_incidents"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1466,11 +1589,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "on-calls",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_on_call_assignments"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1487,11 +1612,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "schedules",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_on_call_schedules"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1508,11 +1635,14 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "services",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_service_repository_mappings",
+        "operational_services"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1529,11 +1659,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "teams",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_teams"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",
@@ -1550,11 +1682,13 @@
         "operational"
       ],
       "processor_flags": {},
-      "go_executor": "none",
+      "go_executor": "native_go",
       "native_shadow": false,
       "route_dataset": "users",
-      "route_destinations": [],
-      "route_ready": false,
+      "route_destinations": [
+        "operational_users"
+      ],
+      "route_ready": true,
       "credential_modes": [
         "api_token",
         "oauth_bearer_token",

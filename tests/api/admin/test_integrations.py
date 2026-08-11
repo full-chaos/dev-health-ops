@@ -943,6 +943,68 @@ async def test_trigger_backfill_org_scoped(client, seeded_state):
 
 
 @pytest.mark.asyncio
+async def test_trigger_backfill_selector_object_org_scoped(client, seeded_state):
+    """Selector-shaped backfill requests must still plan through the admin API."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    source_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    dataset_keys = ["work-item-labels", "work-item-comments"]
+
+    mock_plan = MagicMock()
+    mock_plan.sync_run_id = str(uuid.uuid4())
+    mock_plan.total_units = 0
+    mock_plan.unit_ids = ()
+
+    captured_request = {}
+
+    def _fake_plan(session, request):
+        captured_request["org_id"] = request.org_id
+        captured_request["mode"] = request.mode
+        captured_request["source_ids"] = request.source_ids
+        captured_request["dataset_keys"] = request.dataset_keys
+        captured_request["backfill_selector"] = request.backfill_selector
+        return mock_plan
+
+    mock_dispatch = MagicMock()
+    mock_dispatch.apply_async = MagicMock()
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+            side_effect=_fake_plan,
+        ),
+        patch(
+            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
+            mock_dispatch,
+        ),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/backfill",
+            json={
+                "selector": {
+                    "since": "2024-01-01T00:00:00Z",
+                    "before": "2024-02-01T00:00:00Z",
+                    "source_ids": source_ids,
+                    "dataset_keys": dataset_keys,
+                }
+            },
+        )
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "accepted"
+    assert captured_request["org_id"] == seeded_state["org_id"]
+    assert captured_request["mode"] == "backfill"
+    assert captured_request["source_ids"] == tuple(source_ids)
+    assert captured_request["dataset_keys"] == tuple(dataset_keys)
+    assert captured_request["backfill_selector"] is not None
+    assert captured_request["backfill_selector"].source_ids == tuple(source_ids)
+    assert captured_request["backfill_selector"].dataset_keys == tuple(dataset_keys)
+
+
+@pytest.mark.asyncio
 async def test_trigger_backfill_returns_202_when_enqueue_fails(
     client,
     session_maker,

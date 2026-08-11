@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "name": "Linear work-items family composition and complete sink boundary",
+  "build": [
+    "env",
+    "GOCACHE=/tmp/linear-family-composition-go-cache",
+    "GOWORK=off",
+    "GOTOOLCHAIN=go1.25.9",
+    "go",
+    "test",
+    "-mod=readonly",
+    "-run",
+    "^$",
+    "./internal/providersync/"
+  ],
+  "$limitation": "This plan covers only the Linear family seam that retains six raw effects, appends and orders ten derived effects, computes raw-plus-derived sink completeness, and refuses writes or readback through an incomplete family sink. Provider collection and normalization, derivation semantics, individual raw and derived adapters, lifecycle completion, real ClickHouse behavior, configuration, registry, worker wiring, and activation are covered by their own plans and suites.",
+  "mutations": [
+    {
+      "id": "LC1-family-retains-raw-effects",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "effects = append(effects, raw.Effects...)",
+      "replace": "effects = append(effects, raw.Effects[:0]...)",
+      "rationale": "The complete Linear family must retain all six authoritative raw effects when it composes the ten derived effects; otherwise a derived-only batch could advance as if direct evidence had been persisted.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC2-family-appends-derived-effects",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "effects = append(effects, derivedEffects...)",
+      "replace": "effects = append(effects, derivedEffects[:0]...)",
+      "rationale": "The family batch must append all ten governed derived effects to the six raw effects rather than acknowledge a raw-only result as complete.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC3-family-sorts-composed-effects",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "sortEffectBatches(effects)",
+      "replace": "sortEffectBatches(effects[:0])",
+      "rationale": "Raw and derived effects originate in separate destination orders, so the combined family must be sorted into the canonical sixteen-destination manifest before validation and commit.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC4-raw-half-requires-lease",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "if !rawReady || adapterMissing {",
+      "replace": "if (rawReady && !rawReady) || adapterMissing {",
+      "rationale": "Every raw destination is incomplete when the raw half has no lease guard, even when each raw adapter is installed.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete$/^raw_lease$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC5-raw-half-requires-every-adapter",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "if !rawReady || adapterMissing {",
+      "replace": "if !rawReady || (adapterMissing && !adapterMissing) {",
+      "rationale": "A present raw lease cannot make a six-fact sink complete when any destination adapter is absent.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete$/^raw_adapter$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC6-derived-half-requires-lease",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "if !derivedReady || adapterMissing {",
+      "replace": "if (derivedReady && !derivedReady) || adapterMissing {",
+      "rationale": "Every derived destination is incomplete when the derived half has no lease guard, even when each derived adapter is installed.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete$/^derived_lease$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC7-derived-half-requires-every-adapter",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "if !derivedReady || adapterMissing {",
+      "replace": "if !derivedReady || (adapterMissing && !adapterMissing) {",
+      "rationale": "A present derived lease cannot make a ten-effect sink complete when any destination adapter is absent.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete$/^derived_adapter$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC8-complete-means-no-missing-destinations",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "return len(sink.MissingDestinations()) == 0",
+      "replace": "return len(sink.MissingDestinations()) >= 0",
+      "rationale": "The family sink is complete only when the combined raw and derived missing-destination set is empty; a non-empty set must keep all effects behind the refusal boundary.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC9-incomplete-family-refuses-write",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "func (sink LinearWorkItemFamilyClickHouseEffects) WriteEffect(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) error {\n\tif ctx == nil || !sink.complete() {",
+      "replace": "func (sink LinearWorkItemFamilyClickHouseEffects) WriteEffect(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) error {\n\tif ctx == nil || false {",
+      "rationale": "No raw or derived effect may be written through the family boundary while either sink half is incomplete, even when the selected effect belongs to the complete half.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LC10-incomplete-family-refuses-readback",
+      "file": "internal/providersync/linear_work_items_composition.go",
+      "find": "func (sink LinearWorkItemFamilyClickHouseEffects) InspectEffect(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) (EffectInspection, error) {\n\tif ctx == nil || !sink.complete() {",
+      "replace": "func (sink LinearWorkItemFamilyClickHouseEffects) InspectEffect(\n\tctx context.Context,\n\tclaim Claim,\n\teffect EffectBatch,\n) (EffectInspection, error) {\n\tif ctx == nil || false {",
+      "rationale": "Readback must report conflict and refuse inspection while either sink half is incomplete; inspecting only the selected complete half would falsely certify a partial family.",
+      "proof": [
+        [
+          "env",
+          "GOCACHE=/tmp/linear-family-composition-go-cache",
+          "GOWORK=off",
+          "GOTOOLCHAIN=go1.25.9",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete$",
+          "./internal/providersync/"
+        ]
+      ]
+    }
+  ]
+}

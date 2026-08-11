@@ -317,7 +317,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 	})
 }
 
-func TestLinearWorkItemFamilyEffectsFailClosedWhenAnyAdapterIsMissing(t *testing.T) {
+func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	complete, err := NewLinearWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease)
 	if err != nil {
@@ -335,26 +335,51 @@ func TestLinearWorkItemFamilyEffectsFailClosedWhenAnyAdapterIsMissing(t *testing
 	for _, testCase := range []struct {
 		name    string
 		mutate  func(*LinearWorkItemFamilyClickHouseEffects)
-		missing string
+		missing []string
 		effect  EffectBatch
 	}{
 		{
-			name: "raw half", missing: "work_item_transitions", effect: derived[0],
+			name: "raw adapter", missing: []string{"work_item_transitions"}, effect: derived[0],
 			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
 				sink.Raw.StatusTransitions = nil
 			},
 		},
 		{
-			name: "derived half", missing: "investment_metrics_daily", effect: raw[0],
+			name: "derived adapter", missing: []string{"investment_metrics_daily"}, effect: raw[0],
 			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
 				sink.Derived.InvestmentMetricsDaily = nil
+			},
+		},
+		{
+			name: "raw lease",
+			missing: []string{
+				"sprints", "work_item_dependencies", "work_item_interactions",
+				"work_item_reopen_events", "work_item_transitions", "work_items",
+			},
+			effect: derived[0],
+			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
+				sink.Raw.Lease = nil
+			},
+		},
+		{
+			name: "derived lease",
+			missing: []string{
+				"ai_attribution", "estimate_coverage_metrics_daily",
+				"investment_classifications_daily", "investment_metrics_daily",
+				"issue_type_metrics_daily", "work_item_cycle_times",
+				"work_item_metrics_daily", "work_item_state_durations_daily",
+				"work_item_team_attributions", "work_item_user_metrics_daily",
+			},
+			effect: raw[0],
+			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
+				sink.Derived.Lease = nil
 			},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			sink := complete
 			testCase.mutate(&sink)
-			if missing := sink.MissingDestinations(); !slices.Equal(missing, []string{testCase.missing}) {
+			if missing := sink.MissingDestinations(); !slices.Equal(missing, testCase.missing) {
 				t.Fatalf("missing=%v", missing)
 			}
 			if err := sink.WriteEffect(context.Background(), claim, testCase.effect); !errors.Is(err, ErrInvalidConfiguration) {

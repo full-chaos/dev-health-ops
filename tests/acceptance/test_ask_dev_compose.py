@@ -401,6 +401,36 @@ def test_keep_stack_is_opt_in_and_skips_only_the_teardown() -> None:
         )
 
 
+def test_keep_stack_exports_and_persists_discovered_api_url() -> None:
+    """A dynamically published port must reach a corpus started later.
+
+    The launcher is a child process of both a developer shell and the CI
+    workflow, so an ordinary shell ``export`` cannot update the caller. Keep
+    the three delivery paths distinct: export for commands inside this
+    launcher, a sourceable file for local callers, and ``GITHUB_ENV`` for a
+    later workflow step.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    discovery = launcher.index(
+        'acceptance_api_url="http://127.0.0.1:${acceptance_api_port}"'
+    )
+    export = launcher.index('export ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}"')
+    keep = launcher.index('if [[ "${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1" ]]')
+    persist = launcher.index("printf 'export ASK_DEV_ACCEPTANCE_API_URL=%q\\n'")
+    github_env = launcher.index('>> "${GITHUB_ENV}"')
+    printed_file = launcher.index("ASK_DEV_ACCEPTANCE_API_URL_FILE=${api_url_output}")
+
+    assert discovery < export < keep < persist < github_env < printed_file
+    assert (
+        "ASK_DEV_ACCEPTANCE_API_URL_OUTPUT:-/tmp/ask-dev-acceptance-api-url-"
+        in launcher
+    )
+    assert 'mkdir -p "$(dirname -- "${api_url_output}")"' in launcher
+    assert 'if [[ -n "${GITHUB_ENV:-}" ]]' in launcher
+    assert "Source it before an external corpus invocation: source" in launcher
+
+
 def test_oracle_is_versioned_and_requires_exact_grounded_answer_parts() -> None:
     oracle = json.loads(_ORACLE.read_text(encoding="utf-8"))
     assert oracle == {

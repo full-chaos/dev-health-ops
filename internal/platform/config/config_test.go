@@ -3,12 +3,92 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
+
+func TestLocalAllProviderRoutesPreset(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(workerSpec(map[string]string{
+		"DEV_HEALTH_ENV":     "local",
+		"GO_PROVIDER_ROUTES": "all",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabledAliases := map[string]bool{
+		"WorkerGithubPRReviewsEnabled":  true,
+		"WorkerGithubPRCommentsEnabled": true,
+		"WorkerGithubTestsEnabled":      true,
+		"WorkerGitlabPRReviewsEnabled":  true,
+		"WorkerGitlabPRCommentsEnabled": true,
+		"WorkerGitlabTestsEnabled":      true,
+	}
+	value := reflect.ValueOf(cfg)
+	typeOfConfig := value.Type()
+	for index := 0; index < value.NumField(); index++ {
+		field := typeOfConfig.Field(index)
+		if !strings.HasPrefix(field.Name, "Worker") ||
+			!strings.HasSuffix(field.Name, "Enabled") ||
+			field.Type.Kind() != reflect.Bool {
+			continue
+		}
+		want := !disabledAliases[field.Name]
+		if got := value.Field(index).Bool(); got != want {
+			t.Errorf("%s=%t, want %t", field.Name, got, want)
+		}
+	}
+	if cfg.WorkerGithubWorkItemsStatusMappingPath != "/app/config/status_mapping.yaml" ||
+		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "/app/config/investment_areas.yaml" {
+		t.Fatalf("unexpected packaged paths: status=%q investment=%q", cfg.WorkerGithubWorkItemsStatusMappingPath, cfg.WorkerGithubWorkItemsInvestmentConfigPath)
+	}
+}
+
+func TestLocalAllProviderRoutesPresetPreservesExplicitOverrides(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(workerSpec(map[string]string{
+		"DEV_HEALTH_ENV":                               "local",
+		"GO_PROVIDER_ROUTES":                           "all",
+		"WORKER_GITHUB_FILES_ENABLED":                  "false",
+		"WORKER_GITLAB_PR_REVIEWS_ENABLED":             "true",
+		"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH": "/override/status.yaml",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkerGithubFilesEnabled || !cfg.WorkerGithubCommitsEnabled {
+		t.Fatalf("explicit false did not override preset: %#v", cfg.SafeAttrs())
+	}
+	if !cfg.WorkerGitlabPRReviewsEnabled || cfg.WorkerGitlabPRsEnabled {
+		t.Fatal("explicit alias choice did not override canonical preset aliases")
+	}
+	if cfg.WorkerGithubWorkItemsStatusMappingPath != "/override/status.yaml" {
+		t.Fatal("explicit semantic path did not override packaged preset path")
+	}
+}
+
+func TestProviderRoutesPresetRejectsNonLocalAndUnknownValues(t *testing.T) {
+	t.Parallel()
+
+	for name, values := range map[string]map[string]string{
+		"missing environment": {"GO_PROVIDER_ROUTES": "all"},
+		"production":          {"DEV_HEALTH_ENV": "production", "GO_PROVIDER_ROUTES": "all"},
+		"unknown preset":      {"DEV_HEALTH_ENV": "local", "GO_PROVIDER_ROUTES": "some"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := Load(workerSpec(values)); err == nil {
+				t.Fatal("expected invalid provider route preset to fail")
+			}
+		})
+	}
+}
 
 func lookup(values map[string]string) secrets.LookupEnv {
 	return func(key string) (string, bool) {

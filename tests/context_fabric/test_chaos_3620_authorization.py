@@ -1208,6 +1208,7 @@ def _record_for(evidence):
         provenance=evidence.provenance,
         confidence=evidence.confidence,
         repository_ids=tuple(evidence.repository_ids),
+        record_locator=evidence.record_locator,
     )
 
 

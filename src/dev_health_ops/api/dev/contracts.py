@@ -310,11 +310,13 @@ class DevAnswerEnrichmentGap(StrEnum):
 
 
 class PacketLimitationKind(StrEnum):
-    """CHAOS-3660 §8(d)/(h). Reserved fresh here for the same reason as the
-    two enums above -- the owning module
-    (``investigation_contract/vocabulary.py``) is feature-branch-only
-    today; must be reconciled to that module's definition when it lands on
-    ``main``.
+    """Closed public mirror of the investigation packet limitations.
+
+    Keep this vocabulary aligned with
+    ``investigation_contract.vocabulary.PacketLimitationKind``.  The graph
+    route converts packet limitations at the public boundary, so every
+    internal limitation that can reach a production packet must be declared
+    here rather than silently dropped or raising during answer assembly.
     """
 
     MISSING_SOURCE = "missing_source"
@@ -325,6 +327,79 @@ class PacketLimitationKind(StrEnum):
     ABSENT_STAFFING_DENOMINATOR = "absent_staffing_denominator"
     HISTORICAL_SLICE_NOT_COMPARABLE = "historical_slice_not_comparable"
     INTERPRETATION_UNCERTAINTY = "interpretation_uncertainty"
+
+
+class DevAnswerDriverRole(StrEnum):
+    """The bounded public distinction between causes and effects."""
+
+    DRIVER = "driver"
+    SYMPTOM = "symptom"
+    CONTEXTUAL_CORRELATE = "contextual_correlate"
+
+
+class DevAnswerDriverStanding(StrEnum):
+    """How strongly the investigation supports one driver candidate."""
+
+    PRINCIPAL_DRIVER = "principal_driver"
+    CONTRIBUTING_DRIVER = "contributing_driver"
+    CANDIDATE_ONLY = "candidate_only"
+    EXCLUDED = "excluded"
+
+
+class DevAnswerDriverCategory(StrEnum):
+    """Closed, product-safe driver categories; no packet prose crosses over."""
+
+    DELIVERY_PRESSURE = "delivery_pressure"
+    REVIEW_PRESSURE = "review_pressure"
+    OPERATIONAL_PRESSURE = "operational_pressure"
+    DEPENDENCY_PRESSURE = "dependency_pressure"
+    INVESTMENT_MIX = "investment_mix"
+    CAPACITY_OR_STAFFING = "capacity_or_staffing"
+    SCOPE_CHANGE = "scope_change"
+    QUALITY_OR_DEFECT = "quality_or_defect"
+    EXTERNAL_BLOCKER = "external_blocker"
+    DATA_COVERAGE = "data_coverage"
+
+
+class DevAnswerDriverConfidence(StrEnum):
+    """The packet's qualification, not a fabricated numeric score."""
+
+    MEASURED_CERTAIN = "measured_certain"
+    QUALIFIED = "qualified"
+    UNCERTAIN = "uncertain"
+    UNSUPPORTED = "unsupported"
+
+
+class DevAnswerDriverRelevance(StrEnum):
+    CURRENT = "current"
+    RECENTLY_CURRENT = "recently_current"
+    HISTORICAL_ONLY = "historical_only"
+    UNKNOWN = "unknown"
+
+
+class DevAnswerDriverWithheldReason(StrEnum):
+    """Why some packet support did not become canonical answer evidence."""
+
+    EVIDENCE_REFUSED = "evidence_refused"
+    EVIDENCE_UNAVAILABLE = "evidence_unavailable"
+    AUTHORIZATION_FILTERED = "authorization_filtered"
+
+
+class DevAnswerDriverExclusionReason(StrEnum):
+    """Why W4 excluded a candidate from asserted driver standing."""
+
+    NO_SUPPORTING_PATH = "no_supporting_path"
+    EVIDENCE_CONFLICT_UNRESOLVED = "evidence_conflict_unresolved"
+    NOT_CURRENTLY_RELEVANT = "not_currently_relevant"
+    SYMPTOM_OF_ANOTHER_CANDIDATE = "symptom_of_another_candidate"
+    UNAUTHORIZED_EVIDENCE = "unauthorized_evidence"
+    INSUFFICIENT_MEASUREMENT = "insufficient_measurement"
+
+
+class DevAnswerStaffingDenominatorState(StrEnum):
+    ALLOCATION_EVIDENCE_AVAILABLE = "allocation_evidence_available"
+    PARTIAL_ALLOCATION_EVIDENCE = "partial_allocation_evidence"
+    DENOMINATOR_ABSENT = "denominator_absent"
 
 
 class DevTimeRange(ContractModel):
@@ -985,16 +1060,90 @@ class DevAnswerCohortSlot(ContractModel):
     warnings: list[ShortText] = Field(default_factory=list, max_length=20)
 
 
+class DevAnswerStaffingQualification(ContractModel):
+    """Bounded denominator disclosure for a capacity/staffing driver.
+
+    The packet's qualification note is intentionally not copied to the public
+    answer: it is arm prose, not a canonical fact.  The denominator state and
+    closed source classes are sufficient for a client to label the judgment
+    honestly and keep a missing denominator visible.
+    """
+
+    denominator_state: DevAnswerStaffingDenominatorState
+    denominator_source_classes: list[DevAnswerEvidenceSourceClass] = Field(
+        default_factory=list, max_length=10
+    )
+
+    @model_validator(mode="after")
+    def validate_available_denominator_names_sources(self) -> Self:
+        if (
+            self.denominator_state
+            is DevAnswerStaffingDenominatorState.ALLOCATION_EVIDENCE_AVAILABLE
+            and not self.denominator_source_classes
+        ):
+            raise ValueError(
+                "an available staffing denominator must name its source classes"
+            )
+        return self
+
+
 class DevAnswerDriverEntry(ContractModel):
-    """CHAOS-3660 §8(d). ``evidence_ref_ids`` point into the SAME answer's
-    own ``evidence[]`` array -- see ``DevAnswer.validate_answer_invariants``
-    below, which enforces that as a real constraint, not just a naming
-    convention.
+    """One evidence-closed, qualified public driver judgment.
+
+    ``rank`` is an ordinal presentation order from the packet's deterministic
+    candidate order.  It is not a contribution or importance score, so
+    ``contribution`` is optional and remains ``None`` for the production
+    projection until a canonical scoring contract exists.  ``evidence_ref_ids``
+    point into the SAME answer's own ``evidence[]`` array -- see
+    ``DevAnswer.validate_answer_invariants`` below, which enforces that as a
+    real constraint, not just a naming convention.
     """
 
     rank: int = Field(ge=1)
-    contribution: float = Field(ge=0.0, le=1.0)
+    contribution: FiniteFloat | None = Field(default=None, ge=0.0, le=1.0)
     evidence_ref_ids: list[OpaqueID] = Field(min_length=1, max_length=10)
+    standing: DevAnswerDriverStanding | None = None
+    role: DevAnswerDriverRole | None = None
+    category: DevAnswerDriverCategory | None = None
+    confidence: DevAnswerDriverConfidence | None = None
+    relevance: DevAnswerDriverRelevance | None = None
+    freshness: FreshnessState | None = None
+    conflicting_evidence_ref_ids: list[OpaqueID] = Field(
+        default_factory=list, max_length=10
+    )
+    staffing_qualification: DevAnswerStaffingQualification | None = None
+    withheld_reason: DevAnswerDriverWithheldReason | None = None
+    exclusion_reason: DevAnswerDriverExclusionReason | None = None
+
+    @model_validator(mode="after")
+    def validate_staffing_qualification(self) -> Self:
+        if self.category is DevAnswerDriverCategory.CAPACITY_OR_STAFFING:
+            if self.staffing_qualification is None:
+                raise ValueError(
+                    "capacity/staffing drivers require a denominator qualification"
+                )
+            if (
+                self.staffing_qualification.denominator_state
+                is not DevAnswerStaffingDenominatorState.ALLOCATION_EVIDENCE_AVAILABLE
+                and self.confidence is DevAnswerDriverConfidence.MEASURED_CERTAIN
+            ):
+                raise ValueError(
+                    "a weak staffing denominator cannot be presented as certain"
+                )
+        elif self.staffing_qualification is not None:
+            raise ValueError(
+                "only capacity/staffing drivers may carry a denominator qualification"
+            )
+        if set(self.evidence_ref_ids) & set(self.conflicting_evidence_ref_ids):
+            raise ValueError(
+                "driver evidence cannot be both supporting and conflicting"
+            )
+        excluded = self.standing is DevAnswerDriverStanding.EXCLUDED
+        if excluded and self.exclusion_reason is None:
+            raise ValueError("an excluded driver must disclose its exclusion reason")
+        if not excluded and self.exclusion_reason is not None:
+            raise ValueError("only an excluded driver may carry an exclusion reason")
+        return self
 
 
 class DevAnswerLineageHop(ContractModel):
@@ -1085,6 +1234,10 @@ class DevAnswer(ContractModel):
                 if not set(driver.evidence_ref_ids) <= known_evidence:
                     raise ValueError(
                         "graph-assisted driver references unknown evidence IDs"
+                    )
+                if not set(driver.conflicting_evidence_ref_ids) <= known_evidence:
+                    raise ValueError(
+                        "graph-assisted driver conflict references unknown evidence IDs"
                     )
         if self.status is AnswerStatus.COMPLETE and (
             self.coverage.available_source_count != self.coverage.required_source_count

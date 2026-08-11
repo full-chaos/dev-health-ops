@@ -1590,6 +1590,15 @@ def _assemble_core(
             issued = observation.attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
             if issued is not None:
                 handle = issued
+                # A source-carried handle still needs the source record's
+                # address on the packet.  The later canonical-admission pass
+                # resolves by locator, never by graph entity id or by this
+                # pre-admission handle.  Omitting it made every production
+                # corpus packet unresolvable even though the projection knew
+                # the exact source id all along.
+                record = dataclasses_replace(
+                    record, record_locator=_admission_locator(observation)
+                )
             else:
                 handle = _mint_handle(signer, readout.org_id, observation, record)
                 # The payload _mint_handle signed carried record_locator
@@ -1688,7 +1697,10 @@ def _assemble_core(
                 source_id=observation.attributes.get(
                     SOURCE_EVIDENCE_ID_ATTRIBUTE, observation.canonical_id
                 ),
-                record=_evidence_record(observation, supports, source_state),
+                record=dataclasses_replace(
+                    _evidence_record(observation, supports, source_state),
+                    record_locator=_admission_locator(observation),
+                ),
                 source_class=observation.source_class,
                 supports=list(supports),
             )
@@ -1744,11 +1756,10 @@ def _assemble_core(
                     "citation_text": None,
                     "repository_ids": list(group.record.repository_ids),
                     "valid_entity_ids": list(entry_supports),
-                    # CHAOS-3633/_mint_handle: present on the wire exactly
-                    # when it was present in the signed payload, so
-                    # signer.verify recomputes the SAME bytes that were
-                    # actually signed. None for a source-carried handle
-                    # (that payload never had one either).
+                    # The producer-owned source record address. For an
+                    # arm-minted handle this is also part of the signed
+                    # payload; for a source-carried handle it is the locator
+                    # canonical admission must independently re-resolve.
                     "record_locator": group.record.record_locator,
                     "flags": {},
                 },

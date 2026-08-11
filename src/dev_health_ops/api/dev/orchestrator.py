@@ -82,12 +82,22 @@ from .contracts import (
     DevAnswerCohortSignal,
     DevAnswerCohortSignalSource,
     DevAnswerCohortSlot,
+    DevAnswerDriverCategory,
+    DevAnswerDriverConfidence,
+    DevAnswerDriverEntry,
+    DevAnswerDriverExclusionReason,
+    DevAnswerDriverRelevance,
+    DevAnswerDriverRole,
+    DevAnswerDriverStanding,
+    DevAnswerDriverWithheldReason,
     DevAnswerEnrichmentGap,
     DevAnswerEvidenceSourceClass,
     DevAnswerGraphAssistance,
     DevAnswerPressureDimension,
     DevAnswerPressureState,
     DevAnswerSourceRequirementState,
+    DevAnswerStaffingDenominatorState,
+    DevAnswerStaffingQualification,
     DevClaim,
     DevContractVersions,
     DevCoverage,
@@ -132,7 +142,7 @@ from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
-from .evidence_service import EvidenceService
+from .evidence_service import EvidenceAdmission, EvidenceAvailability, EvidenceService
 from .graph_evidence_admission import extract_evidence_candidates
 from .graph_investigation_query import (
     CohortDiscoveryFamily,
@@ -467,6 +477,20 @@ GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED = (
     "Some graph-discovered evidence could not be canonically verified and "
     "was excluded from this answer."
 )
+#: A source could not complete canonical admission (UNCONFIGURED or
+#: UNAVAILABLE), or admitted only stale support. Distinct from a canonical
+#: refusal: this is an operational/freshness gap, not a considered "no".
+GRAPH_GROUNDED_WARNING_EVIDENCE_GAP = (
+    "Some graph-discovered evidence was unavailable or stale during canonical "
+    "verification; driver judgments may be incomplete."
+)
+#: The packet carried more evidence-closed W4 candidates than the bounded
+#: public answer can publish. Distinct from ``TRUNCATED_TRAVERSAL``: graph
+#: discovery completed and this projection's own 25-entry cap is what bit.
+GRAPH_GROUNDED_WARNING_DRIVER_PROJECTION_TRUNCATED = (
+    "Additional graph driver judgments were omitted because this answer reached "
+    "its public driver limit."
+)
 #: A distinct cause from the one above: a canonical enrichment source
 #: (status/health/workload/readiness) was unavailable for this scope, not
 #: that evidence was refused. Kept as its own message rather than merged
@@ -743,11 +767,144 @@ def _public_cohort_slot(
     )
 
 
+def _public_driver_freshness(
+    evidence: Sequence[DevEvidenceRef],
+) -> FreshnessState | None:
+    """Summarize admitted support freshness without inventing a value."""
+
+    states = {item.freshness for item in evidence}
+    if not states:
+        return None
+    if FreshnessState.UNAVAILABLE in states:
+        return FreshnessState.UNAVAILABLE
+    if FreshnessState.STALE in states:
+        return FreshnessState.STALE
+    if FreshnessState.UNKNOWN in states:
+        return FreshnessState.UNKNOWN
+    return FreshnessState.FRESH
+
+
+def _public_driver_withheld_reason(
+    admissions: Sequence[EvidenceAdmission],
+) -> DevAnswerDriverWithheldReason | None:
+    """Map canonical admission outcomes to a closed public disclosure."""
+
+    states = {item.state for item in admissions if item.evidence is None}
+    if EvidenceAvailability.NO_MATCHES in states:
+        return DevAnswerDriverWithheldReason.EVIDENCE_REFUSED
+    if EvidenceAvailability.UNAUTHORIZED in states:
+        return DevAnswerDriverWithheldReason.AUTHORIZATION_FILTERED
+    if states & {
+        EvidenceAvailability.UNAVAILABLE,
+        EvidenceAvailability.UNCONFIGURED,
+        EvidenceAvailability.STALE,
+    }:
+        return DevAnswerDriverWithheldReason.EVIDENCE_UNAVAILABLE
+    return None
+
+
+def _public_driver_entries(
+    *,
+    packet: AskDevInvestigationPacket,
+    admissions: Sequence[EvidenceAdmission],
+) -> tuple[tuple[DevAnswerDriverEntry, ...], bool]:
+    """Project packet judgments into the v1 answer without graph prose.
+
+    The packet remains the source of standing, role, category, relevance,
+    staffing qualification, and conflict relationships.  Admission is the
+    only source of public evidence handles.  Candidates with no admitted
+    supporting evidence are withheld from the answer rather than receiving a
+    packet handle or an empty, evidence-free judgment. ``rank`` preserves the
+    packet/W4 candidate ordinal; contribution is deliberately left null.
+    """
+
+    evidence_entries = packet.evidence_coverage.evidence_index
+    admitted_by_packet_handle: dict[str, DevEvidenceRef] = {}
+    admissions_by_packet_handle: dict[str, EvidenceAdmission] = {}
+    for entry, admission in zip(evidence_entries, admissions, strict=True):
+        handle = entry.evidence.evidence_ref_id
+        admissions_by_packet_handle[handle] = admission
+        if admission.evidence is not None:
+            admitted_by_packet_handle[handle] = admission.evidence
+
+    projected: list[DevAnswerDriverEntry] = []
+    for packet_rank, candidate in enumerate(packet.driver_analysis.candidates, start=1):
+        supporting = tuple(
+            admitted_by_packet_handle[handle]
+            for handle in candidate.supporting_evidence_ids
+            if handle in admitted_by_packet_handle
+        )
+        # A public judgment needs at least one canonical supporting reference.
+        # Conflicts are disclosed alongside it, but cannot substitute for
+        # support or turn a refused candidate into a valid judgment.
+        if not supporting:
+            continue
+        conflicting = tuple(
+            admitted_by_packet_handle[handle]
+            for handle in candidate.conflicting_evidence_ids
+            if handle in admitted_by_packet_handle
+        )
+        support_refs = [item.evidence_ref_id for item in supporting[:10]]
+        conflict_refs = [
+            item.evidence_ref_id
+            for item in conflicting[:10]
+            if item.evidence_ref_id not in support_refs
+        ]
+        staffing = None
+        if candidate.staffing_qualification is not None:
+            staffing = DevAnswerStaffingQualification(
+                denominator_state=DevAnswerStaffingDenominatorState(
+                    candidate.staffing_qualification.denominator_state.value
+                ),
+                denominator_source_classes=[
+                    DevAnswerEvidenceSourceClass(source.value)
+                    for source in candidate.staffing_qualification.denominator_source_classes
+                ],
+            )
+        projected.append(
+            DevAnswerDriverEntry(
+                # W4 owns ordering and dispositions. Filtering a sibling at
+                # this boundary must not promote or rerank what remains.
+                rank=packet_rank,
+                contribution=None,
+                evidence_ref_ids=support_refs,
+                standing=DevAnswerDriverStanding(candidate.standing.value),
+                role=DevAnswerDriverRole(candidate.role.value),
+                category=DevAnswerDriverCategory(candidate.category.value),
+                confidence=DevAnswerDriverConfidence(
+                    candidate.confidence_qualifier.value
+                ),
+                relevance=DevAnswerDriverRelevance(candidate.relevance.value),
+                freshness=_public_driver_freshness(supporting),
+                conflicting_evidence_ref_ids=conflict_refs,
+                staffing_qualification=staffing,
+                withheld_reason=_public_driver_withheld_reason(
+                    [
+                        admissions_by_packet_handle[handle]
+                        for handle in (
+                            *candidate.supporting_evidence_ids,
+                            *candidate.conflicting_evidence_ids,
+                        )
+                        if handle in admissions_by_packet_handle
+                    ]
+                ),
+                exclusion_reason=(
+                    DevAnswerDriverExclusionReason(candidate.exclusion_reason.value)
+                    if candidate.exclusion_reason is not None
+                    else None
+                ),
+            )
+        )
+    return tuple(projected[:25]), len(projected) > 25
+
+
 def _graph_assistance_for_result(
     result: GraphQueryResult,
     *,
     graph_answered: bool,
     cohort: DevAnswerCohortSlot | None = None,
+    ranked_drivers: Sequence[DevAnswerDriverEntry] = (),
+    additional_limitations: Sequence[PacketLimitationKind] = (),
 ) -> DevAnswerGraphAssistance:
     """Project one graph attempt into the public answer/event contract.
 
@@ -773,11 +930,15 @@ def _graph_assistance_for_result(
             PacketLimitationKind(kind.value)
             for kind in sorted(limitation_kinds_of(packet), key=lambda item: item.value)
         ]
+        limitations = sorted(
+            {*limitations, *additional_limitations}, key=lambda item: item.value
+        )
     return DevAnswerGraphAssistance(
         schema_version="dev_answer_graph_assistance.v1",
         state=ContractGraphAssistedAvailability(availability.value),
         as_of=(packet.produced_at if packet is not None else datetime.now(UTC)),
         cohort=cohort,
+        ranked_drivers=list(ranked_drivers) if graph_answered else [],
         limitations=limitations,
     )
 
@@ -1354,23 +1515,32 @@ class GraphAssemblyOutcome:
     ``answer`` is ``None`` exactly when there was no material to ground an
     answer on (the CHAOS-3290 floor, applied via ``_assemble_grounded_
     answer``'s own guard) -- the "COMPLETED-with-no-material still falls
-    through" rule. ``evidence_refused``/``enrichment_gap`` are two
-    INDEPENDENT causes of degradation, carried separately rather than
-    collapsed into one flag: CHAOS-3502's ruling forbids conflating "the
-    canonical evidence service refused a candidate" with "a canonical
-    enrichment source was unavailable" -- they are different failures with
-    different user-facing meanings, and a caller (telemetry, warnings) must
-    be able to tell them apart even though both make ``degraded`` True on
-    the assembled ``DevAnswer`` itself.
+    through" rule. ``evidence_refused``/``evidence_gap``/``enrichment_gap``
+    plus ``driver_projection_truncated`` are independent causes of
+    degradation, carried separately rather than collapsed into one flag: a
+    considered canonical refusal, an unconfigured/unavailable/stale
+    admission, unavailable canonical enrichment, and this route's public cap
+    have different user-facing meanings. A caller (telemetry, warnings and
+    limitations) must be able to tell them apart even though each makes
+    ``degraded`` true on the assembled ``DevAnswer`` itself.
     """
 
     answer: DevAnswer | None
     evidence_refused: bool
     enrichment_gap: bool
+    evidence_gap: bool = False
+    driver_projection_truncated: bool = False
     cohort: DevAnswerCohortSlot | None = None
+    ranked_drivers: tuple[DevAnswerDriverEntry, ...] = ()
+    limitations: tuple[PacketLimitationKind, ...] = ()
 
 
-def _graph_assembly_outcome_label(evidence_refused: bool, enrichment_gap: bool) -> str:
+def _graph_assembly_outcome_label(
+    evidence_refused: bool,
+    enrichment_gap: bool,
+    evidence_gap: bool = False,
+    driver_projection_truncated: bool = False,
+) -> str:
     """The closed ``ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL`` label for one
     successfully-assembled answer. Never called when ``answer is None``
     (that case is ``"no_material"``, decided by the caller) -- see
@@ -1378,13 +1548,27 @@ def _graph_assembly_outcome_label(evidence_refused: bool, enrichment_gap: bool) 
     outcome vocabulary this is one half of.
     """
 
-    if evidence_refused and enrichment_gap:
-        return "assembled_degraded_both"
-    if evidence_refused:
-        return "assembled_degraded_evidence_refused"
-    if enrichment_gap:
-        return "assembled_degraded_enrichment_gap"
-    return "assembled_clean"
+    if evidence_refused and enrichment_gap and evidence_gap:
+        label = "assembled_degraded_all_gaps"
+    elif evidence_refused and enrichment_gap:
+        label = "assembled_degraded_both"
+    elif evidence_refused and evidence_gap:
+        label = "assembled_degraded_evidence_refused_and_gap"
+    elif enrichment_gap and evidence_gap:
+        label = "assembled_degraded_enrichment_and_evidence_gap"
+    elif evidence_refused:
+        label = "assembled_degraded_evidence_refused"
+    elif enrichment_gap:
+        label = "assembled_degraded_enrichment_gap"
+    elif evidence_gap:
+        label = "assembled_degraded_evidence_gap"
+    else:
+        label = "assembled_clean"
+    if not driver_projection_truncated:
+        return label
+    if label == "assembled_clean":
+        return "assembled_degraded_driver_projection_truncated"
+    return f"{label}_and_driver_projection_truncated"
 
 
 class DevOrchestrator:
@@ -3551,6 +3735,8 @@ class DevOrchestrator:
                             graph_result,
                             graph_answered=True,
                             cohort=graph_assembly.cohort,
+                            ranked_drivers=graph_assembly.ranked_drivers,
+                            additional_limitations=graph_assembly.limitations,
                         )
                         await emit_graph_state(graph_assistance)
                         return await finish(
@@ -5696,7 +5882,10 @@ class DevOrchestrator:
             ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome="no_material").inc()
             return None
         label = _graph_assembly_outcome_label(
-            outcome.evidence_refused, outcome.enrichment_gap
+            outcome.evidence_refused,
+            outcome.enrichment_gap,
+            outcome.evidence_gap,
+            outcome.driver_projection_truncated,
         )
         logger.info(
             "ask_dev.orchestrator.graph_routing_completed_assembled",
@@ -5704,6 +5893,8 @@ class DevOrchestrator:
                 "run_id": run_id,
                 "evidence_refused": outcome.evidence_refused,
                 "enrichment_gap": outcome.enrichment_gap,
+                "evidence_gap": outcome.evidence_gap,
+                "driver_projection_truncated": outcome.driver_projection_truncated,
             },
         )
         ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome=label).inc()
@@ -5750,14 +5941,15 @@ class DevOrchestrator:
         it is simply admitted like any other candidate and stays usable as
         counter-evidence, exactly as CHAOS-3650's acceptance requires.
 
-        **Two independent degrade causes, never conflated (CHAOS-3502).**
-        ``evidence_refused`` (a candidate was canonically refused) and
-        ``enrichment_gap`` (a canonical enrichment source was unavailable)
-        are computed and returned separately on :class:`GraphAssemblyOutcome`
-        -- each gets its own warning string and its own telemetry label, so
-        a caller can always tell which cause (or both) applies, even though
-        both make the underlying ``DevAnswer.status`` ``DEGRADED`` the same
-        way (``_assemble_grounded_answer`` takes one ``degraded: bool``).
+        **Independent degrade causes, never conflated (CHAOS-3502/3741).**
+        ``evidence_refused`` (a candidate was canonically refused),
+        ``evidence_gap`` (admission was unavailable/unconfigured or support
+        was stale), ``enrichment_gap`` (a canonical enrichment source was
+        unavailable), and ``driver_projection_truncated`` (the bounded public
+        projection omitted otherwise publishable W4 candidates) are computed
+        and returned separately on :class:`GraphAssemblyOutcome`. Each has a
+        distinct warning or telemetry label, so a caller can tell which causes
+        apply even though all make ``DevAnswer.status`` ``DEGRADED``.
 
         **The metric evidence-vocabulary mismatch (recon finding, CHAOS-3502
         Condition 4).** ``CanonicalEnrichmentAccessor``'s metrics are
@@ -5795,16 +5987,37 @@ class DevOrchestrator:
         )
         canonical_evidence: list[DevEvidenceRef] = []
         evidence_refused = False
+        unavailable_evidence = False
+        stale_evidence = False
         for item in admission.admissions:
             if item.evidence is not None:
                 canonical_evidence.append(item.evidence)
+                stale_evidence = (
+                    stale_evidence or item.evidence.freshness is FreshnessState.STALE
+                )
+                unavailable_evidence = (
+                    unavailable_evidence
+                    or item.evidence.freshness
+                    in {
+                        FreshnessState.UNAVAILABLE,
+                        FreshnessState.UNKNOWN,
+                    }
+                )
             elif item.refused:
                 evidence_refused = True
-            # An UNCONFIGURED (no resolver wired for this source_system) or
-            # UNAVAILABLE (transient) candidate is dropped the same way --
-            # neither a canonical refusal (nothing to disclose as "refused"
-            # under CHAOS-3650's own vocabulary) nor material this answer
-            # can cite.
+            else:
+                # Operational admission gaps are neither considered
+                # refusals nor ignorable. They may remove only part of a
+                # driver's support, so disclose them at answer level even
+                # when another support ref lets the driver remain public.
+                unavailable_evidence = True
+
+        evidence_gap = unavailable_evidence or stale_evidence
+
+        public_drivers, driver_projection_truncated = _public_driver_entries(
+            packet=packet,
+            admissions=admission.admissions,
+        )
 
         enrichment = await self._canonical_enrichment.enrich(
             org_id=org_id,
@@ -5844,15 +6057,26 @@ class DevOrchestrator:
                 enrichment.readiness,
             )
         )
-        degraded = evidence_refused or enrichment_gap
+        degraded = (
+            evidence_refused
+            or evidence_gap
+            or enrichment_gap
+            or driver_projection_truncated
+        )
         warnings: list[str] = []
         if evidence_refused:
             warnings.append(GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED)
+        if evidence_gap:
+            warnings.append(GRAPH_GROUNDED_WARNING_EVIDENCE_GAP)
+        if driver_projection_truncated:
+            warnings.append(GRAPH_GROUNDED_WARNING_DRIVER_PROJECTION_TRUNCATED)
         if enrichment_gap:
             warnings.append(GRAPH_GROUNDED_WARNING_ENRICHMENT_GAP)
 
         degraded_sources: list[str] = []
         if evidence_refused:
+            degraded_sources.append("graph_evidence_admission")
+        if evidence_gap and "graph_evidence_admission" not in degraded_sources:
             degraded_sources.append("graph_evidence_admission")
         if enrichment_gap:
             degraded_sources.append("canonical_enrichment")
@@ -5864,6 +6088,12 @@ class DevOrchestrator:
             degraded_required_sources=degraded_sources,
             as_of=now,
         )
+
+        limitations: list[PacketLimitationKind] = []
+        if unavailable_evidence:
+            limitations.append(PacketLimitationKind.MISSING_SOURCE)
+        if stale_evidence:
+            limitations.append(PacketLimitationKind.STALE_SOURCE)
 
         answer = self._assemble_grounded_answer(
             answer_id=answer_id,
@@ -5886,7 +6116,11 @@ class DevOrchestrator:
             answer=answer,
             evidence_refused=evidence_refused,
             enrichment_gap=enrichment_gap,
+            evidence_gap=evidence_gap,
+            driver_projection_truncated=driver_projection_truncated,
             cohort=public_cohort,
+            ranked_drivers=public_drivers,
+            limitations=tuple(limitations),
         )
 
     def _server_grounded_answer(

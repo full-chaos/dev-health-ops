@@ -63,6 +63,48 @@ supported outcome is a claim about a specific driver, and an assertion on the
 enum alone stays green under driver substitution. A mutation that promotes a
 different driver has to fail those tests, and does.
 
+### Public driver projection (CHAOS-3741)
+
+The production Ask Dev route joins the packet's driver candidates to the
+canonical `EvidenceService` admission result before publishing
+`DevAnswer.graph_assisted.ranked_drivers`. The public entry carries only
+bounded semantics: ordinal rank, principal/contributing/candidate/excluded
+standing, driver-versus-symptom role, closed category, confidence qualifier,
+current or historical relevance, admitted-evidence freshness, conflict
+references, and (for capacity claims) the closed staffing denominator state
+and source classes. Packet `summary`, graph identifiers, private rationale,
+and graph-issued evidence handles never cross this boundary.
+
+Rank is presentation order, not a magnitude. The contribution field remains
+`null` unless a canonical scoring contract supplies a real score; the route
+does not derive one from rank, candidate order, or evidence count. The public
+rank is the packet/W4 candidate ordinal, including gaps left by withheld
+candidates; the route never sorts by standing or renumbers the surviving
+entries. An excluded entry carries W4's closed exclusion reason, never its
+private driver id or rationale prose. A candidate
+without an admitted supporting reference is withheld rather than published,
+and any partial admission is disclosed with a closed withheld reason while
+the answer-level limitations and warnings retain the broader degraded state.
+`UNCONFIGURED`/`UNAVAILABLE` admission and stale admitted support are distinct
+from a canonical refusal: they produce the evidence-gap warning and a
+`missing_source`/`stale_source` limitation rather than being silently dropped
+or mislabeled as authorization refusal.
+
+The public list is capped at 25 entries. If more than 25 evidence-closed W4
+candidates remain publishable, the first 25 retain their original W4 ordinals
+and the answer becomes degraded with an explicit public-driver-limit warning
+and a distinct content-safe assembly outcome. This is not labeled
+`truncated_traversal`: discovery completed, and the public projection's own
+bound is what omitted the remaining judgments.
+
+Production packets carry each graph observation's source record locator even
+when the source already supplied its own evidence handle. The locator is the
+address canonical admission re-resolves; the pre-admission handle and graph
+entity id are not substitutes. Already-canonically-admitted refs remain copied
+verbatim.
+The generated Ask Dev v1 schemas are regenerated from
+`src/dev_health_ops/api/dev/contracts.py` after this projection changes.
+
 ## Hard boundaries
 
 - **Shadow-only.** Two flags, both default off and **independent**:

@@ -22,7 +22,6 @@ from dev_health_ops.sync.datasets import (
     get_dataset_spec,
 )
 from dev_health_ops.workers.provider_unit_route import (
-    ProviderUnitRouteError,
     ProviderUnitRouteSwitches,
 )
 
@@ -309,22 +308,6 @@ def test_producer_gate_cannot_route_any_scope_outside_the_ready_set(
         closed.routes_to_river(provider, dataset)
         for provider, dataset in _python_pairs()
     )
-
-
-def test_linear_incomplete_route_switch_remains_forbidden(
-    matrix: dict[str, Any],
-) -> None:
-    """Linear stays unusable until its complete Go composition exists."""
-
-    scope = ("linear", "work-items")
-    ready = {
-        (pair["provider"], pair["dataset"])
-        for pair in matrix["pairs"]
-        if pair["route_ready"]
-    }
-    assert scope not in ready, f"{scope} became route-ready; unblock linear_work_items"
-    with pytest.raises(ProviderUnitRouteError):
-        ProviderUnitRouteSwitches(linear_work_items=True).require_complete_routes()
 
 
 def test_go_executor_kinds_are_bounded_and_honest(

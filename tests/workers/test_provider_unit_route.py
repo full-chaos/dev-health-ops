@@ -36,13 +36,6 @@ def test_route_switch_is_exact_and_independent() -> None:
     assert not switches.routes_to_river("gitlab", "feature-flags")
 
 
-def test_incomplete_linear_route_fails_closed() -> None:
-    with pytest.raises(ProviderUnitRouteError, match="incomplete"):
-        ProviderUnitRouteSwitches.from_environment(
-            {"WORKER_LINEAR_WORK_ITEMS_ENABLED": "true"}
-        )
-
-
 _AGGREGATE_ROUTE_SWITCH_CASES = (
     (
         "gitlab",
@@ -79,6 +72,12 @@ _AGGREGATE_ROUTE_SWITCH_CASES = (
         "WORKER_GITLAB_WORK_ITEMS_ENABLED",
     ),
     ("jira", "work-items", "jira_work_items", "WORKER_JIRA_WORK_ITEMS_ENABLED"),
+    (
+        "linear",
+        "work-items",
+        "linear_work_items",
+        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
+    ),
     (
         "pagerduty",
         "services",
@@ -193,7 +192,7 @@ def test_aggregate_route_switches_reject_invalid_values(
         ProviderUnitRouteSwitches.from_environment({environment_name: "sometimes"})
 
 
-@pytest.mark.parametrize("provider", ("gitlab", "jira"))
+@pytest.mark.parametrize("provider", ("gitlab", "jira", "linear"))
 def test_aggregate_work_item_families_have_one_canonical_writer(
     monkeypatch: pytest.MonkeyPatch, provider: str
 ) -> None:

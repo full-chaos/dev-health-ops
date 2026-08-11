@@ -81,7 +81,17 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 }
 
 func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing.T) {
-	t.Parallel()
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	workItems := validGitHubWorkItemsRuntimeConfig(t)
+	gitlabWorkItems := workItems
+	gitlabWorkItems.WorkerGithubWorkItemsEnabled = false
+	gitlabWorkItems.WorkerGitlabWorkItemsEnabled = true
+	jiraWorkItems := workItems
+	jiraWorkItems.WorkerGithubWorkItemsEnabled = false
+	jiraWorkItems.WorkerJiraWorkItemsEnabled = true
+	linearWorkItems := workItems
+	linearWorkItems.WorkerGithubWorkItemsEnabled = false
+	linearWorkItems.WorkerLinearWorkItemsEnabled = true
 	for _, test := range []struct {
 		name    string
 		config  config.Config
@@ -197,15 +207,32 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 		{name: "github pr reviews missing runtime", config: config.Config{WorkerGithubPRReviewsEnabled: true}, wantErr: true},
 		{name: "github pr comments complete", config: config.Config{WorkerGithubPRCommentsEnabled: true}, runtime: true},
 		{name: "github pr comments missing runtime", config: config.Config{WorkerGithubPRCommentsEnabled: true}, wantErr: true},
+		{name: "gitlab deployments complete", config: config.Config{WorkerGitlabDeploymentsEnabled: true}, runtime: true},
+		{name: "gitlab feature flags complete", config: config.Config{WorkerGitlabFeatureFlagsEnabled: true}, runtime: true},
+		{name: "gitlab files complete", config: config.Config{WorkerGitlabFilesEnabled: true}, runtime: true},
+		{name: "gitlab blame complete", config: config.Config{WorkerGitlabBlameEnabled: true}, runtime: true},
+		{name: "gitlab prs complete", config: config.Config{WorkerGitlabPRsEnabled: true}, runtime: true},
+		{name: "gitlab pr reviews complete", config: config.Config{WorkerGitlabPRReviewsEnabled: true}, runtime: true},
+		{name: "gitlab pr comments complete", config: config.Config{WorkerGitlabPRCommentsEnabled: true}, runtime: true},
+		{name: "gitlab security complete", config: config.Config{WorkerGitlabSecurityEnabled: true}, runtime: true},
+		{name: "gitlab work items complete", config: gitlabWorkItems, runtime: true},
+		{name: "pagerduty services complete", config: config.Config{WorkerPagerDutyServicesEnabled: true}, runtime: true},
+		{name: "pagerduty business services complete", config: config.Config{WorkerPagerDutyBusinessServicesEnabled: true}, runtime: true},
+		{name: "pagerduty escalation policies complete", config: config.Config{WorkerPagerDutyEscalationPoliciesEnabled: true}, runtime: true},
+		{name: "pagerduty schedules complete", config: config.Config{WorkerPagerDutySchedulesEnabled: true}, runtime: true},
+		{name: "pagerduty on calls complete", config: config.Config{WorkerPagerDutyOnCallsEnabled: true}, runtime: true},
+		{name: "pagerduty users complete", config: config.Config{WorkerPagerDutyUsersEnabled: true}, runtime: true},
+		{name: "pagerduty teams complete", config: config.Config{WorkerPagerDutyTeamsEnabled: true}, runtime: true},
+		{name: "pagerduty incident family complete", config: config.Config{WorkerPagerDutyIncidentsEnabled: true}, runtime: true},
 		{
-			name:    "linear incomplete",
-			config:  config.Config{WorkerLinearWorkItemsEnabled: true},
-			wantErr: true,
+			name:    "linear work items complete",
+			config:  linearWorkItems,
+			runtime: true,
 		},
 		{
-			name:    "jira work items incomplete",
-			config:  config.Config{WorkerJiraWorkItemsEnabled: true},
-			wantErr: true,
+			name:    "jira work items complete",
+			config:  jiraWorkItems,
+			runtime: true,
 		},
 		{
 			name:    "jira incidents incomplete",

@@ -42,6 +42,38 @@ func TestCompleteRouteExecutorRunsEnabledMultiEffectUnit(t *testing.T) {
 	}
 }
 
+func TestCompleteRouteExecutorBindsCredentialScopedEffectsBeforeCollection(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSession(t, now, false)
+	descriptor, _ := (CompleteRouteSwitches{
+		LaunchDarklyFeatureFlags: true,
+	}).Descriptor("launchdarkly", "feature-flags")
+	bound := false
+	handler := &effectsFactoryObservingHandler{
+		bound: &bound, batch: completeRouteFixture(t, claim),
+	}
+	ledger := &memoryEffectLedger{}
+	sink := &memoryEffectSink{}
+	executor := completeRouteExecutor(now, handler, ledger, nil)
+	executor.EffectsFactory = func(
+		credential providerfoundation.Credential,
+	) (EffectSink, EffectReadback, error) {
+		if credential.Provider != "launchdarkly" || credential.ID != firstCredentialID {
+			return nil, nil, ErrInvalidConfiguration
+		}
+		bound = true
+		return sink, nil, nil
+	}
+	result, err := executor.Execute(context.Background(), session, descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bound || result.Effects.Written != 4 || len(sink.destinations) != 4 {
+		t.Fatalf("bound=%t result=%+v writes=%v", bound, result, sink.destinations)
+	}
+}
+
 func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnRecovery(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
@@ -273,6 +305,24 @@ type staticCompleteRouteHandler struct {
 
 type requestingCompleteRouteHandler struct {
 	batch CompleteRouteBatch
+}
+
+type effectsFactoryObservingHandler struct {
+	bound *bool
+	batch CompleteRouteBatch
+}
+
+func (handler *effectsFactoryObservingHandler) Collect(
+	_ context.Context,
+	_ Claim,
+	_ providerfoundation.Credential,
+	_ *providerfoundation.HTTPClient,
+	_ time.Time,
+) (CompleteRouteBatch, error) {
+	if handler.bound == nil || !*handler.bound {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	return handler.batch, nil
 }
 
 func (handler *requestingCompleteRouteHandler) Collect(

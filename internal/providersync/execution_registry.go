@@ -30,26 +30,60 @@ const (
 // compiled code only: a pair may be native_go while RouteReady is still false
 // because live parity evidence has not been captured.
 var providerExecutorRegistry = map[string]ExecutorKind{
-	"launchdarkly/feature-flags": ExecutorNativeGo,
-	"github/repo-metadata":       ExecutorNativeGo,
-	"github/prs":                 ExecutorNativeGo,
-	"github/pr-reviews":          ExecutorNativeGo,
-	"github/pr-comments":         ExecutorNativeGo,
-	"github/cicd":                ExecutorNativeGo,
-	"github/commits":             ExecutorNativeGo,
-	"github/deployments":         ExecutorNativeGo,
-	"github/security":            ExecutorNativeGo,
-	"github/files":               ExecutorNativeGo,
-	"github/commit-stats":        ExecutorNativeGo,
-	"jira/incidents":             ExecutorNativeGo,
-	"gitlab/repo-metadata":       ExecutorNativeGo,
-	"gitlab/commits":             ExecutorNativeGo,
-	"gitlab/commit-stats":        ExecutorNativeGo,
-	"gitlab/cicd":                ExecutorNativeGo,
-	"gitlab/tests":               ExecutorNativeGo,
-	"gitlab/incidents":           ExecutorNativeGo,
-	"github/blame":               ExecutorNativeGo,
-	"github/tests":               ExecutorNativeGo,
+	"launchdarkly/feature-flags":     ExecutorNativeGo,
+	"github/repo-metadata":           ExecutorNativeGo,
+	"github/prs":                     ExecutorNativeGo,
+	"github/pr-reviews":              ExecutorNativeGo,
+	"github/pr-comments":             ExecutorNativeGo,
+	"github/cicd":                    ExecutorNativeGo,
+	"github/commits":                 ExecutorNativeGo,
+	"github/deployments":             ExecutorNativeGo,
+	"github/security":                ExecutorNativeGo,
+	"github/files":                   ExecutorNativeGo,
+	"github/commit-stats":            ExecutorNativeGo,
+	"jira/incidents":                 ExecutorNativeGo,
+	"gitlab/repo-metadata":           ExecutorNativeGo,
+	"gitlab/commits":                 ExecutorNativeGo,
+	"gitlab/commit-stats":            ExecutorNativeGo,
+	"gitlab/cicd":                    ExecutorNativeGo,
+	"gitlab/tests":                   ExecutorNativeGo,
+	"gitlab/incidents":               ExecutorNativeGo,
+	"gitlab/deployments":             ExecutorNativeGo,
+	"gitlab/feature-flags":           ExecutorNativeGo,
+	"gitlab/files":                   ExecutorNativeGo,
+	"gitlab/blame":                   ExecutorNativeGo,
+	"gitlab/prs":                     ExecutorNativeGo,
+	"gitlab/pr-reviews":              ExecutorNativeGo,
+	"gitlab/pr-comments":             ExecutorNativeGo,
+	"gitlab/security":                ExecutorNativeGo,
+	"gitlab/work-items":              ExecutorNativeGo,
+	"gitlab/work-item-labels":        ExecutorNativeGo,
+	"gitlab/work-item-projects":      ExecutorNativeGo,
+	"gitlab/work-item-history":       ExecutorNativeGo,
+	"gitlab/work-item-comments":      ExecutorNativeGo,
+	"jira/work-items":                ExecutorNativeGo,
+	"jira/work-item-labels":          ExecutorNativeGo,
+	"jira/work-item-projects":        ExecutorNativeGo,
+	"jira/work-item-history":         ExecutorNativeGo,
+	"jira/work-item-comments":        ExecutorNativeGo,
+	"linear/work-items":              ExecutorNativeGo,
+	"linear/work-item-labels":        ExecutorNativeGo,
+	"linear/work-item-projects":      ExecutorNativeGo,
+	"linear/work-item-history":       ExecutorNativeGo,
+	"linear/work-item-comments":      ExecutorNativeGo,
+	"pagerduty/services":             ExecutorNativeGo,
+	"pagerduty/business-services":    ExecutorNativeGo,
+	"pagerduty/escalation-policies":  ExecutorNativeGo,
+	"pagerduty/schedules":            ExecutorNativeGo,
+	"pagerduty/on-calls":             ExecutorNativeGo,
+	"pagerduty/users":                ExecutorNativeGo,
+	"pagerduty/teams":                ExecutorNativeGo,
+	"pagerduty/incidents":            ExecutorNativeGo,
+	"pagerduty/incident-alerts":      ExecutorNativeGo,
+	"pagerduty/incident-log-entries": ExecutorNativeGo,
+	"pagerduty/incident-notes":       ExecutorNativeGo,
+	"github/blame":                   ExecutorNativeGo,
+	"github/tests":                   ExecutorNativeGo,
 	// GitHub's five work-item dataset identities are one complete native
 	// execution family. The planner emits only a canonical `work-items` claim;
 	// the four sibling identities remain in the capability contract so their
@@ -161,7 +195,31 @@ type CompleteRouteSwitches struct {
 	GitlabCICD  bool
 	GitlabTests bool
 	// GitlabIncidents gates the three-destination canonical operational batch.
-	GitlabIncidents bool
+	GitlabIncidents    bool
+	GitlabDeployments  bool
+	GitlabFeatureFlags bool
+	GitlabFiles        bool
+	GitlabBlame        bool
+	GitlabPRs          bool
+	GitlabPRReviews    bool
+	GitlabPRComments   bool
+	GitlabSecurity     bool
+	// GitlabWorkItems gates one canonical, atomic five-alias family. Direct
+	// alias descriptors remain ready for matrix/audit truth but disabled.
+	GitlabWorkItems bool
+	// PagerDuty incident-family identities remain independent D16 claims. The
+	// single incidents switch deliberately gates each of the four claims.
+	PagerDutyServices           bool
+	PagerDutyBusinessServices   bool
+	PagerDutyEscalationPolicies bool
+	PagerDutySchedules          bool
+	PagerDutyOnCalls            bool
+	PagerDutyUsers              bool
+	PagerDutyTeams              bool
+	PagerDutyIncidents          bool
+	PagerDutyIncidentAlerts     bool
+	PagerDutyIncidentLogEntries bool
+	PagerDutyIncidentNotes      bool
 	// GithubPRs, GithubPRReviews, and GithubPRComments independently gate the
 	// three dataset identities Python maps to one complete PR-social execution.
 	// Every identity constructs the same enriched git_pull_requests and
@@ -239,11 +297,26 @@ func (switches CompleteRouteSwitches) Descriptor(
 			// a reason to pretend a direct sibling alias is executable.
 			descriptor.PreparedManifestRecovery = true
 		}
-	case (provider == "linear" || provider == "jira") && workItemAlias:
+	case provider == "linear" && workItemAlias:
 		descriptor.RouteDataset = "work-items"
 		descriptor.Destinations = workItemRouteDestinations()
-		// The aliases are one complete Python collector, but the complete native
-		// handler is not wired yet. Preserve the manifest while failing closed.
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.LinearWorkItems
+		}
+	case provider == "gitlab" && workItemAlias:
+		descriptor.Destinations = workItemRouteDestinations()
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.GitlabWorkItems
+		}
+	case provider == "jira" && workItemAlias:
+		descriptor.RouteDataset = "work-items"
+		descriptor.Destinations = append(workItemRouteDestinations(), "worklogs")
+		descriptor.RouteReady = true
+		if dataset == "work-items" {
+			descriptor.RouteEnabled = switches.JiraWorkItems
+		}
 	case provider == "jira" && dataset == "incidents":
 		descriptor.Destinations = []string{"operational_incidents"}
 		descriptor.RouteReady = true
@@ -300,6 +373,82 @@ func (switches CompleteRouteSwitches) Descriptor(
 		}
 		descriptor.RouteReady = true
 		descriptor.RouteEnabled = switches.GitlabIncidents
+	case provider == "gitlab" && dataset == "deployments":
+		descriptor.Destinations = []string{"deployments"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabDeployments
+	case provider == "gitlab" && dataset == "feature-flags":
+		descriptor.Destinations = []string{"feature_flag", "feature_flag_event", "work_graph_edges"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabFeatureFlags
+	case provider == "gitlab" && dataset == "files":
+		descriptor.Destinations = []string{"git_files"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabFiles
+	case provider == "gitlab" && dataset == "blame":
+		descriptor.Destinations = []string{"git_blame"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabBlame
+	case provider == "gitlab" && dataset == "prs":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabPRs
+	case provider == "gitlab" && dataset == "pr-reviews":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabPRReviews
+	case provider == "gitlab" && dataset == "pr-comments":
+		descriptor.Destinations = githubPRSocialRouteDestinations()
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabPRComments
+	case provider == "gitlab" && dataset == "security":
+		descriptor.Destinations = []string{"security_alerts"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.GitlabSecurity
+	case provider == "pagerduty" && dataset == "services":
+		descriptor.Destinations = []string{"operational_services", "operational_service_repository_mappings"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyServices
+	case provider == "pagerduty" && dataset == "business-services":
+		descriptor.Destinations = []string{"operational_services"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyBusinessServices
+	case provider == "pagerduty" && dataset == "escalation-policies":
+		descriptor.Destinations = []string{"operational_escalation_policies"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyEscalationPolicies
+	case provider == "pagerduty" && dataset == "schedules":
+		descriptor.Destinations = []string{"operational_on_call_schedules"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutySchedules
+	case provider == "pagerduty" && dataset == "on-calls":
+		descriptor.Destinations = []string{"operational_on_call_assignments"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyOnCalls
+	case provider == "pagerduty" && dataset == "users":
+		descriptor.Destinations = []string{"operational_users"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyUsers
+	case provider == "pagerduty" && dataset == "teams":
+		descriptor.Destinations = []string{"operational_teams"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyTeams
+	case provider == "pagerduty" && dataset == "incidents":
+		descriptor.Destinations = []string{"operational_incidents"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidents
+	case provider == "pagerduty" && dataset == "incident-alerts":
+		descriptor.Destinations = []string{"operational_alerts"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidentAlerts
+	case provider == "pagerduty" && dataset == "incident-log-entries":
+		descriptor.Destinations = []string{"operational_incident_timeline_events"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidentLogEntries
+	case provider == "pagerduty" && dataset == "incident-notes":
+		descriptor.Destinations = []string{"operational_incident_notes"}
+		descriptor.RouteReady = true
+		descriptor.RouteEnabled = switches.PagerDutyIncidentNotes
 	case provider == "github" && dataset == "prs":
 		// The PR-social route mirrors Python's one
 		// _sync_github_prs_to_store_async boundary: REST PR detail (including

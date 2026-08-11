@@ -87,6 +87,15 @@ type CompleteRouteComparator interface {
 	) (ShadowComparison, error)
 }
 
+// CompleteRouteEffectsFactory binds effect persistence to the resolved
+// credential before any provider request. Most routes construct their sink at
+// worker startup. Account-scoped routes such as PagerDuty need the decrypted
+// provider instance to fence empty-snapshot readback and reconciliation, so
+// they construct the same typed sink per attempt through this narrow seam.
+type CompleteRouteEffectsFactory func(
+	providerfoundation.Credential,
+) (EffectSink, EffectReadback, error)
+
 type CompleteRouteExecutor struct {
 	Credentials       providerfoundation.CredentialResolver
 	Doer              providerfoundation.HTTPDoer
@@ -99,6 +108,7 @@ type CompleteRouteExecutor struct {
 	Handler           CompleteRouteHandler
 	Comparator        CompleteRouteComparator
 	Committer         EffectCommitter
+	EffectsFactory    CompleteRouteEffectsFactory
 	HeartbeatInterval time.Duration
 	Now               func() time.Time
 }
@@ -139,7 +149,8 @@ func (executor CompleteRouteExecutor) Execute(
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	if descriptor.RouteEnabled &&
-		(executor.Committer.Ledger == nil || executor.Committer.Sink == nil) {
+		(executor.Committer.Ledger == nil ||
+			(executor.Committer.Sink == nil && executor.EffectsFactory == nil)) {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	if descriptor.PreparedManifestRecovery &&
@@ -155,13 +166,14 @@ func (executor CompleteRouteExecutor) Execute(
 		workContext context.Context,
 		guard providerfoundation.LeaseGuard,
 	) error {
+		committer := executor.Committer
 		normalizedAt := executor.now()
 		var recoveredEffects *EffectLedgerState
 		// Load the durable manifest before touching credentials or provider
 		// state. Snapshot-backed recovery must be able to resume the exact batch
 		// even when the live provider selection has changed since prepare.
 		if descriptor.RouteEnabled {
-			state, loadErr := executor.Committer.Ledger.LoadEffects(
+			state, loadErr := committer.Ledger.LoadEffects(
 				workContext, session.Claim, normalizedAt,
 			)
 			switch {
@@ -212,7 +224,7 @@ func (executor CompleteRouteExecutor) Execute(
 				manifest.Batch.Evidence, manifest.Batch.Result, manifest.Batch.Watermark
 			result.WorklogObservations = manifest.Batch.WorklogObservations
 			result.Comparison = manifest.Comparison
-			result.Effects, err = executor.Committer.CommitPrepared(
+			result.Effects, err = committer.CommitPrepared(
 				workContext, session.Claim, manifest.Batch.Effects, *recoveredEffects,
 			)
 			return err
@@ -224,6 +236,15 @@ func (executor CompleteRouteExecutor) Execute(
 		)
 		if err != nil {
 			return err
+		}
+		if descriptor.RouteEnabled && executor.EffectsFactory != nil {
+			committer.Sink, committer.Readback, err = executor.EffectsFactory(credential)
+			if err != nil {
+				return err
+			}
+			if committer.Sink == nil {
+				return ErrInvalidConfiguration
+			}
 		}
 		client, err := (Executor{
 			Doer: executor.Doer, Retry: executor.Retry,
@@ -262,7 +283,7 @@ func (executor CompleteRouteExecutor) Execute(
 					return replanErr
 				}
 				if canReplan {
-					ledger, ok := executor.Committer.Ledger.(EffectLedgerReplanner)
+					ledger, ok := committer.Ledger.(EffectLedgerReplanner)
 					if !ok {
 						return ErrInvalidConfiguration
 					}
@@ -335,11 +356,11 @@ func (executor CompleteRouteExecutor) Execute(
 			if prepareErr != nil {
 				return prepareErr
 			}
-			result.Effects, err = executor.Committer.CommitPrepared(
+			result.Effects, err = committer.CommitPrepared(
 				workContext, session.Claim, batch.Effects, prepared,
 			)
 		} else {
-			result.Effects, err = executor.Committer.Commit(
+			result.Effects, err = committer.Commit(
 				workContext, session.Claim, batch.Effects, normalizedAt,
 			)
 		}

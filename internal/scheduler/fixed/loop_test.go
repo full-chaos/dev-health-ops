@@ -167,16 +167,38 @@ func TestHealthyInitialWindowOpensReadiness(t *testing.T) {
 	})
 }
 
-// Shutdown must close readiness regardless of how the loop was faring.
 func TestShutdownClosesReadiness(t *testing.T) {
 	schedule := heartbeatSchedule(t)
-	stepper := &scriptedStepper{schedules: []Schedule{schedule}}
+	stepper := &blockingStepper{
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+		schedules: []Schedule{schedule},
+	}
 	loop, _ := newFixedTestLoop(t, stepper)
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := loop.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() = %v", err)
+	select {
+	case <-stepper.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first window never began")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- loop.Shutdown(context.Background()) }()
+	waitFor(t, "shutdown to mark the loop stopping", func() bool {
+		loop.mu.Lock()
+		defer loop.mu.Unlock()
+		return loop.stopping
+	})
+	close(stepper.release)
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown() = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown() did not wait for the in-flight window")
 	}
 	if err := loop.Readiness(context.Background()); err == nil {
 		t.Fatal("readiness stayed open after shutdown")

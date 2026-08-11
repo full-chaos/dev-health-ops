@@ -557,6 +557,23 @@
           "./internal/providersync/"
         ]
       ]
+    },
+    {
+      "id": "W1-derived-write-rejects-foreign-tenant-rows",
+      "file": "internal/providersync/github_work_item_derived_effects_clickhouse.go",
+      "find": "\t\tif !validGitHubWorkItemDerivedRowTenancy(row, identity) {",
+      "replace": "\t\tif !validGitHubWorkItemDerivedRowTenancy(row, identity) && false {",
+      "rationale": "readback must let the SQL org_id fence return EffectAbsent, but writes must reject a persisted row whose tenant or provider differs from the effect identity before acquiring the lease. The public write-entrypoint proof makes bypassing this guard observable.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestGitHubEstimateCoverageWrite_rejectsForeignTenantBeforeLease$",
+          "./internal/providersync/"
+        ]
+      ]
     }
   ]
 }

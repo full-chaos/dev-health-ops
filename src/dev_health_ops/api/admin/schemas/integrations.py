@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Integration
@@ -123,11 +123,41 @@ class SyncTriggerRequest(BaseModel):
     full_resync: bool = False
 
 
-class BackfillTriggerRequest(BaseModel):
+class BackfillSelector(BaseModel):
+    """Explicit backfill scope for date and repository/unit selectors."""
+
     since: datetime
     before: datetime
     source_ids: list[str] | None = None
     dataset_keys: list[str] | None = None
+
+
+class BackfillTriggerRequest(BaseModel):
+    selector: BackfillSelector | None = None
+    since: datetime | None = None
+    before: datetime | None = None
+    source_ids: list[str] | None = None
+    dataset_keys: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_selector(self) -> BackfillTriggerRequest:
+        if self.selector is None and (self.since is None or self.before is None):
+            raise ValueError(
+                "backfill requires since and before, either top-level or in selector"
+            )
+        return self
+
+    def resolved_selector(self) -> BackfillSelector:
+        if self.selector is not None:
+            return self.selector
+        assert self.since is not None
+        assert self.before is not None
+        return BackfillSelector(
+            since=self.since,
+            before=self.before,
+            source_ids=self.source_ids,
+            dataset_keys=self.dataset_keys,
+        )
 
 
 class SyncTriggerResponse(BaseModel):

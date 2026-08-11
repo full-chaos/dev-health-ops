@@ -348,8 +348,6 @@ class ProviderUnitRouteSwitches:
         return switches
 
     def require_complete_routes(self) -> None:
-        if self.linear_work_items:
-            raise ProviderUnitRouteError("enabled provider unit route is incomplete")
         if self.github_cicd and self.github_tests:
             raise ProviderUnitRouteError(
                 "github cicd and tests switches are mutually exclusive complete-unit aliases"

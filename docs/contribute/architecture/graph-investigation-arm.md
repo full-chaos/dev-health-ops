@@ -47,8 +47,10 @@ product feature, and nothing about it is on a user-visible path.
 The outcome is **derived from what was produced**, never passed in. A packet
 with no asserted driver is, by the frozen contract's own
 `validate_supported_outcome_asserts_a_judgment`, a redirect rather than an
-answer — so for as long as the arm synthesized no drivers it could only emit
-`unsupported`, and it did.
+answer. The seeded paths retain that unsupported control; the subjectless
+production path now runs the structural rules independently for each cohort
+member and can therefore emit a supported outcome only when one of those
+findings carries current lineage and closed evidence.
 
 With structural drivers it now emits `supported_with_gaps` for
 `proj_identity_rewrite`, credited to `drv_block_wu_authcore_release`, and the
@@ -991,10 +993,13 @@ comparison here" must not score identically.
 the packet to mistake for one: it is populated, structured, and looks like a
 comparison was performed. `derive_outcome` evaluates the frozen contract's
 own rule — a supported outcome needs a driver with asserted standing and a
-non-empty evidence index — and this revision synthesizes no drivers, so every
-cohort-bearing packet it emits is still `unsupported`. The function exists
-rather than a constant precisely so both branches can be observed; a constant
-would make "the arm cannot over-claim" unfalsifiable.
+non-empty evidence index. The subjectless production path now supplies
+structural findings per member, while keeping cited measurements
+candidate-only; an empty or evidence-closed failure still emits
+`unsupported`, and a disclosed traversal/driver bound weakens a supported
+result to `supported_with_gaps`. The function exists rather than a constant
+precisely so both branches can be observed; a constant would make "the arm
+cannot over-claim" unfalsifiable.
 
 ## What the differential oracle found
 

@@ -24,9 +24,9 @@ CHAOS-3679's persisted watermark.
 display-label match only — see that module's own docstring for why this is
 narrower than the trial's ``discovery.search_candidates``),
 :class:`~.readback.LiveGraphReader` traversal, and
-:func:`~.packet_builder.build_production_packet` with ``drivers=None`` (no
-driver synthesis — mirrors the trial's own PR1 scope, which never
-synthesized drivers either).
+:func:`~.packet_builder.build_production_packet` without driver synthesis on
+seeded paths. The subjectless production path additionally runs bounded
+structural synthesis once per cohort member; see the later increment note.
 
 **Increment 3 adds ``SEEDED_EXPLICIT_COHORT``** (CHAOS-3688), following the
 trial's own construction (``trials/chaos_3619/graph_leg.py``'s
@@ -57,9 +57,11 @@ _live_graph_snapshot` (CHAOS-3689's adapter PR) supplies the live
 AS-IS, unmodified — needs; the discovered cohort's own members (canonical-
 id order, the same non-ranking discipline as the trial) become the
 traversal seeds, never a single anchor subject, because there is none.
-Like ``SEEDED_EXPLICIT_COHORT``, this mode attributes no drivers — a scope-
-enumerated cohort has no subject for ``discover_drivers`` to explain, the
-same scope boundary the trial itself already drew and documented.
+Unlike ``SEEDED_EXPLICIT_COHORT``, this mode does not need a committed anchor
+subject: it runs the existing structural rules once for each scope-enumerated
+cohort member. Each finding keeps that member, its own lineage and its own
+edge-scoped evidence. Canonical measurements remain candidate-only context
+and cannot acquire asserted standing from this wiring.
 """
 
 from __future__ import annotations
@@ -67,6 +69,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -91,6 +94,7 @@ from dev_health_ops.api.dev.investigation_contract import (
 
 from .cohort import build_cohort
 from .cohort_discovery import discover_cohort
+from .drivers import DriverFinding, discover_drivers
 from .flags import graph_read_enabled
 from .live_snapshot import _live_graph_snapshot
 from .packet_builder import (
@@ -98,7 +102,7 @@ from .packet_builder import (
     build_production_packet,
     signer_from_environment,
 )
-from .readback import GraphReader, LiveGraphReader
+from .readback import GraphReader, InvestigationReadout, LiveGraphReader
 from .store import GraphArmStore, StoreUnavailableError
 from .subject_resolution import (
     _live_cohort_edges,
@@ -144,6 +148,62 @@ _COHORT_DISCOVERY_QUESTION_FAMILY: dict[CohortDiscoveryFamily, QuestionFamilyID]
 #: partially -- and that is disclosed by the packet's own truncation
 #: machinery, not silently).
 _MAX_COHORT_SEEDS = 12
+
+# The packet contract caps driver candidates at fifty. Subjectless discovery
+# runs the same structural rules once per committed cohort member, so the
+# bound has to be applied after the per-member results are combined rather
+# than allowing one member to consume the whole packet by construction.
+_MAX_COHORT_DRIVER_CANDIDATES = 50
+
+
+def _subjectless_drivers(
+    readout: InvestigationReadout,
+    member_ids: tuple[str, ...],
+    *,
+    as_of: datetime,
+) -> tuple[tuple[DriverFinding, ...], bool]:
+    """Discover bounded, structural drivers for every cohort member.
+
+    A scope-enumerated cohort has no committed *anchor* subject, but each
+    member is still a subject of the comparison. Running the existing
+    ``discover_drivers`` rules once per member preserves their edge-scoped
+    evidence and status/currency guards; inventing one synthetic anchor would
+    make a driver's lineage and affected subject mean something the question
+    never supplied.
+
+    Results are ordered by canonical member id and driver id, never by
+    relevance or magnitude. ``discover_drivers`` returns excluded candidates
+    as well as asserted findings, and those are retained so evidence and
+    refusal reasons remain visible. A duplicate cause across members is
+    namespaced only when needed to satisfy the packet's unique-driver-id
+    invariant; its ``subject_id`` and affected subject remain the member that
+    produced it.
+    """
+
+    findings: list[DriverFinding] = []
+    seen_driver_ids: set[str] = set()
+    truncated = False
+    for member_id in sorted(set(member_ids)):
+        member_findings, member_truncated = discover_drivers(
+            readout, member_id, as_of=as_of
+        )
+        truncated = truncated or member_truncated
+        for finding in member_findings:
+            driver_id = finding.driver_id
+            if driver_id in seen_driver_ids:
+                driver_id = f"{driver_id}__{member_id}"
+                suffix = 2
+                while driver_id in seen_driver_ids:
+                    driver_id = f"{finding.driver_id}__{member_id}_{suffix}"
+                    suffix += 1
+                finding = replace(finding, driver_id=driver_id)
+            seen_driver_ids.add(driver_id)
+            findings.append(finding)
+
+    ordered = sorted(findings, key=lambda item: (item.subject_id, item.driver_id))
+    if len(ordered) > _MAX_COHORT_DRIVER_CANDIDATES:
+        truncated = True
+    return tuple(ordered[:_MAX_COHORT_DRIVER_CANDIDATES]), truncated
 
 
 class GraphMechanism(StrEnum):
@@ -631,10 +691,10 @@ class ProductionGraphInvestigationQuery:
         this arm does not own), become the traversal seeds, capped at
         :data:`_MAX_COHORT_SEEDS` -- a cohort larger than that is read
         partially, disclosed by the packet's own truncation machinery
-        rather than by an unbounded neighbourhood read. No drivers are
-        attributed, the same scope boundary ``SEEDED_EXPLICIT_COHORT``
-        already draws: a scope-enumerated cohort has no subject for
-        ``discover_drivers`` to explain.
+        rather than by an unbounded neighbourhood read. Each discovered
+        member is then passed through ``discover_drivers`` independently;
+        no synthetic anchor is introduced and no measurement candidate is
+        promoted by this wiring.
 
         An unsupported family (structurally unreachable given the closed
         table above, but not assumed to be), no comparable cohort
@@ -683,11 +743,29 @@ class ProductionGraphInvestigationQuery:
             seeds = sorted(
                 member.canonical_id for member in discovery.proposal.members
             )[:_MAX_COHORT_SEEDS]
+            omitted_seed_count = len(discovery.proposal.members) - len(seeds)
+            readback_cohort = replace(
+                discovery.proposal,
+                # ``discover_cohort``'s count covers peers it dropped before
+                # returning the proposal. The readback seed cap is a second,
+                # later bound over the members that proposal retained, so its
+                # omissions must be added rather than replacing the existing
+                # disclosure.
+                truncated=discovery.proposal.truncated or bool(omitted_seed_count),
+                truncated_count=(
+                    discovery.proposal.truncated_count + omitted_seed_count
+                ),
+            )
             reader = self._reader_factory(traversal_store)
             readout = await reader.neighbourhood(
                 org_id=request.org_id,
                 seed_canonical_ids=seeds,
                 authorized_entity_ids=tuple(request.authorized_entity_ids),
+            )
+            drivers, drivers_truncated = _subjectless_drivers(
+                readout,
+                tuple(seeds),
+                as_of=request.window_end,
             )
             packet = build_production_packet(
                 readout=readout,
@@ -700,7 +778,9 @@ class ProductionGraphInvestigationQuery:
                     window_start=request.window_start,
                     window_end=request.window_end,
                 ),
-                cohort=discovery.proposal,
+                cohort=readback_cohort,
+                drivers=drivers,
+                drivers_truncated=drivers_truncated,
                 watermark=watermark,
                 signer=self._signer_factory(),
                 produced_at=datetime.now(UTC),

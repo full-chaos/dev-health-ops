@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "name": "PagerDuty incident family typed route and readback effects",
+  "$limitation": "This plan covers the incidents parent stream, the three typed incident enrichment streams, their window/cap/pagination semantics, and tenant-scoped ClickHouse effects. Services, schedules, on-calls, registry/matrix/config, deployment, and cutover wiring remain outside this provider-only slice.",
+  "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+  "mutations": [
+    {
+      "id": "PI1-dataset-contract",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if claim.Dataset != \"incidents\" && claim.Dataset != \"incident-alerts\" &&",
+      "replace": "if claim.Dataset != \"incident\" && claim.Dataset != \"incident-alerts\" &&",
+      "expect_occurrences": 1,
+      "rationale": "The family route must accept the exact plural incidents dataset contract and fail closed on a singular alias.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI2-parent-path",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "path: \"/incidents\", decode: decodePagerDutyIncidents, paginated: true,",
+      "replace": "path: \"/services\", decode: decodePagerDutyIncidents, paginated: true,",
+      "expect_occurrences": 1,
+      "rationale": "The parent producer owns PagerDuty's /incidents endpoint; requesting another resource family cannot be normalized as an incident inventory.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI3-parent-response-key",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "return envelope.Incidents, *envelope.More, nil",
+      "replace": "return nil, *envelope.More, nil",
+      "expect_occurrences": 1,
+      "rationale": "A non-empty PagerDuty incidents response must remain non-empty after decoding; dropping the typed response slice would report a false empty batch.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI4-parent-pagination-cap",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if result.Pages >= maxPages {",
+      "replace": "if result.Pages > maxPages {",
+      "expect_occurrences": 1,
+      "rationale": "A parent response that advertises another page must fail at the configured page cap rather than issuing an unbounded follow-up request.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteRejectsPaginationCap$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI5-inclusive-since-cursor",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if claim.SinceAt != nil && createdAt.Before(claim.SinceAt.UTC()) {",
+      "replace": "if claim.SinceAt != nil && !createdAt.Before(claim.SinceAt.UTC()) {",
+      "expect_occurrences": 1,
+      "rationale": "The Python incremental window is inclusive at since; excluding the exact boundary drops a source incident and advances the cursor incorrectly.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteKeepsSinceBoundaryInclusive$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI6-before-window-clause",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "return claim.BeforeAt != nil && createdAt.After(claim.BeforeAt.UTC())",
+      "replace": "return claim.BeforeAt != nil && !createdAt.After(claim.BeforeAt.UTC())",
+      "expect_occurrences": 1,
+      "rationale": "The upper source window is inclusive; treating in-window incidents as outside the window makes a normal non-empty source batch disappear.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI7-child-cap-take",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if take > remaining {\n\t\t\t\ttake = remaining\n\t\t\t}",
+      "replace": "if take > remaining {\n\t\t\t\ttake = 0\n\t\t\t}",
+      "expect_occurrences": 1,
+      "rationale": "An enrichment cap must retain exactly the allowed prefix and clamp the watermark when the child source remains undrained.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteCapsChildrenAndClampsToEarliestUndrainedIncident$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI8-zero-enrichment-cap",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if cap == 0 {\n\t\t\tcontinue\n\t\t}",
+      "replace": "if cap != 0 {\n\t\t\tcontinue\n\t\t}",
+      "expect_occurrences": 1,
+      "rationale": "A zero enrichment cap is a valid bounded mode that reads the parent cursor without making child requests.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteZeroCapReadsParentsWithoutChildRequests$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI9-disabled-enrichment",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if !enabled {\n\t\t\t\treturn handler.emptyPagerDutyIncidentFamilyBatch(claim, 0, 0)",
+      "replace": "if enabled {\n\t\t\t\treturn handler.emptyPagerDutyIncidentFamilyBatch(claim, 0, 0)",
+      "expect_occurrences": 1,
+      "rationale": "A disabled enrichment dataset must short-circuit before any provider request; enabling the branch reverses the source contract.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteDisabledEnrichmentMakesNoProviderCall$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI10-watermark-clamp-clause",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if earliestUndrained != nil && (watermark == nil || earliestUndrained.Before(*watermark)) {",
+      "replace": "if earliestUndrained != nil && (watermark == nil || earliestUndrained.After(*watermark)) {",
+      "expect_occurrences": 1,
+      "rationale": "When a child cap leaves work behind, the parent watermark must clamp to the earliest undrained incident, never a later one.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteCapsChildrenAndClampsToEarliestUndrainedIncident$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI11-notes-are-not-paginated",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "return pagerDutyIncidentFamilyEndpoint{path: base + \"/notes\", decode: decodePagerDutyNotes, paginated: false}, nil",
+      "replace": "return pagerDutyIncidentFamilyEndpoint{path: base + \"/notes\", decode: decodePagerDutyNotes, paginated: true}, nil",
+      "expect_occurrences": 1,
+      "rationale": "PagerDuty notes use the non-paginated source response contract; adding limit/offset changes the request and can make the source reject or reshape it.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteDoesNotPaginateNotes$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI12-html-url-priority",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "if htmlURL != nil && *htmlURL != \"\" {",
+      "replace": "if false && htmlURL != nil && *htmlURL != \"\" {",
+      "expect_occurrences": 1,
+      "rationale": "The common Python normalizer prefers html_url over self; removing that priority changes the canonical source URL for incidents and every child row.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI13-incident-source-event-time",
+      "file": "internal/providersync/pagerduty_incidents_route.go",
+      "find": "SourceEventAt:      createdAt, StartedAt: createdAt, ResolvedAt: resolvedAt,",
+      "replace": "SourceEventAt:      nil, StartedAt: createdAt, ResolvedAt: resolvedAt,",
+      "expect_occurrences": 1,
+      "rationale": "The incident producer's source event time is the created_at timestamp; omitting it changes canonical ordering and loses source evidence.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyRouteNormalizesIncidentAndPreservesCreatedCursor$", "./internal/providersync/"]]
+    },
+    {
+      "id": "PI14-tenant-scope-fence",
+      "file": "internal/providersync/pagerduty_incidents_effects_clickhouse.go",
+      "find": "if row.OrgID != claim.OrgID || row.Provider != \"pagerduty\" ||\n\t\t\t!pagerDutyProviderInstanceMatches(row.ProviderInstanceID, providerInstance) ||\n\t\t\trow.SourceEntityType != \"incident\" ||",
+      "replace": "if row.OrgID == claim.OrgID || row.Provider != \"pagerduty\" ||\n\t\t\t!pagerDutyProviderInstanceMatches(row.ProviderInstanceID, providerInstance) ||\n\t\t\trow.SourceEntityType != \"incident\" ||",
+      "expect_occurrences": 1,
+      "rationale": "Every ClickHouse effect must remain organization-scoped; a correctly ordered row from another tenant must be rejected before any write.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyIncidentFamilyEffectsValidateEachTypedDestinationAndScope$", "./internal/providersync/"]]
+    }
+  ]
+}

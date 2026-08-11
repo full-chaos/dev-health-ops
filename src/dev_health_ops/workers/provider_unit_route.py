@@ -42,6 +42,25 @@ from dev_health_ops.workers.provider_family_contract import (
 _FALSE = frozenset({"", "0", "false", "no", "off"})
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
+_PROVIDER_ROUTES_PRESET_ENV = "GO_PROVIDER_ROUTES"
+_DEV_HEALTH_ENV = "DEV_HEALTH_ENV"
+_LOCAL_ALL_DISABLED_ALIASES = frozenset(
+    {
+        "github_pr_reviews",
+        "github_pr_comments",
+        "github_tests",
+        "gitlab_pr_reviews",
+        "gitlab_pr_comments",
+        "gitlab_tests",
+    }
+)
+_LOCAL_ALL_CANONICAL_ALTERNATIVES = {
+    "github_prs": ("github_pr_reviews", "github_pr_comments"),
+    "github_cicd": ("github_tests",),
+    "gitlab_prs": ("gitlab_pr_reviews", "gitlab_pr_comments"),
+    "gitlab_cicd": ("gitlab_tests",),
+}
+
 # src/dev_health_ops/workers/provider_unit_route.py -> repo root is 3 parents up.
 _DEFAULT_MATRIX_CONTRACT_PATH = (
     Path(__file__).resolve().parents[3]
@@ -77,6 +96,42 @@ def _flag(environment: Mapping[str, str], name: str) -> bool:
     if value in _TRUE:
         return True
     raise ProviderUnitRouteError("provider unit route switch is invalid")
+
+
+def _provider_route_environment(
+    environment: Mapping[str, str], field_names: tuple[str, ...]
+) -> Mapping[str, str]:
+    """Apply the local-only all-routes preset as per-switch defaults.
+
+    Explicit switches win because ``setdefault`` never replaces a supplied
+    value. Production remains default-off: any non-empty preset is rejected
+    unless the process explicitly identifies its environment as local.
+    """
+
+    preset = environment.get(_PROVIDER_ROUTES_PRESET_ENV, "").strip().lower()
+    if not preset:
+        return environment
+    if preset != "all":
+        raise ProviderUnitRouteError("provider route preset must be empty or all")
+    if environment.get(_DEV_HEALTH_ENV, "").strip().lower() != "local":
+        raise ProviderUnitRouteError(
+            "all provider routes preset requires local environment"
+        )
+
+    resolved = dict(environment)
+    for field_name in field_names:
+        environment_name = f"WORKER_{field_name.upper()}_ENABLED"
+        alternative_selected = any(
+            _flag(environment, f"WORKER_{alternative.upper()}_ENABLED")
+            for alternative in _LOCAL_ALL_CANONICAL_ALTERNATIVES.get(field_name, ())
+        )
+        resolved.setdefault(
+            environment_name,
+            "false"
+            if field_name in _LOCAL_ALL_DISABLED_ALIASES or alternative_selected
+            else "true",
+        )
+    return resolved
 
 
 @cache
@@ -223,6 +278,9 @@ def provider_family_strict_admission_enabled(
         or f"WORKER_{normalized_provider.upper()}_WORK_ITEMS_ENABLED"
     )
     source = os.environ if environment is None else environment
+    source = _provider_route_environment(
+        source, tuple(ProviderUnitRouteSwitches.__dataclass_fields__)
+    )
     return _flag(source, switch_name)
 
 
@@ -296,6 +354,7 @@ class ProviderUnitRouteSwitches:
         cls, environment: Mapping[str, str] | None = None
     ) -> ProviderUnitRouteSwitches:
         source = os.environ if environment is None else environment
+        source = _provider_route_environment(source, tuple(cls.__dataclass_fields__))
         switches = cls(
             linear_work_items=_flag(source, "WORKER_LINEAR_WORK_ITEMS_ENABLED"),
             jira_work_items=_flag(source, "WORKER_JIRA_WORK_ITEMS_ENABLED"),

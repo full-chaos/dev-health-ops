@@ -938,6 +938,48 @@ def test_platform_compose_provider_worker_consumes_sync_dispatch_queue() -> None
     assert "sync" in queues
 
 
+def test_platform_compose_wires_local_all_provider_routes_end_to_end() -> None:
+    """The optional monorepo Compose surface must wire one preset to both runtimes."""
+
+    compose_path = _platform_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    for service_name in ("api", "worker", "beat", "go-worker"):
+        environment = services[service_name].get("environment") or {}
+        assert environment["DEV_HEALTH_ENV"] == "${DEV_HEALTH_ENV:-}"
+        assert environment["GO_PROVIDER_ROUTES"] == "${GO_PROVIDER_ROUTES:-}"
+        assert _PROVIDER_ROUTE_SWITCH_NAMES <= environment.keys(), (
+            f"{service_name} is missing provider route switches: "
+            f"{sorted(_PROVIDER_ROUTE_SWITCH_NAMES - environment.keys())}"
+        )
+
+    operator = services.get("go-workerctl")
+    assert operator is not None, "platform Compose must expose the route operator"
+    operator_environment = operator.get("environment") or {}
+    assert operator_environment["COORDINATOR_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE"
+    )
+    assert operator_environment["WORKER_OPERATOR_TOKEN"] == (
+        "${WORKER_OPERATOR_TOKEN:-}"
+    )
+
+    preset_path = compose_path.with_name(".env.go-all")
+    assert preset_path.is_file()
+    preset = {
+        key: value
+        for line in preset_path.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+        for key, value in (line.split("=", maxsplit=1),)
+    }
+    assert preset == {
+        "COMPOSE_PROFILES": "go",
+        "DEV_HEALTH_ENV": "local",
+        "GO_PROVIDER_ROUTES": "all",
+    }
+
+
 def test_compose_workers_override_runner_entrypoint() -> None:
     for path in (_LEGACY_COMPOSE, _PROD_COMPOSE, _SWARM_STACK):
         services = _load_yaml(path).get("services") or {}

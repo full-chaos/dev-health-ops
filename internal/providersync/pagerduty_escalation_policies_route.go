@@ -183,6 +183,14 @@ func pagerDutyProviderInstance(credential providerfoundation.Credential) (string
 	return strings.ToLower(instance), nil
 }
 
+// PagerDutyProviderInstance exposes the normalized account fence needed by a
+// credential-bound effect factory. Provider handlers use the same resolver,
+// so collection and empty-snapshot reconciliation cannot disagree about the
+// PagerDuty account identity.
+func PagerDutyProviderInstance(credential providerfoundation.Credential) (string, error) {
+	return pagerDutyProviderInstance(credential)
+}
+
 func normalizePagerDutyEscalationPolicy(
 	claim Claim,
 	providerInstance string,

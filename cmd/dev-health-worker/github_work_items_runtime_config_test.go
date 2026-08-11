@@ -97,6 +97,36 @@ func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T
 	}
 }
 
+func TestWorkItemsRuntimeConfigLoadsSharedArtifactsForEveryEnabledFamily(t *testing.T) {
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	valid := validGitHubWorkItemsRuntimeConfig(t)
+	valid.WorkerGithubWorkItemsEnabled = false
+
+	for _, test := range []struct {
+		name   string
+		enable func(*config.Config)
+	}{
+		{"github", func(cfg *config.Config) { cfg.WorkerGithubWorkItemsEnabled = true }},
+		{"gitlab", func(cfg *config.Config) { cfg.WorkerGitlabWorkItemsEnabled = true }},
+		{"jira", func(cfg *config.Config) { cfg.WorkerJiraWorkItemsEnabled = true }},
+		{"linear", func(cfg *config.Config) { cfg.WorkerLinearWorkItemsEnabled = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := valid
+			test.enable(&cfg)
+			runtimeConfig, err := workItemsRuntimeConfigFrom(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !runtimeConfig.configured() || runtimeConfig.statusMapping == nil ||
+				runtimeConfig.statusMappingPath != cfg.WorkerGithubWorkItemsStatusMappingPath ||
+				runtimeConfig.investmentConfigPath != cfg.WorkerGithubWorkItemsInvestmentConfigPath {
+				t.Fatalf("%s runtime config = %+v", test.name, runtimeConfig)
+			}
+		})
+	}
+}
+
 func TestGitHubWorkItemsRuntimeConfigRejectsEveryAmbientStatusMappingOverride(t *testing.T) {
 	valid := validGitHubWorkItemsRuntimeConfig(t)
 	for _, test := range []struct {

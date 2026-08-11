@@ -3,15 +3,18 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +34,151 @@ func (require providerSyncEntitlementFunc) Require(ctx context.Context, orgID st
 // which lets this test reach the production config propagation seam without a
 // ClickHouse server.
 type githubWorkItemsBuildExecutorConn struct{ driver.Conn }
+
+func TestBuildProviderSyncHandlerConstructsAggregateGitLabRoutes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		dataset     string
+		handlerType string
+		sinkType    string
+	}{
+		{"deployments", "providersync.GitLabDeploymentsRouteHandler", "providersync.GitLabDeploymentsClickHouseEffects"},
+		{"feature-flags", "providersync.GitLabFeatureFlagsRouteHandler", "providersync.GitLabFeatureFlagsClickHouseEffects"},
+		{"files", "providersync.GitLabFilesRouteHandler", "providersync.GitLabFilesClickHouseEffects"},
+		{"blame", "providersync.GitLabBlameRouteHandler", "providersync.GitLabBlameClickHouseEffects"},
+		{"prs", "providersync.GitLabPullRequestRouteHandler", "providersync.GitLabPullRequestSocialClickHouseEffects"},
+		{"pr-reviews", "providersync.GitLabPullRequestRouteHandler", "providersync.GitLabPullRequestSocialClickHouseEffects"},
+		{"pr-comments", "providersync.GitLabPullRequestRouteHandler", "providersync.GitLabPullRequestSocialClickHouseEffects"},
+		{"security", "providersync.GitLabSecurityRouteHandler", "providersync.GitLabSecurityClickHouseEffects"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.dataset, func(t *testing.T) {
+			t.Parallel()
+			handler, _ := buildProviderSyncHandler(
+				nil, providersync.CompleteRouteSwitches{}, nil, nil, nil, nil,
+				nil, nil, slog.Default(),
+			)
+			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+				Claim: providersync.Claim{Unit: providersync.Unit{
+					Provider: "gitlab", Dataset: test.dataset,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprintf("%T", executor.Handler); got != test.handlerType {
+				t.Fatalf("handler=%s want=%s", got, test.handlerType)
+			}
+			if got := fmt.Sprintf("%T", executor.Committer.Sink); got != test.sinkType {
+				t.Fatalf("sink=%s want=%s", got, test.sinkType)
+			}
+			if got := fmt.Sprintf("%T", executor.Committer.Readback); got != test.sinkType {
+				t.Fatalf("readback=%s want=%s", got, test.sinkType)
+			}
+		})
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsAggregateWorkItemRoutes(t *testing.T) {
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	runtimeConfig, err := githubWorkItemsRuntimeConfigFrom(validGitHubWorkItemsRuntimeConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+		nil, providersync.CompleteRouteSwitches{}, nil,
+		&githubWorkItemsBuildExecutorConn{}, nil, nil, nil, nil,
+		slog.Default(), runtimeConfig,
+	)
+	for _, test := range []struct {
+		provider    string
+		handlerType string
+		sinkType    string
+	}{
+		{"gitlab", "providersync.GitLabWorkItemsRouteHandler", "providersync.GitLabWorkItemFamilyClickHouseEffects"},
+		{"jira", "providersync.JiraAtlassianRouteHandler", "providersync.JiraWorkItemCompositeClickHouseEffects"},
+		{"linear", "providersync.LinearWorkItemFamilyRouteHandler", "providersync.LinearWorkItemFamilyClickHouseEffects"},
+	} {
+		t.Run(test.provider, func(t *testing.T) {
+			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+				Claim: providersync.Claim{Unit: providersync.Unit{
+					Provider: test.provider, Dataset: "work-items",
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprintf("%T", executor.Handler); got != test.handlerType {
+				t.Fatalf("handler=%s want=%s", got, test.handlerType)
+			}
+			if got := fmt.Sprintf("%T", executor.Committer.Sink); got != test.sinkType {
+				t.Fatalf("sink=%s want=%s", got, test.sinkType)
+			}
+		})
+	}
+}
+
+func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEffects(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		dataset     string
+		handlerType string
+		sinkType    string
+	}{
+		{"services", "providersync.PagerDutyServicesRouteHandler", "providersync.PagerDutyServicesClickHouseEffects"},
+		{"business-services", "providersync.PagerDutyBusinessServicesRouteHandler", "providersync.PagerDutyBusinessServicesClickHouseEffects"},
+		{"escalation-policies", "providersync.PagerDutyEscalationPoliciesRouteHandler", "providersync.PagerDutyEscalationPoliciesClickHouseEffects"},
+		{"schedules", "providersync.PagerDutySchedulesRouteHandler", "providersync.PagerDutySchedulesClickHouseEffects"},
+		{"on-calls", "providersync.PagerDutyOnCallsRouteHandler", "providersync.PagerDutyOnCallsClickHouseEffects"},
+		{"users", "providersync.PagerDutyUsersRouteHandler", "providersync.PagerDutyUsersClickHouseEffects"},
+		{"teams", "providersync.PagerDutyTeamsRouteHandler", "providersync.PagerDutyTeamsClickHouseEffects"},
+		{"incidents", "providersync.PagerDutyIncidentFamilyRouteHandler", "providersync.PagerDutyIncidentFamilyClickHouseEffects"},
+		{"incident-alerts", "providersync.PagerDutyIncidentFamilyRouteHandler", "providersync.PagerDutyIncidentFamilyClickHouseEffects"},
+		{"incident-log-entries", "providersync.PagerDutyIncidentFamilyRouteHandler", "providersync.PagerDutyIncidentFamilyClickHouseEffects"},
+		{"incident-notes", "providersync.PagerDutyIncidentFamilyRouteHandler", "providersync.PagerDutyIncidentFamilyClickHouseEffects"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.dataset, func(t *testing.T) {
+			t.Parallel()
+			handler, _ := buildProviderSyncHandler(
+				nil, providersync.CompleteRouteSwitches{}, nil, nil, nil, nil,
+				nil, nil, slog.Default(),
+			)
+			executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+				Claim: providersync.Claim{Unit: providersync.Unit{
+					Provider: "pagerduty", Dataset: test.dataset,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprintf("%T", executor.Handler); got != test.handlerType {
+				t.Fatalf("handler=%s want=%s", got, test.handlerType)
+			}
+			if executor.EffectsFactory == nil || executor.Committer.Sink != nil {
+				t.Fatalf("effects factory=%v startup sink=%T", executor.EffectsFactory != nil, executor.Committer.Sink)
+			}
+			sink, readback, err := executor.EffectsFactory(providerfoundation.Credential{
+				Provider: "pagerduty", Config: map[string]string{"subdomain": " Acme "},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprintf("%T", sink); got != test.sinkType {
+				t.Fatalf("sink=%s want=%s", got, test.sinkType)
+			}
+			if got := fmt.Sprintf("%T", readback); got != test.sinkType {
+				t.Fatalf("readback=%s want=%s", got, test.sinkType)
+			}
+			value := reflect.ValueOf(sink)
+			if field := value.FieldByName("ProviderInstanceID"); field.IsValid() && field.String() != "acme" {
+				t.Fatalf("provider instance=%q want=acme", field.String())
+			}
+		})
+	}
+}
 
 // TestBuildProviderSyncHandlerSharesOneMetricsInstance is CHAOS-3118
 // mutation-tested evidence for dev_health_provider_*, not a behavioral
@@ -402,6 +550,120 @@ func TestBuildProviderSyncWorkerConstructsForEveryRouteReadySwitch(t *testing.T)
 			},
 		},
 		{
+			name: "gitlab deployments",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabDeploymentsEnabled: true,
+			},
+		},
+		{
+			name: "gitlab feature flags",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabFeatureFlagsEnabled: true,
+			},
+		},
+		{
+			name: "gitlab files",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabFilesEnabled: true,
+			},
+		},
+		{
+			name: "gitlab blame",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabBlameEnabled: true,
+			},
+		},
+		{
+			name: "gitlab prs",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabPRsEnabled: true,
+			},
+		},
+		{
+			name: "gitlab pr reviews",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabPRReviewsEnabled: true,
+			},
+		},
+		{
+			name: "gitlab pr comments",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabPRCommentsEnabled: true,
+			},
+		},
+		{
+			name: "gitlab security",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabSecurityEnabled: true,
+			},
+		},
+		{
+			name: "gitlab work items",
+			cfg: config.Config{
+				Profile: "sync", WorkerGitlabWorkItemsEnabled: true,
+			},
+		},
+		{
+			name: "jira work items",
+			cfg: config.Config{
+				Profile: "sync", WorkerJiraWorkItemsEnabled: true,
+			},
+		},
+		{
+			name: "linear work items",
+			cfg: config.Config{
+				Profile: "sync", WorkerLinearWorkItemsEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty services",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutyServicesEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty business services",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutyBusinessServicesEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty escalation policies",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutyEscalationPoliciesEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty schedules",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutySchedulesEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty on calls",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutyOnCallsEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty users",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutyUsersEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty teams",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutyTeamsEnabled: true,
+			},
+		},
+		{
+			name: "pagerduty incident family",
+			cfg: config.Config{
+				Profile: "sync", WorkerPagerDutyIncidentsEnabled: true,
+			},
+		},
+		{
 			name: "github cicd",
 			cfg: config.Config{
 				Profile: "sync", WorkerGithubCICDEnabled: true,
@@ -519,6 +781,77 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 		"gitlab_incidents": {
 			cfg:  config.Config{WorkerGitlabIncidentsEnabled: true},
 			want: providersync.CompleteRouteSwitches{GitlabIncidents: true},
+		},
+		"gitlab_deployments": {
+			cfg:  config.Config{WorkerGitlabDeploymentsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabDeployments: true},
+		},
+		"gitlab_feature_flags": {
+			cfg:  config.Config{WorkerGitlabFeatureFlagsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabFeatureFlags: true},
+		},
+		"gitlab_files": {
+			cfg:  config.Config{WorkerGitlabFilesEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabFiles: true},
+		},
+		"gitlab_blame": {
+			cfg:  config.Config{WorkerGitlabBlameEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabBlame: true},
+		},
+		"gitlab_prs": {
+			cfg:  config.Config{WorkerGitlabPRsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabPRs: true},
+		},
+		"gitlab_pr_reviews": {
+			cfg:  config.Config{WorkerGitlabPRReviewsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabPRReviews: true},
+		},
+		"gitlab_pr_comments": {
+			cfg:  config.Config{WorkerGitlabPRCommentsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabPRComments: true},
+		},
+		"gitlab_security": {
+			cfg:  config.Config{WorkerGitlabSecurityEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabSecurity: true},
+		},
+		"gitlab_work_items": {
+			cfg:  config.Config{WorkerGitlabWorkItemsEnabled: true},
+			want: providersync.CompleteRouteSwitches{GitlabWorkItems: true},
+		},
+		"pagerduty_services": {
+			cfg:  config.Config{WorkerPagerDutyServicesEnabled: true},
+			want: providersync.CompleteRouteSwitches{PagerDutyServices: true},
+		},
+		"pagerduty_business_services": {
+			cfg:  config.Config{WorkerPagerDutyBusinessServicesEnabled: true},
+			want: providersync.CompleteRouteSwitches{PagerDutyBusinessServices: true},
+		},
+		"pagerduty_escalation_policies": {
+			cfg:  config.Config{WorkerPagerDutyEscalationPoliciesEnabled: true},
+			want: providersync.CompleteRouteSwitches{PagerDutyEscalationPolicies: true},
+		},
+		"pagerduty_schedules": {
+			cfg:  config.Config{WorkerPagerDutySchedulesEnabled: true},
+			want: providersync.CompleteRouteSwitches{PagerDutySchedules: true},
+		},
+		"pagerduty_on_calls": {
+			cfg:  config.Config{WorkerPagerDutyOnCallsEnabled: true},
+			want: providersync.CompleteRouteSwitches{PagerDutyOnCalls: true},
+		},
+		"pagerduty_users": {
+			cfg:  config.Config{WorkerPagerDutyUsersEnabled: true},
+			want: providersync.CompleteRouteSwitches{PagerDutyUsers: true},
+		},
+		"pagerduty_teams": {
+			cfg:  config.Config{WorkerPagerDutyTeamsEnabled: true},
+			want: providersync.CompleteRouteSwitches{PagerDutyTeams: true},
+		},
+		"pagerduty_incident_family": {
+			cfg: config.Config{WorkerPagerDutyIncidentsEnabled: true},
+			want: providersync.CompleteRouteSwitches{
+				PagerDutyIncidents: true, PagerDutyIncidentAlerts: true,
+				PagerDutyIncidentLogEntries: true, PagerDutyIncidentNotes: true,
+			},
 		},
 		"github_prs": {
 			cfg:  config.Config{WorkerGithubPRsEnabled: true},
@@ -849,16 +1182,39 @@ func TestProviderSyncWorkerEnabledForEveryRouteReadySwitch(t *testing.T) {
 		"gitlab_cicd":          {WorkerGitlabCICDEnabled: true},
 		"gitlab_tests":         {WorkerGitlabTestsEnabled: true},
 		"gitlab_incidents":     {WorkerGitlabIncidentsEnabled: true},
-		"github_cicd":          {WorkerGithubCICDEnabled: true},
-		"github_commits":       {WorkerGithubCommitsEnabled: true},
-		"github_deployments":   {WorkerGithubDeploymentsEnabled: true},
-		"github_security":      {WorkerGithubSecurityEnabled: true},
-		"github_files":         {WorkerGithubFilesEnabled: true},
-		"github_commit_stats":  {WorkerGithubCommitStatsEnabled: true},
-		"jira_incidents":       {WorkerJiraIncidentsEnabled: true},
-		"github_blame":         {WorkerGithubBlameEnabled: true},
-		"github_tests":         {WorkerGithubTestsEnabled: true},
-		"github_work_items":    {WorkerGithubWorkItemsEnabled: true},
+		"gitlab_deployments":   {WorkerGitlabDeploymentsEnabled: true},
+		"gitlab_feature_flags": {WorkerGitlabFeatureFlagsEnabled: true},
+		"gitlab_files":         {WorkerGitlabFilesEnabled: true},
+		"gitlab_blame":         {WorkerGitlabBlameEnabled: true},
+		"gitlab_prs":           {WorkerGitlabPRsEnabled: true},
+		"gitlab_pr_reviews":    {WorkerGitlabPRReviewsEnabled: true},
+		"gitlab_pr_comments":   {WorkerGitlabPRCommentsEnabled: true},
+		"gitlab_security":      {WorkerGitlabSecurityEnabled: true},
+		"gitlab_work_items":    {WorkerGitlabWorkItemsEnabled: true},
+		"jira_work_items":      {WorkerJiraWorkItemsEnabled: true},
+		"linear_work_items":    {WorkerLinearWorkItemsEnabled: true},
+		"pagerduty_services":   {WorkerPagerDutyServicesEnabled: true},
+		"pagerduty_business_services": {
+			WorkerPagerDutyBusinessServicesEnabled: true,
+		},
+		"pagerduty_escalation_policies": {
+			WorkerPagerDutyEscalationPoliciesEnabled: true,
+		},
+		"pagerduty_schedules": {WorkerPagerDutySchedulesEnabled: true},
+		"pagerduty_on_calls":  {WorkerPagerDutyOnCallsEnabled: true},
+		"pagerduty_users":     {WorkerPagerDutyUsersEnabled: true},
+		"pagerduty_teams":     {WorkerPagerDutyTeamsEnabled: true},
+		"pagerduty_incidents": {WorkerPagerDutyIncidentsEnabled: true},
+		"github_cicd":         {WorkerGithubCICDEnabled: true},
+		"github_commits":      {WorkerGithubCommitsEnabled: true},
+		"github_deployments":  {WorkerGithubDeploymentsEnabled: true},
+		"github_security":     {WorkerGithubSecurityEnabled: true},
+		"github_files":        {WorkerGithubFilesEnabled: true},
+		"github_commit_stats": {WorkerGithubCommitStatsEnabled: true},
+		"jira_incidents":      {WorkerJiraIncidentsEnabled: true},
+		"github_blame":        {WorkerGithubBlameEnabled: true},
+		"github_tests":        {WorkerGithubTestsEnabled: true},
+		"github_work_items":   {WorkerGithubWorkItemsEnabled: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !providerSyncWorkerEnabled(cfg) {

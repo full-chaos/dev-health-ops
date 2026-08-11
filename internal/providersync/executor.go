@@ -289,6 +289,8 @@ func (executor Executor) newClient(
 		return providerfoundation.NewLinearClient(credential, executor.Doer, retry, guard)
 	case "launchdarkly":
 		return providerfoundation.NewLaunchDarklyClient(credential, executor.Doer, retry, guard)
+	case "pagerduty":
+		return providerfoundation.NewPagerDutyClient(credential, executor.Doer, retry, guard)
 	default:
 		return nil, ErrInvalidConfiguration
 	}

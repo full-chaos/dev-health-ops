@@ -84,6 +84,15 @@
       "rationale": "The effect must write the migrated operational_on_call_assignments schema, not the separate schedules table. A table-family mutation must fail the real migration-backed write before any success claim.",
       "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
       "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyOnCallsEffectUsesMigratedClickHouseUpsertsAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "OC11-ordering-encodes-escalation-level-int32",
+      "file": "internal/providersync/jira_incidents_route.go",
+      "find": "case int32:\n\t\treturn \"integer\", 1, []byte(strconv.FormatInt(int64(typed), 10)), nil",
+      "replace": "case int32:\n\t\treturn \"\", 0, nil, providerfoundation.ErrNormalizationInvalid",
+      "expect_occurrences": 1,
+      "rationale": "PagerDuty on-call escalation_level is normalized as int32 and included in the canonical operational ordering conflict key. Rejecting int32 at the shared encoder must make a concrete on-calls row with escalation_level fail normalization.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsRouteUsesOffsetPaginationAndCanonicalAssignment$", "./internal/providersync/"]]
     }
   ]
 }

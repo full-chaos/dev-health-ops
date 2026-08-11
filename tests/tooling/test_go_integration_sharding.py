@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,12 @@ CHECK_GO = ROOT / "ci" / "check_go.sh"
 MANIFEST = ROOT / "ci" / "go_integration_shards.tsv"
 PROVIDER_MANIFEST = ROOT / "ci" / "go_providersync_test_shards.tsv"
 PROVIDER_PACKAGE = "internal/providersync"
+CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.go"
+TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
+# Hosted job 93890967576 measured 49.596s for a cold planner invocation. This
+# test-process guard is deliberately above twice that observed completion; it
+# does not change the workflow job cap or the Go test timeout.
+CHECK_GO_TIMEOUT_SECONDS = 120
 
 EXPECTED_PACKAGES = {
     "cmd/dev-health-worker",
@@ -55,6 +62,7 @@ def _run_check_go(
     env = os.environ.copy()
     env["DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST"] = str(manifest)
     env["DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST"] = str(provider_manifest)
+    env["DEV_HEALTH_GO_CACHE"] = str(TEST_GO_CACHE)
     if github_output is not None:
         env["GITHUB_OUTPUT"] = str(github_output)
     return subprocess.run(
@@ -64,7 +72,7 @@ def _run_check_go(
         check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=CHECK_GO_TIMEOUT_SECONDS,
     )
 
 
@@ -72,11 +80,24 @@ def _workflow() -> dict[str, Any]:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+def _pinned_clickhouse_image() -> str:
+    match = re.search(
+        r'(?m)^\s*ClickHouseImage\s*=\s*"(?P<image>[^"]+)"',
+        CONTAINER_HARNESS.read_text(encoding="utf-8"),
+    )
+    assert match is not None
+    image = match.group("image")
+    assert re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", image)
+    return image
+
+
 def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
     env["GOTOOLCHAIN"] = "go1.25.9"
     env["GOWORK"] = "off"
-    env["GOCACHE"] = "/tmp/chaos3141-provider-test-discovery-cache"
+    # Reuse the production subprocess cache. The previous distinct cache made
+    # this independent oracle pay for a second cold compile in the same test.
+    env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
         [
             "go",
@@ -93,7 +114,7 @@ def _providersync_top_level_tests() -> set[str]:
         check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=CHECK_GO_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     candidates = [
@@ -290,6 +311,99 @@ def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> No
     )
 
 
+def test_clickhouse_prepull_retries_the_exact_source_pinned_image(
+    tmp_path: Path,
+) -> None:
+    attempts = tmp_path / "attempts"
+    docker_args = tmp_path / "docker-args"
+    sleep_args = tmp_path / "sleep-args"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+attempt=0
+if [ -f "${DOCKER_ATTEMPTS_FILE}" ]; then
+  attempt="$(<"${DOCKER_ATTEMPTS_FILE}")"
+fi
+attempt=$((attempt + 1))
+printf '%s\n' "${attempt}" > "${DOCKER_ATTEMPTS_FILE}"
+printf '%s\n' "$*" >> "${DOCKER_ARGS_FILE}"
+[ "${attempt}" -ge "${DOCKER_SUCCEED_ON}" ]
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    sleep = bin_dir / "sleep"
+    sleep.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
+""",
+        encoding="utf-8",
+    )
+    sleep.chmod(0o755)
+
+    image = _pinned_clickhouse_image()
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "DOCKER_ATTEMPTS_FILE": str(attempts),
+            "DOCKER_ARGS_FILE": str(docker_args),
+            "DOCKER_SUCCEED_ON": "3",
+            "SLEEP_ARGS_FILE": str(sleep_args),
+        }
+    )
+    result = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert attempts.read_text(encoding="utf-8") == "3\n"
+    assert docker_args.read_text(encoding="utf-8").splitlines() == [
+        f"pull {image}",
+        f"pull {image}",
+        f"pull {image}",
+    ]
+    assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
+    assert f"pre-pulled pinned ClickHouse image {image} on attempt 3/3" in (
+        result.stdout
+    )
+
+    attempts.unlink()
+    docker_args.unlink()
+    sleep_args.unlink()
+    env["DOCKER_SUCCEED_ON"] = "4"
+    failed = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert failed.returncode == 1
+    assert attempts.read_text(encoding="utf-8") == "3\n"
+    assert docker_args.read_text(encoding="utf-8").splitlines() == [
+        f"pull {image}",
+        f"pull {image}",
+        f"pull {image}",
+    ]
+    assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
+    assert f"failed to pre-pull pinned ClickHouse image {image} after 3 attempts" in (
+        failed.stderr
+    )
+
+
 def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
     workflow = _workflow()
     jobs = workflow["jobs"]
@@ -310,10 +424,17 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
         "${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}"
     )
     shard_commands = [str(step.get("run", "")) for step in shards["steps"]]
+    assert "bash ci/check_go.sh integration-prepull" in shard_commands
     assert (
         'bash ci/check_go.sh integration-shard "${{ matrix.target }}" '
         '"${{ matrix.shard }}"'
     ) in shard_commands
+    assert shard_commands.index("bash ci/check_go.sh integration-prepull") < (
+        shard_commands.index(
+            'bash ci/check_go.sh integration-shard "${{ matrix.target }}" '
+            '"${{ matrix.shard }}"'
+        )
+    )
     assert all("--dry-run" not in command for command in shard_commands)
     assert shards["name"] == (
         "go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}"

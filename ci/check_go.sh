@@ -14,11 +14,12 @@ DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.tsv}"
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
+INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.go"
 
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration-shard-plan|integration-shard|integration|fast|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -63,6 +64,10 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
+  integration-prepull
+         Pre-pull the exact pinned ClickHouse image declared by the Go test
+         container harness, retrying transient registry failures at most three
+         times before failing loudly. CI runs this before each real shard.
   integration-shard TARGET SHARD [--dry-run]
          Run exactly one validated integration shard. TARGET is `packages` for
          a package-level shard or `providersync` for a top-level test shard of
@@ -890,6 +895,61 @@ check_integration_shard_plan() {
   emit_integration_shard_matrix
 }
 
+# Read the test dependency from the production Go harness instead of copying a
+# digest into the workflow. Exact hosted evidence for this retry is PR #1735,
+# run 31524982512, job 93891310235: Docker Hub returned 502 for this pinned
+# manifest and testcontainers made no second pull attempt. The bounded pre-pull
+# keeps the immutable digest contract and makes each registry attempt visible.
+discover_pinned_clickhouse_image() {
+  local image
+  local -a images=()
+
+  [ -f "${INTEGRATION_CONTAINER_HARNESS}" ] \
+    || die "integration container harness not found: ${INTEGRATION_CONTAINER_HARNESS}"
+  while IFS= read -r image; do
+    [ -n "${image}" ] || continue
+    images+=("${image}")
+  done < <(
+    sed -nE \
+      's/^[[:space:]]*ClickHouseImage[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' \
+      "${INTEGRATION_CONTAINER_HARNESS}"
+  )
+
+  [ "${#images[@]}" -eq 1 ] \
+    || die "expected exactly one ClickHouseImage declaration in ${INTEGRATION_CONTAINER_HARNESS}, found ${#images[@]}"
+  image="${images[0]}"
+  if [[ ! "${image}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+    die "ClickHouseImage must be pinned by a full sha256 digest, got '${image}'"
+  fi
+  printf '%s\n' "${image}"
+}
+
+check_integration_prepull() {
+  local image attempt delay
+  local max_attempts=3
+
+  command -v docker >/dev/null 2>&1 || die "docker is required for integration-prepull"
+  image="$(discover_pinned_clickhouse_image)"
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    printf 'pre-pull pinned ClickHouse image %s (attempt %d/%d)\n' \
+      "${image}" "${attempt}" "${max_attempts}"
+    if docker pull "${image}"; then
+      printf 'pre-pulled pinned ClickHouse image %s on attempt %d/%d\n' \
+        "${image}" "${attempt}" "${max_attempts}"
+      return 0
+    fi
+    if [ "${attempt}" -eq "${max_attempts}" ]; then
+      printf 'ERROR: failed to pre-pull pinned ClickHouse image %s after %d attempts\n' \
+        "${image}" "${max_attempts}" >&2
+      return 1
+    fi
+    delay=$((attempt * 5))
+    printf 'WARN: ClickHouse image pull attempt %d/%d failed; retrying in %ds\n' \
+      "${attempt}" "${max_attempts}" "${delay}" >&2
+    sleep "${delay}"
+  done
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
   local index module_dir pkg key
@@ -1082,6 +1142,10 @@ case "${1:-all}" in
   integration-shard-plan)
     [ "$#" -eq 1 ] || die "integration-shard-plan accepts no arguments"
     check_integration_shard_plan
+    ;;
+  integration-prepull)
+    [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"
+    check_integration_prepull
     ;;
   integration-shard)
     [ "$#" -ge 3 ] && [ "$#" -le 4 ] \

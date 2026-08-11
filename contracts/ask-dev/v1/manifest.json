@@ -16,7 +16,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_capabilities.v1.schema.json",
-        "sha256": "e213726e709177362829dedf284c8a8118d883725dd5b0b6b45b51197c4b491b"
+        "sha256": "439abc6dbc2f4844e9d19673cf618af7ae4899e44616f19b0f7dd49f08adc5d2"
       },
       "schema_version": "dev_capabilities.v1"
     },

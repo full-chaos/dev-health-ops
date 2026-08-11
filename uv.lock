@@ -684,7 +684,9 @@ dependencies = [
 
 [package.optional-dependencies]
 context-graph-trial = [
+    { name = "falkordb" },
     { name = "graphiti-core", extra = ["falkordb"] },
+    { name = "redis" },
 ]
 dev = [
     { name = "fakeredis", extra = ["valkey"] },
@@ -721,6 +723,7 @@ requires-dist = [
     { name = "defusedxml", specifier = ">=0.7.0" },
     { name = "email-validator", specifier = ">=2.0.0" },
     { name = "fakeredis", extras = ["valkey"], marker = "extra == 'dev'" },
+    { name = "falkordb", marker = "extra == 'context-graph-trial'", specifier = "==1.2.2" },
     { name = "fastapi", specifier = ">=0.136.1,<0.137" },
     { name = "gitpython", specifier = ">=3.1.47" },
     { name = "graphiti-core", extras = ["falkordb"], marker = "extra == 'context-graph-trial'", specifier = "==0.29.3" },
@@ -756,6 +759,7 @@ requires-dist = [
     { name = "python-json-logger", specifier = ">=2.0.7" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "radon", specifier = ">=6.0.1" },
+    { name = "redis", marker = "extra == 'context-graph-trial'", specifier = "==6.4.0" },
     { name = "requests", specifier = ">=2.34.0" },
     { name = "resend", specifier = ">=2.5.0" },
     { name = "riverqueue", marker = "extra == 'dev'", specifier = "==0.7.0" },

@@ -799,11 +799,13 @@ def _validate_source_evidence(
 ) -> None:
     """Refuse a source-issued handle the arm could not honestly cite.
 
-    Both halves or neither. A handle with no id is a citation the builder
-    cannot attribute to a record, and an id with no handle is a record the
-    builder would then mint its own handle for while believing it had one --
-    the re-minting CHAOS-3627 exists to stop, restored by a half-populated
-    pair rather than by a code change anyone would notice.
+    Both handle/id halves or neither. ``source_evidence_entity_id`` may stand
+    alone: it declares what a handle-less record is about while leaving the
+    packet builder to mint the platform handle, which is the builder's
+    documented handle-less path. A handle with no id is a citation the
+    builder cannot attribute to a record, and an id with no handle is a
+    record the builder would then re-mint while believing it carried source
+    provenance.
     """
 
     handle = attributes.get(SOURCE_EVIDENCE_HANDLE_ATTRIBUTE)
@@ -849,6 +851,11 @@ def _validate_source_evidence(
             f"one of {sorted(_SOURCE_EVIDENCE_STATES)}. A state the arm cannot "
             "read must not be presented as live support"
         )
+    if handle is None and source_id is None and state is None:
+        # An entity declaration is not a source-issued evidence identity.
+        # Preserve it so discovery and the packet builder know what the
+        # handle-less record is about; the builder will mint the handle.
+        return
     if handle is not None and state is None:
         refusal = IdentifierRefusal(
             source_class,

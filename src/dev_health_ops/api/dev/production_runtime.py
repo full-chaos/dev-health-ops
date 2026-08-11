@@ -116,6 +116,9 @@ from .graph_investigation_query import (
     CohortDiscoveryFamily,
     GraphAuthorizationScope,
     GraphInvestigationQuery,
+    GraphInvestigationRequest,
+    GraphQueryOutcome,
+    GraphQueryResult,
 )
 from .graph_routing_policy import CanonicalGraphRoutingEntitlementAuthorizer
 from .investigation_plans import PlanExecutor
@@ -2760,6 +2763,11 @@ async def _assemble_production_runtime(
             metrics=metric_service,
         )
         graph_investigation_query = ProductionGraphInvestigationQuery()
+        fallback_question = _acceptance_graph_fallback_question()
+        if fallback_question is not None:
+            graph_investigation_query = _AcceptanceGraphFallbackQuery(
+                graph_investigation_query, fallback_question
+            )
         graph_routing_entitlement = CanonicalGraphRoutingEntitlementAuthorizer(session)
         # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305/3393 service is
         # constructed over the SAME PlanExecutorRuntime instance the six
@@ -2894,3 +2902,42 @@ __all__ = [
     "resolve_platform_certification_provider",
     "resolve_production_provider",
 ]
+_GRAPH_ACCEPTANCE_FALLBACK_ARM = "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM"
+_GRAPH_ACCEPTANCE_FALLBACK_QUESTION = "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION"
+
+
+class _AcceptanceGraphFallbackQuery:
+    """Induce one real unavailable outcome only in the acceptance runtime.
+
+    The wrapper sits at the production graph-query boundary: the orchestrator
+    still performs normal intent, entitlement, scope, SSE, persistence, and
+    native-fallback work.  It does not assert the expected state; it causes
+    the graph dependency outcome that the browser gate must independently
+    observe.
+    """
+
+    def __init__(self, delegate: GraphInvestigationQuery, question: str) -> None:
+        self._delegate = delegate
+        self._question = question
+
+    async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
+        if request.question_text == self._question:
+            return GraphQueryResult(
+                outcome=GraphQueryOutcome.UNAVAILABLE,
+                diagnostic="acceptance graph dependency unavailable",
+            )
+        return await self._delegate.investigate(request)
+
+
+def _acceptance_graph_fallback_question() -> str | None:
+    if os.getenv("ENVIRONMENT") != "acceptance":
+        return None
+    if os.getenv(_GRAPH_ACCEPTANCE_FALLBACK_ARM) != "1":
+        return None
+    question = os.getenv(_GRAPH_ACCEPTANCE_FALLBACK_QUESTION, "").strip()
+    if not question:
+        raise RuntimeError(
+            f"{_GRAPH_ACCEPTANCE_FALLBACK_QUESTION} is required when "
+            f"{_GRAPH_ACCEPTANCE_FALLBACK_ARM}=1"
+        )
+    return question

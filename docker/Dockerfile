@@ -62,14 +62,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Receive the pretend version so setuptools-scm can produce a version string
 # in environments without a git history (e.g. Docker build in CI).
 ARG SETUPTOOLS_SCM_PRETEND_VERSION
+ARG DEV_HEALTH_BUILD_SHA
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
+ENV DEV_HEALTH_BUILD_SHA=${DEV_HEALTH_BUILD_SHA}
 
 COPY . .
 
 # Build and install into a prefix that we can copy into the runtime image.
 # Strip pip and setuptools (not needed at runtime).
+ARG DEV_HEALTH_INSTALL_TARGET="."
 RUN pip install --upgrade pip && \
-  pip install --no-cache-dir --prefix=/install . && \
+  pip install --no-cache-dir --prefix=/install "${DEV_HEALTH_INSTALL_TARGET}" && \
   rm -rf /install/lib/python3.14/site-packages/pip \
          /install/lib/python3.14/site-packages/pip-* \
          /install/lib/python3.14/site-packages/setuptools \
@@ -107,6 +110,9 @@ USER 10001
 
 # ── API target ────────────────────────────────────────────────────────────────
 FROM runtime AS api
+
+ARG DEV_HEALTH_BUILD_SHA
+ENV DEV_HEALTH_BUILD_SHA=${DEV_HEALTH_BUILD_SHA}
 
 EXPOSE 8000
 

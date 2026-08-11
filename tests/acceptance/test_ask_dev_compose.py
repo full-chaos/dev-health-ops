@@ -168,6 +168,14 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         # just that case, not this shared default.
         "ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX": "1000",
         "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD": "200000000",
+        "CONTEXT_FABRIC_GRAPH_READ_ENABLED": "1",
+        "CONTEXT_FABRIC_GRAPH_STORE_URI": "redis://graph-trial-store:6379",
+        "CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED": "1",
+        "ASK_DEV_GRAPH_ROUTING_ENABLED": "1",
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM": "1",
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION": (
+            "Which teams are falling behind?"
+        ),
         # CHAOS-3532: the QUA ladder, off by default and overridable from the
         # invoking shell. The DEFAULT is the load-bearing half -- an armed
         # corpus run that silently gained a QUA shadow evaluation would
@@ -179,14 +187,13 @@ def test_api_acceptance_configuration_is_exact_and_network_scoped() -> None:
         "ASK_DEV_QUA_COMMIT_ENABLED": "${ASK_DEV_QUA_COMMIT_ENABLED:-0}",
     }
     assert api["networks"] == ["default", "ask-dev-acceptance"]
+    assert api["build"]["args"]["DEV_HEALTH_INSTALL_TARGET"] == ".[context-graph-trial]"
     assert api["depends_on"]["ask-dev-scripted-openai"] == {
         "condition": "service_healthy"
     }
-    # Host port is parameterized so this stack can coexist with the normal
-    # dev-health stack (which already publishes 18080). The default must
-    # stay 18080, and the bind must stay loopback-only -- a bare "PORT:8000"
-    # would expose the acceptance API on every interface.
-    assert api["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"]
+    # Docker allocates a free host port by default so concurrent local stacks
+    # cannot collide. The bind remains loopback-only.
+    assert api["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"]
 
 
 def test_web_is_compose_owned_and_points_only_at_the_ops_service() -> None:
@@ -207,13 +214,15 @@ def test_only_api_and_web_publish_host_ports() -> None:
         assert document["services"][service_name]["ports"] == []
     assert "ports" not in document["services"]["ask-dev-scripted-openai"]
     assert document["services"]["api"]["ports"] == [
-        "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"
+        "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"
     ]
     assert document["services"]["web"]["ports"] == ["127.0.0.1:3002:3000"]
 
 
 def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert "ASK_DEV_ACCEPTANCE_API_PORT:-0" in launcher
+    assert '"${compose[@]}" port api 8000 --index 1' in launcher
     assert '"${1:-}" != "--web-root"' in launcher
     assert '"$#" -ne 2' in launcher
     assert "--profile ask-dev-acceptance" in launcher
@@ -235,9 +244,56 @@ def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     assert 'ASK_DEV_ACCEPTANCE_QUESTION="${acceptance_question}"' in launcher
     assert '"${web_root}/node_modules/.bin/playwright" test' in launcher
     assert "playwright.ask-dev-acceptance.config.ts" in launcher
+    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 3
+    assert "playwright.ask-dev-graph-acceptance.config.ts" in launcher
+    assert "graph-trial-store" in launcher
     assert "The deterministic acceptance provider grounded" not in launcher
     assert '"$@"' not in launcher
     assert "completed successfully" in launcher
+
+
+def test_graph_gate_uses_the_seeded_primary_platform_admin() -> None:
+    """The graph seed and browser gate must address one org partition.
+
+    The ordinary acceptance admin belongs to the generated fixture org. Using
+    it for the graph browser leg would leave the graph seed healthy while the
+    browser queried a different org, invalidating the graph-partition proof.
+    The launcher therefore derives the canonical platform-admin credential
+    from world.json, prepares readiness for that same org, and uses it only for
+    the graph-specific Playwright invocation.
+    """
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert 'graph_primary_user_alias="primary.platform-admin"' in launcher
+    assert "password_for_alias" in launcher
+    assert 'graph_primary_org_alias="$(read_world_user_field' in launcher
+    assert 'graph_primary_org_alias}" != "primary"' in launcher
+    assert "load_world_manifest" in launcher
+    assert "ASK_DEV_GRAPH_PRIMARY_READINESS=PASSED" in launcher
+
+    seed_index = launcher.index("seed_ask_dev_graph_acceptance.py")
+    readiness_index = launcher.index("ASK_DEV_GRAPH_PRIMARY_READINESS=PASSED")
+    graph_gate_index = launcher.index("W3_GRAPH_ACCEPTANCE=RUNNING")
+    assert seed_index < readiness_index < graph_gate_index
+
+    graph_block = launcher[graph_gate_index:]
+    assert 'TEST_SUPERUSER_EMAIL="${graph_primary_user_email}"' in graph_block
+    assert 'TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}"' in graph_block
+
+
+def test_launcher_bypasses_ambient_proxies_for_host_loopback_calls() -> None:
+    """Host urllib calls must not route the discovered API port through a proxy."""
+
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert 'export NO_PROXY="${NO_PROXY},127.0.0.1,localhost"' in launcher
+    assert 'export NO_PROXY="127.0.0.1,localhost"' in launcher
+    assert 'export no_proxy="${no_proxy},127.0.0.1,localhost"' in launcher
+    assert 'export no_proxy="127.0.0.1,localhost"' in launcher
+
+    port_index = launcher.index('acceptance_api_port="$("${compose[@]}" port')
+    no_proxy_index = launcher.index("export NO_PROXY=")
+    first_host_api_call = launcher.index("assert_world_principals_can_log_in.py")
+    assert port_index < no_proxy_index < first_host_api_call
 
 
 def test_launcher_runs_the_not_found_smoke_before_bringing_up_web() -> None:
@@ -285,6 +341,7 @@ def test_keep_stack_is_opt_in_and_skips_only_the_teardown() -> None:
     # And it must be an EQUALS-1 test. `!= "1"` inverts the flag: the default
     # path would then keep the stack and the CI path would tear it down.
     assert '"${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1"' in launcher
+    assert "ASK_DEV_ACCEPTANCE_API_URL=${acceptance_api_url}" in launcher
 
     keep_index = launcher.index("ASK_DEV_ACCEPTANCE_KEEP_STACK")
     playwright_index = launcher.index('"${web_root}/node_modules/.bin/playwright" test')
@@ -414,6 +471,7 @@ class _FakeAcceptanceApi:
                 for key in (
                     "ask_dev",
                     "ask_dev_contextual_entrypoints",
+                    "ask_dev_graph_routing",
                 )
             ]
         if path.endswith("/feature-overrides") and method == "GET":
@@ -434,6 +492,7 @@ class _FakeAcceptanceApi:
         if path == "/api/v1/dev/capabilities":
             return {
                 "ask_dev": True,
+                "ask_dev_graph_routing": True,
                 "agent_context_runtime": False,
                 "can_read": True,
                 "can_manage": True,
@@ -458,6 +517,7 @@ def test_readiness_bootstrap_enables_all_features_and_proves_capabilities() -> N
     assert created_features == [
         "id-ask_dev",
         "id-ask_dev_contextual_entrypoints",
+        "id-ask_dev_graph_routing",
     ]
     assert api.calls[-2][1] == "/api/v1/admin/platform/ask-dev/readiness"
     assert api.calls[-1][1] == "/api/v1/dev/capabilities"
@@ -679,7 +739,7 @@ def test_launcher_boots_required_jobs_fleet_and_gates_acr_optionally() -> None:
     # up, are asserted -- a split that quietly dropped the fleet would leave
     # the "API+jobs" gate framing unmet.
     assert (
-        "boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api)"
+        "boot_services=(postgres pgbouncer clickhouse valkey graph-trial-store migrate ask-dev-scripted-openai api)"
         in launcher
     )
     assert "jobs_services=(worker beat)" in launcher
@@ -772,6 +832,7 @@ class _MultiOrgFakeAcceptanceApi(_FakeAcceptanceApi):
             )
             return {
                 "ask_dev": enabled,
+                "ask_dev_graph_routing": enabled,
                 "readiness": "ready" if enabled else "disabled",
             }
         if path.endswith("/feature-overrides") and method == "POST":
@@ -816,6 +877,7 @@ def test_provision_multi_org_fails_loud_if_disabled_org_leaks_entitlement() -> N
         result = original_request(method, path, payload)
         if path == "/api/v1/dev/capabilities" and isinstance(result, dict):
             result = {**result, "ask_dev": True, "readiness": "ready"}
+            result["ask_dev_graph_routing"] = True
         return result
 
     api.request = leaking_request  # type: ignore[method-assign]
@@ -1346,6 +1408,16 @@ def test_boot_login_proof_and_mint_use_the_same_assertion_script() -> None:
     assert script in mint, "the mint lost the shared login assertion"
 
 
+def test_mint_discovers_the_running_api_port_instead_of_assuming_one() -> None:
+    mint = (_LAUNCHER.parent / "mint_ask_dev_world_snapshot.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "ASK_DEV_ACCEPTANCE_API_PORT:-0" in mint
+    assert '"${compose[@]}" port api 8000 --index 1' in mint
+    assert '--api-url "http://127.0.0.1:${mint_api_port}"' in mint
+    assert "18080" not in mint
+
+
 def test_launcher_restore_targets_the_databases_the_api_actually_serves() -> None:
     """The whole point of CHAOS-3463's B2: the world has to land in the
     ClickHouse `default` / Postgres `postgres` databases the acceptance API
@@ -1457,6 +1529,40 @@ def test_mint_script_supplies_the_interpolation_only_variables() -> None:
     ).read_text(encoding="utf-8")
     assert "export ASK_DEV_WEB_CONTEXT=" in mint
     assert "export BUGSINK_SECRET_KEY=" in mint
+
+
+def test_mint_script_enables_every_profile_required_by_the_acceptance_api() -> None:
+    """The W3 API depends on the isolated graph store in the graph-trial profile."""
+
+    mint = (
+        _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    ).read_text(encoding="utf-8")
+    assert "--profile ask-dev-acceptance" in mint
+    assert "--profile graph-trial" in mint
+
+    overlay = (_ROOT / "tests" / "acceptance" / "compose.ask-dev.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'ASK_DEV_GRAPH_ROUTING_ENABLED: "1"' in overlay
+    assert 'CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED: "1"' in overlay
+
+
+def test_launcher_seeds_real_graph_data_after_world_restore() -> None:
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    restore = launcher.index("dev-hops fixtures world-restore")
+    seed = launcher.index("scripts/acceptance/seed_ask_dev_graph_acceptance.py")
+    browser_gate = launcher.index("W3_GRAPH_ACCEPTANCE=RUNNING")
+    assert restore < seed < browser_gate
+
+
+def test_mint_script_allows_an_explicit_host_python_for_worktrees() -> None:
+    """A clean worktree may intentionally reuse another verified project venv."""
+
+    mint = (
+        _ROOT / "scripts" / "acceptance" / "mint_ask_dev_world_snapshot.sh"
+    ).read_text(encoding="utf-8")
+    assert "ASK_DEV_ACCEPTANCE_PYTHON:-${ops_root}/.venv/bin/python" in mint
+    assert '"${python_bin}"' in mint
 
 
 def test_committed_world_digest_is_a_real_pin_not_a_placeholder() -> None:
@@ -1810,10 +1916,10 @@ def test_launcher_runs_the_wave4_access_matrix_with_its_own_arming_contract() ->
     assert 'ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}"' in launcher
     assert 'ASK_DEV_ACCEPTANCE_ACR="${acr_armed}"' in launcher
 
-    # Two SEPARATE invocations, not one with more env. Folding them together
+    # Three SEPARATE invocations, not one with more env. Folding them together
     # would couple the Phase 1 oracle to the access matrix so either could
     # take the other down.
-    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 2
+    assert launcher.count('"${web_root}/node_modules/.bin/playwright" test') == 3
 
     # Ordering: the matrix runs after web is up and after the Phase 1 spec,
     # so a Phase 1 regression is reported against Phase 1 rather than

@@ -51,7 +51,7 @@ func investmentReflectCallSite(t *testing.T) investmentCallSitePremise {
 	output, err := exec.Command(
 		python,
 		filepath.Join(root, "internal/providersync/testdata/python_investment_call_site.py"),
-		filepath.Join(root, "src/dev_health_ops/metrics/job_work_items.py"),
+		filepath.Join(root, "src/dev_health_ops/metrics/work_item_engine_destinations.py"),
 		filepath.Join(root, "src/dev_health_ops/models/work_items.py"),
 	).CombinedOutput()
 	if err != nil {
@@ -74,9 +74,9 @@ func investmentReflectCallSite(t *testing.T) investmentCallSitePremise {
 //
 // Both facts come from production Python:
 //
-//   - the call site (metrics/job_work_items.py:1377) passes exactly labels,
-//     component, title and provider -- so `paths` is absent, which is what
-//     kills the three path_prefix rules;
+//   - the production helper called by metrics/job_work_items.py passes exactly
+//     labels, component, title and provider -- so `paths` is absent, which is
+//     what kills the three path_prefix rules;
 //   - WorkItem declares no `component` field, so that call site's
 //     `getattr(item, "component", "")` cannot return anything but "" -- which
 //     is what kills data_component.

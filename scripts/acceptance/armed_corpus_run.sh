@@ -17,13 +17,54 @@
 set -uo pipefail
 
 ops_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-}"
 web_root="${ASK_DEV_WEB_CONTEXT:-$(cd -- "${ops_root}/../web" 2>/dev/null && pwd || true)}"
 export ASK_DEV_WEB_CONTEXT="${web_root}"
-export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18099}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
 
 export ASK_DEV_LIVE_ACCEPTANCE=1
-export ASK_DEV_ACCEPTANCE_API_URL="http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}"
+api_url_output="${ASK_DEV_ACCEPTANCE_API_URL_FILE:-${ASK_DEV_ACCEPTANCE_API_URL_OUTPUT:-}}"
+if [[ -z "${api_url_output}" && -n "${project_name}" ]]; then
+  api_url_output="/tmp/ask-dev-acceptance-api-url-${project_name}.env"
+fi
+if [[ -n "${api_url_output}" && -f "${api_url_output}" ]]; then
+  persisted_project="$(sed -n 's/^export ASK_DEV_ACCEPTANCE_PROJECT_NAME=//p' "${api_url_output}" | head -1)"
+  persisted_url="$(sed -n 's/^export ASK_DEV_ACCEPTANCE_API_URL=//p' "${api_url_output}" | head -1)"
+  if [[ -z "${persisted_project}" || -z "${persisted_url}" ]]; then
+    echo "${api_url_output} must contain ASK_DEV_ACCEPTANCE_PROJECT_NAME and ASK_DEV_ACCEPTANCE_API_URL" >&2
+    exit 70
+  fi
+  if [[ -n "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-}" && "${ASK_DEV_ACCEPTANCE_PROJECT_NAME}" != "${persisted_project}" ]]; then
+    echo "${api_url_output} belongs to Compose project ${persisted_project}, not ${ASK_DEV_ACCEPTANCE_PROJECT_NAME}" >&2
+    exit 70
+  fi
+  if [[ -n "${ASK_DEV_ACCEPTANCE_API_URL:-}" && "${ASK_DEV_ACCEPTANCE_API_URL}" != "${persisted_url}" ]]; then
+    echo "${api_url_output} records ${persisted_url}, not ${ASK_DEV_ACCEPTANCE_API_URL}" >&2
+    exit 70
+  fi
+  if [[ -z "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-}" ]]; then
+    export ASK_DEV_ACCEPTANCE_PROJECT_NAME="${persisted_project}"
+    project_name="${persisted_project}"
+  fi
+  if [[ -z "${ASK_DEV_ACCEPTANCE_API_URL:-}" ]]; then
+    export ASK_DEV_ACCEPTANCE_API_URL="${persisted_url}"
+  fi
+fi
+if [[ -z "${ASK_DEV_ACCEPTANCE_API_URL:-}" && -n "${ASK_DEV_ACCEPTANCE_API_PORT:-}" ]]; then
+  # An explicit port remains a supported diagnostic override. The normal
+  # boot path writes the OS-assigned URL artifact instead.
+  export ASK_DEV_ACCEPTANCE_API_URL="http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}"
+fi
+if [[ -z "${ASK_DEV_ACCEPTANCE_API_URL:-}" ]]; then
+  echo "Set ASK_DEV_ACCEPTANCE_API_URL_FILE to the URL artifact emitted by armed_corpus_boot.sh, or provide ASK_DEV_ACCEPTANCE_API_URL explicitly." >&2
+  exit 64
+fi
+if [[ -z "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-}" ]]; then
+  echo "Set ASK_DEV_ACCEPTANCE_PROJECT_NAME or provide the boot artifact so corpus verification addresses the correct Compose stack." >&2
+  exit 64
+fi
+export ASK_DEV_ACCEPTANCE_API_URL_FILE="${api_url_output}"
+echo "ASK_DEV_ACCEPTANCE_API_URL=${ASK_DEV_ACCEPTANCE_API_URL}"
 export TEST_SUPERUSER_EMAIL="${TEST_SUPERUSER_EMAIL:-admin@devhealth.example}"
 export TEST_SUPERUSER_PASSWORD="${TEST_SUPERUSER_PASSWORD:-devhealth123}"
 

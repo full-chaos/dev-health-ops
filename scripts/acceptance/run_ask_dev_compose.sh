@@ -98,7 +98,15 @@ ops_root="$(cd -- "${script_dir}/../.." && pwd)"
 compose_file="${ops_root}/compose.yml"
 acceptance_compose_file="${ops_root}/tests/acceptance/compose.ask-dev.yml"
 acceptance_acr_compose_file="${ops_root}/tests/acceptance/compose.ask-dev-acr.yml"
-project_name="dev-health-ask-dev-acceptance"
+# A fresh local acceptance stack gets its own Compose namespace. CI and
+# coordinated callers can still provide ASK_DEV_ACCEPTANCE_PROJECT_NAME so
+# later teardown/verification processes address the same stack.
+if [[ -z "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-}" ]]; then
+  project_name="dev-health-ask-dev-acceptance-${RANDOM}${RANDOM}"
+else
+  project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME}"
+fi
+export ASK_DEV_ACCEPTANCE_PROJECT_NAME="${project_name}"
 fixture_org_id="0a155cab-8833-42ac-a4ef-0d121725a7b0"
 oracle_file="${ops_root}/tests/acceptance/ask-dev-oracle.v1.json"
 graph_oracle_file="${ops_root}/tests/acceptance/ask-dev-graph-oracle.v1.json"
@@ -178,6 +186,7 @@ export ASK_DEV_WEB_CONTEXT="${web_root}"
 # multiple Compose projects concurrently, so no fixed host port is safe.
 # Callers may still pin a port for reproducible CI or manual debugging.
 export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-0}"
+export ASK_DEV_ACCEPTANCE_WEB_PORT="${ASK_DEV_ACCEPTANCE_WEB_PORT:-0}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
 
 compose=(
@@ -480,9 +489,17 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 
 "${compose[@]}" up -d --build --wait web
 
+acceptance_web_port="$("${compose[@]}" port web 3000 --index 1 | awk -F: '{print $NF}')"
+if [[ ! "${acceptance_web_port}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Could not discover the acceptance Web host port" >&2
+  exit 70
+fi
+acceptance_web_url="http://127.0.0.1:${acceptance_web_port}"
+export ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}"
+
 ASK_DEV_LIVE_ACCEPTANCE=1 \
 ASK_DEV_COMPOSE_WEB_READY=1 \
-ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}" \
 ASK_DEV_ACCEPTANCE_QUESTION="${acceptance_question}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_METRIC_ID="${expected_metric_id}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_EVIDENCE_FRAGMENT="${expected_evidence_entity_fragment}" \
@@ -562,7 +579,7 @@ echo "WAVE4_ACCESS_MATRIX=RUNNING web_root=${web_root}"
 ASK_DEV_LIVE_ACCEPTANCE=1 \
 ASK_DEV_COMPOSE_WEB_READY=1 \
 ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
-ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}" \
 ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
 ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
 PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
@@ -584,7 +601,7 @@ echo "W3_GRAPH_ACCEPTANCE=RUNNING backend_sha=${DEV_HEALTH_BUILD_SHA}"
 ASK_DEV_GRAPH_LIVE_ACCEPTANCE=1 \
 ASK_DEV_COMPOSE_WEB_READY=1 \
 ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM=1 \
-ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}" \
 ASK_DEV_GRAPH_ACCEPTANCE_QUESTION="${graph_question}" \
 ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION="${graph_fallback_question}" \
 ASK_DEV_GRAPH_ACCEPTANCE_AMBIGUOUS_QUESTION="${graph_ambiguous_question}" \
@@ -614,8 +631,10 @@ TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}" \
 # failed job still releases the runner's disk.
 if [[ "${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1" ]]; then
   mkdir -p "$(dirname -- "${api_url_output}")"
-  printf 'export ASK_DEV_ACCEPTANCE_API_URL=%q\n' "${acceptance_api_url}" > "${api_url_output}"
+  printf 'export ASK_DEV_ACCEPTANCE_PROJECT_NAME=%q\n' "${project_name}" > "${api_url_output}"
+  printf 'export ASK_DEV_ACCEPTANCE_API_URL=%q\n' "${acceptance_api_url}" >> "${api_url_output}"
   if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'ASK_DEV_ACCEPTANCE_PROJECT_NAME=%s\n' "${project_name}" >> "${GITHUB_ENV}"
     printf 'ASK_DEV_ACCEPTANCE_API_URL=%s\n' "${acceptance_api_url}" >> "${GITHUB_ENV}"
   fi
   trap - EXIT

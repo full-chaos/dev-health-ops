@@ -111,7 +111,8 @@ def test_projection_preserves_rank_signal_quality_and_unknown_disposition() -> N
     member = slot.members[0]
     assert member.rank == 1
     assert member.disposition is DevAnswerCohortDisposition.UNKNOWN
-    assert member.inclusion_rationale == packet_member.inclusion_rationale
+    assert member.inclusion_rationale is None
+    assert packet_member.inclusion_rationale not in slot.model_dump_json()
     assert member.pressure_dimensions == [
         DevAnswerPressureDimension.COGNITIVE_WORKLOAD_PRESSURE
     ]
@@ -129,7 +130,9 @@ def test_projection_preserves_rank_signal_quality_and_unknown_disposition() -> N
     assert projected.evidence_source_classes == [
         DevAnswerEvidenceSourceClass.WORK_GRAPH
     ]
-    assert projected.limitation == "partial canonical coverage"
+    assert projected.limitation is None
+    assert signal.limitation is not None
+    assert signal.limitation not in slot.model_dump_json()
     assert projected.gap is DevAnswerEnrichmentGap.NO_DATA
 
 

@@ -356,7 +356,33 @@ def quota_budget() -> QuotaBudget:
 
 
 def _api_base_url() -> str:
-    return os.getenv("ASK_DEV_ACCEPTANCE_API_URL", "http://127.0.0.1:18080")
+    configured = os.getenv("ASK_DEV_ACCEPTANCE_API_URL", "").strip()
+    if configured:
+        return configured
+
+    # The canonical launcher persists the URL it discovered from Compose for
+    # callers that run the corpus in a separate process (for example the
+    # armed_corpus_boot/run pair). Read that artifact without sourcing an
+    # arbitrary shell file. There is deliberately no fixed localhost fallback:
+    # an armed run must identify the exact stack it is measuring.
+    url_file = os.getenv("ASK_DEV_ACCEPTANCE_API_URL_FILE", "").strip()
+    if url_file:
+        try:
+            for line in Path(url_file).read_text(encoding="utf-8").splitlines():
+                prefix = "export ASK_DEV_ACCEPTANCE_API_URL="
+                if line.startswith(prefix):
+                    persisted = line[len(prefix) :].strip().strip("'\"")
+                    if persisted:
+                        return persisted
+        except OSError as exc:
+            raise AcceptanceFailure(
+                f"could not read ASK_DEV_ACCEPTANCE_API_URL_FILE={url_file}: {exc}"
+            ) from exc
+
+    raise AcceptanceFailure(
+        "ASK_DEV_ACCEPTANCE_API_URL is required; use the URL emitted by the "
+        "canonical acceptance launcher (or ASK_DEV_ACCEPTANCE_API_URL_FILE)"
+    )
 
 
 def _superuser_password() -> str:

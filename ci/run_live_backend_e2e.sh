@@ -255,8 +255,12 @@ export REDIS_URL CLICKHOUSE_URI POSTGRES_URI DATABASE_URI
 export DISABLE_DOTENV=1
 
 API_HOST="${LIVE_E2E_API_HOST:-127.0.0.1}"
-API_PORT="${LIVE_E2E_API_PORT:-18080}"
-BASE_URL="http://${API_HOST}:${API_PORT}"
+# Port 0 asks uvicorn/the OS to choose a free host port. This harness is
+# routinely run beside the dev stack and other acceptance environments, so a
+# fixed local default is an active collision, not a convenience. Callers may
+# still provide LIVE_E2E_API_PORT for an explicitly pinned diagnostic run.
+API_PORT="${LIVE_E2E_API_PORT:-0}"
+BASE_URL=""
 
 FIXTURE_SEED="${LIVE_E2E_FIXTURE_SEED:-20260219}"
 FIXTURE_DAYS="${LIVE_E2E_FIXTURE_DAYS:-14}"
@@ -449,7 +453,7 @@ if [ -z "${JWT_SECRET_KEY:-}" ]; then
   export JWT_SECRET_KEY
 fi
 
-echo "==> starting API at ${BASE_URL}"
+echo "==> starting API at ${API_HOST}:${API_PORT} (port 0 means OS-assigned)"
 (
   export DATABASE_URI="${DATABASE_URI}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
@@ -461,6 +465,36 @@ echo "==> starting API at ${BASE_URL}"
     api --host "${API_HOST}" --port "${API_PORT}"
 ) >"${API_LOG_FILE}" 2>&1 &
 API_PID="$!"
+
+# With the default port 0, the API owns the allocation and reports the bound
+# port in its uvicorn startup line. Do not guess a fallback port: wait for the
+# actual OS-assigned value and fail if the process never reports one. An
+# explicit LIVE_E2E_API_PORT continues to work without log parsing.
+if [ "${API_PORT}" = "0" ]; then
+  for ((i = 1; i <= READINESS_ATTEMPTS; i++)); do
+    discovered_port="$(
+      sed -nE 's/.*Uvicorn running on http:\/\/[^:]+:([0-9]+).*/\1/p' "${API_LOG_FILE}" \
+        | tail -1
+    )"
+    if [[ "${discovered_port}" =~ ^[1-9][0-9]*$ ]]; then
+      API_PORT="${discovered_port}"
+      break
+    fi
+    if ! kill -0 "${API_PID}" >/dev/null 2>&1; then
+      echo "ERROR: API exited before reporting its OS-assigned host port." >&2
+      cat "${API_LOG_FILE}" >&2 || true
+      exit 1
+    fi
+    sleep "${READINESS_SLEEP_SECS}"
+  done
+  if [ "${API_PORT}" = "0" ]; then
+    echo "ERROR: API did not report an OS-assigned host port." >&2
+    cat "${API_LOG_FILE}" >&2 || true
+    exit 1
+  fi
+fi
+BASE_URL="http://${API_HOST}:${API_PORT}"
+echo "==> API bound to ${BASE_URL}"
 
 echo "==> waiting for readiness"
 wait_for_ready

@@ -78,8 +78,12 @@ if [[ ! -x "${python_bin}" ]]; then
 fi
 compose_file="${ops_root}/compose.yml"
 profile_compose_file="${ops_root}/tests/acceptance/compose.ask-dev-provider-profile.yml"
-project_name="dev-health-ask-dev-${profile}"
+project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-${profile}-${RANDOM}${RANDOM}}"
 fixture_org_id="0a155cab-8833-42ac-a4ef-0d121725a7b0"
+# Compose allocates a free loopback port by default. A caller may still pin
+# ASK_DEV_ACCEPTANCE_API_PORT for a deliberate diagnostic run.
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-0}"
+export ASK_DEV_ACCEPTANCE_PROJECT_NAME="${project_name}"
 
 export ASK_DEV_PROFILE_PROVIDER="${provider}"
 export ASK_DEV_PROFILE_MODEL="${model}"
@@ -115,6 +119,13 @@ trap report_failure EXIT
 "${compose[@]}" up -d --build --wait \
   postgres pgbouncer clickhouse valkey migrate api
 
+api_port="$("${compose[@]}" port api 8000 --index 1 | awk -F: '{print $NF}')"
+if [[ ! "${api_port}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Could not discover the provider-profile API host port" >&2
+  exit 70
+fi
+api_url="http://127.0.0.1:${api_port}"
+
 # CHAOS-3572: same wrong-worktree guard run_ask_dev_compose.sh runs -- see
 # container_source_guard.sh. compose bind-mounts --project-directory at
 # /app, so this stack could just as easily be serving a different checkout's
@@ -138,7 +149,7 @@ container_source_guard_check "${ops_root}" "${compose[@]}"
   --with-work-graph
 
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18081 \
+ASK_DEV_ACCEPTANCE_API_URL="${api_url}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_MODEL="${model}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
@@ -147,7 +158,7 @@ PYTHONPATH="${ops_root}/src:${ops_root}" \
   "${ops_root}/scripts/acceptance/prepare_ask_dev_acceptance.py"
 
 ASK_DEV_LIVE_ACCEPTANCE=1 \
-ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:18081 \
+ASK_DEV_ACCEPTANCE_API_URL="${api_url}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_PROVIDER="${provider}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_MODEL="${model}" \
 TEST_SUPERUSER_EMAIL=admin@devhealth.example \

@@ -86,8 +86,12 @@ jobs:
       OPS_ROOT: ${{ github.workspace }}/ops
       WEB_ROOT: ${{ github.workspace }}/web
       LOG_DIR: ${{ github.workspace }}/ops/.acceptance-logs
-      COMPOSE_PROJECT: dev-health-ask-dev-acceptance
-      ASK_DEV_ACCEPTANCE_API_PORT: "18080"
+      # The run id makes the Compose namespace unique even if two workflow
+      # dispatches overlap on a runner. Local launchers use a random suffix;
+      # CI supplies a stable name so later workflow steps can inspect/tear it
+      # down explicitly.
+      COMPOSE_PROJECT: dev-health-ask-dev-acceptance-${{ github.run_id }}
+      ASK_DEV_ACCEPTANCE_PROJECT_NAME: dev-health-ask-dev-acceptance-${{ github.run_id }}
     steps:
       - name: Check out dev-health-ops
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -316,7 +320,9 @@ jobs:
         working-directory: ops
         env:
           ASK_DEV_LIVE_ACCEPTANCE: "1"
-          ASK_DEV_ACCEPTANCE_API_URL: http://127.0.0.1:18080
+          # The boot step discovers the OS-assigned API port and publishes the
+          # complete URL through GITHUB_ENV. Do not reintroduce a fixed URL
+          # here: that would point the corpus at a different local stack.
           # A coarse attrition floor, not a registry -- see the long comment on
           # this variable in run_wave4_corpus.sh. run_report's default of 1
           # means a run executing ONE case exits 0 and this lane reports green

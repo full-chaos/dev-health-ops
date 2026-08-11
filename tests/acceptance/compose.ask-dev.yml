@@ -1,27 +1,27 @@
 services:
   postgres:
-    container_name: ask-dev-acceptance-postgres
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-postgres"
     ports: !reset []
 
   pgbouncer:
-    container_name: ask-dev-acceptance-pgbouncer
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-pgbouncer"
     ports: !reset []
 
   clickhouse:
-    container_name: ask-dev-acceptance-clickhouse
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-clickhouse"
     ports: !reset []
 
   valkey:
-    container_name: ask-dev-acceptance-valkey
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-valkey"
     ports: !reset []
 
   migrate:
-    container_name: ask-dev-acceptance-migrate
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-migrate"
     environment:
       DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
 
   api:
-    container_name: ask-dev-acceptance-api
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-api"
     build:
       args:
         # The graph trial remains optional in normal images; this graph-enabled
@@ -143,7 +143,7 @@ services:
   # work, not just that the container is running.
   # ---------------------------------------------------------------------------
   worker:
-    container_name: ask-dev-acceptance-worker
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-worker"
     healthcheck:
       # Codex finding (HIGH, 2026-08-05): `celery inspect ping` only proves
       # the control-plane RPC answers -- it is served independently of the
@@ -168,7 +168,7 @@ services:
       start_period: 15s
 
   beat:
-    container_name: ask-dev-acceptance-beat
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-beat"
     healthcheck:
       # Codex finding (HIGH, 2026-08-05): the persistent schedule file's
       # mtime is touched by beat's own bookkeeping regardless of whether a
@@ -193,7 +193,7 @@ services:
       start_period: 90s
 
   ask-dev-scripted-openai:
-    container_name: ask-dev-acceptance-scripted-openai
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-scripted-openai"
     profiles: ["ask-dev-acceptance"]
     build:
       context: .
@@ -259,7 +259,7 @@ services:
 
   web:
     profiles: ["ask-dev-acceptance"]
-    container_name: ask-dev-acceptance-web
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-web"
     build:
       context: ${ASK_DEV_WEB_CONTEXT:?pass --web-root to the acceptance launcher}
       dockerfile: Dockerfile
@@ -269,12 +269,15 @@ services:
     environment:
       BACKEND_URL: http://api:8000
       AUTH_SECRET: ask-dev-acceptance-web-auth-secret-v1
-      AUTH_URL: http://127.0.0.1:3002
+      # Leave the canonical URL empty by default so Auth.js derives the
+      # loopback origin from the inbound Host header. A caller that owns a
+      # deliberately pinned web port may still provide this override.
+      AUTH_URL: "${ASK_DEV_ACCEPTANCE_WEB_URL:-}"
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "127.0.0.1:3002:3000"
+      - "127.0.0.1:${ASK_DEV_ACCEPTANCE_WEB_PORT:-0}:3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
       interval: 5s

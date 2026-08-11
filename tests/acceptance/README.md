@@ -12,14 +12,13 @@ build:
 scripts/acceptance/run_ask_dev_compose.sh --web-root /path/to/dev-health-web
 ```
 
-The launcher owns the whole acceptance lifecycle. It resets only its dedicated
-`dev-health-ask-dev-acceptance` Compose project, builds and waits for PostgreSQL,
+The launcher owns the whole acceptance lifecycle. It creates a unique
+`dev-health-ask-dev-acceptance-*` Compose project for each run, builds and waits for PostgreSQL,
 ClickHouse, Ops, and the internal scripted OpenAI service, generates the fixed
 graph/metric/evidence fixture, seeds the canonical admin and organization,
 enables only the Ask Dev and contextual-entrypoint entitlement overrides
 through the admin API, and runs the real organization-admin readiness action.
-It then builds Web in
-Compose on `127.0.0.1:3002` and invokes Web's fixed
+It then builds Web in Compose on an OS-assigned loopback port and invokes Web's fixed
 `test:ask-dev-acceptance` browser oracle. No caller-supplied seed or test command
 is accepted, and no missing-service or missing-secret condition becomes a skip.
 

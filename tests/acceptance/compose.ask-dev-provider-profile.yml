@@ -1,23 +1,29 @@
 services:
   postgres:
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-provider-profile}-postgres"
     ports: !reset []
 
   pgbouncer:
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-provider-profile}-pgbouncer"
     ports: !reset []
 
   clickhouse:
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-provider-profile}-clickhouse"
     ports: !reset []
 
   valkey:
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-provider-profile}-valkey"
     ports: !reset []
 
   migrate:
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-provider-profile}-migrate"
     environment:
       DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
 
   api:
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-provider-profile}-api"
     ports: !override
-      - "127.0.0.1:18081:8000"
+      - "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"
     environment:
       ENVIRONMENT: acceptance
       ASK_DEV_LIVE_ACCEPTANCE: "0"

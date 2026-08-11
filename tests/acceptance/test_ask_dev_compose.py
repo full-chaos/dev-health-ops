@@ -204,7 +204,8 @@ def test_web_is_compose_owned_and_points_only_at_the_ops_service() -> None:
     assert web["build"]["target"] == "runner"
     assert web["build"]["args"] == {"BACKEND_URL": "http://api:8000"}
     assert web["environment"]["BACKEND_URL"] == "http://api:8000"
-    assert web["ports"] == ["127.0.0.1:3002:3000"]
+    assert web["environment"]["AUTH_URL"] == "${ASK_DEV_ACCEPTANCE_WEB_URL:-}"
+    assert web["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_WEB_PORT:-0}:3000"]
     assert web["depends_on"]["api"] == {"condition": "service_healthy"}
 
 
@@ -216,13 +217,137 @@ def test_only_api_and_web_publish_host_ports() -> None:
     assert document["services"]["api"]["ports"] == [
         "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"
     ]
-    assert document["services"]["web"]["ports"] == ["127.0.0.1:3002:3000"]
+    assert document["services"]["web"]["ports"] == [
+        "127.0.0.1:${ASK_DEV_ACCEPTANCE_WEB_PORT:-0}:3000"
+    ]
+
+
+def test_acceptance_api_and_web_defaults_are_os_assigned() -> None:
+    """No final acceptance harness may smuggle in a fixed localhost port."""
+
+    targets = (
+        _OVERLAY,
+        _ACR_OVERLAY,
+        _ROOT / "tests" / "acceptance" / "compose.ask-dev-provider-profile.yml",
+        _LAUNCHER,
+        _ROOT / "scripts" / "acceptance" / "run_ask_dev_provider_profile.sh",
+        _ROOT / "scripts" / "acceptance" / "armed_corpus_boot.sh",
+        _ROOT / "scripts" / "acceptance" / "armed_corpus_run.sh",
+        _ROOT / "ci" / "run_live_backend_e2e.sh",
+        _ROOT / ".github" / "workflows" / "ask-dev-acceptance.yml",
+    )
+    forbidden = ("127.0.0.1:18080", "127.0.0.1:18081", "127.0.0.1:18099")
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        assert not any(port in text for port in forbidden), path
+
+    overlay = _load_overlay()
+    assert overlay["services"]["api"]["ports"] == [
+        "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"
+    ]
+    assert overlay["services"]["web"]["ports"] == [
+        "127.0.0.1:${ASK_DEV_ACCEPTANCE_WEB_PORT:-0}:3000"
+    ]
+
+
+def test_acceptance_compose_namespace_is_unique_by_default() -> None:
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+    assert 'project_name="dev-health-ask-dev-acceptance-${RANDOM}${RANDOM}"' in launcher
+    assert 'export ASK_DEV_ACCEPTANCE_PROJECT_NAME="${project_name}"' in launcher
+
+    overlay = _load_overlay()
+    for service_name in overlay["services"]:
+        container_name = overlay["services"][service_name].get("container_name")
+        if container_name is not None:
+            assert container_name.startswith("${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-"), (
+                service_name
+            )
+
+    boot = (_ROOT / "scripts" / "acceptance" / "armed_corpus_boot.sh").read_text(
+        encoding="utf-8"
+    )
+    run = (_ROOT / "scripts" / "acceptance" / "armed_corpus_run.sh").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        'project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance-${RANDOM}${RANDOM}}"'
+        in boot
+    )
+    assert "ASK_DEV_ACCEPTANCE_API_PORT:-0" in boot
+    assert '"${compose[@]}" port api 8000 --index 1' in boot
+    assert "export ASK_DEV_ACCEPTANCE_PROJECT_NAME=%q" in boot
+    assert "127.0.0.1:18099" not in boot
+    assert "127.0.0.1:18099" not in run
+
+    live_e2e = (_ROOT / "ci" / "run_live_backend_e2e.sh").read_text(encoding="utf-8")
+    assert "LIVE_E2E_API_PORT:-0" in live_e2e
+    assert 'BASE_URL=""' in live_e2e
+    assert "Uvicorn running on http" in live_e2e
+
+
+def test_armed_corpus_run_consumes_boot_url_file_and_project_in_a_new_process(
+    tmp_path: Path,
+) -> None:
+    """The boot artifact must carry both dynamic facts across process boundaries."""
+
+    checkout = tmp_path / "ops"
+    acceptance_scripts = checkout / "scripts" / "acceptance"
+    python_bin = checkout / ".venv" / "bin" / "python"
+    acceptance_scripts.mkdir(parents=True)
+    python_bin.parent.mkdir(parents=True)
+    shutil.copy2(
+        _ROOT / "scripts" / "acceptance" / "armed_corpus_run.sh",
+        acceptance_scripts / "armed_corpus_run.sh",
+    )
+    python_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    python_bin.chmod(0o755)
+    (acceptance_scripts / "run_wave4_corpus.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'delegate project=%s url=%s file=%s\\n' "
+        '"${ASK_DEV_ACCEPTANCE_PROJECT_NAME}" "${ASK_DEV_ACCEPTANCE_API_URL}" '
+        '"${ASK_DEV_ACCEPTANCE_API_URL_FILE}"\n',
+        encoding="utf-8",
+    )
+    artifact = tmp_path / "boot.env"
+    artifact.write_text(
+        "export ASK_DEV_ACCEPTANCE_PROJECT_NAME=dev-health-ask-dev-acceptance-4242\n"
+        "export ASK_DEV_ACCEPTANCE_API_URL=http://127.0.0.1:49152\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    for name in (
+        "ASK_DEV_ACCEPTANCE_API_PORT",
+        "ASK_DEV_ACCEPTANCE_API_URL",
+        "ASK_DEV_ACCEPTANCE_API_URL_OUTPUT",
+        "ASK_DEV_ACCEPTANCE_PROJECT_NAME",
+    ):
+        env.pop(name, None)
+    env["ASK_DEV_ACCEPTANCE_API_URL_FILE"] = str(artifact)
+    env["ASK_DEV_SKIP_LOGIN_WINDOW_WAIT"] = "1"
+
+    completed = subprocess.run(
+        ["bash", str(acceptance_scripts / "armed_corpus_run.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (
+        f"delegate project=dev-health-ask-dev-acceptance-4242 "
+        f"url=http://127.0.0.1:49152 file={artifact}"
+    ) in completed.stdout
 
 
 def test_launcher_owns_seed_readiness_web_and_fixed_browser_oracle() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
     assert "ASK_DEV_ACCEPTANCE_API_PORT:-0" in launcher
     assert '"${compose[@]}" port api 8000 --index 1' in launcher
+    assert "ASK_DEV_ACCEPTANCE_WEB_PORT:-0" in launcher
+    assert '"${compose[@]}" port web 3000 --index 1' in launcher
+    assert 'acceptance_web_url="http://127.0.0.1:${acceptance_web_port}"' in launcher
+    assert "ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002" not in launcher
     assert '"${1:-}" != "--web-root"' in launcher
     assert '"$#" -ne 2' in launcher
     assert "--profile ask-dev-acceptance" in launcher
@@ -407,8 +532,8 @@ def test_keep_stack_exports_and_persists_discovered_api_url() -> None:
     The launcher is a child process of both a developer shell and the CI
     workflow, so an ordinary shell ``export`` cannot update the caller. Keep
     the three delivery paths distinct: export for commands inside this
-    launcher, a sourceable file for local callers, and ``GITHUB_ENV`` for a
-    later workflow step.
+    launcher, a sourceable file for local callers, and ``GITHUB_ENV`` for the
+    project name and URL consumed by later workflow steps.
     """
 
     launcher = _LAUNCHER.read_text(encoding="utf-8")
@@ -418,10 +543,15 @@ def test_keep_stack_exports_and_persists_discovered_api_url() -> None:
     export = launcher.index('export ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}"')
     keep = launcher.index('if [[ "${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1" ]]')
     persist = launcher.index("printf 'export ASK_DEV_ACCEPTANCE_API_URL=%q\\n'")
-    github_env = launcher.index('>> "${GITHUB_ENV}"')
+    persist_project = launcher.index(
+        "printf 'export ASK_DEV_ACCEPTANCE_PROJECT_NAME=%q\\n'"
+    )
+    github_project = launcher.index("printf 'ASK_DEV_ACCEPTANCE_PROJECT_NAME=%s\\n'")
+    github_url = launcher.index("printf 'ASK_DEV_ACCEPTANCE_API_URL=%s\\n'")
     printed_file = launcher.index("ASK_DEV_ACCEPTANCE_API_URL_FILE=${api_url_output}")
 
-    assert discovery < export < keep < persist < github_env < printed_file
+    assert discovery < export < keep
+    assert persist_project < persist < github_project < github_url < printed_file
     assert (
         "ASK_DEV_ACCEPTANCE_API_URL_OUTPUT:-/tmp/ask-dev-acceptance-api-url-"
         in launcher
@@ -657,7 +787,9 @@ def test_acr_profile_is_off_by_default_and_wired_via_extends() -> None:
     # ask-dev-scripted-openai and postgres/pgbouncer/clickhouse/valkey are
     # already kept off the host.
     assert services["acr-api"]["ports"] == []
-    assert services["acr-api"]["container_name"] == "ask-dev-acceptance-acr-api"
+    assert services["acr-api"]["container_name"] == (
+        "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-acr-api"
+    )
 
     # The default `ask-dev-acceptance` profile (used by every other test in
     # this module) must not implicitly pull in ACR.

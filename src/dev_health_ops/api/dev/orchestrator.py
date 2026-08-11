@@ -643,12 +643,8 @@ def _public_cohort_slot(
 
     if not ranking.ranked_members:
         return None
-    packet_members = {
-        member.canonical_id: member for member in packet.comparison_cohort.members
-    }
     members: list[DevAnswerCohortMember] = []
     for rank, ranked in enumerate(ranking.ranked_members, start=1):
-        packet_member = packet_members[ranked.candidate.canonical_id]
         members.append(
             DevAnswerCohortMember(
                 entity_id=ranked.candidate.canonical_id,
@@ -656,7 +652,12 @@ def _public_cohort_slot(
                 inclusion_basis=ContractCohortDiscoveryFamily(family.value),
                 rank=rank,
                 disposition=DevAnswerCohortDisposition(ranked.disposition.value),
-                inclusion_rationale=packet_member.inclusion_rationale,
+                # Investigation-packet rationales contain graph discovery
+                # vocabulary and anchor identifiers (for example relation
+                # enum values and canonical IDs). The public answer already
+                # carries the closed inclusion basis; do not copy private
+                # graph prose across this boundary.
+                inclusion_rationale=None,
                 pressure_dimensions=[
                     DevAnswerPressureDimension(item.value)
                     for item in ranked.pressure_dimensions
@@ -688,7 +689,11 @@ def _public_cohort_slot(
                             DevAnswerEvidenceSourceClass(item.value)
                             for item in signal.evidence_source_classes
                         ],
-                        limitation=signal.limitation,
+                        # Canonical ranker limitations are machine diagnostics
+                        # (including composed tokens and suppressed-reason
+                        # codes), not customer copy. Keep the closed quality
+                        # fields above and omit this private prose.
+                        limitation=None,
                         gap=(
                             DevAnswerEnrichmentGap(signal.gap.value)
                             if signal.gap is not None

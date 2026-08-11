@@ -173,8 +173,59 @@ _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.y
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
 _GO_PROFILE_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-profile.yml"
+_GO_CONFIG = _REPO_ROOT / "internal" / "platform" / "config" / "config.go"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
+
+_PROVIDER_ROUTE_SWITCH_NAMES = frozenset(
+    {
+        "WORKER_GITHUB_BLAME_ENABLED",
+        "WORKER_GITHUB_CICD_ENABLED",
+        "WORKER_GITHUB_COMMIT_STATS_ENABLED",
+        "WORKER_GITHUB_COMMITS_ENABLED",
+        "WORKER_GITHUB_DEPLOYMENTS_ENABLED",
+        "WORKER_GITHUB_FILES_ENABLED",
+        "WORKER_GITHUB_PR_COMMENTS_ENABLED",
+        "WORKER_GITHUB_PR_REVIEWS_ENABLED",
+        "WORKER_GITHUB_PRS_ENABLED",
+        "WORKER_GITHUB_REPO_METADATA_ENABLED",
+        "WORKER_GITHUB_SECURITY_ENABLED",
+        "WORKER_GITHUB_TESTS_ENABLED",
+        "WORKER_GITHUB_WORK_ITEMS_ENABLED",
+        "WORKER_GITLAB_BLAME_ENABLED",
+        "WORKER_GITLAB_CICD_ENABLED",
+        "WORKER_GITLAB_COMMIT_STATS_ENABLED",
+        "WORKER_GITLAB_COMMITS_ENABLED",
+        "WORKER_GITLAB_DEPLOYMENTS_ENABLED",
+        "WORKER_GITLAB_FEATURE_FLAGS_ENABLED",
+        "WORKER_GITLAB_FILES_ENABLED",
+        "WORKER_GITLAB_INCIDENTS_ENABLED",
+        "WORKER_GITLAB_PR_COMMENTS_ENABLED",
+        "WORKER_GITLAB_PR_REVIEWS_ENABLED",
+        "WORKER_GITLAB_PRS_ENABLED",
+        "WORKER_GITLAB_REPO_METADATA_ENABLED",
+        "WORKER_GITLAB_SECURITY_ENABLED",
+        "WORKER_GITLAB_TESTS_ENABLED",
+        "WORKER_GITLAB_WORK_ITEMS_ENABLED",
+        "WORKER_JIRA_INCIDENTS_ENABLED",
+        "WORKER_JIRA_WORK_ITEMS_ENABLED",
+        "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
+        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
+        "WORKER_PAGERDUTY_BUSINESS_SERVICES_ENABLED",
+        "WORKER_PAGERDUTY_ESCALATION_POLICIES_ENABLED",
+        "WORKER_PAGERDUTY_INCIDENTS_ENABLED",
+        "WORKER_PAGERDUTY_ON_CALLS_ENABLED",
+        "WORKER_PAGERDUTY_SCHEDULES_ENABLED",
+        "WORKER_PAGERDUTY_SERVICES_ENABLED",
+        "WORKER_PAGERDUTY_TEAMS_ENABLED",
+        "WORKER_PAGERDUTY_USERS_ENABLED",
+    }
+)
+
+_PROVIDER_ROUTE_CONFIG_NAMES = (
+    "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
+    "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
+)
 
 
 def _platform_compose_path() -> Path | None:
@@ -1088,30 +1139,26 @@ def test_local_postgres_image_pinned_and_pgdata_is_subdirectory() -> None:
     )
 
 
-def test_route_switches_default_off_for_producer_gate() -> None:
-    """CHAOS-3142/CHAOS-3123/CHAOS-3606: route switches, including the
-    GitHub work-item family, must default to "false" wherever
-    this file wires them -- the shared &env anchor (api, inherited by
-    worker/worker-heavy/beat via <<: *env / <<: *worker-base). This is the
-    Python producer gate's half of the CHAOS-3123 route gate
-    (ProviderUnitRouteSwitches, src/dev_health_ops/workers/provider_unit_route.py);
-    a Go worker topology running alongside this stack must read the same
-    variable names with the same default so a unit the Python gate routes
-    to River never finds no handler.
+def test_provider_route_switch_inventory_matches_go_config() -> None:
+    """The packaging census must move with the typed Go configuration surface."""
+    configured = frozenset(
+        re.findall(r'"(WORKER_[A-Z0-9_]+_ENABLED)"', _GO_CONFIG.read_text())
+    )
+    assert configured == _PROVIDER_ROUTE_SWITCH_NAMES
 
-    Mutation coverage (manually verified): changing any default from
-    "false" to "true" makes the corresponding assertion fail.
+
+def test_route_switches_default_off_for_producer_gate() -> None:
+    """Every typed provider switch passes through both runtimes, default-off.
+
+    The shared ``&env`` anchor feeds the Python producer processes and the Go
+    profile feeds the executor. A name missing on either side can route a unit
+    to a process with no matching handler; a true default would activate a
+    landed provider route merely by deploying this packaging change.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    switch_names = (
-        "WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED",
-        "WORKER_GITHUB_REPO_METADATA_ENABLED",
-        "WORKER_GITHUB_WORK_ITEMS_ENABLED",
-        "WORKER_GITLAB_REPO_METADATA_ENABLED",
-    )
 
     shared_env = services["api"]["environment"]  # &env anchor: api, worker, beat
-    for switch in switch_names:
+    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
         assert shared_env[switch] == f"${{{switch}:-false}}", (
             f"{switch} must default to false on the shared Celery env anchor"
         )
@@ -1120,7 +1167,7 @@ def test_route_switches_default_off_for_producer_gate() -> None:
     # confirm the merge actually carried the keys rather than being shadowed.
     for name in ("worker", "worker-heavy", "beat"):
         env = services[name]["environment"]
-        for switch in switch_names:
+        for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
             assert env[switch] == f"${{{switch}:-false}}", (
                 f"{switch} must reach {name} through the shared env anchor"
             )
@@ -1128,26 +1175,35 @@ def test_route_switches_default_off_for_producer_gate() -> None:
     # The GitHub work-item route rejects guessed filesystem defaults. These are
     # deliberately explicit deployment inputs and stay empty until a reviewed
     # activation supplies mounted/runtime paths.
-    for name in (
-        "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
-        "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
-    ):
+    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
         assert shared_env[name] == f"${{{name}:-}}"
 
-    # The additive Go profile carries the exact same inactive switch and the
-    # two worker-only paths. This is deliberately configuration, not a profile
-    # enablement: the `go` profile itself stays opt-in.
+    # The additive Go profile carries the exact same inactive switches and
+    # worker-only paths. This is configuration, not profile activation.
     go_worker_env = _load_yaml(_GO_PROFILE_OVERLAY)["services"]["go-worker"][
         "environment"
     ]
-    assert go_worker_env["WORKER_GITHUB_WORK_ITEMS_ENABLED"] == (
-        "${WORKER_GITHUB_WORK_ITEMS_ENABLED:-false}"
-    )
-    for name in (
-        "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH",
-        "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
-    ):
+    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
+        assert go_worker_env[switch] == f"${{{switch}:-false}}"
+    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
         assert go_worker_env[name] == f"${{{name}:-}}"
+
+
+def test_provider_route_env_example_is_unset_and_default_off() -> None:
+    """The example inventories opt-ins without enabling a route or profile."""
+    lines = _REPO_ROOT.joinpath(".env.example").read_text().splitlines()
+    declared = set(lines)
+
+    for switch in _PROVIDER_ROUTE_SWITCH_NAMES:
+        assert f'# {switch}="false"' in declared
+        assert not any(line.startswith(f"{switch}=") for line in lines)
+    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
+        assert f'# {name}=""' in declared
+        assert not any(line.startswith(f"{name}=") for line in lines)
+
+    assert not any(line.startswith("COMPOSE_PROFILES=") for line in lines), (
+        ".env.example must not activate the opt-in Go profile"
+    )
 
 
 def test_go_profile_overlay_never_depends_on_python_migrate() -> None:

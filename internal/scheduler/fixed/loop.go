@@ -284,11 +284,15 @@ func (loop *Loop) step(parent context.Context, now time.Time) error {
 		return fmt.Errorf("%w: %s", errScheduleOverdue, strings.Join(overdue, ", "))
 	}
 	loop.mu.Lock()
+	if loop.stopping {
+		loop.mu.Unlock()
+		return context.Canceled
+	}
 	loop.windows++
 	loop.consecutive = 0
 	loop.lastOK, loop.up = now.UTC(), true
-	loop.mu.Unlock()
 	loop.ready.Store(true)
+	loop.mu.Unlock()
 	return nil
 }
 
@@ -416,11 +420,11 @@ func (loop *Loop) Shutdown(ctx context.Context) error {
 	if loop == nil || ctx == nil {
 		return ErrEngineUnavailable
 	}
-	loop.setFailed()
 	loop.mu.Lock()
 	loop.stopping = true
 	cancel, ticker, done := loop.cancel, loop.ticker, loop.done
 	loop.mu.Unlock()
+	loop.setFailed()
 	if ticker != nil {
 		ticker.Stop()
 	}

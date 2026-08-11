@@ -125,24 +125,27 @@ func (engine *GitHubWorkItemEngineDeriver) Derive(
 		return nil, err
 	}
 
-	result := make(map[string][]json.RawMessage, len(githubWorkItemDerivedEngineDestinations))
+	var issueTypeMetrics, investmentClassifications, metrics []json.RawMessage
 	for _, destination := range githubWorkItemDerivedEngineDestinations {
-		var encoded []json.RawMessage
 		var err error
 		switch destination {
 		case githubIssueTypeMetricsDestination:
-			encoded, err = marshalGitHubWorkItemDerivedRows(engineRows.IssueTypes)
+			issueTypeMetrics, err = marshalGitHubWorkItemDerivedRows(engineRows.IssueTypes)
 		case githubInvestmentClassificationsDestination:
-			encoded, err = marshalGitHubWorkItemDerivedRows(engineRows.Classifications)
+			investmentClassifications, err = marshalGitHubWorkItemDerivedRows(engineRows.Classifications)
 		case githubInvestmentMetricsDestination:
-			encoded, err = marshalGitHubWorkItemDerivedRows(engineRows.InvestmentMetrics)
+			metrics, err = marshalGitHubWorkItemDerivedRows(engineRows.InvestmentMetrics)
 		default:
 			return nil, ErrInvalidConfiguration
 		}
 		if err != nil {
 			return nil, err
 		}
-		result[destination] = encoded
+	}
+	result := map[string][]json.RawMessage{
+		githubIssueTypeMetricsDestination:          issueTypeMetrics,
+		githubInvestmentClassificationsDestination: investmentClassifications,
+		githubInvestmentMetricsDestination:         metrics,
 	}
 	if len(result) != len(githubWorkItemDerivedEngineDestinations) {
 		return nil, ErrInvalidConfiguration

@@ -136,9 +136,9 @@
     {
       "id": "A5-all-five-aliases-remain-native-route-ready",
       "file": "internal/providersync/execution_registry.go",
-      "find": "\t\tdescriptor.Destinations = workItemRouteDestinations()\n\t\tdescriptor.RouteReady = true\n\t\tif dataset == \"work-items\" {",
-      "replace": "\t\tdescriptor.Destinations = workItemRouteDestinations()\n\t\tdescriptor.RouteReady = false\n\t\tif dataset == \"work-items\" {",
-      "rationale": "matrix readiness is a logical five-alias family property: changing one shared activation assignment must fail both the concrete descriptor assertion and the independent 25/59 plus GitHub 17/17 census",
+      "find": "\t\tdescriptor.RouteReady = true\n\t\tif dataset == \"work-items\" {\n\t\t\tdescriptor.RouteEnabled = switches.GithubWorkItems",
+      "replace": "\t\tdescriptor.RouteReady = false\n\t\tif dataset == \"work-items\" {\n\t\t\tdescriptor.RouteEnabled = switches.GithubWorkItems",
+      "rationale": "matrix readiness is a logical five-alias family property: changing one shared activation assignment must fail both the concrete descriptor assertion and the independent 59/59 plus GitHub 17/17 census",
       "build": [
         "env",
         "GOWORK=off",
@@ -167,7 +167,7 @@
     {
       "id": "A6-python-direct-aliases-never-enable-river",
       "file": "src/dev_health_ops/workers/provider_unit_route.py",
-      "find": "        if is_github_work_item_direct_alias(provider, dataset):",
+      "find": "        if is_atomic_provider_family_direct_alias(provider, dataset):",
       "replace": "        if False:",
       "rationale": "route-ready aliases remain visible in the matrix, but enabling the one family switch must select River only for the canonical work-items claim",
       "build": [
@@ -339,8 +339,8 @@
     {
       "id": "A12-activated-executor-receives-the-validated-status-mapping-path",
       "file": "cmd/dev-health-worker/provider_sync.go",
-      "find": "\t\t\t\t\tgithubWorkItemsRuntime.statusMappingPath,",
-      "replace": "\t\t\t\t\t\"\",",
+      "find": "\t\t\t\tghDeriver, err := providersync.NewGitHubWorkItemDeriver(\n\t\t\t\t\tclickhouseConnection, session,\n\t\t\t\t\tworkItemsRuntime.statusMappingPath,",
+      "replace": "\t\t\t\tghDeriver, err := providersync.NewGitHubWorkItemDeriver(\n\t\t\t\t\tclickhouseConnection, session,\n\t\t\t\t\t\"\",",
       "rationale": "the production BuildExecutor closure must hand the validated explicit status mapping path to NewGitHubWorkItemDeriver rather than a blank/default/ambient path",
       "build": [
         "env",
@@ -370,8 +370,8 @@
     {
       "id": "A12b-activated-executor-receives-the-validated-investment-config-path",
       "file": "cmd/dev-health-worker/provider_sync.go",
-      "find": "\t\t\t\t\tgithubWorkItemsRuntime.investmentConfigPath,",
-      "replace": "\t\t\t\t\t\"\",",
+      "find": "\t\t\t\tghDeriver, err := providersync.NewGitHubWorkItemDeriver(\n\t\t\t\t\tclickhouseConnection, session,\n\t\t\t\t\tworkItemsRuntime.statusMappingPath,\n\t\t\t\t\tworkItemsRuntime.investmentConfigPath,",
+      "replace": "\t\t\t\tghDeriver, err := providersync.NewGitHubWorkItemDeriver(\n\t\t\t\t\tclickhouseConnection, session,\n\t\t\t\t\tworkItemsRuntime.statusMappingPath,\n\t\t\t\t\t\"\",",
       "rationale": "the production BuildExecutor closure must hand the validated explicit investment config path to NewGitHubWorkItemDeriver independently of the status mapping path",
       "build": [
         "env",

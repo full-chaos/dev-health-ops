@@ -7,8 +7,8 @@
     {
       "id": "R1-pr-comments-native-executor",
       "file": "internal/providersync/execution_registry.go",
-      "find": "\"github/pr-comments\":         ExecutorNativeGo,",
-      "replace": "\"github/pr-comments\":         ExecutorNone,",
+      "find": "\"github/pr-comments\":             ExecutorNativeGo,",
+      "replace": "\"github/pr-comments\":             ExecutorNone,",
       "rationale": "the checked-in matrix must not claim pr-comments is native unless the executor registry resolves it to the native Go path",
       "proof": [["go", "test", "-count=1", "-run", "^TestProviderMatrixExecutorRegistryIsHonest$", "./internal/providersync/"]]
     },
@@ -31,8 +31,8 @@
     {
       "id": "R4-config-maps-pr-comments-switch",
       "file": "cmd/dev-health-worker/dependencies.go",
-      "find": "GithubPRComments:         cfg.WorkerGithubPRCommentsEnabled,",
-      "replace": "GithubPRComments:         false,",
+      "find": "GithubPRComments:            cfg.WorkerGithubPRCommentsEnabled,",
+      "replace": "GithubPRComments:            false,",
       "rationale": "the explicit environment switch must reach the Go descriptor rather than leaving a route-ready pair permanently disabled",
       "proof": [["go", "test", "-count=1", "-run", "^TestWorkerRouteSwitchesMapsEveryConfiguredRoute/github_pr_comments$", "./cmd/dev-health-worker/"]]
     },

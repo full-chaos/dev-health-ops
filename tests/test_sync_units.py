@@ -2960,7 +2960,6 @@ def test_dispatch_enabled_atomic_work_item_family_rejects_before_any_transport(
 
     from dev_health_ops.workers import sync_units
     from dev_health_ops.workers.job_routes import WorkerJobRouteError
-    from dev_health_ops.workers.provider_unit_route import ProviderUnitRouteSwitches
 
     run, unit = _seed_run(
         db_session,
@@ -2975,19 +2974,6 @@ def test_dispatch_enabled_atomic_work_item_family_rejects_before_any_transport(
     _patch_db_session(monkeypatch, db_session)
     _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv(f"WORKER_{provider.upper()}_WORK_ITEMS_ENABLED", "true")
-    if transport == "river_canary":
-        # c901 deliberately rejects these incomplete routes during config
-        # construction. Bypass only that separate baseline gate so this test
-        # proves family admission itself wins before routes_to_river/outbox.
-        switches = ProviderUnitRouteSwitches(
-            jira_work_items=provider == "jira",
-            linear_work_items=provider == "linear",
-        )
-        monkeypatch.setattr(
-            ProviderUnitRouteSwitches,
-            "from_environment",
-            classmethod(lambda _cls, _environment=None: switches),
-        )
 
     with pytest.raises(WorkerJobRouteError, match="complete canonical family"):
         sync_units.dispatch_sync_run(str(run.id))
@@ -3094,6 +3080,13 @@ _AGGREGATE_ROUTE_DISPATCH_CASES = (
         _GITHUB_WORK_ITEM_FAMILY_FLAGS,
         "WORKER_JIRA_WORK_ITEMS_ENABLED",
         id="jira-work-items",
+    ),
+    pytest.param(
+        "linear",
+        "work-items",
+        _GITHUB_WORK_ITEM_FAMILY_FLAGS,
+        "WORKER_LINEAR_WORK_ITEMS_ENABLED",
+        id="linear-work-items",
     ),
     pytest.param(
         "pagerduty",

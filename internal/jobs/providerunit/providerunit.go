@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 )
@@ -234,6 +236,35 @@ func routeReconciliationError(configurationErr error) error {
 	return fmt.Errorf("%w: %w", ErrRouteReconciliationRequired, configurationErr)
 }
 
+func validateProviderFamilyExecutionClaim(
+	claim providersync.Claim,
+	switches providersync.CompleteRouteSwitches,
+) error {
+	policy, family := providerfamilycontract.PolicyFor(claim.Provider, claim.Dataset)
+	if !family || policy.Mode == providerfamilycontract.Independent {
+		return nil
+	}
+	// GitHub retains its already-landed always-exact claim contract. Other
+	// work-item providers remain on their D16 legacy claim shape until their
+	// actual typed Go switch is enabled. GitLab deliberately has no switch yet,
+	// so cataloguing its family cannot activate admission or execution.
+	strict := false
+	switch strings.ToLower(strings.TrimSpace(claim.Provider)) {
+	case "github":
+		strict = true
+	case "jira":
+		strict = switches.JiraWorkItems
+	case "linear":
+		strict = switches.LinearWorkItems
+	}
+	if err := providerfamilycontract.ValidateClaim(
+		claim.Provider, claim.Dataset, claim.ProcessorFlags, strict,
+	); err != nil {
+		return fmt.Errorf("%w: %w", providersync.ErrInvalidConfiguration, err)
+	}
+	return nil
+}
+
 func (handler *Handler) Work(
 	ctx context.Context,
 	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
@@ -267,9 +298,7 @@ func (handler *Handler) Work(
 	// BuildExecutor. A stale River unit can otherwise fetch credentials and
 	// commit an incomplete work-item family before the completion-side
 	// defense-in-depth check observes its flags.
-	familyClaimErr := providersync.ValidateGitHubWorkItemExecutionClaim(
-		claim.Provider, claim.Dataset, claim.ProcessorFlags,
-	)
+	familyClaimErr := validateProviderFamilyExecutionClaim(claim, handler.Switches)
 	if familyClaimErr != nil || !descriptorPresent ||
 		!descriptor.RouteReady || !descriptor.RouteEnabled {
 		return handler.reconcileRouteFault(

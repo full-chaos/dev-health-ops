@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "go.yml"
 CHECK_GO = ROOT / "ci" / "check_go.sh"
 MANIFEST = ROOT / "ci" / "go_integration_shards.tsv"
+PROVIDER_MANIFEST = ROOT / "ci" / "go_providersync_test_shards.tsv"
+PROVIDER_PACKAGE = "internal/providersync"
 
 EXPECTED_PACKAGES = {
     "cmd/dev-health-worker",
@@ -47,10 +49,12 @@ EXPECTED_PACKAGES = {
 def _run_check_go(
     *args: str,
     manifest: Path = MANIFEST,
+    provider_manifest: Path = PROVIDER_MANIFEST,
     github_output: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST"] = str(manifest)
+    env["DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST"] = str(provider_manifest)
     if github_output is not None:
         env["GITHUB_OUTPUT"] = str(github_output)
     return subprocess.run(
@@ -68,6 +72,47 @@ def _workflow() -> dict[str, Any]:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+def _providersync_top_level_tests() -> set[str]:
+    env = os.environ.copy()
+    env["GOTOOLCHAIN"] = "go1.25.9"
+    env["GOWORK"] = "off"
+    env["GOCACHE"] = "/tmp/chaos3141-provider-test-discovery-cache"
+    result = subprocess.run(
+        [
+            "go",
+            "test",
+            "-mod=readonly",
+            "-tags=integration",
+            "-count=1",
+            "-run=^$",
+            "-list=^Test",
+            f"./{PROVIDER_PACKAGE}",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    candidates = [
+        line for line in result.stdout.splitlines() if line.startswith("Test")
+    ]
+    assert all(re.fullmatch(r"Test[A-Za-z0-9_]+", line) for line in candidates)
+    return set(candidates)
+
+
+def _providersync_integration_tagged_tests() -> set[str]:
+    tests: set[str] = set()
+    for path in ROOT.joinpath(PROVIDER_PACKAGE).glob("*_test.go"):
+        source = path.read_text(encoding="utf-8")
+        if not re.search(r"(?m)^//go:build.*\bintegration\b", source):
+            continue
+        tests.update(re.findall(r"(?m)^func (Test[A-Za-z0-9_]+)", source))
+    return tests
+
+
 def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     tmp_path: Path,
 ) -> None:
@@ -82,9 +127,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         line.split("=", maxsplit=1)
         for line in github_output.read_text(encoding="utf-8").splitlines()
     )
-    assert json.loads(output["matrix"]) == {
-        "include": [{"shard": 1}, {"shard": 2}, {"shard": 3}]
+    matrix = json.loads(output["matrix"])["include"]
+    assert {(entry["target"], entry["shard"]) for entry in matrix} == {
+        ("providersync", 1),
+        ("providersync", 2),
+        ("providersync", 3),
+        ("providersync", 4),
+        ("packages", 2),
+        ("packages", 3),
     }
+    assert len(matrix) == 6
 
     assignments: dict[int, set[str]] = {}
     for line in result.stdout.splitlines():
@@ -113,21 +165,88 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     assert set(estimated) == {1, 2, 3}
     assert abs(estimated[2] - estimated[3]) <= 1
 
+    expected_provider_tests = _providersync_top_level_tests()
+    expected_integration_tests = _providersync_integration_tagged_tests()
+    assert len(expected_provider_tests) == 873
+    assert len(expected_integration_tests) == 102
+    assert expected_integration_tests < expected_provider_tests
+
+    provider_assignments: dict[int, set[str]] = {}
+    provider_class: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if not line.startswith("  PROVIDER-SHARD "):
+            continue
+        _label, shard, test_name, _weight, classification = line.split()
+        provider_assignments.setdefault(int(shard), set()).add(test_name)
+        provider_class[test_name] = classification.removeprefix("class=")
+
+    assert set(provider_assignments) == {1, 2, 3, 4}
+    provider_flattened = [
+        test_name for tests in provider_assignments.values() for test_name in tests
+    ]
+    assert len(provider_flattened) == len(set(provider_flattened)) == 873
+    assert set(provider_flattened) == expected_provider_tests
+    assert {
+        name
+        for name, classification in provider_class.items()
+        if classification == "integration"
+    } == expected_integration_tests
+    assert set(provider_class.values()) == {"integration", "ordinary"}
+
+    provider_totals: dict[int, int] = {}
+    provider_integration_counts: dict[int, int] = {}
+    for line in result.stdout.splitlines():
+        match = re.fullmatch(
+            r"providersync test shard (?P<shard>\d+): relative weight "
+            r"(?P<weight>\d+), (?P<count>\d+) test\(s\), "
+            r"(?P<integration>\d+) integration-tagged",
+            line,
+        )
+        if match:
+            provider_totals[int(match.group("shard"))] = int(match.group("weight"))
+            provider_integration_counts[int(match.group("shard"))] = int(
+                match.group("integration")
+            )
+    assert set(provider_totals) == {1, 2, 3, 4}
+    assert max(provider_totals.values()) - min(provider_totals.values()) <= 1
+    assert (
+        max(provider_integration_counts.values())
+        - min(provider_integration_counts.values())
+        <= 1
+    )
+
 
 def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
-    selected: list[str] = []
-    for shard in (1, 2, 3):
-        result = _run_check_go("integration-shard", str(shard), "--dry-run")
+    selected_packages: list[str] = []
+    for shard in (2, 3):
+        result = _run_check_go("integration-shard", "packages", str(shard), "--dry-run")
         assert result.returncode == 0, result.stdout + result.stderr
-        assert f"integration shard {shard}: DRY RUN" in result.stdout
-        selected.extend(
+        assert f"integration package shard {shard}: DRY RUN" in result.stdout
+        selected_packages.extend(
             line.removeprefix("  SHARD-RUN ")
             for line in result.stdout.splitlines()
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected) == len(set(selected)) == 24
-    assert set(selected) == EXPECTED_PACKAGES
+    assert len(selected_packages) == len(set(selected_packages)) == 23
+    assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
+
+    selected_tests: list[str] = []
+    for shard in (1, 2, 3, 4):
+        result = _run_check_go(
+            "integration-shard", "providersync", str(shard), "--dry-run"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"providersync test shard {shard}: DRY RUN" in result.stdout
+        selected_tests.extend(
+            line.removeprefix("  PROVIDER-TEST-RUN ")
+            for line in result.stdout.splitlines()
+            if line.startswith("  PROVIDER-TEST-RUN ")
+        )
+
+    expected_tests = _providersync_top_level_tests()
+    assert len(selected_tests) == len(set(selected_tests)) == 873
+    assert set(selected_tests) == expected_tests
 
 
 def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> None:
@@ -157,6 +276,19 @@ def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> No
         duplicate_result.stderr
     )
 
+    invalid_provider = tmp_path / "invalid-provider.tsv"
+    invalid_provider.write_text(
+        "shards\t1\nintegration-test-weight\t100\nordinary-test-weight\t1\n",
+        encoding="utf-8",
+    )
+    invalid_provider_result = _run_check_go(
+        "integration-shard-plan", provider_manifest=invalid_provider
+    )
+    assert invalid_provider_result.returncode == 2
+    assert "provider test shard manifest must declare at least two shards" in (
+        invalid_provider_result.stderr
+    )
+
 
 def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
     workflow = _workflow()
@@ -178,10 +310,14 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
         "${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}"
     )
     shard_commands = [str(step.get("run", "")) for step in shards["steps"]]
-    assert 'bash ci/check_go.sh integration-shard "${{ matrix.shard }}"' in (
-        shard_commands
-    )
+    assert (
+        'bash ci/check_go.sh integration-shard "${{ matrix.target }}" '
+        '"${{ matrix.shard }}"'
+    ) in shard_commands
     assert all("--dry-run" not in command for command in shard_commands)
+    assert shards["name"] == (
+        "go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}"
+    )
 
     for job in (planner, shards):
         go_setup = next(
@@ -222,6 +358,7 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
 
     workflow_source = WORKFLOW.read_text(encoding="utf-8")
     assert workflow_source.count("- 'ci/go_integration_shards.tsv'") == 2
+    assert workflow_source.count("- 'ci/go_providersync_test_shards.tsv'") == 2
 
     check_go_source = CHECK_GO.read_text(encoding="utf-8")
     assert 'GO_TOOLCHAIN="go1.25.9"' in check_go_source
@@ -230,4 +367,8 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
     assert (
         "GOWORK=off go test -mod=readonly -tags=integration -count=1 "
         '-timeout=30m "${run_pkgs[@]}"'
+    ) in check_go_source
+    assert (
+        "GOWORK=off go test -mod=readonly -tags=integration -count=1 "
+        '-timeout=30m -run "${test_regex}" ./internal/providersync'
     ) in check_go_source

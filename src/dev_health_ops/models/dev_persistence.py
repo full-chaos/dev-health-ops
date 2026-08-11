@@ -385,6 +385,43 @@ class DevRun(Base):
     )
 
 
+class DevRunStreamEvent(Base):
+    """Durable public SSE event ledger used by run resume."""
+
+    __tablename__ = "dev_run_stream_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "org_id", "user_id"],
+            ["dev_runs.id", "dev_runs.org_id", "dev_runs.user_id"],
+            name="fk_dev_run_stream_events_run_owner",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "run_id", "sequence", name="uq_dev_run_stream_events_run_sequence"
+        ),
+        Index(
+            "ix_dev_run_stream_events_owner_run_sequence",
+            "org_id",
+            "user_id",
+            "run_id",
+            "sequence",
+        ),
+        CheckConstraint("sequence >= 0", name="ck_dev_run_stream_events_sequence"),
+    )
+
+
 class DevToolCall(Base):
     """Bounded tool-call audit metadata without inputs or source results."""
 

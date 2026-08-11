@@ -70,10 +70,12 @@ class FakeCatalog:
         self.watermark_calls = 0
         self.organization_repository_ids_calls = 0
         self.organization_project_entities_calls = 0
+        self.organization_team_entities_calls = 0
         self.fail_exact = False
         self.fail_watermark = False
         self.fail_organization_repository_ids = False
         self.fail_organization_project_entities = False
+        self.fail_organization_team_entities = False
 
     async def watermark(self, org_id: str, kinds: tuple[EntityKind, ...]) -> str:
         self.watermark_calls += 1
@@ -145,6 +147,18 @@ class FakeCatalog:
             key=lambda entity: (entity.label.casefold(), entity.canonical_id),
         )
         return projects[:limit], len(projects)
+
+    async def organization_team_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        self.organization_team_entities_calls += 1
+        if self.fail_organization_team_entities:
+            raise RuntimeError("organization team catalog unavailable")
+        teams = sorted(
+            (entity for entity in self.entities if entity.kind is EntityKind.TEAM),
+            key=lambda entity: (entity.label.casefold(), entity.canonical_id),
+        )
+        return teams[:limit], len(teams)
 
 
 def _entity(
@@ -1190,6 +1204,44 @@ async def test_organization_committed_projects_is_request_cached() -> None:
 
     assert first == second
     assert catalog.organization_project_entities_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_teams_returns_tenant_filtered_complete_page() -> (
+    None
+):
+    entities = [
+        _entity(EntityKind.TEAM, "team-z", "Zulu"),
+        _entity(EntityKind.TEAM, "team-a", "Alpha"),
+        _entity(EntityKind.PROJECT, "project-a", "Project"),
+    ]
+    catalog = FakeCatalog(entities)
+    service = ScopeResolutionService(catalog)
+
+    teams, total, catalog_available = await service.organization_committed_teams(
+        "org-a", "perm-a", limit=25
+    )
+
+    assert [entity.canonical_id for entity in teams] == ["team-a", "team-z"]
+    assert all(entity.kind is EntityKind.TEAM for entity in teams)
+    assert total == 2
+    assert catalog_available is True
+    assert catalog.organization_team_entities_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_organization_committed_teams_fails_closed_on_catalog_error() -> None:
+    catalog = FakeCatalog([_entity(EntityKind.TEAM, "team-a", "Alpha")])
+    catalog.fail_organization_team_entities = True
+    service = ScopeResolutionService(catalog)
+
+    teams, total, catalog_available = await service.organization_committed_teams(
+        "org-a", "perm-a", limit=25
+    )
+
+    assert teams == []
+    assert total == 0
+    assert catalog_available is False
 
 
 # --- CHAOS-3256: resolve named entities before executing status tools ---

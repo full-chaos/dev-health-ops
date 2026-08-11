@@ -21,6 +21,7 @@
     "source_health": "Source health",
     "status_change": "Status changes",
     "status_snapshot.v1": "Status snapshot",
+    "temporal_context": "Temporal context",
     "test_report": "Test reports",
     "tool_results": "Tool results",
     "work_graph": "Work graph",

@@ -1,0 +1,29 @@
+{
+  "comparison_shape": "singular_subject",
+  "conversation_reference_ids": [
+    "conv_2026_08_08_a"
+  ],
+  "interpretation_limitations": [],
+  "job_id": "job_nightfall_status",
+  "job_statement": "Report the current delivery status of the Nightfall Migration project and identify its principal current drivers.",
+  "job_uncertainty": "precise",
+  "question_family": "project_status_drivers",
+  "schema_version": "ask_dev_analytical_job.v1",
+  "surface_context_refs": [
+    {
+      "entity_id": "proj_nightfall_migration",
+      "entity_kind": "project",
+      "surface_id": "surface_project_overview",
+      "surface_kind": "project_page"
+    }
+  ],
+  "time_context": {
+    "analytical_slice": "historical",
+    "as_of": "2026-05-08T00:00:00Z",
+    "edge_validity_basis": "unavailable",
+    "end": "2026-08-08T00:00:00Z",
+    "historical_comparability": "not_comparable_missing_baseline",
+    "start": "2026-05-08T00:00:00Z",
+    "timezone": "America/Los_Angeles"
+  }
+}

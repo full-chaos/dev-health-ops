@@ -191,6 +191,7 @@ ORCHESTRATOR_ERROR_CODES = frozenset(
         "scope_ambiguous",
         "scope_forbidden",
         "scope_not_found",
+        "source_unavailable",
         "tool_limit_reached",
         "tool_unavailable",
         # CHAOS-3541
@@ -211,6 +212,7 @@ PUBLIC_OUTCOME_BY_ERROR_CODE: Mapping[str, PublicOutcome] = {
     "tool_unavailable": PublicOutcome.TEMPORARILY_UNAVAILABLE,
     "provider_unavailable": PublicOutcome.TEMPORARILY_UNAVAILABLE,
     "provider_not_configured": PublicOutcome.TEMPORARILY_UNAVAILABLE,
+    "source_unavailable": PublicOutcome.TEMPORARILY_UNAVAILABLE,
     "rate_limited": PublicOutcome.TEMPORARILY_UNAVAILABLE,
     "feature_not_enabled": PublicOutcome.UNSUPPORTED,
     "model_not_supported": PublicOutcome.UNSUPPORTED,

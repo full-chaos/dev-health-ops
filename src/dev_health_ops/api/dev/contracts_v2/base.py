@@ -103,7 +103,9 @@ class EntityKind(StrEnum):
 
 
 class QuestionIntentID(StrEnum):
-    """The twelve Wave 3.1 launch intents (Amendment TRD v2 §4.1)."""
+    """The twelve Wave 3.1 launch intents (Amendment TRD v2 §4.1), plus the
+    CHAOS-3652 graph-assisted subjectless-cohort-discovery intent.
+    """
 
     ENTITY_STATUS = "entity_status"
     PORTFOLIO_STATUS = "portfolio_status"
@@ -117,6 +119,24 @@ class QuestionIntentID(StrEnum):
     TEAM_WORKLOAD_BALANCE = "team_workload_balance"
     OPERATIONAL_DEFICIENCY_INVENTORY = "operational_deficiency_inventory"
     BOUNDED_INVESTIGATION = "bounded_investigation"
+    #: CHAOS-3652: a question that names zero subjects but lexically
+    #: describes a bounded team/project cohort-discovery job ("which teams
+    #: are currently struggling?"), as distinct from a genuinely
+    #: unbounded/ambiguous zero-mention question (which stays
+    #: ``BOUNDED_INVESTIGATION``). Requires ``Cardinality.ORGANIZATION_WIDE``
+    #: (``DevQuestionIntent.validate_intent_invariants``), but that is a
+    #: **closed-universe** discovery job, never organization-wide sweep
+    #: authorization: the graph-assisted route this intent triggers resolves
+    #: it against a bounded, question-family-specific candidate universe
+    #: derived server-side from the authorized scope (CHAOS-3645's
+    #: ``graph_arm.cohort_discovery.discover_cohort`` proved this shape:
+    #: family -> closed candidate-kind set -> authorized universe -> narrow
+    #: via graph relationships/measurements -- never an unrestricted
+    #: enumeration). ``ORGANIZATION_WIDE`` here only encodes "zero named
+    #: mentions were extracted"; it must never be read, by any consumer, as
+    #: authorization to sweep every entity in the organization. See
+    #: CHAOS-3652/CHAOS-3660 for the full guardrail discussion.
+    DISCOVERED_COHORT = "discovered_cohort"
 
 
 class Cardinality(StrEnum):
@@ -281,6 +301,31 @@ class SourceClass(StrEnum):
     #: ``DeficiencyCategoryStatus``'s per-category evaluated/unevaluated
     #: split) has no ``HealthRuleFinding`` equivalent.
     DEFICIENCY_INVENTORY = "deficiency_inventory"
+    #: CHAOS-3567 (flag-off scaffold, no runtime behavior change): reserves
+    #: the wire vocabulary for the optional temporal-context source class
+    #: CHAOS-3502 (amended 2026-08-07) authorizes designing. Deliberately
+    #: inert as of this member's introduction: no ``DevInvestigationPlan``
+    #: declares a ``DevSourceRequirement`` against it (verified exactly,
+    #: not merely asserted -- see
+    #: ``tests/api/dev/test_chaos_3567_temporal_context_source_class_stub.py``'s
+    #: ``test_temporal_context_is_not_referenced_by_any_registered_plan``),
+    #: which in turn makes it structurally impossible for any registered
+    #: ``StepRegistry`` entry to carry this source class either --
+    #: ``registry_validation.validate_registry`` rejects a step whose
+    #: ``(source_class, adapter_id)`` doesn't match a declared requirement
+    #: on its own plan (``registry_validation.py:118-135``,
+    #: ``StepRequirementMismatchError``; that same test module's
+    #: ``test_no_step_can_register_against_temporal_context_without_a_
+    #: declared_requirement`` exercises the rejection directly), and
+    #: ``data_health_service.NATIVE_EVIDENCE_SOURCES`` does not name it
+    #: either (exact-tuple-pinned by the same test module). Full
+    #: registry-impact design: Linear project doc "CHAOS-3567: Ask Dev
+    #: temporal source — design + registry-impact map" (Context Fabric
+    #: project). Real recognizer/plan/source wiring (the acr-precedented
+    #: ``required=False`` ``DataHealthService`` branch, a dedicated plan
+    #: document, registered steps) stays blocked on the CHAOS-3499 ADR and
+    #: CHAOS-3500/3501 contracts.
+    TEMPORAL_CONTEXT = "temporal_context"
 
 
 #: A **server-minted opaque handle**: the canonical hyphenated UUID form.

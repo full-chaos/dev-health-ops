@@ -20,12 +20,21 @@ ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE: Final = "ask_dev_contextual_entrypoints"
 #: behaves exactly as it does today: no server-owned interpretation, no subject
 #: preflight, every tool advertised, and the CHAOS-3289 backstop terminating.
 ASK_DEV_WAVE_3_1_FEATURE: Final = "ask_dev_wave_3_1"
+#: Wave 3.2 design-partner rollout gate (CHAOS-3502). Off means the run
+#: behaves exactly as it does today: no graph-assisted routing branch is
+#: attempted, whether or not the orchestrator was constructed with a
+#: ``graph_investigation_query`` -- this is the SECOND, organization-level
+#: gate; ``orchestrator.graph_routing_runtime_enabled()`` is the independent,
+#: same-process runtime kill switch. Both must be true for a run to attempt
+#: the graph route.
+ASK_DEV_GRAPH_ROUTING_FEATURE: Final = "ask_dev_graph_routing"
 EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset(
     {
         "agent_context_runtime",
         ASK_DEV_FEATURE,
         ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE,
         ASK_DEV_WAVE_3_1_FEATURE,
+        ASK_DEV_GRAPH_ROUTING_FEATURE,
     }
 )
 ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset()
@@ -200,6 +209,13 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         FeatureCategory.ANALYTICS,
         LicenseTier.COMMUNITY,
         "Server-owned question intent and named-subject preflight",
+    ),
+    (
+        ASK_DEV_GRAPH_ROUTING_FEATURE,
+        "Ask Dev Graph-Assisted Routing",
+        FeatureCategory.ANALYTICS,
+        LicenseTier.COMMUNITY,
+        "Graph-assisted investigation for ambiguous, bounded, relational, and cohort questions (design-partner beta)",
     ),
     (
         "scheduled_jobs",

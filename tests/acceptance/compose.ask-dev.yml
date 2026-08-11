@@ -1,35 +1,36 @@
 services:
   postgres:
-    container_name: ask-dev-acceptance-postgres
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-postgres"
     ports: !reset []
 
   pgbouncer:
-    container_name: ask-dev-acceptance-pgbouncer
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-pgbouncer"
     ports: !reset []
 
   clickhouse:
-    container_name: ask-dev-acceptance-clickhouse
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-clickhouse"
     ports: !reset []
 
   valkey:
-    container_name: ask-dev-acceptance-valkey
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-valkey"
     ports: !reset []
 
   migrate:
-    container_name: ask-dev-acceptance-migrate
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-migrate"
     environment:
       DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
 
   api:
-    container_name: ask-dev-acceptance-api
-    # Host port is configurable because 18080 is not ours alone: the normal
-    # dev-health stack publishes its ACR API on 127.0.0.1:18080 too, and a
-    # developer running that stack could not start this one at all (the
-    # container fails with "port is already allocated" before any scenario
-    # runs). Default stays 18080 so nothing that already works changes;
-    # export ASK_DEV_ACCEPTANCE_API_PORT to run alongside the dev stack.
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-api"
+    build:
+      args:
+        # The graph trial remains optional in normal images; this graph-enabled
+        # acceptance API must actually contain its driver.
+        DEV_HEALTH_INSTALL_TARGET: ".[context-graph-trial]"
+    # Docker chooses a free loopback port by default because local development
+    # routinely runs multiple Compose projects. Callers can still pin one.
     ports: !override
-      - "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-18080}:8000"
+      - "127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"
     environment:
       ENVIRONMENT: acceptance
       ASK_DEV_LIVE_ACCEPTANCE: "1"
@@ -97,6 +98,20 @@ services:
       # trip it" reference point.
       ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX: "1000"
       ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD: "200000000"
+      # W3 graph acceptance is explicitly armed only in this overlay. The
+      # trial store is isolated from the production Valkey service and the
+      # read flag remains off in ordinary Compose deployments.
+      CONTEXT_FABRIC_GRAPH_READ_ENABLED: "1"
+      CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED: "1"
+      CONTEXT_FABRIC_GRAPH_STORE_URI: redis://graph-trial-store:6379
+      ASK_DEV_GRAPH_ROUTING_ENABLED: "1"
+      # Acceptance-only fault seam: one distinct, graph-routable question
+      # reaches the real routing boundary and receives UNAVAILABLE so the
+      # browser must observe the native fallback. Production environments
+      # cannot arm this because production_runtime also requires
+      # ENVIRONMENT=acceptance.
+      ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM: "1"
+      ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION: "Which teams are falling behind?"
     depends_on:
       ask-dev-scripted-openai:
         condition: service_healthy
@@ -128,7 +143,7 @@ services:
   # work, not just that the container is running.
   # ---------------------------------------------------------------------------
   worker:
-    container_name: ask-dev-acceptance-worker
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-worker"
     healthcheck:
       # Codex finding (HIGH, 2026-08-05): `celery inspect ping` only proves
       # the control-plane RPC answers -- it is served independently of the
@@ -153,7 +168,7 @@ services:
       start_period: 15s
 
   beat:
-    container_name: ask-dev-acceptance-beat
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-beat"
     healthcheck:
       # Codex finding (HIGH, 2026-08-05): the persistent schedule file's
       # mtime is touched by beat's own bookkeeping regardless of whether a
@@ -178,7 +193,7 @@ services:
       start_period: 90s
 
   ask-dev-scripted-openai:
-    container_name: ask-dev-acceptance-scripted-openai
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-scripted-openai"
     profiles: ["ask-dev-acceptance"]
     build:
       context: .
@@ -244,7 +259,7 @@ services:
 
   web:
     profiles: ["ask-dev-acceptance"]
-    container_name: ask-dev-acceptance-web
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-web"
     build:
       context: ${ASK_DEV_WEB_CONTEXT:?pass --web-root to the acceptance launcher}
       dockerfile: Dockerfile
@@ -254,12 +269,15 @@ services:
     environment:
       BACKEND_URL: http://api:8000
       AUTH_SECRET: ask-dev-acceptance-web-auth-secret-v1
-      AUTH_URL: http://127.0.0.1:3002
+      # Leave the canonical URL empty by default so Auth.js derives the
+      # loopback origin from the inbound Host header. A caller that owns a
+      # deliberately pinned web port may still provide this override.
+      AUTH_URL: "${ASK_DEV_ACCEPTANCE_WEB_URL:-}"
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "127.0.0.1:3002:3000"
+      - "127.0.0.1:${ASK_DEV_ACCEPTANCE_WEB_PORT:-0}:3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
       interval: 5s

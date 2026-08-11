@@ -39,8 +39,30 @@ def _chunked(seq: Sequence[T], size: int) -> Iterator[Sequence[T]]:
 
 
 def _dt_to_clickhouse_datetime(value: datetime | None) -> datetime | None:
+    """Normalize to a timezone-AWARE UTC datetime for clickhouse-connect.
+
+    PR #1602 round-2 review NEW-2 (HIGH, BLOCKS): this used to convert to
+    UTC and then STRIP tzinfo (``.replace(tzinfo=None)``) before returning.
+    clickhouse-connect reinterprets a NAIVE datetime using the WRITER
+    PROCESS's own local system timezone and re-converts it to UTC for the
+    wire -- a second, spurious conversion stacked on top of the first one
+    this function already did. Proven with a 3-TZ matrix (UTC,
+    America/Los_Angeles, Asia/Tokyo): the same instant round-tripped through
+    a naive value landed 0h/+8h/-9h off depending solely on the writer
+    process's `TZ`. Returning an AWARE UTC datetime instead is not
+    reinterpreted -- clickhouse-connect respects `tzinfo` directly and
+    stores the correct instant regardless of the writer's local timezone
+    (verified empirically against the real engine).
+
+    The naive-input branch is fixed the same way: every caller in this
+    codebase treats a naive datetime as ALREADY UTC (the CHAOS-3392
+    no-wall-clock convention; `datetime.now(timezone.utc)` is used
+    throughout), so a naive value reaching this function is stamped with
+    UTC explicitly rather than left naive and vulnerable to the identical
+    reinterpretation bug.
+    """
     if value is None:
         return None
     if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

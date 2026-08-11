@@ -11,13 +11,14 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
-from typing import Any, Literal, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import annotated_types
 from pydantic import ValidationError
@@ -35,6 +36,12 @@ from dev_health_ops.llm.agent.contracts import (
     AgentToolRequest,
     AgentUsage,
 )
+
+if TYPE_CHECKING:
+    from dev_health_ops.context_fabric.graph_arm.cohort import CohortProposal
+    from dev_health_ops.context_fabric.graph_arm.cohort_ranking import (
+        CohortRankingResult,
+    )
 from dev_health_ops.llm.agent.errors import (
     AgentProviderError,
     AgentProviderErrorCode,
@@ -42,6 +49,8 @@ from dev_health_ops.llm.agent.errors import (
 )
 from dev_health_ops.llm.budget import budget_idempotency_scope
 from dev_health_ops.metrics.prometheus import (
+    ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL,
+    ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL,
     ASK_DEV_INTERNAL_TOKEN_LEAK_TOTAL,
     ASK_DEV_PLAN_REGISTRY_GAP_TOTAL,
     ASK_DEV_QUA_COMMIT_TOTAL,
@@ -63,10 +72,22 @@ from .answer_validator import (
     completion_truncation_detail,
     validate_answer_candidate,
 )
+from .canonical_enrichment import CanonicalEnrichmentAccessor, EnrichmentGap
 from .contracts import (
     V1_SCOPE_LIST_LIMIT,
     AnswerStatus,
     DevAnswer,
+    DevAnswerCohortDisposition,
+    DevAnswerCohortMember,
+    DevAnswerCohortSignal,
+    DevAnswerCohortSignalSource,
+    DevAnswerCohortSlot,
+    DevAnswerEnrichmentGap,
+    DevAnswerEvidenceSourceClass,
+    DevAnswerGraphAssistance,
+    DevAnswerPressureDimension,
+    DevAnswerPressureState,
+    DevAnswerSourceRequirementState,
     DevClaim,
     DevContractVersions,
     DevCoverage,
@@ -84,10 +105,17 @@ from .contracts import (
     EntityType,
     FreshnessState,
     MetricID,
+    PacketLimitationKind,
     QuestionClass,
     ScopeResolutionOutcome,
     ToolID,
     dev_error_remediation,
+)
+from .contracts import (
+    CohortDiscoveryFamily as ContractCohortDiscoveryFamily,
+)
+from .contracts import (
+    GraphAssistedAvailability as ContractGraphAssistedAvailability,
 )
 from .contracts_v2 import (
     NO_ANSWER_OUTCOMES,
@@ -104,8 +132,38 @@ from .contracts_v2.frame import DevAnswerFrame
 from .contracts_v2.narrative import DevNarrative
 from .contracts_v2.plan import DevInvestigationPlan
 from .contracts_v2.subject import DevEntityRefV2
+from .evidence_service import EvidenceService
+from .graph_evidence_admission import extract_evidence_candidates
+from .graph_investigation_query import (
+    CohortDiscoveryFamily,
+    GraphAuthorizationResolver,
+    GraphAuthorizationScope,
+    GraphInvestigationQuery,
+    GraphInvestigationRequest,
+    GraphQueryOutcome,
+    GraphQueryResult,
+)
+from .graph_routing_policy import (
+    GraphAssistedAvailability,
+    GraphRoutingEntitlementAuthorizer,
+    GraphRoutingPolicyDeniedError,
+    describe_availability,
+    limitation_kinds_of,
+)
+from .investigation_contract import (
+    AskDevInvestigationPacket,
+    CohortCompleteness,
+    InvestigationOutcome,
+)
 from .investigation_plans import PlanExecutor, StepContext
 from .investigation_plans.state_mapping import UNMEASURED_REQUIREMENT_STATES
+from .investigation_shadow import (
+    FinishedRunContext,
+    InvestigationPacketProducer,
+    InvestigationShadow,
+    InvestigationShadowRecord,
+    run_window,
+)
 from .no_match_terminal import (
     attested_strings,
     disclose_scope_widening,
@@ -119,6 +177,7 @@ from .no_match_terminal import (
 from .orchestrator_states import TERMINAL_STATES, RunState
 from .org_policy import ASK_DEV_RUN_COST_HARD_MAX_MICROUSD
 from .preflight_outcomes import (
+    GRAPH_ROUTED_QUESTION_INTENTS,
     LEGACY_ONLY_QUESTION_INTENTS,
     TERMINAL_STATE_BY_OUTCOME,
     project_preflight_error,
@@ -132,7 +191,12 @@ from .qua_promotion import (
     verify_still_authorized,
 )
 from .qua_shadow import QUAShadowRecord, QuestionUnderstandingShadow
-from .scope_service import MAX_CANDIDATES, ScopeResolutionService
+from .question_interpreter import classify_cohort_discovery_family
+from .scope_service import (
+    MAX_CANDIDATES,
+    ScopeResolutionService,
+    scope_request_from_scope,
+)
 from .status_answer_render import (
     build_deterministic_status_claims,
     deterministic_answer_status,
@@ -249,6 +313,46 @@ def _project_scope_from_ref(
     )
 
 
+def _committed_subject_ref(
+    preflight_result: SubjectPreflightResult | None,
+) -> DevEntityRefV2 | None:
+    """The one subject preflight committed, as a canonical v2 entity ref.
+
+    CHAOS-3618 PR 2 originally handed the shadow seam
+    ``preflight_result.committed_resolution`` here, which is a
+    ``DevScopeResolution``. ``FinishedRunContext.committed_subject`` is
+    typed ``Any`` -- the seam must not couple to any one arm's view of a
+    run -- so nothing caught it, and the native projection reads
+    ``.entity_id`` off this value: every run with a committed subject would
+    have died on ``AttributeError`` inside the arm and been filed as a
+    ``PROJECTION_FAULT``, i.e. as a defect in the baseline rather than in
+    its wiring. Pinned by ``test_the_committed_subject_is_a_canonical_
+    entity_ref``.
+
+    ``committed_resolution`` is still the gate, because it is non-``None``
+    exactly when one *distinct* subject was committed. The ref itself comes
+    from the ledger, which is where a committed ``DevEntityRefV2`` actually
+    lives (``DevResolutionEntry.committed_entity_ref``, non-``None`` only
+    for an ``EXACT_MATCH``). Anything other than exactly one distinct
+    committed ref returns ``None`` rather than picking one: an arm told the
+    wrong subject was committed would attribute the whole packet to it.
+    """
+
+    if preflight_result is None or preflight_result.committed_resolution is None:
+        return None
+    ledger = preflight_result.ledger
+    if ledger is None:
+        return None
+    committed = {
+        entry.committed_entity_ref.entity_id: entry.committed_entity_ref
+        for entry in ledger.latest_by_mention().values()
+        if entry.committed_entity_ref is not None
+    }
+    if len(committed) != 1:
+        return None
+    return next(iter(committed.values()))
+
+
 def _named_entity_phrases(text: str) -> frozenset[str]:
     phrases = set(_NAMED_ENTITY_REFERENCE.findall(text))
     phrases.update(_NAMED_ENTITY_NOUN_STATUS.findall(text))
@@ -342,6 +446,45 @@ SERVER_GROUNDED_WARNING = (
     "server-verified data is reported here."
 )
 
+#: CHAOS-3502/3650: the graph-assisted counterpart of ``SERVER_GROUNDED_
+#: SUMMARY``/``WARNING`` above -- same "server statement about the shape of
+#: what follows" class of copy, naming no source, entity or domain fact. Used
+#: by ``_graph_grounded_answer`` for every answer it assembles, degraded or
+#: not; ``direct_summary`` never varies by degrade cause (that distinction
+#: lives in the two WARNING constants below, added independently -- CHAOS-3502
+#: forbids conflating "evidence was refused" with "an enrichment source was
+#: unavailable" into one message).
+GRAPH_GROUNDED_SUMMARY = (
+    "This result was assembled by the server from graph-discovered evidence "
+    "that the canonical evidence service verified for this request."
+)
+#: CHAOS-3650 drop-and-disclose: at least one graph-discovered evidence
+#: candidate was canonically REFUSED (the service looked at it and declined
+#: to admit it -- UNAUTHORIZED or NO_MATCHES, never UNCONFIGURED/UNAVAILABLE,
+#: see ``EvidenceAdmission.refused``) and was excluded from this answer.
+#: Never fabricated, never silently dropped -- disclosed here.
+GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED = (
+    "Some graph-discovered evidence could not be canonically verified and "
+    "was excluded from this answer."
+)
+#: A distinct cause from the one above: a canonical enrichment source
+#: (status/health/workload/readiness) was unavailable for this scope, not
+#: that evidence was refused. Kept as its own message rather than merged
+#: with ``GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED`` -- CHAOS-3502's ruling
+#: forbids conflating the two causes, and a reader benefits from knowing
+#: which one actually applies to their answer.
+GRAPH_GROUNDED_WARNING_ENRICHMENT_GAP = (
+    "Some canonical enrichment sources were unavailable for this request."
+)
+#: No live model call backs a graph-assembled answer (mirrors
+#: ``_budget_answer``/``_deterministic_status_answer``'s own
+#: ``DevModelMetadata`` construction off ``self._provider_source``/
+#: ``self._provider_family`` with no live ``decision_result`` to read a
+#: fingerprint from) -- a fixed, content-safe sentinel rather than an empty
+#: string, so a stored run row can tell "no model call happened because the
+#: graph route answered" apart from a genuinely missing fingerprint.
+GRAPH_ROUTING_MODEL_FINGERPRINT = "graph_routing.v1"
+
 #: ``dev_runs.grounding_validation_status`` values for the two demoted
 #: guards (a ``String(32)`` column, no CHECK constraint -- both fit).
 #:
@@ -360,6 +503,15 @@ GUARD_DEMOTED_GROUNDING_FLOOR_STATUS = "advisory_grounding_floor"
 #: way a grounding-floor violation is -- never a hard FAILED, which would
 #: throw away real evidence the run already retrieved.
 GUARD_DEMOTED_REFUSAL_STATUS = "advisory_refused_with_grounding"
+#: CHAOS-3502/3650. Set on every ``finish(RunState.COMPLETED, ...)`` this
+#: leg's own assembler produces -- clean or degraded alike (degraded-vs-clean
+#: is already independently visible on ``DevAnswer.status``: DEGRADED vs
+#: PARTIAL; this column instead answers "which route produced this",
+#: matching what ``GUARD_DEMOTED_*`` already means for its own two paths).
+#: Never set on the no-material fallthrough or the assembly-raised path --
+#: a bare ``RunState.COMPLETED`` with no status stays exactly what it means
+#: today (legacy loop or a demoted guard).
+GRAPH_ASSISTED_GROUNDING_STATUS = "graph_assisted"
 
 _LEGACY_GUARD_TERMINALS: dict[str, tuple[str, str]] = {
     "resolve_scope_ambiguous": (
@@ -444,6 +596,190 @@ class DevRunLimits:
 class OrchestratorEvent:
     state: RunState
     safe_code: str | None = None
+    #: A public-safe graph routing state. The orchestrator emits this as an
+    #: interior event only after the graph seam was actually called; a run
+    #: that never attempted graph routing leaves it ``None``.
+    graph_state: DevAnswerGraphAssistance | None = None
+
+
+def _cohort_proposal_from_packet(packet: AskDevInvestigationPacket) -> CohortProposal:
+    """Rehydrate only the graph-discovered membership the canonical ranker reads."""
+
+    from dev_health_ops.context_fabric.graph_arm.cohort import (
+        CohortCandidate,
+        CohortEntryMode,
+        CohortProposal,
+    )
+    from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
+
+    cohort = packet.comparison_cohort
+    return CohortProposal(
+        subject_id="",
+        members=tuple(
+            CohortCandidate(
+                canonical_id=member.canonical_id,
+                kind=GraphEntityKind(member.subject_kind.value),
+                display_label=member.display_label,
+                basis_anchors=tuple((basis, ()) for basis in member.inclusion_basis),
+            )
+            for member in cohort.members
+        ),
+        exclusions=(),
+        dimensions=cohort.supported_comparison_dimensions,
+        truncated=cohort.completeness is CohortCompleteness.TRUNCATED,
+        truncated_count=0,
+        authorization_filtered_count=cohort.authorization_filtered_count,
+        entry_mode=CohortEntryMode.SCOPE_ENUMERATED,
+    )
+
+
+def _public_cohort_slot(
+    *,
+    packet: AskDevInvestigationPacket,
+    family: CohortDiscoveryFamily,
+    ranking: CohortRankingResult,
+) -> DevAnswerCohortSlot | None:
+    """Project canonical ranking facts without inventing a scalar score."""
+
+    if not ranking.ranked_members:
+        return None
+    members: list[DevAnswerCohortMember] = []
+    for rank, ranked in enumerate(ranking.ranked_members, start=1):
+        members.append(
+            DevAnswerCohortMember(
+                entity_id=ranked.candidate.canonical_id,
+                display_label=ranked.candidate.display_label,
+                inclusion_basis=ContractCohortDiscoveryFamily(family.value),
+                rank=rank,
+                disposition=DevAnswerCohortDisposition(ranked.disposition.value),
+                # Investigation-packet rationales contain graph discovery
+                # vocabulary and anchor identifiers (for example relation
+                # enum values and canonical IDs). The public answer already
+                # carries the closed inclusion basis; do not copy private
+                # graph prose across this boundary.
+                inclusion_rationale=None,
+                pressure_dimensions=[
+                    DevAnswerPressureDimension(item.value)
+                    for item in ranked.pressure_dimensions
+                ],
+                signals=[
+                    DevAnswerCohortSignal(
+                        signal_id=signal.signal_id,
+                        source=DevAnswerCohortSignalSource(signal.source),
+                        observed_states=[
+                            DevAnswerSourceRequirementState(item.value)
+                            for item in signal.observed_states
+                        ],
+                        data_semantics=signal.data_semantics,
+                        freshness=signal.freshness,
+                        coverage=signal.coverage,
+                        denominator_present=signal.denominator_present,
+                        attribution_present=signal.attribution_present,
+                        dimension=(
+                            DevAnswerPressureDimension(signal.dimension.value)
+                            if signal.dimension is not None
+                            else None
+                        ),
+                        state=(
+                            DevAnswerPressureState(signal.state.value)
+                            if signal.state is not None
+                            else None
+                        ),
+                        evidence_source_classes=[
+                            DevAnswerEvidenceSourceClass(item.value)
+                            for item in signal.evidence_source_classes
+                        ],
+                        # Canonical ranker limitations are machine diagnostics
+                        # (including composed tokens and suppressed-reason
+                        # codes), not customer copy. Keep the closed quality
+                        # fields above and omit this private prose.
+                        limitation=None,
+                        gap=(
+                            DevAnswerEnrichmentGap(signal.gap.value)
+                            if signal.gap is not None
+                            else None
+                        ),
+                    )
+                    for signal in ranked.signals
+                ],
+            )
+        )
+    warnings: list[str] = []
+    if ranking.authorization_filtered_count:
+        noun = (
+            "candidate" if ranking.authorization_filtered_count == 1 else "candidates"
+        )
+        verb = "was" if ranking.authorization_filtered_count == 1 else "were"
+        warnings.append(
+            f"{ranking.authorization_filtered_count} cohort {noun} "
+            f"{verb} hidden by authorization."
+        )
+    if packet.comparison_cohort.exclusions:
+        warnings.append(
+            f"{len(packet.comparison_cohort.exclusions)} graph-discovered "
+            "candidate was excluded before canonical ranking."
+            if len(packet.comparison_cohort.exclusions) == 1
+            else f"{len(packet.comparison_cohort.exclusions)} graph-discovered "
+            "candidates were excluded before canonical ranking."
+        )
+    if packet.comparison_cohort.completeness is CohortCompleteness.TRUNCATED:
+        warnings.append("The discovered cohort was truncated.")
+    elif (
+        packet.comparison_cohort.completeness
+        is CohortCompleteness.BEST_EFFORT_UNCERTAIN
+    ):
+        warnings.append("The discovered cohort is best-effort and may be incomplete.")
+    if ranking.exclusions:
+        warnings.append(
+            f"{len(ranking.exclusions)} candidates did not meet this question's inclusion rule."
+        )
+    return DevAnswerCohortSlot(
+        entity_kind=EntityType(ranking.ranked_members[0].candidate.kind.value),
+        members=members,
+        cohort_complete=(
+            packet.comparison_cohort.completeness is CohortCompleteness.COMPLETE
+        ),
+        warnings=warnings,
+    )
+
+
+def _graph_assistance_for_result(
+    result: GraphQueryResult,
+    *,
+    graph_answered: bool,
+    cohort: DevAnswerCohortSlot | None = None,
+) -> DevAnswerGraphAssistance:
+    """Project one graph attempt into the public answer/event contract.
+
+    ``GraphQueryResult.diagnostic`` and packet internals deliberately never
+    cross this boundary. The optional packet details stay empty in this
+    narrow state slice; only limitations already disclosed by the validated
+    packet are copied for a graph-grounded answer.
+
+    A completed query that did not produce a graph answer is not advertised
+    as ``enabled`` merely because transport succeeded: the user received the
+    native arm, so graph assistance was unavailable for that answer.
+    """
+
+    availability = describe_availability(entitled=True, result=result)
+    if not graph_answered and availability is GraphAssistedAvailability.ENABLED:
+        availability = GraphAssistedAvailability.UNAVAILABLE
+    packet = result.packet
+    limitations: list[PacketLimitationKind] = []
+    if graph_answered and packet is not None:
+        # Map by the existing closed vocabulary. Do not expose packet details
+        # such as graph node names/IDs or backend-specific diagnostics.
+        limitations = [
+            PacketLimitationKind(kind.value)
+            for kind in sorted(limitation_kinds_of(packet), key=lambda item: item.value)
+        ]
+    return DevAnswerGraphAssistance(
+        schema_version="dev_answer_graph_assistance.v1",
+        state=ContractGraphAssistedAvailability(availability.value),
+        as_of=(packet.produced_at if packet is not None else datetime.now(UTC)),
+        cohort=cohort,
+        limitations=limitations,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -737,6 +1073,12 @@ class RunRecorder(Protocol):
         """
         ...
 
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        """Persist one CHAOS-3618 shadow comparison record."""
+        ...
+
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
         """Persist one CHAOS-3389 QUA shadow evaluation.
 
@@ -828,6 +1170,11 @@ class NullRunRecorder:
 
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         del result
+
+    async def record_investigation_shadow(
+        self, record: InvestigationShadowRecord
+    ) -> None:
+        return None
 
     async def record_qua_shadow(self, record: QUAShadowRecord) -> None:
         del record
@@ -957,6 +1304,88 @@ class EventCancellationSignal:
 
 EventSink = Callable[[OrchestratorEvent], Awaitable[None]]
 
+#: CHAOS-3502: the runtime kill-switch for graph-assisted routing.
+#: Independent of the organization feature-policy gate
+#: (``licensing.registry.ASK_DEV_GRAPH_ROUTING_FEATURE``,
+#: ``production_runtime.py`` evaluates it and decides whether to construct a
+#: real ``GraphInvestigationQuery`` at all) -- same two-flag shape
+#: ``graph_arm.flags`` already uses for projection/read, and for the same
+#: reason: an operator needs a same-process kill switch that does not
+#: require a database round trip or waiting for an org-policy cache to
+#: invalidate, on TOP OF the organization opt-in, not instead of it. Default
+#: OFF, so an unset var is byte-identical to this seam not existing.
+GRAPH_ROUTING_RUNTIME_FLAG = "ASK_DEV_GRAPH_ROUTING_ENABLED"
+
+
+def graph_routing_runtime_enabled() -> bool:
+    """Whether the graph-assisted routing seam may run in this process.
+
+    Both this AND the organization feature-policy gate must be true for the
+    graph route to ever be attempted -- this function is only ever the
+    SECOND check, never a substitute for the org gate. See
+    ``GRAPH_ROUTING_RUNTIME_FLAG``'s own comment for why the two are
+    independent rather than one implying the other.
+    """
+
+    return os.getenv(GRAPH_ROUTING_RUNTIME_FLAG) == "1"
+
+
+#: CHAOS-3502/3650. The two ``InvestigationOutcome`` members that assert the
+#: investigation reached a real judgment -- ``AskDevInvestigationPacket``'s
+#: own ``validate_supported_outcome_asserts_a_judgment`` validator GUARANTEES
+#: ``evidence_coverage.evidence_index`` is non-empty whenever the packet's
+#: outcome is one of these two, so gating assembly on membership here means
+#: ``extract_evidence_candidates`` always has at least one candidate to
+#: admit. The other three members (NEEDS_CLARIFICATION, NO_MATCH,
+#: UNSUPPORTED) may carry an empty index, so attempting assembly for them
+#: would be attempting admission over nothing this packet ever claimed to
+#: have found -- the same "COMPLETED-with-no-material still falls through"
+#: rule, applied one layer earlier, before spending an admission round-trip.
+_GRAPH_ASSEMBLY_SUPPORTED_OUTCOMES = frozenset(
+    {InvestigationOutcome.SUPPORTED, InvestigationOutcome.SUPPORTED_WITH_GAPS}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GraphAssemblyOutcome:
+    """What ``_graph_grounded_answer`` actually did with one COMPLETED graph
+    result -- CHAOS-3502/3650.
+
+    ``answer`` is ``None`` exactly when there was no material to ground an
+    answer on (the CHAOS-3290 floor, applied via ``_assemble_grounded_
+    answer``'s own guard) -- the "COMPLETED-with-no-material still falls
+    through" rule. ``evidence_refused``/``enrichment_gap`` are two
+    INDEPENDENT causes of degradation, carried separately rather than
+    collapsed into one flag: CHAOS-3502's ruling forbids conflating "the
+    canonical evidence service refused a candidate" with "a canonical
+    enrichment source was unavailable" -- they are different failures with
+    different user-facing meanings, and a caller (telemetry, warnings) must
+    be able to tell them apart even though both make ``degraded`` True on
+    the assembled ``DevAnswer`` itself.
+    """
+
+    answer: DevAnswer | None
+    evidence_refused: bool
+    enrichment_gap: bool
+    cohort: DevAnswerCohortSlot | None = None
+
+
+def _graph_assembly_outcome_label(evidence_refused: bool, enrichment_gap: bool) -> str:
+    """The closed ``ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL`` label for one
+    successfully-assembled answer. Never called when ``answer is None``
+    (that case is ``"no_material"``, decided by the caller) -- see
+    ``metrics.prometheus.ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL`` for the full
+    outcome vocabulary this is one half of.
+    """
+
+    if evidence_refused and enrichment_gap:
+        return "assembled_degraded_both"
+    if evidence_refused:
+        return "assembled_degraded_evidence_refused"
+    if enrichment_gap:
+        return "assembled_degraded_enrichment_gap"
+    return "assembled_clean"
+
 
 class DevOrchestrator:
     """Execute one Ask Dev message as a bounded state machine."""
@@ -979,6 +1408,13 @@ class DevOrchestrator:
         plan_executor: PlanExecutor | None = None,
         narrative_provider: narrative_fallback.NarrativeProvider | None = None,
         qua_shadow: QuestionUnderstandingShadow | None = None,
+        investigation_shadow: InvestigationShadow | None = None,
+        investigation_packet_producer: InvestigationPacketProducer | None = None,
+        graph_investigation_query: GraphInvestigationQuery | None = None,
+        evidence_service: EvidenceService | None = None,
+        canonical_enrichment: CanonicalEnrichmentAccessor | None = None,
+        graph_routing_entitlement: GraphRoutingEntitlementAuthorizer | None = None,
+        graph_authorization_resolver: GraphAuthorizationResolver | None = None,
     ) -> None:
         self._provider = provider
         self._provider_source = provider_source
@@ -1014,7 +1450,118 @@ class DevOrchestrator:
         # structural argument that even when set, this can never affect any
         # live decision.
         self._qua_shadow = qua_shadow
+        # CHAOS-3618 PR 2. ``None`` is the flag-off path for BOTH halves, and
+        # they are separate on purpose: the seam is arm-neutral machinery,
+        # the producer is one arm. The orchestrator never imports an arm --
+        # it calls whatever producer it was handed, so wiring the graph arm
+        # later changes production_runtime.py and nothing here.
+        self._investigation_shadow = investigation_shadow
+        self._investigation_packet_producer = investigation_packet_producer
+        # CHAOS-3502: ``None`` is the flag-off path -- no graph-assisted
+        # routing branch is attempted, byte-identical to this seam not
+        # existing (see ``test_chaos_3502_graph_routing_seam.py``'s
+        # inertness test). Even when set, ``run()`` also requires
+        # ``graph_routing_runtime_enabled()`` at the call site: the
+        # organization gate that decides whether to construct this at all
+        # (production_runtime.py) and the runtime kill switch are
+        # independent, mirroring ``graph_arm.flags``'s own
+        # projection/read-independence reasoning. As of this landing the
+        # branch only observes -- it does not yet turn a completed graph
+        # investigation into an answer; see the module docstring on
+        # ``graph_investigation_query.py`` and CHAOS-3502/CHAOS-3664 for the
+        # canonical-admission bridge that finishes this seam.
+        self._graph_investigation_query = graph_investigation_query
+        # CHAOS-3502 increment 2c (now consumed): ``EvidenceService.admit()``
+        # is called on packet-extracted candidates
+        # (``graph_evidence_admission.extract_evidence_candidates``) by
+        # ``_graph_grounded_answer`` below. ``None`` remains the flag-off
+        # path, byte-identical to this collaborator not existing -- the
+        # COMPLETED branch in ``run()`` gates assembly on this being set,
+        # same as ``graph_investigation_query`` above.
+        self._evidence_service = evidence_service
+        # CHAOS-3502/3650: the third and final collaborator this leg's
+        # assembler needs. ``None`` is ALSO a flag-off path, independent of
+        # the two above -- a caller that wires ``graph_investigation_query``/
+        # ``evidence_service`` before this exists sees the exact same
+        # assembly-deferred fallthrough the COMPLETED branch always had,
+        # never a crash on a collaborator nobody constructed yet
+        # (production wires all three only when the Wave 3.1 organization
+        # gate is enabled; see CHAOS-3697).
+        self._canonical_enrichment = canonical_enrichment
+        # Production supplies the canonical organization-level authorizer at
+        # this seam. A missing authorizer remains the legacy direct-test
+        # compatibility path; production composition never leaves it unset
+        # when the graph collaborators are present.
+        self._graph_routing_entitlement = graph_routing_entitlement
+        # The graph route may only receive a complete, server-owned candidate
+        # envelope derived from the canonical tenant catalog.  ``None`` is a
+        # fail-closed compatibility state for direct callers that have not
+        # supplied this production composition seam.
+        self._graph_authorization_resolver = graph_authorization_resolver
         self._composer = PromptComposer(registry)
+
+    async def _graph_route_is_entitled(self, *, org_id: str) -> bool:
+        """Check the canonical org gate immediately before graph entry."""
+
+        if self._graph_routing_entitlement is None:
+            # Graph collaborators without their organization-level policy
+            # authorizer are an incomplete production composition. Fail
+            # closed rather than treating an omitted policy gate as allow.
+            return False
+        try:
+            await self._graph_routing_entitlement.require(org_id)
+        except GraphRoutingPolicyDeniedError:
+            # The canonical authorizer owns both explicit-purchase policy and
+            # fail-closed storage errors. A denied org falls through to the
+            # existing bounded provider path; GraphInvestigationQuery is not
+            # entered.
+            return False
+        return True
+
+    async def _graph_authorization_scope(
+        self,
+        *,
+        org_id: str,
+        permission_fingerprint: str,
+        cohort_discovery_family: CohortDiscoveryFamily,
+        authorized_scope: DevScope,
+    ) -> GraphAuthorizationScope | None:
+        """Resolve a complete server-owned graph candidate envelope.
+
+        A missing resolver, catalog failure, incomplete page, empty roster, or
+        mismatched envelope returns no graph candidate set. The caller
+        terminalizes that state rather than allowing an otherwise eligible
+        subjectless cohort question to fall through to unrestricted legacy
+        execution. Graph data is never consulted to fill a missing
+        authorization set.
+        """
+
+        resolver = self._graph_authorization_resolver
+        if resolver is None:
+            return None
+        try:
+            scope = await resolver(
+                org_id,
+                permission_fingerprint,
+                cohort_discovery_family,
+                authorized_scope,
+            )
+        except Exception:
+            logger.warning(
+                "ask_dev.orchestrator.graph_authorization_unavailable",
+                extra={"reason": "resolver_failure"},
+            )
+            return None
+        if scope is None or not scope.complete or not scope.authorized_entity_ids:
+            return None
+        if (
+            scope.organization_id != org_id
+            or scope.permission_fingerprint != permission_fingerprint
+            or scope.cohort_discovery_family is not cohort_discovery_family
+            or scope.scope != authorized_scope
+        ):
+            return None
+        return scope
 
     async def run(
         self,
@@ -1078,12 +1625,30 @@ class DevOrchestrator:
         # ambiguous "Atlas" and a not-found "Nightfall" both published
         # `inherited`, with zero candidates.
         preflight_terminal_resolution: DevScopeResolution | None = None
+        # CHAOS-3618 PR 2, codex review: the frame this run actually
+        # PERSISTED, or ``None`` when it persisted none.
+        #
+        # Set from both places a frame is written -- ``finish()``'s own
+        # compatibility frame and the preflight TERMINATE branch's richer
+        # one -- because the shadow seam must see every finished run, and
+        # those two branches are exactly what it used to see only half of.
+        # Set only on the success side of each write: a dropped frame means
+        # a run with no server-owned evidence to hand an arm, and inventing
+        # one would be the same class of dishonesty as inventing a window.
+        persisted_frame: DevAnswerFrame | None = None
         #: CHAOS-3525: ``(user's span, authorized entity label)`` for a subject
         #: committed from a QUA proposal -- set at the promotion seam, read by
         #: ``finish()``'s closure. A free variable rather than a parameter for
         #: the same reason ``investigation_result`` is one: ``finish()`` has
         #: ~35 call sites and none of them should have to remember this.
         qua_subject_disclosure: tuple[str, str] | None = None
+        # Bound up front because ``finish()`` closes over it: a run that
+        # terminates before preflight executes (a pre-cancelled request, a
+        # scope resolution that blows the wall clock) still reaches
+        # ``finish()``, and reading an unassigned free variable there is a
+        # NameError inside the terminal path -- which is exactly the class
+        # of failure the shadow seam must never introduce.
+        preflight_result: SubjectPreflightResult | None = None
         selected_event_sink = event_sink or self._event_sink
         # CHAOS-3297 stack #3 (team-lead boundary ruling, 2026-08-02): set
         # by the CHAOS-3295 plan-execution block below when a plan actually
@@ -1093,6 +1658,9 @@ class DevOrchestrator:
         # it, without threading a new parameter through every one of
         # `finish()`'s ~35 call sites.
         investigation_result: DevInvestigationResult | None = None
+        # The public graph-assistance state is set only after the graph seam
+        # returns. A route that was gated off therefore remains ``None``.
+        graph_assistance: DevAnswerGraphAssistance | None = None
         # CHAOS-3393: mirrors investigation_result's own free-variable
         # posture -- set below when a PLURAL_COHORT/ORGANIZATION_WIDE
         # status.portfolio.v1 run actually executes against a committed
@@ -1159,6 +1727,17 @@ class DevOrchestrator:
             if selected_event_sink is not None:
                 await selected_event_sink(event)
 
+        async def emit_graph_state(state: DevAnswerGraphAssistance) -> None:
+            """Publish a graph state without exposing internal graph data."""
+
+            event = OrchestratorEvent(
+                state=RunState.TOOL_EXECUTION,
+                graph_state=state,
+            )
+            events.append(event)
+            if selected_event_sink is not None:
+                await selected_event_sink(event)
+
         async def finish(
             state: RunState,
             *,
@@ -1168,9 +1747,26 @@ class DevOrchestrator:
             grounding_validation_status: str | None = None,
             extra_attested: tuple[str, ...] = (),
         ) -> OrchestratorResult:
-            nonlocal terminal_written
+            nonlocal terminal_written, persisted_frame
             if terminal_written:
                 raise RuntimeError("terminal state already written")
+
+            def terminal_resolution() -> DevScopeResolution | None:
+                """The scope decision THIS terminal reports, from one place.
+
+                Read lazily, so it sees ``answer`` after the disclosure
+                rewrites below rather than before. Two callers need it --
+                the ``OrchestratorResult`` this run publishes, and the
+                CHAOS-3618 shadow seam's bounded window -- and they must not
+                be able to disagree: an arm handed a window derived from a
+                different scope decision than the one the run published
+                would be projecting a run that never happened.
+                """
+
+                if answer is not None:
+                    return answer.resolved_scope
+                return published_resolution()
+
             # CHAOS-3497 part 2: disclose a widening in PROSE, not only in
             # `dev_scope_resolution.v1.fallbacks`.
             #
@@ -1210,6 +1806,11 @@ class DevOrchestrator:
                 answer = disclose_subject_match(
                     answer, span=matched_span, label=matched_label
                 )
+            if answer is not None and graph_assistance is not None:
+                # Attach the same object that was emitted on the interior
+                # event. This keeps live, persisted, and replayed answer
+                # projections on one server-owned state value.
+                answer = answer.model_copy(update={"graph_assisted": graph_assistance})
             # CHAOS-3367: the one place every terminal in this module passes
             # through, and therefore the only place a user-visible-copy rule
             # can be enforced structurally rather than by asking ~35 call
@@ -1730,6 +2331,10 @@ class DevOrchestrator:
                             narrative_failure_code = (
                                 failure_code.value if failure_code is not None else None
                             )
+                    # CHAOS-3618 PR 2: this frame reached storage, so it is
+                    # what an arm may be shown. The seam itself now runs
+                    # below, after terminal() -- see the call site.
+                    persisted_frame = frame
             await self._recorder.terminal(
                 state=state,
                 answer=answer,
@@ -1757,6 +2362,64 @@ class DevOrchestrator:
             events.append(event)
             if selected_event_sink is not None:
                 await selected_event_sink(event)
+            # CHAOS-3618 PR 2. Position moved here by the codex review, and
+            # the move is the fix for three separate findings:
+            #
+            # 1. It used to sit inside ``if not frame_already_recorded``, so
+            #    the preflight TERMINATE path -- which records its own,
+            #    richer frame -- never reached the seam AT ALL. Reproduced:
+            #    a run terminating on an unresolved name recorded 1 frame, 0
+            #    producer calls and 0 shadow records. That is the trial's
+            #    denominator quietly losing a whole class of run, and the
+            #    WORST class to lose: ambiguous-subject runs are precisely
+            #    where a graph arm is supposed to beat this baseline.
+            # 2. It used to sit BEFORE ``terminal()``, so a record could
+            #    describe a run that never terminalized -- and because the
+            #    outer handler retries ``finish()`` when the terminal write
+            #    fails, the retry emitted a SECOND record for the same run.
+            #    Log-only persistence has no dedup key to repair that with.
+            # 3. It added an await point between the frame and the terminal
+            #    write, widening the window in which a cancellation lands
+            #    before the run terminalizes. Below ``terminal_written``,
+            #    that window is gone: the run is already durable.
+            #
+            # Its record remains a local nothing reads, which is still the
+            # structural half of "flipping the flag changes zero live-path
+            # behavior"; the inertness tests prove the other half.
+            #
+            # DECLARED GAP -- CHAOS-3625. ``build_packet`` is SYNCHRONOUS
+            # (PR 1's frozen Protocol), so a slow or blocking producer stalls
+            # the event loop here and the run's remaining wall-clock budget is
+            # not re-checked after it.
+            #
+            # Be precise about what this position does and does not buy,
+            # because the two are easy to conflate: sitting below
+            # ``terminal()`` protects DURABILITY -- the run is already
+            # written, so a slow producer can no longer delay or lose it. It
+            # does NOT protect TAIL LATENCY: ``finish()`` awaits this before
+            # returning, so a blocking producer still delays the caller's
+            # response. Streamed output ordering is unaffected either way,
+            # since the terminal event reaches the sink above.
+            #
+            # Not fixed here on purpose: the honest fixes are an async
+            # Protocol or a post-producer budget check, and that Protocol is
+            # the interface the graph arm is already being built against.
+            # CHAOS-3619's trial infrastructure needs a runner-level timeout
+            # regardless, and owns this.
+            if persisted_frame is not None:
+                await self._run_investigation_shadow(
+                    run_id=run_id,
+                    org_id=org_id,
+                    frame=persisted_frame,
+                    investigation_result=investigation_result,
+                    preflight_result=preflight_result,
+                    # The run's OWN scope decision, and therefore its own
+                    # bounded window -- the same value this terminal
+                    # published on the wire. Reading the window off anything
+                    # else (``request.scope``, a clock) would hand an arm a
+                    # time context the run's queries never used.
+                    scope_resolution=terminal_resolution(),
+                )
             return OrchestratorResult(
                 run_id=run_id,
                 state=state,
@@ -1775,11 +2438,11 @@ class DevOrchestrator:
                 #
                 # On a no-answer terminal it is ``published_resolution()``
                 # below -- the resolution this run actually executed under.
-                scope_resolution=(
-                    answer.resolved_scope
-                    if answer is not None
-                    else published_resolution()
-                ),
+                #
+                # CHAOS-3618 PR 2 moved the expression itself into
+                # ``terminal_resolution()`` so the shadow seam's bounded
+                # window is derived from THIS value and cannot drift from it.
+                scope_resolution=terminal_resolution(),
             )
 
         def error(code: str, message: str, *, retryable: bool = False) -> DevError:
@@ -1837,7 +2500,7 @@ class DevOrchestrator:
             # named subject against the authorized catalog *before* the first
             # model round, so no evidence-bearing tool can execute without an
             # exact committed subject. Zero provider tokens are spent here.
-            preflight_result: SubjectPreflightResult | None = None
+            preflight_result = None
             allowed_tools: frozenset[ToolID] = frozenset(ToolID)
             if self._preflight is not None:
                 if cancellation.is_set():
@@ -2426,6 +3089,9 @@ class DevOrchestrator:
                             ),
                         )
                     except Exception as record_frame_fault:
+                        # (the CHAOS-3618 assignment below is deliberately
+                        # NOT in this handler: a dropped frame is not a
+                        # persisted one)
                         # A database-layer failure here (constraint
                         # violation, dropped connection) marks the
                         # recorder's session rollback-only; the terminal()
@@ -2514,6 +3180,13 @@ class DevOrchestrator:
                         ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL.labels(
                             exception_type=type(record_frame_fault).__name__
                         ).inc()
+                    else:
+                        # CHAOS-3618 PR 2, codex review: the frame landed, so
+                        # the seam may see this run. ``else`` rather than a
+                        # line after the try: the handler above reaches here
+                        # too, and a run whose frame was rolled back must not
+                        # be handed to an arm as though it had one.
+                        persisted_frame = preflight_result.answer.frame
                     return await finish(
                         TERMINAL_STATE_BY_OUTCOME[preflight_result.outcome],
                         error=preflight_error,
@@ -2596,6 +3269,11 @@ class DevOrchestrator:
                 if (
                     plan is None
                     and intent.intent_id not in LEGACY_ONLY_QUESTION_INTENTS
+                    # CHAOS-3502: also silent for DISCOVERED_COHORT -- it is
+                    # equally accounted for, just routed to the graph-assisted
+                    # seam below rather than the legacy loop. See
+                    # GRAPH_ROUTED_QUESTION_INTENTS's own docstring.
+                    and intent.intent_id not in GRAPH_ROUTED_QUESTION_INTENTS
                 ):
                     logger.warning(
                         "ask_dev.orchestrator.plan_registry_gap",
@@ -2713,6 +3391,196 @@ class DevOrchestrator:
                             ref.display_label
                             for ref in portfolio_subject_set.committed_entity_refs
                         )
+
+            # CHAOS-3502 (routing-branch design, signed off on CHAOS-3660):
+            # the graph-assisted seam. A sibling of the plan-governed block
+            # above, not nested inside it -- DISCOVERED_COHORT never has a
+            # plan (plan_eligible is always False for it by construction,
+            # since PLAN_ID_BY_INTENT gives it a compat-only token,
+            # CHAOS-3652), so gating this on self._plan_executor being
+            # wired would tie graph routing to an unrelated collaborator.
+            # Wave 3.1 composition supplies the collaborators, while the
+            # independent graph entitlement is checked immediately below;
+            # the runtime kill switch remains a separate gate, same shape as
+            # every other flag pair in this file.
+            #
+            # CHAOS-3689/CHAOS-3660: computed unconditionally (cheap, pure
+            # lexical matching, no side effects) rather than gated behind
+            # the other conditions -- it must be known before the `if`
+            # below since it is itself one of the gates: an honestly
+            # unclassifiable question (``None``) means the graph seam is
+            # never called at all, exactly like any other gate failure --
+            # never a guess passed across the wire.
+            cohort_discovery_family = classify_cohort_discovery_family(request.question)
+            graph_authorization_scope: GraphAuthorizationScope | None = None
+            graph_route_eligible = (
+                preflight_result is not None
+                and preflight_result.interpretation.intent.intent_id
+                is QuestionIntentID.DISCOVERED_COHORT
+                and cohort_discovery_family is not None
+                and self._graph_investigation_query is not None
+                and self._evidence_service is not None
+                and graph_routing_runtime_enabled()
+            )
+            if graph_route_eligible and await self._graph_route_is_entitled(
+                org_id=org_id
+            ):
+                assert cohort_discovery_family is not None
+                graph_authorization_scope = await self._graph_authorization_scope(
+                    org_id=org_id,
+                    permission_fingerprint=permission_fingerprint,
+                    cohort_discovery_family=cohort_discovery_family,
+                    authorized_scope=authorized_scope,
+                )
+                if graph_authorization_scope is None:
+                    # An entitled graph route without a complete server-owned
+                    # candidate envelope has no safe universe to traverse.
+                    # Do not let it fall through to the unrestricted legacy
+                    # model/tool loop for a subjectless cohort question.
+                    return await finish(
+                        RunState.INSUFFICIENT_EVIDENCE,
+                        error=error(
+                            "source_unavailable",
+                            "The authorized graph scope is unavailable.",
+                            retryable=True,
+                        ),
+                    )
+
+            if graph_authorization_scope is not None:
+                assert preflight_result is not None
+                assert cohort_discovery_family is not None
+                assert self._graph_investigation_query is not None
+                graph_deadline = datetime.now(UTC) + timedelta(
+                    seconds=max(0.0, remaining())
+                )
+                graph_request = GraphInvestigationRequest(
+                    org_id=org_id,
+                    run_id=run_id,
+                    intent_id=preflight_result.interpretation.intent.intent_id,
+                    cardinality=preflight_result.interpretation.intent.cardinality,
+                    mentions=preflight_result.interpretation.mentions,
+                    question_text=request.question,
+                    # CHAOS-3670: the complete candidate universe is derived
+                    # by the production composition root from the canonical,
+                    # tenant-filtered scope catalog. Graph membership never
+                    # supplies or widens this set.
+                    authorized_entity_ids=(
+                        graph_authorization_scope.authorized_entity_ids
+                    ),
+                    # CHAOS-3678: the SAME scope every other tool/metric
+                    # execution for this run is bounded by -- see
+                    # ``StepContext(scope=authorized_scope, ...)`` above.
+                    # The graph seam must never invent its own time policy;
+                    # reusing this window is what keeps a graph-assisted
+                    # answer and a native-arm answer for the same run
+                    # bounded identically.
+                    window_start=authorized_scope.time_range.start,
+                    window_end=authorized_scope.time_range.end,
+                    # CHAOS-3689: non-None by construction -- the gate above
+                    # never enters this block when classification failed.
+                    cohort_discovery_family=cohort_discovery_family,
+                    deadline=graph_deadline,
+                    authorization_scope=graph_authorization_scope,
+                )
+                graph_result = await self._graph_investigation_query.investigate(
+                    graph_request
+                )
+                # Content-safe observability (beta gate 10): the label is
+                # the closed GraphQueryOutcome vocabulary, never question or
+                # entity text, so both the counter and the log are safe to
+                # ship as-is.
+                ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL.labels(
+                    outcome=graph_result.outcome.value
+                ).inc()
+                logger.info(
+                    "ask_dev.orchestrator.graph_routing_outcome",
+                    extra={"run_id": run_id, "outcome": graph_result.outcome.value},
+                )
+                if graph_result.outcome is GraphQueryOutcome.CANCELLED:
+                    # The RUN is cancelled, not just this one call -- unlike
+                    # every other outcome below, this does not fall through
+                    # to the legacy loop (see the CHAOS-3660 fallback table).
+                    graph_assistance = _graph_assistance_for_result(
+                        graph_result, graph_answered=False
+                    )
+                    await emit_graph_state(graph_assistance)
+                    return await finish(
+                        RunState.CANCELLED,
+                        error=error("cancelled", "The request was cancelled."),
+                    )
+                if graph_result.outcome is GraphQueryOutcome.COMPLETED:
+                    # CHAOS-3502/3650: assembly. Both dependencies this
+                    # branch used to wait on are landed --
+                    # build_production_packet (Lane A) and
+                    # CanonicalEnrichmentAccessor (Lane C, CHAOS-3664) -- so a
+                    # COMPLETED call with a genuinely supported packet now
+                    # becomes a real, disclosed answer instead of an
+                    # observed-only no-op.
+                    #
+                    # DECISION (CHAOS-3650): drop-and-disclose, not
+                    # withheld-evidence-finding -- matching packet_builder.
+                    # py's own CHAOS-3650 choice at the driver layer (#1644).
+                    # A canonically refused evidence candidate is excluded
+                    # from this answer and the exclusion is disclosed via
+                    # GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED; it is never
+                    # admitted, never fabricated a replacement handle for,
+                    # and never aborts the run or an unrelated sibling
+                    # candidate. See ``_graph_grounded_answer``'s own
+                    # docstring for the full reasoning.
+                    #
+                    # ``GraphQueryResult``'s own ``__post_init__`` guarantees
+                    # ``packet is not None`` iff ``outcome is COMPLETED`` --
+                    # narrowed here for mypy, not a new runtime check.
+                    assert graph_result.packet is not None
+                    graph_assembly = await self._attempt_graph_grounded_answer(
+                        run_id=run_id,
+                        answer_id=answer_id,
+                        conversation_id=conversation_id,
+                        resolution=resolution,
+                        authorized_scope=authorized_scope,
+                        org_id=org_id,
+                        permission_fingerprint=permission_fingerprint,
+                        packet=graph_result.packet,
+                        cohort_discovery_family=cohort_discovery_family,
+                        authorized_entity_ids=(
+                            graph_authorization_scope.authorized_entity_ids
+                        ),
+                    )
+                    if graph_assembly is not None:
+                        graph_assistance = _graph_assistance_for_result(
+                            graph_result,
+                            graph_answered=True,
+                            cohort=graph_assembly.cohort,
+                        )
+                        await emit_graph_state(graph_assistance)
+                        return await finish(
+                            RunState.COMPLETED,
+                            answer=graph_assembly.answer,
+                            grounding_validation_status=(
+                                GRAPH_ASSISTED_GROUNDING_STATUS
+                            ),
+                        )
+                    # No material (or the collaborator/packet-outcome gate
+                    # never attempted assembly, or assembly raised) -- falls
+                    # through to the legacy loop below, exactly like every
+                    # other non-CANCELLED outcome. ``_attempt_graph_grounded_
+                    # answer`` already logged/counted which of those three
+                    # this was; they are never conflated with each other.
+                # Every other outcome -- DISABLED, UNAVAILABLE, STALE,
+                # PROVIDER_FAILURE, DEADLINE_EXCEEDED, and
+                # COMPLETED-with-no-graph-answer immediately above -- falls
+                # through to the legacy loop below. Per the Wave 3.2 handoff
+                # §4: graph outage, lag, or unavailability must never break
+                # existing Ask Dev behavior, and this question's legacy
+                # answer is a real, already-working path, not a regression.
+
+                # The graph route was attempted, but any answer below comes
+                # from the native arm. Derive only the public state; no
+                # backend diagnostics, names, or IDs are user-facing.
+                graph_assistance = _graph_assistance_for_result(
+                    graph_result, graph_answered=False
+                )
+                await emit_graph_state(graph_assistance)
 
             for round_index in range(self._limits.model_rounds):
                 del round_index
@@ -3823,6 +4691,124 @@ class DevOrchestrator:
                 error=error("internal_error", "The request could not be completed."),
             )
 
+    async def _run_investigation_shadow(
+        self,
+        *,
+        run_id: str,
+        org_id: str,
+        frame: DevAnswerFrame,
+        investigation_result: DevInvestigationResult | None,
+        preflight_result: SubjectPreflightResult | None,
+        scope_resolution: DevScopeResolution | None,
+    ) -> None:
+        """Build one arm's packet and hand it to the shared seam.
+
+        Returns ``None`` always, and swallows every exception. A shadow-mode
+        bug must never fail, roll back, or alter the run it shadows, and the
+        seam's own containment is not relied on here -- a producer is
+        third-party code from this method's point of view.
+        """
+
+        shadow = self._investigation_shadow
+        producer = self._investigation_packet_producer
+        if shadow is None or producer is None or not shadow.enabled:
+            return None
+        try:
+            # ``None`` when the run ended before scope resolution completed.
+            # Passed through as ``None`` rather than substituted, because a
+            # window is the packet's bounded time context and an arm that
+            # accepted a manufactured one would date every claim in it to a
+            # query nothing ran. Refusing is the arm's job, not this
+            # method's -- see ``run_window``.
+            window = run_window(scope_resolution)
+            context = FinishedRunContext(
+                run_id=run_id,
+                organization_id=org_id,
+                frame=frame,
+                investigation_result=investigation_result,
+                interpretation=(
+                    preflight_result.interpretation if preflight_result else None
+                ),
+                ledger=preflight_result.ledger if preflight_result else None,
+                subject_set=preflight_result.subject_set if preflight_result else None,
+                committed_subject=_committed_subject_ref(preflight_result),
+                window_start=window[0] if window else None,
+                window_end=window[1] if window else None,
+                # THE load-bearing line of this method. Canonical evidence
+                # comes from the SERVER-OWNED FRAME, which the server built
+                # from what the evidence service returned -- never from the
+                # packet the producer is about to build. Feeding an arm's own
+                # evidence back in would make the seam's digest compare a
+                # value to itself: a check that cannot fail while wearing the
+                # appearance of one.
+                canonical_evidence=tuple(frame.evidence),
+            )
+            started = time.monotonic()
+            payload = producer.build_packet(context)
+            if payload is None:
+                # A normal outcome -- the native arm reports several kinds
+                # of run as unprojectable by design -- but a RECORDED one.
+                #
+                # This used to `return None`, so a run the arm could not
+                # express left no trace and was indistinguishable from a run
+                # the seam never saw. Those are the runs the trial most
+                # needs to count: "how often can the baseline express its
+                # own run" is one of the numbers the comparison turns on.
+                #
+                # (An earlier version of this comment justified the change
+                # by contrast with SKIPPED_DISABLED. The independent
+                # verifier caught that SKIPPED_DISABLED is unreachable from
+                # the production wiring -- the guard above returns first,
+                # and the factory only ever builds an enabled seam -- so the
+                # contrast described a state that never occurs. The defect
+                # was real without it.)
+                #
+                # The REASON stays in the arm's own log line, because the
+                # reason is the arm's vocabulary and this seam must not
+                # learn to speak it.
+                record = InvestigationShadowRecord.producer_gap(
+                    run_id=run_id,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                )
+            else:
+                record = shadow.evaluate(
+                    payload=payload,
+                    run_id=run_id,
+                    organization_id=org_id,
+                    canonical_evidence=context.canonical_evidence,
+                )
+        except Exception as shadow_fault:
+            logger.exception(
+                "ask_dev.orchestrator.investigation_shadow_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(shadow_fault).__name__,
+                },
+            )
+            return None
+        try:
+            await self._recorder.record_investigation_shadow(record)
+        except Exception as write_fault:
+            # ``Exception``, deliberately NOT ``BaseException``. The codex
+            # review found that ``asyncio.CancelledError`` escapes here, and
+            # it is right that it does: swallowing a cancellation would make
+            # the seam the one thing in this file that refuses to be
+            # cancelled, and a "shadow" that outlives its run is worse than
+            # one that loses a record. What made it a DEFECT was the call's
+            # old position -- before ``terminal()``, where an escaping
+            # cancellation took the terminal write with it. Below
+            # ``terminal_written`` the run is already durable, so a
+            # cancellation here loses this record and nothing else, which is
+            # exactly the trade a shadow seam should make.
+            logger.exception(
+                "ask_dev.orchestrator.investigation_shadow_write_fault",
+                extra={
+                    "run_id": run_id,
+                    "exception_type": type(write_fault).__name__,
+                },
+            )
+        return None
+
     async def _resolve_with_cancellation(
         self,
         *,
@@ -4586,6 +5572,323 @@ class DevOrchestrator:
 
         return preflight is not None
 
+    async def _attempt_graph_grounded_answer(
+        self,
+        *,
+        run_id: str,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        authorized_scope: DevScope,
+        org_id: str,
+        permission_fingerprint: str,
+        packet: AskDevInvestigationPacket,
+        cohort_discovery_family: CohortDiscoveryFamily,
+        authorized_entity_ids: frozenset[str],
+    ) -> GraphAssemblyOutcome | None:
+        """The gate, observability and exception-containment wrapper around
+        :meth:`_graph_grounded_answer` -- CHAOS-3502/3650.
+
+        Three, and only three, outcomes leave this function, and each is
+        logged and counted under a DISTINCT name so none is ever conflated
+        with another (CHAOS-3502's ruling: "never conflate states"):
+
+        * ``graph_routing_completed_assembled`` (INFO) /
+          ``ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL{outcome=assembled_*}`` --
+          real material, degraded or clean.
+        * ``graph_routing_completed_no_material`` (INFO) /
+          ``{outcome="no_material"}`` -- assembly was attempted (both gates
+          below passed) but admission + enrichment together produced
+          nothing to ground an answer on. This is the "COMPLETED-with-
+          no-material still falls through" rule.
+        * ``graph_routing_completed_assembly_raised`` (ERROR, ``exc_info=
+          True``) / ``{outcome="assembly_raised"}`` -- an unexpected
+          exception during admission or enrichment. Logged loud and
+          distinct from the two ordinary outcomes above precisely so a
+          genuine bug can never look like a routine fall-through in the
+          logs (CHAOS-3502 Condition 3) -- but still degrades to the
+          legacy loop rather than aborting the run, mirroring
+          ``GraphInvestigationQuery``'s own "must never raise for an
+          ordinary condition" posture extended to this seam's own
+          assembly step.
+
+          ``except Exception`` deliberately does not need to special-case
+          ``asyncio.CancelledError``: since Python 3.8,
+          ``asyncio.CancelledError`` subclasses ``BaseException``, not
+          ``Exception`` (verified directly against this interpreter, not
+          assumed), so a cancellation propagates through this catch
+          unchanged and the run still ends up ``RunState.CANCELLED``
+          through the ordinary cancellation path above this branch.
+
+          Deliberately kept broad rather than narrowed to named exception
+          types, unlike ``packet_builder.py``'s own "narrow, deliberate,
+          documented" precedent (catching only ``CanonicalEvidenceRefusedError``
+          at :func:`~.packet_builder.build_packet`'s driver loop). That
+          precedent's boundary is ONE custom exception type this codebase
+          itself defines and raises for exactly one condition; this
+          boundary spans ``self._evidence_service.admit()`` (whose own
+          ``entitlement``/``authorizer`` collaborators are caller-supplied
+          Protocols with no fixed exception contract -- an
+          ``AskDevEntitlementAuthorizer`` or a database-backed
+          ``EvidenceScopeAuthorizer`` may raise anything) and
+          ``_assemble_grounded_answer``'s own ``DevAnswer(...)``
+          construction, which is known to raise a concrete
+          ``pydantic.ValidationError`` if a future change ever reintroduces
+          the metric ``evidence_ref_ids`` mismatch Condition 4's scrub
+          exists to prevent (reproduced live during this leg's own
+          verification: temporarily removing the scrub raised exactly this,
+          caught here, degrading to a clean fallthrough rather than a
+          crash). Naming only that one concrete type and leaving the
+          entitlement/authorizer surface behind a second, unnamed catch
+          would not be real narrowing -- it would be false completeness
+          over a boundary whose real exception vocabulary is not owned
+          here. The full observability Condition 3 requires (ERROR level,
+          ``exc_info=True``, a distinct counter value, and cancellation
+          verified never to be swallowed) is what makes keeping this catch
+          broad safe rather than a silence.
+
+        A fourth case -- the gate below never passing at all (no
+        ``canonical_enrichment`` wired, or the packet's own outcome does not
+        assert a judgment) -- reuses the pre-existing
+        ``graph_routing_completed_assembly_deferred`` log name with no
+        counter increment: assembly was never attempted, so there is no
+        assembly outcome to report, and the existing
+        ``ASK_DEV_GRAPH_ROUTING_OUTCOME_TOTAL{outcome=completed}`` increment
+        from the call site above already recorded the transport-level
+        COMPLETED call.
+        """
+
+        if (
+            self._canonical_enrichment is None
+            or packet.outcome not in _GRAPH_ASSEMBLY_SUPPORTED_OUTCOMES
+        ):
+            logger.info(
+                "ask_dev.orchestrator.graph_routing_completed_assembly_deferred",
+                extra={"run_id": run_id},
+            )
+            return None
+        try:
+            outcome = await self._graph_grounded_answer(
+                answer_id=answer_id,
+                conversation_id=conversation_id,
+                resolution=resolution,
+                scope=authorized_scope,
+                org_id=org_id,
+                permission_fingerprint=permission_fingerprint,
+                packet=packet,
+                cohort_discovery_family=cohort_discovery_family,
+                authorized_entity_ids=authorized_entity_ids,
+                now=datetime.now(UTC),
+            )
+        except Exception as exc:  # noqa: BLE001 -- see docstring: contained and counted, never re-raised
+            logger.error(
+                "ask_dev.orchestrator.graph_routing_completed_assembly_raised",
+                extra={"run_id": run_id, "exception_type": type(exc).__name__},
+                exc_info=True,
+            )
+            ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome="assembly_raised").inc()
+            return None
+        if outcome.answer is None:
+            logger.info(
+                "ask_dev.orchestrator.graph_routing_completed_no_material",
+                extra={"run_id": run_id},
+            )
+            ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome="no_material").inc()
+            return None
+        label = _graph_assembly_outcome_label(
+            outcome.evidence_refused, outcome.enrichment_gap
+        )
+        logger.info(
+            "ask_dev.orchestrator.graph_routing_completed_assembled",
+            extra={
+                "run_id": run_id,
+                "evidence_refused": outcome.evidence_refused,
+                "enrichment_gap": outcome.enrichment_gap,
+            },
+        )
+        ASK_DEV_GRAPH_ASSEMBLY_OUTCOME_TOTAL.labels(outcome=label).inc()
+        return outcome
+
+    async def _graph_grounded_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        scope: DevScope,
+        org_id: str,
+        permission_fingerprint: str,
+        packet: AskDevInvestigationPacket,
+        cohort_discovery_family: CohortDiscoveryFamily,
+        authorized_entity_ids: frozenset[str],
+        now: datetime,
+    ) -> GraphAssemblyOutcome:
+        """The graph-frame path's own assembler -- CHAOS-3502/3650.
+
+        Extract candidates -> canonical admission -> a degrade-not-abort
+        join with canonical enrichment -> :meth:`_assemble_grounded_answer`.
+        Callers must only invoke this once ``self._evidence_service`` and
+        ``self._canonical_enrichment`` are both known non-``None`` (asserted
+        below) and ``packet.outcome`` has already been checked against
+        :data:`_GRAPH_ASSEMBLY_SUPPORTED_OUTCOMES` -- see
+        :meth:`_attempt_graph_grounded_answer` for both gates and the
+        exception containment this function relies on its caller for.
+
+        **Drop-and-disclose (CHAOS-3650's chosen behavior).** A candidate
+        the canonical evidence service REFUSED (``EvidenceAdmission.
+        refused`` -- ``UNAUTHORIZED``/``NO_MATCHES``, a considered "no", never
+        confused with ``UNCONFIGURED``/``UNAVAILABLE``) is excluded from
+        ``canonical_evidence`` and never admitted, fabricated, or retried;
+        the run still completes on whatever admissible material remains
+        (this function's caller never raises the run to FAILED/
+        INSUFFICIENT_EVIDENCE over a refusal), and the exclusion is
+        disclosed via ``GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED`` -- never
+        silently swallowed. Matches ``packet_builder.py``'s own CHAOS-3650
+        choice at the driver layer (#1644): drop the unsupported unit, keep
+        the rest, disclose narrowly, never abort. A conflicting/adversarial
+        but canonically ADMISSIBLE record is not touched by any of this --
+        it is simply admitted like any other candidate and stays usable as
+        counter-evidence, exactly as CHAOS-3650's acceptance requires.
+
+        **Two independent degrade causes, never conflated (CHAOS-3502).**
+        ``evidence_refused`` (a candidate was canonically refused) and
+        ``enrichment_gap`` (a canonical enrichment source was unavailable)
+        are computed and returned separately on :class:`GraphAssemblyOutcome`
+        -- each gets its own warning string and its own telemetry label, so
+        a caller can always tell which cause (or both) applies, even though
+        both make the underlying ``DevAnswer.status`` ``DEGRADED`` the same
+        way (``_assemble_grounded_answer`` takes one ``degraded: bool``).
+
+        **The metric evidence-vocabulary mismatch (recon finding, CHAOS-3502
+        Condition 4).** ``CanonicalEnrichmentAccessor``'s metrics are
+        ``MetricQueryService.query(...).contract_refs(scope)`` verbatim,
+        whose ``evidence_ref_ids`` cite ``MetricSourceRef.ref_id`` -- a
+        completely different id vocabulary from the signed
+        ``EvidenceReferenceSigner`` handles this function admits above.
+        ``DevAnswer.validate_answer_invariants`` requires every metric's
+        ``evidence_ref_ids`` to be a subset of the answer's own evidence
+        ids, so passing these through unmodified would raise on
+        construction the moment a metric carried any source ref at all.
+        Confirmed at the call site, not assumed from the shape of the code:
+        ``production_runtime.py``'s own ``query_metric.v1`` tool handler
+        hits the identical mismatch and resolves it with
+        ``item.model_copy(update={"evidence_ref_ids": []})`` -- this reuses
+        that exact precedent rather than inventing a second one.
+        **Documented limitation**: this DROPS the metric's own provenance
+        link with nothing to reconcile it against (the two vocabularies do
+        not name the same records) -- a graph-assisted answer's metrics
+        carry no evidence citation at all, the same as every legacy-loop
+        metric today. See ``test_chaos_3650_graph_grounded_assembler.py``
+        for the test pinning this scrub, so a future change that starts
+        emitting real linkage here fails loudly instead of silently.
+        """
+
+        assert self._evidence_service is not None
+        assert self._canonical_enrichment is not None
+
+        candidates = extract_evidence_candidates(packet)
+        admission = await self._evidence_service.admit(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            scope_request=scope_request_from_scope(scope),
+            candidates=candidates,
+        )
+        canonical_evidence: list[DevEvidenceRef] = []
+        evidence_refused = False
+        for item in admission.admissions:
+            if item.evidence is not None:
+                canonical_evidence.append(item.evidence)
+            elif item.refused:
+                evidence_refused = True
+            # An UNCONFIGURED (no resolver wired for this source_system) or
+            # UNAVAILABLE (transient) candidate is dropped the same way --
+            # neither a canonical refusal (nothing to disclose as "refused"
+            # under CHAOS-3650's own vocabulary) nor material this answer
+            # can cite.
+
+        enrichment = await self._canonical_enrichment.enrich(
+            org_id=org_id,
+            permission_fingerprint=permission_fingerprint,
+            scope=scope,
+            now=now,
+        )
+        canonical_metrics = [
+            metric.model_copy(update={"evidence_ref_ids": []})
+            for metric in enrichment.metrics
+        ]
+
+        from dev_health_ops.context_fabric.graph_arm.cohort_ranking import (
+            CanonicalCohortRankingAdapter,
+        )
+
+        ranking = await CanonicalCohortRankingAdapter(self._canonical_enrichment).rank(
+            proposal=_cohort_proposal_from_packet(packet),
+            authorized_entity_ids=authorized_entity_ids,
+            scope=scope,
+            permission_fingerprint=permission_fingerprint,
+            now=now,
+        )
+        public_cohort = _public_cohort_slot(
+            packet=packet,
+            family=cohort_discovery_family,
+            ranking=ranking,
+        )
+
+        enrichment_gap = any(
+            isinstance(value, EnrichmentGap)
+            and value is not EnrichmentGap.NOT_APPLICABLE
+            for value in (
+                enrichment.status,
+                enrichment.health,
+                enrichment.workload,
+                enrichment.readiness,
+            )
+        )
+        degraded = evidence_refused or enrichment_gap
+        warnings: list[str] = []
+        if evidence_refused:
+            warnings.append(GRAPH_GROUNDED_WARNING_EVIDENCE_REFUSED)
+        if enrichment_gap:
+            warnings.append(GRAPH_GROUNDED_WARNING_ENRICHMENT_GAP)
+
+        degraded_sources: list[str] = []
+        if evidence_refused:
+            degraded_sources.append("graph_evidence_admission")
+        if enrichment_gap:
+            degraded_sources.append("canonical_enrichment")
+        coverage = DevCoverage(
+            required_source_count=2,
+            available_source_count=2 - len(degraded_sources),
+            unavailable_required_sources=[],
+            stale_required_sources=[],
+            degraded_required_sources=degraded_sources,
+            as_of=now,
+        )
+
+        answer = self._assemble_grounded_answer(
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            resolution=resolution,
+            coverage=coverage,
+            canonical_metrics=canonical_metrics,
+            canonical_evidence=canonical_evidence,
+            degraded=degraded,
+            model=DevModelMetadata(
+                provider_source=self._provider_source,
+                provider_family=self._provider_family,
+                model_fingerprint=GRAPH_ROUTING_MODEL_FINGERPRINT,
+            ),
+            now=now,
+            direct_summary=GRAPH_GROUNDED_SUMMARY,
+            warnings=warnings,
+        )
+        return GraphAssemblyOutcome(
+            answer=answer,
+            evidence_refused=evidence_refused,
+            enrichment_gap=enrichment_gap,
+            cohort=public_cohort,
+        )
+
     def _server_grounded_answer(
         self,
         *,
@@ -4614,36 +5917,41 @@ class DevOrchestrator:
         ``narrative_fallback.build_deterministic_fallback_narrative``'s own
         signature-level guarantee one layer down.
 
+        CHAOS-3502 (terminal-path integration-seam decision, CHAOS-3660):
+        this is now the TOOL-RESULTS-SPECIFIC half of what was previously
+        one function. It extracts canonical material from ``tool_results``
+        and computes the degraded flag, then hands both to
+        :meth:`_assemble_grounded_answer` -- the backend-neutral half,
+        shared with the graph-frame path so there is exactly one place a
+        ``DevAnswer`` gets assembled from server-verified material, not two
+        independent constructions that could quietly drift apart.
+
         Returns ``None`` -- meaning "terminate exactly as the pre-cutover
-        code did" -- in three cases, each of which is a case where shipping
-        would be worse than failing:
+        code did" -- in two cases here (a third, "nothing to ground on",
+        lives in :meth:`_assemble_grounded_answer` now and applies to both
+        frame sources identically):
 
         * the cutover is not active for this run (``ask_dev_wave_3_1`` off);
         * the tool results disagree about a canonical object
           (``_canonical_answer_data`` returns ``None``), which is an
-          integrity failure, not a grounding one;
-        * there is no canonical metric and no canonical evidence. An
-          "answer" built from nothing but this module's own copy would be a
-          substantive-looking shell, which is the precise failure the
-          CHAOS-3290 floor exists to prevent.
+          integrity failure, not a grounding one.
 
-        On that last point, ``investigation_result`` is deliberately NOT
-        part of the predicate, and the parameter is kept only to document
-        that (codex adversarial review, round 1 HIGH -- an earlier revision
-        did count plan findings as sufficient material). The plan's
-        health/deficiency findings are real server-computed content, but
-        ``finish()`` embeds them into the FRAME, and no client surface reads
-        a frame today: ``streaming.py`` sends ``result.answer`` live, and
-        ``router``'s replay prefers the stored v1 answer. So a run demoted
-        on the strength of findings alone would terminate COMPLETED while
-        the client received an answer with no claim, no metric and no
-        evidence -- the exact empty shell this function's third guard
-        exists to refuse, and a worse outcome than the honest
-        ``insufficient_evidence`` it replaced. When canonical material IS
-        present the findings ride along on the frame for free, which is the
-        only case where they add anything a caller can reach. Revisit once
-        CHAOS-3298 puts v2 on the wire and a findings-only frame is
-        genuinely readable.
+        ``investigation_result`` is deliberately NOT part of the predicate,
+        and the parameter is kept only to document that (codex adversarial
+        review, round 1 HIGH -- an earlier revision did count plan findings
+        as sufficient material). The plan's health/deficiency findings are
+        real server-computed content, but ``finish()`` embeds them into the
+        FRAME, and no client surface reads a frame today: ``streaming.py``
+        sends ``result.answer`` live, and ``router``'s replay prefers the
+        stored v1 answer. So a run demoted on the strength of findings
+        alone would terminate COMPLETED while the client received an answer
+        with no claim, no metric and no evidence -- the exact empty shell
+        ``_assemble_grounded_answer``'s guard exists to refuse, and a worse
+        outcome than the honest ``insufficient_evidence`` it replaced. When
+        canonical material IS present the findings ride along on the frame
+        for free, which is the only case where they add anything a caller
+        can reach. Revisit once CHAOS-3298 puts v2 on the wire and a
+        findings-only frame is genuinely readable.
         """
 
         del investigation_result  # see the docstring: documented non-input
@@ -4653,11 +5961,65 @@ class DevOrchestrator:
         if canonical_data is None:
             return None
         canonical_metrics, canonical_evidence = canonical_data
-        if not (canonical_metrics or canonical_evidence):
-            return None
         degraded = any(
             result.status in {"unavailable", "error"} for result in tool_results
         )
+        return self._assemble_grounded_answer(
+            answer_id=answer_id,
+            conversation_id=conversation_id,
+            resolution=resolution,
+            coverage=coverage,
+            canonical_metrics=canonical_metrics,
+            canonical_evidence=canonical_evidence,
+            degraded=degraded,
+            model=model,
+            now=now,
+            direct_summary=SERVER_GROUNDED_SUMMARY,
+            warnings=[SERVER_GROUNDED_WARNING],
+        )
+
+    def _assemble_grounded_answer(
+        self,
+        *,
+        answer_id: str,
+        conversation_id: str,
+        resolution: DevScopeResolution,
+        coverage: DevCoverage,
+        canonical_metrics: list[DevMetricRef],
+        canonical_evidence: list[DevEvidenceRef],
+        degraded: bool,
+        model: DevModelMetadata,
+        now: datetime,
+        direct_summary: str,
+        warnings: list[str],
+    ) -> DevAnswer | None:
+        """The backend-neutral core of a server-grounded ``DevAnswer``: no
+        live model prose, ever -- this function takes no ``DevAnswer``/
+        ``claims`` parameter at all, the same signature-level guarantee
+        :meth:`_server_grounded_answer`'s own docstring describes one layer
+        up.
+
+        CHAOS-3502 (terminal-path integration-seam decision, CHAOS-3660):
+        extracted so that BOTH the tool-results path
+        (:meth:`_server_grounded_answer`) and the graph-frame path (the
+        packet-sourced ``_graph_grounded_answer``, landing once the
+        admission-call leg and enrichment type are ready) assemble their
+        ``DevAnswer`` through this ONE core rather than two independent
+        constructions -- exactly the "one terminal path, two frame sources"
+        shape the ruling requires, one level below ``finish()`` itself
+        (which is already shared and needed no change).
+
+        Returns ``None`` when there is no canonical metric and no canonical
+        evidence: an "answer" built from nothing but a caller's own copy
+        would be a substantive-looking shell, which is the precise failure
+        the CHAOS-3290 floor exists to prevent. This guard is deliberately
+        backend-neutral -- it does not know or care whether its caller's
+        material came from a tool loop or a graph packet, only whether real
+        material exists.
+        """
+
+        if not (canonical_metrics or canonical_evidence):
+            return None
         return DevAnswer(
             schema_version="dev_answer.v1",
             answer_id=answer_id,
@@ -4670,13 +6032,13 @@ class DevOrchestrator:
             # COMPLETE additionally asserts every required source was fresh
             # and available (DevAnswer.validate_answer_invariants).
             status=AnswerStatus.DEGRADED if degraded else AnswerStatus.PARTIAL,
-            direct_summary=SERVER_GROUNDED_SUMMARY,
+            direct_summary=direct_summary,
             claims=[],
             metrics=canonical_metrics,
             evidence=canonical_evidence,
             conflicts=[],
             coverage=coverage,
-            warnings=[SERVER_GROUNDED_WARNING],
+            warnings=warnings,
             suggested_follow_up_questions=[],
             versions=self._versions,
             model=model,

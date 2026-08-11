@@ -11,6 +11,11 @@ import pytest
 from dev_health_ops.api.dev import platform_auto_certification, production_runtime
 from dev_health_ops.api.dev.contract_fixtures import positive_fixtures
 from dev_health_ops.api.dev.contracts import DevScope, DevToolRequest, ToolID
+from dev_health_ops.api.dev.graph_investigation_query import (
+    GraphInvestigationRequest,
+    GraphQueryOutcome,
+    GraphQueryResult,
+)
 from dev_health_ops.api.dev.platform_auto_certification import (
     PlatformAutoCertifier,
 )
@@ -20,6 +25,10 @@ from dev_health_ops.api.dev.tool_registry import (
     TOOL_CONTRACT_VERSION,
     ToolExecutionContext,
 )
+from dev_health_ops.context_fabric.graph_arm.query_service import (
+    ProductionGraphInvestigationQuery,
+)
+from dev_health_ops.licensing import FeatureDecision, FeatureDecisionReason
 from dev_health_ops.llm.agent.budget_policy import BUDGET_POLICY_VERSION
 from dev_health_ops.llm.agent.openai_compatible import READINESS_VERSION
 from dev_health_ops.llm.agent.policy import AgentProviderCandidate, AgentProviderSource
@@ -35,6 +44,63 @@ from dev_health_ops.llm.agent.roles import (
 from dev_health_ops.llm.credentials import LLMCredentials
 
 
+class _GraphDelegateProbe:
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
+        self.questions.append(request.question_text)
+        return GraphQueryResult(
+            outcome=GraphQueryOutcome.DISABLED,
+            diagnostic="delegate reached",
+        )
+
+
+@pytest.mark.asyncio
+async def test_acceptance_graph_fallback_seam_induces_only_the_exact_question() -> None:
+    delegate = _GraphDelegateProbe()
+    query = production_runtime._AcceptanceGraphFallbackQuery(
+        delegate, "Which teams are falling behind?"
+    )
+    fallback_request = cast(
+        GraphInvestigationRequest,
+        type("Request", (), {"question_text": "Which teams are falling behind?"})(),
+    )
+    normal_request = cast(
+        GraphInvestigationRequest,
+        type("Request", (), {"question_text": "Which teams are struggling?"})(),
+    )
+
+    fallback = await query.investigate(fallback_request)
+    normal = await query.investigate(normal_request)
+
+    assert fallback.outcome is GraphQueryOutcome.UNAVAILABLE
+    assert delegate.questions == ["Which teams are struggling?"]
+    assert normal.outcome is GraphQueryOutcome.DISABLED
+
+
+def test_acceptance_graph_fallback_seam_requires_acceptance_and_explicit_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM", "1")
+    monkeypatch.setenv(
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION",
+        "Which teams are falling behind?",
+    )
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    assert production_runtime._acceptance_graph_fallback_question() is None
+
+    monkeypatch.setenv("ENVIRONMENT", "acceptance")
+    monkeypatch.setenv("ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM", "0")
+    assert production_runtime._acceptance_graph_fallback_question() is None
+
+    monkeypatch.setenv("ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM", "1")
+    assert (
+        production_runtime._acceptance_graph_fallback_question()
+        == "Which teams are falling behind?"
+    )
+
+
 class FakeProvider:
     def __init__(self) -> None:
         self.closed = False
@@ -44,6 +110,20 @@ class FakeProvider:
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+class RecordingGraphQuery:
+    """Observe the production orchestrator's bounded graph-query request."""
+
+    def __init__(self) -> None:
+        self.requests: list[GraphInvestigationRequest] = []
+
+    async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
+        self.requests.append(request)
+        return GraphQueryResult(
+            outcome=GraphQueryOutcome.DISABLED,
+            diagnostic="test observation boundary",
+        )
 
 
 class FakeSettingsService:
@@ -1944,3 +2024,117 @@ async def test_the_runtime_carries_platform_staleness_to_the_router(
     )
 
     assert runtime.platform_certification_stale is True
+
+
+@pytest.mark.asyncio
+async def test_production_composition_supplies_canonical_graph_authorization_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3670 regression: graph routing must receive canonical candidates.
+
+    This keeps the real production composition and the real orchestrator
+    preflight path, replacing only the bounded graph-query implementation with
+    a recorder so the request supplied at that stable seam is observable.
+    The catalog rows below model the tenant-filtered canonical team roster; the
+    graph is not involved in deriving or authorizing them.
+    """
+
+    from tests._chaos_3292_preflight import (
+        PLATFORM_TEAM,
+        AuthorizedEntity,
+        EntityKind,
+        run_preflight_orchestrator,
+    )
+
+    org_id = "00000000-0000-0000-0000-000000000001"
+    other_team = AuthorizedEntity(EntityKind.TEAM, "team-other", "Other")
+
+    async def resolve_provider(_session, *, org_id: str):
+        assert org_id == "00000000-0000-0000-0000-000000000001"
+        return ProductionProviderResolution(
+            provider=cast(Any, FakeProvider()),
+            source=AgentProviderSource.PLATFORM,
+            family="openai",
+            model="certified-model",
+            provider_label="OpenAI compatible",
+            model_label="certified-model",
+        )
+
+    async def allow_feature(
+        _session: object, _org_uuid: object, feature_key: str
+    ) -> FeatureDecision:
+        return FeatureDecision(
+            feature_key,
+            True,
+            FeatureDecisionReason.ENABLED_BY_ORG_OVERRIDE,
+        )
+
+    async def canonical_catalog_query(
+        _client: object, sql: str, _params: dict[str, object]
+    ) -> list[dict[str, object]]:
+        if "FROM teams" not in sql:
+            return []
+        if "maxOrNull" in sql:
+            return [{"watermark": "2026-08-10T00:00:00+00:00"}]
+        return [
+            {
+                "canonical_id": PLATFORM_TEAM.canonical_id,
+                "label": PLATFORM_TEAM.label,
+                "repository_id": None,
+                "total_authorized": 1,
+            },
+            {
+                "canonical_id": other_team.canonical_id,
+                "label": other_team.label,
+                "repository_id": None,
+                "total_authorized": 2,
+            },
+        ]
+
+    monkeypatch.setattr(
+        production_runtime, "resolve_production_provider", resolve_provider
+    )
+    monkeypatch.setattr(production_runtime, "evaluate_org_feature_async", allow_feature)
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.graph_routing_policy.evaluate_org_feature_async",
+        allow_feature,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.dev.scope_catalog.query_dicts", canonical_catalog_query
+    )
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-evidence-signing-secret-32-bytes")
+    monkeypatch.setenv("ASK_DEV_GRAPH_ROUTING_ENABLED", "1")
+
+    runtime = await production_runtime.build_production_runtime(
+        cast(Any, object()),
+        org_id=org_id,
+        permission_fingerprint="permissions_01",
+        clickhouse=cast(Any, object()),
+    )
+    try:
+        assert isinstance(
+            runtime.graph_investigation_query, ProductionGraphInvestigationQuery
+        )
+        recorder = RecordingGraphQuery()
+        runtime.graph_investigation_query = recorder
+
+        output = await run_preflight_orchestrator(
+            question="Which teams are struggling right now?",
+            entities=[(org_id, PLATFORM_TEAM), (org_id, other_team)],
+            org_id=org_id,
+            script_id="chaos3670-production-composition",
+            scope_overrides={"team_ids": [PLATFORM_TEAM.canonical_id]},
+            graph_investigation_query=runtime.graph_investigation_query,
+            evidence_service=runtime.evidence_service,
+            canonical_enrichment=runtime.canonical_enrichment,
+            graph_routing_entitlement=runtime.graph_routing_entitlement,
+            graph_authorization_resolver=runtime.graph_authorization_resolver,
+        )
+
+        assert output.result.answer is not None
+        assert len(recorder.requests) == 1
+        assert recorder.requests[0].authorized_entity_ids == frozenset(
+            {PLATFORM_TEAM.canonical_id}
+        )
+    finally:
+        await runtime.aclose()

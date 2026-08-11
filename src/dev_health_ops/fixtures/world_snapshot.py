@@ -129,6 +129,7 @@ from typing import Any
 from dev_health_ops.fixtures.ttl_horizon import TTL_SAFETY_MARGIN
 from dev_health_ops.fixtures.ttl_registry import (
     TTL_SAFETY_MARGIN_DAYS,
+    assert_snapshot_not_expired,
     assert_ttl_vocabulary_is_consistent,
     clickhouse_ttl_retentions,
     snapshot_expiry,
@@ -345,7 +346,7 @@ async def _clickhouse_content_hashes(client: Any) -> dict[str, str]:
     ``FINAL`` view is what those engines exist to present and what every
     reader actually sees, so that is what is hashed.
 
-    Covers EVERY table, not just the 14 in ``_CLICKHOUSE_DIGEST_TABLES``:
+    Covers EVERY table, not just the 15 in ``_CLICKHOUSE_DIGEST_TABLES``:
     ``WORLD_DIGEST`` deliberately scopes itself to the world's own orgs and
     tables, while this has to catch a restore that quietly dropped or doubled
     anything anywhere.
@@ -414,15 +415,17 @@ _PG_BASE_TABLES_SQL = (
 
 
 async def _postgres_row_counts(conn: Any) -> dict[str, int]:
-    from sqlalchemy import text
+    from sqlalchemy import MetaData, func, select, text
 
     names = [
         row[0] for row in (await conn.execute(text(_PG_BASE_TABLES_SQL))).fetchall()
     ]
+    metadata = MetaData()
     counts: dict[str, int] = {}
     for name in names:
+        reflected = await _reflect(conn, str(name), metadata)
         value = (
-            await conn.execute(text(f'SELECT count(*) FROM public."{name}"'))
+            await conn.execute(select(func.count()).select_from(reflected))
         ).scalar_one()
         counts[str(name)] = int(value)
     return counts
@@ -1085,6 +1088,7 @@ async def snapshot_world(
         store="postgres",
         ledger=_POSTGRES_LEDGER_TABLES,
     )
+
     # CHAOS-3602: before dumping anything, refuse a snapshot over data that
     # is currently racing a TTL'd table's own background merge scheduler --
     # see _assert_no_ttl_horizon_rows for why this can't wait until after
@@ -1125,7 +1129,8 @@ async def snapshot_world(
             # table changing under the snapshot mid-dump); ClickHouse never
             # did -- the gap found alongside CHAOS-3602. Collapsing engines
             # (ReplacingMergeTree etc.) legitimately dedupe under FINAL, so
-            # raw and dumped counts differ BY DESIGN there -- only a bound
+            # raw and dumped counts differ BY DESIGN there (see
+            # ch_entries' own row_count comment below) -- only a bound
             # applies: FINAL cannot ever produce MORE rows than went in.
             # Non-collapsing engines have no such excuse: an exact mismatch
             # means the same "changing/flaky underneath the snapshot"
@@ -1513,7 +1518,7 @@ async def _align_reference_ids(
     or an existing referencing row -- refuses; nothing is silently skipped.
     """
 
-    from sqlalchemy import select, text, update
+    from sqlalchemy import func, select, update
 
     for table, spec in sorted(reference_tables.items()):
         reflected = await _reflect(conn, table, metadata)
@@ -1525,8 +1530,9 @@ async def _align_reference_ids(
         # this runs, and a stray pre-existing referrer would silently
         # re-target.
         for referrer in await _tables_referencing(conn, table):
+            referrer_table = await _reflect(conn, referrer, metadata)
             existing = (
-                await conn.execute(text(f'SELECT count(*) FROM public."{referrer}"'))
+                await conn.execute(select(func.count()).select_from(referrer_table))
             ).scalar_one()
             if existing:
                 raise RestoreRefusedError(
@@ -1785,6 +1791,15 @@ async def restore_world(
     _verify_snapshot_files(snapshot_dir, document)
     _require_matching_world_manifest(document, manifest)
     _require_acceptance_environment(env)
+
+    # CHAOS-3602: a minted snapshot's dates are frozen relative to
+    # world.json's pinned_now (CHAOS-3392) at mint time -- but ClickHouse's
+    # own TTL enforcement runs on REAL time, always. Once enough real time
+    # has passed since pinned_now, the snapshot's oldest rows are due for a
+    # live TTL merge to silently delete them before a boot's own content
+    # oracle or digest check ever reads them, turning into exactly the
+    # "mysterious 3am acceptance failure" this guard exists to name instead.
+    assert_snapshot_not_expired(manifest.pinned_now, datetime.now(UTC))
 
     ch_tables = document["clickhouse"]["tables"]
     pg_tables = document["postgres"]["tables"]

@@ -77,6 +77,7 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dev.org_policy import TERMINAL_RUN_STATES, platform_month_window
+from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.models.dev_persistence import DevRun
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ def _trip_circuit(exc: Exception) -> None:
     logger.warning(
         "Valkey ask-dev allowance counters unavailable, bypassing for %.0fs: %s",
         _CIRCUIT_SECONDS,
-        exc,
+        sanitize_for_log(str(exc)),
     )
 
 
@@ -580,15 +581,17 @@ async def reconcile_terminal_cost(
                 "askdev allowance counter missing at finalize for org=%s key=%s; "
                 "skipping reconcile (will heal on next cold-key read/admit or "
                 "explicit reconcile)",
-                org_id,
-                key,
+                sanitize_for_log(org_id),
+                sanitize_for_log(key),
             )
             return
         await client.hincrby(key, "cost_microusd", delta)
     except Exception as exc:  # noqa: BLE001 - never block a run's terminal write
         _trip_circuit(exc)
         logger.warning(
-            "askdev allowance counter reconcile failed for org=%s: %s", org_id, exc
+            "askdev allowance counter reconcile failed for org=%s: %s",
+            sanitize_for_log(org_id),
+            sanitize_for_log(str(exc)),
         )
 
 
@@ -724,7 +727,9 @@ async def force_reconcile(
     except Exception as exc:  # noqa: BLE001 - return the accurate value regardless
         _trip_circuit(exc)
         logger.warning(
-            "askdev allowance force_reconcile write failed for org=%s: %s", org_id, exc
+            "askdev allowance force_reconcile write failed for org=%s: %s",
+            sanitize_for_log(org_id),
+            sanitize_for_log(str(exc)),
         )
 
     return counts, window_start, reset_at

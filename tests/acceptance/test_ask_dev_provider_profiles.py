@@ -43,7 +43,27 @@ def test_provider_profile_overlay_passes_source_bound_platform_bundles() -> None
     assert environment["LMSTUDIO_BASE_URL"] == ""
     assert environment["OPENAI_API_KEY"] == ""
     assert api["extra_hosts"] == ["host.docker.internal:host-gateway"]
-    assert api["ports"] == ["127.0.0.1:18081:8000"]
+    assert api["ports"] == ["127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT:-0}:8000"]
+
+
+def test_provider_profile_defaults_to_os_assigned_api_port() -> None:
+    overlay = _OVERLAY.read_text(encoding="utf-8")
+    launcher = _LAUNCHER.read_text(encoding="utf-8")
+
+    assert "127.0.0.1:18081" not in overlay
+    assert "127.0.0.1:18081" not in launcher
+    assert "ASK_DEV_ACCEPTANCE_API_PORT:-0" in overlay
+    assert 'ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-0}"' in launcher
+    assert '"${compose[@]}" port api 8000 --index 1' in launcher
+    assert 'api_url="http://127.0.0.1:${api_port}"' in launcher
+    assert (
+        'project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-${profile}-${RANDOM}${RANDOM}}"'
+        in launcher
+    )
+    for service in _load_overlay()["services"].values():
+        container_name = service.get("container_name")
+        if container_name is not None:
+            assert container_name.startswith("${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-")
 
 
 def test_launcher_has_three_explicit_non_skipping_profiles() -> None:

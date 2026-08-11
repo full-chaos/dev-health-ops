@@ -24,12 +24,20 @@ technique:
   of the extracted mentions (``subject_preflight``), never by matching prose
   against prose.
 
-Mention extraction is likewise lexical, and has a stated residual gap: a name
-must be adjacent to one of the closed kind nouns below. A lowercase slug or a
-noun-less name ("how is Nightfall doing?") produces no mention, so the run
-degrades to today's organization-wide behaviour with the legacy backstop still
-armed. That gap is narrower than fabricating a subject, and is the direction
-CHAOS-3301 widens.
+Mention extraction is likewise lexical, and has a stated residual gap: a
+*typed* mention requires a name adjacent to one of the closed kind nouns
+below. A noun-less name ("how is Nightfall doing?") and a lowercase definite
+description of a body of work ("what about the auth work?") produce an
+**untyped** mention instead — resolved across every kind, and degrading to
+today's organization-wide behaviour with the legacy backstop still armed when
+nothing resolves. That gap is narrower than fabricating a subject, and is the
+direction CHAOS-3301 and CHAOS-3648 widen.
+
+What remains outside extraction entirely is a question that contains no name
+at all — a pronoun ("what's holding it up?") or a bare definite description
+with a relative clause ("the project that kept cycling in review"). Those need
+conversational-reference resolution, not a wider grammar, and no recognizer
+here should pretend otherwise by guessing.
 
 ``interpretation_reasons`` carries **recognizer IDs only, never question
 text**, per the "no raw question or entity text in logs, traces, or metric
@@ -54,6 +62,7 @@ from .contracts_v2 import (
     EntityKind,
     QuestionIntentID,
 )
+from .graph_investigation_query import CohortDiscoveryFamily
 from .metrics.definitions import METRIC_REGISTRY
 
 __all__ = [
@@ -66,6 +75,7 @@ __all__ = [
     "IntentClassifier",
     "InterpretedQuestion",
     "QuestionInterpreter",
+    "classify_cohort_discovery_family",
     "count_mention_candidates",
     "extract_mentions",
     "organization_mention_spans",
@@ -290,6 +300,122 @@ def _candidate_from(match: re.Match[str]) -> _MentionCandidate | None:
 #: A bare capitalized or quoted span, with no kind noun anywhere beside it.
 _BARE_NAME = re.compile(rf"(?:{_QUOTED}|(?P<plain>{_NAME}))")
 
+#: Head nouns that denote a **discrete undertaking** — a body of engineering
+#: work — without naming any member of ``EntityKind`` (CHAOS-3648).
+#:
+#: The class is eventive/deverbal nouns of *undertaking*: each one answers
+#: "what is being done", and each takes the restrictive modifiers a proper
+#: name occupies ("the payroll migration", "the search rewrite"). Nouns that
+#: denote a **delta or an event** rather than an undertaking are deliberately
+#: excluded — "change", "update", "fix", "release" head noun phrases that are
+#: overwhelmingly descriptions of a difference ("the biggest change", "the
+#: latest update"), so admitting them would mint mentions out of ordinary
+#: prose. Nothing here overlaps ``_KIND_NOUNS``: a phrase whose head *does*
+#: name a kind is the typed grammar's to claim.
+_WORK_HEAD_NOUNS: frozenset[str] = frozenset(
+    {
+        "adoption",
+        "buildout",
+        "cleanup",
+        "consolidation",
+        "effort",
+        "efforts",
+        "hardening",
+        "initiative",
+        "initiatives",
+        "integration",
+        "integrations",
+        "migration",
+        "migrations",
+        "modernisation",
+        "modernization",
+        "overhaul",
+        "overhauls",
+        "program",
+        "programme",
+        "programs",
+        "redesign",
+        "redesigns",
+        "refactor",
+        "refactoring",
+        "refactors",
+        "replatform",
+        "revamp",
+        "revamps",
+        "rewrite",
+        "rewrites",
+        "rollout",
+        "rollouts",
+        "upgrade",
+        "upgrades",
+        "work",
+        "workstream",
+        "workstreams",
+    }
+)
+
+#: Determiners whose noun phrase is a **definite description**: it presupposes
+#: a referent the hearer can already identify uniquely. That presupposition is
+#: what makes "the payroll migration" a naming act in the way "a migration"
+#: is not, and it is why capitalization is not required after one — a chat
+#: user lowercases a name they have already established as shared.
+_DEFINITE_DETERMINERS: tuple[str, ...] = ("the", "this", "that", "our")
+
+#: Modifiers that quantify, order, or locate in time rather than individuate.
+#: "the current work" restricts by recency, not by identity, so the tokens are
+#: stripped from the left of a definite description before it is treated as a
+#: name. They are held apart from ``_NAME_STOP_WORDS`` because that list
+#: governs capitalized spans, where a leading "Current" is far rarer.
+_NON_NAMING_MODIFIERS: frozenset[str] = frozenset(
+    {
+        "actual",
+        "biggest",
+        "current",
+        "entire",
+        "final",
+        "first",
+        "general",
+        "hardest",
+        "initial",
+        "last",
+        "latest",
+        "main",
+        "most",
+        "much",
+        "next",
+        "ongoing",
+        "only",
+        "outstanding",
+        "overall",
+        "previous",
+        "prior",
+        "real",
+        "recent",
+        "remaining",
+        "rest",
+        "total",
+        "upcoming",
+        "whole",
+    }
+)
+
+_WORK_NOUN_ALTERNATION = "|".join(
+    re.escape(noun) for noun in sorted(_WORK_HEAD_NOUNS, key=len, reverse=True)
+)
+_DETERMINER_ALTERNATION = "|".join(
+    re.escape(word) for word in sorted(_DEFINITE_DETERMINERS, key=len, reverse=True)
+)
+
+#: ``the <one to three modifiers> <work head noun>``. Matched case-insensitively
+#: on purpose: unlike ``_NAME``, this pattern does not use capitalization as
+#: its evidence that a name is present — the definite determiner is.
+_DEFINITE_DESCRIPTION = re.compile(
+    rf"\b(?:{_DETERMINER_ALTERNATION})[ \t]+"
+    rf"(?P<phrase>(?:[\w][\w&/'’\-]*[ \t]+){{1,3}}"
+    rf"(?:{_WORK_NOUN_ALTERNATION}))\b",
+    re.IGNORECASE,
+)
+
 _WORD_PUNCTUATION = re.compile(r"[^\w]+", re.UNICODE)
 
 
@@ -304,18 +430,90 @@ def _opens_a_sentence(question: str, start: int) -> bool:
     return not prefix or prefix[-1] in ".!?;:"
 
 
+def _is_naming_token(token: str) -> bool:
+    """Whether ``token`` can individuate a referent, rather than quantify one."""
+
+    word = _strip_word_punctuation(_normalize(token))
+    return bool(word) and word not in _NAME_STOP_WORDS | _NON_NAMING_MODIFIERS
+
+
+def _definite_description_spans(question: str) -> list[tuple[int, str]]:
+    """``(start, span)`` for each definite description naming a body of work.
+
+    CHAOS-3648. "What about the auth work?" and "what happened to the payments
+    rewrite?" name a subject exactly as plainly as "the Nightfall project"
+    does. Two independent properties of the kind-noun grammar make them
+    invisible to it, and both are properties of English rather than of any
+    corpus: the head noun ("work", "rewrite") is not a member of
+    ``EntityKind``, and the modifier that carries the name is lowercased, so
+    ``_NAME``'s capitalization evidence is absent. The definite determiner
+    supplies the missing evidence — a definite description presupposes a
+    uniquely identifiable referent, which is precisely the claim "this is a
+    name" makes.
+
+    Two readings are emitted per phrase, in specific-first order, because
+    English does not settle which one holds without a catalog:
+
+    * The **whole phrase**, for the reading where the head noun is part of the
+      proper name ("the Payments Rewrite").
+    * The **modifiers alone**, for the reading where the head noun is a common
+      classifier of a differently-named entity ("the AuthCore Adoption work"),
+      emitted only when the head noun is lowercased — a capitalized head is
+      the writer's own evidence that it belongs to the name.
+
+    This mirrors ``_NOUN_LEADING``/``_NOUN_TRAILING`` emitting a candidate per
+    reading and letting resolution rank them; a broader reading that matches
+    nothing costs nothing, and one that matches ranks below an exact
+    display-name or alias hit.
+    """
+
+    spans: list[tuple[int, str]] = []
+    for match in _DEFINITE_DESCRIPTION.finditer(question):
+        phrase_start = match.start("phrase")
+        tokens = [
+            (phrase_start + token.start(), token.group())
+            for token in re.finditer(r"\S+", match.group("phrase"))
+        ]
+        if len(tokens) < 2:
+            continue
+        head_start, head = tokens[-1]
+        modifiers = tokens[:-1]
+        # A leading "current"/"the"/"other" restricts by recency or contrast,
+        # never by identity, so it is not part of the name it precedes.
+        while modifiers and not _is_naming_token(modifiers[0][1]):
+            modifiers = modifiers[1:]
+        if not modifiers:
+            continue
+        start = modifiers[0][0]
+        spans.append((start, question[start : head_start + len(head)]))
+        if head[:1].islower():
+            last_start, last = modifiers[-1]
+            spans.append((start, question[start : last_start + len(last)]))
+    return spans
+
+
 def untyped_name_candidates(
     question: str, typed: Sequence[str] = ()
 ) -> tuple[str, ...]:
-    """Capitalized or quoted spans the kind-noun grammar did not claim.
+    """Naming spans the kind-noun grammar did not claim.
 
-    "How is Nightfall doing?" names a subject as plainly as "the Nightfall
-    project" does; only the noun that would let us *type* it is missing. These
-    spans are resolved across every searchable kind, and — crucially — an
-    unresolved one does **not** terminate the run, because we are not confident
-    the span was a subject at all ("What is our DORA score?" would otherwise
-    break). It re-arms the legacy backstop instead, which judges the model's
-    own answer text and is exactly today's behaviour for this shape.
+    Two shapes qualify, and neither states a kind:
+
+    * A **capitalized or quoted** span. "How is Nightfall doing?" names a
+      subject as plainly as "the Nightfall project" does; only the noun that
+      would let us *type* it is missing.
+    * A **definite description** of a body of work — "the auth work", "the
+      payments rewrite" (CHAOS-3648, see ``_definite_description_spans``).
+
+    These spans are resolved across every searchable kind, and — crucially —
+    an unresolved one does **not** terminate the run, because we are not
+    confident the span was a subject at all ("What is our DORA score?" would
+    otherwise break). It re-arms the legacy backstop instead, which judges the
+    model's own answer text and is exactly today's behaviour for this shape.
+    That non-terminating failure mode is why the definite-description reading
+    belongs here rather than in the typed grammar: a wrong *typed* mention
+    refuses a question that works today, while a wrong untyped one simply
+    matches nothing.
 
     Deliberately **uncapped** (CHAOS-3301 review fix): this used to truncate
     to ``MAX_MENTIONS`` internally, so a caller reading ``len(...)`` as an
@@ -329,16 +527,25 @@ def untyped_name_candidates(
     claimed = {value.casefold() for value in typed}
     found: list[str] = []
     seen: set[str] = set()
+    raw_spans: list[tuple[int, str]] = []
     for match in _BARE_NAME.finditer(question):
         raw = match.group("quoted") or match.group("plain")
         if raw is None:
             continue
-        span = raw.strip()
-        if len(span) < 2 or len(span) > 256:
-            continue
         start = match.start("quoted")
         if start < 0:
             start = match.start("plain")
+        raw_spans.append((start, raw))
+    # Definite descriptions are merged by position rather than appended, so
+    # mention ordinals stay in the order a reader sees the phrases in. The
+    # sort is stable, so a bare name keeps its precedence over a definite
+    # description that starts at the same offset.
+    raw_spans.extend(_definite_description_spans(question))
+    raw_spans.sort(key=lambda item: item[0])
+    for start, raw in raw_spans:
+        span = raw.strip()
+        if len(span) < 2 or len(span) > 256:
+            continue
         normalized = _normalize(span)
         words = [_strip_word_punctuation(word) for word in normalized.split(" ")]
         words = [word for word in words if word]
@@ -735,6 +942,62 @@ _DEFICIENCY_ANCHORS = _any_of(
     "missing controls",
     "process gaps",
 )
+#: CHAOS-3652. Deliberately disjoint from ``_HEALTH_ANCHORS``/``_WORKLOAD_
+#: ANCHORS``' phrases -- a zero-mention question already recognized by an
+#: earlier recognizer (``balance.team_workload``, ``health.team``,
+#: ``health.project``) must keep resolving to that intent; this recognizer
+#: is deliberately placed last in ``_RECOGNIZERS`` so it only catches what
+#: nothing else does, and never re-routes an existing recognized shape.
+_COHORT_DISCOVERY_SUBJECT_ANCHORS = _any_of(
+    "team",
+    "teams",
+    "project",
+    "projects",
+    "squad",
+    "squads",
+    "repo",
+    "repos",
+    "repository",
+    "repositories",
+    "service",
+    "services",
+)
+_COHORT_DISCOVERY_JUDGMENT_ANCHORS = _any_of(
+    "struggling",
+    "struggle",
+    "falling behind",
+    "underperforming",
+    "capacity-constrained",
+    "capacity constrained",
+    "unusually lightly loaded",
+    "lightly loaded",
+)
+#: CHAOS-3689: family-classification sub-groups for
+#: ``classify_cohort_discovery_family``, split out of the two anchor groups
+#: above by kind -- the SAME phrase lists, zero new lexical surface (per
+#: this round's "no corpus tuning" constraint). Subject anchors split into
+#: TEAM / PROJECT / unclassifiable-on-purpose: ``repo``/``repos``/
+#: ``repository``/``repositories``/``service``/``services`` are deliberately
+#: NOT folded into PROJECT -- ``GraphEntityKind`` has distinct
+#: ``REPOSITORY``/``SERVICE`` members, and ``cohort_discovery.
+#: FAMILY_CANDIDATE_KINDS`` never maps any family to either, so a question
+#: naming them cannot be satisfied by ``discover_cohort`` regardless of
+#: family choice — honestly unclassifiable, not a guess. Judgment anchors
+#: split into PRESSURE (mirrors the trial's ``STRUGGLING_TEAMS``/
+#: ``PRESSURE_SIGNALS`` phrasing) / CAPACITY (mirrors ``PROJECT_CAPACITY``'s
+#: own "capacity-constrained... unusually lightly loaded" phrasing
+#: near-verbatim).
+_COHORT_DISCOVERY_TEAM_SUBJECT_ANCHORS = _any_of("team", "teams", "squad", "squads")
+_COHORT_DISCOVERY_PROJECT_SUBJECT_ANCHORS = _any_of("project", "projects")
+_COHORT_DISCOVERY_PRESSURE_JUDGMENT_ANCHORS = _any_of(
+    "struggling", "struggle", "falling behind", "underperforming"
+)
+_COHORT_DISCOVERY_CAPACITY_JUDGMENT_ANCHORS = _any_of(
+    "capacity-constrained",
+    "capacity constrained",
+    "unusually lightly loaded",
+    "lightly loaded",
+)
 _RANKING_ANCHORS = _any_of(
     "top ",
     "most ",
@@ -859,7 +1122,70 @@ _RECOGNIZERS: tuple[_Recognizer, ...] = (
         QuestionIntentID.ENTITY_STATUS,
         lambda s: _STATUS_ANCHORS(s.normalized) and s.mention_count >= 1,
     ),
+    # CHAOS-3652. Placed last, deliberately: every earlier recognizer keeps
+    # first-match-wins precedence over this one, so this only catches a
+    # zero-mention, cohort-discovery-shaped question that would otherwise
+    # fall all the way through to BOUNDED_INVESTIGATION -- never anything an
+    # existing launch-intent recognizer already claims. Gated on
+    # ``mention_count == 0`` (checked before ``MAX_MENTIONS`` capping and
+    # after untyped-name merging -- see ``_Signals``): a question naming
+    # something, resolved or not, must never route here (Wave 3.2's
+    # no-organization-widening-for-an-unresolved-name guardrail; also
+    # enforced structurally by ``DevQuestionIntent.validate_intent_
+    # invariants``, which rejects this intent at any cardinality other than
+    # ``ORGANIZATION_WIDE``).
+    _Recognizer(
+        "cohort.discovery",
+        QuestionIntentID.DISCOVERED_COHORT,
+        lambda s: (
+            s.mention_count == 0
+            and _COHORT_DISCOVERY_SUBJECT_ANCHORS(s.normalized)
+            and _COHORT_DISCOVERY_JUDGMENT_ANCHORS(s.normalized)
+        ),
+    ),
 )
+
+
+def classify_cohort_discovery_family(
+    question_text: str,
+) -> CohortDiscoveryFamily | None:
+    """CHAOS-3689/CHAOS-3660: the one closed-vocabulary classification signal
+    a ``DISCOVERED_COHORT`` question carries beyond ``(intent_id,
+    cardinality)`` -- see ``CohortDiscoveryFamily``'s own docstring
+    (``graph_investigation_query.py``) for why this exists and why it has
+    only two members.
+
+    Intended to be called only after the ``cohort.discovery`` recognizer has
+    already matched (i.e. at least one subject anchor and one judgment
+    anchor are already known present) -- this just identifies WHICH ones,
+    reusing the exact same, already-measured phrase lists (split into
+    sub-groups above, not new lexical surface).
+
+    Requires an EXCLUSIVE match on both axes -- exactly one subject kind and
+    exactly one judgment kind -- before committing to a family. Returns
+    ``None`` (honestly unclassifiable) for everything else: a mixed subject
+    ("teams and projects"), a mixed judgment, a cross-mismatch
+    ``FAMILY_CANDIDATE_KINDS`` cannot satisfy (e.g. "teams" +
+    "capacity-constrained" -- ``TEAM_PRESSURE`` requires a pressure
+    judgment, ``PROJECT_CAPACITY`` requires a project subject), or a
+    repo/service subject (``GraphEntityKind.REPOSITORY``/``SERVICE`` are
+    distinct from ``PROJECT``; no family maps to either). The caller
+    (orchestrator's routing branch) never invokes the graph seam at all when
+    this returns ``None`` -- an honest miss here falls back to the existing
+    legacy loop exactly like any other unclassified question, never a
+    guess.
+    """
+
+    normalized = _normalize(question_text)
+    is_team = _COHORT_DISCOVERY_TEAM_SUBJECT_ANCHORS(normalized)
+    is_project = _COHORT_DISCOVERY_PROJECT_SUBJECT_ANCHORS(normalized)
+    is_pressure = _COHORT_DISCOVERY_PRESSURE_JUDGMENT_ANCHORS(normalized)
+    is_capacity = _COHORT_DISCOVERY_CAPACITY_JUDGMENT_ANCHORS(normalized)
+    if is_team and not is_project and is_pressure and not is_capacity:
+        return CohortDiscoveryFamily.TEAM_PRESSURE
+    if is_project and not is_team and is_capacity and not is_pressure:
+        return CohortDiscoveryFamily.PROJECT_CAPACITY
+    return None
 
 
 def _cardinality_for(mention_count: int) -> Cardinality:

@@ -54,10 +54,13 @@ in flight.
 
 ### Interpretation
 
-A subject is recognized two ways. A name beside a kind noun ("the Ask Dev
+A subject is recognized three ways. A name beside a kind noun ("the Ask Dev
 project", "project Ask Dev") is typed directly. A bare name with no such noun
-("How is Nightfall doing?") is still recognized, and is resolved across every
-searchable kind — but because we cannot be sure a bare capitalized word was a
+("How is Nightfall doing?") is still recognized, and so is a definite
+description of a body of work whose head noun names no kind ("What about the
+payroll migration?" — here the definite determiner, not capitalization, is
+what marks the phrase as naming something). Both of the latter are resolved
+across every searchable kind — but because we cannot be sure either was a
 subject at all, failing to resolve one does **not** stop the run. Instead the
 run widens to organization scope and the previous named-entity backstop is
 re-armed, comparing the name against the model's own answer text and stopping

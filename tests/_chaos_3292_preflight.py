@@ -43,6 +43,10 @@ from dev_health_ops.api.dev.evidence_service import (
     EvidenceRecord,
     EvidenceReferenceSigner,
 )
+from dev_health_ops.api.dev.graph_investigation_query import (
+    CohortDiscoveryFamily,
+    GraphAuthorizationScope,
+)
 from dev_health_ops.api.dev.orchestrator import DevOrchestrator, OrchestratorResult
 from dev_health_ops.api.dev.orchestrator_states import RunState
 from dev_health_ops.api.dev.question_interpreter import QuestionInterpreter
@@ -254,6 +258,21 @@ class SeededCatalog:
             entity
             for owner, entity in self.entities
             if owner == org_id and entity.kind is EntityKind.PROJECT
+        ]
+        matched.sort(key=_label_sort_key)
+        return matched[:limit], len(matched)
+
+    async def organization_team_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """Mirror the production tenant-filtered team roster."""
+
+        if self.fail_search:
+            raise RuntimeError("catalog unavailable")
+        matched = [
+            entity
+            for owner, entity in self.entities
+            if owner == org_id and entity.kind is EntityKind.TEAM
         ]
         matched.sort(key=_label_sort_key)
         return matched[:limit], len(matched)
@@ -492,6 +511,7 @@ class Recorder:
         self.terminals: list[RunState] = []
         self.preflight_diagnostics: list[tuple[str | None, str | None]] = []
         self.frames: list[Any] = []
+        self.investigation_shadow_records: list[Any] = []
         self.resolutions: list[Any] = []
         #: CHAOS-3533: the ``authorizing_mention_id`` passed alongside each
         #: recorded frame -- ``None`` for every terminal that made no
@@ -558,6 +578,9 @@ class Recorder:
     async def record_investigation_result(self, result: DevInvestigationResult) -> None:
         """No-op here; CHAOS-3295's InvestigationRecorder subclass captures this."""
         del result
+
+    async def record_investigation_shadow(self, record: Any) -> None:
+        self.investigation_shadow_records.append(record)
 
     async def record_qua_shadow(self, record: Any) -> None:
         self.qua_shadow_records.append(record)
@@ -759,6 +782,13 @@ async def run_preflight_orchestrator(
         recording_registry
     ),
     qua_shadow: Any = None,
+    investigation_shadow: Any = None,
+    investigation_packet_producer: Any = None,
+    graph_investigation_query: Any = None,
+    evidence_service: Any = None,
+    canonical_enrichment: Any = None,
+    graph_routing_entitlement: Any = None,
+    graph_authorization_resolver: Any = None,
 ) -> RunOutput:
     """One full orchestrator run with the preflight wired the way production wires it.
 
@@ -780,10 +810,71 @@ async def run_preflight_orchestrator(
     ``PersistenceRunRecorder`` against a seeded database and assert on the
     actual rows a live run leaves behind, not a fake recorder's captured
     call list.
+
+    ``graph_investigation_query``/``evidence_service``/``canonical_enrichment``
+    default to ``None`` (flag-off, same as production when the org feature is
+    off) -- CHAOS-3502's routing-branch suite passes a real
+    ``FakeGraphInvestigationQuery`` plus a minimal ``EvidenceService`` here
+    so a genuine ``DISCOVERED_COHORT`` ``preflight_result`` (only the real
+    interpreter/preflight pipeline produces one) drives the actual routing
+    branch in ``DevOrchestrator.run()``, not a construction-only smoke test.
+    Routing tests must also pass an explicit ``graph_routing_entitlement``;
+    the production orchestrator fails closed when graph collaborators are
+    present without that organization-level authorizer.
+    ``canonical_enrichment`` (CHAOS-3650) is the third collaborator the
+    graph-grounded assembler needs; every existing caller leaves it unset,
+    which keeps the COMPLETED-branch assembly attempt gated off exactly as
+    it was before that assembler existed.
     """
 
-    catalog = SeededCatalog(entities, fail_search=fail_search)
+    seeded_entities = list(entities)
+    if graph_investigation_query is not None and not any(
+        owner == org_id and entity.kind is EntityKind.TEAM
+        for owner, entity in seeded_entities
+    ):
+        # Subjectless graph tests still need an explicit authorized universe.
+        # This is a fixture-only roster row, not an authorization fallback in
+        # production; the production resolver reads the tenant catalog.
+        seeded_entities.append((org_id, PLATFORM_TEAM))
+    catalog = SeededCatalog(seeded_entities, fail_search=fail_search)
     scope_service = ScopeResolutionService(catalog, cache=ScopeRequestCache())
+    if graph_authorization_resolver is None and graph_investigation_query is not None:
+
+        async def seeded_graph_authorization(
+            requested_org_id: str,
+            requested_permission_fingerprint: str,
+            family: CohortDiscoveryFamily,
+            authorized_scope: DevScope,
+        ) -> GraphAuthorizationScope | None:
+            if family is CohortDiscoveryFamily.TEAM_PRESSURE:
+                selected, total = await catalog.organization_team_entities(
+                    requested_org_id, limit=25
+                )
+            else:
+                selected, total = await catalog.organization_project_entities(
+                    requested_org_id, limit=25
+                )
+            requested_ids = set(authorized_scope.team_ids)
+            if requested_ids and family is CohortDiscoveryFamily.TEAM_PRESSURE:
+                selected = [
+                    entity
+                    for entity in selected
+                    if entity.canonical_id in requested_ids
+                ]
+            ids = frozenset(entity.canonical_id for entity in selected)
+            complete = bool(ids) and len(selected) == total <= 25
+            if requested_ids and family is CohortDiscoveryFamily.TEAM_PRESSURE:
+                complete = ids == requested_ids
+            return GraphAuthorizationScope(
+                organization_id=requested_org_id,
+                permission_fingerprint=requested_permission_fingerprint,
+                scope=authorized_scope,
+                cohort_discovery_family=family,
+                authorized_entity_ids=ids,
+                complete=complete,
+            )
+
+        graph_authorization_resolver = seeded_graph_authorization
     mint = sequential_ids()
     preflight = (
         SubjectPreflight(
@@ -825,6 +916,13 @@ async def run_preflight_orchestrator(
         plan_registry=plan_registry,
         plan_executor=plan_executor,
         qua_shadow=qua_shadow,
+        investigation_shadow=investigation_shadow,
+        investigation_packet_producer=investigation_packet_producer,
+        graph_investigation_query=graph_investigation_query,
+        evidence_service=evidence_service,
+        canonical_enrichment=canonical_enrichment,
+        graph_routing_entitlement=graph_routing_entitlement,
+        graph_authorization_resolver=graph_authorization_resolver,
     )
     result = await orchestrator.run(
         request=request,

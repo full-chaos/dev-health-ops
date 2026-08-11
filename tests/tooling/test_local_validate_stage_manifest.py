@@ -271,7 +271,7 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
     """With every leaf gate stubbed to pass instantly (no lint/mypy/pytest/
     docker/ClickHouse actually run -- see the `--stage-manifest-probe` hook's
     own header comment in local_validate.sh), a clean run's executed-stage-id
-    set must equal the full 8-stage declared set, and the verdict line +
+    set must equal the full 10-stage declared set, and the verdict line +
     machine-readable manifest line must say so explicitly.
     """
     result = subprocess.run(
@@ -286,10 +286,10 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
 
     assert result.returncode == 0, combined
     assert "GATE PASSED." in combined, combined
-    assert "GATE_STAGE_MANIFEST result=PASSED declared=8 executed=8" in combined, (
+    assert "GATE_STAGE_MANIFEST result=PASSED declared=10 executed=10" in combined, (
         combined
     )
-    assert "[8/8:" in combined, combined
+    assert "[10/10:" in combined, combined
     for stage_id in (
         "lint_format",
         "lint_check",
@@ -299,6 +299,8 @@ def test_full_run_executed_stages_equal_the_full_declared_set(tmp_path):
         "ch_migrate",
         "unit_suite",
         "ch_argmax_proof",
+        "ch_declared_state_history_tests",
+        "ch_migration_075_reconcile_tests",
     ):
         assert stage_id in combined, (
             f"missing declared stage id {stage_id!r}.\n{combined}"
@@ -324,7 +326,14 @@ def test_skip_clickhouse_reduces_the_declared_set_exactly(tmp_path):
         combined
     )
     assert "[4/4:" in combined, combined
-    for stage_id in ("ch_probe", "ch_scratch_create", "ch_migrate", "ch_argmax_proof"):
+    for stage_id in (
+        "ch_probe",
+        "ch_scratch_create",
+        "ch_migrate",
+        "ch_argmax_proof",
+        "ch_declared_state_history_tests",
+        "ch_migration_075_reconcile_tests",
+    ):
         assert stage_id not in combined, (
             f"CH stage id {stage_id!r} must not appear in a SKIP_CLICKHOUSE=1 "
             f"manifest.\n{combined}"

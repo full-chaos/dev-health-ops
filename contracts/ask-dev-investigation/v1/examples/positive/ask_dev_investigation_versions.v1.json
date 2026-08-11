@@ -1,0 +1,23 @@
+{
+  "corpus_version": null,
+  "packet_schema_version": "ask_dev_investigation_packet.v1",
+  "projection_version": "work_graph_projection.v1",
+  "query_version": "ask_dev_investigation_queries.v1",
+  "ranking_version": "ask_dev_investigation_ranking.v1",
+  "schema_version": "ask_dev_investigation_versions.v1",
+  "source_contract_versions": [
+    {
+      "contract_version": "work_graph.v1",
+      "source_class": "work_graph"
+    },
+    {
+      "contract_version": "review_metrics.v1",
+      "source_class": "review"
+    },
+    {
+      "contract_version": "work_item.v1",
+      "source_class": "work_item"
+    }
+  ],
+  "trial": null
+}

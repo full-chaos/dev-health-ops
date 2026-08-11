@@ -337,28 +337,31 @@ def check_corpus_step_runs_armed_after_the_boot(text: str) -> list[str]:
 def check_corpus_talks_to_the_port_the_stack_published(text: str) -> list[str]:
     """The corpus must query the API this run actually booted.
 
-    The launcher publishes ASK_DEV_ACCEPTANCE_API_PORT; the corpus reads
-    ASK_DEV_ACCEPTANCE_API_URL. They are two variables holding one fact, and if
-    they drift the corpus points at a port nothing is listening on -- which
-    fails, loudly, but only after a full stack build. Cheaper to fail here.
+    The launcher discovers the OS-assigned host port and publishes the complete
+    ASK_DEV_ACCEPTANCE_API_URL through GITHUB_ENV. The corpus step must inherit
+    that value rather than carrying a second fixed URL or port that can point
+    at a different local stack.
     """
     doc = _load(text)
-    port = str(
-        _jobs(doc)
-        .get(LIVE_JOB, {})
-        .get("env", {})
-        .get("ASK_DEV_ACCEPTANCE_API_PORT", "")
-    )
+    fixed_ports = ("127.0.0.1:18080", "127.0.0.1:18081", "127.0.0.1:18099")
+    if any(port in text for port in fixed_ports):
+        return [
+            "the workflow contains a fixed local acceptance API URL; the launcher "
+            "must publish the OS-assigned URL instead"
+        ]
+    job_env = _jobs(doc).get(LIVE_JOB, {}).get("env", {})
+    if "ASK_DEV_ACCEPTANCE_API_PORT" in job_env:
+        return [
+            "the live job pins ASK_DEV_ACCEPTANCE_API_PORT; Compose must allocate "
+            "the port by default"
+        ]
     step = _step(doc, LIVE_JOB, CORPUS_STEP)
     if step is None:
         return [f"{LIVE_JOB} has no step named {CORPUS_STEP!r}"]
-    url = str(step.get("env", {}).get("ASK_DEV_ACCEPTANCE_API_URL", ""))
-    if not port:
-        return [f"{LIVE_JOB} does not pin ASK_DEV_ACCEPTANCE_API_PORT"]
-    if not url.endswith(f":{port}"):
+    if "ASK_DEV_ACCEPTANCE_API_URL" in step.get("env", {}):
         return [
-            f"the corpus queries {url!r} but the stack publishes port {port}; one of the two "
-            "was changed without the other"
+            f"{CORPUS_STEP} overrides ASK_DEV_ACCEPTANCE_API_URL instead of inheriting "
+            "the launcher-discovered URL"
         ]
     return []
 
@@ -784,8 +787,9 @@ _MUTATIONS: list[tuple[str, str, str]] = [
     ),
     (
         "api-port",
-        "          ASK_DEV_ACCEPTANCE_API_URL: http://127.0.0.1:18080",
-        "          ASK_DEV_ACCEPTANCE_API_URL: http://127.0.0.1:18099",
+        '          ASK_DEV_LIVE_ACCEPTANCE: "1"\n',
+        '          ASK_DEV_LIVE_ACCEPTANCE: "1"\n'
+        "          ASK_DEV_ACCEPTANCE_API_URL: http://127.0.0.1:18080\n",
     ),
     (
         "always-cleanup",
@@ -851,8 +855,8 @@ _MUTATIONS: list[tuple[str, str, str]] = [
     ),
     (
         "api-port",
-        '      ASK_DEV_ACCEPTANCE_API_PORT: "18080"\n',
-        "",
+        "          # The boot step discovers the OS-assigned API port and publishes the\n",
+        "          ASK_DEV_ACCEPTANCE_API_URL: http://127.0.0.1:18080\n",
     ),
     (
         "quota-budget",

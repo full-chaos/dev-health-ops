@@ -51,7 +51,6 @@ from typing import get_args
 from .answer_validator import answer_has_material_grounding
 from .contracts import (
     AnswerStatus,
-    CohortDiscoveryFamily,
     DevActualCompletion,
     DevAnswer,
     DevContractVersions,
@@ -59,10 +58,12 @@ from .contracts import (
     DevError,
     DevModelMetadata,
     DevScopeResolution,
-    PacketLimitationKind,
     ScopeResolutionOutcome,
 )
 from .contracts_v2 import PublicOutcome, ResolutionOutcome
+from .contracts_v2.base import QuestionIntentID
+from .graph_investigation_query import CohortDiscoveryFamily, GraphQueryOutcome
+from .investigation_contract import ComparisonShape, PacketLimitationKind
 from .orchestrator_states import RunState
 from .status_change_service import STATUS_REASON_CODES
 
@@ -114,6 +115,49 @@ def _underscore_members(values: Iterable[str]) -> frozenset[str]:
 #: ``DevError.code`` already is below.
 _EXTRA_INTERNAL_TOKENS: frozenset[str] = frozenset({"actual_completion", "ev1_"})
 
+#: CHAOS-3698. The graph-assisted routing seam (CHAOS-3502/3650) makes a new
+#: family of internal vocabulary reachable in user-visible prose for the
+#: first time: once ``orchestrator._graph_grounded_answer`` starts building
+#: real answers from graph packets, ``discovered_cohort``,
+#: ``deadline_exceeded``, ``provider_failure``, ``team_pressure``,
+#: ``project_capacity`` and every ``PacketLimitationKind`` member become
+#: values a producer could echo, exactly the CHAOS-3367/3377 leak class,
+#: reopened against this vocabulary. #1681 (ops main) registered
+#: ``GraphQueryOutcome``/``CohortDiscoveryFamily`` here already but silently
+#: dropped ``PacketLimitationKind`` and the ``discovered_cohort`` intent/
+#: comparison-shape token -- this closes both gaps rather than leaving a
+#: partial union that looks complete.
+#:
+#: Only ``QuestionIntentID.DISCOVERED_COHORT``/``ComparisonShape.
+#: DISCOVERED_COHORT`` are pulled from their enums, not the enums wholesale:
+#: those two enums carry members well beyond the graph route (every Wave 3.1
+#: launch intent, every comparison shape), and widening the union to all of
+#: them is a broader change than this leak class needs -- CHAOS-3693 (filed,
+#: unstarted) is the deliberate follow-up for "every StrEnum is covered-or-
+#: excluded" as a structural guard, not this fix.
+#:
+#: Deliberately NOT unioned, with the reason stated here rather than left
+#: silent (the exact omission that caused this issue):
+#: * ``graph_arm.query_service.GraphMechanism`` -- "Trial metadata only --
+#:   never reaches the wire" per its own docstring; it has no path to any
+#:   producer-authored or model-authored string this scan runs over.
+#: * ``evidence_service.EvidenceAvailability`` -- a real, pre-existing
+#:   leak-shaped vocabulary (``no_matches``, ``unauthorized``,
+#:   ``unconfigured``, ...), but not part of CHAOS-3698's reported instance
+#:   and not newly made reachable by this leg; tracked as a candidate for
+#:   the CHAOS-3693 structural guard rather than folded into this fix.
+_GRAPH_ASSISTED_INTERNAL_TOKENS: frozenset[str] = (
+    _underscore_members(member.value for member in GraphQueryOutcome)
+    | _underscore_members(member.value for member in CohortDiscoveryFamily)
+    | _underscore_members(member.value for member in PacketLimitationKind)
+    | _underscore_members(
+        (
+            QuestionIntentID.DISCOVERED_COHORT.value,
+            ComparisonShape.DISCOVERED_COHORT.value,
+        )
+    )
+)
+
 #: Every internal vocabulary token that must never reach a user-visible
 #: string, derived from the live enums. See the module docstring for why only
 #: underscore-bearing members are kept.
@@ -141,6 +185,7 @@ INTERNAL_TOKEN_DENYLIST: frozenset[str] = (
     | _underscore_members(member.value for member in CohortDiscoveryFamily)
     | _underscore_members(member.value for member in PacketLimitationKind)
     | _EXTRA_INTERNAL_TOKENS
+    | _GRAPH_ASSISTED_INTERNAL_TOKENS
 )
 
 # NOT included, deliberately: ``ToolID``. A round-2 review argued that a

@@ -788,10 +788,10 @@ async def test_the_widening_marker_alone_would_be_the_wrong_predicate() -> None:
     a fact about a module nobody calls that way.
     """
 
-    from dev_health_ops.api.dev.production_runtime import _scope_request
     from dev_health_ops.api.dev.scope_service import (
         ScopeResolutionService,
         ScopeResolveRequest,
+        scope_request_from_scope,
     )
     from tests.api.dev.test_scope_service import FakeCatalog
 
@@ -809,7 +809,7 @@ async def test_the_widening_marker_alone_would_be_the_wrong_predicate() -> None:
     )
     assert "organization" in subject_free.fallbacks
 
-    assert _scope_request(_scope()).allow_organization_fallback is False, (
+    assert scope_request_from_scope(_scope()).allow_organization_fallback is False, (
         "HALF TWO MOVED: production now ASKS for the organization fallback, so "
         "the second producer is reachable from Ask Dev and an ordinary "
         "org-wide answer can carry fallbacks==['organization'] with no subject "

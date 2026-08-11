@@ -10,10 +10,18 @@ from typing import Literal
 from dev_health_ops.llm.agent.contracts import AgentLLMProvider
 
 from .answer_frames import narrative_fallback
+from .canonical_enrichment import CanonicalEnrichmentAccessor
 from .contracts import DevContractVersions, DevMessageRequest
 from .contracts_v2.base import QuestionIntentID
 from .contracts_v2.plan import DevInvestigationPlan
+from .evidence_service import EvidenceService
+from .graph_investigation_query import (
+    GraphAuthorizationResolver,
+    GraphInvestigationQuery,
+)
+from .graph_routing_policy import GraphRoutingEntitlementAuthorizer
 from .investigation_plans import PlanExecutor
+from .investigation_shadow import InvestigationPacketProducer, InvestigationShadow
 from .orchestrator import (
     DevOrchestrator,
     EventSink,
@@ -73,6 +81,27 @@ class BoundedDevRuntime:
     #: without this it would leak a connection on every request once the
     #: shadow flag is enabled.
     qua_shadow_provider: AgentLLMProvider | None = None
+    #: CHAOS-3618 PR 2. ``None`` on both is the flag-off path, and they are
+    #: separate fields on purpose: the seam is arm-neutral machinery and the
+    #: producer is one arm, so wiring a second arm later touches only the
+    #: producer. Neither is constructed unless its flag is on, so "off" is
+    #: the absence of an object rather than a branch inside one.
+    investigation_shadow: InvestigationShadow | None = None
+    investigation_packet_producer: InvestigationPacketProducer | None = None
+    #: Server-owned graph-assisted collaborators. Production constructs all
+    #: three once in its composition root; the runtime carries those exact
+    #: instances into each per-run orchestrator.
+    graph_investigation_query: GraphInvestigationQuery | None = None
+    evidence_service: EvidenceService | None = None
+    canonical_enrichment: CanonicalEnrichmentAccessor | None = None
+    #: The independent organization-level graph entitlement. Production
+    #: carries the canonical authorizer only when the Wave 3.1 collaborators
+    #: are constructed; the orchestrator checks it immediately before route
+    #: entry, leaving the runtime kill switch independent.
+    graph_routing_entitlement: GraphRoutingEntitlementAuthorizer | None = None
+    #: Complete server-owned graph candidate envelope resolver. ``None`` is
+    #: fail-closed for direct callers and for organizations outside Wave 3.1.
+    graph_authorization_resolver: GraphAuthorizationResolver | None = None
 
     async def run(
         self,
@@ -102,6 +131,13 @@ class BoundedDevRuntime:
             plan_executor=self.plan_executor,
             narrative_provider=self.narrative_provider,
             qua_shadow=self.qua_shadow,
+            investigation_shadow=self.investigation_shadow,
+            investigation_packet_producer=self.investigation_packet_producer,
+            graph_investigation_query=self.graph_investigation_query,
+            evidence_service=self.evidence_service,
+            canonical_enrichment=self.canonical_enrichment,
+            graph_routing_entitlement=self.graph_routing_entitlement,
+            graph_authorization_resolver=self.graph_authorization_resolver,
         )
         return await orchestrator.run(
             request=request,

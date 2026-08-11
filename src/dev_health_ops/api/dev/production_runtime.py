@@ -71,6 +71,7 @@ from dev_health_ops.metrics.prometheus import (
 )
 from dev_health_ops.models.settings import SettingCategory
 
+from .canonical_enrichment import CanonicalEnrichmentAccessor
 from .contracts import (
     DevActualCompletion,
     DevAnswer,
@@ -93,6 +94,7 @@ from .contracts import (
     DevToolRequest,
     DevToolResult,
     DirectScope,
+    EntityType,
     FreshnessState,
     ToolID,
 )
@@ -110,6 +112,15 @@ from .evidence_service import (
     EvidenceReferenceSigner,
     EvidenceService,
 )
+from .graph_investigation_query import (
+    CohortDiscoveryFamily,
+    GraphAuthorizationScope,
+    GraphInvestigationQuery,
+    GraphInvestigationRequest,
+    GraphQueryOutcome,
+    GraphQueryResult,
+)
+from .graph_routing_policy import CanonicalGraphRoutingEntitlementAuthorizer
 from .investigation_plans import PlanExecutor
 from .investigation_plans.plan_documents import CORE_PLANS_BY_INTENT
 from .investigation_plans.wave_3_1_plans import (
@@ -119,6 +130,7 @@ from .investigation_plans.wave_3_1_plans import (
 from .metrics.clickhouse import ClickHouseMetricSource
 from .metrics.service import MetricQueryRequest, MetricQueryService
 from .native_evidence import native_evidence_adapters
+from .native_evidence_resolver import NativeEvidenceCandidateResolver
 from .native_status_change import ClickHouseStatusChangeSource
 from .native_team_workload import ClickHouseTeamWorkloadSource
 from .operational_deficiency_service import OperationalDeficiencyService
@@ -132,14 +144,13 @@ from .question_interpreter import QuestionInterpreter
 from .runtime import BoundedDevRuntime, DevRuntimeUnavailable
 from .scope_catalog import ClickHouseAuthorizedEntityCatalog
 from .scope_service import (
+    MAX_CANDIDATES,
     MODEL_SEARCHABLE_ENTITY_KINDS,
     EntityKind,
-    ScopeRef,
     ScopeRequestCache,
     ScopeResolutionService,
-    ScopeResolveRequest,
     ScopeSearchRequest,
-    TimeRangeRequest,
+    scope_request_from_scope,
 )
 from .status_change_service import (
     ChangeSummaryRequest,
@@ -1199,42 +1210,6 @@ def _provider(candidate: AgentProviderCandidate) -> AgentLLMProvider:
     )
 
 
-def _scope_request(scope: DevScope) -> ScopeResolveRequest:
-    refs: tuple[ScopeRef, ...]
-    if scope.direct_scope is DirectScope.ORGANIZATION:
-        refs = (ScopeRef(EntityKind.ORGANIZATION, scope.organization_id),)
-    elif scope.direct_scope is DirectScope.REPOSITORY:
-        refs = tuple(
-            ScopeRef(EntityKind.REPOSITORY, value) for value in scope.repositories
-        )
-    else:
-        refs = tuple(
-            ScopeRef(EntityKind(item.entity_type.value), item.entity_id)
-            for item in scope.entity_refs
-        )
-    return ScopeResolveRequest(
-        explicit_refs=refs,
-        # A team *direct* scope already carries its team as an explicit_ref
-        # (via the entity_refs branch above); team_ids there is required by
-        # DevScope.validate_direct_scope to name that same team, not a second
-        # independent dimension. Also passing it as a team_filter_ref would
-        # make `resolve()` treat the run as team-*filtered* (outcome=FILTERED)
-        # rather than an exact single-entity commit (CHAOS-3301).
-        team_filter_refs=(
-            ()
-            if scope.direct_scope is DirectScope.TEAM
-            else tuple(ScopeRef(EntityKind.TEAM, value) for value in scope.team_ids)
-        ),
-        time_range=TimeRangeRequest(
-            preset_days=None,
-            start_date=date.fromisoformat(scope.time_range.start.date().isoformat()),
-            end_date=date.fromisoformat(scope.time_range.end.date().isoformat()),
-            timezone=scope.time_range.timezone,
-        ),
-        allow_organization_fallback=False,
-    )
-
-
 async def _resolve_exact_contract(
     service: ScopeResolutionService,
     *,
@@ -1243,7 +1218,7 @@ async def _resolve_exact_contract(
     requested_scope: DevScope,
 ) -> DevScopeResolution:
     resolution = await service.resolve_contract(
-        org_id, permission_fingerprint, _scope_request(requested_scope)
+        org_id, permission_fingerprint, scope_request_from_scope(requested_scope)
     )
     if resolution.resolved_scope is None:
         return resolution.model_copy(update={"requested_scope": requested_scope})
@@ -1603,7 +1578,7 @@ class _ProductionPlanExecutorRuntime:
             org_id=org_id,
             permission_fingerprint=permission_fingerprint,
             request=WorkGraphNeighborsRequest(
-                scope_request=_scope_request(scope),
+                scope_request=scope_request_from_scope(scope),
                 root_refs=roots,
                 relationship_types=tuple(sorted(ALLOWED_RELATIONSHIP_TYPES)),
                 direction=GraphDirection.BOTH,
@@ -1615,7 +1590,7 @@ class _ProductionPlanExecutorRuntime:
         return await self.data_health_service.inspect(
             org_id=org_id,
             permission_fingerprint=permission_fingerprint,
-            scope_request=_scope_request(scope),
+            scope_request=scope_request_from_scope(scope),
             required_sources=NATIVE_EVIDENCE_SOURCES,
         )
 
@@ -1661,6 +1636,143 @@ async def _assemble_production_runtime(
     scope_service = ScopeResolutionService(
         ClickHouseAuthorizedEntityCatalog(clickhouse), cache=ScopeRequestCache()
     )
+
+    async def resolve_graph_authorization(
+        requested_org_id: str,
+        requested_permission_fingerprint: str,
+        family: CohortDiscoveryFamily,
+        authorized_scope: DevScope,
+    ) -> GraphAuthorizationScope | None:
+        """Derive the bounded graph candidate universe from the canonical catalog.
+
+        The graph arm receives only a complete page from the same
+        tenant-filtered catalog used by native Ask Dev scope resolution.  A
+        catalog outage, empty roster, or roster larger than the bound is an
+        explicit incomplete envelope and therefore falls back to the legacy
+        path; no graph membership or model text is consulted.
+        """
+
+        if (
+            requested_org_id != org_id
+            or requested_permission_fingerprint != permission_fingerprint
+        ):
+            return None
+
+        def requested_candidate_ids() -> frozenset[str] | None:
+            """Map the committed request scope to a catalog entity set.
+
+            Team-to-repository/project expansion is deliberately unavailable
+            here: the canonical catalog does not grant that relationship, so
+            a narrower scope that cannot be represented by the graph family
+            fails closed instead of widening to the organization roster.
+            An empty set means the committed scope is organization-wide and
+            therefore selects the complete catalog page.
+            """
+
+            if authorized_scope.organization_id != requested_org_id:
+                return None
+
+            expected_type = (
+                EntityType.TEAM
+                if family is CohortDiscoveryFamily.TEAM_PRESSURE
+                else EntityType.PROJECT
+            )
+            if authorized_scope.surface_context is not None and any(
+                ref.entity_type is not expected_type
+                for ref in authorized_scope.surface_context.entity_refs
+            ):
+                return None
+            if any(
+                ref.entity_type is not expected_type
+                for ref in authorized_scope.entity_refs
+            ):
+                return None
+
+            requested = {
+                ref.entity_id
+                for ref in authorized_scope.entity_refs
+                if ref.entity_type is expected_type
+            }
+            if authorized_scope.team_ids:
+                if family is not CohortDiscoveryFamily.TEAM_PRESSURE:
+                    return None
+                requested.update(authorized_scope.team_ids)
+
+            if family is CohortDiscoveryFamily.TEAM_PRESSURE:
+                if authorized_scope.direct_scope not in {
+                    DirectScope.ORGANIZATION,
+                    DirectScope.TEAM,
+                }:
+                    return None
+            elif authorized_scope.direct_scope not in {
+                DirectScope.ORGANIZATION,
+                DirectScope.PROJECT,
+            }:
+                return None
+
+            return frozenset(requested)
+
+        requested_ids = requested_candidate_ids()
+        if requested_ids is None:
+            return GraphAuthorizationScope(
+                organization_id=requested_org_id,
+                permission_fingerprint=requested_permission_fingerprint,
+                scope=authorized_scope,
+                cohort_discovery_family=family,
+                authorized_entity_ids=frozenset(),
+                complete=False,
+            )
+        if family is CohortDiscoveryFamily.TEAM_PRESSURE:
+            (
+                entities,
+                total,
+                catalog_available,
+            ) = await scope_service.organization_committed_teams(
+                requested_org_id,
+                requested_permission_fingerprint,
+                limit=MAX_CANDIDATES,
+            )
+        elif family is CohortDiscoveryFamily.PROJECT_CAPACITY:
+            (
+                entities,
+                total,
+                catalog_available,
+            ) = await scope_service.organization_committed_projects(
+                requested_org_id,
+                requested_permission_fingerprint,
+                limit=MAX_CANDIDATES,
+            )
+        else:
+            return None
+
+        if requested_ids:
+            entities = [
+                entity for entity in entities if entity.canonical_id in requested_ids
+            ]
+
+        ids = frozenset(entity.canonical_id for entity in entities)
+        complete = (
+            catalog_available
+            and total > 0
+            and total <= MAX_CANDIDATES
+            and (
+                (not requested_ids and len(entities) == total and len(ids) == total)
+                or (
+                    bool(requested_ids)
+                    and len(entities) == len(requested_ids)
+                    and ids == requested_ids
+                )
+            )
+        )
+        return GraphAuthorizationScope(
+            organization_id=requested_org_id,
+            permission_fingerprint=requested_permission_fingerprint,
+            scope=authorized_scope,
+            cohort_discovery_family=family,
+            authorized_entity_ids=ids,
+            complete=complete,
+        )
+
     metric_service = MetricQueryService(ClickHouseMetricSource(clickhouse))
     # CHAOS-3297 stack #3: kept as a NAMED reference (not inlined into
     # StatusChangeService's constructor call the way it was before this
@@ -1686,6 +1798,15 @@ async def _assemble_production_runtime(
         signer=evidence_signer,
         native_adapters=native_evidence_adapters(clickhouse),
         acr_adapter=None,
+        # CHAOS-3675 PR 1/3: the first real (non-fixture) candidate
+        # resolver. Registering it does not, by itself, admit anything --
+        # nothing in production calls ``EvidenceService.admit`` yet (Lane
+        # B's routing work does); this only replaces the "no shipped
+        # construction passes a resolver" default the class docstring
+        # describes. Handles ``review``-kind candidates only today; every
+        # other ``GraphObservationKind`` still refuses as
+        # ``source_unconfigured`` until PR 2/3 and PR 3/3 land.
+        candidate_resolvers=(NativeEvidenceCandidateResolver(clickhouse),),
     )
     data_health_service = DataHealthService(
         entitlement=entitlement,
@@ -2370,7 +2491,7 @@ async def _assemble_production_runtime(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
             request=WorkGraphNeighborsRequest(
-                scope_request=_scope_request(request.scope),
+                scope_request=scope_request_from_scope(request.scope),
                 root_refs=roots,
                 relationship_types=tuple(sorted(ALLOWED_RELATIONSHIP_TYPES)),
                 direction=GraphDirection.BOTH,
@@ -2425,7 +2546,7 @@ async def _assemble_production_runtime(
         result = await evidence_service.search(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
-            scope_request=_scope_request(request.scope),
+            scope_request=scope_request_from_scope(request.scope),
             query=request.query or "",
             limit=request.limit,
         )
@@ -2457,7 +2578,7 @@ async def _assemble_production_runtime(
         result = await evidence_service.expand(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
-            scope_request=_scope_request(request.scope),
+            scope_request=scope_request_from_scope(request.scope),
             evidence=known,
         )
         facts = [
@@ -2483,7 +2604,7 @@ async def _assemble_production_runtime(
         result = await data_health_service.inspect(
             org_id=org_id,
             permission_fingerprint=context.permission_fingerprint,
-            scope_request=_scope_request(request.scope),
+            scope_request=scope_request_from_scope(request.scope),
             required_sources=NATIVE_EVIDENCE_SOURCES,
         )
         items = [
@@ -2603,7 +2724,21 @@ async def _assemble_production_runtime(
     # organization gate as preflight -- a plan can only run once a subject
     # is committed, and only the preflight commits one.
     plan_executor: PlanExecutor | None = None
+    graph_investigation_query: GraphInvestigationQuery | None = None
+    canonical_enrichment: CanonicalEnrichmentAccessor | None = None
+    graph_routing_entitlement: CanonicalGraphRoutingEntitlementAuthorizer | None = None
     if wave_3_1_enabled:
+        # Keep the optional graph arm out of production module import time.
+        # Organization policy is evaluated first, so a policy-off request
+        # never imports or constructs the arm.
+        from dev_health_ops.context_fabric.graph_arm.query_service import (
+            ProductionGraphInvestigationQuery,
+        )
+
+        # The graph-assisted enrichment path and authored-plan path share the
+        # exact same canonical service instances. Their construction is
+        # side-effect free; organization policy controls their presence, and
+        # the independent runtime kill switch controls execution.
         plan_executor_runtime = _ProductionPlanExecutorRuntime(
             status_service=status_service,
             metric_service=metric_service,
@@ -2611,6 +2746,29 @@ async def _assemble_production_runtime(
             data_health_service=data_health_service,
             evidence_signer=evidence_signer,
         )
+        team_health_service = TeamHealthService(
+            plan_executor_runtime, status_change_source
+        )
+        team_workload_service = TeamWorkloadService(
+            plan_executor_runtime, status_change_source, team_workload_source
+        )
+        operational_deficiency_service = OperationalDeficiencyService(
+            plan_executor_runtime, status_change_source, team_workload_source
+        )
+        canonical_enrichment = CanonicalEnrichmentAccessor(
+            status=status_service,
+            health=team_health_service,
+            workload=team_workload_service,
+            readiness=operational_deficiency_service,
+            metrics=metric_service,
+        )
+        graph_investigation_query = ProductionGraphInvestigationQuery()
+        fallback_question = _acceptance_graph_fallback_question()
+        if fallback_question is not None:
+            graph_investigation_query = _AcceptanceGraphFallbackQuery(
+                graph_investigation_query, fallback_question
+            )
+        graph_routing_entitlement = CanonicalGraphRoutingEntitlementAuthorizer(session)
         # CHAOS-3297 stack #3: every CHAOS-3303/3304/3305/3393 service is
         # constructed over the SAME PlanExecutorRuntime instance the six
         # core plans' steps use -- never a second, parallel query path.
@@ -2638,15 +2796,9 @@ async def _assemble_production_runtime(
             registry=build_registry_with_wave_3_1(
                 plan_executor_runtime,
                 project_health=project_health_service,
-                team_health=TeamHealthService(
-                    plan_executor_runtime, status_change_source
-                ),
-                team_workload=TeamWorkloadService(
-                    plan_executor_runtime, status_change_source, team_workload_source
-                ),
-                operational_deficiency=OperationalDeficiencyService(
-                    plan_executor_runtime, status_change_source, team_workload_source
-                ),
+                team_health=team_health_service,
+                team_workload=team_workload_service,
+                operational_deficiency=operational_deficiency_service,
                 # CHAOS-3393: PortfolioStatusService batches over the SAME
                 # ProjectHealthService instance the health.project.v1 step
                 # above uses -- never a second, parallel query path.
@@ -2680,6 +2832,13 @@ async def _assemble_production_runtime(
             else None
         ),
         plan_executor=plan_executor,
+        graph_investigation_query=graph_investigation_query,
+        evidence_service=evidence_service if wave_3_1_enabled else None,
+        canonical_enrichment=canonical_enrichment,
+        graph_routing_entitlement=graph_routing_entitlement,
+        graph_authorization_resolver=(
+            resolve_graph_authorization if wave_3_1_enabled else None
+        ),
     )
 
 
@@ -2729,7 +2888,7 @@ async def expand_production_evidence(
     return await service.expand(
         org_id=org_id,
         permission_fingerprint=permission_fingerprint,
-        scope_request=_scope_request(scope),
+        scope_request=scope_request_from_scope(scope),
         evidence=evidence,
     )
 
@@ -2743,3 +2902,42 @@ __all__ = [
     "resolve_platform_certification_provider",
     "resolve_production_provider",
 ]
+_GRAPH_ACCEPTANCE_FALLBACK_ARM = "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM"
+_GRAPH_ACCEPTANCE_FALLBACK_QUESTION = "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION"
+
+
+class _AcceptanceGraphFallbackQuery:
+    """Induce one real unavailable outcome only in the acceptance runtime.
+
+    The wrapper sits at the production graph-query boundary: the orchestrator
+    still performs normal intent, entitlement, scope, SSE, persistence, and
+    native-fallback work.  It does not assert the expected state; it causes
+    the graph dependency outcome that the browser gate must independently
+    observe.
+    """
+
+    def __init__(self, delegate: GraphInvestigationQuery, question: str) -> None:
+        self._delegate = delegate
+        self._question = question
+
+    async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
+        if request.question_text == self._question:
+            return GraphQueryResult(
+                outcome=GraphQueryOutcome.UNAVAILABLE,
+                diagnostic="acceptance graph dependency unavailable",
+            )
+        return await self._delegate.investigate(request)
+
+
+def _acceptance_graph_fallback_question() -> str | None:
+    if os.getenv("ENVIRONMENT") != "acceptance":
+        return None
+    if os.getenv(_GRAPH_ACCEPTANCE_FALLBACK_ARM) != "1":
+        return None
+    question = os.getenv(_GRAPH_ACCEPTANCE_FALLBACK_QUESTION, "").strip()
+    if not question:
+        raise RuntimeError(
+            f"{_GRAPH_ACCEPTANCE_FALLBACK_QUESTION} is required when "
+            f"{_GRAPH_ACCEPTANCE_FALLBACK_ARM}=1"
+        )
+    return question

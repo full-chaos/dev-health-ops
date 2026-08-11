@@ -169,7 +169,7 @@
       "type": "string"
     },
     "QuestionIntentID": {
-      "description": "The twelve Wave 3.1 launch intents (Amendment TRD v2 \u00a74.1).",
+      "description": "The twelve Wave 3.1 launch intents (Amendment TRD v2 \u00a74.1), plus the\nCHAOS-3652 graph-assisted subjectless-cohort-discovery intent.",
       "enum": [
         "entity_status",
         "portfolio_status",
@@ -182,7 +182,8 @@
         "team_health",
         "team_workload_balance",
         "operational_deficiency_inventory",
-        "bounded_investigation"
+        "bounded_investigation",
+        "discovered_cohort"
       ],
       "title": "QuestionIntentID",
       "type": "string"
@@ -205,7 +206,8 @@
         "cognitive_load",
         "investment_allocation",
         "health_profile",
-        "deficiency_inventory"
+        "deficiency_inventory",
+        "temporal_context"
       ],
       "title": "SourceClass",
       "type": "string"

@@ -279,6 +279,55 @@ class ScopeResolveRequest:
                 raise ValueError("Surface context IDs must contain 1 to 128 characters")
 
 
+def scope_request_from_scope(scope: DevScope) -> ScopeResolveRequest:
+    """Derive a :class:`ScopeResolveRequest` from a client-supplied ``DevScope``.
+
+    CHAOS-3502: promoted from ``production_runtime._scope_request`` (a
+    behavior-preserving move, not a rewrite -- every existing call site there
+    now imports this instead of a private copy) so ``orchestrator.py`` can
+    build the same request shape ``EvidenceService.admit()`` needs without a
+    circular import: ``production_runtime.py`` already imports from
+    ``orchestrator.py`` (the DI/wiring layer depends on the orchestrator, not
+    the reverse), so the orchestrator can never import from
+    ``production_runtime``. ``scope_service.py`` -- where ``ScopeResolveRequest``
+    itself is already defined -- is the shared leaf both sides can import.
+    """
+
+    refs: tuple[ScopeRef, ...]
+    if scope.direct_scope is DirectScope.ORGANIZATION:
+        refs = (ScopeRef(EntityKind.ORGANIZATION, scope.organization_id),)
+    elif scope.direct_scope is DirectScope.REPOSITORY:
+        refs = tuple(
+            ScopeRef(EntityKind.REPOSITORY, value) for value in scope.repositories
+        )
+    else:
+        refs = tuple(
+            ScopeRef(EntityKind(item.entity_type.value), item.entity_id)
+            for item in scope.entity_refs
+        )
+    return ScopeResolveRequest(
+        explicit_refs=refs,
+        # A team *direct* scope already carries its team as an explicit_ref
+        # (via the entity_refs branch above); team_ids there is required by
+        # DevScope.validate_direct_scope to name that same team, not a second
+        # independent dimension. Also passing it as a team_filter_ref would
+        # make `resolve()` treat the run as team-*filtered* (outcome=FILTERED)
+        # rather than an exact single-entity commit (CHAOS-3301).
+        team_filter_refs=(
+            ()
+            if scope.direct_scope is DirectScope.TEAM
+            else tuple(ScopeRef(EntityKind.TEAM, value) for value in scope.team_ids)
+        ),
+        time_range=TimeRangeRequest(
+            preset_days=None,
+            start_date=date.fromisoformat(scope.time_range.start.date().isoformat()),
+            end_date=date.fromisoformat(scope.time_range.end.date().isoformat()),
+            timezone=scope.time_range.timezone,
+        ),
+        allow_organization_fallback=False,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeSearchRequest:
     query: str
@@ -406,6 +455,17 @@ class AuthorizedEntityCatalog(Protocol):
         total authorized for ``org_id`` -- so a caller enumerating an
         ORGANIZATION_WIDE portfolio can disclose truncation rather than
         silently sampling.
+        """
+        ...
+
+    async def organization_team_entities(
+        self, org_id: str, *, limit: int
+    ) -> tuple[list[AuthorizedEntity], int]:
+        """Return up to ``limit`` authorized teams and the true total.
+
+        The graph candidate resolver uses this tenant-filtered roster for
+        team-pressure questions.  The true total lets that resolver reject a
+        truncated page rather than widening or silently sampling authority.
         """
         ...
 
@@ -1492,6 +1552,41 @@ class ScopeResolutionService:
                 entities, total = cached
                 return entities, total, True
             entities, total = await self._catalog.organization_project_entities(
+                org_id, limit=limit
+            )
+            self._cache.put(cache_key, (entities, total))
+            return entities, total, True
+        except Exception:
+            return [], 0, False
+
+    async def organization_committed_teams(
+        self,
+        org_id: str,
+        permission_fingerprint: str,
+        *,
+        limit: int,
+    ) -> tuple[list[AuthorizedEntity], int, bool]:
+        """Return the complete bounded team universe for graph routing.
+
+        A graph cohort must not receive a partial organization roster as if it
+        were complete.  This mirrors the project enumeration cache and keeps
+        catalog failures distinct from an authoritative empty roster.
+        """
+
+        try:
+            watermark = await self._catalog.watermark(org_id, (EntityKind.TEAM,))
+            cache_key = self._cache_key(
+                "organization_graph_teams",
+                org_id,
+                permission_fingerprint,
+                {"limit": limit},
+                watermark,
+            )
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, tuple) and len(cached) == 2:
+                entities, total = cached
+                return entities, total, True
+            entities, total = await self._catalog.organization_team_entities(
                 org_id, limit=limit
             )
             self._cache.put(cache_key, (entities, total))

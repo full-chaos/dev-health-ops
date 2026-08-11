@@ -1,0 +1,367 @@
+{
+  "$defs": {
+    "AnalyticalSlice": {
+      "description": "Current-versus-historical slice of the investigation.\n\nSlice boundaries, and what each slice requires of edge validity, are\ndeclared once in :mod:`.allowlists` (``SLICE_BOUNDARIES``).",
+      "enum": [
+        "current",
+        "historical",
+        "current_vs_historical"
+      ],
+      "title": "AnalyticalSlice",
+      "type": "string"
+    },
+    "BoundedTimeContext": {
+      "additionalProperties": false,
+      "description": "The bounded time window, and which slice of history it addresses.",
+      "properties": {
+        "analytical_slice": {
+          "$ref": "#/$defs/AnalyticalSlice"
+        },
+        "as_of": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "As Of"
+        },
+        "edge_validity_basis": {
+          "$ref": "#/$defs/EdgeValidityBasis"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "historical_comparability": {
+          "$ref": "#/$defs/HistoricalComparability"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "timezone",
+        "analytical_slice",
+        "historical_comparability",
+        "edge_validity_basis"
+      ],
+      "title": "BoundedTimeContext",
+      "type": "object"
+    },
+    "ComparisonShape": {
+      "description": "The requested comparison or singular-subject shape.",
+      "enum": [
+        "singular_subject",
+        "explicit_cohort",
+        "discovered_cohort",
+        "portfolio_wide",
+        "organization_wide"
+      ],
+      "title": "ComparisonShape",
+      "type": "string"
+    },
+    "EdgeValidityBasis": {
+      "description": "What backs a slice's claim that its relationships were valid *then*.\n\nAdded after adversarial review round 1 (finding M7). ``SLICE_BOUNDARIES``\ndeclared that historical slices require edge validity, but nothing on the\nwire recorded whether an arm actually had it \u2014 so a packet could label a\nhistorical slice ``COMPARABLE`` while having read the live projection,\nproducing a confident and entirely false delta.\n\n``NOT_REQUIRED`` is the current slice. ``OBSERVED_INTERVALS`` means every\ntraversed edge carried a validity interval covering the as-of instant, and\nis the only basis on which a historical slice may be ``COMPARABLE``.\n``UNAVAILABLE`` is the CHAOS-3569 state and forces\n``NOT_COMPARABLE_MISSING_EDGE_VALIDITY``.",
+      "enum": [
+        "not_required",
+        "observed_intervals",
+        "unavailable"
+      ],
+      "title": "EdgeValidityBasis",
+      "type": "string"
+    },
+    "HistoricalComparability": {
+      "description": "Whether a historical slice can be fairly compared at all.\n\n``NOT_COMPARABLE_MISSING_EDGE_VALIDITY`` is the CHAOS-3569 state: native\nhistorical edge validity is not implemented, so as-of traversal cannot\nbe reconstructed for those rows. The correction plan is explicit that\nsuch rows are **NOT COMPARABLE, not blockers** \u2014 a packet that declares\nthis state is still a *valid* packet and may still be ``SUPPORTED``\n(pinned by ``test_not_comparable_historical_slice_is_valid_and_\nsupported``). What it may not do is stay silent: the packet must also\ncarry a ``HISTORICAL_SLICE_NOT_COMPARABLE`` limitation.",
+      "enum": [
+        "not_applicable",
+        "comparable",
+        "not_comparable_missing_edge_validity",
+        "not_comparable_missing_baseline"
+      ],
+      "title": "HistoricalComparability",
+      "type": "string"
+    },
+    "InvestigationSubjectKind": {
+      "description": "What an investigation may take as a subject, cohort member or node.\n\nA superset of the *organizational* kinds an Ask Dev question can name,\nand a strict subset of \"anything in the work graph\": there is no person\nkind, by design (see the module docstring). ``EntityKind``\n(``contracts_v2.base``) is the answer-frame subject vocabulary and is\ndeliberately not reused here \u2014 it carries ``pull_request``/``issue`` as\n*subjects* of a status answer, whereas this enum has to describe\nportfolio, initiative and service nodes that a status answer never takes\nas its subject but a lineage path routinely crosses.",
+      "enum": [
+        "team",
+        "project",
+        "portfolio",
+        "initiative",
+        "repository",
+        "service",
+        "work_unit",
+        "issue",
+        "pull_request",
+        "dependency"
+      ],
+      "title": "InvestigationSubjectKind",
+      "type": "string"
+    },
+    "JobUncertainty": {
+      "description": "How precisely the analytical job could be interpreted.\n\n``BROAD_WITH_UNCERTAINTY`` exists because the correction addendum bans\nrequiring a fully pre-enumerated intent before investigation may begin:\n\"what is going sideways?\" is a legitimate job whose subject set is\ndiscovered, not declared. A broad or ambiguous job must carry at least\none interpretation limitation, which is what stops the state from being\na free pass.",
+      "enum": [
+        "precise",
+        "broad_with_uncertainty",
+        "ambiguous"
+      ],
+      "title": "JobUncertainty",
+      "type": "string"
+    },
+    "PacketLimitation": {
+      "additionalProperties": false,
+      "description": "One safe, closed-vocabulary limitation the packet is disclosing.",
+      "properties": {
+        "detail": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PacketLimitationKind"
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "title": "PacketLimitation",
+      "type": "object"
+    },
+    "PacketLimitationKind": {
+      "enum": [
+        "missing_source",
+        "stale_source",
+        "conflicting_evidence",
+        "authorization_filtered",
+        "truncated_traversal",
+        "absent_staffing_denominator",
+        "historical_slice_not_comparable",
+        "interpretation_uncertainty"
+      ],
+      "title": "PacketLimitationKind",
+      "type": "string"
+    },
+    "ProductionJobProvenance": {
+      "additionalProperties": false,
+      "description": "Production's own job identity: no trial family, no fixture concept.\n\nCHAOS-3660/CHAOS-3678. ``intent_id`` is a **validated string**, not the\nproduction ``QuestionIntentID`` enum imported directly \u2014 this frozen\ncontract must never import production's vocabulary (see\n``investigation_contract/__init__.py``'s own \"deliberately its own\ntree\" boundary, which exists precisely so this contract does not depend\non anything outside the trial). Coupling the frozen contract to a\nvocabulary that changes on production's own schedule would let a\nproduction enum edit silently rewrite what a *trial* schema_version\nmeans \u2014 a frozen contract has no way to notice that happened. The\nstring is validated against the real ``QuestionIntentID`` member set by\nthe producer (``packet_builder.build_production_packet``), one layer up\nfrom here, where the import is legitimate because that module is\nproduction code, not the frozen contract itself.\n\n``run_id`` is the identifier the calling ``GraphInvestigationRequest``\nalready carried \u2014 production's analog of what ``TrialContext.run_id``\nis for a trial run, but this model carries no corpus/fixture concept at\nall: production has neither.",
+      "properties": {
+        "intent_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "ask_dev_production_job_provenance.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "intent_id",
+        "run_id"
+      ],
+      "title": "ProductionJobProvenance",
+      "type": "object"
+    },
+    "QuestionFamilyID": {
+      "description": "The ten frozen families of the corrected trial.",
+      "enum": [
+        "struggling_teams",
+        "pressure_signals",
+        "project_capacity",
+        "staffing_language",
+        "project_status_drivers",
+        "portfolio_dependency_risk",
+        "declared_versus_actual",
+        "ambiguous_identity",
+        "colloquial_follow_up",
+        "clarification_and_no_match"
+      ],
+      "title": "QuestionFamilyID",
+      "type": "string"
+    },
+    "SurfaceContextRef": {
+      "additionalProperties": false,
+      "description": "A safe reference to the surface or conversation the question came from.\n\nDeliberately three closed/opaque fields and no URL: see\n``vocabulary.SurfaceKind``.",
+      "properties": {
+        "entity_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entity Id"
+        },
+        "entity_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationSubjectKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "surface_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Surface Id",
+          "type": "string"
+        },
+        "surface_kind": {
+          "$ref": "#/$defs/SurfaceKind"
+        }
+      },
+      "required": [
+        "surface_kind",
+        "surface_id"
+      ],
+      "title": "SurfaceContextRef",
+      "type": "object"
+    },
+    "SurfaceKind": {
+      "description": "Safe surface/conversation context references.\n\nClosed rather than free text on purpose: a surface reference is the one\nfield on an investigation packet whose natural implementation is \"paste\nthe URL the user was looking at\", and a URL is both an unbounded\ndisclosure channel and the exact shape of a dashboard redirect.",
+      "enum": [
+        "dashboard",
+        "project_page",
+        "team_page",
+        "portfolio_page",
+        "report",
+        "conversation"
+      ],
+      "title": "SurfaceKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://api.fullchaos.dev/contracts/ask-dev-investigation/v1/ask_dev_analytical_job.v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The normalized analytical job, with its uncertainty stated.\n\n``job_uncertainty`` is what keeps this contract from requiring a\npre-enumerated intent: an arm may declare a broad job it is uncertain\nabout and still investigate, provided it says so. The\n``question_family`` is a *family*, not an enumerated intent \u2014 ten of\nthem cover the whole trial, and one of them is \"clarification and safe\nno-match\".\n\n**Provenance is exactly one of two shapes (CHAOS-3660/CHAOS-3678).**\n``question_family`` (with ``schema_version`` ending ``.v1``) is the\noriginal, byte-stable trial shape \u2014 every packet ``build_packet`` has\never emitted keeps this exact shape, unchanged. ``production_job``\n(with ``schema_version`` ending ``.v2``) is production's shape, with no\ntrial family and no fixture/corpus concept. See\n``CONTRACT_CHANGELOG`` for the dated, cited record of why this widened\nrather than staying single-shape, and\n``validate_provenance_matches_schema_version`` for the enforcement.",
+  "properties": {
+    "comparison_shape": {
+      "$ref": "#/$defs/ComparisonShape"
+    },
+    "conversation_reference_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Conversation Reference Ids",
+      "type": "array"
+    },
+    "interpretation_limitations": {
+      "items": {
+        "$ref": "#/$defs/PacketLimitation"
+      },
+      "maxItems": 25,
+      "title": "Interpretation Limitations",
+      "type": "array"
+    },
+    "job_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "job_statement": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Job Statement",
+      "type": "string"
+    },
+    "job_uncertainty": {
+      "$ref": "#/$defs/JobUncertainty"
+    },
+    "production_job": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProductionJobProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "question_family": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QuestionFamilyID"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "enum": [
+        "ask_dev_analytical_job.v1",
+        "ask_dev_analytical_job.v2"
+      ],
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "surface_context_refs": {
+      "items": {
+        "$ref": "#/$defs/SurfaceContextRef"
+      },
+      "maxItems": 10,
+      "title": "Surface Context Refs",
+      "type": "array"
+    },
+    "time_context": {
+      "$ref": "#/$defs/BoundedTimeContext"
+    }
+  },
+  "required": [
+    "schema_version",
+    "job_id",
+    "job_uncertainty",
+    "job_statement",
+    "comparison_shape",
+    "time_context"
+  ],
+  "title": "AnalyticalJob",
+  "type": "object"
+}

@@ -182,6 +182,14 @@
       "title": "DevAnswer",
       "type": "object"
     },
+    "DevAnswerCohortDisposition": {
+      "enum": [
+        "included",
+        "unknown"
+      ],
+      "title": "DevAnswerCohortDisposition",
+      "type": "string"
+    },
     "DevAnswerCohortMember": {
       "additionalProperties": false,
       "description": "CHAOS-3660 \u00a78(d). One named member of a discovered cohort.\n\nDeliberately no \"excluded candidate\" counterpart: an excluded candidate\nis never named on the wire, since that would disclose a judgment about\nan entity nobody asked about. Disclosure of \"N candidates considered,\nnot included\" rides ``DevAnswerCohortSlot.warnings`` instead -- the\nsame mechanism v2's ``DevSubjectSet.warnings`` already uses for\ntruncation disclosure, not a new one.",
@@ -192,6 +200,17 @@
           "title": "Display Label",
           "type": "string"
         },
+        "disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerCohortDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "entity_id": {
           "maxLength": 128,
           "minLength": 1,
@@ -201,6 +220,49 @@
         },
         "inclusion_basis": {
           "$ref": "#/$defs/CohortDiscoveryFamily"
+        },
+        "inclusion_rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inclusion Rationale"
+        },
+        "pressure_dimensions": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerPressureDimension"
+          },
+          "maxItems": 12,
+          "title": "Pressure Dimensions",
+          "type": "array"
+        },
+        "rank": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rank"
+        },
+        "signals": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerCohortSignal"
+          },
+          "maxItems": 50,
+          "title": "Signals",
+          "type": "array"
         }
       },
       "required": [
@@ -210,6 +272,163 @@
       ],
       "title": "DevAnswerCohortMember",
       "type": "object"
+    },
+    "DevAnswerCohortSignal": {
+      "additionalProperties": false,
+      "properties": {
+        "attribution_present": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attribution Present"
+        },
+        "coverage": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coverage"
+        },
+        "data_semantics": {
+          "enum": [
+            "measured_zero",
+            "no_data",
+            "not_measured"
+          ],
+          "title": "Data Semantics",
+          "type": "string"
+        },
+        "denominator_present": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Denominator Present"
+        },
+        "dimension": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerPressureDimension"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence_source_classes": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerEvidenceSourceClass"
+          },
+          "maxItems": 12,
+          "title": "Evidence Source Classes",
+          "type": "array"
+        },
+        "freshness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "gap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerEnrichmentGap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "observed_states": {
+          "items": {
+            "$ref": "#/$defs/DevAnswerSourceRequirementState"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Observed States",
+          "type": "array"
+        },
+        "signal_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}$",
+          "title": "Signal Id",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/DevAnswerCohortSignalSource"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevAnswerPressureState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "signal_id",
+        "source",
+        "observed_states",
+        "data_semantics"
+      ],
+      "title": "DevAnswerCohortSignal",
+      "type": "object"
+    },
+    "DevAnswerCohortSignalSource": {
+      "enum": [
+        "status",
+        "health",
+        "workload",
+        "readiness",
+        "metrics",
+        "canonical_enrichment"
+      ],
+      "title": "DevAnswerCohortSignalSource",
+      "type": "string"
     },
     "DevAnswerCohortSlot": {
       "additionalProperties": false,
@@ -286,9 +505,42 @@
       "title": "DevAnswerDriverEntry",
       "type": "object"
     },
+    "DevAnswerEnrichmentGap": {
+      "enum": [
+        "not_applicable",
+        "unauthorized",
+        "unavailable",
+        "no_data"
+      ],
+      "title": "DevAnswerEnrichmentGap",
+      "type": "string"
+    },
+    "DevAnswerEvidenceSourceClass": {
+      "enum": [
+        "status_change",
+        "work_item",
+        "work_graph",
+        "pull_request",
+        "code_change",
+        "review",
+        "ci_run",
+        "test_report",
+        "deployment",
+        "incident",
+        "operational_control",
+        "source_health",
+        "cognitive_load",
+        "investment_allocation",
+        "health_profile",
+        "deficiency_inventory",
+        "temporal_context"
+      ],
+      "title": "DevAnswerEvidenceSourceClass",
+      "type": "string"
+    },
     "DevAnswerGraphAssistance": {
       "additionalProperties": false,
-      "description": "CHAOS-3660 \u00a78(b)/(c)/(d). Everything the graph route (CHAOS-3502\nwave) contributed to an answer, in one namespace. ``cohort``,\n``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are\npopulated only when ``state`` reflects a completed, cohort-shaped\nanswer; ``None``/empty otherwise. Schema-only on ``main`` today -- see\n``DevAnswer.graph_assisted``'s own docstring.",
+      "description": "CHAOS-3660 \u00a78(b)/(c)/(d). Everything the graph route (CHAOS-3502\nwave) contributed to an answer, in one namespace. ``cohort``,\n``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are\npopulated only when ``state`` reflects a completed, cohort-shaped\nanswer; ``None``/empty otherwise. The orchestrator owns the runtime\nprojection of the route attempt; packet/backend details never cross this\ncontract boundary.",
       "properties": {
         "as_of": {
           "format": "date-time",
@@ -363,6 +615,47 @@
       ],
       "title": "DevAnswerLineageHop",
       "type": "object"
+    },
+    "DevAnswerPressureDimension": {
+      "enum": [
+        "execution_completion",
+        "delivery_flow",
+        "reliability_release",
+        "review_ci_pressure",
+        "code_ownership_risk",
+        "cognitive_workload_pressure",
+        "investment_balance",
+        "dependencies_blockers",
+        "data_trust"
+      ],
+      "title": "DevAnswerPressureDimension",
+      "type": "string"
+    },
+    "DevAnswerPressureState": {
+      "enum": [
+        "healthy",
+        "watch",
+        "at_risk",
+        "critical",
+        "unknown",
+        "not_applicable"
+      ],
+      "title": "DevAnswerPressureState",
+      "type": "string"
+    },
+    "DevAnswerSourceRequirementState": {
+      "enum": [
+        "available_current",
+        "available_stale",
+        "available_unknown",
+        "unconfigured",
+        "unavailable",
+        "unauthorized_or_not_visible",
+        "not_applicable",
+        "truncated"
+      ],
+      "title": "DevAnswerSourceRequirementState",
+      "type": "string"
     },
     "DevCitationLink": {
       "additionalProperties": false,
@@ -739,6 +1032,9 @@
             "scope_forbidden",
             "conversation_not_found",
             "conversation_expired",
+            "resume_scope_mismatch",
+            "resume_unavailable",
+            "resume_stream_invalid",
             "tool_limit_reached",
             "tool_unavailable",
             "source_unavailable",

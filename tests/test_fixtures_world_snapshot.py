@@ -19,6 +19,7 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1005,7 +1006,11 @@ class TestRefusalHappensBeforeAnyWrite:
             world_snapshot, "_require_matching_world_manifest", lambda *a, **k: None
         )
 
-        manifest = object()
+        # CHAOS-3602: restore_world now checks manifest.pinned_now (TTL
+        # shelf-life) before anything else that matters here -- a bare
+        # object() has no such attribute. A fresh timestamp keeps this test
+        # focused on the empty-target refusal it actually exercises.
+        manifest = SimpleNamespace(pinned_now=datetime.now(timezone.utc))
         with pytest.raises(RestoreRefusedError, match="not a freshly-migrated"):
             await world_snapshot.restore_world(
                 sink="clickhouse://x/default",
@@ -1019,6 +1024,149 @@ class TestRefusalHappensBeforeAnyWrite:
             "the restore reached a write path before refusing a non-empty "
             f"target: {writes}. The refusal must happen first -- this predicate "
             "is what stops a real database being written to."
+        )
+
+
+class TestSnapshotShelfLifeAtRestore:
+    """CHAOS-3602: a minted snapshot's dates are frozen relative to
+    pinned_now, but ClickHouse's TTL enforcement always runs on real time.
+    Restoring an expired snapshot must fail with a NAMED error before any
+    write path is reached -- not surface as a mysterious digest mismatch or
+    a content-oracle failure hours or days later.
+    """
+
+    def _snapshot(self, tmp_path: Path) -> Path:
+        import hashlib
+
+        (tmp_path / "clickhouse").mkdir()
+        (tmp_path / "postgres").mkdir()
+        blob = tmp_path / "clickhouse" / "git_commits.native.gz"
+        blob.write_bytes(gzip.compress(b"payload", mtime=0))
+        (tmp_path / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": SNAPSHOT_SCHEMA_VERSION,
+                    "world_digest": "d" * 64,
+                    "clickhouse": {
+                        "tables": {
+                            "git_commits": {
+                                "file": "clickhouse/git_commits.native.gz",
+                                "row_count": 1,
+                                "sha256": hashlib.sha256(blob.read_bytes()).hexdigest(),
+                            }
+                        },
+                        "schema_fingerprint": {"migrations": ["001"], "s": "v"},
+                        "source_content_hashes": [],
+                        "source_row_counts": {},
+                        "baseline_row_counts": {},
+                    },
+                    "postgres": {
+                        "tables": {},
+                        "schema_fingerprint": {"alembic_heads": ["0086"]},
+                        "reference_tables": {},
+                        "source_row_counts": {},
+                        "baseline_row_counts": {},
+                    },
+                }
+            )
+        )
+        return tmp_path
+
+    @pytest.mark.asyncio
+    async def test_an_expired_snapshot_is_refused_before_any_client_call(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from dev_health_ops.fixtures import world_snapshot
+        from dev_health_ops.fixtures.ttl_registry import SnapshotExpiredError
+
+        calls: list[str] = []
+
+        async def _fail_ch(sink, handler):
+            calls.append(getattr(handler, "__name__", str(handler)))
+            raise AssertionError("must not reach a ClickHouse call")
+
+        async def _fail_pg(uri, handler):
+            calls.append(getattr(handler, "__name__", str(handler)))
+            raise AssertionError("must not reach a Postgres call")
+
+        monkeypatch.setattr(world_snapshot, "_with_clickhouse_client", _fail_ch)
+        monkeypatch.setattr(world_snapshot, "_with_postgres_conn", _fail_pg)
+        monkeypatch.setattr(
+            world_snapshot, "_require_matching_world_manifest", lambda *a, **k: None
+        )
+
+        # pinned_now far enough in the past that this snapshot is already
+        # past its shelf life today, regardless of the safety-margin/slack
+        # constants in effect.
+        manifest = SimpleNamespace(
+            pinned_now=datetime.now(timezone.utc) - timedelta(days=365)
+        )
+
+        with pytest.raises(SnapshotExpiredError, match="re-mint required"):
+            await world_snapshot.restore_world(
+                sink="clickhouse://x/default",
+                postgres_uri="postgresql+asyncpg://x/postgres",
+                snapshot_dir=self._snapshot(tmp_path),
+                manifest=manifest,  # type: ignore[arg-type]
+                env={"ENVIRONMENT": "acceptance"},
+            )
+
+        assert calls == [], (
+            "the restore reached a client call before refusing an expired "
+            f"snapshot: {calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_fresh_pinned_now_does_not_trip_the_shelf_life_guard(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Proves wiring without presuming exactly which LATER precondition
+        a real restore would next hit (that's covered by the other tests in
+        this file) -- a fresh `pinned_now` must reach the schema-
+        compatibility check, not be refused here."""
+        from dev_health_ops.fixtures import world_snapshot
+
+        reached_schema_check = False
+
+        async def _ch(sink, handler):
+            nonlocal reached_schema_check
+            name = getattr(handler, "__name__", str(handler))
+            if name == "_clickhouse_schema_fingerprint":
+                reached_schema_check = True
+                return {"migrations": ["001"], "s": "v"}
+            return {}
+
+        async def _pg(uri, handler):
+            name = getattr(handler, "__name__", str(handler))
+            if name == "_postgres_schema_fingerprint":
+                return {"alembic_heads": ["0086"]}
+            return {}
+
+        monkeypatch.setattr(world_snapshot, "_with_clickhouse_client", _ch)
+        monkeypatch.setattr(world_snapshot, "_with_postgres_conn", _pg)
+        monkeypatch.setattr(
+            world_snapshot, "_require_matching_world_manifest", lambda *a, **k: None
+        )
+
+        manifest = SimpleNamespace(pinned_now=datetime.now(timezone.utc))
+        # Whatever happens next (empty-target precondition, an actual
+        # write attempt against fakes with no real write support, ...) is
+        # out of scope here -- only that the shelf-life guard itself let a
+        # fresh pinned_now through to reach the schema check.
+        try:
+            await world_snapshot.restore_world(
+                sink="clickhouse://x/default",
+                postgres_uri="postgresql+asyncpg://x/postgres",
+                snapshot_dir=self._snapshot(tmp_path),
+                manifest=manifest,  # type: ignore[arg-type]
+                env={"ENVIRONMENT": "acceptance"},
+            )
+        except Exception:
+            pass
+        assert reached_schema_check, (
+            "a fresh pinned_now was refused before reaching the schema "
+            "check -- the shelf-life guard is misfiring on non-expired "
+            "snapshots"
         )
 
 
@@ -1110,7 +1258,9 @@ class TestLossyMintTouchesNothing:
                 sink="clickhouse://x/default",
                 postgres_uri="postgresql+asyncpg://x/postgres",
                 snapshot_dir=snapshot,
-                manifest=object(),  # type: ignore[arg-type]
+                # CHAOS-3602: restore_world checks manifest.pinned_now
+                # (TTL shelf-life) first -- a bare object() has none.
+                manifest=SimpleNamespace(pinned_now=datetime.now(timezone.utc)),  # type: ignore[arg-type]
                 digest_path=pin,
                 mint_digest=True,
                 # What `fixtures world` measured -- deliberately different from

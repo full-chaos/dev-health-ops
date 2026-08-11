@@ -98,7 +98,10 @@ class TestStaysInSyncWithTheLauncher:
             / "acceptance"
             / "run_ask_dev_compose.sh"
         ).read_text(encoding="utf-8")
-        assert f'project_name="{DEFAULT_PROJECT_NAME}"' in launcher
+        assert (
+            f'project_name="{DEFAULT_PROJECT_NAME}-${{RANDOM}}${{RANDOM}}"' in launcher
+        )
+        assert "ASK_DEV_ACCEPTANCE_PROJECT_NAME" in launcher
 
     def test_profile_literal_matches_the_launcher(self) -> None:
         launcher = (

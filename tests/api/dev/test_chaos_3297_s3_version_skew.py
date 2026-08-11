@@ -121,9 +121,12 @@ def test_tolerant_parse_makes_the_pre_s3_frame_replayable() -> None:
 
 def test_tolerant_parse_changes_nothing_else() -> None:
     """ "Byte-identical" proof (team-lead's requirement 1): every field the
-    pre-s3 payload carried survives untouched -- the only delta introduced
-    anywhere in the round trip is the one new key on the one patched
-    metric.
+    pre-s3 payload carried survives untouched. The only deltas introduced
+    anywhere in the round trip are the one new key on the one patched
+    metric, the ``coverage.degraded_required_sources`` key CHAOS-3334 added,
+    and the ``record_locator`` key CHAOS-3633 added to every evidence ref --
+    all three additive, all three at their unset default for a payload that
+    predates them.
     """
 
     original = _pre_s3_payload()
@@ -152,6 +155,24 @@ def test_tolerant_parse_changes_nothing_else() -> None:
         if key in {"metrics", "coverage", "evidence"}:
             continue
         assert reserialized[key] == value, key
+
+    # ``evidence`` gained ``record_locator`` additively in CHAOS-3633 -- the
+    # same shape as ``coverage``'s ``degraded_required_sources`` below: a new
+    # optional field with a ``None`` default, no ``schema_version`` bump.
+    # This pre-s3 fixture predates the field entirely, so every ref's only
+    # addition is the new key at its unset default -- a pre-existing ref
+    # cannot have known a graph-admission record locator, so anything else
+    # here would be fabricated identity.
+    original_evidence = original["evidence"]
+    reserialized_evidence = reserialized["evidence"]
+    assert len(reserialized_evidence) == len(original_evidence)
+    for original_ref, reserialized_ref in zip(
+        original_evidence, reserialized_evidence, strict=True
+    ):
+        for key, value in original_ref.items():
+            assert reserialized_ref[key] == value, f"evidence.{key}"
+        assert set(reserialized_ref) - set(original_ref) == {"record_locator"}
+        assert reserialized_ref["record_locator"] is None
 
     # ``coverage`` gained ``degraded_required_sources`` additively in
     # CHAOS-3334 -- the same shape as this branch's own

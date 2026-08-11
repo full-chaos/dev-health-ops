@@ -57,7 +57,10 @@ def active_incidents_query(
         (
             "repo_id IS NOT NULL",
             "is_active = 1",
-            "valid_from <= {as_of:DateTime64(6, 'UTC')}",
+            # CHAOS-3570: valid_from is Nullable; NULL <= x is false in
+            # ClickHouse, so a NULL valid_from ("valid since before records
+            # began") must be treated as satisfying the as-of filter.
+            "(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
             "(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
         ),
     )

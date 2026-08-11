@@ -1,0 +1,14 @@
+{
+  "schema_version": "ask_dev_graph_acceptance_oracle.v1",
+  "graph_question": "Which teams are struggling right now?",
+  "fallback_question": "Which teams are falling behind?",
+  "ambiguous_question": "What's the status of Atlas?",
+  "expected_graph_state": "enabled",
+  "expected_fallback_state": "unavailable",
+  "fallback_induction": "acceptance-only production graph-query boundary returns UNAVAILABLE for the distinct fallback question",
+  "sources": {
+    "graph_question": "src/dev_health_ops/api/dev/question_interpreter.py:cohort.discovery + TEAM_PRESSURE",
+    "fallback_question": "production_runtime acceptance-only unavailable seam; still exercises normal routing, entitlement, scope, SSE, persistence, and native fallback",
+    "ambiguous_question": "world/ask-dev-world.v1/corpus/case-scope.ambiguous.json:question"
+  }
+}

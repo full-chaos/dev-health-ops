@@ -125,6 +125,25 @@ class DevQuestionIntent(ContractModelV2):
             raise ValueError("plural cohort intent requires two or more mentions")
         if self.cardinality is Cardinality.ORGANIZATION_WIDE and self.mention_ordinals:
             raise ValueError("organization-wide intent cannot carry subject mentions")
+        # CHAOS-3652: DISCOVERED_COHORT is the graph-assisted, zero-mention
+        # cohort-discovery intent. It must carry ORGANIZATION_WIDE
+        # cardinality -- not because it authorizes an organization-wide
+        # sweep (it does not; see QuestionIntentID.DISCOVERED_COHORT's own
+        # docstring for the closed-universe semantics), but because zero
+        # named mentions is the one structural fact that makes "no unresolved
+        # named subject can ever widen into this route" true by construction
+        # rather than by convention. A SINGULAR or PLURAL_COHORT
+        # DISCOVERED_COHORT intent would mean a named-but-unresolved subject
+        # reached the cohort-discovery route -- exactly the widening the
+        # Wave 3.2 guardrails forbid.
+        if (
+            self.intent_id is QuestionIntentID.DISCOVERED_COHORT
+            and self.cardinality is not Cardinality.ORGANIZATION_WIDE
+        ):
+            raise ValueError(
+                "discovered-cohort intent requires organization-wide "
+                "cardinality (zero named mentions)"
+            )
         # The client-supplied question_class is a non-authoritative hint per
         # the Wave 3.1 request amendment: whenever it is present, the server
         # must record a content-free deprecation diagnostic rather than use

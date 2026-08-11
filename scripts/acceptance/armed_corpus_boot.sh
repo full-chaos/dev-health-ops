@@ -71,7 +71,8 @@ if [[ -z "${web_root}" || ! -d "${web_root}" ]]; then
   echo "git common-dir sibling); set ASK_DEV_WEB_CONTEXT to its path." >&2
   exit 64
 fi
-project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}"
+project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance-${RANDOM}${RANDOM}}"
+export ASK_DEV_ACCEPTANCE_PROJECT_NAME="${project_name}"
 fixture_org_id="0a155cab-8833-42ac-a4ef-0d121725a7b0"
 world_dir="${ops_root}/tests/acceptance/world/ask-dev-world.v1"
 log_dir="${ASK_DEV_ACCEPTANCE_LOG_DIR:-${ops_root}/tests/acceptance/artifacts/wave4}"
@@ -91,10 +92,12 @@ export ASK_DEV_QUA_SHADOW_ENABLED=0
 export ASK_DEV_QUA_COMMIT_ENABLED=0
 
 export ASK_DEV_WEB_CONTEXT="${web_root}"
-export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18099}"
+# Docker allocates a free loopback port by default. A caller may still pin
+# ASK_DEV_ACCEPTANCE_API_PORT for an explicitly coordinated diagnostic run.
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-0}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
 export ASK_DEV_ACCEPTANCE_ACR="${ASK_DEV_ACCEPTANCE_ACR:-0}"
-acceptance_api_url="http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}"
+api_url_output="${ASK_DEV_ACCEPTANCE_API_URL_OUTPUT:-/tmp/ask-dev-acceptance-api-url-${project_name}.env}"
 
 compose=(
   docker compose
@@ -119,6 +122,20 @@ echo "=== down --volumes --remove-orphans (THIS project only) ==="
 
 echo "=== up -d --build --wait (boot services, no jobs fleet) ==="
 "${compose[@]}" up -d --build --wait "${boot_services[@]}"
+
+acceptance_api_port="$("${compose[@]}" port api 8000 --index 1 | awk -F: '{print $NF}')"
+if [[ ! "${acceptance_api_port}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Could not discover the armed acceptance API host port" >&2
+  exit 70
+fi
+acceptance_api_url="http://127.0.0.1:${acceptance_api_port}"
+mkdir -p "$(dirname -- "${api_url_output}")"
+printf 'export ASK_DEV_ACCEPTANCE_PROJECT_NAME=%q\n' "${project_name}" > "${api_url_output}"
+printf 'export ASK_DEV_ACCEPTANCE_API_URL=%q\n' "${acceptance_api_url}" >> "${api_url_output}"
+export ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}"
+export ASK_DEV_ACCEPTANCE_API_URL_FILE="${api_url_output}"
+echo "ASK_DEV_ACCEPTANCE_API_URL=${acceptance_api_url}"
+echo "ASK_DEV_ACCEPTANCE_API_URL_FILE=${api_url_output}"
 
 # CHAOS-3575: pin the api container's IDENTITY so a competing boot is named,
 # not merely suffered. On 2026-08-07 a second lane ran run_ask_dev_compose.sh

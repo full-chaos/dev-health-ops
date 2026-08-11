@@ -12,15 +12,21 @@ from dev_health_ops.api.dev.contracts_v2 import (
     EntityKind,
     QuestionIntentID,
 )
+from dev_health_ops.api.dev.graph_investigation_query import CohortDiscoveryFamily
 from dev_health_ops.api.dev.question_interpreter import (
+    _KIND_NOUNS,
+    _NON_NAMING_MODIFIERS,
+    _WORK_HEAD_NOUNS,
     CLARIFICATION_REASONS,
     FALLBACK_CONFIDENCE_FLOOR,
     INTERPRETER_VERSION,
     MAX_MENTIONS,
     ClassifierProposal,
     QuestionInterpreter,
+    classify_cohort_discovery_family,
     extract_mentions,
     organization_mention_spans,
+    untyped_name_candidates,
 )
 from tests._chaos_3292_preflight import fixed_now, request_for, sequential_ids
 
@@ -90,6 +96,120 @@ async def test_an_unrecognized_question_degrades_rather_than_refusing() -> None:
     assert interpreted.intent.intent_id is QuestionIntentID.BOUNDED_INVESTIGATION
     assert interpreted.intent.requires_clarification is False
     assert interpreted.intent.confidence < FALLBACK_CONFIDENCE_FLOOR
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which teams are currently struggling?",
+        "Which projects are capacity-constrained?",
+    ],
+)
+@pytest.mark.asyncio
+async def test_subjectless_cohort_question_routes_to_discovered_cohort(
+    question: str,
+) -> None:
+    """CHAOS-3652: a zero-mention, bounded cohort-discovery question is
+    recognized as ``QuestionIntentID.DISCOVERED_COHORT`` (approved on
+    CHAOS-3660), distinct from a genuinely unbounded question, so it can be
+    routed to graph-assisted cohort discovery instead of the legacy loop
+    (routing itself is CHAOS-3502's job; this only proves the intent is
+    reachable). Was RED before the ``contracts_v2`` enum + this recognizer
+    landed -- see git history for the failing form.
+    """
+
+    interpreted = await _interpreter().interpret(request_for(question))
+    assert interpreted.intent.intent_id is QuestionIntentID.DISCOVERED_COHORT
+    assert interpreted.intent.cardinality is Cardinality.ORGANIZATION_WIDE
+    assert interpreted.intent.interpretation_reasons[0] != "recognizer.none"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Is the Payments team currently struggling?",
+        "Is Nightfall capacity-constrained right now?",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_named_subject_never_routes_to_discovered_cohort(
+    question: str,
+) -> None:
+    """CHAOS-3652 guardrail (team-lead condition, load-bearing): a question
+    that names a subject -- even one lexically shaped exactly like a
+    cohort-discovery question -- must never route to ``DISCOVERED_COHORT``.
+    That would be exactly the "unresolved named subject widens to
+    organization/cohort scope" shape Wave 3.2 forbids. Enforced lexically
+    here (the recognizer requires ``mention_count == 0``); enforced
+    structurally at the contract level by
+    ``test_discovered_cohort_rejects_singular_cardinality`` /
+    ``test_discovered_cohort_rejects_plural_cohort_cardinality`` in
+    ``test_contracts_v2.py``.
+    """
+
+    interpreted = await _interpreter().interpret(request_for(question))
+    assert interpreted.intent.intent_id is not QuestionIntentID.DISCOVERED_COHORT
+    assert interpreted.mentions, "expected a named subject to be extracted"
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Which teams are currently struggling?", CohortDiscoveryFamily.TEAM_PRESSURE),
+        ("Which squads are falling behind?", CohortDiscoveryFamily.TEAM_PRESSURE),
+        (
+            "Which projects appear capacity-constrained?",
+            CohortDiscoveryFamily.PROJECT_CAPACITY,
+        ),
+        (
+            "Which projects are unusually lightly loaded relative to demand?",
+            CohortDiscoveryFamily.PROJECT_CAPACITY,
+        ),
+    ],
+)
+def test_classify_cohort_discovery_family_matches_the_exclusive_pairing(
+    question: str, expected: CohortDiscoveryFamily
+) -> None:
+    """CHAOS-3689: an exclusive (subject-kind, judgment-kind) pairing --
+    exactly the shape ``cohort.discovery`` already recognizes as
+    ``DISCOVERED_COHORT`` -- classifies to the matching family.
+    """
+
+    assert classify_cohort_discovery_family(question) is expected
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # No anchor of either group at all.
+        "What is the sky?",
+        # Mixed subject: both TEAM and PROJECT anchors present.
+        "Which teams and projects are struggling?",
+        # Mixed judgment: both PRESSURE and CAPACITY anchors present.
+        "Which teams are struggling and capacity-constrained?",
+        # Cross-mismatch: FAMILY_CANDIDATE_KINDS cannot satisfy team+capacity
+        # (TEAM_PRESSURE needs a pressure judgment) or project+pressure
+        # (PROJECT_CAPACITY needs a project subject, TEAM_PRESSURE needs a
+        # team subject).
+        "Which teams are capacity-constrained?",
+        "Which projects are struggling?",
+        # GraphEntityKind.REPOSITORY/SERVICE are distinct from PROJECT and
+        # no family maps to either -- unclassifiable, not folded into
+        # PROJECT_CAPACITY.
+        "Which repos are struggling?",
+        "Which services are capacity-constrained?",
+    ],
+)
+def test_classify_cohort_discovery_family_is_honestly_unclassifiable(
+    question: str,
+) -> None:
+    """CHAOS-3689: every combination this round doesn't cover returns
+    ``None`` rather than guessing -- the orchestrator's routing-branch gate
+    treats ``None`` as "never call the graph seam", falling back to the
+    legacy loop exactly like any other unclassified question.
+    """
+
+    assert classify_cohort_discovery_family(question) is None
 
 
 @pytest.mark.asyncio
@@ -250,6 +370,131 @@ def test_context_refs_are_used_only_when_the_question_names_nothing() -> None:
     assert [mention.normalized_lookup_text for mention in unnamed] == [
         "project-page-ctx"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Definite descriptions of a body of work (CHAOS-3648)
+# ---------------------------------------------------------------------------
+#
+# Every phrasing below is invented for the test. None of it is drawn from the
+# frozen investigation corpus: a recall rule justified by "it makes a corpus
+# case pass" is tuning, and would read as capability it does not have.
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # Lowercase name, non-kind head noun: both readings are emitted,
+        # specific first, because English does not settle without a catalog
+        # whether the head noun belongs to the name.
+        ("What about the payroll migration?", ("payroll migration", "payroll")),
+        ("how's the checkout redesign going", ("checkout redesign", "checkout")),
+        (
+            "why has the invoicing consolidation stalled?",
+            ("invoicing consolidation", "invoicing"),
+        ),
+        # Two modifiers are as much a name as one.
+        (
+            "what happened to the mobile onboarding rewrite?",
+            ("mobile onboarding rewrite", "mobile onboarding"),
+        ),
+        # Determiners other than "the" are definite too.
+        ("is our billing rollout on track?", ("billing rollout", "billing")),
+    ],
+)
+def test_a_definite_description_of_work_names_a_subject(
+    question: str, expected: tuple[str, ...]
+) -> None:
+    assert untyped_name_candidates(question) == expected
+
+
+def test_a_capitalized_head_noun_keeps_the_head_inside_the_name() -> None:
+    """A capitalized head belongs to the proper name, so no second reading.
+
+    "the Payroll Migration" is one name; "the payroll migration" is two
+    readings. Capitalizing the head noun is the writer's own evidence that it
+    belongs to the name, so the classifier reading is not offered.
+    """
+
+    assert untyped_name_candidates("What about the Payroll Migration?") == (
+        "Payroll Migration",
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # Nothing but quantificational, temporal, or contrastive modifiers:
+        # they restrict by recency or contrast, never by identity.
+        "What about the current work?",
+        "how is the remaining work going",
+        "What about the other migration?",
+        "is the whole rollout done?",
+        # No definite determiner, so no presupposed referent: this is a
+        # description of an activity, not a reference to a named one.
+        "we did a lot of work this week",
+        # A determiner immediately followed by the head noun names nothing.
+        "What about the rewrite?",
+    ],
+)
+def test_a_description_without_a_name_mints_nothing(question: str) -> None:
+    assert untyped_name_candidates(question) == ()
+    assert extract_mentions(question, mint_id=sequential_ids()) == ()
+
+
+def test_a_leading_non_naming_modifier_is_not_part_of_the_name() -> None:
+    assert untyped_name_candidates("how is the current payroll migration going") == (
+        "payroll migration",
+        "payroll",
+    )
+
+
+def test_a_definite_description_never_mints_a_typed_mention() -> None:
+    """The kind is unstated, so the mention must stay untyped.
+
+    A wrong *typed* mention terminates a question that works today; a wrong
+    untyped one only fails to match. That asymmetry is the whole reason this
+    rule lives in the untyped path.
+    """
+
+    assert extract_mentions("What about the payroll migration?") == ()
+
+
+def test_a_kind_noun_head_stays_with_the_typed_grammar() -> None:
+    """ "the Payroll project" states its kind, so the typed grammar claims it."""
+
+    question = "What about the Payroll project?"
+    mentions = extract_mentions(question, mint_id=sequential_ids())
+    assert [
+        (mention.original_text_span, mention.requested_entity_kind.value)
+        for mention in mentions
+    ] == [("Payroll", "project")]
+    claimed = [mention.normalized_lookup_text for mention in mentions]
+    assert untyped_name_candidates(question, claimed) == ()
+
+
+def test_definite_descriptions_are_ordered_by_position_among_bare_names() -> None:
+    question = "is the payroll migration blocking Beacon?"
+    assert untyped_name_candidates(question) == (
+        "payroll migration",
+        "payroll",
+        "Beacon",
+    )
+
+
+def test_the_work_noun_vocabulary_stays_disjoint_from_the_kind_nouns() -> None:
+    """A head noun that names a kind belongs to the typed grammar, not here.
+
+    Structural rather than exemplary: it holds for every future addition to
+    either list, where a test naming today's members would not.
+    """
+
+    kind_nouns = {noun for noun, _kind in _KIND_NOUNS}
+    assert not _WORK_HEAD_NOUNS & kind_nouns
+    assert not _WORK_HEAD_NOUNS & _NON_NAMING_MODIFIERS
+    # Single tokens only: a multi-word entry would be a phrase, and a phrase
+    # is how a corpus-specific string gets smuggled into a "generic" list.
+    assert all(" " not in noun for noun in _WORK_HEAD_NOUNS | _NON_NAMING_MODIFIERS)
 
 
 # ---------------------------------------------------------------------------

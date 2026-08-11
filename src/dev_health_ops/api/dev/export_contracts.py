@@ -81,6 +81,10 @@ SOURCE_HEALTH_LABELS: dict[str, str] = {
     SourceClass.INVESTMENT_ALLOCATION.value: "Investment allocation",
     SourceClass.HEALTH_PROFILE.value: "Health profile",
     SourceClass.DEFICIENCY_INVENTORY.value: "Deficiency inventory",
+    # CHAOS-3567 reserves this source class while its runtime/plan wiring
+    # remains intentionally inert; it is still part of the closed coverage
+    # vocabulary and therefore needs a stable client label now.
+    SourceClass.TEMPORAL_CONTEXT.value: "Temporal context",
     # Orchestrator._budget_exhausted_answer's one hardcoded literal.
     "tool_results": "Tool results",
 }

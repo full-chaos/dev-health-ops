@@ -236,6 +236,79 @@ class CohortDiscoveryFamily(StrEnum):
     PROJECT_CAPACITY = "project_capacity"
 
 
+class DevAnswerCohortDisposition(StrEnum):
+    INCLUDED = "included"
+    UNKNOWN = "unknown"
+
+
+class DevAnswerCohortSignalSource(StrEnum):
+    STATUS = "status"
+    HEALTH = "health"
+    WORKLOAD = "workload"
+    READINESS = "readiness"
+    METRICS = "metrics"
+    CANONICAL_ENRICHMENT = "canonical_enrichment"
+
+
+class DevAnswerEvidenceSourceClass(StrEnum):
+    STATUS_CHANGE = "status_change"
+    WORK_ITEM = "work_item"
+    WORK_GRAPH = "work_graph"
+    PULL_REQUEST = "pull_request"
+    CODE_CHANGE = "code_change"
+    REVIEW = "review"
+    CI_RUN = "ci_run"
+    TEST_REPORT = "test_report"
+    DEPLOYMENT = "deployment"
+    INCIDENT = "incident"
+    OPERATIONAL_CONTROL = "operational_control"
+    SOURCE_HEALTH = "source_health"
+    COGNITIVE_LOAD = "cognitive_load"
+    INVESTMENT_ALLOCATION = "investment_allocation"
+    HEALTH_PROFILE = "health_profile"
+    DEFICIENCY_INVENTORY = "deficiency_inventory"
+    TEMPORAL_CONTEXT = "temporal_context"
+
+
+class DevAnswerSourceRequirementState(StrEnum):
+    AVAILABLE_CURRENT = "available_current"
+    AVAILABLE_STALE = "available_stale"
+    AVAILABLE_UNKNOWN = "available_unknown"
+    UNCONFIGURED = "unconfigured"
+    UNAVAILABLE = "unavailable"
+    UNAUTHORIZED_OR_NOT_VISIBLE = "unauthorized_or_not_visible"
+    NOT_APPLICABLE = "not_applicable"
+    TRUNCATED = "truncated"
+
+
+class DevAnswerPressureDimension(StrEnum):
+    EXECUTION_COMPLETION = "execution_completion"
+    DELIVERY_FLOW = "delivery_flow"
+    RELIABILITY_RELEASE = "reliability_release"
+    REVIEW_CI_PRESSURE = "review_ci_pressure"
+    CODE_OWNERSHIP_RISK = "code_ownership_risk"
+    COGNITIVE_WORKLOAD_PRESSURE = "cognitive_workload_pressure"
+    INVESTMENT_BALANCE = "investment_balance"
+    DEPENDENCIES_BLOCKERS = "dependencies_blockers"
+    DATA_TRUST = "data_trust"
+
+
+class DevAnswerPressureState(StrEnum):
+    HEALTHY = "healthy"
+    WATCH = "watch"
+    AT_RISK = "at_risk"
+    CRITICAL = "critical"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class DevAnswerEnrichmentGap(StrEnum):
+    NOT_APPLICABLE = "not_applicable"
+    UNAUTHORIZED = "unauthorized"
+    UNAVAILABLE = "unavailable"
+    NO_DATA = "no_data"
+
+
 class PacketLimitationKind(StrEnum):
     """CHAOS-3660 §8(d)/(h). Reserved fresh here for the same reason as the
     two enums above -- the owning module
@@ -523,6 +596,9 @@ def _default_retention_options() -> list[Literal[0, 30]]:
 
 class DevCapabilities(ContractModel):
     schema_version: Literal["dev_capabilities.v1"]
+    backend_sha: Annotated[str, StringConstraints(pattern=r"[0-9a-f]{40}")] | None = (
+        None
+    )
     ask_dev: bool = False
     byo_llm: bool = False
     agent_context_runtime: bool = False
@@ -627,6 +703,16 @@ class DevMessageRequest(ContractModel):
         return value
 
 
+class DevRunResumeRequest(ContractModel):
+    """Additive cursor and immutable scope envelope for an SSE rejoin."""
+
+    schema_version: Literal["dev_run_resume_request.v1"]
+    request_id: OpaqueID
+    conversation_id: OpaqueID
+    last_sequence: int = Field(ge=-1, le=100_000)
+    scope: DevScope
+
+
 class DevCitationLink(ContractModel):
     internal_path: RelativePath | None = None
     source_url: (
@@ -668,19 +754,18 @@ class DevEvidenceRef(ContractModel):
     ) = None
     repository_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
     valid_entity_ids: list[OpaqueID] = Field(default_factory=list, max_length=20)
-    #: CHAOS-3633 / CHAOS-3660 §8(i). Reserves the wire slot for the SOURCE's
-    #: own identity for this specific record, distinct from ``entity_id``
-    #: (the entity the record is *about*). Schema-only on ``main`` today:
-    #: the canonical evidence-admission path that will populate it
-    #: (``EvidenceService.admit``, still feature-branch-only -- see
-    #: CHAOS-3650/3632/3685) has not landed here yet, so nothing on this
-    #: branch sets, reads, or signs it. Additive and optional so every ref
-    #: minted by ``search``/``expand`` today -- and every already-persisted
-    #: ``dev_answer.v1`` evidence ref -- is completely unaffected: no
-    #: current code path constructs a ``DevEvidenceRef`` with this field, so
-    #: it is always its ``None`` default until the admission-path port lands
-    #: (a separate PR) and starts setting it and binding it into the signed
-    #: HMAC.
+    #: CHAOS-3633. The SOURCE's own identity for this specific record,
+    #: distinct from ``entity_id`` (the entity the record is *about*).
+    #: ``None`` for every ref minted by ``search``/``expand`` today, which
+    #: describe one record per entity and never had a collision to prevent.
+    #: The canonical evidence-admission path (``EvidenceService.admit``)
+    #: always sets this to the submitted candidate's own locator, so two
+    #: distinct same-kind records about one entity -- two reviews on one
+    #: PR, two incidents about one project -- mint distinct handles instead
+    #: of colliding on one. Additive and optional so every currently
+    #: persisted ``dev_answer.v1`` evidence ref keeps verifying unchanged:
+    #: ``EvidenceReferenceSigner._payload`` binds this field into the
+    #: signed HMAC only when it is not ``None``.
     record_locator: OpaqueID | None = None
     flags: DevEvidenceFlags
 
@@ -859,6 +944,33 @@ class DevAnswerCohortMember(ContractModel):
     entity_id: OpaqueID
     display_label: Label
     inclusion_basis: CohortDiscoveryFamily
+    rank: int | None = Field(default=None, ge=1)
+    disposition: DevAnswerCohortDisposition | None = None
+    inclusion_rationale: ShortText | None = None
+    pressure_dimensions: list[DevAnswerPressureDimension] = Field(
+        default_factory=list, max_length=12
+    )
+    signals: list[DevAnswerCohortSignal] = Field(default_factory=list, max_length=50)
+
+
+class DevAnswerCohortSignal(ContractModel):
+    signal_id: OpaqueID
+    source: DevAnswerCohortSignalSource
+    observed_states: list[DevAnswerSourceRequirementState] = Field(
+        min_length=1, max_length=8
+    )
+    data_semantics: Literal["measured_zero", "no_data", "not_measured"]
+    freshness: FreshnessState | None = None
+    coverage: FiniteFloat | None = Field(default=None, ge=0, le=1)
+    denominator_present: bool | None = None
+    attribution_present: bool | None = None
+    dimension: DevAnswerPressureDimension | None = None
+    state: DevAnswerPressureState | None = None
+    evidence_source_classes: list[DevAnswerEvidenceSourceClass] = Field(
+        default_factory=list, max_length=12
+    )
+    limitation: ShortText | None = None
+    gap: DevAnswerEnrichmentGap | None = None
 
 
 class DevAnswerCohortSlot(ContractModel):
@@ -900,8 +1012,9 @@ class DevAnswerGraphAssistance(ContractModel):
     wave) contributed to an answer, in one namespace. ``cohort``,
     ``ranked_drivers``, ``evidence_lineage``, and ``limitations`` are
     populated only when ``state`` reflects a completed, cohort-shaped
-    answer; ``None``/empty otherwise. Schema-only on ``main`` today -- see
-    ``DevAnswer.graph_assisted``'s own docstring.
+    answer; ``None``/empty otherwise. The orchestrator owns the runtime
+    projection of the route attempt; packet/backend details never cross this
+    contract boundary.
     """
 
     schema_version: Literal["dev_answer_graph_assistance.v1"]
@@ -941,11 +1054,9 @@ class DevAnswer(ContractModel):
     #: route at all (mirrors the feature branch's
     #: ``describe_availability``'s own ``result is None`` branch); present
     #: with ``state=unavailable`` when attempted but the route
-    #: declined/failed. Schema-only on ``main`` today: the graph-routing
-    #: wave (CHAOS-3502) that computes a real value here has not landed on
-    #: `main` yet, so no runtime path constructs a ``DevAnswer`` with this
-    #: set -- every existing answer (and every already-persisted
-    #: ``dev_answer.v1``) is unaffected.
+    #: declined/failed. The field remains absent when routing was never
+    #: attempted, so existing non-graph answers and persisted v1 payloads are
+    #: unaffected.
     graph_assisted: DevAnswerGraphAssistance | None = None
 
     @model_validator(mode="after")
@@ -1431,6 +1542,9 @@ class DevError(ContractModel):
         "scope_forbidden",
         "conversation_not_found",
         "conversation_expired",
+        "resume_scope_mismatch",
+        "resume_unavailable",
+        "resume_stream_invalid",
         "tool_limit_reached",
         "tool_unavailable",
         "source_unavailable",
@@ -1516,9 +1630,8 @@ class DevStreamEvent(ContractModel):
     #: CHAOS-3660 §8(c). Carries only the `{state, as_of}` pair (via
     #: `DevAnswerGraphAssistance`, reused rather than a slimmer duplicate)
     #: -- the same object `DevAnswer.graph_assisted` carries once, in full,
-    #: on the terminal event. Schema-only on `main` today: see
-    #: `DevAnswer.graph_assisted`'s own docstring for why nothing here
-    #: emits a populated value yet.
+    #: on the terminal event. The streaming projection emits it only after a
+    #: graph query has actually returned, and carries no backend identifiers.
     graph_state: DevAnswerGraphAssistance | None = None
     delta: Annotated[str, StringConstraints(min_length=1, max_length=8_192)] | None = (
         None

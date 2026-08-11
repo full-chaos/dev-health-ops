@@ -47,6 +47,11 @@
           "case": "clarification_without_reason",
           "path": "examples/negative/dev_question_intent.v1.clarification_without_reason.json",
           "sha256": "647687109c9ac4b368c3907a7791061305e4d0e93aa26a307f42d8d10f0dba3f"
+        },
+        {
+          "case": "discovered_cohort_requires_organization_wide_cardinality",
+          "path": "examples/negative/dev_question_intent.v1.discovered_cohort_requires_organization_wide_cardinality.json",
+          "sha256": "d33f1320734a49f8cd8d18c9d3b77ee4962396ad6c0500dba229c40f9dfffec7"
         }
       ],
       "positive": {
@@ -56,7 +61,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_question_intent.v1.schema.json",
-        "sha256": "ab9aba605adc6d28366087aa1d543453e5fac7eae09b25adee806b63f62e492e"
+        "sha256": "dbaf9871984d64ebc6c9ea0e270fe069b5d0a2d0476df685b2b98cb19f7d88c1"
       },
       "schema_version": "dev_question_intent.v1"
     },
@@ -132,7 +137,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_source_requirement.v1.schema.json",
-        "sha256": "50ee3376959280adbd82706fe9d35096d78d96c2ceeecf58a59701a24a1b19b7"
+        "sha256": "cd1167485d657c6bf3fa7a39b8873fd72eb40be7ad8bd0421147cee4167af8ea"
       },
       "schema_version": "dev_source_requirement.v1"
     },
@@ -151,7 +156,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_investigation_plan.v1.schema.json",
-        "sha256": "f483e4657f6527f51f42657028bc2d6603ac84699dde2b52d5b411d5d27d6415"
+        "sha256": "e0b5f48243149aecbb49a3736e015fa53749865fc6fdfb9dbda1ddae3d1ddd76"
       },
       "schema_version": "dev_investigation_plan.v1"
     },
@@ -170,7 +175,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_source_observation.v1.schema.json",
-        "sha256": "e8c6882cad2933fecdd3b674e81266bf9b1b538b03a3e83733faf19ec85006fd"
+        "sha256": "0a3062074470fa82b07a970f7435bfa5f3e0345ac543bb09fc3161c9e0bb45d9"
       },
       "schema_version": "dev_source_observation.v1"
     },
@@ -189,7 +194,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_investigation_result.v1.schema.json",
-        "sha256": "7c6096fc8eddcfa052aac462fb1a7d9e1d43c0f9cbffcb74bff1e41bfb28dda0"
+        "sha256": "b7d36509fd16b3425a9245c22a886d4ee703a663df04b28db9e4891fc7a7f597"
       },
       "schema_version": "dev_investigation_result.v1"
     },
@@ -378,7 +383,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer_frame.v1.schema.json",
-        "sha256": "a4819a0c7c693d34703d5d6803da17aae19df619b6cee0eccc1e693ce14195e5"
+        "sha256": "ab0bd03257260f596b474d86983b66237a8bae05fc47e79c3640b75c89142623"
       },
       "schema_version": "dev_answer_frame.v1"
     },
@@ -466,7 +471,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_answer.v2.schema.json",
-        "sha256": "27b9e5f9328fab2f4f3658f62a7da00ae6ef0967db6c9ae8afa98dd6bb37f2d8"
+        "sha256": "600b17e9524ef9e4046452c18887507c23d99c009552c90e947ede39899f548f"
       },
       "schema_version": "dev_answer.v2"
     },
@@ -485,7 +490,7 @@
       "positive_variants": [],
       "schema": {
         "path": "schemas/dev_stream_event.v2.schema.json",
-        "sha256": "2f3a526681553793456e128bf03d67cd6d2e99c3b2e965894d37b1cb1f6c2dfd"
+        "sha256": "1163612df6c1c9e523b755260bfeafcd7ce506d917f4c4702e479abac66cd9b6"
       },
       "schema_version": "dev_stream_event.v2"
     }

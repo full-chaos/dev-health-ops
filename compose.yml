@@ -153,6 +153,7 @@ services:
       target: api
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        DEV_HEALTH_BUILD_SHA: ${DEV_HEALTH_BUILD_SHA:-}
     container_name: dev-health-migrate
     restart: "no"
     entrypoint:
@@ -188,6 +189,7 @@ services:
       target: api
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        DEV_HEALTH_BUILD_SHA: ${DEV_HEALTH_BUILD_SHA:-}
     container_name: dev-health-api
     command: |
       --host 0.0.0.0 --port 8000 --reload
@@ -433,3 +435,58 @@ services:
         condition: service_healthy
     ports:
       - "8800:8000"
+
+  # ---------------------------------------------------------------------------
+  # CHAOS-3617 — Context Fabric graph trial store. Profile-gated, default OFF.
+  # ---------------------------------------------------------------------------
+  # Isolated datastore for the shadow Graphiti investigation arm. Behind
+  # `profiles: [graph-trial]`, so a bare `docker compose up -d` creates none
+  # of it and this stack behaves exactly as it did before -- the same
+  # arrangement the repo-root compose.yml uses for the `go` profile.
+  #
+  #   export GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"
+  #   docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store
+  #   GRAPH_TRIAL_STORE_PORT="$(docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379 | awk -F: '{print $NF}')"
+  #   export CONTEXT_FABRIC_GRAPH_STORE_URI="falkor://127.0.0.1:$GRAPH_TRIAL_STORE_PORT"
+  #   # After the trial:
+  #   docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans
+  #
+  # Why FalkorDB: of the backends graphiti-core 0.29.3 ships drivers for
+  # (Neo4j, FalkorDB, FalkorDB-lite, Kuzu, Neptune, Neo4j+OpenSearch), Kuzu
+  # -- the embedded option -- has no wheel for this repo's Python 3.14 and
+  # its sdist build fails; Neptune is a managed AWS service; Neo4j+OpenSearch
+  # is two servers. FalkorDB is one container and gives one graph keyspace
+  # per organization, which makes org deletion a keyspace drop rather than a
+  # traversal that could miss a node. Full write-up:
+  # docs/contribute/architecture/graph-investigation-arm.md
+  #
+  # Both isolation axes are required for parallel local environments. The host
+  # port is OS-assigned (`127.0.0.1::6379`), and `--project-name` overrides this
+  # file's intentionally fixed top-level name for the trial container/network.
+  # Without the latter, two worktrees would still address one generated
+  # container even though its host port was random. The container remains on
+  # 6379 internally; use the project-scoped `docker compose ... port` command
+  # above before exporting the URI.
+  #
+  # No named volume on purpose. The trial store holds only derived, rebuildable
+  # projection data and the issue requires deterministic cleanup; keeping it
+  # in the container's own writable layer means `down` genuinely removes it
+  # and there is no volume to forget. Rebuild by re-running the projection.
+  #
+  # GRAPHITI_TELEMETRY_ENABLED is also forced off in code
+  # (graph_arm.backend.require_graphiti); it is repeated here so a `docker
+  # compose exec` session cannot phone home either.
+  graph-trial-store:
+    image: falkordb/falkordb:v4.14.4
+    profiles: ["graph-trial"]
+    restart: unless-stopped
+    environment:
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+    ports:
+      - "127.0.0.1::6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

@@ -76,13 +76,13 @@ services:
     extends:
       file: ${ASK_DEV_ACCEPTANCE_PARENT_COMPOSE:-../compose.yml}
       service: acr-api
-    container_name: ask-dev-acceptance-acr-api
+    container_name: "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-dev-health-ask-dev-acceptance}-acr-api"
     profiles: ["ask-dev-acceptance-acr"]
-    # The parent definition publishes 127.0.0.1:18080 -- the same host port
-    # ask-dev-acceptance's own `api` service already parameterizes around
-    # (see compose.ask-dev.yml). Never publish acr-api's port from this
-    # acceptance overlay; it is reached only over the internal network by
-    # the `web` service's Context Fabric panel, same as the parent stack.
+    # The parent definition may publish a host port, but the acceptance
+    # overlay's API uses an OS-assigned loopback port. Never publish acr-api's
+    # port from this acceptance overlay; it is reached only over the internal
+    # network by the `web` service's Context Fabric panel, same as the parent
+    # stack.
     ports: !reset []
     environment:
       ACR_POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/acr?sslmode=disable

@@ -149,6 +149,48 @@ CONDITIONAL_KEEP_ENV_NAMES: dict[str, str] = {
     # LIVE_E2E_BASE_URL is that lane's own sentinel, exported at
     # run_live_backend_e2e.sh:498 -- six lines after REDIS_URL, same subshell.
     "REDIS_URL": "LIVE_E2E_BASE_URL",
+    # CHAOS-3617: the Context Fabric trial graph store, same shape as
+    # REDIS_URL above -- a pollutant in the unit tier and a requirement in
+    # exactly one lane.
+    #
+    # Pollutant: with CONTEXT_FABRIC_GRAPH_STORE_URI ambient (a developer who
+    # exported it to run the live arm tests, then ran the full suite), the
+    # arm's live tests would connect to whatever that URI names and write
+    # real projections there, from a tier that is supposed to touch nothing.
+    #
+    # Requirement: tests/context_fabric/test_chaos_3617_live_store.py cannot
+    # measure anything without it, and its skip is deliberately loud rather
+    # than silent.
+    #
+    # CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE is that lane's sentinel, and using it
+    # here has a property worth keeping: the live half runs only when the
+    # operator has explicitly armed it, so "the store URI happened to be in
+    # my shell" can never turn into an unannounced live run. Setting the URI
+    # alone yields the loud skip, which names the sentinel.
+    "CONTEXT_FABRIC_GRAPH_STORE_URI": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
+    "CONTEXT_FABRIC_GRAPH_STORE_PASSWORD": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
+    # CHAOS-3647: the semantic retrieval leg needs a REAL embedding model, and
+    # the credential it needs is one of the two the repo already conventions
+    # on (``llm/credentials.py``: LLM_API_KEY first, then OPENAI_API_KEY).
+    #
+    # Pollutant, and more sharply than the store URI: an ambient key does not
+    # merely reach a local container, it spends money against a third party
+    # from a tier that is supposed to touch nothing. Scrubbing it by default
+    # stays right.
+    #
+    # Requirement: tests/context_fabric/test_chaos_3647_live_semantic.py
+    # cannot measure anything without it. It does not fall back to
+    # DeterministicEmbedder — a run on hash vectors would look semantic and
+    # score like noise, which is worse than not running — so an unconditional
+    # scrub turns that lane into a permanent skip.
+    #
+    # Sentinel is CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE, the same one the store
+    # URI uses, and deliberately so: this leg needs BOTH a live store and a
+    # live model, there is no configuration in which it wants one without the
+    # other, and a second sentinel would be a second thing to forget. Setting
+    # the key alone still yields the loud skip that names the sentinel.
+    "LLM_API_KEY": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
+    "OPENAI_API_KEY": "CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE",
 }
 
 # ---------------------------------------------------------------------------
@@ -165,6 +207,9 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "ASK_DEV_ACCEPTANCE_OPENAI_API_KEY",
         "ASK_DEV_ACCEPTANCE_OPENAI_BASE_URL",
         "ASK_DEV_ACCEPTANCE_OPENAI_PORT",
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM",
+        "ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION",
+        "ASK_DEV_GRAPH_ROUTING_ENABLED",
         "ASK_DEV_LIVE_ACCEPTANCE",
         "ASK_DEV_PLATFORM_MONTHLY_COST_DEV_MAX_MICROUSD",
         "ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD",
@@ -207,11 +252,18 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "CELERY_BROKER_URL",
         "CELERY_RESULT_BACKEND",
         "COMMIT_STATS_MAX_COMMITS",
+        "CONTEXT_FABRIC_GRAPH_EMBEDDING_MODEL",
+        "CONTEXT_FABRIC_GRAPH_EVIDENCE_ADMISSION_ENABLED",
+        "CONTEXT_FABRIC_GRAPH_STORE_PASSWORD",
+        "CONTEXT_FABRIC_GRAPH_STORE_URI",
+        "CONTEXT_FABRIC_NATIVE_PROJECTION_ENABLED",
+        "CONTEXT_FABRIC_SHADOW_SYNTHESIS_ENABLED",
         "CORS_ALLOWED_ORIGINS",
         "DASHSCOPE_API_KEY",
         "DASHSCOPE_BASE_URL",
         "DATABASE_URL",
         "DEV_HEALTH_ALLOW_PLACEHOLDER_CLICKHOUSE_URI",
+        "DEV_HEALTH_BUILD_SHA",
         "DEV_HEALTH_SINK",
         "EMAIL_API_KEY",
         "EMAIL_FROM_ADDRESS",
@@ -247,6 +299,7 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "GITHUB_WEBHOOK_SECRET",
         "GITLAB_NOTES_LIMIT",
         "GITLAB_WEBHOOK_TOKEN",
+        "GRAPHITI_TELEMETRY_ENABLED",
         "GRAPHQL_AUTH_REQUIRED",
         "GRAPHQL_MAX_QUERY_BYTES",
         "HIDE_MIGRATED_CHILD_CONFIGS",

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
 from dev_health_ops.api.dev.contracts import FreshnessState
 from dev_health_ops.api.dev.evidence_service import (
     MAX_EXPANSION_BYTES,
+    EvidenceAdmission,
+    EvidenceAdmissionResult,
     EvidenceAvailability,
+    EvidenceCandidate,
     EvidenceRecord,
     EvidenceReferenceSigner,
     EvidenceService,
@@ -556,3 +561,793 @@ async def test_no_matches_is_distinct_from_unconfigured_optional_source() -> Non
         "work_items": EvidenceAvailability.NO_MATCHES,
         "acr": EvidenceAvailability.UNCONFIGURED,
     }
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3633: two same-kind records about one entity must not collide onto
+# one handle.
+# ---------------------------------------------------------------------------
+
+
+class _TwoRecordResolver:
+    """Resolves two DISTINCT records of the same kind about one entity.
+
+    Keyed by ``candidate.locator`` -- the source's own record identity
+    (CHAOS-3646, ``EvidenceCandidate.locator`` docstring) -- never by
+    ``entity_id``, which both records share on purpose: that sharing is
+    exactly the CHAOS-3633 scenario (two reviews on one PR, two incidents
+    about one project, ...).
+    """
+
+    source_system = "reviews"
+
+    def __init__(self, records_by_locator: dict[str, EvidenceRecord]) -> None:
+        self._records = records_by_locator
+
+    async def resolve(
+        self, *, org_id: str, scope: object, candidate: EvidenceCandidate
+    ) -> EvidenceRecord | None:
+        return self._records.get(candidate.locator)
+
+
+def _same_entity_record(locator: str, *, label: str) -> EvidenceRecord:
+    return EvidenceRecord(
+        source_system="reviews",
+        source_version="native.v1",
+        entity_type="pull_request",
+        entity_id="issue-1",
+        display_label=label,
+        observed_at=NOW,
+        freshness=FreshnessState.FRESH,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=(),
+        raw_excerpt=f"{label} content, locator {locator}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_same_kind_records_about_one_entity_mint_distinct_handles() -> None:
+    """CHAOS-3633 RED-first: the defect this test demonstrates is a
+    denial-of-service on legitimate, distinct evidence. Before the fix,
+    ``EvidenceReferenceSigner._payload`` binds only
+    ``(org, source_system, source_version, entity_type, entity_id,
+    repositories)`` -- none of which differ between these two records, since
+    they are two DIFFERENT records about the SAME entity. Both mint the
+    identical ``evidence_ref_id``, and a caller enforcing "no repeated index
+    handle" (the frozen graph packet contract) refuses the second, genuine
+    record as though it were a duplicate of the first.
+    """
+
+    records = {
+        "review-1": _same_entity_record("review-1", label="First review"),
+        "review-2": _same_entity_record("review-2", label="Second review"),
+    }
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_TwoRecordResolver(records)],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="reviews",
+            entity_type="pull_request",
+            entity_id="issue-1",
+            locator=locator,
+        )
+        for locator in ("review-1", "review-2")
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    first, second = result.admissions
+    assert first.state is EvidenceAvailability.AVAILABLE
+    assert second.state is EvidenceAvailability.AVAILABLE
+    assert first.evidence is not None
+    assert second.evidence is not None
+    assert first.evidence.display_label == "First review"
+    assert second.evidence.display_label == "Second review"
+    # The defect: without a distinct record identity in the signed payload,
+    # these two DIFFERENT records mint the SAME handle.
+    assert first.evidence.evidence_ref_id != second.evidence.evidence_ref_id
+
+
+def test_adjacent_field_concatenation_cannot_collide_payloads() -> None:
+    """Contract-owner condition 1: the signed payload is a JSON object with
+    a distinct named key per field, never a concatenation of
+    ``entity_type``/``record_locator`` -- so ``(entity_type="a",
+    record_locator="bc")`` and ``(entity_type="ab", record_locator="c")``
+    -- which a naive ``entity_type + record_locator`` string join WOULD
+    equate, both reducing to ``"abc"`` -- must sign to different bytes."""
+
+    left = EvidenceRecord(
+        source_system="reviews",
+        source_version="native.v1",
+        entity_type="a",
+        entity_id="issue-1",
+        display_label="Left",
+        observed_at=NOW,
+        freshness=FreshnessState.FRESH,
+        provenance="native",
+        confidence=1.0,
+        record_locator="bc",
+    )
+    right = replace(left, entity_type="ab", record_locator="c")
+    signer = EvidenceReferenceSigner(SECRET)
+    assert signer.issue("org-a", left) != signer.issue("org-a", right)
+
+
+class _RecordLocatorStrippingSigner(EvidenceReferenceSigner):
+    """A DELIBERATELY weakened encoder: identical to the real signer except
+    it drops ``record_locator`` from the signed payload -- i.e. exactly
+    today's pre-CHAOS-3633 behaviour. Exists only so the strip/forge tests
+    below can be shown failing against it, proving those tests actually
+    discriminate rather than passing by construction."""
+
+    @staticmethod
+    def _payload(org_id: str, evidence) -> bytes:
+        repository_ids = sorted(evidence.repository_ids)
+        payload = {
+            "org": org_id,
+            "source": evidence.source_system,
+            "source_version": evidence.source_version,
+            "entity_type": evidence.entity_type,
+            "entity_id": evidence.entity_id,
+            "repositories": repository_ids,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _locator_bearing_record(locator: str) -> EvidenceRecord:
+    return EvidenceRecord(
+        source_system="reviews",
+        source_version="native.v1",
+        entity_type="pull_request",
+        entity_id="issue-1",
+        display_label="A review",
+        observed_at=NOW,
+        freshness=FreshnessState.FRESH,
+        provenance="native",
+        confidence=1.0,
+        repository_ids=(),
+        record_locator=locator,
+    )
+
+
+@pytest.mark.parametrize(
+    "signer_cls,discriminates",
+    [
+        pytest.param(EvidenceReferenceSigner, True, id="real_signer"),
+        pytest.param(_RecordLocatorStrippingSigner, False, id="weakened_signer"),
+    ],
+)
+def test_stripping_the_signed_locator_is_caught_only_by_the_real_signer(
+    signer_cls: type[EvidenceReferenceSigner], discriminates: bool
+) -> None:
+    """Contract-owner condition 2, strip direction: a ref signed WITH a
+    locator, then presented for verification WITHOUT one, must fail.
+    Parametrized over the real signer and the deliberately weakened one
+    above so this property is observed FAILING against the weak encoder
+    (``discriminates=False``) before it is trusted to pass against the real
+    one -- a strip test that could never fail proves nothing."""
+
+    signer = signer_cls(SECRET)
+    signed = _locator_bearing_record("review-1")
+    handle = signer.issue("org-a", signed)
+    stripped = replace(signed, record_locator=None)
+    verified = signer.verify(
+        "org-a",
+        SimpleNamespace(
+            evidence_ref_id=handle,
+            source_system=stripped.source_system,
+            source_version=stripped.source_version,
+            entity_type=stripped.entity_type,
+            entity_id=stripped.entity_id,
+            repository_ids=stripped.repository_ids,
+            record_locator=stripped.record_locator,
+        ),
+    )
+    # A stripped locator must NEVER verify against the real signer
+    # (``discriminates=True``), and -- observed here, not assumed -- DOES
+    # verify against the deliberately weakened one, which is exactly what
+    # makes the weakened encoder weak and this parametrization meaningful.
+    assert verified is not discriminates
+
+
+@pytest.mark.parametrize(
+    "signer_cls,discriminates",
+    [
+        pytest.param(EvidenceReferenceSigner, True, id="real_signer"),
+        pytest.param(_RecordLocatorStrippingSigner, False, id="weakened_signer"),
+    ],
+)
+def test_forging_a_different_locator_is_caught_only_by_the_real_signer(
+    signer_cls: type[EvidenceReferenceSigner], discriminates: bool
+) -> None:
+    """Contract-owner condition 2, forge direction: a ref signed for one
+    locator, then presented with a DIFFERENT locator substituted in, must
+    fail against the real signer -- and, observed here rather than assumed,
+    does NOT fail against the deliberately weakened one, proving this test
+    discriminates instead of passing by construction."""
+
+    signer = signer_cls(SECRET)
+    signed = _locator_bearing_record("review-1")
+    handle = signer.issue("org-a", signed)
+    forged = replace(signed, record_locator="review-2")
+    verified = signer.verify(
+        "org-a",
+        SimpleNamespace(
+            evidence_ref_id=handle,
+            source_system=forged.source_system,
+            source_version=forged.source_version,
+            entity_type=forged.entity_type,
+            entity_id=forged.entity_id,
+            repository_ids=forged.repository_ids,
+            record_locator=forged.record_locator,
+        ),
+    )
+    assert verified is not discriminates
+
+
+@pytest.mark.asyncio
+async def test_non_vacuity_admission_forces_distinct_locators_even_if_the_resolver_forgets() -> (
+    None
+):
+    """Contract-owner condition 3: same-kind multi-record admission MUST set
+    the locator -- unset-by-default must not be able to silently
+    reintroduce CHAOS-3633. The resolver below is deliberately "lazy": it
+    never sets ``record_locator`` on the ``EvidenceRecord`` it returns (the
+    field defaults to ``None``, exactly as every pre-fix resolver would).
+    ``EvidenceService.admit`` must still force distinctness by binding the
+    submitted candidate's own locator -- see ``admit``'s docstring -- so
+    this passes not because the resolver did the right thing, but because
+    the service does not let it get this wrong.
+    """
+
+    class _LazyResolver:
+        source_system = "reviews"
+
+        async def resolve(self, *, org_id, scope, candidate):
+            # Deliberately ignores ``candidate.locator`` when building the
+            # record -- ``record_locator`` stays at its ``None`` default.
+            return EvidenceRecord(
+                source_system="reviews",
+                source_version="native.v1",
+                entity_type="pull_request",
+                entity_id="issue-1",
+                display_label=f"Review at {candidate.locator}",
+                observed_at=NOW,
+                freshness=FreshnessState.FRESH,
+                provenance="native",
+                confidence=1.0,
+                repository_ids=(),
+            )
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_LazyResolver()],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="reviews",
+            entity_type="pull_request",
+            entity_id="issue-1",
+            locator=locator,
+        )
+        for locator in ("review-1", "review-2")
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    first, second = result.admissions
+    assert first.evidence is not None and second.evidence is not None
+    assert first.evidence.evidence_ref_id != second.evidence.evidence_ref_id
+    assert first.evidence.record_locator == "review-1"
+    assert second.evidence.record_locator == "review-2"
+
+
+@pytest.mark.asyncio
+async def test_a_genuine_handle_collision_within_one_round_is_refused_not_silently_merged() -> (
+    None
+):
+    """Defense-in-depth backstop for condition 3: even if two DIFFERENT
+    locators somehow minted the identical handle -- a payload-encoding
+    regression, not something reachable through the real signer today --
+    the second admission must be refused rather than silently returned as
+    though it were a distinct, valid record. Exercised with the
+    deliberately weakened (locator-blind) signer, which is exactly the kind
+    of regression this guard exists to catch.
+    """
+
+    class _TwoLocatorResolver:
+        source_system = "reviews"
+
+        async def resolve(self, *, org_id, scope, candidate):
+            return _locator_bearing_record(candidate.locator)
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=_RecordLocatorStrippingSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_TwoLocatorResolver()],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="reviews",
+            entity_type="pull_request",
+            entity_id="issue-1",
+            locator=locator,
+        )
+        for locator in ("review-1", "review-2")
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    first, second = result.admissions
+    assert first.state is EvidenceAvailability.AVAILABLE
+    assert first.evidence is not None
+    assert second.state is EvidenceAvailability.UNAVAILABLE
+    assert second.evidence is None
+    assert second.warning == "ambiguous_record_identity"
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3675 PR2: entity-less admission (a deployment with no linked PR, an
+# incident with no linked repository) falls through to repository-only
+# authorization -- ONLY when explicitly marked, never merely because
+# entity_id happens to be empty.
+# ---------------------------------------------------------------------------
+
+
+class _EntityLessResolver:
+    """Returns a record with no directly-authorizable entity -- the shape a
+    real deployment/incident resolver produces when its linkage column is
+    genuinely absent."""
+
+    source_system = "deployments"
+
+    def __init__(self, *, marked: bool, repository_ids: tuple[str, ...]) -> None:
+        self._marked = marked
+        self._repository_ids = repository_ids
+
+    async def resolve(self, *, org_id, scope, candidate):
+        return EvidenceRecord(
+            source_system="deployments",
+            source_version="native.v1",
+            entity_type="deployment",
+            # A normal, non-empty DESCRIPTIVE identity -- DevEvidenceRef.
+            # entity_id requires at least one character and is never
+            # repurposed as an authorization signal. Whether this record
+            # authorizes via entity or via repository-only is governed
+            # SOLELY by ``no_authorizable_entity`` below, not by this
+            # value.
+            entity_id="repo-a#deployment1",
+            display_label="Deployment with no linked PR",
+            observed_at=NOW,
+            freshness=FreshnessState.FRESH,
+            provenance="native",
+            confidence=1.0,
+            repository_ids=self._repository_ids,
+            no_authorizable_entity=self._marked,
+        )
+
+
+def _entity_less_candidate(*, entity_id: str = "issue-999") -> EvidenceCandidate:
+    return EvidenceCandidate(
+        source_system="deployments",
+        entity_type="deployment",
+        # Deliberately a claim the resolver's own record does not carry --
+        # nothing about entity-less admission should ever consult it.
+        entity_id=entity_id,
+        locator="repo-a#deployment1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_entity_less_record_with_repository_access_is_admitted() -> None:
+    """RED-first: before this fix, admit() hardcoded
+    ``valid_entity_ids=(record.entity_id,)`` -- an entity-less record
+    produced ``("",)``, which the entity containment check always fails
+    (the empty string is never a real authorized entity), wrongly refusing
+    evidence the caller's repository access should admit.
+    """
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=True, repository_ids=("repo-a",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),  # repo-a, granted
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.state is EvidenceAvailability.AVAILABLE
+    assert only.evidence is not None
+    assert only.evidence.valid_entity_ids == []
+
+
+@pytest.mark.asyncio
+async def test_without_the_explicit_marker_the_entity_check_runs_as_before() -> None:
+    """Condition (i): the empty-``valid_entity_ids`` path requires the
+    EXPLICIT ``no_authorizable_entity`` marker -- gating on the flag alone,
+    never inferred from ``entity_id``'s value. With the marker ``False``,
+    the SAME record's descriptive (but non-authorizable) ``entity_id``
+    goes through the ordinary entity containment check exactly as before
+    this fix, and is refused because the caller's grant does not contain
+    it -- proving the fallback is opt-in per record, not automatic
+    whenever a resolver returns something that isn't a "real" entity."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=False, repository_ids=("repo-a",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.evidence is None
+    assert only.state is EvidenceAvailability.UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_entity_less_record_without_repository_access_is_refused() -> None:
+    """Condition (iii), positive case: the repository-only fallback is a
+    REAL check, not a rubber stamp -- an entity-less record naming a repo
+    the caller cannot see is refused. The mutation-kill proof that this
+    test actually discriminates is
+    ``test_the_repository_only_check_is_observed_failing_when_short_circuited``
+    below."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=True, repository_ids=("repo-unauthorized",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),  # repo-a granted; the record names a DIFFERENT repo
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.evidence is None
+    assert only.state is EvidenceAvailability.UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_the_repository_only_check_is_observed_failing_when_short_circuited() -> (
+    None
+):
+    """Condition (iii), the mutation-kill proof itself: a signer/service
+    combination that SKIPS the repository check entirely -- simulating the
+    defect class the check exists to catch -- wrongly admits the
+    unauthorized-repo record the previous test correctly refuses. Observed
+    failing here (against the shim), never assumed passing against the
+    real code."""
+
+    class _RepositoryCheckSkippingService(EvidenceService):
+        async def _authorize_expansion(
+            self, org_id, permission_fingerprint, scope_request, resolution, evidence
+        ):
+            # Short-circuits exactly the check CHAOS-3675 PR2 condition
+            # (iii) requires: no repository re-resolution, no containment
+            # comparison, always "available".
+            return EvidenceAvailability.AVAILABLE, None
+
+    service = _RepositoryCheckSkippingService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[
+            _EntityLessResolver(marked=True, repository_ids=("repo-unauthorized",))
+        ],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    # This is the FAILURE the shim demonstrates -- an unauthorized-repo
+    # record wrongly admitted -- proving
+    # ``test_entity_less_record_without_repository_access_is_refused``
+    # exercises a real check against the unmodified service.
+    assert only.evidence is not None
+    assert only.state is EvidenceAvailability.AVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_a_record_with_no_authorization_anchor_at_all_is_refused() -> None:
+    """A record marked ``no_authorizable_entity`` with EMPTY
+    ``repository_ids`` has no authorization anchor whatsoever:
+    ``_authorize_expansion``'s entity check and its repository check are
+    BOTH truthy-gated, so neither would run -- an unconditional admission
+    to any caller with a generally-valid resolution, not merely a
+    convenience. ``admit`` must refuse this combination outright rather
+    than trust every current and future resolver never to produce it."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_EntityLessResolver(marked=True, repository_ids=())],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    assert only.evidence is None
+    assert only.state is EvidenceAvailability.UNAUTHORIZED
+    assert only.warning == "no_authorization_anchor"
+
+
+@pytest.mark.asyncio
+async def test_the_no_anchor_guard_is_observed_failing_when_removed() -> None:
+    """Mutation-kill for the guard above: a service whose ``admit`` skips
+    straight to minting without the anchor check -- simulating the defect
+    the guard exists to catch -- wrongly admits the anchor-less record the
+    previous test correctly refuses."""
+
+    class _AnchorGuardSkippingService(EvidenceService):
+        async def admit(
+            self, *, org_id, permission_fingerprint, scope_request, candidates
+        ):
+            # Re-implements just enough of ``admit`` to demonstrate the
+            # ungated path, deliberately WITHOUT the no-anchor refusal --
+            # the same shape the real ``admit`` had before this guard was
+            # added.
+            admissions = []
+            for candidate in candidates:
+                resolver = self._resolvers.get(candidate.source_system)
+                assert resolver is not None
+                resolution = await self._authorizer.resolve(
+                    org_id, permission_fingerprint, scope_request
+                )
+                record = await resolver.resolve(
+                    org_id=org_id, scope=resolution, candidate=candidate
+                )
+                assert record is not None
+                valid_entity_ids = (
+                    () if record.no_authorizable_entity else (record.entity_id,)
+                )
+                ref = self._to_ref(org_id, record, valid_entity_ids=valid_entity_ids)
+                state, warning = await self._authorize_expansion(
+                    org_id, permission_fingerprint, scope_request, resolution, ref
+                )
+                admissions.append(
+                    EvidenceAdmission(
+                        candidate=candidate,
+                        state=state,
+                        evidence=ref
+                        if state is EvidenceAvailability.AVAILABLE
+                        else None,
+                        warning=warning,
+                    )
+                )
+            return EvidenceAdmissionResult(tuple(admissions))
+
+    service = _AnchorGuardSkippingService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_EntityLessResolver(marked=True, repository_ids=())],
+    )
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(),
+        candidates=[_entity_less_candidate()],
+    )
+    (only,) = result.admissions
+    # This is the FAILURE the shim demonstrates: an anchor-less record,
+    # admitted unconditionally, because BOTH of _authorize_expansion's
+    # checks are truthy-gated and this shim never sees an empty-anchor
+    # record for what it is.
+    assert only.evidence is not None
+    assert only.state is EvidenceAvailability.AVAILABLE
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3650 admission-side: ``EvidenceAdmission.refused`` is the single
+# classification a consumer degrading an answer around a canonically
+# refused candidate should read -- distinct from an unconfigured source and
+# a transient outage, never re-derived by hand-checking ``state`` against a
+# set the caller reconstructs itself.
+# ---------------------------------------------------------------------------
+
+
+def _admission(state: EvidenceAvailability) -> EvidenceAdmission:
+    candidate = EvidenceCandidate(
+        source_system="reviews",
+        entity_type="review",
+        entity_id="issue-1",
+        locator="repo-a#pr1#review1",
+    )
+    return EvidenceAdmission(candidate=candidate, state=state)
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_refused"),
+    [
+        (EvidenceAvailability.UNAUTHORIZED, True),
+        (EvidenceAvailability.NO_MATCHES, True),
+        (EvidenceAvailability.UNCONFIGURED, False),
+        (EvidenceAvailability.UNAVAILABLE, False),
+        (EvidenceAvailability.AVAILABLE, False),
+        (EvidenceAvailability.REDACTED, False),
+        (EvidenceAvailability.STALE, False),
+    ],
+)
+def test_refused_is_true_only_for_a_considered_canonical_no(
+    state: EvidenceAvailability, expected_refused: bool
+) -> None:
+    """UNAUTHORIZED and NO_MATCHES are both the canonical service having
+    LOOKED at this exact candidate and declined it -- a source-backed "no".
+    UNCONFIGURED (no resolver wired for this source_system at all -- an
+    operational coverage gap, not a canonical judgment about the record)
+    and UNAVAILABLE (a transient resolver failure -- retry-worthy, never a
+    considered refusal) must NOT be conflated with that, exactly the
+    distinction CHAOS-3650's admission-side half exists to make explicit
+    for a future consumer degrading an answer around a refusal."""
+
+    assert _admission(state).refused is expected_refused
+
+
+def test_refused_and_admitted_are_always_mutually_exclusive() -> None:
+    for state in EvidenceAvailability:
+        admission = _admission(state)
+        assert not (admission.refused and admission.admitted), (
+            f"{state} must never be both refused and admitted"
+        )
+
+
+class _MixedOutcomeResolver:
+    """One resolver, three candidates, three genuinely different
+    admission outcomes -- proves ``admit()`` never collapses distinct
+    per-record reasons into a shared one, and that a single canonically
+    refused candidate never aborts its unrelated siblings (the same
+    property CHAOS-3650's packet-level fix proves at the packet layer,
+    proven here at the admission layer that feeds it)."""
+
+    source_system = "mixed"
+
+    async def resolve(self, *, org_id, scope, candidate):
+        if candidate.locator == "no-such-record":
+            # NO_MATCHES: the canonical service looked and this exact
+            # locator does not correspond to a real record.
+            return None
+        if candidate.locator == "wrong-entity":
+            # UNAUTHORIZED: a real record, genuinely about an entity the
+            # caller's grant does not contain.
+            return EvidenceRecord(
+                source_system="mixed",
+                source_version="test.v1",
+                entity_type="review",
+                entity_id="issue-999-not-granted",
+                display_label="A record about an entity outside the grant",
+                observed_at=NOW,
+                freshness=FreshnessState.FRESH,
+                provenance="native",
+                confidence=1.0,
+                repository_ids=("repo-a",),
+            )
+        return EvidenceRecord(
+            source_system="mixed",
+            source_version="test.v1",
+            entity_type="review",
+            entity_id="issue-1",
+            display_label="A genuinely admissible record",
+            observed_at=NOW,
+            freshness=FreshnessState.FRESH,
+            provenance="native",
+            confidence=1.0,
+            repository_ids=("repo-a",),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_canonical_refusal_never_erases_unrelated_admitted_evidence_in_the_same_round() -> (
+    None
+):
+    """CHAOS-3650 acceptance criterion, proven at the admission layer: "A
+    single refused record cannot erase unrelated valid drivers or the
+    whole answer." Three candidates submitted together -- one admits, one
+    is NO_MATCHES, one is UNAUTHORIZED -- and every sibling resolves
+    exactly as it would alone; the batch never aborts and never conflates
+    the two distinct refusal reasons with each other or with the
+    admitted one."""
+
+    service = EvidenceService(
+        entitlement=Entitlement(),
+        authorizer=Authorizer(),
+        signer=EvidenceReferenceSigner(SECRET),
+        native_adapters=[],
+        candidate_resolvers=[_MixedOutcomeResolver()],
+    )
+    candidates = [
+        EvidenceCandidate(
+            source_system="mixed",
+            entity_type="review",
+            entity_id="issue-1",
+            locator="genuinely-admissible",
+        ),
+        EvidenceCandidate(
+            source_system="mixed",
+            entity_type="review",
+            entity_id="issue-1",
+            locator="no-such-record",
+        ),
+        EvidenceCandidate(
+            source_system="mixed",
+            entity_type="review",
+            entity_id="issue-1",
+            locator="wrong-entity",
+        ),
+    ]
+    result = await service.admit(
+        org_id="org-a",
+        permission_fingerprint="allowed",
+        scope_request=_request(EntityKind.ISSUE, "issue-1"),
+        candidates=candidates,
+    )
+    admitted, no_matches, unauthorized = result.admissions
+
+    assert admitted.state is EvidenceAvailability.AVAILABLE
+    assert admitted.admitted is True
+    assert admitted.refused is False
+
+    assert no_matches.state is EvidenceAvailability.NO_MATCHES
+    assert no_matches.admitted is False
+    assert no_matches.refused is True
+
+    assert unauthorized.state is EvidenceAvailability.UNAUTHORIZED
+    assert unauthorized.admitted is False
+    assert unauthorized.refused is True
+
+    # The two refusals are for genuinely different reasons -- a consumer
+    # reading only ``.refused`` cannot tell them apart, which is correct
+    # (both are "disclose narrowly, do not retry"), but the underlying
+    # ``state`` must still be preserved distinctly for anything that DOES
+    # want the finer-grained reason (e.g. telemetry).
+    assert no_matches.state != unauthorized.state

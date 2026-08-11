@@ -98,9 +98,19 @@ ops_root="$(cd -- "${script_dir}/../.." && pwd)"
 compose_file="${ops_root}/compose.yml"
 acceptance_compose_file="${ops_root}/tests/acceptance/compose.ask-dev.yml"
 acceptance_acr_compose_file="${ops_root}/tests/acceptance/compose.ask-dev-acr.yml"
-project_name="dev-health-ask-dev-acceptance"
+# A fresh local acceptance stack gets its own Compose namespace. CI and
+# coordinated callers can still provide ASK_DEV_ACCEPTANCE_PROJECT_NAME so
+# later teardown/verification processes address the same stack.
+if [[ -z "${ASK_DEV_ACCEPTANCE_PROJECT_NAME:-}" ]]; then
+  project_name="dev-health-ask-dev-acceptance-${RANDOM}${RANDOM}"
+else
+  project_name="${ASK_DEV_ACCEPTANCE_PROJECT_NAME}"
+fi
+export ASK_DEV_ACCEPTANCE_PROJECT_NAME="${project_name}"
 fixture_org_id="0a155cab-8833-42ac-a4ef-0d121725a7b0"
 oracle_file="${ops_root}/tests/acceptance/ask-dev-oracle.v1.json"
+graph_oracle_file="${ops_root}/tests/acceptance/ask-dev-graph-oracle.v1.json"
+world_manifest="${ops_root}/tests/acceptance/world/ask-dev-world.v1/world.json"
 # CHAOS-3219 D3: ACR (Agent Context Runtime) evidence-adapter services are
 # OFF by default -- arm with ASK_DEV_ACCEPTANCE_ACR=1. See
 # tests/acceptance/compose.ask-dev-acr.yml for the wiring rationale and the
@@ -118,22 +128,65 @@ export ASK_DEV_ACCEPTANCE_ACR="${acr_armed}"
 # repo state -- a fresh runtime artifact per acceptance run, same lifecycle
 # as the containers themselves.
 org_ids_output="${ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT:-/tmp/ask-dev-acceptance-org-ids.json}"
+# A retained stack is consumed by a second process (for example the Wave 4
+# corpus), so the dynamically assigned API port must survive this shell. Keep
+# the path overrideable for CI, and namespace the default by Compose project so
+# two local acceptance projects do not overwrite each other's URL artifact.
+api_url_output="${ASK_DEV_ACCEPTANCE_API_URL_OUTPUT:-/tmp/ask-dev-acceptance-api-url-${project_name}.env}"
 read_oracle_field() {
   "${ops_root}/.venv/bin/python" -c \
     'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
     "${oracle_file}" "$1"
 }
+read_graph_oracle_field() {
+  "${ops_root}/.venv/bin/python" -c \
+    'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
+    "${graph_oracle_file}" "$1"
+}
+read_world_user_field() {
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+    "${ops_root}/.venv/bin/python" -c \
+    'import json, sys; user = next(item for item in json.load(open(sys.argv[1], encoding="utf-8"))["users"] if item["alias"] == sys.argv[2]); print(user[sys.argv[3]])' \
+    "${world_manifest}" "$1" "$2"
+}
+export DEV_HEALTH_BUILD_SHA="$(git -C "${ops_root}" rev-parse HEAD)"
 acceptance_question="$(read_oracle_field question)"
 expected_metric_id="$(read_oracle_field expected_metric_id)"
 expected_evidence_entity_fragment="$(read_oracle_field expected_evidence_entity_fragment)"
 expected_claim_kind="$(read_oracle_field expected_claim_kind)"
 
+# The graph seed writes the primary partition for this exact world principal.
+# Derive the browser credentials and expected org from the committed manifest,
+# rather than reusing the generated fixture admin (which belongs to a
+# different org and can make the graph gate prove an empty partition).
+graph_primary_user_alias="primary.platform-admin"
+graph_primary_user_email="$(read_world_user_field "${graph_primary_user_alias}" email)"
+graph_primary_org_alias="$(read_world_user_field "${graph_primary_user_alias}" org_alias)"
+if [[ "${graph_primary_org_alias}" != "primary" ]]; then
+  echo "${graph_primary_user_alias} must belong to world org primary, got ${graph_primary_org_alias}" >&2
+  exit 70
+fi
+graph_primary_user_password="$({
+  OTEL_ENABLED=false \
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+    "${ops_root}/.venv/bin/python" -c \
+    'from dev_health_ops.fixtures.world import password_for_alias; import sys; print(password_for_alias(sys.argv[1]))' \
+    "${graph_primary_user_alias}"
+})"
+graph_primary_org_id="$({
+  OTEL_ENABLED=false \
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+    "${ops_root}/.venv/bin/python" -c \
+    'from dev_health_ops.fixtures.world import load_world_manifest; import sys; manifest = load_world_manifest(sys.argv[1]); print(manifest.org_id("primary"))' \
+    "${world_manifest}"
+})"
+
 export ASK_DEV_WEB_CONTEXT="${web_root}"
-# 18080 collides with the normal dev-health stack's ACR API, which means a
-# developer with that stack up cannot run acceptance at all. Overridable so
-# both can coexist; the default preserves existing behaviour exactly.
-export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-18080}"
-acceptance_api_url="http://127.0.0.1:${ASK_DEV_ACCEPTANCE_API_PORT}"
+# Let Docker allocate a free loopback port by default. Local development runs
+# multiple Compose projects concurrently, so no fixed host port is safe.
+# Callers may still pin a port for reproducible CI or manual debugging.
+export ASK_DEV_ACCEPTANCE_API_PORT="${ASK_DEV_ACCEPTANCE_API_PORT:-0}"
+export ASK_DEV_ACCEPTANCE_WEB_PORT="${ASK_DEV_ACCEPTANCE_WEB_PORT:-0}"
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-ask-dev-acceptance-unused}"
 
 compose=(
@@ -143,6 +196,7 @@ compose=(
   -f "${compose_file}"
   -f "${acceptance_compose_file}"
   --profile ask-dev-acceptance
+  --profile graph-trial
 )
 # CHAOS-3463: split in two. `world-restore` checks that every table it is
 # about to write is empty and then writes it; a running `worker`/`beat` fleet
@@ -151,7 +205,7 @@ compose=(
 # AFTER the restore -- it is still a required part of the stack, just not while
 # a state-based precondition is being evaluated. Codex adversarial review
 # (HIGH): the original single list started them before the restore.
-boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api)
+boot_services=(postgres pgbouncer clickhouse valkey graph-trial-store migrate ask-dev-scripted-openai api)
 jobs_services=(worker beat)
 log_services=(api ask-dev-scripted-openai worker beat web)
 
@@ -196,6 +250,27 @@ trap report_failure EXIT
 # without touching a normal dev-health-ops Compose project.
 "${compose[@]}" down --volumes --remove-orphans
 "${compose[@]}" up -d --build --wait "${boot_services[@]}"
+acceptance_api_port="$("${compose[@]}" port api 8000 --index 1 | awk -F: '{print $NF}')"
+if [[ ! "${acceptance_api_port}" =~ ^[0-9]+$ ]] || [[ "${acceptance_api_port}" == "0" ]]; then
+  echo "Could not discover the acceptance API host port" >&2
+  exit 70
+fi
+acceptance_api_url="http://127.0.0.1:${acceptance_api_port}"
+export ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}"
+
+# urllib honors both spellings when resolving ambient HTTP(S) proxies. Local
+# acceptance API calls must bypass them: a proxy on this host can route
+# 127.0.0.1 back into itself and consume the whole 20-second request timeout.
+if [[ -n "${NO_PROXY:-}" ]]; then
+  export NO_PROXY="${NO_PROXY},127.0.0.1,localhost"
+else
+  export NO_PROXY="127.0.0.1,localhost"
+fi
+if [[ -n "${no_proxy:-}" ]]; then
+  export no_proxy="${no_proxy},127.0.0.1,localhost"
+else
+  export no_proxy="127.0.0.1,localhost"
+fi
 
 # CHAOS-3572: refuse to proceed unless the api container we just booted is
 # serving THIS checkout. Runs immediately after boot and before anything --
@@ -238,6 +313,15 @@ container_source_guard_check "${ops_root}" "${compose[@]}"
   --sink clickhouse://ch:ch@clickhouse:8123/default \
   --postgres-uri postgresql+asyncpg://postgres:postgres@postgres:5432/postgres \
   --snapshot /app/tests/acceptance/world/ask-dev-world.v1/snapshot
+
+# W3 positive graph path. This is a real projection from the restored
+# world's canonical ClickHouse team metrics into the isolated trial store;
+# it does not inject an answer or an expected graph state. The seed fails
+# unless the source data itself contains a corroborated two-signal pressure
+# candidate, and the browser later proves that production routing consumes it.
+"${compose[@]}" exec -T api python \
+  /app/scripts/acceptance/seed_ask_dev_graph_acceptance.py \
+  --manifest /app/tests/acceptance/world/ask-dev-world.v1/world.json
 
 # CHAOS-3463 / Codex adversarial review round 3 (HIGH, confirmed): prove on
 # EVERY boot -- not only in the one-off mint -- that the world's principals can
@@ -300,6 +384,30 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 ASK_DEV_ACCEPTANCE_ORG_IDS_OUTPUT="${org_ids_output}" \
   "${ops_root}/.venv/bin/python" \
   "${ops_root}/scripts/acceptance/prepare_ask_dev_acceptance.py"
+
+# The graph seed targets the canonical primary world org, while the ordinary
+# acceptance preparation above intentionally provisions a separate generated
+# fixture org and two Wave 4 tenants. Prepare readiness for the same canonical
+# principal before the graph browser gate, and fail if the login resolves to a
+# different org than the seed's partition.
+graph_prepared_org_id="$({
+  PYTHONPATH="${ops_root}/src:${ops_root}" \
+  ASK_DEV_ACCEPTANCE_API_URL="${acceptance_api_url}" \
+  TEST_SUPERUSER_EMAIL="${graph_primary_user_email}" \
+  TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}" \
+    "${ops_root}/.venv/bin/python" -c '
+import os
+from scripts.acceptance.prepare_ask_dev_acceptance import AcceptanceApi, prepare
+
+api = AcceptanceApi(os.environ["ASK_DEV_ACCEPTANCE_API_URL"])
+print(prepare(api, email=os.environ["TEST_SUPERUSER_EMAIL"], password=os.environ["TEST_SUPERUSER_PASSWORD"]))
+'
+})"
+if [[ "${graph_prepared_org_id}" != "${graph_primary_org_id}" ]]; then
+  echo "graph readiness prepared org ${graph_prepared_org_id}, expected seeded org ${graph_primary_org_id}" >&2
+  exit 70
+fi
+echo "ASK_DEV_GRAPH_PRIMARY_READINESS=PASSED org_id=${graph_prepared_org_id}"
 
 # CHAOS-3300: the "Ask Dev" not-found original defect reproduction, proven
 # through the real HTTP/SSE API surface (no Playwright/web needed for this
@@ -381,9 +489,17 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 
 "${compose[@]}" up -d --build --wait web
 
+acceptance_web_port="$("${compose[@]}" port web 3000 --index 1 | awk -F: '{print $NF}')"
+if [[ ! "${acceptance_web_port}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Could not discover the acceptance Web host port" >&2
+  exit 70
+fi
+acceptance_web_url="http://127.0.0.1:${acceptance_web_port}"
+export ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}"
+
 ASK_DEV_LIVE_ACCEPTANCE=1 \
 ASK_DEV_COMPOSE_WEB_READY=1 \
-ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}" \
 ASK_DEV_ACCEPTANCE_QUESTION="${acceptance_question}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_METRIC_ID="${expected_metric_id}" \
 ASK_DEV_ACCEPTANCE_EXPECTED_EVIDENCE_FRAGMENT="${expected_evidence_entity_fragment}" \
@@ -463,7 +579,7 @@ echo "WAVE4_ACCESS_MATRIX=RUNNING web_root=${web_root}"
 ASK_DEV_LIVE_ACCEPTANCE=1 \
 ASK_DEV_COMPOSE_WEB_READY=1 \
 ASK_DEV_WAVE4_ACCESS_MATRIX=1 \
-ASK_DEV_ACCEPTANCE_WEB_URL=http://127.0.0.1:3002 \
+ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}" \
 ASK_DEV_ACCEPTANCE_ORG_IDS="${org_ids_output}" \
 ASK_DEV_ACCEPTANCE_ACR="${acr_armed}" \
 PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
@@ -471,6 +587,32 @@ TEST_SUPERUSER_EMAIL=admin@devhealth.example \
 TEST_SUPERUSER_PASSWORD=devhealth123 \
   "${web_root}/node_modules/.bin/playwright" test \
   -c "${wave4_config}"
+
+if [[ ! -f "${graph_oracle_file}" ]]; then
+  echo "W3_GRAPH_ACCEPTANCE=FAILED reason=oracle-absent path=${graph_oracle_file}" >&2
+  exit 1
+fi
+graph_question="$(read_graph_oracle_field graph_question)"
+graph_fallback_question="$(read_graph_oracle_field fallback_question)"
+graph_ambiguous_question="$(read_graph_oracle_field ambiguous_question)"
+graph_expected_state="$(read_graph_oracle_field expected_graph_state)"
+graph_expected_fallback_state="$(read_graph_oracle_field expected_fallback_state)"
+echo "W3_GRAPH_ACCEPTANCE=RUNNING backend_sha=${DEV_HEALTH_BUILD_SHA}"
+ASK_DEV_GRAPH_LIVE_ACCEPTANCE=1 \
+ASK_DEV_COMPOSE_WEB_READY=1 \
+ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_ARM=1 \
+ASK_DEV_ACCEPTANCE_WEB_URL="${acceptance_web_url}" \
+ASK_DEV_GRAPH_ACCEPTANCE_QUESTION="${graph_question}" \
+ASK_DEV_GRAPH_ACCEPTANCE_FALLBACK_QUESTION="${graph_fallback_question}" \
+ASK_DEV_GRAPH_ACCEPTANCE_AMBIGUOUS_QUESTION="${graph_ambiguous_question}" \
+ASK_DEV_GRAPH_ACCEPTANCE_EXPECTED_GRAPH_STATE="${graph_expected_state}" \
+ASK_DEV_GRAPH_ACCEPTANCE_EXPECTED_FALLBACK_STATE="${graph_expected_fallback_state}" \
+ASK_DEV_GRAPH_ACCEPTANCE_BACKEND_SHA="${DEV_HEALTH_BUILD_SHA}" \
+PLAYWRIGHT_LIVE_BACKEND_URL="${acceptance_api_url}" \
+TEST_SUPERUSER_EMAIL="${graph_primary_user_email}" \
+TEST_SUPERUSER_PASSWORD="${graph_primary_user_password}" \
+  "${web_root}/node_modules/.bin/playwright" test \
+  -c "${web_root}/playwright.ask-dev-graph-acceptance.config.ts"
 
 # CHAOS-3219 Phase 5 (CI lane): keep the stack up for a caller that has more
 # to run against it -- specifically scripts/acceptance/run_wave4_corpus.sh,
@@ -488,8 +630,18 @@ TEST_SUPERUSER_PASSWORD=devhealth123 \
 # ask-dev-acceptance.yml does it in an `if: always()` step, so a cancelled or
 # failed job still releases the runner's disk.
 if [[ "${ASK_DEV_ACCEPTANCE_KEEP_STACK:-0}" == "1" ]]; then
+  mkdir -p "$(dirname -- "${api_url_output}")"
+  printf 'export ASK_DEV_ACCEPTANCE_PROJECT_NAME=%q\n' "${project_name}" > "${api_url_output}"
+  printf 'export ASK_DEV_ACCEPTANCE_API_URL=%q\n' "${acceptance_api_url}" >> "${api_url_output}"
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'ASK_DEV_ACCEPTANCE_PROJECT_NAME=%s\n' "${project_name}" >> "${GITHUB_ENV}"
+    printf 'ASK_DEV_ACCEPTANCE_API_URL=%s\n' "${acceptance_api_url}" >> "${GITHUB_ENV}"
+  fi
   trap - EXIT
   echo "Ask Dev Compose acceptance completed successfully; stack retained (ASK_DEV_ACCEPTANCE_KEEP_STACK=1)."
+  echo "ASK_DEV_ACCEPTANCE_API_URL=${acceptance_api_url}"
+  echo "ASK_DEV_ACCEPTANCE_API_URL_FILE=${api_url_output}"
+  echo "Source it before an external corpus invocation: source ${api_url_output}"
   # Deliberately NOT spelled with the same literal as the real teardown command
   # below. Adversarial review 2026-08-06 (HIGH): the first version of this hint
   # printed `down --volumes --remove-orphans` verbatim, which put a SECOND

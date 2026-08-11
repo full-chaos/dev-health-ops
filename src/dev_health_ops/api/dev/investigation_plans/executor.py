@@ -53,7 +53,11 @@ from .steps import (
     StepRegistry,
 )
 
-__all__ = ["PlanExecutionError", "PlanExecutor"]
+__all__ = [
+    "PlanExecutionError",
+    "PlanExecutor",
+    "investigation_result_run_handle",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,13 @@ class _CandidateIdentity:
     entity_type: str
     entity_id: str
     repository_ids: Sequence[str]
+    #: CHAOS-3633. ``None`` for every fact this executor derives -- none of
+    #: EVIDENCE_IDENTITY_TABLE's categories carry a source-record locator
+    #: distinct from ``entity_id`` -- which is also the correct default for
+    #: a handle minted before this field existed
+    #: (``EvidenceReferenceSigner._payload`` binds it only when set). See
+    #: ``evidence_service.IdentityPayload`` for the full property.
+    record_locator: str | None = None
 
 
 #: Codex finding (HIGH, 2026-08-02, round 2): raising the persistence
@@ -217,6 +228,25 @@ _MINT_NAMESPACE = uuid.UUID("f91838e6-6d11-5c43-8fb6-10d72f647684")
 
 def _mint(*parts: str) -> str:
     return str(uuid.uuid5(_MINT_NAMESPACE, ":".join(parts)))
+
+
+def investigation_result_run_handle(run_id: str) -> str:
+    """The ``DevInvestigationResult.run_id`` a run with this key produces.
+
+    ``DevInvestigationResult.run_id`` is a ``ServerHandle`` and therefore a
+    minted UUID, NOT the orchestrator's own ``run_id`` string (which is a
+    correlation key with no wire grammar). Anything comparing the two must
+    fold one through this function first, and must call THIS function
+    rather than re-deriving the mint: a second copy of the namespace would
+    agree until one of them changed.
+
+    Added by CHAOS-3618 PR 2, which found ``NativeProjectionInput``'s
+    finished-run coherence check comparing the two spaces directly. That
+    check could only ever hold for hand-built fixtures; against a real run
+    it raised on every projection.
+    """
+
+    return _mint("run", run_id)
 
 
 class PlanExecutionError(RuntimeError):
@@ -741,7 +771,7 @@ class PlanExecutor:
             # every other id here. The DB-level correlation to the real run
             # is ``PersistenceRunRecorder``'s constructor-bound run UUID,
             # never this field.
-            run_id=_mint("run", run_id),
+            run_id=investigation_result_run_handle(run_id),
             subject_set_fingerprint=subject_set_fingerprint,
             subject_entity_id=subject_entity_id,
             observations=observations,

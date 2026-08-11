@@ -31,6 +31,7 @@ from urllib.request import Request, urlopen
 _REQUIRED_FEATURES = (
     "ask_dev",
     "ask_dev_contextual_entrypoints",
+    "ask_dev_graph_routing",
 )
 _DEFAULT_EXPECTED_MODEL = "ask-dev-scripted-v1"
 _SECOND_ORG_NAME = "Ask Dev Acceptance Second Org"
@@ -211,6 +212,7 @@ def prepare(
     _require(isinstance(capabilities, dict), "capabilities response was not an object")
     expected_capabilities = {
         "ask_dev": True,
+        "ask_dev_graph_routing": True,
         "agent_context_runtime": False,
         "can_read": True,
         "can_manage": True,
@@ -310,7 +312,9 @@ def provision_multi_org(
         "second-org capabilities response was not an object",
     )
     _require(
-        second_caps.get("ask_dev") is True and second_caps.get("readiness") == "ready",
+        second_caps.get("ask_dev") is True
+        and second_caps.get("ask_dev_graph_routing") is True
+        and second_caps.get("readiness") == "ready",
         f"second org {second_org_id} did not become ask_dev-ready: {second_caps!r}",
     )
 
@@ -329,6 +333,11 @@ def provision_multi_org(
         disabled_caps.get("ask_dev") is False,
         "disabled-entitlement org "
         f"{disabled_org_id} unexpectedly reports ask_dev capability: {disabled_caps!r}",
+    )
+    _require(
+        disabled_caps.get("ask_dev_graph_routing") is False,
+        "disabled-entitlement org "
+        f"{disabled_org_id} unexpectedly reports graph capability: {disabled_caps!r}",
     )
 
     return second_org_id, disabled_org_id

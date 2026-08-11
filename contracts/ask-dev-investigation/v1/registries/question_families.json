@@ -1,0 +1,739 @@
+{
+  "families": [
+    {
+      "analytical_job_statement": "Identify which teams are currently under strain and explain why, from cross-source evidence rather than a single health chart. The subject set is discovered, not supplied: the question names no team, so an arm that requires a committed subject before it will investigate cannot answer this family at all.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "What teams are currently struggling, and why?",
+          "variant_id": "struggling_teams.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "Which teams need attention right now?",
+          "variant_id": "struggling_teams.e2"
+        }
+      ],
+      "family_id": "struggling_teams",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "who's having a rough time at the moment?",
+          "variant_id": "struggling_teams.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "any teams we should be worried about?",
+          "variant_id": "struggling_teams.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "where are things not going well?",
+          "variant_id": "struggling_teams.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "discovered_cohort",
+        "portfolio_wide"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "dashboard_redirect_as_answer",
+        "pre_enumerated_intent_required",
+        "unqualified_staffing_certainty",
+        "auto_unsupported_on_missing_denominator"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "comparison_cohort",
+        "related_context",
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "work_item",
+        "review",
+        "cognitive_load",
+        "health_profile",
+        "incident"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "cohort_precision",
+        "cohort_recall",
+        "cohort_inclusion_explainability",
+        "principal_driver_precision",
+        "principal_driver_recall",
+        "symptom_versus_driver_distinction",
+        "answer_usefulness_beyond_dashboard",
+        "cross_source_association"
+      ],
+      "staffing_denominator_policy": "qualify_when_absent",
+      "title": "Struggling teams and teams needing attention"
+    },
+    {
+      "analytical_job_statement": "Locate where pressure is concentrated and of what kind. Five distinct pressure classes, deliberately in one family: an arm that can only see delivery pressure will score well on a delivery-only family and badly here, which is the point.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "Which teams need attention because of delivery, operational, review, dependency, or investment pressure?",
+          "variant_id": "pressure_signals.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "Where is delivery pressure highest right now?",
+          "variant_id": "pressure_signals.e2"
+        }
+      ],
+      "family_id": "pressure_signals",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "what's under the most pressure?",
+          "variant_id": "pressure_signals.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "where are we bottlenecked?",
+          "variant_id": "pressure_signals.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "who's drowning in reviews?",
+          "variant_id": "pressure_signals.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "discovered_cohort",
+        "portfolio_wide",
+        "explicit_cohort"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "dashboard_redirect_as_answer",
+        "unqualified_staffing_certainty",
+        "auto_unsupported_on_missing_denominator"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "comparison_cohort",
+        "related_context",
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "work_item",
+        "pull_request",
+        "review",
+        "incident",
+        "investment_allocation",
+        "deficiency_inventory"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "cohort_precision",
+        "cohort_recall",
+        "relevant_relationship_recall",
+        "principal_driver_precision",
+        "symptom_versus_driver_distinction",
+        "comparative_judgment_support",
+        "cross_source_association"
+      ],
+      "staffing_denominator_policy": "qualify_when_absent",
+      "title": "Delivery, operational, review, dependency and investment pressure"
+    },
+    {
+      "analytical_job_statement": "Judge which projects look capacity-constrained and which look unusually lightly loaded relative to demand. Both directions are in scope: an arm that only ever reports overload is not measuring capacity, it is measuring activity.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "Which projects appear capacity-constrained, understaffed, overstaffed, or unusually lightly loaded relative to demand?",
+          "variant_id": "project_capacity.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "Which projects are capacity-constrained right now?",
+          "variant_id": "project_capacity.e2"
+        }
+      ],
+      "family_id": "project_capacity",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "what are we under-resourcing?",
+          "variant_id": "project_capacity.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "anything that looks over-provisioned?",
+          "variant_id": "project_capacity.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "where do we have slack?",
+          "variant_id": "project_capacity.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "discovered_cohort",
+        "portfolio_wide",
+        "explicit_cohort"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "unqualified_staffing_certainty",
+        "auto_unsupported_on_missing_denominator",
+        "dashboard_redirect_as_answer"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "comparison_cohort",
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "work_item",
+        "investment_allocation",
+        "cognitive_load",
+        "work_graph"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "cohort_precision",
+        "cohort_recall",
+        "comparative_judgment_support",
+        "zero_unsupported_staffing_certainty",
+        "unsupported_attribution_rate",
+        "answer_usefulness_beyond_dashboard"
+      ],
+      "staffing_denominator_policy": "qualify_when_absent",
+      "title": "Project capacity constraints and lightly loaded projects"
+    },
+    {
+      "analytical_job_statement": "Answer questions phrased in staffing language without inventing a staffing denominator the platform does not have. The correct behaviour when allocation data is absent is a qualified answer that says what it is inferring from -- not silence, and not certainty.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "Which projects are understaffed?",
+          "variant_id": "staffing_language.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "Is this project overstaffed for what it is being asked to deliver?",
+          "variant_id": "staffing_language.e2"
+        }
+      ],
+      "family_id": "staffing_language",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "do we have enough people on this?",
+          "variant_id": "staffing_language.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "are we spreading ourselves too thin here?",
+          "variant_id": "staffing_language.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "is anyone sitting idle on that project?",
+          "variant_id": "staffing_language.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "singular_subject",
+        "explicit_cohort",
+        "discovered_cohort"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "unqualified_staffing_certainty",
+        "auto_unsupported_on_missing_denominator"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "investment_allocation",
+        "work_item",
+        "cognitive_load"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "zero_unsupported_staffing_certainty",
+        "unsupported_attribution_rate",
+        "subject_top_1",
+        "answer_usefulness_beyond_dashboard"
+      ],
+      "staffing_denominator_policy": "qualify_when_absent",
+      "title": "Understaffed and overstaffed language with qualified evidence"
+    },
+    {
+      "analytical_job_statement": "State where a named project actually stands and what is principally driving that, distinguishing drivers from symptoms and current causes from historical ones.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "What is the actual status of Project XYZ, and what are the principal current drivers?",
+          "variant_id": "project_status_drivers.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "Why is ACR still not finished?",
+          "variant_id": "project_status_drivers.e2"
+        }
+      ],
+      "family_id": "project_status_drivers",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "what's the deal with the auth work?",
+          "variant_id": "project_status_drivers.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "where did that project get to?",
+          "variant_id": "project_status_drivers.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "what's holding it up?",
+          "variant_id": "project_status_drivers.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "singular_subject"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "dashboard_redirect_as_answer",
+        "unqualified_staffing_certainty",
+        "auto_unsupported_on_missing_denominator"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "related_context",
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "status_change",
+        "work_item",
+        "pull_request",
+        "review",
+        "deployment"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "subject_top_1",
+        "subject_top_3",
+        "principal_driver_precision",
+        "principal_driver_recall",
+        "symptom_versus_driver_distinction",
+        "lineage_path_precision",
+        "lineage_direction_correctness",
+        "current_relevance",
+        "answer_usefulness_beyond_dashboard"
+      ],
+      "staffing_denominator_policy": "qualify_when_absent",
+      "title": "Project status and principal current drivers"
+    },
+    {
+      "analytical_job_statement": "Find projects exposed through a dependency they share with something already in trouble. This family is the clearest test of whether relationship traversal adds anything: the answer is not visible in any single project's own metrics.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "Which projects are at risk because of shared dependencies?",
+          "variant_id": "portfolio_dependency_risk.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "What else is exposed if this dependency slips?",
+          "variant_id": "portfolio_dependency_risk.e2"
+        }
+      ],
+      "family_id": "portfolio_dependency_risk",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "what else does that break?",
+          "variant_id": "portfolio_dependency_risk.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "who else is on the hook for this?",
+          "variant_id": "portfolio_dependency_risk.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "if that library is stuck, what else is stuck?",
+          "variant_id": "portfolio_dependency_risk.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "discovered_cohort",
+        "portfolio_wide"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "dashboard_redirect_as_answer"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "comparison_cohort",
+        "related_context",
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "work_graph",
+        "work_item",
+        "deployment",
+        "incident"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "relevant_entity_recall",
+        "relevant_relationship_recall",
+        "lineage_path_precision",
+        "lineage_direction_correctness",
+        "cohort_precision",
+        "cohort_recall",
+        "cross_source_association"
+      ],
+      "staffing_denominator_policy": "not_applicable",
+      "title": "Portfolio and shared-dependency risk"
+    },
+    {
+      "analytical_job_statement": "Find work declared complete that lacks the delivery, release, documentation or operational evidence completion would imply. Requires both halves -- the declaration and the evidence -- from different source classes, by construction.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "Which declared-complete projects lack delivery, release, documentation, or operational evidence?",
+          "variant_id": "declared_versus_actual.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "Is this actually done?",
+          "variant_id": "declared_versus_actual.e2"
+        }
+      ],
+      "family_id": "declared_versus_actual",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "is that really finished?",
+          "variant_id": "declared_versus_actual.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "did that ever actually ship?",
+          "variant_id": "declared_versus_actual.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "anything marked done that isn't?",
+          "variant_id": "declared_versus_actual.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "singular_subject",
+        "discovered_cohort",
+        "portfolio_wide"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "dashboard_redirect_as_answer"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "related_context",
+        "driver_analysis",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "status_change",
+        "pull_request",
+        "deployment",
+        "ci_run",
+        "test_report",
+        "deficiency_inventory"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "cross_source_association",
+        "principal_driver_precision",
+        "unsupported_attribution_rate",
+        "current_relevance",
+        "answer_usefulness_beyond_dashboard"
+      ],
+      "staffing_denominator_policy": "not_applicable",
+      "title": "Declared status versus actual delivery and readiness evidence"
+    },
+    {
+      "analytical_job_statement": "Resolve a reference that is not the canonical name -- an acronym, an old name, a provider key, a nickname -- to the right canonical subject, or say honestly that it is ambiguous. The failure to score hardest is confident resolution to the wrong similarly-named thing.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "What about the auth work?",
+          "variant_id": "ambiguous_identity.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "How is ACR doing?",
+          "variant_id": "ambiguous_identity.e2"
+        }
+      ],
+      "family_id": "ambiguous_identity",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "how's the thing we used to call Northstar going?",
+          "variant_id": "ambiguous_identity.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "status on DHO?",
+          "variant_id": "ambiguous_identity.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "what happened to the payments rewrite?",
+          "variant_id": "ambiguous_identity.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "singular_subject",
+        "explicit_cohort"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "pre_enumerated_intent_required"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "work_graph",
+        "work_item",
+        "status_change"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "subject_top_1",
+        "subject_top_3",
+        "alias_acronym_rename_resolution",
+        "clarification_candidate_precision",
+        "no_unsafe_organization_widening"
+      ],
+      "staffing_denominator_policy": "not_applicable",
+      "title": "Ambiguous aliases, acronyms and renamed entities"
+    },
+    {
+      "analytical_job_statement": "Resolve a reference that only makes sense against the conversation or the surface the user is on. 'What about the other project we discussed?' has no answer without context and must not be answered by guessing.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "What about the other project we discussed?",
+          "variant_id": "colloquial_follow_up.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "What happened with the project that kept cycling in review?",
+          "variant_id": "colloquial_follow_up.e2"
+        }
+      ],
+      "family_id": "colloquial_follow_up",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "and the other one?",
+          "variant_id": "colloquial_follow_up.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "what about that thing from earlier?",
+          "variant_id": "colloquial_follow_up.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "same question for the second team",
+          "variant_id": "colloquial_follow_up.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "singular_subject",
+        "explicit_cohort"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "pre_enumerated_intent_required"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "work_graph",
+        "review",
+        "work_item"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "conversational_reference_resolution",
+        "subject_top_1",
+        "clarification_candidate_precision",
+        "no_unsafe_organization_widening"
+      ],
+      "staffing_denominator_policy": "not_applicable",
+      "title": "Colloquial references and conversational follow-ups"
+    },
+    {
+      "analytical_job_statement": "Behave well when the question cannot be answered as asked: ask a useful clarifying question with a short, plausible candidate list, or say there is no match. Never widen to the whole organization, and never manufacture a subject.",
+      "exact_variants": [
+        {
+          "kind": "exact",
+          "text": "What is going sideways?",
+          "variant_id": "clarification_and_no_match.e1"
+        },
+        {
+          "kind": "exact",
+          "text": "How is Atlas doing?",
+          "variant_id": "clarification_and_no_match.e2"
+        }
+      ],
+      "family_id": "clarification_and_no_match",
+      "natural_variants": [
+        {
+          "kind": "natural",
+          "text": "what about that other team, the new one?",
+          "variant_id": "clarification_and_no_match.n1"
+        },
+        {
+          "kind": "natural",
+          "text": "how's the project going",
+          "variant_id": "clarification_and_no_match.n2"
+        },
+        {
+          "kind": "natural",
+          "text": "give me the update",
+          "variant_id": "clarification_and_no_match.n3"
+        }
+      ],
+      "permitted_comparison_shapes": [
+        "singular_subject",
+        "discovered_cohort",
+        "organization_wide"
+      ],
+      "prohibited_reductions": [
+        "single_dashboard_metric",
+        "single_exact_prompt",
+        "person_level_ranking",
+        "pre_enumerated_intent_required"
+      ],
+      "required_packet_sections": [
+        "analytical_job",
+        "subject_discovery",
+        "evidence_coverage"
+      ],
+      "required_source_classes": [
+        "work_graph",
+        "source_health"
+      ],
+      "schema_version": "ask_dev_question_family.v1",
+      "scoring_dimension_ids": [
+        "evidence_closure",
+        "useful_uncertainty_behaviour",
+        "zero_unauthorized_results",
+        "zero_person_level_ranking",
+        "zero_graph_native_surface_leakage",
+        "clarification_candidate_precision",
+        "no_unsafe_organization_widening",
+        "subject_top_3"
+      ],
+      "staffing_denominator_policy": "not_applicable",
+      "title": "Clarification and safe no-match behaviour"
+    }
+  ],
+  "mandatory_prohibited_reductions": [
+    "single_dashboard_metric",
+    "single_exact_prompt",
+    "person_level_ranking"
+  ],
+  "schema_version": "ask_dev_question_family_registry.v1"
+}

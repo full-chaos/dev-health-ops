@@ -1307,7 +1307,20 @@ def negative_fixtures() -> dict[str, list[tuple[str, dict[str, Any]]]]:
                     "dev_question_intent.v1",
                     lambda value: value.__setitem__("requires_clarification", True),
                 ),
-            )
+            ),
+            (
+                # CHAOS-3652: DISCOVERED_COHORT requires organization-wide
+                # cardinality (zero named mentions) -- the base fixture is
+                # singular/one-mention, so setting only intent_id already
+                # violates the invariant without needing to touch cardinality
+                # too, which keeps the mutation minimal and attributable to
+                # one clause.
+                "discovered_cohort_requires_organization_wide_cardinality",
+                changed(
+                    "dev_question_intent.v1",
+                    lambda value: value.__setitem__("intent_id", "discovered_cohort"),
+                ),
+            ),
         ],
         "dev_subject_mention.v1": [
             (

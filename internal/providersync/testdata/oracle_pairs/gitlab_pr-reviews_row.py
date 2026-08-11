@@ -19,8 +19,9 @@ oracle_registry.register(
             pathlib.Path(MODEL_SOURCE).read_text(), "GitPullRequestReview"
         ),
         excluded_fields={
-            "last_synced": "stamped from the Go collection instant, not the Python mapper",
+            "last_synced": (
+                "stamped from the Go collection instant, not the Python mapper"
+            ),
         },
     )
 )
-

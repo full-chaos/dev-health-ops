@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -73,12 +74,68 @@ func TestGitHubDeploymentsRouteMirrorsPythonEnrichmentAndWindow(t *testing.T) {
 
 func TestDeploymentReadbackRejectsEachPersistedFieldMismatch(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
-	expected := deploymentRow{OrgID: "org-1", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", DeploymentID: "101", DeployedAt: deploymentTimePointer(now), ReleaseRef: "v1", ReleaseRefConfidence: 1, LastSynced: now}
-	actual := expected
-	actual.ReleaseRef = "other"
-	if got := compareDeploymentVersion(expected, actual, true); got != EffectConflict {
-		t.Fatalf("inspection=%s", got)
+	now := time.Date(2026, 7, 23, 12, 30, 0, 123000000, time.UTC)
+	base := deploymentComparatorRow(now)
+	tests := []struct {
+		name     string
+		expected func() deploymentRow
+		mutate   func(*deploymentRow)
+		found    bool
+		want     EffectInspection
+	}{
+		{name: "exact", mutate: func(*deploymentRow) {}, found: true, want: EffectExact},
+		{name: "repo id", mutate: func(row *deploymentRow) { row.RepoID = "c7198fbc-1945-3717-05d8-eb78866b4e78" }, found: true, want: EffectConflict},
+		{name: "deployment id", mutate: func(row *deploymentRow) { row.DeploymentID = "102" }, found: true, want: EffectConflict},
+		{name: "org id", mutate: func(row *deploymentRow) { row.OrgID = "org-2" }, found: true, want: EffectConflict},
+		{name: "status", mutate: func(row *deploymentRow) { row.Status = deploymentStringPointer("failed") }, found: true, want: EffectConflict},
+		{name: "environment", mutate: func(row *deploymentRow) { row.Environment = deploymentStringPointer("staging") }, found: true, want: EffectConflict},
+		{name: "started at", mutate: func(row *deploymentRow) { row.StartedAt = deploymentTimePointer(now.Add(-9 * time.Minute)) }, found: true, want: EffectConflict},
+		{name: "finished at", mutate: func(row *deploymentRow) { row.FinishedAt = deploymentTimePointer(now.Add(-4 * time.Minute)) }, found: true, want: EffectConflict},
+		{name: "deployed at", mutate: func(row *deploymentRow) { row.DeployedAt = deploymentTimePointer(now.Add(-3 * time.Minute)) }, found: true, want: EffectConflict},
+		{name: "merged at", mutate: func(row *deploymentRow) { row.MergedAt = deploymentTimePointer(now.Add(-14 * time.Minute)) }, found: true, want: EffectConflict},
+		{name: "pull request number", mutate: func(row *deploymentRow) { row.PullRequestNumber = deploymentIntPointer(43) }, found: true, want: EffectConflict},
+		{name: "pull request number nil", mutate: func(row *deploymentRow) { row.PullRequestNumber = nil }, found: true, want: EffectConflict},
+		{
+			name: "pull request nil versus zero",
+			expected: func() deploymentRow {
+				row := base
+				row.PullRequestNumber = nil
+				return row
+			},
+			mutate: func(row *deploymentRow) { row.PullRequestNumber = deploymentIntPointer(0) },
+			found:  true,
+			want:   EffectConflict,
+		},
+		{
+			name: "pull request zero versus nil",
+			expected: func() deploymentRow {
+				row := base
+				row.PullRequestNumber = deploymentIntPointer(0)
+				return row
+			},
+			mutate: func(row *deploymentRow) { row.PullRequestNumber = nil },
+			found:  true,
+			want:   EffectConflict,
+		},
+		{name: "release ref", mutate: func(row *deploymentRow) { row.ReleaseRef = "other" }, found: true, want: EffectConflict},
+		{name: "release confidence", mutate: func(row *deploymentRow) { row.ReleaseRefConfidence = 0.5 }, found: true, want: EffectConflict},
+		{name: "last synced zero", mutate: func(row *deploymentRow) { row.LastSynced = time.Time{} }, found: true, want: EffectAbsent},
+		{name: "last synced older", mutate: func(row *deploymentRow) { row.LastSynced = now.Add(-time.Millisecond) }, found: true, want: EffectAbsent},
+		{name: "last synced newer", mutate: func(row *deploymentRow) { row.LastSynced = now.Add(time.Millisecond) }, found: true, want: EffectConflict},
+		{name: "not found", mutate: func(*deploymentRow) {}, found: false, want: EffectAbsent},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expected := base
+			if test.expected != nil {
+				expected = test.expected()
+			}
+			actual := expected
+			test.mutate(&actual)
+			if got := compareDeploymentVersion(expected, actual, test.found); got != test.want {
+				t.Fatalf("inspection=%s want=%s expected=%+v actual=%+v", got, test.want, expected, actual)
+			}
+		})
 	}
 }
 
@@ -92,4 +149,51 @@ func TestDeploymentRowRejectsCrossTenantClaim(t *testing.T) {
 	}
 }
 
+func TestDeploymentRowRejectsPullRequestNumbersOutsideUInt32(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("github", "deployments")
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	values := []struct {
+		name   string
+		number int
+	}{{name: "negative", number: -1}}
+	tooLarge := uint64(math.MaxUint32) + 1
+	if uint64(math.MaxInt) >= tooLarge {
+		values = append(values, struct {
+			name   string
+			number int
+		}{name: "above UInt32", number: int(tooLarge)})
+	}
+	for _, value := range values {
+		t.Run(value.name, func(t *testing.T) {
+			number := value.number
+			row := deploymentRow{
+				OrgID: claim.OrgID, RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79",
+				DeploymentID: "101", DeployedAt: deploymentTimePointer(now),
+				PullRequestNumber: &number, LastSynced: now,
+			}
+			if err := row.validate(claim); err == nil {
+				t.Fatalf("pull request number %d passed validation", value.number)
+			}
+		})
+	}
+}
+
 func deploymentTimePointer(value time.Time) *time.Time { return &value }
+
+func deploymentStringPointer(value string) *string { return &value }
+
+func deploymentIntPointer(value int) *int { return &value }
+
+func deploymentComparatorRow(now time.Time) deploymentRow {
+	return deploymentRow{
+		OrgID: "org-1", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", DeploymentID: "101",
+		Status: deploymentStringPointer("success"), Environment: deploymentStringPointer("production"),
+		StartedAt:         deploymentTimePointer(now.Add(-10 * time.Minute)),
+		FinishedAt:        deploymentTimePointer(now.Add(-5 * time.Minute)),
+		DeployedAt:        deploymentTimePointer(now.Add(-4 * time.Minute)),
+		MergedAt:          deploymentTimePointer(now.Add(-15 * time.Minute)),
+		PullRequestNumber: deploymentIntPointer(42), ReleaseRef: "v1.2.3",
+		ReleaseRefConfidence: 0.875, LastSynced: now,
+	}
+}

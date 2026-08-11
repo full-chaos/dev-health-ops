@@ -28,6 +28,12 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
+from dev_health_ops.sync.planner import (
+    _FAMILY_CANONICAL_DATASET_KEY,
+    _WORK_ITEM_FAMILY_DATASET_ORDER,
+    _family_dataset_flag,
+)
+
 _FALSE = frozenset({"", "0", "false", "no", "off"})
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
@@ -45,6 +51,14 @@ _DEFAULT_MATRIX_CONTRACT_PATH = (
 # through a fixture contract without ever editing the checked-in matrix.
 # Production code never assigns to this.
 _MATRIX_CONTRACT_PATH = _DEFAULT_MATRIX_CONTRACT_PATH
+
+# The planner owns the exact family order and canonical claim identity. Import
+# those values rather than copying five dataset names into this admission gate:
+# a future planner alias cannot silently acquire a partially-wired switch here.
+_GITHUB_WORK_ITEM_FAMILY_DATASETS = frozenset(_WORK_ITEM_FAMILY_DATASET_ORDER)
+_GITHUB_WORK_ITEM_FAMILY_FLAGS = tuple(
+    _family_dataset_flag(dataset) for dataset in _WORK_ITEM_FAMILY_DATASET_ORDER
+)
 
 
 class ProviderUnitRouteError(ValueError):
@@ -107,10 +121,72 @@ def _switch_field_name(provider: str, dataset: str) -> str:
     only enabled if a field of this name also exists on the dataclass AND is
     True. A provider/dataset combination with no matching field derives a
     name that resolves to nothing, so it fails closed by construction rather
-    than through an explicit denylist.
+    than through an explicit denylist. The one deliberate family mapping is
+    GitHub work-items: all five matrix identities share one switch because
+    they are one planner-collapsed complete execution, never five writers.
     """
 
-    return f"{provider.strip().lower()}_{dataset.strip().lower()}".replace("-", "_")
+    normalized_provider = provider.strip().lower()
+    normalized_dataset = dataset.strip().lower()
+    if (
+        normalized_provider == "github"
+        and normalized_dataset in _GITHUB_WORK_ITEM_FAMILY_DATASETS
+    ):
+        return "github_work_items"
+    return f"{normalized_provider}_{normalized_dataset}".replace("-", "_")
+
+
+def is_github_work_item_direct_alias(provider: str, dataset: str) -> bool:
+    """Whether a pair is a malformed persisted alias, not a planner claim."""
+
+    return (
+        provider.strip().lower() == "github"
+        and dataset.strip().lower() in _GITHUB_WORK_ITEM_FAMILY_DATASETS
+        and dataset.strip().lower() != _FAMILY_CANONICAL_DATASET_KEY
+    )
+
+
+def is_github_work_item_family_dataset(provider: str, dataset: str) -> bool:
+    """Whether a pair belongs to GitHub's planner-collapsed work-item family."""
+
+    return (
+        provider.strip().lower() == "github"
+        and dataset.strip().lower() in _GITHUB_WORK_ITEM_FAMILY_DATASETS
+    )
+
+
+def is_complete_github_work_item_family_claim(
+    provider: str,
+    dataset: str,
+    processor_flags: Mapping[str, object] | None,
+) -> bool:
+    """Return whether a Go-admitted GitHub work-item unit is canonical and full.
+
+    Planner output is exactly one canonical ``work-items`` unit carrying all
+    five ordered ``family_dataset_*`` flags. The activation route cannot safely
+    accept a subset: the Go route writes the complete sixteen-destination
+    family, while completion fans watermarks back to every alias. A malformed
+    direct alias or a partial canonical row is an ownership/configuration fault
+    and is refused before the producer enqueues either runtime.
+    """
+
+    if (
+        provider.strip().lower() != "github"
+        or dataset.strip().lower() != _FAMILY_CANONICAL_DATASET_KEY
+    ):
+        return False
+    flags = processor_flags or {}
+    # Persisted flag JSON is untyped at this boundary. Truthiness is unsafe:
+    # e.g. the string "false" must not acquire the Go writer. Reject unknown
+    # family flags too, matching completion's reconciliation contract while
+    # allowing unrelated canonical flags such as sync_prs.
+    if any(
+        name.startswith("family_dataset_")
+        and name not in _GITHUB_WORK_ITEM_FAMILY_FLAGS
+        for name in flags
+    ):
+        return False
+    return all(flags.get(name) is True for name in _GITHUB_WORK_ITEM_FAMILY_FLAGS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +227,11 @@ class ProviderUnitRouteSwitches:
     github_commit_stats: bool = False
     github_blame: bool = False
     github_tests: bool = False
+    # One switch for all five GitHub work-item matrix aliases. Only planner's
+    # canonical work-items claim is directly admissible; sibling aliases stay
+    # route-ready for matrix/audit/watermark truth but never become partial
+    # producer routes.
+    github_work_items: bool = False
 
     @classmethod
     def from_environment(
@@ -182,6 +263,7 @@ class ProviderUnitRouteSwitches:
             github_commit_stats=_flag(source, "WORKER_GITHUB_COMMIT_STATS_ENABLED"),
             github_blame=_flag(source, "WORKER_GITHUB_BLAME_ENABLED"),
             github_tests=_flag(source, "WORKER_GITHUB_TESTS_ENABLED"),
+            github_work_items=_flag(source, "WORKER_GITHUB_WORK_ITEMS_ENABLED"),
         )
         switches.require_complete_routes()
         return switches
@@ -212,6 +294,12 @@ class ProviderUnitRouteSwitches:
         # getattr's default is what makes "no field declared for this pair"
         # resolve to False instead of raising -- the mechanism behind "a pair
         # can never be enabled by omission".
+        if is_github_work_item_direct_alias(provider, dataset):
+            # Matrix readiness describes the all-five logical family. A direct
+            # alias cannot be planned by the Python producer and cannot safely
+            # execute the composite Go handler, so keep it at reconciliation
+            # before any River enqueue rather than widening a partial writer.
+            return False
         return bool(getattr(self, _switch_field_name(provider, dataset), False))
 
     @staticmethod

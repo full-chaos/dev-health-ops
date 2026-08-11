@@ -187,20 +187,22 @@ services:
   # sync.team_autoimport handler whenever DEV_HEALTH_PROFILE=sync and a domain
   # DSN is present, then requires an exact match between what it constructed
   # and the full job_kinds set the sync profile declares — which includes
-  # sync.provider_unit. With both switches off, that match fails. To watch the
+  # sync.provider_unit. With every route switch off, that match fails. To watch the
   # path actually execute, set this in the ROOT .env (next to this file) or in
   # your shell — not ops/.env, which loses to the `environment:` interpolation
   # below:
   #
   #   WORKER_GITHUB_REPO_METADATA_ENABLED=true
   #
-  # Both switches default to false here on purpose: only 2 of 59
-  # provider/dataset pairs are route-ready, and each switch must be flipped
-  # alongside a reviewed route release. The SAME variable names are read by the
-  # Python producer gate (ops/src/dev_health_ops/workers/provider_unit_route.py)
-  # and by this Go worker, so one override moves both halves coherently — a
-  # unit the producer routes to River while the Go switch is off finds no
-  # handler.
+  # The matrix now records 25 of 59 provider/dataset pairs as route-ready, but
+  # EVERY switch remains false here on purpose. Each must be flipped only with
+  # a reviewed route release; this does not activate a deployment profile or
+  # change cutover ownership. The SAME switch names are read by the Python
+  # producer gate (ops/src/dev_health_ops/workers/provider_unit_route.py) and
+  # by this Go worker, so one override moves both halves coherently — a unit
+  # the producer routes to River while the Go switch is off finds no handler.
+  # GitHub work-items additionally needs the two explicit config-file paths
+  # below; no ambient STATUS_MAPPING_PATH override is accepted.
   go-worker:
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}
@@ -242,6 +244,9 @@ services:
       WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
       WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED: ${WORKER_LAUNCHDARKLY_FEATURE_FLAGS_ENABLED:-false}
       WORKER_GITHUB_REPO_METADATA_ENABLED: ${WORKER_GITHUB_REPO_METADATA_ENABLED:-false}
+      WORKER_GITHUB_WORK_ITEMS_ENABLED: ${WORKER_GITHUB_WORK_ITEMS_ENABLED:-false}
+      WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH: ${WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH:-}
+      WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH: ${WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH:-}
       WORKER_GITLAB_REPO_METADATA_ENABLED: ${WORKER_GITLAB_REPO_METADATA_ENABLED:-false}
       WORKER_GITLAB_INCIDENTS_ENABLED: ${WORKER_GITLAB_INCIDENTS_ENABLED:-false}
       # sync.team_autoimport's post-sync bridge is constructed unconditionally

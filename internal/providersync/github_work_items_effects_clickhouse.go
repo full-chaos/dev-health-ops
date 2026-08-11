@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 // GitHubWorkItemEffectRows is the complete Python work-item write surface.
@@ -32,48 +33,57 @@ type GitHubWorkItemEffectRows struct {
 	WorkItems                      []json.RawMessage
 }
 
+// githubWorkItemEffectRowsByDestination is intentionally a projection map,
+// not another destination manifest. workitemcontract owns the ordered semantic
+// list; this map only tells the GitHub writer which typed rows belong to each
+// declared destination. Keep an entry for an empty projection: omitting it
+// changes a completed family into an indistinguishable partial write and breaks
+// readback/recovery.
+var githubWorkItemEffectRowsByDestination = map[string]func(GitHubWorkItemEffectRows) []json.RawMessage{
+	"ai_attribution":                   func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.AIAttribution },
+	"estimate_coverage_metrics_daily":  func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.EstimateCoverageMetricsDaily },
+	"investment_classifications_daily": func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.InvestmentClassificationsDaily },
+	"investment_metrics_daily":         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.InvestmentMetricsDaily },
+	"issue_type_metrics_daily":         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.IssueTypeMetricsDaily },
+	"sprints":                          func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.Sprints },
+	"work_item_cycle_times":            func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemCycleTimes },
+	"work_item_dependencies":           func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemDependencies },
+	"work_item_interactions":           func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemInteractions },
+	"work_item_metrics_daily":          func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemMetricsDaily },
+	"work_item_reopen_events":          func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemReopenEvents },
+	"work_item_state_durations_daily":  func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemStateDurationsDaily },
+	"work_item_team_attributions":      func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemTeamAttributions },
+	"work_item_transitions":            func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemTransitions },
+	"work_item_user_metrics_daily":     func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemUserMetricsDaily },
+	"work_items":                       func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItems },
+}
+
+func githubWorkItemRouteDestinations() []string {
+	return workitemcontract.GitHubEffectDestinations()
+}
+
 // BuildGitHubWorkItemEffects constructs one deterministic, readback-fenced
 // effect for every destination owned by the Python composite unit. The order
-// is the canonical workItemRouteDestinations order, which also matches the
+// is the canonical githubWorkItemRouteDestinations order, which also matches the
 // EffectCommitter's stable destination order.
 func BuildGitHubWorkItemEffects(rows GitHubWorkItemEffectRows) ([]EffectBatch, error) {
-	values := []struct {
-		destination string
-		rows        []json.RawMessage
-	}{
-		{"ai_attribution", rows.AIAttribution},
-		{"estimate_coverage_metrics_daily", rows.EstimateCoverageMetricsDaily},
-		{"investment_classifications_daily", rows.InvestmentClassificationsDaily},
-		{"investment_metrics_daily", rows.InvestmentMetricsDaily},
-		{"issue_type_metrics_daily", rows.IssueTypeMetricsDaily},
-		{"sprints", rows.Sprints},
-		{"work_item_cycle_times", rows.WorkItemCycleTimes},
-		{"work_item_dependencies", rows.WorkItemDependencies},
-		{"work_item_interactions", rows.WorkItemInteractions},
-		{"work_item_metrics_daily", rows.WorkItemMetricsDaily},
-		{"work_item_reopen_events", rows.WorkItemReopenEvents},
-		{"work_item_state_durations_daily", rows.WorkItemStateDurationsDaily},
-		{"work_item_team_attributions", rows.WorkItemTeamAttributions},
-		{"work_item_transitions", rows.WorkItemTransitions},
-		{"work_item_user_metrics_daily", rows.WorkItemUserMetricsDaily},
-		{"work_items", rows.WorkItems},
-	}
-	canonical := workItemRouteDestinations()
-	if len(values) != len(canonical) {
+	destinations := githubWorkItemRouteDestinations()
+	if len(destinations) == 0 || len(githubWorkItemEffectRowsByDestination) != len(destinations) {
 		return nil, ErrInvalidConfiguration
 	}
-	effects := make([]EffectBatch, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for index, value := range values {
-		if value.destination != canonical[index] {
+	effects := make([]EffectBatch, 0, len(destinations))
+	seen := make(map[string]struct{}, len(destinations))
+	for _, destination := range destinations {
+		rowProjection, exists := githubWorkItemEffectRowsByDestination[destination]
+		if destination == "" || !exists || rowProjection == nil {
 			return nil, ErrInvalidConfiguration
 		}
-		if _, duplicate := seen[value.destination]; duplicate {
+		if _, duplicate := seen[destination]; duplicate {
 			return nil, ErrInvalidConfiguration
 		}
-		seen[value.destination] = struct{}{}
+		seen[destination] = struct{}{}
 		effect, err := BuildEffectBatch(
-			value.destination, EffectReadbackRequired, value.rows,
+			destination, EffectReadbackRequired, rowProjection(rows),
 		)
 		if err != nil {
 			return nil, err
@@ -146,11 +156,12 @@ type GitHubWorkItemEffectAdapter interface {
 	) (EffectInspection, error)
 }
 
-// GitHubWorkItemClickHouseEffects is an unregistered composite dispatcher.
+// GitHubWorkItemClickHouseEffects is the active canonical composite dispatcher.
 // Named fields make the 16-table ownership visible and prevent a dynamic
 // destination registry from silently accepting or omitting a surface.
-// Concrete ClickHouse adapters are added per table; this foundation does not
-// activate any route or alias.
+// Concrete ClickHouse adapters are injected by the canonical GitHub work-item
+// worker constructor. Direct alias claims are rejected before this dispatcher
+// is constructed, so it can only receive the collapsed work-items family.
 type GitHubWorkItemClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 
@@ -309,10 +320,8 @@ func (sink GitHubWorkItemClickHouseEffects) complete() bool {
 	return len(sink.MissingDestinations()) == 0
 }
 
-// The sibling-sink convention, and the reason it matters more here than
-// elsewhere: this composite is not registered yet, so nothing in the tree calls
-// it through either interface. Without these assertions a signature drift in
-// EffectSink or EffectReadback would compile cleanly and surface only when
-// activation first wires the sink up -- the most expensive moment to find it.
+// The canonical worker constructs this composite through both interfaces.
+// Preserve these assertions so an interface drift fails at build time rather
+// than at a runtime route switch.
 var _ EffectSink = GitHubWorkItemClickHouseEffects{}
 var _ EffectReadback = GitHubWorkItemClickHouseEffects{}

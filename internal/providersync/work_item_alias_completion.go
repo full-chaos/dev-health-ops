@@ -1,28 +1,15 @@
 package providersync
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
+)
 
 const (
 	workItemFamilyFlagPrefix     = "family_dataset_"
 	workItemFamilyAuditResultKey = "family_datasets"
 )
-
-type workItemFamilyAlias struct {
-	flag    string
-	dataset string
-}
-
-// Keep this order byte-for-byte aligned with planner.py's
-// _WORK_ITEM_FAMILY_DATASET_ORDER. The Python planner collapses the enabled
-// aliases into one canonical work-items claim; successful completion must fan
-// the one result back out to the same ordered per-alias watermark identities.
-var workItemFamilyAliases = []workItemFamilyAlias{
-	{flag: "family_dataset_work_items", dataset: "work-items"},
-	{flag: "family_dataset_work_item_labels", dataset: "work-item-labels"},
-	{flag: "family_dataset_work_item_projects", dataset: "work-item-projects"},
-	{flag: "family_dataset_work_item_history", dataset: "work-item-history"},
-	{flag: "family_dataset_work_item_comments", dataset: "work-item-comments"},
-}
 
 var workItemFamilyProviders = map[string]struct{}{
 	"github": {},
@@ -43,9 +30,10 @@ func workItemAliasCompletionMetadata(
 ) ([]string, map[string]any, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	dataset = strings.ToLower(strings.TrimSpace(dataset))
-	knownFlags := make(map[string]struct{}, len(workItemFamilyAliases))
-	for _, alias := range workItemFamilyAliases {
-		knownFlags[alias.flag] = struct{}{}
+	familyDatasets := workitemcontract.FamilyDatasets()
+	knownFlags := make(map[string]struct{}, len(familyDatasets))
+	for _, familyDataset := range familyDatasets {
+		knownFlags[workItemFamilyFlagForDataset(familyDataset)] = struct{}{}
 	}
 
 	hasFamilyFlag := false
@@ -68,14 +56,25 @@ func workItemAliasCompletionMetadata(
 	if _, supported := workItemFamilyProviders[provider]; !supported || !hasFamilyFlag {
 		return nil, nil, ErrInvalidConfiguration
 	}
+	// The GitHub work-items route is one atomic five-dataset family. A subset
+	// cannot be completed safely: terminalizing the canonical claim would make
+	// omitted aliases look current even though their effects were never part of
+	// the durable manifest. Other providers retain their existing subset shape.
+	if provider == "github" {
+		for _, familyDataset := range familyDatasets {
+			if !processorFlags[workItemFamilyFlagForDataset(familyDataset)] {
+				return nil, nil, ErrInvalidConfiguration
+			}
+		}
+	}
 	if _, collision := result[workItemFamilyAuditResultKey]; collision {
 		return nil, nil, ErrInvalidConfiguration
 	}
 
-	datasetKeys := make([]string, 0, len(workItemFamilyAliases))
-	for _, alias := range workItemFamilyAliases {
-		if processorFlags[alias.flag] {
-			datasetKeys = append(datasetKeys, alias.dataset)
+	datasetKeys := make([]string, 0, len(familyDatasets))
+	for _, familyDataset := range familyDatasets {
+		if processorFlags[workItemFamilyFlagForDataset(familyDataset)] {
+			datasetKeys = append(datasetKeys, familyDataset)
 		}
 	}
 	if len(datasetKeys) == 0 {
@@ -84,6 +83,10 @@ func workItemAliasCompletionMetadata(
 	audited := cloneCompletionResult(result)
 	audited[workItemFamilyAuditResultKey] = append([]string(nil), datasetKeys...)
 	return datasetKeys, audited, nil
+}
+
+func workItemFamilyFlagForDataset(dataset string) string {
+	return workItemFamilyFlagPrefix + strings.ReplaceAll(dataset, "-", "_")
 }
 
 func cloneCompletionResult(result map[string]any) map[string]any {

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 func TestLinearExpiredLeaseRecoveryContractMatchesPythonAST(t *testing.T) {
@@ -31,11 +33,11 @@ func TestLinearExpiredLeaseRecoveryContractMatchesPythonAST(t *testing.T) {
 	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatalf("decode Python Linear recovery oracle: %v: %s", err, output)
 	}
-	if !reflect.DeepEqual(linearBackfillWorkItemDatasets, want.Datasets) {
-		t.Fatalf("datasets=%v want=%v", linearBackfillWorkItemDatasets, want.Datasets)
+	if got := workitemcontract.LinearBackfillWorkItemDatasets(); !reflect.DeepEqual(got, want.Datasets) {
+		t.Fatalf("datasets=%v want=%v", got, want.Datasets)
 	}
-	if !reflect.DeepEqual(linearBackfillWorkItemRetrySurfaces, want.RetrySurfaces) {
-		t.Fatalf("retry surfaces=%v want=%v", linearBackfillWorkItemRetrySurfaces, want.RetrySurfaces)
+	if got := workitemcontract.LinearExpiredLeaseRetryDestinations(); !reflect.DeepEqual(got, want.RetrySurfaces) {
+		t.Fatalf("retry surfaces=%v want=%v", got, want.RetrySurfaces)
 	}
 	if !reflect.DeepEqual(clickHouseRetryProvenSafeSurfaces, want.ProvenSafeSurfaces) {
 		t.Fatalf("proven-safe surfaces=%v want=%v", clickHouseRetryProvenSafeSurfaces, want.ProvenSafeSurfaces)
@@ -47,7 +49,7 @@ func TestLinearExpiredLeaseRecoveryEligibilityIsFailClosed(t *testing.T) {
 	base := Unit{Provider: "linear", Dataset: "work-items", Mode: "backfill"}
 	decision := LinearExpiredLeaseRetryDecision(base, 0, 1)
 	if !decision.ShouldRetry || decision.RetryExhausted || decision.NextRetryCount != 1 ||
-		!reflect.DeepEqual(decision.RetrySurfaces, linearBackfillWorkItemRetrySurfaces) {
+		!reflect.DeepEqual(decision.RetrySurfaces, workitemcontract.LinearExpiredLeaseRetryDestinations()) {
 		t.Fatalf("eligible decision=%+v", decision)
 	}
 	exhausted := LinearExpiredLeaseRetryDecision(base, 1, 1)

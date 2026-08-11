@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 const (
@@ -149,14 +151,6 @@ type datasetSpec struct {
 	LegacyTargets  []string
 }
 
-var workItemFamilyOrder = []string{
-	"work-items",
-	"work-item-labels",
-	"work-item-projects",
-	"work-item-history",
-	"work-item-comments",
-}
-
 var supportedProviderDatasets = map[string]map[string]struct{}{
 	"github":       setOf("repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments", "cicd", "tests", "deployments", "security", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"),
 	"gitlab":       setOf("repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments", "cicd", "tests", "deployments", "incidents", "security", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments", "feature-flags"),
@@ -227,7 +221,8 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 	for _, source := range input.Sources {
 		provider := strings.ToLower(source.Provider)
 		prsEnabled := false
-		family := make([]PlanDataset, 0, len(workItemFamilyOrder))
+		familyDatasets := workitemcontract.FamilyDatasets()
+		family := make([]PlanDataset, 0, len(familyDatasets))
 		for _, dataset := range input.Datasets {
 			spec, ok := datasetSpecification(provider, dataset.Key)
 			if !ok {
@@ -236,7 +231,7 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 			if slices.Contains(spec.LegacyTargets, "prs") {
 				prsEnabled = true
 			}
-			if slices.Contains(workItemFamilyOrder, dataset.Key) {
+			if slices.Contains(familyDatasets, dataset.Key) {
 				family = append(family, dataset)
 				continue
 			}
@@ -299,11 +294,21 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 			earliest = nil
 		}
 		flags := cloneFlags(canonical.ProcessorFlags)
-		for _, dataset := range contributing {
-			flags[familyDatasetFlag(dataset.Key)] = true
-		}
 		if provider == "github" {
+			// CHAOS-3606: GitHub's activated route has one indivisible all-five
+			// work-item writer. A sibling with an empty/caught-up window still has
+			// no independent owner while this canonical unit executes, so its
+			// literal flag records route ownership rather than contribution to the
+			// merged window above. Non-GitHub families retain their historical
+			// contributing-alias flags.
+			for _, dataset := range familyDatasets {
+				flags[familyDatasetFlag(dataset)] = true
+			}
 			flags["sync_prs"] = prsEnabled
+		} else {
+			for _, dataset := range contributing {
+				flags[familyDatasetFlag(dataset.Key)] = true
+			}
 		}
 		unit := newPlannedUnit(input, source, canonicalWorkItemsDataset, canonical, earliest, latest)
 		unit.ProcessorFlags = flags

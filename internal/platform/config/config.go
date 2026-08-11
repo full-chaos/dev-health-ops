@@ -148,6 +148,18 @@ type Config struct {
 	WorkerGithubBlameEnabled bool
 	// WorkerGithubTestsEnabled gates the complete six-effect (github, tests) route.
 	WorkerGithubTestsEnabled bool
+	// WorkerGithubWorkItemsEnabled gates the one complete five-alias GitHub
+	// work-item family. The Python planner emits only canonical work-items
+	// claims; sibling alias identities survive in processor flags, watermark,
+	// and audit metadata rather than becoming partial writers.
+	WorkerGithubWorkItemsEnabled bool
+	// WorkerGithubWorkItemsStatusMappingPath and
+	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
+	// for the two Python-parity config engines. There is intentionally no
+	// source-relative default: when the route is enabled, cmd/dev-health-worker
+	// validates both paths and rejects ambient STATUS_MAPPING_PATH overrides.
+	WorkerGithubWorkItemsStatusMappingPath    string
+	WorkerGithubWorkItemsInvestmentConfigPath string
 
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
@@ -292,6 +304,10 @@ func Load(spec Spec) (Config, error) {
 			name:   "WORKER_GITHUB_TESTS_ENABLED",
 			target: &cfg.WorkerGithubTestsEnabled,
 		},
+		{
+			name:   "WORKER_GITHUB_WORK_ITEMS_ENABLED",
+			target: &cfg.WorkerGithubWorkItemsEnabled,
+		},
 	} {
 		*item.target, err = boolEnv(lookup, item.name, false)
 		if err != nil {
@@ -317,6 +333,12 @@ func Load(spec Spec) (Config, error) {
 	if cfg.WorkerGitlabCICDEnabled && cfg.WorkerGitlabTestsEnabled {
 		return Config{}, fmt.Errorf("WORKER_GITLAB_CICD_ENABLED and WORKER_GITLAB_TESTS_ENABLED are mutually exclusive: both delegate to one complete TestOps writer")
 	}
+	cfg.WorkerGithubWorkItemsStatusMappingPath = envOrDefault(
+		lookup, "WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH", "",
+	)
+	cfg.WorkerGithubWorkItemsInvestmentConfigPath = envOrDefault(
+		lookup, "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH", "",
+	)
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
 		"DEV_HEALTH_HEALTH_CHECK_TIMEOUT",
@@ -587,6 +609,15 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("worker_github_security_enabled", c.WorkerGithubSecurityEnabled),
 		slog.Bool("worker_github_blame_enabled", c.WorkerGithubBlameEnabled),
 		slog.Bool("worker_github_tests_enabled", c.WorkerGithubTestsEnabled),
+		slog.Bool("worker_github_work_items_enabled", c.WorkerGithubWorkItemsEnabled),
+		slog.Bool(
+			"worker_github_work_items_status_mapping_path_configured",
+			c.WorkerGithubWorkItemsStatusMappingPath != "",
+		),
+		slog.Bool(
+			"worker_github_work_items_investment_config_path_configured",
+			c.WorkerGithubWorkItemsInvestmentConfigPath != "",
+		),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),

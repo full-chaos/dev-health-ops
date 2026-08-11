@@ -217,13 +217,17 @@ def test_different_route_family_dispatches_normally(db_session, monkeypatch):
 
     run, first = _seed_run(db_session)  # dataset_key=commits -> route_family "git"
     first.status = SyncRunUnitStatus.SUCCESS.value
-    second = _sibling_unit(run, first, dataset_key="work-items", processor_flags={})
+    # Keep this cooldown test outside the canonical GitHub work-item family:
+    # an empty work-items flag set is now deliberately malformed and rejected
+    # before either writer is staged. ``cicd`` remains a GitHub unit, so this
+    # still proves the route-family distinction rather than a provider change.
+    second = _sibling_unit(run, first, dataset_key="cicd", processor_flags={})
     run.total_units = 2
     db_session.add(second)
     db_session.flush()
 
     now = datetime.now(timezone.utc)
-    # Cooldown on 'prs' (a different route family than second's 'work_items').
+    # Cooldown on 'prs' (a different route family than second's 'cicd').
     db_session.add(
         _observation(
             run,

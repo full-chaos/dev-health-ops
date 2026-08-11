@@ -171,7 +171,7 @@ def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
     credentials = pagerduty_credentials_from_mapping(_credentials_mapping(context))
     if credentials is None:
         raise ValueError("Missing PagerDuty credentials for dataset unit")
-    auth: PagerDutyAuth
+    auth: PagerDutyAuth | None = None
     match credentials.auth_mode:
         case "oauth" | "client_credentials" as auth_mode:
             access_token = credentials.access_token
@@ -198,6 +198,8 @@ def _pagerduty_client(context: SyncTaskContext) -> tuple[Any, str]:
                 )
         case auth_mode:
             raise ValueError(f"Unsupported PagerDuty auth mode: {auth_mode}")
+    if auth is None:
+        raise ValueError("PagerDuty dataset unit requires a supported auth mode")
     provider_instance_id = (
         credentials.subdomain.strip() if credentials.subdomain else ""
     )

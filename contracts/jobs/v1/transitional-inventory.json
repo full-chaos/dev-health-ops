@@ -393,12 +393,12 @@
       "notes": "Beat entry prune-external-ingest-batches, crontab(5,15) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:766",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:767",
       "surface": "dispatch_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 766
+        "line": 767
       },
       "queue_or_cadence": "sync",
       "dispatches": "run_sync_unit (per unit)",
@@ -417,12 +417,12 @@
       "notes": "transport-routes.json kind dispatch_sync_run, route=celery"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1194",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1190",
       "surface": "run_sync_unit",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1194
+        "line": 1190
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -441,12 +441,12 @@
       "notes": "matrix inventory: 25/59 provider/dataset pairs route-ready in Go, including GitHub 17/17; all deployment switches remain default-off and Celery/Python ownership remains active"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:2049",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:2045",
       "surface": "finalize_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2049
+        "line": 2045
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -2289,12 +2289,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1090",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1086",
       "surface": "getattr(signature,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1090
+        "line": 1086
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic per-provider signature",
@@ -2313,12 +2313,12 @@
       "notes": "grep-evading form; internal to dispatch_sync_run fan-out"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1680",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1676",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1680
+        "line": 1676
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -2337,12 +2337,12 @@
       "notes": "grep-evading form; internal to unit completion"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2500",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2496",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2500
+        "line": 2496
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

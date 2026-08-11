@@ -186,15 +186,15 @@
     },
     {
       "id": "A7-python-admission-requires-exact-booleans",
-      "file": "src/dev_health_ops/workers/provider_unit_route.py",
-      "find": "    return all(flags.get(name) is True for name in _GITHUB_WORK_ITEM_FAMILY_FLAGS)",
+      "file": "src/dev_health_ops/workers/provider_family_contract.py",
+      "find": "    return all(flags.get(name) is True for name in expected)",
       "replace": "    return True",
       "rationale": "persisted JSON flag truthiness is unsafe: missing, false, string, integer, and unknown family flag shapes must never acquire either writer",
       "build": [
         ".venv/bin/python",
         "-m",
         "py_compile",
-        "src/dev_health_ops/workers/provider_unit_route.py"
+        "src/dev_health_ops/workers/provider_family_contract.py"
       ],
       "proof": [
         [
@@ -206,15 +206,15 @@
     },
     {
       "id": "A7b-python-unknown-family-flags-are-rejected",
-      "file": "src/dev_health_ops/workers/provider_unit_route.py",
-      "find": "        and name not in _GITHUB_WORK_ITEM_FAMILY_FLAGS",
-      "replace": "        and False",
+      "file": "src/dev_health_ops/workers/provider_family_contract.py",
+      "find": "        name.startswith(FAMILY_DATASET_FLAG_PREFIX) and name not in expected",
+      "replace": "        name.startswith(FAMILY_DATASET_FLAG_PREFIX) and False",
       "rationale": "the unknown-family clause is distinct from exact-boolean evaluation: an otherwise complete canonical claim carrying an unrecognized family_dataset_* key must be rejected before either transport stages it",
       "build": [
         ".venv/bin/python",
         "-m",
         "py_compile",
-        "src/dev_health_ops/workers/provider_unit_route.py"
+        "src/dev_health_ops/workers/provider_family_contract.py"
       ],
       "proof": [
         [
@@ -232,8 +232,8 @@
     {
       "id": "A8-pretransport-partial-family-guard-fences-river-and-celery",
       "file": "src/dev_health_ops/workers/sync_units.py",
-      "find": "            ) and not is_complete_github_work_item_family_claim(",
-      "replace": "            ) and False and is_complete_github_work_item_family_claim(",
+      "find": "            if not validate_provider_family_claim(",
+      "replace": "            if False and not validate_provider_family_claim(",
       "rationale": "the full-family admission guard sits before transport selection; bypassing it must show the same stale partial canonical claim staging neither forward River nor rollback Celery",
       "build": [
         ".venv/bin/python",

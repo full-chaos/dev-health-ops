@@ -997,11 +997,37 @@ async def test_trigger_backfill_selector_object_org_scoped(client, seeded_state)
     assert data["status"] == "accepted"
     assert captured_request["org_id"] == seeded_state["org_id"]
     assert captured_request["mode"] == "backfill"
-    assert captured_request["source_ids"] == tuple(source_ids)
-    assert captured_request["dataset_keys"] == tuple(dataset_keys)
+    assert captured_request["source_ids"] is None
+    assert captured_request["dataset_keys"] is None
     assert captured_request["backfill_selector"] is not None
     assert captured_request["backfill_selector"].source_ids == tuple(source_ids)
     assert captured_request["backfill_selector"].dataset_keys == tuple(dataset_keys)
+
+
+@pytest.mark.asyncio
+async def test_trigger_backfill_rejects_mixed_selector_shapes(client):
+    """Structured selector plus legacy flat fields must fail validation."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+
+    with patch(
+        "dev_health_ops.api.admin.routers.integrations.plan_sync_run",
+        side_effect=AssertionError("planner should not be called on invalid payload"),
+    ):
+        resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/backfill",
+            json={
+                "selector": {
+                    "since": "2024-01-01T00:00:00Z",
+                    "before": "2024-02-01T00:00:00Z",
+                    "source_ids": [str(uuid.uuid4())],
+                },
+                "source_ids": [str(uuid.uuid4())],
+            },
+        )
+
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

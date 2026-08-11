@@ -516,31 +516,39 @@ async def trigger_integration_backfill(
     if await int_svc.get_by_id(integration_id) is None:
         raise HTTPException(status_code=404, detail="Integration not found")
 
-    selector = payload.resolved_selector()
-    request = SyncPlanRequest(
-        integration_id=integration_id,
-        org_id=org_id,
-        mode="backfill",
-        triggered_by="admin-api",
-        backfill_selector=SyncBackfillSelector(
-            since=selector.since,
-            before=selector.before,
-            source_ids=tuple(selector.source_ids)
-            if selector.source_ids is not None
+    if payload.selector is not None:
+        selector = payload.selector
+        request = SyncPlanRequest(
+            integration_id=integration_id,
+            org_id=org_id,
+            mode="backfill",
+            triggered_by="admin-api",
+            backfill_selector=SyncBackfillSelector(
+                since=selector.since,
+                before=selector.before,
+                source_ids=tuple(selector.source_ids)
+                if selector.source_ids is not None
+                else None,
+                dataset_keys=tuple(selector.dataset_keys)
+                if selector.dataset_keys is not None
+                else None,
+            ),
+        )
+    else:
+        request = SyncPlanRequest(
+            integration_id=integration_id,
+            org_id=org_id,
+            mode="backfill",
+            triggered_by="admin-api",
+            source_ids=tuple(payload.source_ids)
+            if payload.source_ids is not None
             else None,
-            dataset_keys=tuple(selector.dataset_keys)
-            if selector.dataset_keys is not None
+            dataset_keys=tuple(payload.dataset_keys)
+            if payload.dataset_keys is not None
             else None,
-        ),
-        source_ids=tuple(selector.source_ids)
-        if selector.source_ids is not None
-        else None,
-        dataset_keys=tuple(selector.dataset_keys)
-        if selector.dataset_keys is not None
-        else None,
-        since=selector.since,
-        before=selector.before,
-    )
+            since=payload.since,
+            before=payload.before,
+        )
 
     try:
         plan = await session.run_sync(

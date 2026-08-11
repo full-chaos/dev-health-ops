@@ -40,7 +40,7 @@ func TestPagerDutyBusinessServicesEffectUsesMigratedClickHouseTombstonesAndExact
 	initialAt := time.Date(2026, 8, 9, 19, 0, 0, 123456000, time.UTC)
 	rowA, err := normalizePagerDutyBusinessService(
 		claim, "acme", pagerDutyBusinessServicePayload{
-			ID: "PBS1", Name: "Payments", Description: stringPtr("Checkout"),
+			ID: "PBS1", Name: "Payments", Description: pagerDutyStringPtr("Checkout"),
 		}, initialAt,
 	)
 	if err != nil {

@@ -13,7 +13,7 @@ func TestPagerDutyBusinessServicesEffectRejectsForeignScopeOrderingTamperAndMixe
 	claim := nativeTestClaim("pagerduty", "business-services")
 	row, err := normalizePagerDutyBusinessService(
 		claim, "acme", pagerDutyBusinessServicePayload{
-			ID: "PBS1", Name: "Payments", Description: stringPtr("Checkout"),
+			ID: "PBS1", Name: "Payments", Description: pagerDutyStringPtr("Checkout"),
 		}, time.Date(2026, 8, 9, 19, 0, 0, 0, time.UTC),
 	)
 	if err != nil {

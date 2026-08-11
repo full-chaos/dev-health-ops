@@ -40,30 +40,30 @@ func TestPagerDutyIncidentFamilyEffectsUseMigratedClickHouseAndExactReplay(t *te
 	normalizedAt := time.Date(2026, 7, 19, 19, 0, 0, 123456000, time.UTC)
 	claim := nativeTestClaim("pagerduty", "incidents")
 	incident, err := normalizePagerDutyIncident(claim, "acme", pagerDutyIncidentPayload{
-		ID: "PI1", Title: stringPtr("Database outage"), Status: stringPtr("triggered"),
-		CreatedAt: stringPtr("2026-07-17T12:00:00Z"), UpdatedAt: stringPtr("2026-07-17T12:01:00Z"),
+		ID: "PI1", Title: pagerDutyStringPtr("Database outage"), Status: pagerDutyStringPtr("triggered"),
+		CreatedAt: pagerDutyStringPtr("2026-07-17T12:00:00Z"), UpdatedAt: pagerDutyStringPtr("2026-07-17T12:01:00Z"),
 	}, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	alertClaim := nativeTestClaim("pagerduty", "incident-alerts")
 	alert, err := normalizePagerDutyAlert(alertClaim, "acme", pagerDutyAlertPayload{
-		ID: "PA1", Summary: stringPtr("Disk alert"), Status: stringPtr("triggered"), Severity: stringPtr("critical"),
-		CreatedAt: stringPtr("2026-07-17T12:02:00Z"), UpdatedAt: stringPtr("2026-07-17T12:03:00Z"),
+		ID: "PA1", Summary: pagerDutyStringPtr("Disk alert"), Status: pagerDutyStringPtr("triggered"), Severity: pagerDutyStringPtr("critical"),
+		CreatedAt: pagerDutyStringPtr("2026-07-17T12:02:00Z"), UpdatedAt: pagerDutyStringPtr("2026-07-17T12:03:00Z"),
 	}, incident.ID, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	logClaim := nativeTestClaim("pagerduty", "incident-log-entries")
 	entry, err := normalizePagerDutyLogEntry(logClaim, "acme", pagerDutyLogEntryPayload{
-		ID: "PL1", Type: stringPtr("status_change"), Summary: stringPtr("Triggered"), CreatedAt: stringPtr("2026-07-17T12:04:00Z"),
+		ID: "PL1", Type: pagerDutyStringPtr("status_change"), Summary: pagerDutyStringPtr("Triggered"), CreatedAt: pagerDutyStringPtr("2026-07-17T12:04:00Z"),
 	}, incident.ID, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	noteClaim := nativeTestClaim("pagerduty", "incident-notes")
 	note, err := normalizePagerDutyNote(noteClaim, "acme", pagerDutyNotePayload{
-		ID: "PN1", Content: stringPtr("Investigating"), CreatedAt: stringPtr("2026-07-17T12:05:00Z"),
+		ID: "PN1", Content: pagerDutyStringPtr("Investigating"), CreatedAt: pagerDutyStringPtr("2026-07-17T12:05:00Z"),
 	}, incident.ID, normalizedAt)
 	if err != nil {
 		t.Fatal(err)

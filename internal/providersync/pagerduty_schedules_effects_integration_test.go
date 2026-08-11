@@ -40,7 +40,7 @@ func TestPagerDutySchedulesEffectUsesMigratedClickHouseTombstonesAndExactReplay(
 	initialAt := time.Date(2026, 8, 9, 19, 0, 0, 123456000, time.UTC)
 	rowA, err := normalizePagerDutySchedule(
 		claim, "acme", pagerDutySchedulePayload{
-			ID: "PS1", Name: "Primary", TimeZone: stringPtr("America/Los_Angeles"),
+			ID: "PS1", Name: "Primary", TimeZone: pagerDutyStringPtr("America/Los_Angeles"),
 		}, initialAt,
 	)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestPagerDutySchedulesEffectUsesMigratedClickHouseTombstonesAndExactReplay(
 	rowAUpdated, err := normalizePagerDutySchedule(
 		claim, "acme", pagerDutySchedulePayload{
 			ID: "PS1", Name: "Primary updated", UpdatedAt: updatedAt.Format(time.RFC3339Nano),
-			TimeZone: stringPtr("America/Los_Angeles"),
+			TimeZone: pagerDutyStringPtr("America/Los_Angeles"),
 		}, updatedAt,
 	)
 	if err != nil {

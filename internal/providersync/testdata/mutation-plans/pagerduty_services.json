@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "name": "PagerDuty services typed parity, repository-mapping ownership, and complete snapshots",
+  "build": ["go", "test", "-run", "^$", "./internal/providersync/"],
+  "$limitation": "This plan covers the dormant PagerDuty services provider route, its separate service-repository mapping effect, live Python row oracles, tenant/account fences, ordering, and migrated ClickHouse integration proof. Registry, route-switch, matrix, config, deployment, and activation wiring remain intentionally outside this provider-only slice.",
+  "mutations": [
+    {
+      "id": "S1-services-route-dataset-fence",
+      "file": "internal/providersync/pagerduty_services_route.go",
+      "find": "claim.Dataset != \"services\"",
+      "replace": "false",
+      "rationale": "The services handler must reject every other PagerDuty dataset; otherwise a teams or users claim could be fetched from /services and committed under the wrong source entity type.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesRouteRejectsAnotherPagerDutyDataset$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S2-service-name-id-fallback",
+      "file": "internal/providersync/pagerduty_services_route.go",
+      "find": "if name == \"\" {\n\t\tname = payload.ID\n\t}",
+      "replace": "if false {\n\t\tname = payload.ID\n\t}",
+      "rationale": "Python falls back from name and summary to the provider id. Removing that clause emits an empty canonical service name and diverges from the live normalizer.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesRouteUsesProviderIDWhenNamesAreAbsent$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S3-service-escalation-policy-reference",
+      "file": "internal/providersync/pagerduty_services_route.go",
+      "find": "if payload.EscalationPolicy != nil && strings.TrimSpace(payload.EscalationPolicy.ID) != \"\" {",
+      "replace": "if false && strings.TrimSpace(payload.EscalationPolicy.ID) != \"\" {",
+      "rationale": "The service normalizer must preserve the canonical operational escalation-policy reference when PagerDuty includes one; dropping this clause loses a typed relationship field.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesRouteBuildsTypedServicesAndSeparateMappingEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S4-mapping-precedence-admin-over-metadata",
+      "file": "internal/providersync/pagerduty_services_route.go",
+      "find": "*value.RelationshipConfidence > *current.RelationshipConfidence",
+      "replace": "*value.RelationshipConfidence < *current.RelationshipConfidence",
+      "rationale": "Python retains the highest-confidence evidence for each service/repository pair. Reversing this clause would let metadata or Compass evidence override explicit admin ownership.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesRouteBuildsTypedServicesAndSeparateMappingEffects$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S5-service-tombstone-version-bump",
+      "file": "internal/providersync/pagerduty_services_route.go",
+      "find": "row.SourceVersionAt.UTC().Truncate(time.Microsecond).Add(time.Microsecond)",
+      "replace": "row.SourceVersionAt.UTC().Truncate(time.Microsecond).Add(0)",
+      "rationale": "A complete snapshot with an observation time equal to the prior version must still produce a strictly newer ReplacingMergeTree tombstone.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesTombstonesAdvanceVersionsAndPreserveMappingOwnership$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S6-mapping-tombstone-version-bump",
+      "file": "internal/providersync/pagerduty_services_effects_clickhouse.go",
+      "find": "row.SourceVersionAt.UTC().Truncate(time.Microsecond).Add(time.Microsecond)",
+      "replace": "row.SourceVersionAt.UTC().Truncate(time.Microsecond).Add(0)",
+      "rationale": "Mapping evidence has its own active/inactive lifecycle; its deactivation must win the source-version race independently of service tombstones.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesTombstonesAdvanceVersionsAndPreserveMappingOwnership$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S7-service-tenant-fence",
+      "file": "internal/providersync/pagerduty_services_effects_clickhouse.go",
+      "find": "if row.OrgID != claim.OrgID || row.Provider != \"pagerduty\" ||\n\t\t\trow.ProviderInstanceID == \"\" || row.ProviderInstanceID != strings.ToLower(row.ProviderInstanceID) ||\n\t\t\trow.SourceEntityType != \"service\"",
+      "replace": "if false || row.Provider != \"pagerduty\" ||\n\t\t\trow.ProviderInstanceID == \"\" || row.ProviderInstanceID != strings.ToLower(row.ProviderInstanceID) ||\n\t\t\trow.SourceEntityType != \"service\"",
+      "rationale": "Every service effect row must remain inside the claimed organization; accepting a foreign org row would cross the analytics tenant boundary.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesEffectsRejectForeignScopeOrderingTamperAndMixedInstances$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S8-pagerduty-account-fence",
+      "file": "internal/providersync/pagerduty_services_effects_clickhouse.go",
+      "find": "if instance != value {",
+      "replace": "if false {",
+      "rationale": "One effect payload must contain one credential-derived PagerDuty account. Allowing mixed subdomains makes active-row queries and tombstones ambiguous across accounts.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesEffectsRejectForeignScopeOrderingTamperAndMixedInstances$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S9-mapping-provenance-ownership",
+      "file": "internal/providersync/pagerduty_services_effects_clickhouse.go",
+      "find": "row.RelationshipProvenance == nil ||\n\t\t\t*row.RelationshipProvenance != row.SourceEntityType",
+      "replace": "row.RelationshipProvenance == nil ||\n\t\t\tfalse",
+      "rationale": "Repository-mapping evidence must retain the source enum as relationship provenance; accepting a different value would erase the ownership boundary between service rows and mapping producers.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServicesEffectsRejectForeignScopeOrderingTamperAndMixedInstances$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S10-service-omitted-row-tombstone",
+      "file": "internal/providersync/pagerduty_services_effects_clickhouse.go",
+      "find": "allRows := append([]pagerDutyServiceRow(nil), rows...)\n\tfor _, existing := range active {\n\t\tif _, present := seen[existing.ID]; present {\n\t\t\tcontinue\n\t\t}",
+      "replace": "allRows := append([]pagerDutyServiceRow(nil), rows...)\n\tfor _, existing := range active {\n\t\tif _, present := seen[existing.ID]; !present {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "A complete successful services snapshot must tombstone every previously active service omitted by the provider, not leave stale rows active.",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyServicesEffectsUseMigratedClickHouseForReplayTombstonesTenantAndLease$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S11-mapping-omitted-row-tombstone",
+      "file": "internal/providersync/pagerduty_services_effects_clickhouse.go",
+      "find": "allRows := append([]pagerDutyServiceRepositoryMappingRow(nil), rows...)\n\tfor _, existing := range active {\n\t\tif _, present := seen[existing.ID]; present {\n\t\t\tcontinue\n\t\t}",
+      "replace": "allRows := append([]pagerDutyServiceRepositoryMappingRow(nil), rows...)\n\tfor _, existing := range active {\n\t\tif _, present := seen[existing.ID]; !present {\n\t\t\tcontinue\n\t\t}",
+      "rationale": "Mapping reconciliation is an independent complete snapshot. An omitted source mapping must become inactive with valid_to evidence, even when its service row remains present.",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyServicesEffectsUseMigratedClickHouseForReplayTombstonesTenantAndLease$", "./internal/providersync/"]]
+    }
+  ]
+}

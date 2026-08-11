@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "name": "PagerDuty business-services typed route and complete-snapshot effects",
+  "$limitation": "This plan covers the provider-owned business-services collection, typed normalization, canonical identity, and ClickHouse complete-snapshot tombstone/readback fences. Executor registration, capability/matrix wiring, route activation, and deployment remain intentionally outside this provider-only slice.",
+  "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+  "mutations": [
+    {
+      "id": "B1-dataset-identity-guard",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "claim.Provider != \"pagerduty\" || claim.Dataset != \"business-services\" ||",
+      "replace": "claim.Provider != \"pagerduty\" || claim.Dataset != \"business-service\" ||",
+      "rationale": "The route must accept exactly the checked-in business-services dataset identity; a singular alias must fail closed rather than collecting under the wrong contract.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyBusinessServicesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B2-business-services-path",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "Path: \"/business_services\", DataKey: \"business_services\",",
+      "replace": "Path: \"/services\", DataKey: \"business_services\",",
+      "rationale": "PagerDuty business services are collected from the dedicated /business_services endpoint; routing to /services would silently collect a different resource family.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyBusinessServicesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B3-business-services-response-key",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "Path: \"/business_services\", DataKey: \"business_services\",",
+      "replace": "Path: \"/business_services\", DataKey: \"services\",",
+      "rationale": "The response key is part of PagerDuty's typed page contract; accepting the wrong key would turn a non-empty source response into an unproven empty snapshot.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyBusinessServicesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B4-description-preserved",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "Description: payload.Description, ServiceType: &serviceType,",
+      "replace": "Description: nil, ServiceType: &serviceType,",
+      "rationale": "Python's business-service normalizer persists the typed source description; dropping it is a row-level parity defect.",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "B5-business-service-type",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "serviceType := \"business\"",
+      "replace": "serviceType := \"technical\"",
+      "rationale": "Business services share operational_services with technical services but must retain the canonical service_type discriminator.",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "B6-business-source-family",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "SourceEntityType: \"business_service\", ExternalID: externalID,",
+      "replace": "SourceEntityType: \"service\", ExternalID: externalID,",
+      "rationale": "The source_entity_type separates business-service rows from PagerDuty technical services in the shared ClickHouse table and in complete-snapshot reconciliation.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyBusinessServicesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B7-active-row-filter",
+      "file": "internal/providersync/pagerduty_business_services_effects_clickhouse.go",
+      "find": "FROM operational_services FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+      "replace": "FROM operational_services FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 1",
+      "rationale": "Complete snapshots must load active business-service rows before writing so omitted rows receive tombstones; selecting deleted rows loses the reconciliation set.",
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyBusinessServicesEffectUsesMigratedClickHouseTombstonesAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B8-tenant-fence",
+      "file": "internal/providersync/pagerduty_business_services_effects_clickhouse.go",
+      "find": "FROM operational_services FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+      "replace": "FROM operational_services FINAL WHERE org_id != ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+      "rationale": "The complete-snapshot active-row read must stay tenant-scoped; weakening org_id equality allows one organization’s PagerDuty snapshot to mutate another’s services.",
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyBusinessServicesEffectUsesMigratedClickHouseTombstonesAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B9-tombstone-version-bump",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "Add(time.Microsecond)",
+      "replace": "Add(0)",
+      "rationale": "A tombstone observed at the same timestamp as its active row must win ReplacingMergeTree deterministically, so its source version is strictly advanced by one microsecond.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyBusinessServicesTombstoneBumpsSourceVersionAndPreservesIdentity$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B10-instance-scope-fence",
+      "file": "internal/providersync/pagerduty_business_services_effects_clickhouse.go",
+      "find": "if instance != rowInstance {",
+      "replace": "if false && instance != rowInstance {",
+      "rationale": "A batch may not mix PagerDuty account identities; disabling the instance equality fence can merge canonical service rows across accounts.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyBusinessServicesEffectRejectsForeignScopeOrderingTamperAndMixedInstances$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B11-omitted-row-readback-fence",
+      "file": "internal/providersync/pagerduty_business_services_effects_clickhouse.go",
+      "find": "if _, present := seen[row.ID]; !present {",
+      "replace": "if _, present := seen[row.ID]; present {",
+      "rationale": "Readback must reject a snapshot when an active business service remains outside the returned source set; otherwise a partial write can report exact.",
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyBusinessServicesEffectUsesMigratedClickHouseTombstonesAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "B12-tombstone-state",
+      "file": "internal/providersync/pagerduty_business_services_route.go",
+      "find": "row.IsDeleted = true",
+      "replace": "row.IsDeleted = false",
+      "rationale": "An omitted source row must be persisted as a deleted typed OperationalService tombstone; leaving it active defeats complete-snapshot reconciliation.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyBusinessServicesTombstoneBumpsSourceVersionAndPreservesIdentity$", "./internal/providersync/"]]
+    }
+  ]
+}

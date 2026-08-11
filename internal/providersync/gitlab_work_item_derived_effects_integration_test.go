@@ -15,7 +15,7 @@ import (
 
 // This suite deliberately uses githubDerivedIntegrationConn: it applies the
 // production ClickHouse migration chain and authors no local DDL. The GitLab
-// dispatcher is then exercised through the same nine schema-specific adapters
+// dispatcher is then exercised through the same ten schema-specific adapters
 // used by the provider route, with the provider identity kept as "gitlab".
 func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
@@ -28,15 +28,26 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	}
 
 	claim := nativeTestClaim("gitlab", "work-items")
-	claim.OrgID = githubDerivedIntegrationOrg
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	now := time.Date(2026, 8, 5, 0, 30, 0, 123000000, time.UTC)
 	day := newGitHubWorkItemDerivedDay(now)
 	metricDay := newGitHubWorkItemMetricDay(now)
 	repoID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	orgID := uuid.MustParse(claim.OrgID)
 	teamID, teamName := "team-a", "Team A"
 	area, rule := "security", "sec_general"
 	assignee := "dev@example.com"
 	ratio := 0.5
+	actor := "chatgpt-codex[bot]"
+	aiAttribution := gitlabAIAttributionRow{
+		RecordID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("gitlab-integration-ai")),
+		OrgID:    orgID, Provider: "gitlab", SubjectType: "pull_request", SubjectID: "9",
+		RepoID: &repoID, Kind: "agent_created", Source: "bot_author", Confidence: 0.9,
+		Actor: &actor, Evidence: map[string]any{
+			"login": actor, "user_type": "Bot", "app_slug": nil, "known_ai_bot": true,
+		},
+		ObservedAt: now.Add(-48 * time.Hour), IngestedAt: now,
+	}
 
 	estimate := gitlabEstimateCoverageMetricsDailyRow{
 		Day: day, Provider: "gitlab", WorkScopeID: "acme/api", TeamID: &teamID,
@@ -82,6 +93,7 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	}
 
 	effects, err := BuildGitLabWorkItemDerivedEffects(GitLabWorkItemDerivedEffectRows{
+		AIAttributions:                 []gitlabAIAttributionRow{aiAttribution},
 		EstimateCoverageMetricsDaily:   []gitlabEstimateCoverageMetricsDailyRow{estimate},
 		InvestmentClassificationsDaily: []gitlabInvestmentClassificationDailyRow{classification},
 		InvestmentMetricsDaily:         []gitlabInvestmentMetricsDailyRow{investment},
@@ -143,10 +155,20 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	recoveryGuard := &secondAssertionLosesLease{}
 	recoverySink := sink
 	recoverySink.EstimateCoverageMetricsDaily.Lease = recoveryGuard
-	if err := recoverySink.WriteEffect(ctx, claim, effects[0]); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+	var estimateEffect EffectBatch
+	for _, effect := range effects {
+		if effect.Destination == "estimate_coverage_metrics_daily" {
+			estimateEffect = effect
+			break
+		}
+	}
+	if estimateEffect.Destination == "" {
+		t.Fatal("estimate effect missing")
+	}
+	if err := recoverySink.WriteEffect(ctx, claim, estimateEffect); !errors.Is(err, providerfoundation.ErrLeaseLost) {
 		t.Fatalf("post-write lease loss error=%v", err)
 	}
-	if inspection, inspectErr := sink.InspectEffect(ctx, claim, effects[0]); inspectErr != nil || inspection != EffectExact {
+	if inspection, inspectErr := sink.InspectEffect(ctx, claim, estimateEffect); inspectErr != nil || inspection != EffectExact {
 		t.Fatalf("recovery readback: inspection=%v error=%v", inspection, inspectErr)
 	}
 }

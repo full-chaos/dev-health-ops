@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "GitLab canonical work-items raw parity (CHAOS-3723)",
   "build": ["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-run", "^$", "./internal/providersync/"],
-  "$limitation": "This provider-local plan covers canonical-claim admission, project binding through the real GitLab route, pagination caps, label/history/comment/link/MR collection, Unicode comment measurement, derived-gap watermark withholding, typed six-fact effects, deterministic effect identity, and lease fencing. The integration-tagged ClickHouse test is the real schema/readback proof. It deliberately excludes registry, capability matrix, config, deployment, scheduler, and worker activation wiring; those are separate slices.",
+  "$limitation": "This provider-local plan covers canonical-claim admission, project binding through the real GitLab route, pagination caps, label/history/comment/link/MR collection, Unicode comment measurement, raw-only derived-gap watermark withholding, typed six-fact effects, deterministic effect identity, and lease fencing. The complete ten-destination derived family and sixteen-effect composition have their own plan. The integration-tagged ClickHouse test is the real schema/readback proof. It deliberately excludes registry, capability matrix, config, deployment, scheduler, and worker activation wiring; those are separate slices.",
   "mutations": [
     {
       "id": "W1-claim-provider-guard",
@@ -91,7 +91,7 @@
       "file": "internal/providersync/gitlab_work_items_route.go",
       "find": "if includeMRs {",
       "replace": "if false && includeMRs {",
-      "rationale": "the canonical provider batch includes merge-request work items and their history/comments, even though fetch_gitlab_work_items uses MRs only for blank-tenant attribution avoidance",
+      "rationale": "the canonical provider batch includes merge-request work items, authoritative AI inputs, history, and comments",
       "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
     },
     {
@@ -105,16 +105,16 @@
     {
       "id": "W13-derived-gap-holds-watermark",
       "file": "internal/providersync/gitlab_work_items_route.go",
-      "find": "WatermarkHeldForDerivedGap:       true",
-      "replace": "WatermarkHeldForDerivedGap:       false",
+      "find": "WatermarkHeldForDerivedGap:       len(derivedUnimplemented) > 0,",
+      "replace": "WatermarkHeldForDerivedGap:       false,",
       "rationale": "the typed result must honestly report that ten of sixteen derived destinations are not implemented, so callers cannot advance completion as if the family were whole",
       "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
     },
     {
       "id": "W14-watermark-is-withheld",
       "file": "internal/providersync/gitlab_work_items_route.go",
-      "find": "Effects: effects, Result: result, Watermark: nil",
-      "replace": "Effects: effects, Result: result, Watermark: claim.BeforeAt",
+      "find": "var watermark *time.Time",
+      "replace": "watermark := claim.BeforeAt",
       "rationale": "a route with an explicit ten-destination derived gap must not advance the leased watermark",
       "proof": [["env", "GOCACHE=/tmp/chaos-gitlab-go-cache", "go", "test", "-count=1", "-run", "^TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap$", "./internal/providersync/"]]
     },

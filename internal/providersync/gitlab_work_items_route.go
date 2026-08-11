@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -37,9 +38,7 @@ var gitLabWorkItemRawDestinations = []string{
 
 // gitLabWorkItemDerivedGap is the raw-only route's honest remainder of the
 // 16-destination canonical work-item family. Once the typed deriver is injected
-// at the processor boundary, its nine concrete destinations are removed and
-// only the AI producer gap remains. No empty effect is manufactured for that
-// missing producer.
+// at the processor boundary, all ten concrete derived destinations are emitted.
 var gitLabWorkItemDerivedGap = []string{
 	"ai_attribution",
 	"estimate_coverage_metrics_daily",
@@ -64,8 +63,9 @@ type GitLabWorkItemsRequestUsage struct {
 }
 
 // GitLabWorkItemsResult is the concrete provider result carried inside the
-// framework's legacy result map. It keeps the six-fact/gap claim typed even
-// though CompleteRouteBatch predates provider-specific result structs.
+// framework's legacy result map. It keeps raw/derived completion and watermark
+// withholding typed even though CompleteRouteBatch predates provider-specific
+// result structs.
 type GitLabWorkItemsResult struct {
 	WorkItemsSynced                  int      `json:"work_items_synced"`
 	TransitionsSynced                int      `json:"transitions_synced"`
@@ -341,6 +341,13 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			rows.WorkItems = append(rows.WorkItems, item)
 			rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 			rows.ReopenEvents = append(rows.ReopenEvents, reopens...)
+			attributions, attributionErr := normalizeGitLabMRAIAttributions(
+				claim, repoID, payload, normalizedAt,
+			)
+			if attributionErr != nil {
+				return CompleteRouteBatch{}, attributionErr
+			}
+			rows.AIAttributions = append(rows.AIAttributions, attributions...)
 			if fetchComments {
 				notes, notePages, noteErr := collectGitLabNotes(
 					ctx, &counted, root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
@@ -363,10 +370,25 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	derivedUnimplemented := append([]string(nil), gitLabWorkItemDerivedGap...)
 	derivedImplemented := []string{}
 	derivedRecords := 0
+	var watermark *time.Time
 	if handler.Derived != nil {
 		derived, deriveErr := handler.Derived.Derive(ctx, claim, rows, normalizedAt)
 		if deriveErr != nil {
 			return CompleteRouteBatch{}, deriveErr
+		}
+		if len(derived.Gaps) > 0 {
+			gaps := make([]string, 0, len(derived.Gaps))
+			for _, gap := range derived.Gaps {
+				if !gitlabWorkItemDerivedDestination(gap.Destination) ||
+					strings.TrimSpace(gap.AuthoritativeProducer) == "" ||
+					strings.TrimSpace(gap.Reason) == "" {
+					return CompleteRouteBatch{}, ErrInvalidConfiguration
+				}
+				gaps = append(gaps, gap.Destination)
+			}
+			return CompleteRouteBatch{}, fmt.Errorf(
+				"%w: %s", ErrGitLabWorkItemDerivedProducerUnavailable, strings.Join(gaps, ", "),
+			)
 		}
 		derivedEffects, effectErr := BuildGitLabWorkItemDerivedEffects(derived.EffectRows())
 		if effectErr != nil {
@@ -374,11 +396,13 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		}
 		effects = append(effects, derivedEffects...)
 		derivedImplemented = derived.producedDestinations()
-		derivedUnimplemented = make([]string, 0, len(derived.Gaps))
-		for _, gap := range derived.Gaps {
-			derivedUnimplemented = append(derivedUnimplemented, gap.Destination)
+		derivedUnimplemented = []string{}
+		if len(derivedUnimplemented) == 0 && claim.BeforeAt != nil &&
+			(derived.Watermark == nil || !derived.Watermark.Equal(claim.BeforeAt.UTC())) {
+			return CompleteRouteBatch{}, ErrInvalidConfiguration
 		}
-		derivedRecords = len(derived.EstimateCoverageMetricsDaily) +
+		watermark = derived.Watermark
+		derivedRecords = len(derived.AIAttributions) + len(derived.EstimateCoverageMetricsDaily) +
 			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
 			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
 			len(derived.WorkItemMetricsDaily) + len(derived.WorkItemStateDurationsDaily) +
@@ -391,7 +415,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		RawDestinations:                  append([]string(nil), gitLabWorkItemRawDestinations...),
 		DerivedDestinationsImplemented:   append([]string(nil), derivedImplemented...),
 		DerivedDestinationsUnimplemented: derivedUnimplemented,
-		WatermarkHeldForDerivedGap:       true,
+		WatermarkHeldForDerivedGap:       len(derivedUnimplemented) > 0,
 	}
 	result := map[string]any{
 		"work_items_synced":                  len(rows.WorkItems),
@@ -403,11 +427,11 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		"raw_destinations":                   append([]string(nil), gitLabWorkItemRawDestinations...),
 		"derived_destinations_implemented":   derivedImplemented,
 		"derived_destinations_unimplemented": derivedUnimplemented,
-		"watermark_held_for_derived_gap":     true,
+		"watermark_held_for_derived_gap":     len(derivedUnimplemented) > 0,
 		"gitlab_work_items":                  summary,
 	}
 	return CompleteRouteBatch{
-		Effects: effects, Result: result, Watermark: nil,
+		Effects: effects, Result: result, Watermark: watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
 			Pages: pages, Records: len(rows.WorkItems) + len(rows.StatusTransitions) +

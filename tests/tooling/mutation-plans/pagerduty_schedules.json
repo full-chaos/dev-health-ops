@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "name": "PagerDuty schedules typed route and complete-snapshot effects",
+  "$limitation": "This plan covers provider-owned schedules collection, typed normalization, canonical identity, complete ClickHouse snapshot tombstones, and readback fences. On-call assignments remain a separate unit. Executor registration, capability/matrix wiring, route activation, and deployment remain outside this provider-only slice.",
+  "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+  "mutations": [
+    {
+      "id": "S1-dataset-identity-guard",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "claim.Provider != \"pagerduty\" || claim.Dataset != \"schedules\" || client == nil ||",
+      "replace": "claim.Provider != \"pagerduty\" || claim.Dataset != \"schedule\" || client == nil ||",
+      "rationale": "The route must accept exactly the schedules dataset identity; a singular alias must fail closed rather than collecting under the wrong contract.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutySchedulesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S2-schedules-path",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "Path: \"/schedules\", DataKey: \"schedules\",",
+      "replace": "Path: \"/services\", DataKey: \"schedules\",",
+      "rationale": "PagerDuty schedules are collected from the dedicated /schedules endpoint; a different path silently collects a different resource family.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutySchedulesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S3-schedules-response-key",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "Path: \"/schedules\", DataKey: \"schedules\",",
+      "replace": "Path: \"/schedules\", DataKey: \"services\",",
+      "rationale": "The response key is part of PagerDuty's typed page contract; using the wrong key must not turn non-empty source data into an empty snapshot.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutySchedulesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S4-timezone-preserved",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "Timezone: payload.TimeZone,",
+      "replace": "Timezone: nil,",
+      "rationale": "Python's schedule normalizer persists the typed time_zone field; dropping it is a row-level parity defect.",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "S5-schedule-source-family",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "SourceEntityType: \"schedule\", ExternalID: externalID,",
+      "replace": "SourceEntityType: \"service\", ExternalID: externalID,",
+      "rationale": "The source_entity_type distinguishes schedule rows from services and on-call assignments in the canonical source identity.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutySchedulesRouteUsesOffsetPaginationAndCanonicalRow$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S6-active-row-filter",
+      "file": "internal/providersync/pagerduty_schedules_effects_clickhouse.go",
+      "find": "FROM operational_on_call_schedules FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+      "replace": "FROM operational_on_call_schedules FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 1",
+      "rationale": "Complete snapshots must load active schedules before tombstoning omissions; selecting deleted rows loses the reconciliation set.",
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutySchedulesEffectUsesMigratedClickHouseTombstonesAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S7-tenant-fence",
+      "file": "internal/providersync/pagerduty_schedules_effects_clickhouse.go",
+      "find": "FROM operational_on_call_schedules FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+      "replace": "FROM operational_on_call_schedules FINAL WHERE org_id != ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+      "rationale": "Active-row reconciliation must remain organization-scoped; weakening org_id equality allows one tenant's snapshot to mutate another tenant's schedules.",
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutySchedulesEffectUsesMigratedClickHouseTombstonesAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S8-tombstone-version-bump",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "Add(time.Microsecond)",
+      "replace": "Add(0)",
+      "rationale": "A tombstone observed at the same timestamp as its active row must win ReplacingMergeTree deterministically by advancing source_version_at.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutySchedulesTombstoneBumpsSourceVersionAndPreservesIdentity$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S9-instance-scope-fence",
+      "file": "internal/providersync/pagerduty_schedules_effects_clickhouse.go",
+      "find": "if instance != rowInstance {",
+      "replace": "if false && instance != rowInstance {",
+      "rationale": "A batch may not mix PagerDuty account identities; disabling this fence can merge canonical schedules across accounts.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutySchedulesEffectRejectsForeignScopeOrderingTamperAndMixedInstances$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S10-omitted-row-readback-fence",
+      "file": "internal/providersync/pagerduty_schedules_effects_clickhouse.go",
+      "find": "if _, present := seen[row.ID]; !present {",
+      "replace": "if _, present := seen[row.ID]; present {",
+      "rationale": "Readback must reject a snapshot when an active schedule remains outside the returned source set; otherwise a partial write can report exact.",
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutySchedulesEffectUsesMigratedClickHouseTombstonesAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S11-tombstone-state",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "row.IsDeleted = true",
+      "replace": "row.IsDeleted = false",
+      "rationale": "An omitted source schedule must be persisted as a deleted typed tombstone; leaving it active defeats complete-snapshot reconciliation.",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutySchedulesTombstoneBumpsSourceVersionAndPreservesIdentity$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S12-source-url-priority",
+      "file": "internal/providersync/pagerduty_schedules_route.go",
+      "find": "if payload.HTMLURL != \"\" {",
+      "replace": "if false && payload.HTMLURL != \"\" {",
+      "rationale": "Python's canonical common normalization prefers html_url and falls back to self; changing that priority produces a field-level parity mismatch.",
+      "proof": [["bash", "ci/check_go.sh", "live-python-oracles"]]
+    }
+  ]
+}

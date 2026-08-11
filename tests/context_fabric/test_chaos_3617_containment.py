@@ -36,6 +36,9 @@ from dev_health_ops.context_fabric.graph_arm.projection import (
     READBACK_ATTRIBUTE_KEYS,
 )
 from dev_health_ops.context_fabric.graph_arm.readback import READ_ONLY_QUERIES
+from dev_health_ops.metrics.prometheus import (
+    CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ARM_ROOT = _REPO_ROOT / "src" / "dev_health_ops" / "context_fabric"
@@ -458,10 +461,19 @@ class TestOrgDeletionRegistration:
         import logging
 
         monkeypatch.delenv("CONTEXT_FABRIC_GRAPH_STORE_URI", raising=False)
+        before = CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
+            outcome="unconfigured", dry_run="false"
+        )._value.get()
         with caplog.at_level(logging.WARNING):
             assert await store_module.org_deletion_visit("org_alpha", False) == 0
         assert any("not configured" in record.message for record in caplog.records), (
             "the unchecked-absence residual must be logged, not silent"
+        )
+        assert (
+            CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
+                outcome="unconfigured", dry_run="false"
+            )._value.get()
+            == before + 1
         )
 
     @pytest.mark.asyncio
@@ -471,6 +483,9 @@ class TestOrgDeletionRegistration:
         """The data does not disappear because the library did."""
 
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
+        before = CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
+            outcome="unknown", dry_run="false"
+        )._value.get()
 
         async def _unavailable(*_args, **_kwargs):
             raise store_module.GraphitiUnavailableError("not installed")
@@ -478,6 +493,12 @@ class TestOrgDeletionRegistration:
         monkeypatch.setattr(store_module, "partition_exists_for", _unavailable)
         with pytest.raises(store_module.DeletionCompletenessUnknownError):
             await store_module.org_deletion_visit("org_alpha", False)
+        assert (
+            CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
+                outcome="unknown", dry_run="false"
+            )._value.get()
+            == before + 1
+        )
 
     @pytest.mark.asyncio
     async def test_zero_is_returned_only_after_a_positive_absence_check(
@@ -491,6 +512,9 @@ class TestOrgDeletionRegistration:
         """
 
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_STORE_URI", "falkor://127.0.0.1:1")
+        before = CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
+            outcome="absent", dry_run="false"
+        )._value.get()
         checked: list[str] = []
 
         async def _absent(org_id: str, _config: object) -> bool:
@@ -500,6 +524,12 @@ class TestOrgDeletionRegistration:
         monkeypatch.setattr(store_module, "partition_exists_for", _absent)
         assert await store_module.org_deletion_visit("org_alpha", False) == 0
         assert checked == ["org_alpha"], "zero was reported without checking"
+        assert (
+            CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
+                outcome="absent", dry_run="false"
+            )._value.get()
+            == before + 1
+        )
 
     @pytest.mark.asyncio
     async def test_an_unreachable_configured_store_fails_visibly(

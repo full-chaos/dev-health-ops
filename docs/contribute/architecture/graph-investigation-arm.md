@@ -415,6 +415,27 @@ separate audit-log store, since the acceptance text's other reading
 ("who/when entered or left the graph") is already answered by the
 structured logs above.
 
+The W7 operational metrics are also content-safe and use only closed labels:
+`devhealth_context_fabric_graph_query_outcome_total{outcome}` and
+`devhealth_context_fabric_graph_query_duration_seconds{outcome}` cover the
+bounded query seam; `devhealth_context_fabric_graph_projection_writes_total{outcome}`
+covers projection success, refusal, failure and cancellation;
+`devhealth_context_fabric_graph_watermark_state_total{state}` and
+`devhealth_context_fabric_graph_watermark_lag_seconds` cover freshness;
+`devhealth_context_fabric_graph_purges_total{outcome,dry_run}` covers partition
+purges; `devhealth_context_fabric_graph_document_removal_outcome_total{outcome,reason}`
+covers removal/no-op/failure/cancellation; and
+`devhealth_context_fabric_graph_org_deletion_visits_total{outcome,dry_run}`
+covers every registered org-deletion visit, including unconfigured, unknown,
+failure, cancellation and close failure. None carries an organization,
+partition, document, question, title, body or prompt label.
+
+Known follow-up (not fixed in W7): `purge_org` drops the graph keyspace before
+deleting the separate raw watermark key. If the watermark delete fails after
+the graph drop, an orphan freshness key can remain; the deletion warning and
+visit outcome make that failure visible, but cleanup/reconciliation of orphan
+watermarks needs a separate change.
+
 ## Semantic and conversational subject resolution: a second leg
 
 Everything above resolves a subject by **stored text**:
@@ -484,10 +505,14 @@ change was legitimate rather than drift — read it before trusting any
 number quoted from that artifact. Reproduce with:
 
 ```
-CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389 \
+export GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"
+docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store
+GRAPH_TRIAL_STORE_PORT="$(docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379 | awk -F: '{print $NF}')"
+CONTEXT_FABRIC_GRAPH_STORE_URI="falkor://127.0.0.1:$GRAPH_TRIAL_STORE_PORT" \
 CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1 \
 CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED=1 \
 uv run python -m trials.chaos_3647.runner
+docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans
 ```
 
 Two things worth knowing before reading that artifact:
@@ -530,6 +555,7 @@ Two things worth knowing before reading that artifact:
 | Content-safe logs | `IndexWatermark.detail_for` — timestamps and counts only |
 | Exact dependency/projection/query versions | `versions.*` on every packet; `backend.graphiti_version()` reads installed metadata |
 | Single-document, prompt removal | `store.GraphArmStore.remove_document` (issue 3632) — see [Embedded documents](#embedded-documents-issue-3632) |
+| Graph operational metrics | `metrics/prometheus.py`: `devhealth_context_fabric_graph_query_outcome_total{outcome}`, `devhealth_context_fabric_graph_query_duration_seconds{outcome}`, `devhealth_context_fabric_graph_projection_writes_total{outcome}`, `devhealth_context_fabric_graph_watermark_state_total{state}`, `devhealth_context_fabric_graph_watermark_lag_seconds`, `devhealth_context_fabric_graph_purges_total{outcome,dry_run}`, `devhealth_context_fabric_graph_document_removal_outcome_total{outcome,reason}`, `devhealth_context_fabric_graph_org_deletion_visits_total{outcome,dry_run}` |
 | Document indexing/removal metrics | `metrics/prometheus.py`: `devhealth_context_fabric_documents_indexed_total`, `devhealth_context_fabric_documents_removed_total{reason}` |
 | Document index audit query | `store.GraphArmStore.list_indexed_documents` — current-state listing, trust/evidence metadata included, title only |
 
@@ -614,27 +640,36 @@ deletion run.
 # Compose interpolates EVERY service before it filters by profile, so this
 # needs the repo's usual root .env present (e.g. BUGSINK_SECRET_KEY) even
 # though none of those services start.
-docker compose --profile graph-trial up -d graph-trial-store
+export GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"
+docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store
 
-export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
+GRAPH_TRIAL_STORE_PORT="$(docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379 | awk -F: '{print $NF}')"
+export CONTEXT_FABRIC_GRAPH_STORE_URI="falkor://127.0.0.1:$GRAPH_TRIAL_STORE_PORT"
 
 # Install the optional extra.
 uv sync --extra context-graph-trial
 ```
 
-Port 6389, not 6379: `valkey` already owns 6379, and a trial store sharing a
-port with the production cache would be the "isolated datastore" requirement
-violated at the first hop. There is no named volume — the store holds only
-derived, rebuildable projection data, so `down` genuinely removes it.
+The generated project name and host port are both isolated. The random
+`GRAPH_TRIAL_PROJECT` overrides `compose.yml`'s intentionally fixed top-level
+name for this one store; without it, two worktrees would still address the
+same generated container. The host port is OS-assigned and bound to loopback,
+while the container keeps 6379 internally. Use the same project name with
+`docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store
+6379` before exporting the URI. There is no named volume — the store holds
+only derived, rebuildable projection data, so project-scoped `down` genuinely
+removes it.
 
 ## Reproduction
 
 ### The full arm suite, with the live half required
 
 ```bash
-export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
+GRAPH_TRIAL_STORE_PORT="$(docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379 | awk -F: '{print $NF}')"
+export CONTEXT_FABRIC_GRAPH_STORE_URI="falkor://127.0.0.1:$GRAPH_TRIAL_STORE_PORT"
 export CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1     # required: see below
 uv run pytest tests/context_fabric -q -p no:randomly
+docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans
 ```
 
 **Both variables are required, and the second is not optional polish.**

@@ -232,7 +232,10 @@ Expect `GUARD PROOF PASSED: 15/15 guards observed failing`, about 2m35s.
 3627 lane found that `scripts/chaos_3617_guard_injection.py` needs
 
 ```bash
-export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
+export GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"
+docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store
+GRAPH_TRIAL_STORE_PORT="$(docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379 | awk -F: '{print $NF}')"
+export CONTEXT_FABRIC_GRAPH_STORE_URI="falkor://127.0.0.1:$GRAPH_TRIAL_STORE_PORT"
 export CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1
 ```
 
@@ -242,6 +245,12 @@ and reports a guard as proven that was never exercised. The 3620 harness has
 no live-store mutations and is unaffected, but the two are usually run
 together and a survived-by-skip result is exactly the unearned green both
 harnesses exist to prevent.
+
+After the live harness finishes, tear down the same isolated project:
+
+```bash
+docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans
+```
 
 **Run it single-process, and never during the standing gate.** It edits files
 under `src/` and restores them; the unit tier runs under pytest-xdist with

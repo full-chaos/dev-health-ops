@@ -5,7 +5,7 @@ Defines application-level counters, histograms, and gauges for:
   - ClickHouse query latency
   - LLM API calls (OpenAI / Anthropic)
   - GitHub API calls (requests by endpoint/status, rate limit remaining)
-  - Context Fabric graph arm: embedded-surface document indexing/removal
+  - Context Fabric graph arm: bounded query, projection and deletion telemetry
 
 Usage:
     from dev_health_ops.metrics.prometheus import (
@@ -39,6 +39,47 @@ except ImportError:
     _prometheus_client_module = None
 
 _PROMETHEUS_AVAILABLE = _prometheus_client_module is not None
+
+# These labels are deliberately duplicated from the graph arm's public
+# contracts rather than accepting arbitrary strings.  Metrics are an ordinary
+# operational output, so source-controlled content must never become a label.
+_CONTEXT_FABRIC_GRAPH_QUERY_OUTCOMES = frozenset(
+    {
+        "completed",
+        "disabled",
+        "unavailable",
+        "stale",
+        "deadline_exceeded",
+        "cancelled",
+        "provider_failure",
+    }
+)
+_CONTEXT_FABRIC_GRAPH_PROJECTION_OUTCOMES = frozenset(
+    {"completed", "disabled", "failed", "cancelled"}
+)
+_CONTEXT_FABRIC_GRAPH_WATERMARK_STATES = frozenset(
+    {"available_current", "available_stale", "unavailable"}
+)
+_CONTEXT_FABRIC_GRAPH_PURGE_OUTCOMES = frozenset(
+    {"completed", "dry_run", "absent", "failed", "cancelled"}
+)
+_CONTEXT_FABRIC_GRAPH_DOCUMENT_REMOVAL_OUTCOMES = frozenset(
+    {"removed", "not_found", "failed", "cancelled"}
+)
+_CONTEXT_FABRIC_GRAPH_DOCUMENT_REMOVAL_REASONS = frozenset(
+    {"approval_revoked", "policy_forbidden", "cross_tenant"}
+)
+_CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISIT_OUTCOMES = frozenset(
+    {
+        "purged",
+        "dry_run",
+        "absent",
+        "unconfigured",
+        "failed",
+        "unknown",
+        "cancelled",
+    }
+)
 
 
 def _noop_counter(*args, **kwargs):
@@ -396,6 +437,65 @@ if _PROMETHEUS_AVAILABLE:
         ["reason"],
     )
 
+    CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_context_fabric_graph_query_outcome_total",
+        "Bounded graph investigation calls by closed transport outcome. "
+        "Labels contain only GraphQueryOutcome values.",
+        ["outcome"],
+    )
+
+    CONTEXT_FABRIC_GRAPH_QUERY_DURATION_SECONDS = _prometheus_client_module.Histogram(
+        "devhealth_context_fabric_graph_query_duration_seconds",
+        "Bounded graph investigation latency in seconds by closed transport outcome.",
+        ["outcome"],
+        buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+    )
+
+    CONTEXT_FABRIC_GRAPH_PROJECTION_WRITES_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_context_fabric_graph_projection_writes_total",
+        "Graph projection write attempts by closed result. A failed result "
+        "does not imply that a partial write occurred.",
+        ["outcome"],
+    )
+
+    CONTEXT_FABRIC_GRAPH_WATERMARK_STATE_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_context_fabric_graph_watermark_state_total",
+        "Graph watermark observations by closed freshness state.",
+        ["state"],
+    )
+
+    CONTEXT_FABRIC_GRAPH_WATERMARK_LAG_SECONDS = _prometheus_client_module.Histogram(
+        "devhealth_context_fabric_graph_watermark_lag_seconds",
+        "Observed graph watermark lag in seconds when a watermark exists. "
+        "Never-projected partitions contribute only to the unavailable state "
+        "counter.",
+        buckets=(0.0, 1.0, 10.0, 60.0, 300.0, 900.0, 3600.0, 21600.0, 86400.0),
+    )
+
+    CONTEXT_FABRIC_GRAPH_PURGES_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_context_fabric_graph_purges_total",
+        "Graph partition purge attempts by result and dry-run mode. Labels "
+        "contain no organization or partition identifiers.",
+        ["outcome", "dry_run"],
+    )
+
+    CONTEXT_FABRIC_GRAPH_DOCUMENT_REMOVAL_OUTCOME_TOTAL = (
+        _prometheus_client_module.Counter(
+            "devhealth_context_fabric_graph_document_removal_outcome_total",
+            "Graph document removal attempts by closed result and removal "
+            "reason. Labels contain no document identifiers or source text.",
+            ["outcome", "reason"],
+        )
+    )
+
+    CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_context_fabric_graph_org_deletion_visits_total",
+        "Organization-deletion visits to the optional graph store by closed "
+        "result and dry-run mode. Unknown means the configured store could not "
+        "prove deletion completeness.",
+        ["outcome", "dry_run"],
+    )
+
     # ---------------------------------------------------------------------------
     # Integration credentials (issue 3694)
     # ---------------------------------------------------------------------------
@@ -444,6 +544,14 @@ else:
     ASK_DEV_RETENTION_SWEEP_LAST_SUCCESS_TIMESTAMP = _noop_gauge()
     CONTEXT_FABRIC_DOCUMENTS_INDEXED_TOTAL = _noop_counter()
     CONTEXT_FABRIC_DOCUMENTS_REMOVED_TOTAL = _noop_counter()
+    CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL = _noop_counter()
+    CONTEXT_FABRIC_GRAPH_QUERY_DURATION_SECONDS = _noop_histogram()
+    CONTEXT_FABRIC_GRAPH_PROJECTION_WRITES_TOTAL = _noop_counter()
+    CONTEXT_FABRIC_GRAPH_WATERMARK_STATE_TOTAL = _noop_counter()
+    CONTEXT_FABRIC_GRAPH_WATERMARK_LAG_SECONDS = _noop_histogram()
+    CONTEXT_FABRIC_GRAPH_PURGES_TOTAL = _noop_counter()
+    CONTEXT_FABRIC_GRAPH_DOCUMENT_REMOVAL_OUTCOME_TOTAL = _noop_counter()
+    CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL = _noop_counter()
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
 
 
@@ -579,6 +687,90 @@ def record_context_fabric_document_removed(reason: str) -> None:
     """
 
     CONTEXT_FABRIC_DOCUMENTS_REMOVED_TOTAL.labels(reason=reason).inc()
+
+
+def _require_closed_label(value: str, allowed: frozenset[str], name: str) -> str:
+    if value not in allowed:
+        raise ValueError(f"{name} is not a closed Context Fabric telemetry label")
+    return value
+
+
+def record_context_fabric_graph_query(*, outcome: str, duration_seconds: float) -> None:
+    """Record one bounded graph investigation call.
+
+    The caller supplies the transport contract's closed outcome value.  An
+    unexpected value is a programming error, not a new metric cardinality.
+    """
+
+    safe_outcome = _require_closed_label(
+        outcome, _CONTEXT_FABRIC_GRAPH_QUERY_OUTCOMES, "outcome"
+    )
+    CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(outcome=safe_outcome).inc()
+    CONTEXT_FABRIC_GRAPH_QUERY_DURATION_SECONDS.labels(outcome=safe_outcome).observe(
+        duration_seconds
+    )
+
+
+def record_context_fabric_graph_projection(outcome: str) -> None:
+    """Record one graph projection write result without payload labels."""
+
+    safe_outcome = _require_closed_label(
+        outcome, _CONTEXT_FABRIC_GRAPH_PROJECTION_OUTCOMES, "outcome"
+    )
+    CONTEXT_FABRIC_GRAPH_PROJECTION_WRITES_TOTAL.labels(outcome=safe_outcome).inc()
+
+
+def record_context_fabric_graph_watermark(*, state: str, lag_seconds: float) -> None:
+    """Record a watermark freshness observation and, when available, lag."""
+
+    safe_state = _require_closed_label(
+        state, _CONTEXT_FABRIC_GRAPH_WATERMARK_STATES, "state"
+    )
+    CONTEXT_FABRIC_GRAPH_WATERMARK_STATE_TOTAL.labels(state=safe_state).inc()
+    if safe_state != "unavailable":
+        CONTEXT_FABRIC_GRAPH_WATERMARK_LAG_SECONDS.observe(max(0.0, lag_seconds))
+
+
+def record_context_fabric_graph_purge(*, outcome: str, dry_run: bool) -> None:
+    """Record one graph partition purge attempt."""
+
+    safe_outcome = _require_closed_label(
+        outcome, _CONTEXT_FABRIC_GRAPH_PURGE_OUTCOMES, "outcome"
+    )
+    CONTEXT_FABRIC_GRAPH_PURGES_TOTAL.labels(
+        outcome=safe_outcome, dry_run=str(dry_run).lower()
+    ).inc()
+
+
+def record_context_fabric_graph_document_removal(*, outcome: str, reason: str) -> None:
+    """Record a document-removal result with closed outcome and reason labels."""
+
+    safe_outcome = _require_closed_label(
+        outcome, _CONTEXT_FABRIC_GRAPH_DOCUMENT_REMOVAL_OUTCOMES, "outcome"
+    )
+    safe_reason = _require_closed_label(
+        reason,
+        _CONTEXT_FABRIC_GRAPH_DOCUMENT_REMOVAL_REASONS,
+        "reason",
+    )
+    CONTEXT_FABRIC_GRAPH_DOCUMENT_REMOVAL_OUTCOME_TOTAL.labels(
+        outcome=safe_outcome, reason=safe_reason
+    ).inc()
+
+
+def record_context_fabric_graph_org_deletion_visit(
+    *, outcome: str, dry_run: bool
+) -> None:
+    """Record an org-deletion visit without organization identifiers."""
+
+    safe_outcome = _require_closed_label(
+        outcome,
+        _CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISIT_OUTCOMES,
+        "outcome",
+    )
+    CONTEXT_FABRIC_GRAPH_ORG_DELETION_VISITS_TOTAL.labels(
+        outcome=safe_outcome, dry_run=str(dry_run).lower()
+    ).inc()
 
 
 @contextmanager

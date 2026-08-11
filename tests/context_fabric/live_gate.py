@@ -38,15 +38,16 @@ __all__ = [
     "require_live_store",
 ]
 
-_COMPOSE_HINT = (
-    "start it with `docker compose --profile graph-trial up -d "
-    f"graph-trial-store`, export {TRIAL_STORE_URI_VAR}=falkor://127.0.0.1:6389 "
-    f"AND set {REQUIRE_LIVE_FLAG}=1 -- the store URI is a conditional keep in "
-    "tests/_env_isolation.py whose lane sentinel is that flag, so the suite "
-    "scrubs the URI unless the live lane has announced itself. That is "
-    "deliberate: a URI that merely happened to be in your shell must never "
-    "turn into an unannounced live run"
-)
+_COMPOSE_HINT = f"""set `GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"`,
+start it with `docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store`,
+discover the OS-assigned port with `docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379`,
+then export {TRIAL_STORE_URI_VAR}=falkor://127.0.0.1:<port> AND set
+{REQUIRE_LIVE_FLAG}=1 -- the store URI is a conditional keep in
+tests/_env_isolation.py whose lane sentinel is that flag, so the suite scrubs
+the URI unless the live lane has announced itself. Tear the store down with
+`docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans`
+afterward. That is deliberate: a URI that merely happened to be in your shell
+must never turn into an unannounced live run"""
 
 
 @dataclass(frozen=True, slots=True)

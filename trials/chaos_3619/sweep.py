@@ -118,10 +118,15 @@ def _require_store_config() -> Any:
     config = trial_store_config()
     if config is None:
         raise RuntimeError(
-            "no live graph store configured. The sweep requires "
-            "CONTEXT_FABRIC_GRAPH_STORE_URI (e.g. falkor://127.0.0.1:6389); "
-            "it will not fall back to a projection reader, because a sweep "
-            "against a reader nobody ships is not this trial"
+            """no live graph store configured. Set
+GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)", launch with
+`docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store`,
+discover its OS-assigned host port with
+`docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379`,
+and export CONTEXT_FABRIC_GRAPH_STORE_URI for that port. The sweep will not
+fall back to a projection reader, because a sweep against a reader nobody ships
+is not this trial. After the run, tear it down with
+`docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans`"""
         )
     import socket
 

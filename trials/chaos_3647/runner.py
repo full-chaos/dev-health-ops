@@ -2,10 +2,14 @@
 
 Run it with the live store and a real embedding model::
 
-    CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389 \\
+    GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"
+    docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store
+    GRAPH_TRIAL_STORE_PORT="$(docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379 | awk -F: '{print $NF}')"
+    CONTEXT_FABRIC_GRAPH_STORE_URI="falkor://127.0.0.1:$GRAPH_TRIAL_STORE_PORT" \\
     CONTEXT_FABRIC_GRAPH_REQUIRE_LIVE=1 \\
     CONTEXT_FABRIC_GRAPH_PROJECTION_ENABLED=1 \\
     uv run python -m trials.chaos_3647.runner
+    docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans
 
 **Every precondition raises rather than degrades.** No live store, no API
 key, a non-semantic embedder — each is a hard stop with a message naming

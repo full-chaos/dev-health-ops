@@ -444,8 +444,12 @@ services:
   # of it and this stack behaves exactly as it did before -- the same
   # arrangement the repo-root compose.yml uses for the `go` profile.
   #
-  #   docker compose --profile graph-trial up -d graph-trial-store
-  #   export CONTEXT_FABRIC_GRAPH_STORE_URI=falkor://127.0.0.1:6389
+  #   export GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"
+  #   docker compose --project-name "$GRAPH_TRIAL_PROJECT" --profile graph-trial up -d graph-trial-store
+  #   GRAPH_TRIAL_STORE_PORT="$(docker compose --project-name "$GRAPH_TRIAL_PROJECT" port graph-trial-store 6379 | awk -F: '{print $NF}')"
+  #   export CONTEXT_FABRIC_GRAPH_STORE_URI="falkor://127.0.0.1:$GRAPH_TRIAL_STORE_PORT"
+  #   # After the trial:
+  #   docker compose --project-name "$GRAPH_TRIAL_PROJECT" down --volumes --remove-orphans
   #
   # Why FalkorDB: of the backends graphiti-core 0.29.3 ships drivers for
   # (Neo4j, FalkorDB, FalkorDB-lite, Kuzu, Neptune, Neo4j+OpenSearch), Kuzu
@@ -456,21 +460,13 @@ services:
   # traversal that could miss a node. Full write-up:
   # docs/contribute/architecture/graph-investigation-arm.md
   #
-  # Port 6389, NOT 6379: valkey above already owns 6379, and a trial store
-  # that silently shared a port with the production cache would be exactly
-  # the "isolated datastore" requirement violated at the first hop.
-  #
-  # The port is a literal, not a shell interpolation, and deliberately so:
-  # tests/acceptance/test_ask_dev_compose.py::
-  # test_launcher_hardens_compose_interpolation_env_for_every_var_it_boots
-  # requires every interpolation in this file to be triaged into the
-  # acceptance launcher's unset/export/ASK_DEV_ buckets, because an
-  # ambient shell value
-  # (e.g. from a direnv-loaded .env) can otherwise silently reach the
-  # acceptance stack's interpolation. A trial-only store needs no ambient
-  # port configurability, so removing the interpolation removes the hazard
-  # rather than annotating around it. Need a different port on your machine?
-  # Use a compose override file.
+  # Both isolation axes are required for parallel local environments. The host
+  # port is OS-assigned (`127.0.0.1::6379`), and `--project-name` overrides this
+  # file's intentionally fixed top-level name for the trial container/network.
+  # Without the latter, two worktrees would still address one generated
+  # container even though its host port was random. The container remains on
+  # 6379 internally; use the project-scoped `docker compose ... port` command
+  # above before exporting the URI.
   #
   # No named volume on purpose. The trial store holds only derived, rebuildable
   # projection data and the issue requires deterministic cleanup; keeping it
@@ -482,13 +478,12 @@ services:
   # compose exec` session cannot phone home either.
   graph-trial-store:
     image: falkordb/falkordb:v4.14.4
-    container_name: dev-health-ops-graph-trial-store
     profiles: ["graph-trial"]
     restart: unless-stopped
     environment:
       GRAPHITI_TELEMETRY_ENABLED: "false"
     ports:
-      - "6389:6379"
+      - "127.0.0.1::6379"
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s

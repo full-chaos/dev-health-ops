@@ -61,6 +61,10 @@ from typing import Any
 from dev_health_ops.metrics.prometheus import (
     record_context_fabric_document_removed,
     record_context_fabric_documents_indexed,
+    record_context_fabric_graph_document_removal,
+    record_context_fabric_graph_org_deletion_visit,
+    record_context_fabric_graph_projection,
+    record_context_fabric_graph_purge,
 )
 
 from .backend import (
@@ -431,6 +435,25 @@ class GraphArmStore:
     async def write_projection(
         self, projection: GraphProjection, *, budgets: TrialBudgets = DEFAULT_BUDGETS
     ) -> WriteResult:
+        """Write one projection and record its closed operational outcome."""
+
+        try:
+            result = await self._write_projection(projection, budgets=budgets)
+        except asyncio.CancelledError:
+            record_context_fabric_graph_projection("cancelled")
+            raise
+        except ProjectionDisabledError:
+            record_context_fabric_graph_projection("disabled")
+            raise
+        except Exception:
+            record_context_fabric_graph_projection("failed")
+            raise
+        record_context_fabric_graph_projection("completed")
+        return result
+
+    async def _write_projection(
+        self, projection: GraphProjection, *, budgets: TrialBudgets = DEFAULT_BUDGETS
+    ) -> WriteResult:
         """Write one projection. Structured only, no model call, no waiting.
 
         Three refusals before anything is written:
@@ -668,25 +691,35 @@ class GraphArmStore:
         metadata behind for an organization that no longer has any data.
         """
 
-        if not await self.partition_exists():
-            return 0
-        total = await self.count_nodes()
-        if dry_run:
+        try:
+            if not await self.partition_exists():
+                record_context_fabric_graph_purge(outcome="absent", dry_run=dry_run)
+                return 0
+            total = await self.count_nodes()
+            if dry_run:
+                record_context_fabric_graph_purge(outcome="dry_run", dry_run=True)
+                return total
+            # One keyspace per organization, so deletion is a drop: there is no
+            # partial state a failure could leave behind, and no node that a
+            # traversal-based delete could miss. A drop is a single fixed-cost
+            # operation regardless of partition size, so it belongs under the
+            # read bound, not the write one.
+            await self._bounded_read(
+                self._driver.client.select_graph(self._partition).delete(),
+                operation="purge_org",
+            )
+            await self._bounded_read(
+                self._driver.client.connection.delete(_watermark_key(self._partition)),
+                operation="purge_watermark",
+            )
+            record_context_fabric_graph_purge(outcome="completed", dry_run=False)
             return total
-        # One keyspace per organization, so deletion is a drop: there is no
-        # partial state a failure could leave behind, and no node that a
-        # traversal-based delete could miss. A drop is a single fixed-cost
-        # operation regardless of partition size, so it belongs under the
-        # read bound, not the write one.
-        await self._bounded_read(
-            self._driver.client.select_graph(self._partition).delete(),
-            operation="purge_org",
-        )
-        await self._bounded_read(
-            self._driver.client.connection.delete(_watermark_key(self._partition)),
-            operation="purge_watermark",
-        )
-        return total
+        except asyncio.CancelledError:
+            record_context_fabric_graph_purge(outcome="cancelled", dry_run=dry_run)
+            raise
+        except Exception:
+            record_context_fabric_graph_purge(outcome="failed", dry_run=dry_run)
+            raise
 
     async def remove_document(
         self, canonical_id: str, *, reason: DocumentRemovalReason
@@ -737,28 +770,36 @@ class GraphArmStore:
         uuid = observation_uuid(
             self._org_id, GraphObservationKind.DOCUMENT, canonical_id
         )
-        result = await self._bounded_write(
-            self._driver.execute_query(_DELETE_DOCUMENT_NODE_QUERY, uuid=uuid),
-            operation="remove_document",
-        )
-        records, _, _ = result
-        removed = bool(records) and int(records[0]["total"]) > 0
-        # canonical_id is an opaque internal identifier, logged the same way
-        # org_id is logged elsewhere in this module -- never the document's
-        # title or body, which is the content-safety line the acceptance
-        # text actually draws.
-        logger.info(
-            "context-fabric graph document %s %s in partition %s (reason=%s)",
-            canonical_id,
-            "removed" if removed else "not found; no-op",
-            self._partition,
-            reason.value,
-        )
-        # Telemetry only on an actual deletion -- a no-op (already absent,
-        # never approved) must not inflate a counter that is supposed to
-        # measure real index shrinkage.
+        reason_value = reason.value
+        outcome = "failed"
+        removed = False
+        try:
+            result = await self._bounded_write(
+                self._driver.execute_query(_DELETE_DOCUMENT_NODE_QUERY, uuid=uuid),
+                operation="remove_document",
+            )
+            records, _, _ = result
+            removed = bool(records) and int(records[0]["total"]) > 0
+            outcome = "removed" if removed else "not_found"
+            # canonical_id is an opaque internal identifier, logged the same
+            # way org_id is logged elsewhere in this module -- never the
+            # document's title or body.
+            logger.info(
+                "context-fabric graph document %s %s in partition %s (reason=%s)",
+                canonical_id,
+                "removed" if removed else "not found; no-op",
+                self._partition,
+                reason_value,
+            )
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            record_context_fabric_graph_document_removal(
+                outcome=outcome, reason=reason_value
+            )
         if removed:
-            record_context_fabric_document_removed(reason.value)
+            record_context_fabric_document_removed(reason_value)
         return removed
 
     async def list_indexed_documents(self) -> tuple[IndexedDocumentSummary, ...]:
@@ -901,7 +942,13 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
     unverified deletion is visible.
     """
 
-    config = trial_store_config()
+    try:
+        config = trial_store_config()
+    except Exception:
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="failed", dry_run=dry_run
+        )
+        raise
     if config is None:
         # NOT an "unknown". This is the production default -- the trial store
         # is opt-in per environment and is configured nowhere in production --
@@ -925,10 +972,21 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
             org_id,
             TRIAL_STORE_URI_VAR,
         )
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="unconfigured", dry_run=dry_run
+        )
         return 0
     try:
         exists = await partition_exists_for(org_id, config)
+    except asyncio.CancelledError:
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="cancelled", dry_run=dry_run
+        )
+        raise
     except GraphitiUnavailableError as exc:
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="unknown", dry_run=dry_run
+        )
         raise DeletionCompletenessUnknownError(
             f"deletion completeness unknown for org {org_id}: the trial graph "
             "store is configured but graphiti-core is not installed, so its "
@@ -945,6 +1003,9 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
         # infrastructure blip rather than as "this organization's derived data
         # was never checked". The docstring promises an unknown; the recorded
         # warning has to say so too.
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="unknown", dry_run=dry_run
+        )
         raise DeletionCompletenessUnknownError(
             f"deletion completeness unknown for org {org_id}: the trial graph "
             f"store at {config.host}:{config.port} is configured but could "
@@ -958,9 +1019,29 @@ async def org_deletion_visit(org_id: str, dry_run: bool) -> int:
         logger.info(
             "context-fabric graph trial store holds no partition for org %s", org_id
         )
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="absent", dry_run=dry_run
+        )
         return 0
-    store = GraphArmStore.for_org(org_id, config=config)
+    store: GraphArmStore | None = None
     try:
-        return await store.purge_org(dry_run=dry_run)
-    finally:
-        await store.close()
+        try:
+            store = GraphArmStore.for_org(org_id, config=config)
+            count = await store.purge_org(dry_run=dry_run)
+        finally:
+            if store is not None:
+                await store.close()
+    except asyncio.CancelledError:
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="cancelled", dry_run=dry_run
+        )
+        raise
+    except Exception:
+        record_context_fabric_graph_org_deletion_visit(
+            outcome="failed", dry_run=dry_run
+        )
+        raise
+    record_context_fabric_graph_org_deletion_visit(
+        outcome="dry_run" if dry_run else "purged", dry_run=dry_run
+    )
+    return count

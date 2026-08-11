@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
+import yaml
 
 from dev_health_ops.api.dev.contracts_v2.base import SourceRequirementState
 from dev_health_ops.api.dev.investigation_contract import TruncationReason
@@ -32,6 +34,14 @@ from dev_health_ops.context_fabric.graph_arm.readback import ProjectionGraphRead
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
 
 _WINDOW_END = datetime(2026, 8, 8, tzinfo=UTC)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_UNIQUE_GRAPH_TRIAL_PROJECT = 'GRAPH_TRIAL_PROJECT="graph-trial-$(openssl rand -hex 6)"'
+_PROJECT_SCOPED_COMPOSE = 'docker compose --project-name "$GRAPH_TRIAL_PROJECT"'
+_PROJECT_SCOPED_LAUNCH = (
+    f"{_PROJECT_SCOPED_COMPOSE} --profile graph-trial up -d graph-trial-store"
+)
+_PROJECT_SCOPED_PORT = f"{_PROJECT_SCOPED_COMPOSE} port graph-trial-store 6379"
+_PROJECT_SCOPED_DOWN = f"{_PROJECT_SCOPED_COMPOSE} down --volumes --remove-orphans"
 
 
 class TestFlagsDefaultOff:
@@ -97,6 +107,50 @@ class TestTrialStoreConfiguration:
 
         with pytest.raises(ValueError, match="names no port"):
             TrialStoreConfig(uri="falkor://127.0.0.1").port
+
+    def test_active_trial_store_guidance_is_parallel_environment_safe(self) -> None:
+        """The host port and Compose project must both be isolated.
+
+        An OS-assigned port alone is insufficient: ``compose.yml`` has a fixed
+        top-level name, so two worktrees without ``--project-name`` would still
+        address the same generated container.
+        """
+
+        compose_path = _REPO_ROOT / "compose.yml"
+        compose = yaml.safe_load(compose_path.read_text())
+        assert compose["name"] == "dev-health-ops"
+        service = compose["services"]["graph-trial-store"]
+        assert "container_name" not in service
+        assert service["ports"] == ["127.0.0.1::6379"]
+        assert "6389:6379" not in compose_path.read_text()
+
+        active_guidance = (
+            compose_path,
+            _REPO_ROOT
+            / "docs"
+            / "contribute"
+            / "architecture"
+            / "graph-investigation-arm.md",
+            _REPO_ROOT
+            / "docs"
+            / "contribute"
+            / "architecture"
+            / "ask-dev-graph-safety-proof.md",
+            _REPO_ROOT / "tests" / "context_fabric" / "live_gate.py",
+            _REPO_ROOT / "trials" / "chaos_3619" / "sweep.py",
+            _REPO_ROOT / "trials" / "chaos_3647" / "runner.py",
+        )
+        for path in active_guidance:
+            guidance = path.read_text()
+            assert _UNIQUE_GRAPH_TRIAL_PROJECT in guidance, path
+            assert _PROJECT_SCOPED_COMPOSE in guidance, path
+            assert _PROJECT_SCOPED_LAUNCH in guidance, path
+            assert _PROJECT_SCOPED_PORT in guidance, path
+            assert _PROJECT_SCOPED_DOWN in guidance, path
+            assert "falkor://127.0.0.1:6389" not in guidance, path
+            assert "docker compose --profile graph-trial" not in guidance, path
+            assert "docker compose port graph-trial-store" not in guidance, path
+            assert "docker compose down" not in guidance, path
 
 
 class TestBudgets:

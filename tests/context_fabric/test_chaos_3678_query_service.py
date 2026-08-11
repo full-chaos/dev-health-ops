@@ -71,6 +71,10 @@ from dev_health_ops.context_fabric.graph_arm.store import (
 )
 from dev_health_ops.context_fabric.graph_arm.vocabulary import GraphEntityKind
 from dev_health_ops.context_fabric.graph_arm.watermark import IndexWatermark
+from dev_health_ops.metrics.prometheus import (
+    CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL,
+    CONTEXT_FABRIC_GRAPH_WATERMARK_STATE_TOTAL,
+)
 from tests.context_fabric import live_gate
 
 #: A fixed reference instant for constructing WATERMARK values only -- always
@@ -240,10 +244,19 @@ class TestDisabled:
     pytestmark = pytest.mark.asyncio
 
     async def test_disabled_when_the_read_flag_is_off(self) -> None:
+        before = CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+            outcome="disabled"
+        )._value.get()
         service = _query(_FakeStore())
         result = await service.investigate(_request())
         assert result.outcome is GraphQueryOutcome.DISABLED
         assert result.packet is None
+        assert (
+            CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+                outcome="disabled"
+            )._value.get()
+            == before + 1
+        )
 
     async def test_disabled_never_constructs_a_store(self, monkeypatch) -> None:
         """The read flag is checked before the store factory is ever called."""
@@ -298,6 +311,12 @@ class TestStale:
 
     async def test_a_watermark_beyond_tolerance_is_stale(self, monkeypatch) -> None:
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+        before = CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+            outcome="stale"
+        )._value.get()
+        watermark_before = CONTEXT_FABRIC_GRAPH_WATERMARK_STATE_TOTAL.labels(
+            state="available_stale"
+        )._value.get()
         store = _FakeStore(
             watermark=IndexWatermark(
                 indexed_through=_NOW - timedelta(days=2), records_indexed=5
@@ -307,6 +326,18 @@ class TestStale:
         result = await service.investigate(_request(deadline=_soon()))
         assert result.outcome is GraphQueryOutcome.STALE
         assert result.packet is None
+        assert (
+            CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+                outcome="stale"
+            )._value.get()
+            == before + 1
+        )
+        assert (
+            CONTEXT_FABRIC_GRAPH_WATERMARK_STATE_TOTAL.labels(
+                state="available_stale"
+            )._value.get()
+            == watermark_before + 1
+        )
 
     async def test_a_partial_watermark_is_stale_even_if_recent(
         self, monkeypatch
@@ -347,12 +378,21 @@ class TestDeadlineExceeded:
         self, monkeypatch
     ) -> None:
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+        before = CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+            outcome="deadline_exceeded"
+        )._value.get()
         store = _FakeStore(hang_seconds=999.0)
         service = _query(store)
         near_deadline = datetime.now(UTC) + timedelta(milliseconds=50)
         result = await service.investigate(_request(deadline=near_deadline))
         assert result.outcome is GraphQueryOutcome.DEADLINE_EXCEEDED
         assert store.closed is True, "the store is still closed on a deadline timeout"
+        assert (
+            CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+                outcome="deadline_exceeded"
+            )._value.get()
+            == before + 1
+        )
 
 
 class TestCancelled:
@@ -380,6 +420,9 @@ class TestUnsupportedMechanism:
         self, monkeypatch
     ) -> None:
         monkeypatch.setenv("CONTEXT_FABRIC_GRAPH_READ_ENABLED", "1")
+        before = CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+            outcome="provider_failure"
+        )._value.get()
         store = _FakeStore(watermark=_fresh_watermark())
         service = _query(store)
         result = await service.investigate(
@@ -391,6 +434,12 @@ class TestUnsupportedMechanism:
         assert result.outcome is GraphQueryOutcome.PROVIDER_FAILURE
         assert result.diagnostic is not None
         assert "no graph mechanism" in result.diagnostic
+        assert (
+            CONTEXT_FABRIC_GRAPH_QUERY_OUTCOME_TOTAL.labels(
+                outcome="provider_failure"
+            )._value.get()
+            == before + 1
+        )
 
 
 # SUBJECTLESS_COHORT_DISCOVERY graduated to a real COMPLETED path in

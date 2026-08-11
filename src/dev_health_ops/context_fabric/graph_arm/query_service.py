@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -90,6 +91,10 @@ from dev_health_ops.api.dev.graph_investigation_query import (
 from dev_health_ops.api.dev.investigation_contract import (
     ComparisonShape,
     QuestionFamilyID,
+)
+from dev_health_ops.metrics.prometheus import (
+    record_context_fabric_graph_query,
+    record_context_fabric_graph_watermark,
 )
 
 from .cohort import build_cohort
@@ -351,6 +356,38 @@ class ProductionGraphInvestigationQuery:
         self._signer_factory = signer_factory
 
     async def investigate(self, request: GraphInvestigationRequest) -> GraphQueryResult:
+        """Record bounded query outcome/latency around the production seam."""
+
+        started = time.perf_counter()
+        try:
+            result = await self._investigate(request)
+        except asyncio.CancelledError:
+            result = GraphQueryResult(
+                outcome=GraphQueryOutcome.CANCELLED,
+                diagnostic=_diagnostic(
+                    "cancellation", "the calling task was cancelled"
+                ),
+            )
+            record_context_fabric_graph_query(
+                outcome=result.outcome.value,
+                duration_seconds=time.perf_counter() - started,
+            )
+            return result
+        except Exception:
+            record_context_fabric_graph_query(
+                outcome=GraphQueryOutcome.PROVIDER_FAILURE.value,
+                duration_seconds=time.perf_counter() - started,
+            )
+            raise
+        record_context_fabric_graph_query(
+            outcome=result.outcome.value,
+            duration_seconds=time.perf_counter() - started,
+        )
+        return result
+
+    async def _investigate(
+        self, request: GraphInvestigationRequest
+    ) -> GraphQueryResult:
         """Bounded by ``request.deadline`` end to end, never past it.
 
         Order of checks is deliberate, each one a distinct outcome the
@@ -431,6 +468,14 @@ class ProductionGraphInvestigationQuery:
 
             freshness = watermark.freshness_for(
                 now, tolerance=self._staleness_tolerance
+            )
+            record_context_fabric_graph_watermark(
+                state=freshness.value,
+                lag_seconds=(
+                    (now - watermark.indexed_through).total_seconds()
+                    if watermark.indexed_through is not None
+                    else 0.0
+                ),
             )
             if freshness is SourceRequirementState.UNAVAILABLE:
                 return GraphQueryResult(

@@ -12,11 +12,12 @@ mkdir -p "${DEV_HEALTH_GO_CACHE}"
 export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
+DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.tsv}"
 
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration|fast|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|integration-vet|integration-coverage|integration-shard-plan|integration-shard|integration|fast|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -56,16 +57,25 @@ usage() {
          plan (see INTEGRATION_DENYLIST in this script). No Docker required.
          Fails if the denylist names a package discovery does not find, or if
          discovery finds nothing at all.
+  integration-shard-plan
+         Validate ci/go_integration_shards.tsv against live package discovery,
+         derive deterministic longest-processing-time-first shard assignments,
+         print the complete assignment, and write a GitHub Actions `matrix`
+         output when GITHUB_OUTPUT is set. No Docker required.
+  integration-shard SHARD [--dry-run]
+         Run exactly one validated integration shard. `--dry-run` prints the
+         exact package selection without starting Docker-backed tests; CI never
+         passes that option.
   integration
          Discover and run EVERY integration-tagged package'\''s suite against
          real containers, except the (small, justified) INTEGRATION_DENYLIST.
          Inclusion is the default; exclusion is the explicit, loud exception.
   fast   Run fmt, vet, test, live-python-oracles, build, contract,
-         integration-vet, and integration-coverage checks, then publish
-         the grant advisory report.
+         integration-vet, and the integration shard-plan checks, then
+         publish the grant advisory report.
   all    Run fmt, vet, test, race, live-python-oracles, build, contract,
-         integration-vet, and integration-coverage checks, then publish
-         the grant advisory report (default).'
+         integration-vet, and the integration shard-plan checks, then
+         publish the grant advisory report (default).'
 }
 
 die() {
@@ -366,6 +376,11 @@ check_contract() {
 # the run set, failing loudly, not hidden here. Legitimate reasons look like
 # "needs a live vendor credential CI does not provision."
 declare -A INTEGRATION_DENYLIST=()
+declare -A INTEGRATION_SHARD_WEIGHTS=()
+declare -A INTEGRATION_SHARD_BY_KEY=()
+declare -a INTEGRATION_SHARD_TOTALS=()
+declare -a INTEGRATION_SHARD_PACKAGE_COUNTS=()
+INTEGRATION_SHARD_COUNT=0
 
 # discover_integration_packages populates parallel module/package arrays with
 # every module-relative "./pkg/dir" entry that has at least one tracked or
@@ -466,8 +481,229 @@ check_integration_coverage() {
     "${total}" "${#denylist_seen[@]}" "$((total - ${#denylist_seen[@]}))"
 }
 
-check_integration() {
+# load_integration_shard_manifest validates the manifest's syntax only. The
+# package-set equality check happens in plan_integration_shards after live
+# discovery, so neither the manifest nor the source scan can silently stand in
+# for the other.
+load_integration_shard_manifest() {
+  local manifest="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST}"
+  local line_number=0 key value extra
+  local shards_seen=0
+
+  [ -f "${manifest}" ] \
+    || die "integration shard manifest not found: ${manifest}"
+
+  INTEGRATION_SHARD_WEIGHTS=()
+  INTEGRATION_SHARD_COUNT=0
+  while IFS=$'\t ' read -r key value extra; do
+    line_number=$((line_number + 1))
+    case "${key}" in
+      ""|\#*) continue ;;
+    esac
+    if [ -n "${extra}" ]; then
+      die "integration shard manifest ${manifest}:${line_number} must contain exactly two fields"
+    fi
+    case "${value}" in
+      ""|*[!0-9]*)
+        die "integration shard manifest ${manifest}:${line_number} has non-numeric value '${value}'"
+        ;;
+    esac
+    if [ "${value}" -le 0 ]; then
+      die "integration shard manifest ${manifest}:${line_number} values must be positive"
+    fi
+
+    if [ "${key}" = "shards" ]; then
+      [ "${shards_seen}" -eq 0 ] \
+        || die "integration shard manifest declares 'shards' more than once"
+      shards_seen=1
+      INTEGRATION_SHARD_COUNT="${value}"
+      continue
+    fi
+    if [ -n "${INTEGRATION_SHARD_WEIGHTS[${key}]+set}" ]; then
+      die "integration shard manifest lists '${key}' more than once"
+    fi
+    INTEGRATION_SHARD_WEIGHTS["${key}"]="${value}"
+  done < "${manifest}"
+
+  [ "${shards_seen}" -eq 1 ] \
+    || die "integration shard manifest must declare one 'shards' row"
+  [ "${INTEGRATION_SHARD_COUNT}" -ge 2 ] \
+    || die "integration shard manifest must declare at least two shards"
+}
+
+# plan_integration_shards performs deterministic longest-processing-time-first
+# assignment from the checked-in weights. Package paths break equal-weight
+# ties; the lowest-numbered shard breaks equal-load ties. A single dominant
+# package therefore stays isolated while the remaining packages balance across
+# the other jobs. Every call starts with fresh source discovery and exact
+# manifest equality, preserving the 24/24, zero-denylist contract independently
+# in every matrix runner.
+plan_integration_shards() {
   check_integration_coverage
+  load_integration_shard_manifest
+
+  local index module_dir pkg key reason manifest_key
+  local runnable_count=0
+  local shard selected_shard selected_total weight
+  declare -A discovered_run_packages=()
+
+  for index in "${!INTEGRATION_PACKAGES[@]}"; do
+    module_dir="${INTEGRATION_PACKAGE_MODULES[${index}]}"
+    pkg="${INTEGRATION_PACKAGES[${index}]}"
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    if reason="$(integration_denylist_reason "${key}")"; then
+      continue
+    fi
+    discovered_run_packages["${key}"]=1
+    runnable_count=$((runnable_count + 1))
+    if [ -z "${INTEGRATION_SHARD_WEIGHTS[${key}]+set}" ]; then
+      die "integration shard manifest is missing discovered package '${key}'"
+    fi
+  done
+
+  for manifest_key in "${!INTEGRATION_SHARD_WEIGHTS[@]}"; do
+    if [ -z "${discovered_run_packages[${manifest_key}]+set}" ]; then
+      die "integration shard manifest names undiscovered or denylisted package '${manifest_key}'"
+    fi
+  done
+  if [ "${#INTEGRATION_SHARD_WEIGHTS[@]}" -ne "${runnable_count}" ]; then
+    die "integration shard manifest/package count mismatch after equality validation"
+  fi
+  if [ "${INTEGRATION_SHARD_COUNT}" -gt "${runnable_count}" ]; then
+    die "integration shard manifest declares more shards than runnable packages"
+  fi
+
+  INTEGRATION_SHARD_BY_KEY=()
+  INTEGRATION_SHARD_TOTALS=()
+  INTEGRATION_SHARD_PACKAGE_COUNTS=()
+  for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+    INTEGRATION_SHARD_TOTALS[shard]=0
+    INTEGRATION_SHARD_PACKAGE_COUNTS[shard]=0
+  done
+
+  while IFS=$'\t' read -r weight key; do
+    selected_shard=1
+    selected_total="${INTEGRATION_SHARD_TOTALS[1]}"
+    for ((shard = 2; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+      if [ "${INTEGRATION_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
+        selected_shard="${shard}"
+        selected_total="${INTEGRATION_SHARD_TOTALS[${shard}]}"
+      fi
+    done
+    INTEGRATION_SHARD_BY_KEY["${key}"]="${selected_shard}"
+    INTEGRATION_SHARD_TOTALS[selected_shard]=$((
+      INTEGRATION_SHARD_TOTALS[selected_shard] + weight
+    ))
+    INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard]=$((
+      INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard] + 1
+    ))
+  done < <(
+    for key in "${!INTEGRATION_SHARD_WEIGHTS[@]}"; do
+      printf '%s\t%s\n' "${INTEGRATION_SHARD_WEIGHTS[${key}]}" "${key}"
+    done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
+  )
+
+  printf 'integration shard plan: %d shard(s), %d package(s)\n' \
+    "${INTEGRATION_SHARD_COUNT}" "${runnable_count}"
+  for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+    printf 'integration shard %d: estimated %ds, %d package(s)\n' \
+      "${shard}" \
+      "${INTEGRATION_SHARD_TOTALS[${shard}]}" \
+      "${INTEGRATION_SHARD_PACKAGE_COUNTS[${shard}]}"
+    for index in "${!INTEGRATION_PACKAGES[@]}"; do
+      module_dir="${INTEGRATION_PACKAGE_MODULES[${index}]}"
+      pkg="${INTEGRATION_PACKAGES[${index}]}"
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      if [ "${INTEGRATION_SHARD_BY_KEY[${key}]:-0}" -eq "${shard}" ]; then
+        printf '  SHARD %d %s weight=%ss\n' \
+          "${shard}" "${key}" "${INTEGRATION_SHARD_WEIGHTS[${key}]}"
+      fi
+    done
+  done
+}
+
+emit_integration_shard_matrix() {
+  local matrix='{"include":[' separator="" shard
+  for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+    matrix+="${separator}{\"shard\":${shard}}"
+    separator=","
+  done
+  matrix+=']}'
+  printf 'integration shard matrix: %s\n' "${matrix}"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    printf 'matrix=%s\n' "${matrix}" >> "${GITHUB_OUTPUT}"
+  fi
+}
+
+check_integration_shard_plan() {
+  plan_integration_shards
+  emit_integration_shard_matrix
+}
+
+check_integration_shard() {
+  local shard="${1:-}" mode="${2:-}"
+  local index module_dir pkg key
+  local selected_count=0
+  local -a run_pkgs=()
+  local -a run_keys=()
+
+  case "${shard}" in
+    ""|*[!0-9]*) die "integration-shard requires a numeric shard id" ;;
+  esac
+  case "${mode}" in
+    ""|--dry-run) ;;
+    *) die "integration-shard accepts only the optional --dry-run flag" ;;
+  esac
+
+  plan_integration_shards
+  if [ "${shard}" -lt 1 ] || [ "${shard}" -gt "${INTEGRATION_SHARD_COUNT}" ]; then
+    die "integration shard ${shard} is outside 1..${INTEGRATION_SHARD_COUNT}"
+  fi
+
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    run_pkgs=()
+    run_keys=()
+    for index in "${!INTEGRATION_PACKAGES[@]}"; do
+      [ "${INTEGRATION_PACKAGE_MODULES[${index}]}" = "${module_dir}" ] || continue
+      pkg="${INTEGRATION_PACKAGES[${index}]}"
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      [ "${INTEGRATION_SHARD_BY_KEY[${key}]:-0}" -eq "${shard}" ] || continue
+      run_pkgs+=("${pkg}")
+      run_keys+=("${key}")
+      selected_count=$((selected_count + 1))
+    done
+    [ "${#run_pkgs[@]}" -gt 0 ] || continue
+
+    printf 'go test integration shard %s: %s -> %s\n' \
+      "${shard}" "${module_dir}" "${run_pkgs[*]}"
+    for key in "${run_keys[@]}"; do
+      printf '  SHARD-RUN %s\n' "${key}"
+    done
+    if [ "${mode}" = "--dry-run" ]; then
+      continue
+    fi
+    (
+      cd "${ROOT}/${module_dir}"
+      GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+    )
+  done
+
+  [ "${selected_count}" -gt 0 ] \
+    || die "integration shard ${shard} selected zero packages"
+  if [ "${selected_count}" -ne "${INTEGRATION_SHARD_PACKAGE_COUNTS[${shard}]}" ]; then
+    die "integration shard ${shard} selected ${selected_count} packages but plan declared ${INTEGRATION_SHARD_PACKAGE_COUNTS[${shard}]}"
+  fi
+  if [ "${mode}" = "--dry-run" ]; then
+    printf 'integration shard %s: DRY RUN selected %d package(s); no tests executed\n' \
+      "${shard}" "${selected_count}"
+  fi
+}
+
+check_integration() {
+  plan_integration_shards
   local index module_dir pkg key reason
   local -a run_pkgs=()
 
@@ -542,6 +778,15 @@ case "${1:-all}" in
   integration-coverage)
     check_integration_coverage
     ;;
+  integration-shard-plan)
+    [ "$#" -eq 1 ] || die "integration-shard-plan accepts no arguments"
+    check_integration_shard_plan
+    ;;
+  integration-shard)
+    [ "$#" -ge 2 ] && [ "$#" -le 3 ] \
+      || die "integration-shard requires SHARD and accepts only optional --dry-run"
+    check_integration_shard "$2" "${3:-}"
+    ;;
   integration)
     check_integration
     ;;
@@ -553,7 +798,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_integration_vet
-    check_integration_coverage
+    plan_integration_shards
     check_grant_advisory
     ;;
   all)
@@ -565,7 +810,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_integration_vet
-    check_integration_coverage
+    plan_integration_shards
     check_grant_advisory
     ;;
   -h|--help|help)

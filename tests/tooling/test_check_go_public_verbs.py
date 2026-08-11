@@ -18,6 +18,8 @@ PUBLIC_VERBS = (
     "grant-advisory",
     "integration-vet",
     "integration-coverage",
+    "integration-shard-plan",
+    "integration-shard",
     "integration",
     "fast",
     "all",

@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
@@ -164,6 +165,7 @@ func (handler *Handler) logLifecycle(
 	claim providersync.Claim,
 	event string,
 	result string,
+	err error,
 ) {
 	if execution == nil {
 		return
@@ -186,7 +188,21 @@ func (handler *Handler) logLifecycle(
 	if result != "" {
 		attributes = append(attributes, "result", result)
 	}
+	if detail := lifecycleErrorDetail(err); detail != "" {
+		attributes = append(attributes, "error_detail", detail)
+	}
 	logger.InfoContext(ctx, event, attributes...)
+}
+
+func lifecycleErrorDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	detail := logging.RedactText(err.Error())
+	if detail == "" {
+		return ""
+	}
+	return detail
 }
 
 func (handler *Handler) observeRouteFault(fault RouteFault) {
@@ -260,7 +276,7 @@ func (handler *Handler) reconcileRouteFault(
 			return jobruntime.Retryable(failErr)
 		}
 		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
-		handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "failed")
+		handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "failed", configurationErr)
 		return jobruntime.Retryable(routeReconciliationError(configurationErr))
 	}
 	releaseErr := handler.Repository.ReleaseForRetry(
@@ -272,7 +288,7 @@ func (handler *Handler) reconcileRouteFault(
 		return jobruntime.Retryable(releaseErr)
 	}
 	handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
-	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying")
+	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying", configurationErr)
 	return jobruntime.Retryable(routeReconciliationError(configurationErr))
 }
 
@@ -340,7 +356,7 @@ func (handler *Handler) Work(
 		}
 		return jobruntime.Permanent(err)
 	}
-	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_started", "")
+	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_started", "", nil)
 	descriptor, descriptorPresent := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
 	// This admission boundary is intentionally before LeaseSession and
 	// BuildExecutor. A stale River unit can otherwise fetch credentials and
@@ -378,7 +394,7 @@ func (handler *Handler) Work(
 			); completeErr != nil {
 				err = completeErr
 			} else {
-				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "succeeded")
+				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "succeeded", nil)
 				return nil
 			}
 		}
@@ -399,7 +415,7 @@ func (handler *Handler) Work(
 			return jobruntime.Retryable(failErr)
 		}
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
-		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed")
+		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		return jobruntime.Permanent(err)
 	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
@@ -413,7 +429,7 @@ func (handler *Handler) Work(
 		)
 		if failErr == nil {
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
-			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed")
+			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		}
 		return jobruntime.Retryable(err)
 	}
@@ -423,7 +439,7 @@ func (handler *Handler) Work(
 		return jobruntime.Retryable(releaseErr)
 	}
 	handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
-	handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "retrying")
+	handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "retrying", err)
 	return jobruntime.Retryable(err)
 }
 

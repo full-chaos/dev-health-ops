@@ -213,8 +213,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
-    assert len(expected_provider_tests) == 882
-    assert len(expected_integration_tests) == 102
+    assert len(expected_provider_tests) == 888
+    assert len(expected_integration_tests) == 103
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -230,7 +230,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 882
+    assert len(provider_flattened) == len(set(provider_flattened)) == 888
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -291,7 +291,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 882
+    assert len(selected_tests) == len(set(selected_tests)) == 888
     assert set(selected_tests) == expected_tests
 
 

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "stale dispatch rearm",
+  "$limitation": "Pins the new Go reconciler guard that re-arms stale dispatching and due retrying sync runs exactly once, while keeping fresh River rows and feature-disabled rows protected.",
+  "mutations": [
+    {
+      "id": "SDR01-stale-dispatching-clause",
+      "file": "internal/syncreconciler/materializer.go",
+      "find": "\t\t\tOR (unit.status = 'dispatching' AND unit.updated_at <= $2)",
+      "replace": "\t\t\tOR false",
+      "expect_occurrences": 1,
+      "rationale": "A stale dispatching unit must be able to re-arm an already-dispatched River wakeup.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestMaterializerRedispatchesStaleUnitsExactlyOnce$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "SDR02-retrying-due-clause",
+      "file": "internal/syncreconciler/materializer.go",
+      "find": "\t\t\tOR (\n\t\t\t\tunit.status = 'retrying'\n\t\t\t\tAND unit.available_at IS NOT NULL\n\t\t\t\tAND unit.available_at <= $1\n\t\t\t)",
+      "replace": "\t\t\tOR false",
+      "expect_occurrences": 1,
+      "rationale": "A due retrying unit must be able to re-arm an already-dispatched River wakeup.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestMaterializerRedispatchesStaleUnitsExactlyOnce$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "SDR03-no-amplification-status-guard",
+      "file": "internal/syncreconciler/materializer.go",
+      "find": "WHERE sync_dispatch_outbox.status <> 'pending'\n\tAND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'\n\tAND (\n\t\tsync_dispatch_outbox.dispatched_transport IS DISTINCT FROM 'river'\n\t\tOR EXISTS (",
+      "replace": "WHERE true",
+      "expect_occurrences": 1,
+      "rationale": "A pending River wakeup must not be re-armed again on the next reconciler pass.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestMaterializerRedispatchesStaleUnitsExactlyOnce$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "SDR04-feature-disabled-protection",
+      "file": "internal/syncreconciler/materializer.go",
+      "find": "AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'",
+      "replace": "AND sync_dispatch_outbox.last_error IS NOT DISTINCT FROM 'feature_disabled'",
+      "expect_occurrences": 1,
+      "rationale": "A River dispatch denied by the feature flag must stay protected from re-arm.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-stale-dispatch-rearm-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestMaterializerRedispatchesStaleUnitsExactlyOnce$", "./internal/syncreconciler/"]]
+    }
+  ]
+}

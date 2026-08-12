@@ -19,7 +19,7 @@ from dev_health_ops.llm.errors import (
 )
 from dev_health_ops.logging_config import pin_content_carrying_client_loggers
 
-from ._http import make_hardened_async_httpx_client
+from ._http import make_hardened_async_httpx2_client
 from .base import (
     DEFAULT_MODEL_BY_PROVIDER,
     CompletionResult,
@@ -160,7 +160,7 @@ class LocalProvider(LLMProviderBase):
                 self._client = AsyncOpenAI(
                     api_key=self.api_key,
                     base_url=self.base_url,
-                    http_client=make_hardened_async_httpx_client(),
+                    http_client=make_hardened_async_httpx2_client(),
                     max_retries=0,
                 )
             except ImportError:

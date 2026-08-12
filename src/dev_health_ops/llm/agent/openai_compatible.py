@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from dev_health_ops.llm.providers._http import make_hardened_async_httpx_client
+from dev_health_ops.llm.providers._http import make_hardened_async_httpx2_client
 from dev_health_ops.llm.providers.openai_capabilities import (
     build_wire_tool_name_map,
     chat_completion_reasoning_effort,
@@ -376,7 +376,7 @@ class OpenAICompatibleAgentProvider:
             # first-ever) import (CHAOS-3258).
             pin_content_carrying_client_loggers()
 
-            self._http_client = make_hardened_async_httpx_client()
+            self._http_client = make_hardened_async_httpx2_client()
             # CHAOS-3285 round 6 (Codex HIGH): AsyncOpenAI reads
             # OPENAI_ORG_ID/OPENAI_PROJECT_ID/OPENAI_CUSTOM_HEADERS from the
             # process environment AMBIENTLY whenever organization/project

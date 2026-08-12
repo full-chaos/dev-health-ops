@@ -303,6 +303,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
 			is_active boolean NOT NULL, config json, credentials_encrypted text
 		)`,
+		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		// Carries the columns syncroute's real route-mutation statements name,
 		// so a privilege denial cannot be mistaken for an undefined column

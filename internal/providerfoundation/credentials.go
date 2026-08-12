@@ -5,11 +5,15 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"golang.org/x/crypto/pbkdf2"
@@ -56,6 +60,51 @@ func (d FernetDecryptor) Decrypt(ciphertext secrets.Value) ([]byte, error) {
 	}
 	legacy := sha256.Sum256(key)
 	return decryptFernet(raw, legacy[:])
+}
+
+// Encrypt emits the same versioned Fernet format as core/encryption.py. It is
+// used only when an OAuth refresh atomically replaces a short-lived token.
+func (d FernetDecryptor) Encrypt(plaintext []byte) (secrets.Value, error) {
+	if !d.key.Configured() {
+		return secrets.Value{}, ErrCredentialInvalid
+	}
+	key := pbkdf2.Key(
+		[]byte(d.key.Reveal()), []byte(d.salt), 600000, 32, sha256.New,
+	)
+	token, err := encryptFernet(plaintext, key, time.Now(), rand.Reader)
+	if err != nil {
+		return secrets.Value{}, ErrCredentialInvalid
+	}
+	return secrets.NewValue(credentialCiphertextV1 + token), nil
+}
+
+func encryptFernet(plaintext, key []byte, now time.Time, entropy io.Reader) (string, error) {
+	if len(key) != 32 || entropy == nil {
+		return "", ErrCredentialInvalid
+	}
+	padding := fernetBlockSize - len(plaintext)%fernetBlockSize
+	padded := make([]byte, len(plaintext)+padding)
+	copy(padded, plaintext)
+	copy(padded[len(plaintext):], bytes.Repeat([]byte{byte(padding)}, padding))
+	block, err := aes.NewCipher(key[16:])
+	if err != nil {
+		return "", ErrCredentialInvalid
+	}
+	iv := make([]byte, fernetBlockSize)
+	if _, err := io.ReadFull(entropy, iv); err != nil {
+		return "", ErrCredentialInvalid
+	}
+	payload := make([]byte, fernetHeaderSize, fernetHeaderSize+len(padded)+fernetSignatureSize)
+	payload[0] = fernetVersion
+	binary.BigEndian.PutUint64(payload[1:9], uint64(now.Unix()))
+	copy(payload[9:fernetHeaderSize], iv)
+	encrypted := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(encrypted, padded)
+	payload = append(payload, encrypted...)
+	mac := hmac.New(sha256.New, key[:16])
+	_, _ = mac.Write(payload)
+	payload = append(payload, mac.Sum(nil)...)
+	return base64.URLEncoding.EncodeToString(payload), nil
 }
 
 func decryptFernet(token string, key []byte) ([]byte, error) {

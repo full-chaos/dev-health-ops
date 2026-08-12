@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "name": "PagerDuty OAuth binding hydration for native Go provider workers",
+  "build": ["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-run", "^$", "./internal/providerfoundation/", "./cmd/dev-health-worker/", "./internal/storage/postgres/", "./internal/storage/river/"],
+  "$limitation": "This plan covers tokenless descriptor hydration, tenant-bound OAuth binding and scope fences, renewal selection, production worker wiring, and least-privilege domain-role posture. Live PagerDuty HTTP behavior and a real PostgreSQL optimistic-rotation race remain integration evidence rather than mutation targets in this focused repair.",
+  "mutations": [
+    {
+      "id": "PD-OAUTH-1-resolver-invokes-hydrator",
+      "file": "internal/providerfoundation/types.go",
+      "find": "if r.Hydrator != nil {",
+      "replace": "if false {",
+      "rationale": "A tokenless PagerDuty descriptor cannot authenticate unless the claimed credential resolver invokes its explicit OAuth hydration boundary.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestCredentialResolverHydratesTokenlessPagerDutyOAuthBinding$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "PD-OAUTH-2-binding-fence",
+      "file": "internal/providerfoundation/pagerduty_oauth.go",
+      "find": "record.BindingID != expectedBindingID ||",
+      "replace": "false ||",
+      "rationale": "A reconnect replaces the OAuth grant. The worker must never attach a token from a different binding to a frozen integration descriptor.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyOAuthHydratorRejectsBindingAndScopeDrift/binding$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "PD-OAUTH-2a-embedded-token-compatibility",
+      "file": "internal/providerfoundation/pagerduty_oauth.go",
+      "find": "if token, exists := credential.Secret(\"access_token\"); exists && token.Configured() {",
+      "replace": "if false {",
+      "rationale": "An already hydrated or direct OAuth credential remains a supported shape and must not be forced through a missing binding repository reference.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyOAuthHydratorPreservesEmbeddedAccessTokenCompatibility$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "PD-OAUTH-3-required-read-scopes",
+      "file": "internal/providerfoundation/pagerduty_oauth.go",
+      "find": "if !hasPagerDutyOperationalReadScopes(tokens.GrantedScopes) {",
+      "replace": "if false {",
+      "rationale": "The complete operational route set must not start with a grant that cannot read every enabled PagerDuty dataset.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyOAuthHydratorRejectsBindingAndScopeDrift/scope$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "PD-OAUTH-4-renewal-window",
+      "file": "internal/providerfoundation/pagerduty_oauth.go",
+      "find": "if tokens.ExpiresAt.After(h.now().Add(pagerDutyOAuthRenewalWindow)) {",
+      "replace": "if true {",
+      "rationale": "A token inside the five-minute renewal window must refresh before provider work instead of being attached as if it were durable for the claim.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyOAuthHydratorRefreshesAndRotatesEncryptedToken$", "./internal/providerfoundation/"]]
+    },
+    {
+      "id": "PD-OAUTH-5-worker-wiring",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "Hydrator:  credentialHydrator,",
+      "replace": "Hydrator:  nil,",
+      "rationale": "Constructing a hydrator at startup is not capability evidence unless every provider-unit executor receives the same dependency.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerWiresPagerDutyCredentialHydrator$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "PD-OAUTH-6-domain-role-update",
+      "file": "internal/storage/postgres/domain_authorization.go",
+      "find": "{\"provider_oauth_credentials\", false, true, false},",
+      "replace": "{\"provider_oauth_credentials\", false, false, false},",
+      "rationale": "The domain worker needs narrowly scoped UPDATE authority to atomically rotate an expiring OAuth token; SELECT alone fails only after the first token approaches expiry.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges$", "./internal/storage/postgres/"]]
+    }
+  ]
+}

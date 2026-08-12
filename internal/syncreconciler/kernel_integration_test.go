@@ -669,6 +669,7 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
 		// (role-partition manifest, removed in e23ede618; see git history at

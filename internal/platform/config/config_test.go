@@ -154,17 +154,22 @@ func TestSafeAttrsNeverContainSecretsOrDSNs(t *testing.T) {
 
 	secret := "postgres://worker:top-secret@database.internal/app"
 	cfg, err := Load(workerSpec(map[string]string{
-		"POSTGRES_URI":        secret,
-		"WORKER_DATABASE_URI": "postgres://queue:other-secret@database.internal/app",
-		"CLICKHOUSE_URI":      "clickhouse://analytics:secret@ch.internal/default",
-		"VALKEY_URI":          "redis://:secret@valkey.internal/1",
+		"POSTGRES_URI":         secret,
+		"WORKER_DATABASE_URI":  "postgres://queue:other-secret@database.internal/app",
+		"CLICKHOUSE_URI":       "clickhouse://analytics:secret@ch.internal/default",
+		"VALKEY_URI":           "redis://:secret@valkey.internal/1",
+		"PAGER_DUTY_CLIENT_ID": "pagerduty-client-id",
+		"PAGER_DUTY_SECRET":    "pagerduty-client-secret",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	text := fmt.Sprint(cfg.SafeAttrs())
-	for _, forbidden := range []string{secret, "top-secret", "clickhouse://", "redis://"} {
+	for _, forbidden := range []string{
+		secret, "top-secret", "clickhouse://", "redis://",
+		"pagerduty-client-id", "pagerduty-client-secret",
+	} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("safe attrs leaked %q: %s", forbidden, text)
 		}
@@ -174,6 +179,8 @@ func TestSafeAttrsNeverContainSecretsOrDSNs(t *testing.T) {
 		"queue_database_configured=true",
 		"clickhouse_configured=true",
 		"valkey_configured=true",
+		"pagerduty_oauth_client_id_configured=true",
+		"pagerduty_oauth_secret_configured=true",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("safe attrs missing %q: %s", expected, text)

@@ -557,6 +557,10 @@ func domainPosture() RolePosture {
 			{"integration_sources", true, true, false},
 			{"integration_datasets", true, true, false},
 			{"integration_credentials", false, false, false},
+			// Provider-sync workers resolve tokenless PagerDuty OAuth descriptors
+			// through this encrypted token row and atomically rotate an expiring
+			// token. They need no INSERT or DELETE authority.
+			{"provider_oauth_credentials", false, true, false},
 			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
 			{"sync_run_units", true, true, false},

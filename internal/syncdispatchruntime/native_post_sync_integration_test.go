@@ -202,7 +202,7 @@ CREATE TABLE sync_run_units (
 );
 CREATE TABLE sync_configurations (
  id uuid PRIMARY KEY, org_id uuid NOT NULL, integration_id uuid NOT NULL,
- parent_id uuid NULL, sync_options jsonb NOT NULL, created_at timestamptz NOT NULL
+ parent_id uuid NULL, sync_options json NOT NULL, created_at timestamptz NOT NULL
 );
 CREATE TABLE post_sync_markers (
  sync_run_id uuid NOT NULL, kind text NOT NULL, prerequisite text NULL,
@@ -240,7 +240,7 @@ VALUES ('00000000-0000-4000-8000-000000000006',$1,'github','commits',$2,
 		{`INSERT INTO sync_configurations
     (id,org_id,integration_id,parent_id,sync_options,created_at)
 VALUES ('00000000-0000-4000-8000-000000000007',$1,$2,NULL,
-        '{"auto_import_teams":true}'::jsonb,'2026-07-23T00:00:00Z')`,
+        '{"auto_import_teams":true}'::json,'2026-07-23T00:00:00Z')`,
 			[]any{orgID, integrationID}},
 	}
 	for _, statement := range statements {

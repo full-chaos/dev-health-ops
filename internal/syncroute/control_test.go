@@ -69,6 +69,36 @@ func TestResumeFailsBeforeTransactionWithoutMatchingRiverCapability(t *testing.T
 	}
 }
 
+func TestApplyCheckedInFailsBeforeTransactionWithoutMatchingRiverCapability(t *testing.T) {
+	t.Parallel()
+	registry := controlRegistry{
+		syncdispatchcontract.KindReferenceDiscovery: {
+			Kind: syncdispatchcontract.KindReferenceDiscovery, Delivery: syncdispatchcontract.DeliveryAtLeastOnce,
+			Route: syncdispatchcontract.RouteRiver, RollbackRoute: syncdispatchcontract.RouteCelery,
+		},
+	}
+	empty, err := NewCapabilities(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begins := 0
+	controller, err := newController(func(context.Context) (pgx.Tx, error) {
+		begins++
+		return nil, errors.New("must not begin")
+	}, registry, empty, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.ApplyCheckedIn(
+		context.Background(), syncdispatchcontract.KindReferenceDiscovery,
+	); !errors.Is(err, ErrCapabilityMissing) {
+		t.Fatalf("missing capability error=%v", err)
+	}
+	if begins != 0 {
+		t.Fatalf("unsafe apply opened %d transactions", begins)
+	}
+}
+
 func TestResumeCapabilityTreatsPostSyncAsOrdinaryClaimFencedRoute(t *testing.T) {
 	t.Parallel()
 	empty, err := NewCapabilities(nil)

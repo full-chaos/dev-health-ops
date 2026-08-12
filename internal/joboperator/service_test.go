@@ -243,6 +243,32 @@ func TestRouteControlsPreserveAuthorizationAndDurableAudit(t *testing.T) {
 	}
 }
 
+func TestApplyCheckedInRoutePreservesAuthorizationAndDurableAudit(t *testing.T) {
+	t.Parallel()
+	fixture := newServiceFixture(t)
+	fixture.routes.state = syncroute.RouteState{
+		Kind: "reference_discovery", Transport: "river", Generation: 2,
+		RollbackTransport: "celery",
+	}
+	state, err := fixture.service.ApplyCheckedInRoute(
+		context.Background(), testPrincipal(), "reference_discovery", "local_start", "corr-route-apply",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Transport != "river" ||
+		strings.Join(fixture.order, ",") != "authorize,audit_begin,route_apply,audit_succeeded" {
+		t.Fatalf("route apply state=%+v order=%v", state, fixture.order)
+	}
+	if fixture.auditor.event.Action != ActionApplyRoute ||
+		fixture.auditor.event.ResourceType != "sync_route" {
+		t.Fatalf("route apply audit=%+v", fixture.auditor.event)
+	}
+	if got := string(fixture.auditor.event.Action); got != "job_routes.apply_checked_in" {
+		t.Fatalf("route apply schema-compatible action=%q", got)
+	}
+}
+
 func TestRouteResumeFailsClosedWithoutCapabilityAndAuditsFailure(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
@@ -478,6 +504,10 @@ type fakeRouteController struct {
 
 func (controller *fakeRouteController) Inspect(context.Context, string) (syncroute.RouteState, error) {
 	*controller.order = append(*controller.order, "route_inspect")
+	return controller.state, controller.err
+}
+func (controller *fakeRouteController) ApplyCheckedIn(context.Context, string) (syncroute.RouteState, error) {
+	*controller.order = append(*controller.order, "route_apply")
 	return controller.state, controller.err
 }
 func (controller *fakeRouteController) Pause(context.Context, string) (syncroute.RouteState, error) {

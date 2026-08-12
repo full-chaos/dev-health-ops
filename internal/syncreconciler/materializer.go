@@ -24,10 +24,10 @@ type materializerBeginFunc func(context.Context) (pgx.Tx, error)
 // domain state. It is transport-neutral: it neither reads nor mutates transport
 // routes, and it never claims or publishes an outbox row.
 //
-// The component is intentionally command-unwired. Its transaction can coexist
-// with the Python reconciler because the outbox has a unique (sync_run_id, kind)
-// constraint. The first three conflict transitions match the Python wrapper;
-// post_sync is deliberately stricter and never re-arms an existing row.
+// Its transaction can coexist with a compatibility reconciler because the
+// outbox has a unique (sync_run_id, kind) constraint. The first three conflict
+// transitions match that compatibility contract; post_sync is deliberately
+// stricter and never re-arms an existing row.
 type Materializer struct {
 	begin materializerBeginFunc
 }
@@ -47,8 +47,8 @@ func newMaterializer(begin materializerBeginFunc) (*Materializer, error) {
 }
 
 // Step materializes one deterministic candidate window per frozen kind in one
-// transaction. staleDispatchCutoff is supplied by the future command owner so
-// this dormant domain component does not duplicate environment policy.
+// transaction. staleDispatchCutoff is supplied by command composition so this
+// domain component does not duplicate environment policy.
 func (materializer *Materializer) Step(
 	ctx context.Context,
 	now time.Time,
@@ -221,6 +221,10 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
+	AND NOT (
+		sync_dispatch_outbox.status = 'dispatched'
+		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	)
 `
 
 const materializeFinalizeSQL = `
@@ -339,6 +343,10 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
+	AND NOT (
+		sync_dispatch_outbox.status = 'dispatched'
+		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	)
 `
 
 const materializeDiscoverySQL = `
@@ -449,6 +457,10 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
+	AND NOT (
+		sync_dispatch_outbox.status = 'dispatched'
+		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	)
 `
 
 // post_sync is reconstructed only when the once-only finalizer ledger exists and the

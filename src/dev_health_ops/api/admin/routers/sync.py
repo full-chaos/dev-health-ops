@@ -87,11 +87,7 @@ from dev_health_ops.sync.pagerduty_repair import (
     repair_pagerduty_operational_integration,
 )
 from dev_health_ops.sync.planner import BackfillSelector as SyncBackfillSelector
-from dev_health_ops.sync.trigger_routing import (
-    mark_sync_run_failed,
-)
 from dev_health_ops.utils.datetime import validate_timezone_name
-from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
 
@@ -2498,42 +2494,10 @@ async def trigger_sync_config(
             "total_units": trigger.total_units,
         }
     await session.commit()
-    try:
-        dispatch_result = getattr(dispatch_sync_run, "apply_async")(
-            args=(trigger.sync_run_id,), queue="sync"
-        )
-    except Exception as exc:
-        # Bind to a plain local before closing over it in the lambdas below:
-        # `except ... as exc` implicitly deletes `exc` at the end of THIS
-        # block, which a closure captures by reference, not by value (ruff
-        # F821 catches this). The raw exception is passed straight through
-        # to the sink (_mark_job_run_failed -> sanitize_error_text), not
-        # pre-formatted into a string here -- a Celery/broker enqueue
-        # failure can embed the broker/result-backend URL, credentials
-        # included (CHAOS-2766 codex review finding).
-        dispatch_exc = exc
-        await session.run_sync(
-            lambda s: mark_sync_run_failed(
-                s, trigger.sync_run_id, "dispatch enqueue failed"
-            )
-        )
-        await session.run_sync(
-            lambda s: _mark_job_run_failed(s, trigger.job_run_id, dispatch_exc)
-        )
-        await session.commit()
-        raise HTTPException(
-            status_code=503,
-            detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
-        )
-    dispatch_task_id = str(getattr(dispatch_result, "id", "") or "")
-    await session.run_sync(
-        lambda s: _merge_job_run_result(
-            s,
-            trigger.job_run_id,
-            {"dispatch_task_id": dispatch_task_id} if dispatch_task_id else None,
-        )
-    )
-    await session.commit()
+    # create_sync_execution_trigger persists the planner's reference-discovery
+    # outbox wakeup with the run. The reconciler publishes that wakeup through
+    # the durable sync-dispatch route; publishing a second Celery task here
+    # would bypass the route and strand work when Python workers are absent.
     return {
         "status": "triggered",
         "config_id": str(config.id),
@@ -2665,45 +2629,11 @@ async def trigger_sync_config_backfill(
 
         await session.commit()
 
-        try:
-            result = getattr(dispatch_sync_run, "apply_async")(
-                args=(trigger.sync_run_id,), queue="sync"
-            )
-        except Exception as e:
-            # Bind to a plain local before closing over it below -- see the
-            # matching comment in trigger_sync_config above (ruff F821: a
-            # closure over a bare `except ... as e` name is unreliable,
-            # since the name is implicitly deleted at block exit). Same
-            # sink-sanitizes-not-caller rationale (CHAOS-2766 codex review
-            # finding).
-            dispatch_exc = e
-            completed_at = datetime.now(timezone.utc)
-            await session.run_sync(
-                lambda sync_session: _mark_backfill_job_failed(
-                    sync_session, backfill_job_id, dispatch_exc, completed_at
-                )
-            )
-            await session.run_sync(
-                lambda sync_session: _mark_job_run_failed(
-                    sync_session, trigger.job_run_id, dispatch_exc
-                )
-            )
-            await session.run_sync(
-                lambda sync_session: mark_sync_run_failed(
-                    sync_session, trigger.sync_run_id, "dispatch enqueue failed"
-                )
-            )
-            await session.commit()
-            raise HTTPException(
-                status_code=503,
-                detail=f"Task queue unavailable: {sanitize_error_text(dispatch_exc)}",
-            )
-        backfill_job.celery_task_id = f"{result.id}|sync_run:{trigger.sync_run_id}"
-        await session.commit()
+        dispatch_id = f"sync_run:{trigger.sync_run_id}"
         return {
             "status": "accepted",
             "config_id": str(config.id),
-            "task_id": result.id,
+            "task_id": dispatch_id,
             "backfill_job_id": backfill_job_id,
             "sync_run_id": trigger.sync_run_id,
             "mode": "fanout",

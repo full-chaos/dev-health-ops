@@ -161,11 +161,11 @@ type reconcilerActivation struct {
 	syncMutation bool
 }
 
-// The checked-in routes remain Celery until the canary owner proves a River
-// consumer deployment. The complete mutation composition is retained below,
-// but source activation stays false so this branch cannot alter the current
-// production baseline merely by starting a reconciler replica.
-var checkedInReconcilerActivation = reconcilerActivation{}
+// Every checked-in sync-dispatch route is River-owned. The reconciler must run
+// the mutation pipeline so durable outbox wakeups are claimed and published;
+// leaving this in shadow mode strands planned runs when Python workers are not
+// present even though the route table says River.
+var checkedInReconcilerActivation = reconcilerActivation{syncMutation: true}
 
 var productionReconcilerDependencySources = reconcilerDependencySources{
 	openDatabase:             openReconcilerDatabase,
@@ -188,8 +188,8 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 	syncDispatchContractRoot: defaultSyncDispatchContractRoot,
 }
 
-// Dormant today (checkedInReconcilerActivation.syncMutation is false), but
-// wired correctly so flipping that flag does not ship a 42501: the Materializer
+// The active mutation pipeline is wired so activation does not ship a 42501:
+// the Materializer
 // reads sync_run_reference_discoveries and sync_run_post_dispatches, both
 // coordinator-exclusive, so it takes the coordinator pool. LeaseRepair, the
 // Kernel's observe side, and the Observer stay on the domain pool -- every
@@ -237,13 +237,10 @@ func buildSyncMutationPipeline(
 		if referenceErr != nil {
 			return "", referenceErr
 		}
-		return publisher.Publish(ctx, tx, syncdispatchruntime.Claim{
-			OutboxID: claim.ID, Kind: claim.Kind, RouteGeneration: claim.RouteGeneration,
-		}, reference)
+		return publisher.Publish(ctx, tx, syncDispatchClaimForTransport(claim), reference)
 	}
-	// The bridge workers cover the three concrete coordinator kinds. post_sync
-	// remains fail-closed under its current Celery route until a concrete River
-	// fanout handler is registered and proven independently.
+	// The worker registers all four coordinator kinds, including the native
+	// post_sync fanout, before advertising River route readiness.
 	return syncreconciler.NewMutationPipeline(
 		repair,
 		materializer,
@@ -253,6 +250,13 @@ func buildSyncMutationPipeline(
 		nil,
 		syncreconciler.DefaultMutationPipelineConfig(),
 	)
+}
+
+func syncDispatchClaimForTransport(claim syncreconciler.TransportClaim) syncdispatchruntime.Claim {
+	return syncdispatchruntime.Claim{
+		OutboxID: claim.ID, Kind: claim.Kind, RouteGeneration: claim.RouteGeneration,
+		DeliveryAttempt: claim.Attempts,
+	}
 }
 
 func syncDispatchReference(

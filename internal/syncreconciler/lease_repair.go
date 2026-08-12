@@ -55,10 +55,10 @@ func (config LeaseRepairConfig) valid() bool {
 	return config.MaximumRetries >= 0 && config.RetryBackoff >= 0
 }
 
-// LeaseRepair is a dormant PostgreSQL-only repair primitive. Construction has
-// no side effects, and no command constructs it today. Its SQL locks a bounded
-// ordered candidate window and then uses the observed owner in every terminal
-// write so concurrent replicas cannot repair a live or replaced lease.
+// LeaseRepair is the PostgreSQL-only repair primitive used by the active
+// mutation pipeline. Construction has no side effects. Its SQL locks a
+// bounded ordered candidate window and then uses the observed owner in every
+// terminal write so concurrent replicas cannot repair a live or replaced lease.
 type LeaseRepair struct {
 	begin  leaseRepairBeginFunc
 	config LeaseRepairConfig

@@ -58,15 +58,44 @@ func TestConvertProducesExactVersionedTypedArgsWithoutClaimToken(t *testing.T) {
 			if err := json.Unmarshal(encoded, &fields); err != nil {
 				t.Fatal(err)
 			}
-			if len(fields) != 5 || fields["contract_version"] != float64(1) || fields["organization_id"] != testOrg ||
+			if len(fields) != 6 || fields["contract_version"] != float64(1) || fields["organization_id"] != testOrg ||
 				fields["sync_run_id"] != testRun || fields["outbox_id"] != testOutbox ||
-				fields["route_generation"] != float64(9) {
+				fields["route_generation"] != float64(9) || fields["delivery_attempt"] != float64(1) {
 				t.Fatalf("encoded fields = %#v", fields)
 			}
 			if _, leaked := fields["claim_token"]; leaked {
 				t.Fatal("claim token leaked into River arguments")
 			}
 		})
+	}
+}
+
+func TestConvertSeparatesRearmedDeliveryAttempts(t *testing.T) {
+	t.Parallel()
+	first, err := Convert(Claim{
+		OutboxID: testOutbox, Kind: syncdispatchcontract.KindDispatchSyncRun,
+		RouteGeneration: 9, DeliveryAttempt: 1,
+	}, testReference())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Convert(Claim{
+		OutboxID: testOutbox, Kind: syncdispatchcontract.KindDispatchSyncRun,
+		RouteGeneration: 9, DeliveryAttempt: 2,
+	}, testReference())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstJSON, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondJSON, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(firstJSON) == string(secondJSON) || first.Attempt() != 1 || second.Attempt() != 2 {
+		t.Fatalf("rearmed attempts collapsed: first=%s second=%s", firstJSON, secondJSON)
 	}
 }
 
@@ -113,16 +142,38 @@ func TestPublisherUsesCallerTransactionAndVerifiesExactArgs(t *testing.T) {
 
 func TestPublisherRejectsMismatchedRiverResultWithoutLeakingArguments(t *testing.T) {
 	t.Parallel()
-	client := &recordingInsertClient{mutate: func(job *rivertype.JobRow) { job.Queue = "other" }}
-	publisher, err := NewPublisher(client, PublisherOptions{Queue: "sync", MaxAttempts: 5})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = publisher.Publish(context.Background(), &inertTx{}, Claim{
-		OutboxID: testOutbox, Kind: syncdispatchcontract.KindFinalizeSyncRun, RouteGeneration: 3,
-	}, testReference())
-	if !errors.Is(err, ErrInsertRejected) {
-		t.Fatalf("Publish() error = %v, want %v", err, ErrInsertRejected)
+	for _, test := range []struct {
+		name   string
+		mutate func(*rivertype.JobRow)
+	}{
+		{"queue", func(job *rivertype.JobRow) { job.Queue = "other" }},
+		{"delivery attempt", func(job *rivertype.JobRow) {
+			var fields map[string]any
+			if err := json.Unmarshal(job.EncodedArgs, &fields); err != nil {
+				t.Fatal(err)
+			}
+			fields["delivery_attempt"] = float64(99)
+			encoded, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job.EncodedArgs = encoded
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &recordingInsertClient{mutate: test.mutate}
+			publisher, err := NewPublisher(client, PublisherOptions{Queue: "sync", MaxAttempts: 5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = publisher.Publish(context.Background(), &inertTx{}, Claim{
+				OutboxID: testOutbox, Kind: syncdispatchcontract.KindFinalizeSyncRun,
+				RouteGeneration: 3, DeliveryAttempt: 2,
+			}, testReference())
+			if !errors.Is(err, ErrInsertRejected) {
+				t.Fatalf("Publish() error = %v, want %v", err, ErrInsertRejected)
+			}
+		})
 	}
 }
 

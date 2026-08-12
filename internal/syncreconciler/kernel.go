@@ -26,9 +26,9 @@ var (
 	ErrPublisherRequired = errors.New("sync dispatch transport publisher required")
 )
 
-// KernelMode selects a strictly bounded reconciler behavior. Shadow is the
-// only mode suitable for the current runtime. Mutation is intentionally
-// unreferenced until a future cutover has an audited activation path.
+// KernelMode selects a strictly bounded reconciler behavior. Shadow remains
+// available for observation, while the checked-in reconciler composition uses
+// Mutation for River-owned sync-dispatch routes.
 type KernelMode string
 
 const (
@@ -54,7 +54,7 @@ type TransportClaim struct {
 type AtLeastOncePublisher func(context.Context, pgx.Tx, TransportClaim) (string, error)
 
 // PostSyncHandoff is retained as an inert source-compatibility parameter for
-// dormant compositions. All post_sync delivery goes through AtLeastOncePublisher
+// older compositions. All post_sync delivery goes through AtLeastOncePublisher
 // and this callback has no dispatch, retry, or readiness effect.
 type PostSyncHandoff func(context.Context, TransportClaim) error
 
@@ -71,9 +71,9 @@ type KernelResult struct {
 
 type beginFunc func(context.Context) (pgx.Tx, error)
 
-// Kernel keeps a dormant mutation implementation beside the observer without
-// coupling it to command wiring. A future activation must explicitly construct
-// it in KernelModeMutation and provide the delivery seams to Step.
+// Kernel keeps the mutation implementation beside the observer without
+// coupling route policy to the domain component. Command composition must
+// explicitly construct KernelModeMutation and provide the delivery seam.
 type Kernel struct {
 	mode        KernelMode
 	observer    Stepper
@@ -83,8 +83,8 @@ type Kernel struct {
 	riverKinds  []string
 }
 
-// NewKernel constructs an unactivated kernel across the two runtime database
-// trust boundaries. Observation stays on the domain pool; mutation begins only
+// NewKernel constructs a kernel across the two runtime database trust
+// boundaries. Observation stays on the domain pool; mutation begins only
 // on the least-privilege queue-control pool. No transaction or route mutation
 // occurs during construction.
 func NewKernel(
@@ -172,9 +172,8 @@ func (kernel *Kernel) Step(
 	if kernel.mode != KernelModeMutation || kernel.begin == nil || kernel.failures == nil {
 		return KernelResult{}, ErrInvalidConfiguration
 	}
-	// The checked-in contract is currently Celery-only. Avoid even opening a
-	// write-capable transaction until a later activation changes a frozen kind
-	// to River and explicitly wires this kernel.
+	// Avoid opening a write-capable transaction when a compatibility registry
+	// contains no River-owned kinds.
 	if len(kernel.riverKinds) == 0 {
 		return KernelResult{Mode: KernelModeMutation}, nil
 	}
@@ -387,8 +386,8 @@ func markRiverDispatched(
 	return nil
 }
 
-// claimRiverRoutesSQL is intentionally not reachable from current command
-// wiring. The queue role has UPDATE on the outbox but only SELECT on routes.
+// claimRiverRoutesSQL is used by the checked-in mutation pipeline. The queue
+// role has UPDATE on the outbox but only SELECT on routes.
 // PostgreSQL row-locking clauses require mutation authority on every locked
 // relation, so only each claimed outbox row is locked here. A route change
 // committed before markRiverDispatched is safe: the live generation recheck

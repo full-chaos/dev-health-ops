@@ -1,6 +1,6 @@
-// Package syncdispatchruntime contains dormant, typed River transport
-// primitives for the frozen sync-dispatch v1 contract. It has no command,
-// route, or worker registration side effects.
+// Package syncdispatchruntime contains the typed River transport primitives
+// used by the active sync-dispatch v1 coordinator. Command composition owns
+// route activation and worker registration.
 package syncdispatchruntime
 
 import (
@@ -30,6 +30,7 @@ type Claim struct {
 	OutboxID        string
 	Kind            string
 	RouteGeneration int64
+	DeliveryAttempt int64
 }
 
 // DomainReference is the authoritative, tenant-scoped domain identity looked
@@ -79,6 +80,7 @@ type Args interface {
 	OrganizationID() string
 	SyncRunID() string
 	RouteGeneration() int64
+	Attempt() int64
 	valid() error
 }
 
@@ -90,6 +92,7 @@ type TransportArgs struct {
 	OrgID           string `json:"organization_id"`
 	RunID           string `json:"sync_run_id"`
 	DispatchOutbox  string `json:"outbox_id" river:"unique"`
+	DeliveryAttempt int64  `json:"delivery_attempt" river:"unique"`
 	RouteGeneration int64  `json:"route_generation"`
 }
 
@@ -98,6 +101,7 @@ func (args TransportArgs) OutboxID() string       { return args.DispatchOutbox }
 func (args TransportArgs) OrganizationID() string { return args.OrgID }
 func (args TransportArgs) SyncRunID() string      { return args.RunID }
 func (args TransportArgs) Generation() int64      { return args.RouteGeneration }
+func (args TransportArgs) Attempt() int64         { return args.DeliveryAttempt }
 
 func (args TransportArgs) valid() error {
 	if args.Version != ContractVersionV1 || !uuidPattern.MatchString(args.OrgID) ||
@@ -145,11 +149,20 @@ func Convert(claim Claim, reference DomainReference) (Args, error) {
 	if !uuidPattern.MatchString(claim.OutboxID) || claim.RouteGeneration < 1 {
 		return nil, ErrInvalidClaim
 	}
+	deliveryAttempt := claim.DeliveryAttempt
+	if deliveryAttempt < 1 {
+		// Old in-process callers did not supply an attempt. Preserve their v1
+		// shape as the first delivery while production claims carry the durable
+		// outbox attempt, which lets a re-armed completed wakeup create a new
+		// River job without weakening same-attempt deduplication.
+		deliveryAttempt = 1
+	}
 	base := TransportArgs{
 		Version:         ContractVersionV1,
 		OrgID:           reference.OrganizationID,
 		RunID:           reference.SyncRunID,
 		DispatchOutbox:  claim.OutboxID,
+		DeliveryAttempt: deliveryAttempt,
 		RouteGeneration: claim.RouteGeneration,
 	}
 	if err := base.valid(); err != nil {

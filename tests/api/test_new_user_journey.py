@@ -31,6 +31,7 @@ from dev_health_ops.models.licensing import OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
+    JobRunStatus,
     ScheduledJob,
     SyncConfiguration,
 )
@@ -293,11 +294,32 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
     mock_dispatch = MagicMock()
     mock_dispatch.apply_async.return_value = MagicMock(id="journey-task-id")
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
     assert trigger_resp.status_code == 202, trigger_resp.text
-    mock_dispatch.apply_async.assert_called_once()
+    mock_dispatch.apply_async.assert_not_called()
+
+    trigger_data = trigger_resp.json()
+    async with session_maker() as session:
+        job_run = await session.get(JobRun, uuid.UUID(trigger_data["run_id"]))
+        sync_run = await session.get(SyncRun, uuid.UUID(trigger_data["sync_run_id"]))
+        outbox = (
+            await session.execute(
+                select(SyncDispatchOutbox).where(
+                    SyncDispatchOutbox.sync_run_id
+                    == uuid.UUID(trigger_data["sync_run_id"]),
+                    SyncDispatchOutbox.kind == "reference_discovery",
+                )
+            )
+        ).scalar_one()
+
+    assert job_run is not None
+    assert job_run.status == JobRunStatus.PENDING.value
+    assert sync_run is not None
+    assert sync_run.status == "planned"
+    assert outbox.status == "pending"
 
 
 @pytest.mark.asyncio

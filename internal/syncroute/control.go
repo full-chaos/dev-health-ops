@@ -140,6 +140,63 @@ func (controller *Controller) Inspect(ctx context.Context, kind string) (RouteSt
 	return state, nil
 }
 
+// ApplyCheckedIn atomically moves one route to its checked-in transport while
+// holding both the route row and outbox table fences. Unlike the manual
+// pause/drain/resume sequence, this is safe for unattended deployment
+// convergence: an unclaimed pending wakeup remains pending and becomes
+// eligible for the new transport after commit, while any live claim blocks
+// the transition.
+func (controller *Controller) ApplyCheckedIn(ctx context.Context, kind string) (RouteState, error) {
+	descriptor, known := controller.registry.Lookup(kind)
+	if !known {
+		return RouteState{}, ErrUnknownRoute
+	}
+	if descriptor.Route == syncdispatchcontract.RouteRiver {
+		capability, ok := controller.capabilities.Lookup(kind, descriptor.Route)
+		if !ok || capability.Kind != kind || capability.Transport != descriptor.Route {
+			return RouteState{}, ErrCapabilityMissing
+		}
+	}
+
+	now := controller.now().UTC()
+	tx, state, err := controller.beginRouteMutation(ctx, kind, now)
+	if err != nil {
+		return RouteState{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if state.Transport == descriptor.Route && !state.Paused {
+		if err := tx.Commit(ctx); err != nil {
+			return RouteState{}, ErrMutationOutcomeUnknown
+		}
+		return state, nil
+	}
+	if state.Transport != descriptor.Route && state.Transport != descriptor.RollbackRoute {
+		return RouteState{}, ErrDrift
+	}
+	if state.LiveClaims != 0 {
+		return RouteState{}, ErrLiveClaims
+	}
+	row := tx.QueryRow(ctx, `
+UPDATE public.sync_dispatch_transport_routes
+SET transport = $2, paused = FALSE, paused_at = NULL,
+    generation = generation + 1, updated_at = $3
+WHERE kind = $1 AND generation = $4
+RETURNING generation`, kind, descriptor.Route, now, state.Generation)
+	if err := row.Scan(&state.Generation); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RouteState{}, ErrRouteStateConflict
+		}
+		return RouteState{}, ErrUnavailable
+	}
+	state.Transport = descriptor.Route
+	state.Paused = false
+	state.PausedAt = nil
+	if err := tx.Commit(ctx); err != nil {
+		return RouteState{}, ErrMutationOutcomeUnknown
+	}
+	return state, nil
+}
+
 // Pause serializes behind every outbox terminal transaction, increments the
 // generation, and prevents new claims before releasing the lock.
 func (controller *Controller) Pause(ctx context.Context, kind string) (RouteState, error) {
@@ -218,7 +275,7 @@ func (controller *Controller) Resume(
 	if !known {
 		return RouteState{}, ErrUnknownRoute
 	}
-	if transport != descriptor.Route {
+	if transport != descriptor.Route && transport != descriptor.RollbackRoute {
 		return RouteState{}, ErrCapabilityMissing
 	}
 	if transport == syncdispatchcontract.RouteRiver {

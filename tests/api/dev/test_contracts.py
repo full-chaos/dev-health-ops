@@ -4,10 +4,12 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from dev_health_ops.api.dev import export_contracts
 from dev_health_ops.api.dev.contract_fixtures import (
     TEAM_ID,
     TEAM_LABEL,
@@ -31,16 +33,14 @@ from dev_health_ops.api.dev.contracts import (
     validate_stream,
 )
 from dev_health_ops.api.dev.contracts_v2.base import SourceClass
-from dev_health_ops.api.dev.contracts_v2.compat import NO_ANSWER_ERROR_CODES
-from dev_health_ops.api.dev.contracts_v2.validators import (
-    CANONICAL_NO_ANSWER_COPY,
-    CANONICAL_NO_ANSWER_REMEDIATION,
-    NO_ANSWER_OUTCOMES,
-)
+from dev_health_ops.api.dev.contracts_v2.compat import no_answer_error_projection
+from dev_health_ops.api.dev.contracts_v2.validators import NO_ANSWER_OUTCOMES
 from dev_health_ops.api.dev.export_contracts import (
+    ARTIFACT_ROOT,
     SOURCE_HEALTH_LABELS,
     check_artifacts,
     expected_artifacts,
+    write_artifacts,
 )
 from dev_health_ops.api.dev.no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from dev_health_ops.api.dev.scope_service import (
@@ -602,17 +602,21 @@ def test_source_health_labels_cover_every_known_required_source_producer() -> No
 
 def test_published_no_answer_vocabulary_matches_the_live_policy_tables() -> None:
     """CHAOS-3471. The entire user-visible text of a v1 ``DevError`` for a
-    ``dev_answer.v2`` no-answer outcome is the server-owned
-    ``CANONICAL_NO_ANSWER_COPY`` / ``CANONICAL_NO_ANSWER_REMEDIATION``
-    tables plus the ``(code, retryable)`` pair
-    ``compat.NO_ANSWER_ERROR_CODES`` attaches (``compat._project_error``).
-    Before this artifact, web hand-mirrored all three in
+    ``dev_answer.v2`` no-answer outcome comes from
+    ``compat.no_answer_error_projection`` -- the single function
+    ``compat._project_error`` (the live path) and this exporter both call,
+    per codex round-1 findings 1+2 (see that function's docstring). Before
+    this artifact, web hand-mirrored the underlying tables in
     ``tests/mocks/devScenario.ts``'s ``NO_ANSWER_OUTCOMES`` -- a copy that
     proves the UI renders ``safe_message`` verbatim but cannot detect an
     ops-side reword. This test pins that the published artifact is exactly
-    the live tables, keyed by every member of ``NO_ANSWER_OUTCOMES`` (not a
-    hand-picked subset), so a future outcome addition or a copy/remediation
-    edit either lands in the artifact automatically or fails this test.
+    what that shared function returns, keyed by every member of
+    ``NO_ANSWER_OUTCOMES`` (not a hand-picked subset), so a future outcome
+    addition or a copy/remediation edit either lands in the artifact
+    automatically or fails this test. The stronger, end-to-end guard --
+    that this also matches a REAL ``project_answer_v2_to_v1`` call, not
+    just the function the exporter happens to call too -- lives in
+    ``test_contracts_v2.py``.
     """
     published = json.loads(
         expected_artifacts()["vocabulary/no_answer_vocabulary.v1.json"]
@@ -620,10 +624,10 @@ def test_published_no_answer_vocabulary_matches_the_live_policy_tables() -> None
     assert published["schema_version"] == "ask_dev_no_answer_vocabulary.v1"
     assert set(published["outcomes"]) == NO_ANSWER_OUTCOMES
     for outcome in NO_ANSWER_OUTCOMES:
-        code, retryable = NO_ANSWER_ERROR_CODES[outcome]
+        safe_message, code, retryable, remediation = no_answer_error_projection(outcome)
         assert published["outcomes"][outcome] == {
-            "safe_message": CANONICAL_NO_ANSWER_COPY[outcome],
-            "remediation": list(CANONICAL_NO_ANSWER_REMEDIATION[outcome]),
+            "safe_message": safe_message,
+            "remediation": remediation,
             "code": code,
             "retryable": retryable,
         }
@@ -644,6 +648,61 @@ def test_no_answer_vocabulary_is_listed_in_the_manifest() -> None:
             artifacts["vocabulary/no_answer_vocabulary.v1.json"].encode("utf-8")
         ).hexdigest()
     )
+
+
+def test_no_answer_vocabulary_manifest_sha_matches_the_bytes_on_disk() -> None:
+    """CHAOS-3471 / codex round-1 finding 3. Hashes the RAW ON-DISK BYTES
+    of the checked-in artifact (not the in-memory string ``expected_
+    artifacts()`` built) and pins that against both the manifest's
+    declared sha256 and the generator output -- so a byte-level corruption
+    a text read would silently normalize away (see
+    ``test_check_artifacts_detects_byte_level_corruption_read_text_would_
+    hide`` below for the direct reproduction of that gap) is still caught
+    here, on the actual shipped file.
+    """
+    artifacts = expected_artifacts()
+    manifest = json.loads(artifacts["manifest.json"])
+    entry = next(
+        item
+        for item in manifest["vocabulary"]
+        if item["case"] == "no_answer_vocabulary"
+    )
+    on_disk_bytes = (ARTIFACT_ROOT / entry["path"]).read_bytes()
+    assert hashlib.sha256(on_disk_bytes).hexdigest() == entry["sha256"]
+    assert on_disk_bytes == artifacts[entry["path"]].encode("utf-8")
+
+
+def test_check_artifacts_detects_byte_level_corruption_read_text_would_hide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-3471 / codex round-1 finding 3 (probe). ``Path.read_text()``
+    performs universal-newline translation on read, so a checked-in
+    file's real CRLF bytes decode back to plain "\\n" in memory --
+    a text-based ``check_artifacts`` could never observe that corruption,
+    even though it changes the file's actual git-blob bytes (what
+    dev-health-web's ``ask-dev-contracts.mjs`` really hashes via
+    ``git show``, and what a manifest sha256 is supposed to pin).
+    ``check_artifacts`` now compares raw bytes, so this corruption is
+    caught.
+    """
+    monkeypatch.setattr(export_contracts, "ARTIFACT_ROOT", tmp_path)
+    artifacts = {"vocabulary/probe.v1.json": '{"a": 1}\n'}
+    write_artifacts(artifacts)
+    check_artifacts(artifacts)  # uncorrupted: passes
+
+    on_disk_path = tmp_path / "vocabulary" / "probe.v1.json"
+    corrupted_bytes = (
+        artifacts["vocabulary/probe.v1.json"].replace("\n", "\r\n").encode("utf-8")
+    )
+    on_disk_path.write_bytes(corrupted_bytes)
+    # A text read would normalize \r\n back to \n and see no difference;
+    # confirm that decoy first, so this test documents the exact gap.
+    assert (
+        on_disk_path.read_text(encoding="utf-8")
+        == artifacts["vocabulary/probe.v1.json"]
+    )
+    with pytest.raises(RuntimeError, match="contract artifacts drifted"):
+        check_artifacts(artifacts)
 
 
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)

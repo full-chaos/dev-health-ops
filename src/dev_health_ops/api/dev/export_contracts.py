@@ -18,12 +18,8 @@ from .contract_fixtures import (
 )
 from .contracts import CONTRACT_MODELS, DevStreamEvent, ToolID, validate_stream
 from .contracts_v2.base import SourceClass
-from .contracts_v2.compat import NO_ANSWER_ERROR_CODES
-from .contracts_v2.validators import (
-    CANONICAL_NO_ANSWER_COPY,
-    CANONICAL_NO_ANSWER_REMEDIATION,
-    NO_ANSWER_OUTCOMES,
-)
+from .contracts_v2.compat import no_answer_error_projection
+from .contracts_v2.validators import NO_ANSWER_OUTCOMES
 from .no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from .status_change_service import STATUS_REASON_CODES
 
@@ -272,6 +268,7 @@ def expected_artifacts() -> dict[str, str]:
         }
     )
     artifacts["vocabulary/source_health_labels.v1.json"] = source_health_labels_contents
+
     # CHAOS-3471. The entire user-visible text of a v1 DevError for a
     # dev_answer.v2 no-answer outcome comes from two server-owned Python
     # tables (contracts_v2/no_answer_policy.py's CANONICAL_NO_ANSWER_COPY /
@@ -287,16 +284,27 @@ def expected_artifacts() -> dict[str, str]:
     # off NO_ANSWER_OUTCOMES itself so a future outcome addition (e.g.
     # CHAOS-3541's "refused") is picked up automatically rather than
     # requiring someone to remember to extend a second, independent list.
+    #
+    # Codex round-1 findings 1+2: entries below call
+    # ``no_answer_error_projection`` -- the same function ``compat.
+    # _project_error`` calls for a real v1 request -- rather than reading
+    # ``CANONICAL_NO_ANSWER_REMEDIATION``/``_ERROR_OUTCOME_CODES`` directly,
+    # so this artifact cannot represent a composition the live path does
+    # not actually run.
+    def _no_answer_outcome_entry(outcome: str) -> dict[str, Any]:
+        safe_message, code, retryable, remediation = no_answer_error_projection(outcome)
+        return {
+            "safe_message": safe_message,
+            "remediation": remediation,
+            "code": code,
+            "retryable": retryable,
+        }
+
     no_answer_vocabulary_contents = _json(
         {
             "schema_version": "ask_dev_no_answer_vocabulary.v1",
             "outcomes": {
-                outcome: {
-                    "safe_message": CANONICAL_NO_ANSWER_COPY[outcome],
-                    "remediation": list(CANONICAL_NO_ANSWER_REMEDIATION[outcome]),
-                    "code": NO_ANSWER_ERROR_CODES[outcome][0],
-                    "retryable": NO_ANSWER_ERROR_CODES[outcome][1],
-                }
+                outcome: _no_answer_outcome_entry(outcome)
                 for outcome in sorted(NO_ANSWER_OUTCOMES)
             },
         }
@@ -347,12 +355,19 @@ def write_artifacts(artifacts: dict[str, str]) -> None:
     for relative_path, contents in artifacts.items():
         destination = ARTIFACT_ROOT / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(contents, encoding="utf-8")
+        destination.write_bytes(contents.encode("utf-8"))
     for stale in _current_artifact_paths() - set(artifacts):
         (ARTIFACT_ROOT / stale).unlink()
 
 
 def check_artifacts(artifacts: dict[str, str]) -> None:
+    # Codex round-1 finding 3: ``Path.read_text()`` runs universal-newline
+    # translation on read, silently turning a checked-in file's real CRLF
+    # bytes back into "\n" in memory -- a text comparison here could never
+    # observe that corruption even though it changes the file's actual
+    # git-blob bytes (what dev-health-web's ``ask-dev-contracts.mjs``
+    # really hashes via ``git show``, and what the manifest's own declared
+    # sha256 is supposed to pin). Comparing raw bytes closes that gap.
     actual_paths = _current_artifact_paths()
     expected_paths = set(artifacts)
     if actual_paths != expected_paths:
@@ -364,7 +379,7 @@ def check_artifacts(artifacts: dict[str, str]) -> None:
     drifted = [
         relative_path
         for relative_path, expected in artifacts.items()
-        if (ARTIFACT_ROOT / relative_path).read_text(encoding="utf-8") != expected
+        if (ARTIFACT_ROOT / relative_path).read_bytes() != expected.encode("utf-8")
     ]
     if drifted:
         raise RuntimeError(f"contract artifacts drifted: {sorted(drifted)}")

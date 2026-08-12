@@ -26,6 +26,7 @@ from typing import Any, get_args, get_origin
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from dev_health_ops.api.dev import contracts as contracts_module
 from dev_health_ops.api.dev import contracts_v2 as v2
 from dev_health_ops.api.dev.contract_fixtures import (
     TEAM_ID,
@@ -1200,6 +1201,102 @@ def test_compat_error_outcome_codes_is_total_over_no_answer_outcomes() -> None:
         f"missing: {sorted(o.value for o in expected - actual)}, "
         f"unexpected: {sorted(o.value for o in actual - expected)}"
     )
+
+
+def test_no_answer_vocabulary_artifact_matches_the_real_v1_projection() -> None:
+    """CHAOS-3471 / codex round-1 finding 1. The published
+    ``no_answer_vocabulary.v1.json`` must equal what a v1 client actually
+    receives -- a REAL ``project_answer_v2_to_v1`` call for every
+    no-answer outcome, not merely a value the artifact-exporter's own
+    ``no_answer_error_projection`` call happens to agree with (the
+    self-consistency version of this lives in ``test_contracts.py``).
+    Drives the real projector end to end so a future change to either side
+    of the ``compat.py``/``export_contracts.py`` boundary is caught here.
+    """
+    published = json.loads(
+        expected_artifacts_v1()["vocabulary/no_answer_vocabulary.v1.json"]
+    )["outcomes"]
+    for outcome in v2.NO_ANSWER_OUTCOMES:
+        answer = v2.DevAnswerV2.model_validate(no_answer_payload(outcome))
+        projected = v2.project_answer_v2_to_v1(
+            answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
+        )
+        assert isinstance(projected, DevErrorV1)
+        assert published[outcome] == {
+            "safe_message": projected.safe_message,
+            "remediation": projected.remediation,
+            "code": projected.code,
+            "retryable": projected.retryable,
+        }
+
+
+def test_no_answer_vocabulary_composes_effective_remediation_not_just_the_canonical_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3471 / codex round-1 finding 1 (probe). ``_project_error``
+    composes ``dev_error_remediation(code) or CANONICAL_NO_ANSWER_
+    REMEDIATION[outcome]`` -- ``dev_error_remediation`` wins when it has
+    an entry for the code (``compat.no_answer_error_projection``).
+
+    Fail-before verified: with the exporter reading
+    ``CANONICAL_NO_ANSWER_REMEDIATION`` directly (the pre-fix shape),
+    registering a ``dev_error_remediation`` entry for ``denied``'s code
+    ("forbidden") changes what a real v1 client receives
+    (``projected.remediation`` below) while the published artifact stayed
+    on the old canonical text -- both the artifact and its own content
+    test stayed green. Composing through the shared
+    ``no_answer_error_projection`` function makes that divergence
+    impossible; this test pins it by registering exactly that entry and
+    asserting the live projection and the published artifact still agree.
+    """
+    patched_remediation = ("Patched: contact your org administrator.",)
+    monkeypatch.setitem(
+        contracts_module._DEV_ERROR_REMEDIATION, "forbidden", patched_remediation
+    )
+
+    answer = v2.DevAnswerV2.model_validate(no_answer_payload("denied"))
+    projected = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
+    )
+    assert isinstance(projected, DevErrorV1)
+    assert projected.remediation == list(patched_remediation)
+
+    published = json.loads(
+        expected_artifacts_v1()["vocabulary/no_answer_vocabulary.v1.json"]
+    )["outcomes"]
+    assert published["denied"]["remediation"] == list(patched_remediation)
+
+
+def test_no_answer_vocabulary_reflects_a_runtime_mutation_of_error_outcome_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-3471 / codex round-1 finding 2 (probe). Before this fix, the
+    exporter read a MODULE-LEVEL SNAPSHOT (``NO_ANSWER_ERROR_CODES``)
+    derived from ``compat._ERROR_OUTCOME_CODES`` once at import time,
+    while the live projector reads ``_ERROR_OUTCOME_CODES`` directly on
+    every call -- a runtime mutation of the private table would reach the
+    live path immediately but never that stale snapshot. Both now read
+    ``_ERROR_OUTCOME_CODES`` fresh (``compat.no_answer_error_projection``
+    is a function, not a precomputed table), so mutating it here reaches
+    both the live projection and the published artifact identically.
+    """
+    monkeypatch.setitem(
+        compat_module._ERROR_OUTCOME_CODES,
+        v2.PublicOutcome.DENIED,
+        ("forbidden", True),
+    )
+
+    answer = v2.DevAnswerV2.model_validate(no_answer_payload("denied"))
+    projected = v2.project_answer_v2_to_v1(
+        answer, organization_id="org_fullchaos", time_range=_time_range_for_scope()
+    )
+    assert isinstance(projected, DevErrorV1)
+    assert projected.retryable is True
+
+    published = json.loads(
+        expected_artifacts_v1()["vocabulary/no_answer_vocabulary.v1.json"]
+    )["outcomes"]
+    assert published["denied"]["retryable"] is True
 
 
 def test_compat_never_mislabels_a_team_subject_answer() -> None:

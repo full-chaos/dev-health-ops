@@ -57,7 +57,6 @@ client can only ever see an approximation of the richer v2 frame):
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import datetime
 from typing import TypeVar
 
@@ -94,7 +93,7 @@ from .subject import DevResolutionCandidate
 from .validators import CANONICAL_NO_ANSWER_COPY, CANONICAL_NO_ANSWER_REMEDIATION
 
 __all__ = [
-    "NO_ANSWER_ERROR_CODES",
+    "no_answer_error_projection",
     "project_answer_v2_to_v1",
     "scope_resolution_from_frame",
 ]
@@ -298,16 +297,36 @@ _ERROR_OUTCOME_CODES: dict[PublicOutcome, tuple[str, bool]] = {
     PublicOutcome.REFUSED: ("refused", False),
 }
 
-#: CHAOS-3471: the same table as ``_ERROR_OUTCOME_CODES``, keyed by the
-#: outcome's plain string value instead of the enum member, so a consumer
-#: outside this module (the contract-artifact exporter) can pin the
-#: ``(code, retryable)`` pair a v1 client actually receives for each
-#: no-answer outcome without importing a private, enum-keyed name across a
-#: module boundary. Derived from ``_ERROR_OUTCOME_CODES``, never redeclared,
-#: so the two cannot drift apart.
-NO_ANSWER_ERROR_CODES: Mapping[str, tuple[str, bool]] = {
-    outcome.value: pair for outcome, pair in _ERROR_OUTCOME_CODES.items()
-}
+
+def no_answer_error_projection(outcome: str) -> tuple[str, str, bool, list[str]]:
+    """``(safe_message, code, retryable, remediation)`` for one no-answer
+    outcome -- EXACTLY the composition ``_project_error`` uses to build a
+    v1 ``DevError``, factored out as the single function both the live
+    projector and the CHAOS-3471 contract-artifact exporter call.
+
+    Codex round-1 finding 1: an earlier version of the exporter published
+    ``CANONICAL_NO_ANSWER_REMEDIATION`` directly, which is only the
+    FALLBACK half of what a v1 client actually receives --
+    ``_project_error`` tries ``dev_error_remediation(code)`` first. A
+    ``dev_error_remediation`` entry added for a no-answer code (e.g.
+    ``"forbidden"``, ``denied``'s code) would silently change live output
+    while that artifact and its own content test stayed green. Composing
+    here, in the one function both sides call, makes that class of drift
+    structurally impossible rather than merely tested against.
+
+    Codex round-1 finding 2: an earlier version also published a
+    module-level snapshot (``NO_ANSWER_ERROR_CODES``) taken from
+    ``_ERROR_OUTCOME_CODES`` once at import time, while ``_project_error``
+    read ``_ERROR_OUTCOME_CODES`` directly on every call -- a runtime
+    mutation of the private table would reach the live path immediately
+    but never the stale snapshot. Reading ``_ERROR_OUTCOME_CODES`` fresh
+    on every call here closes that gap too.
+    """
+    code, retryable = _ERROR_OUTCOME_CODES[PublicOutcome(outcome)]
+    remediation = list(
+        dev_error_remediation(code) or CANONICAL_NO_ANSWER_REMEDIATION[outcome]
+    )
+    return CANONICAL_NO_ANSWER_COPY[outcome], code, retryable, remediation
 
 
 def _build_resolved_scope(
@@ -543,17 +562,16 @@ def _project_error(answer: DevAnswerV2) -> DevError:
     # channel if that constraint is ever relaxed: adversarial review's
     # `denied` counterexample reached a v1 client precisely because
     # `DevError.safe_message` was `frame.direct_answer` verbatim.
-    code, retryable = _ERROR_OUTCOME_CODES[answer.public_outcome]
+    safe_message, code, retryable, remediation = no_answer_error_projection(
+        answer.public_outcome.value
+    )
     return DevError(
         schema_version="dev_error.v1",
         request_id=answer.run_id,
         code=code,
-        safe_message=CANONICAL_NO_ANSWER_COPY[answer.public_outcome.value],
+        safe_message=safe_message,
         retryable=retryable,
-        remediation=(
-            dev_error_remediation(code)
-            or list(CANONICAL_NO_ANSWER_REMEDIATION[answer.public_outcome.value])
-        ),
+        remediation=remediation,
     )
 
 

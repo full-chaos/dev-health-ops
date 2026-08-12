@@ -35,6 +35,7 @@ from dev_health_ops.sync.planner import (
 )
 from dev_health_ops.workers.provider_family_contract import (
     FamilyExecutionMode,
+    atomic_provider_family_route_enabled,
     provider_family_policy,
     validate_provider_family_claim,
 )
@@ -268,20 +269,9 @@ def provider_family_strict_admission_enabled(
     """
 
     normalized_provider = provider.strip().lower()
-    policy = provider_family_policy(normalized_provider, dataset.strip().lower())
-    if policy is None or policy.mode is not FamilyExecutionMode.ATOMIC_CANONICAL:
-        return False
     if normalized_provider == "github":
         return True
-    switch_name = (
-        policy.switch_environment_name(normalized_provider)
-        or f"WORKER_{normalized_provider.upper()}_WORK_ITEMS_ENABLED"
-    )
-    source = os.environ if environment is None else environment
-    source = _provider_route_environment(
-        source, tuple(ProviderUnitRouteSwitches.__dataclass_fields__)
-    )
-    return _flag(source, switch_name)
+    return atomic_provider_family_route_enabled(provider, dataset, environment)
 
 
 @dataclass(frozen=True, slots=True)

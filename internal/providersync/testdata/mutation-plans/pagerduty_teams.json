@@ -68,6 +68,23 @@
       "rationale": "A complete successful teams snapshot must reconcile every previously active row omitted by the source into a tombstone; skipping omitted rows leaves stale teams active and readback must reject the partial write.",
       "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
       "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyTeamsEffectUsesMigratedClickHouseTombstonesAndExactReplay$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T9-account-ability-failure-is-not-an-empty-snapshot",
+      "file": "internal/providersync/pagerduty_teams_route.go",
+      "find": "providerErr.StatusCode == http.StatusPaymentRequired",
+      "replace": "providerErr.StatusCode == http.StatusOK",
+      "rationale": "PagerDuty returns HTTP 402/code 2014 when the account lacks the teams product ability; the route must preserve that as unavailable rather than retry to exhaustion or fabricate an empty authoritative snapshot",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyTeamsRouteClassifiesUnavailableAccountAbility$", "./internal/providersync/"]]
+    },
+    {
+      "id": "T10-dataset-unavailable-terminalizes-on-first-attempt",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {\n\t\treturn ProviderDatasetUnavailableCategory, true",
+      "replace": "if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {\n\t\treturn \"\", false",
+      "rationale": "An account-level product ability cannot appear on a retry; the unit must retain a truthful provider_dataset_unavailable category instead of burning all attempts and becoming generic exhaustion",
+      "build": ["go", "test", "-run", "^$", "./internal/jobs/providerunit/"],
+      "proof": [["go", "test", "-count=1", "-run", "^TestDeterministicTerminalCategoryContract$", "./internal/jobs/providerunit/"]]
     }
   ]
 }

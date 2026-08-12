@@ -9,6 +9,7 @@ or reject those units.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -78,6 +79,7 @@ _POLICIES = (
 )
 
 FAMILY_DATASET_FLAG_PREFIX = "family_dataset_"
+_TRUE = frozenset({"1", "true", "yes", "on"})
 
 
 def family_dataset_flag(dataset: str) -> str:
@@ -91,6 +93,37 @@ def provider_family_policy(provider: str, dataset: str) -> ProviderFamilyPolicy 
         if policy.applies_to(normalized_provider, normalized_dataset):
             return policy
     return None
+
+
+def atomic_provider_family_route_enabled(
+    provider: str,
+    dataset: str,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether one atomic family has native ownership in this process.
+
+    Explicit per-provider switches override the local ``all`` preset. Keeping
+    this decision beside the family policy lets the planner and dispatcher
+    agree on whether processor flags describe contributing datasets or the
+    complete indivisible Go writer family.
+    """
+
+    normalized_provider = provider.strip().lower()
+    policy = provider_family_policy(normalized_provider, dataset.strip().lower())
+    if policy is None or policy.mode is not FamilyExecutionMode.ATOMIC_CANONICAL:
+        return False
+    source = os.environ if environment is None else environment
+    switch_name = (
+        policy.switch_environment_name(normalized_provider)
+        or f"WORKER_{normalized_provider.upper()}_WORK_ITEMS_ENABLED"
+    )
+    explicit = source.get(switch_name)
+    if explicit is not None:
+        return explicit.strip().lower() in _TRUE
+    return (
+        source.get("DEV_HEALTH_ENV", "").strip().lower() == "local"
+        and source.get("GO_PROVIDER_ROUTES", "").strip().lower() == "all"
+    )
 
 
 def validate_provider_family_claim(

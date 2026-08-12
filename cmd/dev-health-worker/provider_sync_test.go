@@ -994,6 +994,59 @@ func TestWorkerRouteSwitchesMapsEveryConfiguredRoute(t *testing.T) {
 	}
 }
 
+func TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable(t *testing.T) {
+	t.Parallel()
+	values := map[string]string{
+		"DEV_HEALTH_ENV":     "local",
+		"GO_PROVIDER_ROUTES": "all",
+		"DEV_HEALTH_PROFILE": "sync",
+	}
+	cfg, err := config.Load(config.Spec{
+		Service: "dev-health-worker", Profiles: []string{"sync"}, DefaultProfile: "sync",
+		LookupEnv: func(key string) (string, bool) {
+			value, ok := values[key]
+			return value, ok
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	switches := workerRouteSwitches(cfg)
+	handler, _ := buildProviderSyncHandler(
+		nil, switches, nil, nil, nil, nil, nil, nil, slog.Default(),
+	)
+	for _, route := range []struct {
+		provider string
+		dataset  string
+	}{
+		{"github", "pr-reviews"}, {"github", "pr-comments"}, {"github", "tests"},
+		{"gitlab", "pr-reviews"}, {"gitlab", "pr-comments"}, {"gitlab", "tests"},
+	} {
+		descriptor, ok := switches.Descriptor(route.provider, route.dataset)
+		if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
+			t.Fatalf("%s/%s descriptor=%+v ok=%v", route.provider, route.dataset, descriptor, ok)
+		}
+		executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+			Claim: providersync.Claim{Unit: providersync.Unit{
+				Provider: route.provider, Dataset: route.dataset,
+			}},
+		})
+		if err != nil {
+			t.Fatalf("%s/%s executor: %v", route.provider, route.dataset, err)
+		}
+		if executor.Handler == nil {
+			t.Fatalf("%s/%s executor has no complete handler", route.provider, route.dataset)
+		}
+	}
+	explicit := workerRouteSwitches(config.Config{WorkerGithubPRsEnabled: true})
+	for _, dataset := range []string{"pr-reviews", "pr-comments"} {
+		descriptor, _ := explicit.Descriptor("github", dataset)
+		if descriptor.RouteEnabled {
+			t.Fatalf("explicit github/prs switch widened to github/%s", dataset)
+		}
+	}
+}
+
 func TestBuildProviderSyncHandlerConstructsGitHubCommitStatsCapability(t *testing.T) {
 	handler, _ := buildProviderSyncHandler(
 		nil,

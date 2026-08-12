@@ -248,6 +248,7 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 	// The literal below must name every field of CompleteRouteSwitches: a new
 	// switch left out of it would leave its pair unexercised here.
 	all := CompleteRouteSwitches{
+		LocalAllRoutes:  true,
 		LinearWorkItems: true, JiraWorkItems: true, JiraIncidents: true,
 		LaunchDarklyFeatureFlags: true, GithubRepoMetadata: true,
 		GitlabRepoMetadata:          true,
@@ -284,7 +285,7 @@ func TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs(t *testing.T) {
 		GithubTests:       true,
 		GithubWorkItems:   true,
 	}
-	if reflect.TypeOf(all).NumField() != 43 {
+	if reflect.TypeOf(all).NumField() != 44 {
 		t.Fatalf(
 			"CompleteRouteSwitches gained a field; add it to `all` above so its " +
 				"pair is exercised, then update this count",

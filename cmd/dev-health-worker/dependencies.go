@@ -508,6 +508,7 @@ func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error
 // handler used to permit (CHAOS-3123).
 func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
 	return providersync.CompleteRouteSwitches{
+		LocalAllRoutes:              cfg.LocalAllProviderRoutes,
 		LinearWorkItems:             cfg.WorkerLinearWorkItemsEnabled,
 		JiraWorkItems:               cfg.WorkerJiraWorkItemsEnabled,
 		JiraIncidents:               cfg.WorkerJiraIncidentsEnabled,
@@ -554,16 +555,15 @@ func workerRouteSwitches(cfg config.Config) providersync.CompleteRouteSwitches {
 	}
 }
 
-func providerRouteSwitchesReady(
-	cfg config.Config,
-	runtimeConstructed *bool,
-) health.CheckFunc {
+type providerRouteSwitch struct {
+	provider   string
+	dataset    string
+	configured bool
+}
+
+func effectiveProviderRouteSwitches(cfg config.Config) []providerRouteSwitch {
 	switches := workerRouteSwitches(cfg)
-	routes := []struct {
-		provider string
-		dataset  string
-		enabled  bool
-	}{
+	routes := []providerRouteSwitch{
 		{"linear", "work-items", cfg.WorkerLinearWorkItemsEnabled},
 		{"jira", "work-items", cfg.WorkerJiraWorkItemsEnabled},
 		{"jira", "incidents", cfg.WorkerJiraIncidentsEnabled},
@@ -608,6 +608,22 @@ func providerRouteSwitchesReady(
 		{"github", "tests", cfg.WorkerGithubTestsEnabled},
 		{"github", "work-items", cfg.WorkerGithubWorkItemsEnabled},
 	}
+	effective := make([]providerRouteSwitch, 0, len(routes))
+	for _, route := range routes {
+		descriptor, ok := switches.Descriptor(route.provider, route.dataset)
+		if route.configured || (ok && descriptor.RouteEnabled) {
+			effective = append(effective, route)
+		}
+	}
+	return effective
+}
+
+func providerRouteSwitchesReady(
+	cfg config.Config,
+	runtimeConstructed *bool,
+) health.CheckFunc {
+	switches := workerRouteSwitches(cfg)
+	routes := effectiveProviderRouteSwitches(cfg)
 	return func(context.Context) error {
 		// The same helper feeds the production BuildExecutor closure below.
 		// A route cannot report ready for one pair of config files and construct
@@ -617,9 +633,6 @@ func providerRouteSwitchesReady(
 			return errWorkerDependencyUnavailable
 		}
 		for _, route := range routes {
-			if !route.enabled {
-				continue
-			}
 			descriptor, ok := switches.Descriptor(route.provider, route.dataset)
 			if !ok || !descriptor.RouteReady || !descriptor.RouteEnabled {
 				return errWorkerDependencyUnavailable

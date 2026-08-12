@@ -104,6 +104,7 @@ type Config struct {
 	OperationalBridgeTimeout       time.Duration
 	OperationalBridgeAllowInsecure bool
 	StreamConfiguredReplicas       int
+	LocalAllProviderRoutes         bool
 
 	WorkerLinearWorkItemsEnabled          bool
 	WorkerJiraWorkItemsEnabled            bool
@@ -252,6 +253,7 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.LocalAllProviderRoutes = allProviderRoutes
 	for _, item := range []struct {
 		name   string
 		target *bool

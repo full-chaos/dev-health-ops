@@ -79,7 +79,7 @@ def test_go_quality_bootstraps_locked_live_oracle_dependencies() -> None:
         assert str(locked[package]["version"]) == version, (
             f"live-oracle pin for {package} must match uv.lock"
         )
-    for root in ("httpx", "pygithub", "croniter"):
+    for root in ("croniter", "cryptography", "httpx", "pygithub"):
         for package, version in _locked_closure(root).items():
             assert pins.get(package) == version, (
                 f"live Python oracles require locked {package}=={version}"

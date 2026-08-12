@@ -4,6 +4,8 @@ package providerunit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 )
@@ -125,6 +128,7 @@ type UnitRepository interface {
 		time.Time,
 	) error
 	ReleaseForRetry(context.Context, providersync.Claim, time.Time) error
+	DeferForBudgetContention(context.Context, providersync.Claim, time.Time, time.Time) error
 	Fail(
 		context.Context,
 		providersync.Claim,
@@ -400,6 +404,22 @@ func (handler *Handler) Work(
 		}
 	}
 	completedAt := handler.now()
+	// A healthy shared request bucket can be full when sibling provider units
+	// overlap. That is scheduling contention, not an execution failure. Persist
+	// the domain deferral before returning River's attempt-neutral snooze so a
+	// process restart keeps the same not-before fence and operator evidence.
+	if errors.Is(err, providerfoundation.ErrBudgetContended) {
+		delay := providerBudgetContentionDelay(session.Claim.ID)
+		availableAt := completedAt.Add(delay)
+		if deferErr := handler.Repository.DeferForBudgetContention(
+			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
+		); deferErr != nil {
+			return jobruntime.Retryable(deferErr)
+		}
+		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "deferred", err)
+		return jobruntime.BudgetContention(err, delay)
+	}
 	// A deterministic fault cannot succeed on a later attempt. Burning the
 	// remaining attempts would only delay the outcome and then bury the real
 	// cause under the generic provider_unit_exhausted category.
@@ -441,6 +461,12 @@ func (handler *Handler) Work(
 	handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 	handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "retrying", err)
 	return jobruntime.Retryable(err)
+}
+
+func providerBudgetContentionDelay(unitID string) time.Duration {
+	digest := sha256.Sum256([]byte(unitID))
+	jitter := time.Duration(binary.BigEndian.Uint64(digest[:8])%1000) * time.Millisecond
+	return time.Second + jitter
 }
 
 func cloneResult(input map[string]any) map[string]any {

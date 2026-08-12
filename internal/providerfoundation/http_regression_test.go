@@ -209,6 +209,28 @@ func TestHTTPClientPreservesRequestAndReleaseFailures(t *testing.T) {
 	}
 }
 
+func TestHTTPClientUnauthenticatedPreservesBudgetContention(t *testing.T) {
+	t.Parallel()
+	client := newTestHTTPClient(t, HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("contended request reached transport")
+		return nil, nil
+	}), RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond})
+	client.Budget = staticBudgetStore{err: ErrBudgetContended}
+	client.BudgetKey = BudgetKey{
+		Provider: "github", OrgID: "org", CostClass: "rest", Limit: 1, TTL: time.Minute,
+	}
+
+	response, err := client.DoUnauthenticated(
+		context.Background(), http.MethodGet, "https://objects.example.test/artifact",
+	)
+	if response != nil || !errors.Is(err, ErrBudgetContended) {
+		t.Fatalf("response=%v error=%v; want preserved contention", response, err)
+	}
+	if errors.Is(err, ErrBudgetUnavailable) {
+		t.Fatalf("unauthenticated request converted contention into store outage: %v", err)
+	}
+}
+
 func newTestHTTPClient(t *testing.T, doer HTTPDoer, retry RetryPolicy) *HTTPClient {
 	t.Helper()
 	client, err := NewHTTPClient(

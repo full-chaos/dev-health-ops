@@ -224,7 +224,13 @@ func (c *HTTPClient) DoUnauthenticated(
 	var reservation Reservation
 	if c.Budget != nil {
 		reservation, err = c.Budget.Acquire(ctx, c.BudgetKey)
-		if err != nil || reservation == nil {
+		if err != nil {
+			if c.Metrics != nil {
+				c.Metrics.RecordBudgetDenied(c.Provider)
+			}
+			return nil, err // Preserve ErrBudgetContended for attempt-neutral snooze.
+		}
+		if reservation == nil {
 			if c.Metrics != nil {
 				c.Metrics.RecordBudgetDenied(c.Provider)
 			}

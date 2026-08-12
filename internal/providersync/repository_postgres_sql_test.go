@@ -69,6 +69,50 @@ func TestReleaseForRetrySQLDoesNotClearEpisodeState(t *testing.T) {
 	}
 }
 
+func TestProviderBudgetContentionStampIsDistinctAndDurable(t *testing.T) {
+	for _, required := range []string{
+		"status = 'dispatching'",
+		"attempts = GREATEST(unit.attempts - 1, 0)",
+		"available_at = $4",
+		"COALESCE(unit.result::jsonb, jsonb_build_object()) ||",
+		"'error_category', 'provider_budget_contention'",
+		"'provider_budget_contention_deferrals'",
+		"first_blocked_at = COALESCE(unit.first_blocked_at, $3)",
+		"last_retry_reason = 'provider_budget_contention'",
+	} {
+		if !strings.Contains(deferForBudgetContentionSQL, required) {
+			t.Errorf("deferForBudgetContentionSQL missing %q:\n%s", required, deferForBudgetContentionSQL)
+		}
+	}
+	if strings.Contains(deferForBudgetContentionSQL, "budget_deferrals = unit.budget_deferrals + 1") {
+		t.Fatalf("request-slot contention was charged to the intrinsic planner budget episode:\n%s",
+			deferForBudgetContentionSQL)
+	}
+	for _, column := range episodeClearColumns {
+		name := strings.SplitN(column, " ", 2)[0]
+		if strings.Contains(deferForBudgetContentionSQL, name+" =") {
+			t.Fatalf("contention stamp changes existing %q episode state:\n%s",
+				name, deferForBudgetContentionSQL)
+		}
+	}
+	if preservingErrorCategory(deferForBudgetContentionSQL) {
+		t.Fatalf("contention stamp preserves a prior category; Python could treat it as intrinsic unfitness:\n%s",
+			deferForBudgetContentionSQL)
+	}
+}
+
+func TestClaimHonorsDurableProviderBudgetContentionFence(t *testing.T) {
+	for _, required := range []string{
+		"unit.status = 'dispatching'",
+		"unit.available_at IS NULL OR unit.available_at <= $3",
+	} {
+		if !strings.Contains(claimUnitSQL, required) {
+			t.Errorf("claimUnitSQL missing %q; a restarted worker could bypass available_at:\n%s",
+				required, claimUnitSQL)
+		}
+	}
+}
+
 // preservingErrorCategory reports whether a jsonb result stamp could leave a
 // PRIOR result document's 'error_category' in place. See
 // sqlshape.PreservesPriorResultCategory for the two forbidden shapes and why
@@ -109,9 +153,10 @@ func preservingErrorCategory(sql string) bool {
 // a merge.
 func TestNoUnitStampPreservesAPriorErrorCategory(t *testing.T) {
 	stamps := map[string]string{
-		"completeUnitSQL":    completeUnitSQL,
-		"releaseForRetrySQL": releaseForRetrySQL,
-		"failUnitSQL":        failUnitSQL,
+		"completeUnitSQL":             completeUnitSQL,
+		"releaseForRetrySQL":          releaseForRetrySQL,
+		"deferForBudgetContentionSQL": deferForBudgetContentionSQL,
+		"failUnitSQL":                 failUnitSQL,
 	}
 	measured := 0
 	for name, sql := range stamps {

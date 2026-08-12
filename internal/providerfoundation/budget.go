@@ -109,7 +109,7 @@ type ValkeyBudgetStore struct {
 	// Observer records how long Acquire spent asking the shared Valkey store
 	// for a reservation — round-trip and lock-contention latency, not a
 	// client-side backoff sleep (this store never sleeps; a denial is
-	// returned immediately as ErrBudgetUnavailable). It is observed on both
+	// returned immediately as ErrBudgetContended). It is observed on both
 	// the granted and the denied path, since both represent real time this
 	// call spent waiting on the budget subsystem.
 	Observer BudgetWaitObserver
@@ -130,7 +130,7 @@ func (s ValkeyBudgetStore) Acquire(ctx context.Context, key BudgetKey) (Reservat
 		return nil, ErrBudgetUnavailable
 	}
 	if allowed != 1 {
-		return nil, ErrBudgetUnavailable
+		return nil, ErrBudgetContended
 	}
 	return &valkeyReservation{client: s.Client, key: key.String()}, nil
 }

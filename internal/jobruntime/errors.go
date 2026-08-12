@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/riverqueue/river"
 )
@@ -42,6 +43,7 @@ type markedError struct {
 	category ErrorCategory
 	cause    error
 	cancel   bool
+	snooze   time.Duration
 }
 
 func (err *markedError) Error() string { return "job error category: " + string(err.category) }
@@ -49,6 +51,26 @@ func (err *markedError) Unwrap() error { return err.cause }
 
 // Retryable marks an expected transient handler failure.
 func Retryable(err error) error { return mark(CategoryRetryable, err, false) }
+
+// BudgetContention marks a short-lived shared-request reservation collision.
+// River snoozes do not count as attempts, so this is distinct from Retryable:
+// healthy sibling work cannot consume a job's bounded failure budget.
+func BudgetContention(err error, delay time.Duration) error {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	return &markedError{category: CategoryBudget, cause: nonNilError(err), snooze: delay}
+}
+
+// SnoozeDelay exposes the typed decision to domain handlers and tests without
+// exposing the internal runtime error representation.
+func SnoozeDelay(err error) (time.Duration, bool) {
+	var marked *markedError
+	if !errors.As(err, &marked) || marked.snooze <= 0 {
+		return 0, false
+	}
+	return marked.snooze, true
+}
 
 // Permanent marks an invalid request or deterministic handler failure that
 // must not be retried.
@@ -64,16 +86,21 @@ func Cancel(err error) error { return mark(CategoryCancelled, err, true) }
 func DomainMismatch(err error) error { return mark(CategoryTenant, err, true) }
 
 func mark(category ErrorCategory, err error, cancel bool) error {
+	return &markedError{category: category, cause: nonNilError(err), cancel: cancel}
+}
+
+func nonNilError(err error) error {
 	if err == nil {
-		err = errors.New("unspecified")
+		return errors.New("unspecified")
 	}
-	return &markedError{category: category, cause: err, cancel: cancel}
+	return err
 }
 
 type decision struct {
 	result   Result
 	category ErrorCategory
 	cancel   bool
+	snooze   time.Duration
 }
 
 func classify(ctx context.Context, err error, attempt, maxAttempts int) decision {
@@ -90,6 +117,9 @@ func classify(ctx context.Context, err error, attempt, maxAttempts int) decision
 	}
 	var marked *markedError
 	if errors.As(err, &marked) {
+		if marked.snooze > 0 {
+			return decision{result: ResultRetry, category: marked.category, snooze: marked.snooze}
+		}
 		if marked.cancel {
 			return decision{result: ResultCancel, category: marked.category, cancel: true}
 		}
@@ -114,6 +144,9 @@ func (err *safeError) Error() string {
 }
 
 func transportError(choice decision) error {
+	if choice.snooze > 0 {
+		return river.JobSnooze(choice.snooze)
+	}
 	safe := &safeError{category: choice.category}
 	if choice.cancel {
 		return river.JobCancel(safe)

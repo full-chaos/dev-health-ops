@@ -57,6 +57,7 @@ client can only ever see an approximation of the richer v2 frame):
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TypeVar
 
@@ -92,7 +93,11 @@ from .frame import DevAnswerFrame, DevFrameVersions
 from .subject import DevResolutionCandidate
 from .validators import CANONICAL_NO_ANSWER_COPY, CANONICAL_NO_ANSWER_REMEDIATION
 
-__all__ = ["project_answer_v2_to_v1", "scope_resolution_from_frame"]
+__all__ = [
+    "NO_ANSWER_ERROR_CODES",
+    "project_answer_v2_to_v1",
+    "scope_resolution_from_frame",
+]
 
 _V1Model = TypeVar("_V1Model", bound=BaseModel)
 
@@ -291,6 +296,17 @@ _ERROR_OUTCOME_CODES: dict[PublicOutcome, tuple[str, bool]] = {
     # would mislabel a categorical refusal as a resolvable evidence gap on
     # replay too.
     PublicOutcome.REFUSED: ("refused", False),
+}
+
+#: CHAOS-3471: the same table as ``_ERROR_OUTCOME_CODES``, keyed by the
+#: outcome's plain string value instead of the enum member, so a consumer
+#: outside this module (the contract-artifact exporter) can pin the
+#: ``(code, retryable)`` pair a v1 client actually receives for each
+#: no-answer outcome without importing a private, enum-keyed name across a
+#: module boundary. Derived from ``_ERROR_OUTCOME_CODES``, never redeclared,
+#: so the two cannot drift apart.
+NO_ANSWER_ERROR_CODES: Mapping[str, tuple[str, bool]] = {
+    outcome.value: pair for outcome, pair in _ERROR_OUTCOME_CODES.items()
 }
 
 

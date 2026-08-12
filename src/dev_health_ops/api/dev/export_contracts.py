@@ -18,6 +18,12 @@ from .contract_fixtures import (
 )
 from .contracts import CONTRACT_MODELS, DevStreamEvent, ToolID, validate_stream
 from .contracts_v2.base import SourceClass
+from .contracts_v2.compat import NO_ANSWER_ERROR_CODES
+from .contracts_v2.validators import (
+    CANONICAL_NO_ANSWER_COPY,
+    CANONICAL_NO_ANSWER_REMEDIATION,
+    NO_ANSWER_OUTCOMES,
+)
 from .no_match_terminal import INTERNAL_TOKEN_DENYLIST
 from .status_change_service import STATUS_REASON_CODES
 
@@ -266,6 +272,36 @@ def expected_artifacts() -> dict[str, str]:
         }
     )
     artifacts["vocabulary/source_health_labels.v1.json"] = source_health_labels_contents
+    # CHAOS-3471. The entire user-visible text of a v1 DevError for a
+    # dev_answer.v2 no-answer outcome comes from two server-owned Python
+    # tables (contracts_v2/no_answer_policy.py's CANONICAL_NO_ANSWER_COPY /
+    # CANONICAL_NO_ANSWER_REMEDIATION) plus the (code, retryable) pair
+    # compat.py's projector attaches -- see compat._project_error. Before
+    # this, web hand-mirrored all three as tests/mocks/devScenario.ts's
+    # NO_ANSWER_OUTCOMES, which proves the UI renders the server's
+    # safe_message verbatim but cannot detect an ops-side reword: the mock
+    # and the Python constants could drift and both sides would stay green.
+    # Publishing the live tables closes that gap the same way
+    # internal_prose_denylist.v1.json already does for the completion-
+    # assessment vocabulary -- derived here, never hand-authored, and keyed
+    # off NO_ANSWER_OUTCOMES itself so a future outcome addition (e.g.
+    # CHAOS-3541's "refused") is picked up automatically rather than
+    # requiring someone to remember to extend a second, independent list.
+    no_answer_vocabulary_contents = _json(
+        {
+            "schema_version": "ask_dev_no_answer_vocabulary.v1",
+            "outcomes": {
+                outcome: {
+                    "safe_message": CANONICAL_NO_ANSWER_COPY[outcome],
+                    "remediation": list(CANONICAL_NO_ANSWER_REMEDIATION[outcome]),
+                    "code": NO_ANSWER_ERROR_CODES[outcome][0],
+                    "retryable": NO_ANSWER_ERROR_CODES[outcome][1],
+                }
+                for outcome in sorted(NO_ANSWER_OUTCOMES)
+            },
+        }
+    )
+    artifacts["vocabulary/no_answer_vocabulary.v1.json"] = no_answer_vocabulary_contents
     manifest = {
         "schema_version": "ask_dev_contract_manifest.v1",
         "compatibility": "additive-within-v1",
@@ -284,6 +320,11 @@ def expected_artifacts() -> dict[str, str]:
                 "case": "source_health_labels",
                 "path": "vocabulary/source_health_labels.v1.json",
                 "sha256": _sha256(source_health_labels_contents),
+            },
+            {
+                "case": "no_answer_vocabulary",
+                "path": "vocabulary/no_answer_vocabulary.v1.json",
+                "sha256": _sha256(no_answer_vocabulary_contents),
             },
         ],
     }

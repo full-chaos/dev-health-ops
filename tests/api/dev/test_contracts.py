@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime
@@ -30,6 +31,12 @@ from dev_health_ops.api.dev.contracts import (
     validate_stream,
 )
 from dev_health_ops.api.dev.contracts_v2.base import SourceClass
+from dev_health_ops.api.dev.contracts_v2.compat import NO_ANSWER_ERROR_CODES
+from dev_health_ops.api.dev.contracts_v2.validators import (
+    CANONICAL_NO_ANSWER_COPY,
+    CANONICAL_NO_ANSWER_REMEDIATION,
+    NO_ANSWER_OUTCOMES,
+)
 from dev_health_ops.api.dev.export_contracts import (
     SOURCE_HEALTH_LABELS,
     check_artifacts,
@@ -591,6 +598,52 @@ def test_source_health_labels_cover_every_known_required_source_producer() -> No
     assert set(published["labels"]) == expected
     for source_id, label in SOURCE_HEALTH_LABELS.items():
         assert label, f"{source_id} has an empty label"
+
+
+def test_published_no_answer_vocabulary_matches_the_live_policy_tables() -> None:
+    """CHAOS-3471. The entire user-visible text of a v1 ``DevError`` for a
+    ``dev_answer.v2`` no-answer outcome is the server-owned
+    ``CANONICAL_NO_ANSWER_COPY`` / ``CANONICAL_NO_ANSWER_REMEDIATION``
+    tables plus the ``(code, retryable)`` pair
+    ``compat.NO_ANSWER_ERROR_CODES`` attaches (``compat._project_error``).
+    Before this artifact, web hand-mirrored all three in
+    ``tests/mocks/devScenario.ts``'s ``NO_ANSWER_OUTCOMES`` -- a copy that
+    proves the UI renders ``safe_message`` verbatim but cannot detect an
+    ops-side reword. This test pins that the published artifact is exactly
+    the live tables, keyed by every member of ``NO_ANSWER_OUTCOMES`` (not a
+    hand-picked subset), so a future outcome addition or a copy/remediation
+    edit either lands in the artifact automatically or fails this test.
+    """
+    published = json.loads(
+        expected_artifacts()["vocabulary/no_answer_vocabulary.v1.json"]
+    )
+    assert published["schema_version"] == "ask_dev_no_answer_vocabulary.v1"
+    assert set(published["outcomes"]) == NO_ANSWER_OUTCOMES
+    for outcome in NO_ANSWER_OUTCOMES:
+        code, retryable = NO_ANSWER_ERROR_CODES[outcome]
+        assert published["outcomes"][outcome] == {
+            "safe_message": CANONICAL_NO_ANSWER_COPY[outcome],
+            "remediation": list(CANONICAL_NO_ANSWER_REMEDIATION[outcome]),
+            "code": code,
+            "retryable": retryable,
+        }
+
+
+def test_no_answer_vocabulary_is_listed_in_the_manifest() -> None:
+    artifacts = expected_artifacts()
+    manifest = json.loads(artifacts["manifest.json"])
+    entry = next(
+        item
+        for item in manifest["vocabulary"]
+        if item["case"] == "no_answer_vocabulary"
+    )
+    assert entry["path"] == "vocabulary/no_answer_vocabulary.v1.json"
+    assert (
+        entry["sha256"]
+        == hashlib.sha256(
+            artifacts["vocabulary/no_answer_vocabulary.v1.json"].encode("utf-8")
+        ).hexdigest()
+    )
 
 
 @pytest.mark.parametrize("schema_version", CONTRACT_MODELS)

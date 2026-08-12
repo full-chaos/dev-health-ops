@@ -55,6 +55,7 @@ _package("dev_health_ops.credentials")
 _package("dev_health_ops.providers")
 _package("dev_health_ops.providers.github")
 _package("dev_health_ops.sync")
+_package("dev_health_ops.workers")
 _module(
     "dev_health_ops.backfill.chunker",
     chunk_date_range=lambda **_kwargs: (),
@@ -88,6 +89,10 @@ _module(
     sync_datasets_require_canonical_incident_feature=lambda *_args, **_kwargs: False,
 )
 datasets = _load("dev_health_ops.sync.datasets", SOURCE / "sync/datasets.py")
+_load(
+    "dev_health_ops.workers.provider_family_contract",
+    SOURCE / "workers/provider_family_contract.py",
+)
 _load(
     "dev_health_ops.providers.github.work_item_options",
     SOURCE / "providers/github/work_item_options.py",

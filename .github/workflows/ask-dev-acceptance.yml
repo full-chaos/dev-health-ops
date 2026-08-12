@@ -56,12 +56,12 @@
 # pins every guard in this file and fails against a mutated copy.
 name: Ask Dev Acceptance (live stack)
 
-on:
-  schedule:
-    # 04:23 UTC nightly. Off the hour on purpose: GitHub queues scheduled
-    # workflows across all of github.com and the top of the hour is the worst
-    # slot for a job that needs a full runner for over an hour.
-    - cron: "23 4 * * *"
+# on:
+#   schedule:
+#     # 04:23 UTC nightly. Off the hour on purpose: GitHub queues scheduled
+#     # workflows across all of github.com and the top of the hour is the worst
+#     # slot for a job that needs a full runner for over an hour.
+#     - cron: "23 4 * * *"
   workflow_dispatch:
 
 # Never cancel a run in progress: this lane's whole product is a completed

@@ -55,6 +55,8 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 -- no way to express "this column only" — hence the separate CTEs below.
 ), column_scoped_privileges(table_name, column_name, privilege) AS (
 	SELECT * FROM unnest($6::text[], $7::text[], $8::text[])
+), required_sequence_privileges(sequence_name) AS (
+	SELECT * FROM unnest($10::text[])
 ), column_scoped_relations AS (
 	SELECT DISTINCT class.oid, class.relname
 	FROM pg_catalog.pg_class AS class
@@ -89,12 +91,20 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 			FROM column_scoped_privileges AS scoped
 			WHERE scoped.table_name = class.relname
 		)
-), public_sequences AS (
+), required_public_sequences AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
 	WHERE namespace.nspname = 'public'
 		AND class.relkind = 'S'
+		AND class.relname IN (SELECT sequence_name FROM required_sequence_privileges)
+), other_public_sequences AS (
+	SELECT class.oid
+	FROM pg_catalog.pg_class AS class
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+	WHERE namespace.nspname = 'public'
+		AND class.relkind = 'S'
+		AND class.relname NOT IN (SELECT sequence_name FROM required_sequence_privileges)
 ), river_relations AS (
 	SELECT class.oid
 	FROM pg_catalog.pg_class AS class
@@ -369,9 +379,19 @@ SELECT
 				ELSE false
 			END
 	)
+	AND (SELECT count(*) FROM required_public_sequences) =
+		(SELECT count(*) FROM required_sequence_privileges)
 	AND NOT EXISTS (
 		SELECT 1
-		FROM public_sequences
+		FROM required_public_sequences
+		WHERE NOT has_sequence_privilege(current_user, oid, 'USAGE')
+			OR has_sequence_privilege(current_user, oid, 'USAGE WITH GRANT OPTION')
+			OR has_sequence_privilege(current_user, oid, 'SELECT')
+			OR has_sequence_privilege(current_user, oid, 'UPDATE')
+	)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM other_public_sequences
 		WHERE has_sequence_privilege(current_user, oid, 'USAGE')
 			OR has_sequence_privilege(current_user, oid, 'SELECT')
 			OR has_sequence_privilege(current_user, oid, 'UPDATE')
@@ -454,8 +474,9 @@ type ColumnPrivilege struct {
 // same deployment; see the package doc on rolePostureQuery for why that is
 // what makes cross-role attribution hold without a separate check.
 type RolePosture struct {
-	RequiredTables []TablePrivilege
-	ColumnScoped   []ColumnPrivilege
+	RequiredTables    []TablePrivilege
+	ColumnScoped      []ColumnPrivilege
+	RequiredSequences []string
 }
 
 // domainPosture is the domain runtime role's declared manifest under the
@@ -748,6 +769,7 @@ func coordinatorPosture() RolePosture {
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},
+		RequiredSequences: []string{"worker_operator_audits_id_seq"},
 	}
 }
 
@@ -860,7 +882,7 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
-		allowDeletes,
+		allowDeletes, posture.RequiredSequences,
 	).Scan(&authorized); err != nil || !authorized {
 		return ErrUnavailable
 	}

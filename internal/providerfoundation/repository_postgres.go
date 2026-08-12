@@ -3,8 +3,12 @@ package providerfoundation
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -87,4 +91,90 @@ func decodeConfig(raw []byte, target map[string]string) error {
 	return nil
 }
 
+// PostgresPagerDutyOAuthTokenRepository reads and rotates only the encrypted
+// OAuth token row referenced by a tokenless integration descriptor.
+type PostgresPagerDutyOAuthTokenRepository struct{ Pool *pgxpool.Pool }
+
+func (r PostgresPagerDutyOAuthTokenRepository) Load(
+	ctx context.Context,
+	orgID string,
+	credentialName string,
+) (PagerDutyOAuthTokenRecord, error) {
+	if r.Pool == nil || strings.TrimSpace(orgID) == "" ||
+		strings.TrimSpace(credentialName) == "" {
+		return PagerDutyOAuthTokenRecord{}, ErrCredentialInvalid
+	}
+	var (
+		ciphertext string
+		version    int
+		bindingID  *string
+	)
+	err := r.Pool.QueryRow(ctx, `
+SELECT token_encrypted, version, binding_id
+FROM provider_oauth_credentials
+WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2`,
+		orgID, credentialName,
+	).Scan(&ciphertext, &version, &bindingID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PagerDutyOAuthTokenRecord{}, ErrCredentialNotFound
+	}
+	if err != nil {
+		return PagerDutyOAuthTokenRecord{}, &ProviderError{Class: ErrorTransient}
+	}
+	if bindingID == nil || strings.TrimSpace(*bindingID) == "" ||
+		strings.TrimSpace(ciphertext) == "" || version < 1 {
+		return PagerDutyOAuthTokenRecord{}, ErrCredentialInvalid
+	}
+	return PagerDutyOAuthTokenRecord{
+		Ciphertext: secrets.NewValue(ciphertext), Version: version,
+		BindingID: *bindingID,
+	}, nil
+}
+
+func (r PostgresPagerDutyOAuthTokenRepository) Rotate(
+	ctx context.Context,
+	orgID string,
+	credentialName string,
+	rotation PagerDutyOAuthTokenRotation,
+) (bool, error) {
+	if r.Pool == nil || strings.TrimSpace(orgID) == "" ||
+		strings.TrimSpace(credentialName) == "" ||
+		rotation.ExpectedVersion < 1 ||
+		strings.TrimSpace(rotation.ExpectedBindingID) == "" ||
+		!rotation.Ciphertext.Configured() || rotation.ExpiresAt.IsZero() {
+		return false, ErrCredentialInvalid
+	}
+	scopes, err := json.Marshal(normalizedPagerDutyScopes(rotation.GrantedScopes))
+	if err != nil {
+		return false, ErrCredentialInvalid
+	}
+	var version int
+	err = r.Pool.QueryRow(ctx, `
+UPDATE provider_oauth_credentials
+SET token_encrypted = $1,
+    version = version + 1,
+    expires_at = $2,
+    granted_scopes = $3::json,
+    has_refresh_token = $4,
+    updated_at = $5
+WHERE org_id = $6
+  AND provider = 'pagerduty'
+  AND credential_name = $7
+  AND version = $8
+  AND binding_id = $9
+RETURNING version`,
+		rotation.Ciphertext.Reveal(), rotation.ExpiresAt, string(scopes),
+		rotation.HasRefreshToken, time.Now().UTC(), orgID, credentialName,
+		rotation.ExpectedVersion, rotation.ExpectedBindingID,
+	).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, &ProviderError{Class: ErrorTransient}
+	}
+	return version == rotation.ExpectedVersion+1, nil
+}
+
 var _ CredentialRepository = PostgresCredentialRepository{}
+var _ PagerDutyOAuthTokenRepository = PostgresPagerDutyOAuthTokenRepository{}

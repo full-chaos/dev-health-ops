@@ -208,6 +208,49 @@ func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEff
 	}
 }
 
+func TestBuildProviderSyncHandlerWiresPagerDutyCredentialHydrator(t *testing.T) {
+	t.Parallel()
+	hydrator := providerSyncCredentialHydratorFunc(func(
+		_ context.Context,
+		_ providerfoundation.LeaseGuard,
+		_ providerfoundation.TenantScope,
+		credential providerfoundation.Credential,
+	) (providerfoundation.Credential, error) {
+		return credential, nil
+	})
+	handler, _ := buildProviderSyncHandlerWithRuntimeDependencies(
+		nil, providersync.CompleteRouteSwitches{}, nil, hydrator,
+		nil, nil, nil, nil, nil, slog.Default(), workItemsRuntimeConfig{},
+	)
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "pagerduty", Dataset: "services",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.Credentials.Hydrator == nil {
+		t.Fatal("PagerDuty OAuth credential hydrator was not wired")
+	}
+}
+
+type providerSyncCredentialHydratorFunc func(
+	context.Context,
+	providerfoundation.LeaseGuard,
+	providerfoundation.TenantScope,
+	providerfoundation.Credential,
+) (providerfoundation.Credential, error)
+
+func (hydrate providerSyncCredentialHydratorFunc) Hydrate(
+	ctx context.Context,
+	lease providerfoundation.LeaseGuard,
+	scope providerfoundation.TenantScope,
+	credential providerfoundation.Credential,
+) (providerfoundation.Credential, error) {
+	return hydrate(ctx, lease, scope, credential)
+}
+
 // TestBuildProviderSyncHandlerSharesOneMetricsInstance is CHAOS-3118
 // mutation-tested evidence for dev_health_provider_*, not a behavioral
 // assertion: it pins the identity between the providerfoundation.Metrics

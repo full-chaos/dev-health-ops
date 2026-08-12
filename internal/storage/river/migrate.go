@@ -385,6 +385,7 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + domainRole + "; END IF; END $$",
 		// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the
 		// Option B two-role split (role-partition manifest, removed in

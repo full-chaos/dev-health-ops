@@ -17,7 +17,6 @@ from sqlalchemy import create_engine, event, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     Base,
     Integration,
@@ -64,9 +63,12 @@ def require_postgres_test_uri() -> None:
 
 
 def _postgres_engine():
-    return create_engine(
-        normalize_sync_postgres_uri(os.environ[_POSTGRES_TEST_URI_ENV])
-    )
+    # CHAOS-3450 centralized the async->blocking driver coercion in
+    # tests._helpers. Every Postgres-gated test in this file goes through this
+    # one helper so the mismatch cannot be re-introduced by copying a
+    # neighbour, and so this file follows the same helper as the rest of the
+    # suite rather than open-coding its own normalization.
+    return create_engine(sync_postgres_test_url())
 
 
 @contextmanager
@@ -1030,7 +1032,7 @@ def test_real_postgres_migration_trigger_keeps_legacy_celery_worker_compatible()
 
 @pytest.mark.usefixtures("require_postgres_test_uri")
 def test_real_postgres_route_change_fences_claim_from_another_session():
-    engine = create_engine(sync_postgres_test_url())
+    engine = _postgres_engine()
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None
@@ -1117,7 +1119,7 @@ def test_real_postgres_route_change_fences_claim_from_another_session():
 
 @pytest.mark.usefixtures("require_postgres_test_uri")
 def test_real_postgres_publish_lock_blocks_route_change_until_commit():
-    engine = create_engine(sync_postgres_test_url())
+    engine = _postgres_engine()
     Base.metadata.create_all(engine)
     run_id = None
     integration_id = None

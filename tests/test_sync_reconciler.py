@@ -11,7 +11,6 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     BackfillJob,
     Base,

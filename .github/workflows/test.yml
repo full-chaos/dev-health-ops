@@ -321,7 +321,6 @@ jobs:
           DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
           OTEL_ENABLED: "false"
           PYTEST_XDIST_WORKERS: "4"
-          PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs

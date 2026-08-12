@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session
 
-from dev_health_ops.db import normalize_sync_postgres_uri
 from dev_health_ops.models import (
     Base,
     Integration,
@@ -25,7 +24,6 @@ from dev_health_ops.models import (
     SyncWatermark,
 )
 from dev_health_ops.models.licensing import OrgLicense
-from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.models.users import Organization
 from dev_health_ops.sync import planner
 from dev_health_ops.sync.dispatch_outbox import (

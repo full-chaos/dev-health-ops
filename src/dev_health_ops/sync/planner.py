@@ -118,6 +118,13 @@ from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     upsert_outbox_wakeup,
 )
+from dev_health_ops.sync.family_flags import (
+    WORK_ITEM_DATASETS,
+    family_dataset_flag,
+)
+from dev_health_ops.sync.family_flags import (
+    family_dataset_keys_from_flags as family_dataset_keys_from_flags,
+)
 from dev_health_ops.sync.guard import _resolve_total_unit_cap
 from dev_health_ops.sync.pagerduty_repair import (
     repair_pagerduty_operational_integration,
@@ -1006,41 +1013,13 @@ def _is_linear_work_item_family(provider: str, dataset_key: str) -> bool:
 # deliberate exception: every canonical GitHub unit claims all five aliases,
 # even when one is caught up, because the route owns one indivisible writer
 # family. GitLab, Jira, and Linear retain their contributing-dataset flags.
-_WORK_ITEM_FAMILY_DATASET_ORDER: tuple[str, ...] = (
-    "work-items",
-    "work-item-labels",
-    "work-item-projects",
-    "work-item-history",
-    "work-item-comments",
-)
+_WORK_ITEM_FAMILY_DATASET_ORDER = WORK_ITEM_DATASETS
 _WORK_ITEM_FAMILY_DATASETS: frozenset[str] = frozenset(_WORK_ITEM_FAMILY_DATASET_ORDER)
 _FAMILY_CANONICAL_DATASET_KEY = "work-items"
-_FAMILY_DATASET_FLAG_PREFIX = "family_dataset_"
-
-
-def _family_dataset_flag(dataset_key: str) -> str:
-    """Boolean processor-flag name marking an enabled work-item-family dataset."""
-    return _FAMILY_DATASET_FLAG_PREFIX + dataset_key.replace("-", "_")
-
-
-def family_dataset_keys_from_flags(
-    processor_flags: Mapping[str, object] | None,
-) -> list[str]:
-    """Enabled work-item-family dataset keys encoded on a collapsed composite
-    unit's ``processor_flags`` (CHAOS-2721), in canonical order.
-
-    ``SyncTaskBootstrap.load`` bool-coerces every processor_flags value, so the
-    composite cannot carry a *list* of enabled datasets — each is encoded as its
-    own boolean ``family_dataset_<key>`` flag. This reader validates against the
-    known family keys so a stray/unknown flag can never advance a bogus
-    watermark or pollute audit metadata.
-    """
-    flags = processor_flags or {}
-    return [
-        key
-        for key in _WORK_ITEM_FAMILY_DATASET_ORDER
-        if bool(flags.get(_family_dataset_flag(key)))
-    ]
+# Compatibility alias for route validation consumers. The implementation lives
+# in the pure family-flags module so coverage imports do not initialize planner
+# dependencies.
+_family_dataset_flag = family_dataset_flag
 
 
 def _build_work_item_family_units(
@@ -1117,7 +1096,7 @@ def _build_work_item_family_units(
     else:
         family_flag_datasets = tuple(dataset.dataset_key for dataset, _ in contributing)
     for dataset_key in family_flag_datasets:
-        processor_flags[_family_dataset_flag(dataset_key)] = True
+        processor_flags[family_dataset_flag(dataset_key)] = True
     if provider == "github":
         # CHAOS-646: thread the PRS-as-work-items signal onto the composite so
         # ``_work_item_kwargs`` sets ``include_pull_requests`` correctly.

@@ -93,6 +93,14 @@
       "rationale": "Mapping reconciliation is an independent complete snapshot. An omitted source mapping must become inactive with valid_to evidence, even when its service row remains present.",
       "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
       "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestPagerDutyServicesEffectsUseMigratedClickHouseForReplayTombstonesTenantAndLease$", "./internal/providersync/"]]
+    },
+    {
+      "id": "S12-unset-ordering-contract-uses-live-legacy-schema",
+      "file": "internal/providersync/pagerduty_services_effects_clickhouse.go",
+      "find": "if !present || raw == \"1\" {\n\t\treturn pagerDutyServicesLegacyContract, nil",
+      "replace": "if !present || raw == \"1\" {\n\t\treturn pagerDutyServicesCurrentContract, nil",
+      "rationale": "The local stack has not applied deferred migration 067 and leaves OPERATIONAL_ORDERING_CONTRACT unset; selecting v2 columns makes every services write or readback fail with ClickHouse code 47",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyServices(ReadbackDoesNotClaimV2ColumnsFromActiveLegacySchema|StorageContractDefaultsToLegacySchema)$", "./internal/providersync/"]]
     }
   ]
 }

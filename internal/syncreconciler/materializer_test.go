@@ -97,24 +97,20 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 			t.Fatalf("statement %d is not bounded/idempotent:\n%s", index, execution.sql)
 		}
 	}
-	for _, rearmSQL := range []string{
-		tx.execs[0].sql,
-		tx.execs[1].sql,
-		tx.execs[2].sql,
+	rearmSQL := strings.ToUpper(tx.execs[0].sql)
+	for _, required := range []string{
+		"EXCLUDED.AVAILABLE_AT < SYNC_DISPATCH_OUTBOX.AVAILABLE_AT",
+		"SYNC_DISPATCH_OUTBOX.CLAIM_EXPIRES_AT > $1",
+		"LAST_ERROR IS DISTINCT FROM 'FEATURE_DISABLED'",
+		"DISPATCHED_TRANSPORT IS DISTINCT FROM 'RIVER'",
+		"UNIT.STATUS = 'DISPATCHING'",
+		"UNIT.STATUS = 'RETRYING'",
+		"CLAIM_ROUTE_GENERATION = CASE",
+		"DISPATCHED_ROUTE_GENERATION = CASE",
+		"WHERE SYNC_DISPATCH_OUTBOX.STATUS <> 'PENDING'",
 	} {
-		upper := strings.ToUpper(rearmSQL)
-		for _, required := range []string{
-			"EXCLUDED.AVAILABLE_AT < SYNC_DISPATCH_OUTBOX.AVAILABLE_AT",
-			"SYNC_DISPATCH_OUTBOX.CLAIM_EXPIRES_AT > $1",
-			"LAST_ERROR = 'FEATURE_DISABLED'",
-			"DISPATCHED_TRANSPORT = 'RIVER'",
-			"CLAIM_ROUTE_GENERATION = CASE",
-			"DISPATCHED_ROUTE_GENERATION = CASE",
-			"WHERE SYNC_DISPATCH_OUTBOX.STATUS <> 'PENDING'",
-		} {
-			if !strings.Contains(upper, required) {
-				t.Fatalf("rearm SQL missing %q:\n%s", required, rearmSQL)
-			}
+		if !strings.Contains(rearmSQL, required) {
+			t.Fatalf("rearm SQL missing %q:\n%s", required, tx.execs[0].sql)
 		}
 	}
 	postSyncUpper := strings.ToUpper(tx.execs[3].sql)

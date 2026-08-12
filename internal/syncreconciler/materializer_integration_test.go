@@ -15,16 +15,143 @@ import (
 )
 
 const (
-	materializerDispatchMissing = "00000000-0000-4000-8000-000000004101"
-	materializerExpiredClaim    = "00000000-0000-4000-8000-000000004102"
-	materializerLiveClaim       = "00000000-0000-4000-8000-000000004103"
-	materializerTerminalDenial  = "00000000-0000-4000-8000-000000004104"
-	materializerFinalize        = "00000000-0000-4000-8000-000000004105"
-	materializerDiscovery       = "00000000-0000-4000-8000-000000004106"
-	materializerPostSyncMissing = "00000000-0000-4000-8000-000000004107"
-	materializerPostSyncExists  = "00000000-0000-4000-8000-000000004108"
-	materializerRiverQueued     = "00000000-0000-4000-8000-000000004109"
+	materializerDispatchMissing  = "00000000-0000-4000-8000-000000004101"
+	materializerExpiredClaim     = "00000000-0000-4000-8000-000000004102"
+	materializerLiveClaim        = "00000000-0000-4000-8000-000000004103"
+	materializerTerminalDenial   = "00000000-0000-4000-8000-000000004104"
+	materializerFinalize         = "00000000-0000-4000-8000-000000004105"
+	materializerDiscovery        = "00000000-0000-4000-8000-000000004106"
+	materializerPostSyncMissing  = "00000000-0000-4000-8000-000000004107"
+	materializerPostSyncExists   = "00000000-0000-4000-8000-000000004108"
+	materializerRiverQueued      = "00000000-0000-4000-8000-000000004109"
+	materializerStaleDispatch    = "00000000-0000-4000-8000-00000000410a"
+	materializerFreshDispatch    = "00000000-0000-4000-8000-00000000410b"
+	materializerRetryingDispatch = "00000000-0000-4000-8000-00000000410c"
+	materializerFeatureDisabled  = "00000000-0000-4000-8000-00000000410d"
 )
+
+func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	materializer, err := NewMaterializer(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("stale dispatching River row re-arms once", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 1, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerStaleDispatch, "running", now.Add(-2*time.Hour))
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004301",
+			materializerStaleDispatch, "dispatching", nil, now.Add(-time.Hour))
+		seedMaterializerDispatchedOutbox(t, ctx, pool, materializerStaleDispatch, "river-stale-job", now.Add(-2*time.Hour))
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 1 {
+			t.Fatalf("stale dispatching graph did not rearm exactly once: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerStaleDispatch, "pending", nil, 1)
+
+		result, err = materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 0 {
+			t.Fatalf("stale dispatching graph amplified on second pass: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerStaleDispatch, "pending", nil, 1)
+	})
+
+	t.Run("fresh dispatching River row stays protected", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 2, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerFreshDispatch, "running", now.Add(-2*time.Hour))
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004302",
+			materializerFreshDispatch, "dispatching", nil, now.Add(-5*time.Minute))
+		seedMaterializerDispatchedOutbox(t, ctx, pool, materializerFreshDispatch, "river-fresh-job", now.Add(-2*time.Hour))
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 0 {
+			t.Fatalf("fresh dispatching graph rearmed unexpectedly: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerFreshDispatch, "dispatched", ptrString("river"), 1)
+	})
+
+	t.Run("retrying River row re-arms once when due", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 3, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerRetryingDispatch, "running", now.Add(-2*time.Hour))
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004303",
+			materializerRetryingDispatch, "retrying", ptrTime(now.Add(-time.Minute)), now.Add(-5*time.Minute))
+		seedMaterializerDispatchedOutbox(t, ctx, pool, materializerRetryingDispatch, "river-retry-job", now.Add(-2*time.Hour))
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 1 {
+			t.Fatalf("retrying graph did not rearm exactly once: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerRetryingDispatch, "pending", nil, 1)
+
+		result, err = materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 0 {
+			t.Fatalf("retrying graph amplified on second pass: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerRetryingDispatch, "pending", nil, 1)
+	})
+
+	t.Run("feature-disabled River row stays protected", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 4, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerFeatureDisabled, "running", now.Add(-2*time.Hour))
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004304",
+			materializerFeatureDisabled, "dispatching", nil, now.Add(-time.Hour))
+		seedMaterializerFeatureDisabledOutbox(t, ctx, pool, materializerFeatureDisabled, now.Add(-2*time.Hour))
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 0 {
+			t.Fatalf("feature-disabled row rearmed unexpectedly: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerFeatureDisabled, "dispatched", ptrString("river"), 1)
+	})
+}
 
 func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -611,6 +738,97 @@ func seedUnit(
 		id, runID, status, availableAt, updatedAt); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func seedMaterializerDispatchedOutbox(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID, jobID string,
+	dispatchedAt time.Time,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			dispatched_at, dispatched_transport, dispatched_route_generation,
+			transport_job_id, created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), 'org-materializer', $1, 'dispatch_sync_run',
+			'dispatched', $2, 1, $2, 'river', 2, $3, $2, $2
+		)`,
+		runID, dispatchedAt, jobID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedMaterializerFeatureDisabledOutbox(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID string,
+	dispatchedAt time.Time,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			last_error, dispatched_at, dispatched_transport,
+			dispatched_route_generation, transport_job_id,
+			created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), 'org-materializer', $1, 'dispatch_sync_run',
+			'dispatched', $2, 1, 'feature_disabled', $2, 'river', 2, 'feature-disabled-job', $2, $2
+		)`,
+		runID, dispatchedAt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertMaterializerDispatchState(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID, wantStatus string,
+	wantTransport *string,
+	wantAttempts int,
+) {
+	t.Helper()
+	var (
+		status    string
+		transport *string
+		attempts  int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, dispatched_transport, attempts
+		FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run'`,
+		runID,
+	).Scan(&status, &transport, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != wantStatus || attempts != wantAttempts {
+		t.Fatalf("dispatch state for %s = %s/%v/%d, want %s/%v/%d",
+			runID, status, transport, attempts, wantStatus, wantTransport, wantAttempts)
+	}
+	if wantTransport == nil {
+		if transport != nil {
+			t.Fatalf("dispatch state for %s transport = %v, want nil", runID, transport)
+		}
+		return
+	}
+	if transport == nil || *transport != *wantTransport {
+		t.Fatalf("dispatch state for %s transport = %v, want %s",
+			runID, transport, *wantTransport)
+	}
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
+}
+
+func ptrString(value string) *string {
+	return &value
 }
 
 func assertMaterializerOutboxCount(

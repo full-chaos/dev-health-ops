@@ -600,6 +600,83 @@ def test_source_health_labels_cover_every_known_required_source_producer() -> No
         assert label, f"{source_id} has an empty label"
 
 
+#: CHAOS-3471 / codex round-2 finding. HARDCODED LITERALS -- deliberately
+#: not derived from ``CANONICAL_NO_ANSWER_COPY``, ``CANONICAL_NO_ANSWER_
+#: REMEDIATION``, or ``compat.no_answer_error_projection`` -- because both
+#: of the tests below it compute their own "expected" value by calling
+#: ``no_answer_error_projection`` (directly, or transitively through a real
+#: ``project_answer_v2_to_v1`` call), and the published artifact is built
+#: from that SAME function. A mutation inside that one shared composition
+#: (codex round-2 repro: hardcode every outcome's remediation to
+#: ``["WRONG-REMEDIATION"]``) changes the exporter's output, the live
+#: projector's output, and both tests' own "expected" value together --
+#: so both tests keep passing. Only a genuinely independent ground truth,
+#: typed out here by hand, can catch that class of bug.
+_NO_ANSWER_VOCABULARY_GOLDEN: dict[str, dict[str, object]] = {
+    "not_found": {
+        "safe_message": "No matching subject was found for this question.",
+        "remediation": ["Check the name and try again."],
+        "code": "scope_not_found",
+        "retryable": False,
+    },
+    "temporarily_unavailable": {
+        "safe_message": (
+            "This answer is temporarily unavailable. Please try again shortly."
+        ),
+        "remediation": ["Try the question again in a few minutes."],
+        "code": "source_unavailable",
+        "retryable": True,
+    },
+    "unsupported": {
+        "safe_message": "This question is not supported yet.",
+        "remediation": ["Try a status, health, or metric question instead."],
+        "code": "feature_not_enabled",
+        "retryable": False,
+    },
+    "denied": {
+        "safe_message": "You do not have access to ask about this.",
+        "remediation": ["Ask an administrator for access to this area."],
+        "code": "forbidden",
+        "retryable": False,
+    },
+    "failed": {
+        "safe_message": "Something went wrong while preparing this answer.",
+        "remediation": ["Try the question again."],
+        "code": "internal_error",
+        "retryable": False,
+    },
+    "refused": {
+        "safe_message": (
+            "Ask Dev can only read and summarize your data; it can't run "
+            "commands or make changes."
+        ),
+        "remediation": ["Ask a read-only question about your data instead."],
+        "code": "refused",
+        "retryable": False,
+    },
+}
+
+
+def test_no_answer_vocabulary_matches_an_independent_golden_expectation() -> None:
+    """CHAOS-3471 / codex round-2 finding (probe). Verified fail-to-catch
+    gap in the pre-existing tests: monkeypatching ``no_answer_error_
+    projection`` (both this module's and ``compat``'s bound name, so it
+    reaches the exporter AND the live projector) to return
+    ``remediation=["WRONG-REMEDIATION"]`` for every outcome left
+    ``test_published_no_answer_vocabulary_matches_the_live_policy_tables``
+    and ``test_contracts_v2.py``'s
+    ``test_no_answer_vocabulary_artifact_matches_the_real_v1_projection``
+    both green, because each computes its own "expected" value through
+    the very function that was mutated. This test's expectation is typed
+    out by hand instead, so that exact mutation fails it.
+    """
+    assert set(_NO_ANSWER_VOCABULARY_GOLDEN) == NO_ANSWER_OUTCOMES
+    published = json.loads(
+        expected_artifacts()["vocabulary/no_answer_vocabulary.v1.json"]
+    )["outcomes"]
+    assert published == _NO_ANSWER_VOCABULARY_GOLDEN
+
+
 def test_published_no_answer_vocabulary_matches_the_live_policy_tables() -> None:
     """CHAOS-3471. The entire user-visible text of a v1 ``DevError`` for a
     ``dev_answer.v2`` no-answer outcome comes from

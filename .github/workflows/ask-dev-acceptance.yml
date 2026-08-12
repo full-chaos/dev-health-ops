@@ -62,7 +62,7 @@ name: Ask Dev Acceptance (live stack)
 #     # workflows across all of github.com and the top of the hour is the worst
 #     # slot for a job that needs a full runner for over an hour.
 #     - cron: "23 4 * * *"
-  workflow_dispatch:
+# workflow_dispatch:
 
 # Never cancel a run in progress: this lane's whole product is a completed
 # boot + corpus execution, and a cancelled run is an unmeasured one, not a

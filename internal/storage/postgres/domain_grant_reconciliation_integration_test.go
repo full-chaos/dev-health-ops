@@ -426,6 +426,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			Privilege:  column.Privilege,
 		})
 	}
+	coordinatorSequences := append([]string(nil), coordinatorPosture.RequiredSequences...)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema:                  grantSchema,
 		DomainRole:              grantDomainRole,
@@ -433,6 +434,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		CoordinatorRole:         grantCoordinatorRole,
 		CoordinatorGrants:       coordinatorGrants,
 		CoordinatorColumnGrants: coordinatorColumnGrants,
+		CoordinatorSequences:    coordinatorSequences,
 	}); err != nil {
 		t.Fatal(err)
 	}

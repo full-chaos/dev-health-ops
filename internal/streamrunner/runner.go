@@ -128,6 +128,9 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) error {
 	r.mu.Lock()
 	streams := append([]string(nil), r.streams...)
 	r.mu.Unlock()
+	if len(streams) == 0 {
+		return sleepContext(ctx, r.config.Block)
+	}
 
 	var failures []error
 	for _, stream := range streams {
@@ -447,4 +450,15 @@ func minDuration(left, right time.Duration) time.Duration {
 		return left
 	}
 	return right
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

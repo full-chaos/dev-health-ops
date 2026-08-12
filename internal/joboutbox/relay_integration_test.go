@@ -94,6 +94,12 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 			}
 			continue
 		}
+		if descriptor.Kind == jobcontract.KindSyncCoverageRefresh {
+			if descriptor.Route != "river" || descriptor.MigrationState != "celery_removed" || descriptor.RollbackRoute != "none" || !descriptor.Executable() {
+				t.Fatalf("sync-coverage native-only policy drifted: %#v", descriptor)
+			}
+			continue
+		}
 		if descriptor.Route != "river" || descriptor.MigrationState != "go_default" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
 			t.Fatalf("checked-in production route drifted from post-cutover go_default/river policy: %#v", descriptor)
 		}

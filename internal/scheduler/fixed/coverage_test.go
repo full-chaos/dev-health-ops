@@ -202,12 +202,14 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// change here means a Beat entry was added or removed, which must be a
 	// reviewed ownership decision rather than an unnoticed coverage change.
 	//
-	// 20 -> 21 when CHAOS-3404's `ask-dev-retention-sweep` merged from main.
+	// 19 -> 20 when CHAOS-3404's `ask-dev-retention-sweep` merged from main.
 	// The reviewed decision: it is owned by the already-ported Go schedule
 	// `prune_ask_dev_conversations` (CHAOS-3209), which stopped being Native
-	// in the same change because it now has a Python predecessor.
-	if unconditional != 21 {
-		t.Fatalf("parsed %d unconditional beat entries, want 21", unconditional)
+	// in the same change because it now has a Python predecessor. The native
+	// sync coverage refresh then retired the Beat entry entirely, so the
+	// checked inventory now holds twenty unconditional rows.
+	if unconditional != 20 {
+		t.Fatalf("parsed %d unconditional beat entries, want 20", unconditional)
 	}
 	if optional != 1 {
 		t.Fatalf("parsed %d optional beat entries, want 1", optional)
@@ -319,6 +321,32 @@ func TestLegacyInventoryReplacementsAreNotSilentlyDropped(t *testing.T) {
 	}
 }
 
+// Sync coverage is durable product state, not runtime telemetry. Its Python
+// Beat entry and task are deleted only after the native schedule and producer
+// are constructed, so a Go-only stack can create cold projections and rebuild
+// invalidated ones without restoring a second writer.
+func TestSyncCoverageRefreshHasAConstructedFixedScheduleOwner(t *testing.T) {
+	schedules, err := Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, schedule := range schedules {
+		if schedule.ID == "sync_coverage_refresh" && schedule.Native &&
+			schedule.LegacyBeatEntry == "" &&
+			schedule.Cadence.Fingerprint() == EveryInterval(300*time.Second).Fingerprint() {
+			producers, producerErr := NewProducerSet(NewSyncCoverageRefreshProducer())
+			if producerErr != nil {
+				t.Fatal(producerErr)
+			}
+			if _, ok := producers.Producer(schedule.ProducerID); !ok {
+				t.Fatalf("sync coverage producer %q is not constructed", schedule.ProducerID)
+			}
+			return
+		}
+	}
+	t.Fatal("native sync coverage schedule is not constructed")
+}
+
 // The cadence fingerprint alone is not the whole timing contract. Beat resolves
 // every crontab against the Celery `timezone` setting, and the missed-run
 // policy decides what happens after an outage. A change to either would alter
@@ -387,6 +415,7 @@ func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
 		"recommendations_daily_fanout":     CatchUpBounded,
 		"membership_backfill_daily_fanout": CatchUpBounded,
 		"capacity_forecast_weekly_fanout":  CatchUpBounded,
+		"sync_coverage_refresh":            CatchUpSkip,
 	}
 	schedules, err := Schedules()
 	if err != nil {

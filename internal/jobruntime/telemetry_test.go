@@ -366,7 +366,7 @@ func TestDimensionsForProfileUsesRegistryPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dimensions.Jobs) != 4 ||
+	if len(dimensions.Jobs) != 5 ||
 		strings.Join(dimensions.DomainTypes, ",") != "billing_notification,maintenance_run,schedule_occurrence,webhook_delivery" {
 		t.Fatalf("profile dimensions drifted: %+v", dimensions)
 	}

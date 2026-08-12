@@ -24,6 +24,7 @@ from .models import (
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_SYNC_COVERAGE_REFRESH,
     KIND_SYNC_PROVIDER_UNIT,
     KIND_TEAM_AUTOIMPORT,
     KIND_WEBHOOK_DELIVERY,
@@ -58,6 +59,7 @@ from .models import (
     RemainingTeamMetricsPayload,
     RetentionCleanupPayload,
     ScheduledReportExecutionPayload,
+    SyncCoverageRefreshPayload,
     TeamAutoimportPayload,
     WebhookDeliveryPayload,
     WorkGraphBuildPayload,
@@ -106,6 +108,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
 
     if kind not in {
         KIND_HEARTBEAT,
+        KIND_SYNC_COVERAGE_REFRESH,
         KIND_BILLING_NOTIFICATION,
         KIND_RETENTION_CLEANUP,
         KIND_REPORT_EXECUTE_ON_DEMAND,
@@ -198,6 +201,10 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         if domain_type != HeartbeatPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
         payload = _decode_heartbeat(envelope["payload"])
+    elif kind == KIND_SYNC_COVERAGE_REFRESH:
+        if domain_type != SyncCoverageRefreshPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = _decode_sync_coverage_refresh(envelope["payload"])
     elif kind == KIND_RETENTION_CLEANUP:
         if domain_type != RetentionCleanupPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
@@ -292,6 +299,7 @@ def build_envelope(
         payload,
         (
             HeartbeatPayload,
+            SyncCoverageRefreshPayload,
             BillingNotificationPayload,
             RetentionCleanupPayload,
             OnDemandReportExecutionPayload,
@@ -346,6 +354,8 @@ def encode_envelope(envelope: Envelope) -> bytes:
         kind = KIND_WEBHOOK_DELIVERY
     elif isinstance(envelope.payload, HeartbeatPayload):
         kind = KIND_HEARTBEAT
+    elif isinstance(envelope.payload, SyncCoverageRefreshPayload):
+        kind = KIND_SYNC_COVERAGE_REFRESH
     elif isinstance(envelope.payload, RetentionCleanupPayload):
         kind = KIND_RETENTION_CLEANUP
     elif isinstance(envelope.payload, OnDemandReportExecutionPayload):
@@ -427,6 +437,21 @@ def _decode_heartbeat(value: Any) -> HeartbeatPayload:
     scheduled_for = _expect_string(payload["scheduled_for"], "scheduled_for")
     _validate_utc_timestamp("scheduled_for", scheduled_for)
     return HeartbeatPayload(scheduled_for=scheduled_for)
+
+
+def _decode_sync_coverage_refresh(value: Any) -> SyncCoverageRefreshPayload:
+    payload = _expect_object(
+        value,
+        required={"scheduled_for", "limit"},
+        optional=set(),
+        label="sync coverage refresh payload",
+    )
+    scheduled_for = _expect_string(payload["scheduled_for"], "scheduled_for")
+    _validate_utc_timestamp("scheduled_for", scheduled_for)
+    limit = _expect_int(payload["limit"], "limit")
+    if not 1 <= limit <= 1000:
+        raise ContractDecodeError("limit is outside its bounds")
+    return SyncCoverageRefreshPayload(scheduled_for=scheduled_for, limit=limit)
 
 
 def _decode_retention(value: Any, *, version: int) -> RetentionCleanupPayload:
@@ -583,6 +608,8 @@ def _payload_document(payload: object) -> dict[str, Any]:
         return {"delivery_id": payload.delivery_id}
     if isinstance(payload, HeartbeatPayload):
         return {"scheduled_for": payload.scheduled_for}
+    if isinstance(payload, SyncCoverageRefreshPayload):
+        return {"scheduled_for": payload.scheduled_for, "limit": payload.limit}
     if isinstance(payload, RetentionCleanupPayload):
         return {
             "batch_size": payload.batch_size,

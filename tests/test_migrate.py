@@ -64,9 +64,9 @@ class TestAlembicDirResolution:
             heads = script.get_heads()
             revisions = list(script.walk_revisions())
 
-        assert set(heads) == {"0066", "0093"}
+        assert set(heads) == {"0066", "0094"}
         assert script.get_revision("river_cutover@head").revision == "0066"
-        assert script.get_revision("application_schema@head").revision == "0093"
+        assert script.get_revision("application_schema@head").revision == "0094"
         assert revisions
 
     def test_no_two_migrations_declare_the_same_revision_id(self):

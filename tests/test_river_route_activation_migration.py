@@ -197,9 +197,15 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
         assert by_kind[kind]["route"] == "river", kind
         assert by_kind[kind]["rollback_route"] == "celery", kind
 
-    # Exactly one checked-in kind is deliberately excluded. Asserting the
-    # identity of the exclusion, not merely its count, is what stops a future
-    # kind from being dropped from the migration unnoticed.
-    assert set(by_kind) - pinned == {"sync.provider_unit"}
+    # The canary and the post-0066 coverage kind are deliberately excluded.
+    # Asserting their identities stops a future kind from being dropped from
+    # the historical migration unnoticed.
+    assert set(by_kind) - pinned == {
+        "sync.provider_unit",
+        "system.sync_coverage_refresh",
+    }
     assert by_kind["sync.provider_unit"]["state"] == "canary"
     assert by_kind["sync.provider_unit"]["route"] == "river_canary"
+    assert by_kind["system.sync_coverage_refresh"]["state"] == "celery_removed"
+    assert by_kind["system.sync_coverage_refresh"]["route"] == "river"
+    assert by_kind["system.sync_coverage_refresh"]["rollback_route"] == "none"

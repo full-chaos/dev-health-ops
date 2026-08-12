@@ -63,7 +63,7 @@ func promotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, 
 
 // demotedContractRoot copies the checked-in contract tree and routes exactly
 // the named kinds back to Celery. It is the inverse of promotedContractRoot:
-// the checked-in tree now ships every kind at go_default (CHAOS-3033), so a
+// the checked-in tree now ships every kind on River (CHAOS-3033), so a
 // genuinely celery-routed/dormant scenario has to be constructed explicitly
 // rather than found by loading the production tree unmodified.
 func demotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, string) {
@@ -89,6 +89,7 @@ func demotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, s
 		if slices.Contains(kinds, kind) {
 			job["state"] = "go_implemented"
 			job["route"] = "celery"
+			job["rollback_route"] = "celery"
 		}
 	}
 	encoded, err := json.Marshal(document)

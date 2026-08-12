@@ -29,4 +29,4 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "  RUN  internal/providersync" in result.stdout
-    assert "24 package(s) discovered, 0 denylisted, 24 will run" in result.stdout
+    assert "25 package(s) discovered, 0 denylisted, 25 will run" in result.stdout

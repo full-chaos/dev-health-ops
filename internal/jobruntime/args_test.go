@@ -25,6 +25,17 @@ var (
 	_ river.Worker[HeartbeatArgs] = (*Adapter[HeartbeatArgs])(nil)
 )
 
+func TestRetentionCleanupArgsSupportsEveryContractVersion(t *testing.T) {
+	want := []int{
+		jobcontract.ContractVersionV1,
+		jobcontract.ContractVersionV2,
+		jobcontract.ContractVersionV3,
+	}
+	if got := (RetentionCleanupArgs{}).SupportedContractVersions(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("supported retention versions = %v, want %v", got, want)
+	}
+}
+
 func TestTypedArgsPreserveVersionedContractEnvelope(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

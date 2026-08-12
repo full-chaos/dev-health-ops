@@ -421,6 +421,13 @@ class SyncCoverageSummaryResponse(BaseModel):
     truncation_reason: Literal["lookback_limit"] | None = None
     projection_version: int
     projection_complete: bool
+    projection_refreshing: bool = Field(
+        default=False,
+        description=(
+            "True when this response is the last completed projection while a newer "
+            "projection is being built."
+        ),
+    )
     overall: SyncCoverageOverall
     datasets: list[SyncCoverageDataset]
     sources: list[SyncCoverageSource]

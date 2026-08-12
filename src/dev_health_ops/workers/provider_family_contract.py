@@ -14,6 +14,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from dev_health_ops.sync.family_flags import (
+    FAMILY_DATASET_FLAG_PREFIX,
+    WORK_ITEM_DATASETS,
+    family_dataset_flag,
+)
+
 
 class FamilyExecutionMode(StrEnum):
     ATOMIC_CANONICAL = "atomic_canonical"
@@ -43,14 +49,6 @@ class ProviderFamilyPolicy:
         )
 
 
-WORK_ITEM_DATASETS = (
-    "work-items",
-    "work-item-labels",
-    "work-item-projects",
-    "work-item-history",
-    "work-item-comments",
-)
-
 PAGERDUTY_INCIDENT_DATASETS = (
     "incidents",
     "incident-alerts",
@@ -78,12 +76,7 @@ _POLICIES = (
     ),
 )
 
-FAMILY_DATASET_FLAG_PREFIX = "family_dataset_"
 _TRUE = frozenset({"1", "true", "yes", "on"})
-
-
-def family_dataset_flag(dataset: str) -> str:
-    return FAMILY_DATASET_FLAG_PREFIX + dataset.replace("-", "_")
 
 
 def provider_family_policy(provider: str, dataset: str) -> ProviderFamilyPolicy | None:

@@ -131,12 +131,12 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 		}
 	}
 
-	if len(gt.RequiredTablePrivileges) != 35 {
-		t.Errorf("domain posture: got %d tables, want 35 (Option B two-role split) -- "+
+	if len(gt.RequiredTablePrivileges) != 36 {
+		t.Errorf("domain posture: got %d tables, want 36 (Option B two-role split) -- "+
 			"if this changed intentionally, the ground-truth reader is fine, just update this pin", len(gt.RequiredTablePrivileges))
 	}
-	if len(gt.Grants) != 35 {
-		t.Errorf("runtimeGrantStatements: got %d granted tables, want 35 -- see note above", len(gt.Grants))
+	if len(gt.Grants) != 36 {
+		t.Errorf("runtimeGrantStatements: got %d granted tables, want 36 -- see note above", len(gt.Grants))
 	}
 	// The two lists agreeing on their size is the property that matters most
 	// here: this checker exists because they disagreed once.

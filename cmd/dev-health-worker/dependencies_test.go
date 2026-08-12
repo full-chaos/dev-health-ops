@@ -560,13 +560,14 @@ func TestOpsProfileMetricsUseRegistryBoundedJobDimensions(t *testing.T) {
 }
 
 // celeryRoutedOpsKinds is every ops-profile kind. The checked-in contract now
-// ships all four at go_default, so a genuinely dormant ops profile has to be
+// ships all five at go_default, so a genuinely dormant ops profile has to be
 // built explicitly by demoting them back to Celery in a scoped fixture.
 var celeryRoutedOpsKinds = []string{
 	jobcontract.KindBillingNotification,
 	jobcontract.KindWebhookDelivery,
 	jobcontract.KindHeartbeat,
 	jobcontract.KindRetentionCleanup,
+	jobcontract.KindSyncCoverageRefresh,
 }
 
 func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
@@ -609,9 +610,17 @@ func TestCeleryRoutedHandlersCannotPassProfileCompleteness(t *testing.T) {
 		t.Fatalf("readiness = %#v, want only profile_completeness failure", status)
 	}
 	if database.telemetryConfig.ClientID == "" || !slices.Equal(
-		[]string{database.telemetryConfig.Queues[0].Name, database.telemetryConfig.Queues[1].Name},
-		[]string{"heartbeat", "retention"},
-	) || database.telemetryConfig.Queues[0].MaxWorkers != 1 || database.telemetryConfig.Queues[1].MaxWorkers != 1 {
+		[]string{
+			database.telemetryConfig.Queues[0].Name,
+			database.telemetryConfig.Queues[1].Name,
+			database.telemetryConfig.Queues[2].Name,
+			database.telemetryConfig.Queues[3].Name,
+		},
+		[]string{"coverage", "heartbeat", "retention", "webhooks"},
+	) || database.telemetryConfig.Queues[0].MaxWorkers != 1 ||
+		database.telemetryConfig.Queues[1].MaxWorkers != 1 ||
+		database.telemetryConfig.Queues[2].MaxWorkers != 1 ||
+		database.telemetryConfig.Queues[3].MaxWorkers != 4 {
 		t.Fatalf("queue telemetry did not use deployment capacities: %#v", database.telemetryConfig)
 	}
 	var metrics bytes.Buffer
@@ -822,6 +831,59 @@ func TestProductionBuildersConstructDailyWhileReportsRemainDeferred(t *testing.T
 	}
 	if len(components) != 3 || components[0].Name() != "postgres-runtime-pools" ||
 		components[2].Name() != "river-heavy-metrics-worker" {
+		t.Fatalf("production components = %#v", components)
+	}
+	if err := components[0].Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionOpsBuilderConstructsNativeSyncCoverageRefresh(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, err := jobruntime.Load("contracts/jobs/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	domainPool, err := pgxpool.New(ctx, "postgresql://domain@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	queuePool, err := pgxpool.New(ctx, "postgresql://queue@127.0.0.1:1/devhealth")
+	if err != nil {
+		domainPool.Close()
+		t.Fatal(err)
+	}
+	database := &postgresWorkerDatabase{
+		pools: &postgres.RuntimePools{Domain: domainPool, QueueControl: queuePool},
+	}
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return database, nil
+	}
+	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+		return runtimeRegistry, nil
+	}
+	components, err := configureWorkerDependenciesWithSources(
+		ctx,
+		config.Config{
+			Profile:                  "ops",
+			RiverDatabaseSchema:      "river",
+			DomainDatabaseMaxConns:   4,
+			QueueDatabaseMaxConns:    2,
+			OperationalBridgeURL:     "http://localhost",
+			OperationalBridgeToken:   secrets.NewValue("test-bridge-token"),
+			OperationalBridgeTimeout: time.Second,
+		},
+		health.NewRegistry(time.Second),
+		sources,
+		slog.Default(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 3 || components[0].Name() != "postgres-runtime-pools" ||
+		components[2].Name() != "river-operational-worker" {
 		t.Fatalf("production components = %#v", components)
 	}
 	if err := components[0].Shutdown(ctx); err != nil {
@@ -1063,10 +1125,12 @@ func executableHeavyRegistry(
 			} else {
 				job["state"] = "go_implemented"
 				job["route"] = "celery"
+				job["rollback_route"] = "celery"
 			}
 		case demoted[kind]:
 			job["state"] = "go_implemented"
 			job["route"] = "celery"
+			job["rollback_route"] = "celery"
 		}
 	}
 	encoded, err := json.Marshal(document)

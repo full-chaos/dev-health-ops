@@ -315,6 +315,7 @@ func TestQueueInspectionRequiresExactSanitizedProfileCoverage(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
 	fixture.backend.queues = []QueueSummary{
+		{Name: "coverage", Profile: "ops"},
 		{Name: "retention", Profile: "ops", Available: 2, Running: 1},
 		{Name: "heartbeat", Profile: "ops", Scheduled: 1},
 		{Name: "webhooks", Profile: "ops"},
@@ -323,8 +324,8 @@ func TestQueueInspectionRequiresExactSanitizedProfileCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Queues: %v", err)
 	}
-	if len(queues) != 3 || queues[0].Name != "heartbeat" ||
-		queues[1].Name != "retention" || queues[2].Name != "webhooks" {
+	if len(queues) != 4 || queues[0].Name != "coverage" || queues[1].Name != "heartbeat" ||
+		queues[2].Name != "retention" || queues[3].Name != "webhooks" {
 		t.Fatalf("queues were not sanitized/sorted: %+v", queues)
 	}
 

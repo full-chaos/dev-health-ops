@@ -113,6 +113,7 @@ func buildFixedScheduleProducers(
 	}
 	return schedulerfixed.NewProducerSet(
 		schedulerfixed.NewHeartbeatProducer(),
+		schedulerfixed.NewSyncCoverageRefreshProducer(),
 		retention,
 		remainingFanout,
 		scheduledReports,

@@ -69,6 +69,50 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
+			// The native coverage projector reads fixed-schedule state on the
+			// domain worker. The scheduler remains the only writer, so this is a
+			// deliberate read-only dual-role relation.
+			name: "scheduled_jobs",
+			ddl: `CREATE TABLE public.scheduled_jobs (
+				id uuid PRIMARY KEY, org_id text NOT NULL, job_type text NOT NULL,
+				schedule_cron text NOT NULL, status integer NOT NULL DEFAULT 0,
+				sync_config_id uuid, next_run_at timestamptz,
+				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+			exercise: []string{
+				"SELECT EXISTS (SELECT 1 FROM public.scheduled_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND job_type = 'sync')",
+				"SELECT schedule_cron, next_run_at FROM public.scheduled_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND job_type = 'sync' AND status = 0 ORDER BY next_run_at ASC NULLS LAST, created_at DESC LIMIT 1",
+			},
+		},
+		{
+			name: "backfill_jobs",
+			ddl: `CREATE TABLE public.backfill_jobs (
+				id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,
+				celery_task_id text, since_date date NOT NULL, before_date date NOT NULL,
+				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+			exercise: []string{
+				"SELECT id, celery_task_id, since_date, before_date FROM public.backfill_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND before_date >= CURRENT_DATE",
+				"SELECT max(updated_at) FROM public.backfill_jobs WHERE org_id = 'o' AND sync_config_id = gen_random_uuid() AND before_date >= CURRENT_DATE",
+			},
+		},
+		{
+			name: "sync_coverage_projections",
+			ddl: `CREATE TABLE public.sync_coverage_projections (
+				id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,
+				history_lookback_days integer NOT NULL, projection_version integer NOT NULL,
+				generated_at timestamptz NOT NULL, source_updated_at timestamptz,
+				backfill_updated_at timestamptz, invalidated_at timestamptz, payload json NOT NULL,
+				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+				UNIQUE (org_id, sync_config_id, history_lookback_days))`,
+			exercise: []string{
+				`INSERT INTO public.sync_coverage_projections
+					(id, org_id, sync_config_id, history_lookback_days, projection_version,
+					 generated_at, payload, created_at, updated_at)
+				 VALUES (gen_random_uuid(), 'o', gen_random_uuid(), 3650, 1, now(), '{}'::json, now(), now())`,
+				"SELECT payload FROM public.sync_coverage_projections WHERE org_id = 'o'",
+				"UPDATE public.sync_coverage_projections SET invalidated_at = NULL, updated_at = now() WHERE org_id = 'o'",
+			},
+		},
+		{
 			// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences,
 			// and fixed_schedule_occurrences moved to coordinatorPosture
 			// entirely under the Option B split and no longer appear here —

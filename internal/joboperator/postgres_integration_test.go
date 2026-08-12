@@ -215,8 +215,13 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatalf("List() = %+v, %v", jobs, err)
 	}
 	queues, err := service.Queues(ctx, principal, "ops")
-	if err != nil || len(queues) != 3 {
+	if err != nil || len(queues) != 4 {
 		t.Fatalf("Queues() = %+v, %v", queues, err)
+	}
+	for index, name := range []string{"coverage", "heartbeat", "retention", "webhooks"} {
+		if queues[index].Name != name {
+			t.Fatalf("Queues()[%d].Name = %q, want %q", index, queues[index].Name, name)
+		}
 	}
 	if err := productionGuard.Check(ctx, ActionCancel, job); !errors.Is(err, ErrDomainPreconditionUnsupported) {
 		t.Fatalf("production domain guard error = %v", err)
@@ -235,7 +240,7 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatalf("PauseQueue: %v", err)
 	}
 	queues, err = service.Queues(ctx, principal, "ops")
-	if err != nil || !queues[0].Paused {
+	if err != nil || len(queues) != 4 || queues[1].Name != "heartbeat" || !queues[1].Paused {
 		t.Fatalf("paused Queues() = %+v, %v", queues, err)
 	}
 	if err := service.ResumeQueue(ctx, principal, "heartbeat", "incident_response", "operator-integration-resume"); err != nil {
@@ -368,6 +373,9 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"CREATE TABLE public.sync_run_unit_effect_snapshots (sync_run_unit_id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",

@@ -5,21 +5,21 @@ Covers:
   and returns HTTP 400 without creating any records or dispatching.
 - Endpoint (fanout path): creates a visible PENDING JobRun anchored to the sync
   ScheduledJob and threads the planner ``sync_run_id`` into it.
-- Endpoint (fanout path): commits the BackfillJob before dispatching.
-- Endpoint (fanout path): a dispatch enqueue failure rolls the BackfillJob,
-  JobRun and SyncRun to FAILED and returns 503.
+- Endpoint (fanout path): commits the BackfillJob with a stable
+  ``sync_run:<id>`` marker and a durable reference-discovery wakeup.
+- Endpoint (fanout path): does not publish a parallel Celery task; the
+  BackfillJob, JobRun, and SyncRun remain pending/planned for the reconciler.
 - Endpoint: a ``planner_managed`` config routes to fanout.
 - Endpoint: a paused config returns 409 without dispatching.
 
 The legacy worker path (``run_backfill``/``sync_backfill``/``sync_tasks``) was
 removed in CHAOS-2647; all backfills now go through the planner + unitized
-fan-out (``plan_sync_run`` + ``dispatch_sync_run``).
+fan-out (``plan_sync_run`` + durable ``reference_discovery`` outbox wakeup).
 """
 
 from __future__ import annotations
 
 import importlib
-import sqlite3
 import types
 import uuid
 from collections.abc import Iterator
@@ -233,11 +233,10 @@ def _patch_dispatch(
     side_effect: BaseException | None = None,
     task_id: str = "bf-task-id",
 ) -> Iterator[MagicMock]:
-    """Patch the unitized dispatcher used by the backfill endpoint.
+    """Patch the retired Celery fastpath to prove the endpoint does not use it.
 
     The real planner (``plan_sync_run``) still runs against the test DB so the
-    PENDING JobRun anchor and SyncRun are created for real; only the Celery
-    dispatch is intercepted.
+    PENDING JobRun anchor, SyncRun, and durable outbox wakeup are created for real.
     """
     mock_dispatch = MagicMock()
     if side_effect is not None:
@@ -245,7 +244,8 @@ def _patch_dispatch(
     else:
         mock_dispatch.apply_async.return_value = MagicMock(id=task_id)
     with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         yield mock_dispatch
 
@@ -279,11 +279,16 @@ async def test_backfill_config_created_via_plain_endpoint_succeeds(
         )
 
     assert resp.status_code == 202, resp.text
-    mock_dispatch.apply_async.assert_called_once()
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         backfill_jobs = (await session.execute(select(BackfillJob))).scalars().all()
+        outboxes = (await session.execute(select(SyncDispatchOutbox))).scalars().all()
     assert len(backfill_jobs) == 1
+    assert backfill_jobs[0].celery_task_id == f"sync_run:{resp.json()['sync_run_id']}"
+    assert len(outboxes) == 1
+    assert outboxes[0].kind == "reference_discovery"
+    assert outboxes[0].status == "pending"
 
 
 @pytest.mark.asyncio
@@ -383,7 +388,8 @@ async def test_backfill_fanout_creates_job_run_anchor(
     sync_run_id = data["sync_run_id"]
     assert sync_run_id is not None
     uuid.UUID(sync_run_id)
-    mock_dispatch.apply_async.assert_called_once_with(args=(sync_run_id,), queue="sync")
+    assert data["task_id"] == f"sync_run:{sync_run_id}"
+    mock_dispatch.apply_async.assert_not_called()
 
     # A PENDING JobRun must exist anchored to the config's sync ScheduledJob.
     async with session_maker() as session:
@@ -403,6 +409,15 @@ async def test_backfill_fanout_creates_job_run_anchor(
         projection = (
             await session.execute(select(SyncCoverageProjection))
         ).scalar_one()
+        sync_run = await session.get(SyncRun, uuid.UUID(sync_run_id))
+        outbox = (
+            await session.execute(
+                select(SyncDispatchOutbox).where(
+                    SyncDispatchOutbox.sync_run_id == uuid.UUID(sync_run_id),
+                    SyncDispatchOutbox.kind == "reference_discovery",
+                )
+            )
+        ).scalar_one()
 
     assert len(runs) == 1
     run = runs[0]
@@ -410,6 +425,9 @@ async def test_backfill_fanout_creates_job_run_anchor(
     assert run.triggered_by == "backfill"
     assert run.result["planner_managed"] is True
     assert run.result["sync_run_id"] == sync_run_id
+    assert sync_run is not None
+    assert sync_run.status == SyncRunStatus.PLANNED.value
+    assert outbox.status == "pending"
     assert projection.invalidated_at is not None
 
 
@@ -484,14 +502,14 @@ async def test_backfill_over_unit_cap_rejected_before_persisting(
 
 
 @pytest.mark.asyncio
-async def test_backfill_fanout_commits_backfill_job_before_dispatch(
+async def test_backfill_fanout_commits_stable_marker_without_celery_dispatch(
     client, session_maker, seeded_state
 ):
-    """The BackfillJob must be committed (visible) before the dispatch fires."""
+    """The BackfillJob marker is durable without a Celery task identifier."""
     ac, _ = client
 
     create_resp = await _create_sync_config(
-        ac, name="bf-fanout-committed-before-dispatch", provider="github"
+        ac, name="bf-fanout-durable-marker", provider="github"
     )
     assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
@@ -499,27 +517,9 @@ async def test_backfill_fanout_commits_backfill_job_before_dispatch(
         session_maker, seeded_state["org_id"], config_id, planner_managed=True
     )
 
-    db_path = session_maker.kw["bind"].url.database
-    visible_at_dispatch: list[tuple[str, int, str | None]] = []
-
-    def _delay_side_effect(*args, **kwargs):
-        assert db_path is not None
-        with sqlite3.connect(db_path) as conn:
-            row = conn.execute(
-                """
-                SELECT status, total_chunks, celery_task_id
-                FROM backfill_jobs
-                """
-            ).fetchone()
-        assert row is not None, "BackfillJob must be committed before dispatch"
-        visible_at_dispatch.append(row)
-        return MagicMock(id="bf-fanout-visible-task-id")
-
-    mock_dispatch = MagicMock()
-    mock_dispatch.apply_async.side_effect = _delay_side_effect
-    with patch(
-        "dev_health_ops.api.admin.routers.sync.dispatch_sync_run", mock_dispatch
-    ):
+    with _patch_dispatch(
+        side_effect=AssertionError("Celery publication must not be attempted")
+    ) as mock_dispatch:
         resp = await ac.post(
             f"/api/v1/admin/sync-configs/{config_id}/backfill",
             json={"since": "2026-01-01", "before": "2026-01-08"},
@@ -527,37 +527,33 @@ async def test_backfill_fanout_commits_backfill_job_before_dispatch(
 
     assert resp.status_code == 202, resp.text
     assert resp.json()["mode"] == "fanout"
-    # Durability (CHAOS-2647): the sync_run:<id> marker is committed BEFORE
-    # dispatch, so a crash between enqueue and the post-dispatch commit still lets
-    # finalize_sync_run link this BackfillJob. At dispatch time the committed row
-    # is pending/0-chunks and already carries the marker.
-    assert len(visible_at_dispatch) == 1
-    status_at_dispatch, chunks_at_dispatch, marker_at_dispatch = visible_at_dispatch[0]
-    assert (status_at_dispatch, chunks_at_dispatch) == ("pending", 0)
-    assert marker_at_dispatch is not None
-    assert marker_at_dispatch.startswith("sync_run:")
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
-    # The celery_task_id must carry the ``sync_run:<id>`` marker so finalize_sync_run
-    # (which looks up BackfillJob by celery_task_id.contains("sync_run:<id>")) can link
-    # the job to its run and update status/chunk counts (CHAOS-2647 regression).
-    assert (
-        backfill_job.celery_task_id
-        == f"bf-fanout-visible-task-id|sync_run:{resp.json()['sync_run_id']}"
-    )
+        outbox = (
+            await session.execute(
+                select(SyncDispatchOutbox).where(
+                    SyncDispatchOutbox.sync_run_id
+                    == uuid.UUID(resp.json()["sync_run_id"]),
+                    SyncDispatchOutbox.kind == "reference_discovery",
+                )
+            )
+        ).scalar_one()
+
+    # finalize_sync_run still looks up this stable marker to link the job to its
+    # planner run; a broker-specific task id is no longer part of the contract.
+    assert backfill_job.status == "pending"
+    assert backfill_job.total_chunks == 0
+    assert backfill_job.celery_task_id == f"sync_run:{resp.json()['sync_run_id']}"
+    assert outbox.status == "pending"
 
 
 @pytest.mark.asyncio
-async def test_backfill_fanout_enqueue_failure_marks_records_failed(
+async def test_backfill_fanout_ignores_celery_failure_and_keeps_records_pending(
     client, session_maker, seeded_state
 ):
-    """A dispatch enqueue failure flips BackfillJob, JobRun and SyncRun to FAILED.
-
-    Unlike the deleted legacy path, the planner commits the SyncRun + units
-    before dispatching, so on enqueue failure the committed SyncRun is rolled to
-    FAILED (rather than left non-existent).
-    """
+    """The retired Celery path cannot fail a durable planner-owned backfill."""
     ac, _ = client
 
     create_resp = await _create_sync_config(
@@ -569,43 +565,44 @@ async def test_backfill_fanout_enqueue_failure_marks_records_failed(
         session_maker, seeded_state["org_id"], config_id, planner_managed=True
     )
 
-    with _patch_dispatch(side_effect=RuntimeError("broker down")):
+    with _patch_dispatch(side_effect=RuntimeError("broker down")) as mock_dispatch:
         resp = await ac.post(
             f"/api/v1/admin/sync-configs/{config_id}/backfill",
             json={"since": "2026-01-01", "before": "2026-01-08"},
         )
 
-    assert resp.status_code == 503
-    assert "Task queue unavailable: RuntimeError: broker down" in resp.json()["detail"]
+    assert resp.status_code == 202, resp.text
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
         job_runs = list((await session.execute(select(JobRun))).scalars().all())
         sync_runs = list((await session.execute(select(SyncRun))).scalars().all())
+        outboxes = list(
+            (await session.execute(select(SyncDispatchOutbox))).scalars().all()
+        )
 
-    assert backfill_job.status == "failed"
-    assert backfill_job.error_message == "RuntimeError: broker down"
-    assert backfill_job.completed_at is not None
-    assert backfill_job.celery_task_id is None
+    sync_run_id = resp.json()["sync_run_id"]
+    assert backfill_job.status == "pending"
+    assert backfill_job.error_message is None
+    assert backfill_job.completed_at is None
+    assert backfill_job.celery_task_id == f"sync_run:{sync_run_id}"
     assert len(job_runs) == 1
-    assert job_runs[0].status == JobRunStatus.FAILED.value
-    assert job_runs[0].error == "RuntimeError: broker down"
-    assert job_runs[0].completed_at is not None
+    assert job_runs[0].status == JobRunStatus.PENDING.value
+    assert job_runs[0].error is None
+    assert job_runs[0].completed_at is None
     assert len(sync_runs) == 1
-    assert sync_runs[0].status == SyncRunStatus.FAILED.value
+    assert sync_runs[0].status == SyncRunStatus.PLANNED.value
+    assert len(outboxes) == 1
+    assert outboxes[0].kind == "reference_discovery"
+    assert outboxes[0].status == "pending"
 
 
 @pytest.mark.asyncio
-async def test_backfill_fanout_enqueue_failure_sanitizes_broker_url_credential(
+async def test_backfill_fanout_never_observes_celery_broker_credentials(
     client, session_maker, seeded_state
 ):
-    """Codex review finding (CHAOS-2766 PR #1123): a Celery/broker
-    enqueue-failure exception can embed the configured broker/result-backend
-    URL, credentials included -- e.g. Celery/kombu wrapping a connection
-    error with the DSN it tried. That credential must not survive into
-    BackfillJob.error_message, JobRun.error, or the API-returned detail; all
-    three are populated from the same exception."""
-    from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
+    """A broker exception cannot leak because the API does not call Celery."""
 
     ac, _ = client
 
@@ -627,30 +624,25 @@ async def test_backfill_fanout_enqueue_failure_sanitizes_broker_url_credential(
         + "@redis-broker.internal:6379/0."
     )
 
-    with _patch_dispatch(side_effect=broker_dsn_error):
+    with _patch_dispatch(side_effect=broker_dsn_error) as mock_dispatch:
         resp = await ac.post(
             f"/api/v1/admin/sync-configs/{config_id}/backfill",
             json={"since": "2026-01-01", "before": "2026-01-08"},
         )
 
-    assert resp.status_code == 503
-    detail = resp.json()["detail"]
-    assert fixture_value not in detail
-    assert REDACTION_MARKER in detail
+    assert resp.status_code == 202, resp.text
+    mock_dispatch.apply_async.assert_not_called()
+    assert fixture_value not in resp.text
 
     async with session_maker() as session:
         backfill_job = (await session.execute(select(BackfillJob))).scalar_one()
         job_runs = list((await session.execute(select(JobRun))).scalars().all())
 
-    assert backfill_job.status == "failed"
-    assert backfill_job.error_message is not None
-    assert fixture_value not in backfill_job.error_message
-    assert REDACTION_MARKER in backfill_job.error_message
-
+    assert backfill_job.status == "pending"
+    assert backfill_job.error_message is None
     assert len(job_runs) == 1
-    assert job_runs[0].error is not None
-    assert fixture_value not in job_runs[0].error
-    assert REDACTION_MARKER in job_runs[0].error
+    assert job_runs[0].status == JobRunStatus.PENDING.value
+    assert job_runs[0].error is None
 
 
 @pytest.mark.asyncio
@@ -679,7 +671,7 @@ async def test_backfill_planner_managed_config_routes_to_fanout(
     data = resp.json()
     assert data["mode"] == "fanout"
     sync_run_id = data["sync_run_id"]
-    mock_dispatch.apply_async.assert_called_once_with(args=(sync_run_id,), queue="sync")
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         sched_job = (
@@ -693,10 +685,19 @@ async def test_backfill_planner_managed_config_routes_to_fanout(
         run = (
             await session.execute(select(JobRun).where(JobRun.job_id == sched_job.id))
         ).scalar_one()
+        outbox = (
+            await session.execute(
+                select(SyncDispatchOutbox).where(
+                    SyncDispatchOutbox.sync_run_id == uuid.UUID(sync_run_id),
+                    SyncDispatchOutbox.kind == "reference_discovery",
+                )
+            )
+        ).scalar_one()
     assert run.status == JobRunStatus.PENDING.value
     assert run.triggered_by == "backfill"
     assert run.result["planner_managed"] is True
     assert run.result["sync_run_id"] == sync_run_id
+    assert outbox.status == "pending"
 
 
 @pytest.mark.asyncio

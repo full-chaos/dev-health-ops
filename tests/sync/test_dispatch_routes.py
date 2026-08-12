@@ -106,7 +106,7 @@ def test_contract_covers_exactly_the_production_outbox_kinds() -> None:
     assert tuple(production_kinds) == tuple(sorted(load_transport_routes().routes))
 
 
-def test_checked_in_transport_routes_are_celery_only_and_immutable() -> None:
+def test_checked_in_transport_routes_are_river_with_celery_rollback() -> None:
     routes = load_transport_routes()
 
     assert tuple(routes.routes) == (
@@ -116,10 +116,8 @@ def test_checked_in_transport_routes_are_celery_only_and_immutable() -> None:
         "reference_discovery",
     )
     assert routes.by_kind("post_sync").delivery == "at_least_once"
-    assert all(
-        route.route == route.rollback_route == "celery"
-        for route in routes.routes.values()
-    )
+    assert all(route.route == "river" for route in routes.routes.values())
+    assert all(route.rollback_route == "celery" for route in routes.routes.values())
     with pytest.raises(TypeError):
         routes.routes["post_sync"] = routes.by_kind("post_sync")  # type: ignore[index]
     with pytest.raises(DispatchRouteContractError, match="unknown"):

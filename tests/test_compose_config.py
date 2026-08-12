@@ -240,6 +240,17 @@ def _platform_compose_path() -> Path | None:
     return None
 
 
+def _platform_go_compose_path() -> Path | None:
+    for parent in _REPO_ROOT.parents:
+        candidate = parent / "compose.yml"
+        if not candidate.exists():
+            continue
+        services = _load_yaml(candidate).get("services") or {}
+        if "api" in services and "go-worker" in services:
+            return candidate
+    return None
+
+
 def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -978,6 +989,44 @@ def test_platform_compose_wires_local_all_provider_routes_end_to_end() -> None:
         "DEV_HEALTH_ENV": "local",
         "GO_PROVIDER_ROUTES": "all",
     }
+
+
+def test_platform_compose_applies_sync_routes_before_readiness() -> None:
+    """Local no-Celery startup must converge routes without a readiness cycle."""
+
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    activators = {
+        "go-sync-dispatch-route-activate": "dispatch_sync_run",
+        "go-sync-finalize-route-activate": "finalize_sync_run",
+        "go-sync-post-route-activate": "post_sync",
+        "go-sync-reference-route-activate": "reference_discovery",
+    }
+    serial_order = tuple(activators)
+    ready_dependencies = services["go-worker-ready"].get("depends_on") or {}
+
+    for index, (service_name, kind) in enumerate(activators.items()):
+        service = services[service_name]
+        command = service.get("command") or []
+        assert command[:2] == ["routes", "apply"]
+        assert command[-1] == kind
+        dependencies = service.get("depends_on") or {}
+        assert "go-worker-ready" not in dependencies
+        assert dependencies["go-worker-operator-credential"]["condition"] == (
+            "service_completed_successfully"
+        )
+        assert dependencies["go-worker"]["condition"] == "service_started"
+        assert dependencies["go-reconciler"]["condition"] == "service_started"
+        if index:
+            assert dependencies[serial_order[index - 1]]["condition"] == (
+                "service_completed_successfully"
+            )
+        assert ready_dependencies[service_name]["condition"] == (
+            "service_completed_successfully"
+        )
 
 
 def test_compose_workers_override_runner_entrypoint() -> None:

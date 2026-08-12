@@ -261,7 +261,7 @@ ORDER BY id`, args.SyncRunID())
 	}
 	autoImport := false
 	if err := tx.QueryRow(ctx, `
-SELECT COALESCE(sync_options->'auto_import_teams' = 'true'::jsonb, false)
+SELECT COALESCE(sync_options->>'auto_import_teams' = 'true', false)
 FROM public.sync_configurations
 WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id

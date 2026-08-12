@@ -24,17 +24,17 @@ func TestCheckedInArtifactIsFrozenAndLookupIsImmutable(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s route is missing", kind)
 		}
-		if descriptor.Route != RouteCelery || descriptor.RollbackRoute != RouteCelery {
-			t.Fatalf("%s descriptor is not currently Celery-only: %#v", kind, descriptor)
+		if descriptor.Route != RouteRiver || descriptor.RollbackRoute != RouteCelery {
+			t.Fatalf("%s descriptor is not River with Celery rollback: %#v", kind, descriptor)
 		}
 	}
 	descriptor, ok := registry.Lookup(KindPostSync)
 	if !ok || descriptor.Delivery != DeliveryAtLeastOnce {
 		t.Fatalf("post_sync descriptor = %#v", descriptor)
 	}
-	descriptor.Route = RouteRiver
+	descriptor.Route = RouteCelery
 	again, ok := registry.Lookup(KindPostSync)
-	if !ok || again.Route != RouteCelery {
+	if !ok || again.Route != RouteRiver {
 		t.Fatalf("registry was mutated through lookup: %#v", again)
 	}
 	if _, ok := registry.Lookup("not-a-frozen-kind"); ok {

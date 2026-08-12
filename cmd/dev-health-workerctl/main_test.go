@@ -96,6 +96,15 @@ func (commandJobRouteController) ApplyCheckedIn(_ context.Context, kind string) 
 func (controller commandRouteController) Inspect(context.Context, string) (syncroute.RouteState, error) {
 	return controller.state, controller.err
 }
+func (controller commandRouteController) ApplyCheckedIn(context.Context, string) (syncroute.RouteState, error) {
+	if controller.state.Kind == "" && controller.err == nil {
+		return syncroute.RouteState{
+			Kind: "reference_discovery", Transport: "river", Generation: 2,
+			RollbackTransport: "celery",
+		}, nil
+	}
+	return controller.state, controller.err
+}
 func (controller commandRouteController) Pause(context.Context, string) (syncroute.RouteState, error) {
 	if controller.state.Kind == "" && controller.err == nil {
 		return syncroute.RouteState{
@@ -170,6 +179,20 @@ func TestDispatchRoutesCanPauseAndResumePostSyncOnCelery(t *testing.T) {
 	}
 	if stdout.String() != "{\"kind\":\"post_sync\",\"transport\":\"celery\",\"generation\":3,\"paused\":false,\"rollback_transport\":\"celery\",\"live_claims\":0}\n" {
 		t.Fatalf("routes resume output=%q", stdout.String())
+	}
+}
+
+func TestDispatchRoutesApplyCheckedInRiverTransport(t *testing.T) {
+	runtime := commandRuntime(t, commandAuthorizer{})
+	var stdout, stderr bytes.Buffer
+	if code := dispatch(context.Background(), runtime, []string{
+		"routes", "apply", "--reason", "local_start", "--correlation-id", "route-cli-apply",
+		"reference_discovery",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("routes apply code=%d stderr=%s", code, stderr.String())
+	}
+	if stdout.String() != "{\"kind\":\"reference_discovery\",\"transport\":\"river\",\"generation\":2,\"paused\":false,\"rollback_transport\":\"celery\",\"live_claims\":0}\n" {
+		t.Fatalf("routes apply output=%q", stdout.String())
 	}
 }
 

@@ -40,7 +40,7 @@ Do not record task payloads, encoded arguments, DSNs, tokens, or customer-sensit
 | Workers are alive but jobs do not complete | Dependency, handler, lease, timeout, downstream write, or contract failure |
 | Repeated retries with no progress | Persistent auth/schema/data error or unsafe retry amplification |
 | Go `/healthz` succeeds but `/readyz` fails | Role, DSN mode, registry, handler, schema, or queue-control incompatibility |
-| Go profile is healthy but no work arrives | Expected while profile is disabled and route remains Celery-owned |
+| Go profile is healthy but no work arrives | Confirm the profile is enabled and inspect the durable job and sync-dispatch routes; a checked-in River route that was not applied remains on its prior database transport |
 | Operator command reports `outcome_unknown` | Database commit ambiguity; inspect before retrying |
 | Operator command reports `audit_pending` | Mutation committed; audit finalization needs recovery |
 

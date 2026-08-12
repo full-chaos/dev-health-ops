@@ -252,30 +252,30 @@ def test_observe_due_outbox_rows_matches_claim_window_and_go_digest(db_session):
         "sampled_candidates": 2,
         "truncated": True,
         "unknown_kind_count": 0,
-        "celery_due_pending": 2,
-        "river_due_pending": 0,
+        "celery_due_pending": 0,
+        "river_due_pending": 2,
         "kinds": [
             {
                 "kind": "dispatch_sync_run",
-                "route": "celery",
+                "route": "river",
                 "due_pending": 1,
                 "expired_claims": 1,
             },
             {
                 "kind": "finalize_sync_run",
-                "route": "celery",
+                "route": "river",
                 "due_pending": 0,
                 "expired_claims": 0,
             },
             {
                 "kind": "post_sync",
-                "route": "celery",
+                "route": "river",
                 "due_pending": 1,
                 "expired_claims": 0,
             },
             {
                 "kind": "reference_discovery",
-                "route": "celery",
+                "route": "river",
                 "due_pending": 0,
                 "expired_claims": 0,
             },
@@ -305,7 +305,7 @@ def test_observe_due_outbox_rows_matches_claim_window_and_go_digest(db_session):
     assert live_claim.claim_token == "live-claim"
 
 
-def test_observe_due_outbox_rows_mirrors_active_celery_route_fence_and_redacts(
+def test_observe_due_outbox_rows_mirrors_active_river_route_fence_and_redacts(
     db_session,
 ):
     now = datetime(2026, 7, 22, 12, 0, 0, 123456, tzinfo=timezone.utc)
@@ -340,7 +340,8 @@ def test_observe_due_outbox_rows_mirrors_active_celery_route_fence_and_redacts(
 
     assert record["observed_at"] == "2026-07-22T12:00:00.123456000Z"
     assert record["unknown_kind_count"] == 0
-    assert record["celery_due_pending"] == 1
+    assert record["celery_due_pending"] == 0
+    assert record["river_due_pending"] == 1
     assert record["sampled_candidates"] == 1
     assert record["truncated"] is False
     rendered = repr(record)

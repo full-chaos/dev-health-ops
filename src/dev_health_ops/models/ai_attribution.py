@@ -5,7 +5,7 @@ These types represent both the lightweight *signal* detected at normalization ti
 and the full *record* persisted to ClickHouse.
 
 Source precedence (highest → lowest):
-    MANUAL > PR_LABEL > BOT_AUTHOR > COMMIT_TRAILER > CI_ANNOTATION > BRANCH_NAME > PR_BODY
+    MANUAL > ISSUE_LABEL > PR_LABEL > BOT_AUTHOR > COMMIT_TRAILER > CI_ANNOTATION > BRANCH_NAME > PR_BODY
 
 Write-time: persist every detected signal, deduped on (repo, subject, source).
 Read-time:  the ``ai_attribution_resolved`` view resolves the effective attribution.
@@ -28,7 +28,8 @@ from uuid import UUID, uuid4
 class AIAttributionSource(StrEnum):
     """Where the AI attribution signal came from (ordered by precedence, high→low)."""
 
-    PR_LABEL = "pr_label"  # explicit label on the PR — highest signal
+    ISSUE_LABEL = "issue_label"  # explicit label on an issue/work item
+    PR_LABEL = "pr_label"  # explicit label on a PR
     BOT_AUTHOR = "bot_author"  # GitHub App / known bot user
     COMMIT_TRAILER = "commit_trailer"  # AI-Assisted-By / Co-authored-by AI bot
     BRANCH_NAME = "branch_name"  # weak heuristic signal
@@ -54,12 +55,13 @@ class AIAttributionKind(StrEnum):
 #: Lower integer = higher precedence.  MANUAL wins all others.
 SOURCE_PRECEDENCE: dict[AIAttributionSource, int] = {
     AIAttributionSource.MANUAL: 1,
-    AIAttributionSource.PR_LABEL: 2,
-    AIAttributionSource.BOT_AUTHOR: 3,
-    AIAttributionSource.COMMIT_TRAILER: 4,
-    AIAttributionSource.CI_ANNOTATION: 5,
-    AIAttributionSource.BRANCH_NAME: 6,
-    AIAttributionSource.PR_BODY: 7,
+    AIAttributionSource.ISSUE_LABEL: 2,
+    AIAttributionSource.PR_LABEL: 3,
+    AIAttributionSource.BOT_AUTHOR: 4,
+    AIAttributionSource.COMMIT_TRAILER: 5,
+    AIAttributionSource.CI_ANNOTATION: 6,
+    AIAttributionSource.BRANCH_NAME: 7,
+    AIAttributionSource.PR_BODY: 8,
 }
 
 SubjectType = Literal["pull_request", "commit", "issue", "workflow_run", "review"]
@@ -116,7 +118,7 @@ class AIAttributionRecord:
     """
 
     org_id: UUID
-    provider: str  # github | gitlab | jira | local
+    provider: str  # github | gitlab | jira | linear | local
     subject_type: SubjectType
     subject_id: str  # provider-native id
     repo_id: UUID | None

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,8 +17,9 @@ const maxCompatibilityResponseBytes = 4 * 1024
 // HTTPCompatibilityConfig names the one reviewed remaining-metrics bridge.
 // No command, callable, credential, or database URL can cross this boundary.
 type HTTPCompatibilityConfig struct {
-	Endpoint    string
-	BearerToken string
+	Endpoint              string
+	BearerToken           string
+	AllowInsecureInternal bool
 }
 
 type HTTPCompatibilityExecutor struct {
@@ -28,7 +30,8 @@ type HTTPCompatibilityExecutor struct {
 
 func NewHTTPCompatibilityExecutor(client *http.Client, config HTTPCompatibilityConfig) (*HTTPCompatibilityExecutor, error) {
 	if client == nil || (client.Timeout != 0 && (client.Timeout < 100*time.Millisecond || client.Timeout > 30*time.Second)) ||
-		strings.TrimSpace(config.BearerToken) == "" || !validCompatibilityEndpoint(config.Endpoint) {
+		strings.TrimSpace(config.BearerToken) == "" ||
+		!validCompatibilityEndpoint(config.Endpoint, config.AllowInsecureInternal) {
 		return nil, ErrUnavailable
 	}
 	return &HTTPCompatibilityExecutor{client: client, endpoint: config.Endpoint, token: config.BearerToken}, nil
@@ -85,7 +88,7 @@ func (executor *HTTPCompatibilityExecutor) post(ctx context.Context, value compa
 	return nil
 }
 
-func validCompatibilityEndpoint(raw string) bool {
+func validCompatibilityEndpoint(raw string, allowInsecure bool) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		parsed.Path != "/internal/worker/remaining-metrics/v1/execute" {
@@ -95,5 +98,15 @@ func validCompatibilityEndpoint(raw string) bool {
 		return true
 	}
 	host := strings.ToLower(parsed.Hostname())
-	return parsed.Scheme == "http" && (host == "127.0.0.1" || host == "::1" || host == "localhost")
+	if parsed.Scheme != "http" || parsed.Host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || (allowInsecure && ip.IsPrivate())
+	}
+	return allowInsecure && (!strings.Contains(host, ".") ||
+		strings.HasSuffix(host, ".internal") || strings.HasSuffix(host, ".local"))
 }

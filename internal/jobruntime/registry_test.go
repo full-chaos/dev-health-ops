@@ -291,7 +291,7 @@ func testContractRegistry() jobcontract.Registry {
 			SameVersionRollout: "schema_digest_all_live_profiles",
 		},
 		Jobs: []jobcontract.JobDefinition{{
-			Kind: jobcontract.KindRetentionCleanup, CurrentVersion: 1, SupportedVersions: []int{1},
+			Kind: jobcontract.KindRetentionCleanup, CurrentVersion: 2, SupportedVersions: []int{1, 2, 3},
 			Profile: "ops", Queue: "retention", ExecutionMode: "command", Priority: 3,
 			TimeoutSeconds: 300, MaxAttempts: 3, RetryPolicy: "bounded_exponential_jitter",
 			Cancellation: "cooperative_checkpoint", Delivery: "guarded_at_least_once",
@@ -306,8 +306,8 @@ func testMigrationState() jobcontract.MigrationState {
 	return jobcontract.MigrationState{
 		SchemaVersion: 1,
 		Jobs: []jobcontract.MigrationJob{{
-			Kind: jobcontract.KindRetentionCleanup, State: "canary", ProducerVersion: 1,
-			ConsumerVersions: []int{1}, RequiredProfiles: []string{"ops"},
+			Kind: jobcontract.KindRetentionCleanup, State: "canary", ProducerVersion: 2,
+			ConsumerVersions: []int{1, 2, 3}, RequiredProfiles: []string{"ops"},
 			Route: "river_canary", RollbackRoute: "celery", Evidence: []string{"contract_schema"},
 		}},
 	}

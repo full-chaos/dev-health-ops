@@ -82,6 +82,27 @@ func TestHTTPCompatibilityExecutorRejectsGenericOrUntrustedEndpoints(t *testing.
 	}
 }
 
+func TestHTTPCompatibilityExecutorAllowsExplicitInternalComposeService(t *testing.T) {
+	client := &http.Client{Timeout: time.Second}
+	endpoint := "http://api:8000/internal/worker/remaining-metrics/v1/execute"
+	if executor, err := NewHTTPCompatibilityExecutor(client, HTTPCompatibilityConfig{
+		Endpoint: endpoint, BearerToken: "token", AllowInsecureInternal: true,
+	}); err != nil || executor == nil {
+		t.Fatalf("explicit internal endpoint rejected: executor=%v err=%v", executor, err)
+	}
+	if executor, err := NewHTTPCompatibilityExecutor(client, HTTPCompatibilityConfig{
+		Endpoint: endpoint, BearerToken: "token",
+	}); err == nil || executor != nil {
+		t.Fatal("internal HTTP endpoint accepted without explicit opt-in")
+	}
+	if executor, err := NewHTTPCompatibilityExecutor(client, HTTPCompatibilityConfig{
+		Endpoint:    "http://worker.example/internal/worker/remaining-metrics/v1/execute",
+		BearerToken: "token", AllowInsecureInternal: true,
+	}); err == nil || executor != nil {
+		t.Fatal("public HTTP endpoint accepted with internal opt-in")
+	}
+}
+
 func TestHTTPCompatibilityExecutorRejectsAmbiguousResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusConflict)

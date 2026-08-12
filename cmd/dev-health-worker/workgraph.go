@@ -58,8 +58,9 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	compatibility, err := workgraph.NewHTTPCompatibilityExecutor(
 		workgraphCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 		workgraph.HTTPCompatibilityConfig{
-			Endpoint:    strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute",
-			BearerToken: cfg.OperationalBridgeToken.Reveal(),
+			Endpoint:              strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute",
+			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
+			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
 		},
 	)
 	if err != nil {

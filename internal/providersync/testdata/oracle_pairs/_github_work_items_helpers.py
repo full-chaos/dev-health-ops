@@ -132,6 +132,14 @@ def install_minimal_oracle_imports(*, real_client: bool = False) -> None:
         ClickHouseStore=type("ClickHouseStore", (), {}),
     )
 
+    if real_client:
+        # PyGithub imports requests.utils while defining its Auth types. Load
+        # the locked real package before the minimal-import branch below can
+        # install the annotation-only requests stub used by Protocol-only
+        # oracles. real_client=True promises a production client, so stubbing
+        # one of that client's import-time dependencies contradicts the mode.
+        import requests  # noqa: F401
+
     if "requests" not in sys.modules:
         requests_stub = types.ModuleType("requests")
         # dev_health_ops.connectors.utils.graphql has no

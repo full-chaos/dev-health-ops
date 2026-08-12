@@ -46,7 +46,7 @@ versioned job contract + checked-in route
   → domain effect and audit
 ```
 
-Current checked-in routes still point to Celery and no production domain producer routes work to River.
+The checked-in sync-dispatch routes target River with Celery as the explicit rollback transport. Deployment still requires live Go consumers and an audited route apply; changing configuration alone does not activate a database route.
 
 ## Ask Dev and Context Fabric runtime
 

@@ -4,25 +4,25 @@
     {
       "kind": "dispatch_sync_run",
       "delivery": "at_least_once",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery"
     },
     {
       "kind": "finalize_sync_run",
       "delivery": "at_least_once",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery"
     },
     {
       "kind": "post_sync",
       "delivery": "at_least_once",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery"
     },
     {
       "kind": "reference_discovery",
       "delivery": "at_least_once",
-      "route": "celery",
+      "route": "river",
       "rollback_route": "celery"
     }
   ]

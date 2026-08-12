@@ -51,7 +51,7 @@ func TestFenceClosesReadinessOnRouteDrift(t *testing.T) {
 		{name: "paused without timestamp", states: replaceState(validStates(registry), 0, routeState{kind: frozenKinds[0], transport: syncdispatchcontract.RouteCelery, rollbackTransport: syncdispatchcontract.RouteCelery, generation: 1, paused: true})},
 		{name: "coherent paused route", states: replaceState(validStates(registry), 0, routeState{kind: frozenKinds[0], transport: syncdispatchcontract.RouteCelery, rollbackTransport: syncdispatchcontract.RouteCelery, generation: 1, paused: true, pausedAt: &now})},
 		{name: "unpaused with timestamp", states: replaceState(validStates(registry), 0, routeState{kind: frozenKinds[0], transport: syncdispatchcontract.RouteCelery, rollbackTransport: syncdispatchcontract.RouteCelery, generation: 1, pausedAt: &now})},
-		{name: "active transport differs from contract", states: replaceState(validStates(registry), 0, routeState{kind: frozenKinds[0], transport: syncdispatchcontract.RouteRiver, rollbackTransport: syncdispatchcontract.RouteCelery, generation: 1})},
+		{name: "active transport differs from contract", states: replaceState(validStates(registry), 0, routeState{kind: frozenKinds[0], transport: syncdispatchcontract.RouteCelery, rollbackTransport: syncdispatchcontract.RouteCelery, generation: 1})},
 	}
 
 	for _, test := range tests {
@@ -75,7 +75,6 @@ func TestFenceClosesReadinessForCoherentPausedRoute(t *testing.T) {
 	now := time.Now().UTC()
 	states[0].paused = true
 	states[0].pausedAt = &now
-	states[0].transport = syncdispatchcontract.RouteRiver
 	fence, err := newFence(registry, func(context.Context) (routeRows, error) {
 		return &fakeRows{states: states}, nil
 	})

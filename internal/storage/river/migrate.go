@@ -81,7 +81,11 @@ type MigrationOptions struct {
 	// legitimate is supplying it without a role, which is rejected alongside
 	// CoordinatorGrants for the same reason.
 	CoordinatorColumnGrants []ColumnGrant
-	Logger                  *slog.Logger
+	// CoordinatorSequences are the exact public-schema sequences the
+	// coordinator may use. Each receives USAGE only; all other sequence
+	// privileges remain revoked.
+	CoordinatorSequences []string
+	Logger               *slog.Logger
 }
 
 // columnGrantablePrivileges is PostgreSQL's closed set of column-level
@@ -266,7 +270,7 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		// No coordinator provisioning requested. Grants supplied without a role
 		// are a caller bug, not a no-op: it would silently skip the grants the
 		// caller believed it was applying.
-		if len(options.CoordinatorGrants) != 0 || len(options.CoordinatorColumnGrants) != 0 {
+		if len(options.CoordinatorGrants) != 0 || len(options.CoordinatorColumnGrants) != 0 || len(options.CoordinatorSequences) != 0 {
 			return ErrMigrationConfiguration
 		}
 		return nil
@@ -309,6 +313,16 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 			return ErrMigrationConfiguration
 		}
 		seenColumns[key] = struct{}{}
+	}
+	seenSequences := make(map[string]struct{}, len(options.CoordinatorSequences))
+	for _, sequence := range options.CoordinatorSequences {
+		if !validIdentifier(sequence) {
+			return ErrMigrationConfiguration
+		}
+		if _, duplicate := seenSequences[sequence]; duplicate {
+			return ErrMigrationConfiguration
+		}
+		seenSequences[sequence] = struct{}{}
 	}
 	return nil
 }
@@ -524,6 +538,13 @@ func coordinatorGrantStatements(options MigrationOptions) []string {
 				grant.Privilege+" ("+pgx.Identifier{grant.ColumnName}.Sanitize()+
 				") ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
 				" TO "+coordinatorRole+"; END IF; END $$",
+		)
+	}
+	for _, sequence := range options.CoordinatorSequences {
+		qualified := "public." + sequence
+		statements = append(statements,
+			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT USAGE ON SEQUENCE "+
+				pgx.Identifier{"public", sequence}.Sanitize()+" TO "+coordinatorRole+"; END IF; END $$",
 		)
 	}
 	return statements

@@ -180,6 +180,12 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 				{TableName: "worker_job_routes"},
 			}
 		}},
+		{"unsafe sequence identifier", func(o *MigrationOptions) {
+			o.CoordinatorSequences = []string{"audit_seq; DROP TABLE x"}
+		}},
+		{"duplicate sequence grant", func(o *MigrationOptions) {
+			o.CoordinatorSequences = []string{"worker_operator_audits_id_seq", "worker_operator_audits_id_seq"}
+		}},
 		// The column-scoped half (CHAOS-3114) is validated with the same
 		// strictness. Every rejection below would otherwise provision a role
 		// whose readiness check can never pass, or a statement with an
@@ -258,6 +264,7 @@ func TestCoordinatorGrantStatementsDeriveFromTheInjectedPosture(t *testing.T) {
 			{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "SELECT"},
 			{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
 		},
+		CoordinatorSequences: []string{"worker_operator_audits_id_seq"},
 	})
 	joined := strings.Join(statements, "\n")
 
@@ -283,6 +290,7 @@ func TestCoordinatorGrantStatementsDeriveFromTheInjectedPosture(t *testing.T) {
 		"GRANT SELECT (\"completion_key\") ON TABLE \"public\".\"worker_job_completion_fences\" TO \"coordinator_runtime\"",
 		"GRANT INSERT (\"completion_key\") ON TABLE \"public\".\"worker_job_completion_fences\" TO \"coordinator_runtime\"",
 		"IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN",
+		"GRANT USAGE ON SEQUENCE \"public\".\"worker_operator_audits_id_seq\" TO \"coordinator_runtime\"",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("coordinator grants missing %q:\n%s", expected, joined)

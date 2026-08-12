@@ -221,9 +221,22 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
-	AND NOT (
-		sync_dispatch_outbox.status = 'dispatched'
-		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'
+	AND (
+		sync_dispatch_outbox.dispatched_transport IS DISTINCT FROM 'river'
+		OR EXISTS (
+			SELECT 1
+			FROM public.sync_run_units AS unit
+			WHERE unit.sync_run_id = sync_dispatch_outbox.sync_run_id
+				AND (
+					(unit.status = 'dispatching' AND unit.updated_at <= $2)
+					OR (
+						unit.status = 'retrying'
+						AND unit.available_at IS NOT NULL
+						AND unit.available_at <= $1
+					)
+				)
+		)
 	)
 `
 

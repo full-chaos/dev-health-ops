@@ -770,9 +770,7 @@ func constructProviderSyncWorkerWithDependencies(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	decryptor, err := providerfoundation.NewFernetDecryptor(
-		cfg.SettingsEncryptionKey, "",
-	)
+	decryptor, err := newWorkerCredentialCipher(cfg)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
@@ -855,6 +853,13 @@ func constructProviderSyncWorkerWithDependencies(
 		},
 		metricsSource: providerMetrics,
 	}, nil
+}
+
+func newWorkerCredentialCipher(cfg config.Config) (providerfoundation.FernetDecryptor, error) {
+	return providerfoundation.NewFernetDecryptor(
+		cfg.SettingsEncryptionKey,
+		cfg.SettingsEncryptionSalt.Reveal(),
+	)
 }
 
 func providerSyncWorkerEnabled(cfg config.Config) bool {

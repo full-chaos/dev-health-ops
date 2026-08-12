@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "PagerDuty OAuth binding hydration for native Go provider workers",
   "build": ["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-run", "^$", "./internal/providerfoundation/", "./cmd/dev-health-worker/", "./internal/storage/postgres/", "./internal/storage/river/"],
-  "$limitation": "This plan covers tokenless descriptor hydration, tenant-bound OAuth binding and scope fences, renewal selection, production worker wiring, and least-privilege domain-role posture. Live PagerDuty HTTP behavior and a real PostgreSQL optimistic-rotation race remain integration evidence rather than mutation targets in this focused repair.",
+  "$limitation": "This plan covers tokenless descriptor hydration, tenant-bound OAuth binding and scope fences, renewal selection and row-locked recheck, production worker and custom-salt wiring, real PostgreSQL refresh serialization, and least-privilege domain-role posture. Live PagerDuty HTTP behavior remains outside this focused local repair.",
   "mutations": [
     {
       "id": "PD-OAUTH-1-resolver-invokes-hydrator",
@@ -45,12 +45,36 @@
       "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyOAuthHydratorRefreshesAndRotatesEncryptedToken$", "./internal/providerfoundation/"]]
     },
     {
+      "id": "PD-OAUTH-4a-row-locked-renewal-recheck",
+      "file": "internal/providerfoundation/pagerduty_oauth.go",
+      "find": "if current.ExpiresAt.After(h.now().Add(pagerDutyOAuthRenewalWindow)) {",
+      "replace": "if false {",
+      "rationale": "A worker that waited for the refresh row lock must re-read expiry and use the winner's token instead of calling the remote refresh endpoint with the same rotating refresh token.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestPagerDutyOAuthHydratorSerializesConcurrentRefresh$", "./internal/providerfoundation/"]]
+    },
+    {
       "id": "PD-OAUTH-5-worker-wiring",
       "file": "cmd/dev-health-worker/provider_sync.go",
       "find": "Hydrator:  credentialHydrator,",
       "replace": "Hydrator:  nil,",
       "rationale": "Constructing a hydrator at startup is not capability evidence unless every provider-unit executor receives the same dependency.",
       "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerWiresPagerDutyCredentialHydrator$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "PD-OAUTH-5a-settings-encryption-salt",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "cfg.SettingsEncryptionSalt.Reveal(),",
+      "replace": "\"\",",
+      "rationale": "PagerDuty token reads and refresh writes must derive the same Fernet key as Python when a deployment configures SETTINGS_ENCRYPTION_SALT.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-count=1", "-run", "^TestWorkerCredentialCipherUsesConfiguredSettingsEncryptionSalt$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "PD-OAUTH-5b-postgres-refresh-row-lock",
+      "file": "internal/providerfoundation/repository_postgres.go",
+      "find": "FOR UPDATE`, orgID, credentialName).Scan(&ciphertext, &version, &bindingID)",
+      "replace": "FOR SHARE`, orgID, credentialName).Scan(&ciphertext, &version, &bindingID)",
+      "rationale": "The real PostgreSQL repository must hold an exclusive row lock across refresh so concurrent workers cannot both use one rotating refresh token.",
+      "proof": [["env", "GOCACHE=/tmp/pagerduty-oauth-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestPostgresPagerDutyOAuthRefreshLockSerializesWorkers$", "./internal/providerfoundation/"]]
     },
     {
       "id": "PD-OAUTH-6-domain-role-update",

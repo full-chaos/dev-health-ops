@@ -130,6 +130,36 @@ func TestLoadDefaultsAndTypedOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsEncryptionSalt(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(workerSpec(map[string]string{
+		"SETTINGS_ENCRYPTION_SALT": "deployment-specific-salt",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SettingsEncryptionSalt.Reveal() != "deployment-specific-salt" {
+		t.Fatal("SETTINGS_ENCRYPTION_SALT was not preserved in typed config")
+	}
+}
+
+func TestSafeAttrsRedactsSettingsEncryptionSalt(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(workerSpec(map[string]string{
+		"SETTINGS_ENCRYPTION_SALT": "deployment-specific-salt",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := fmt.Sprint(cfg.SafeAttrs())
+	if strings.Contains(text, "deployment-specific-salt") {
+		t.Fatal("safe attrs leaked SETTINGS_ENCRYPTION_SALT")
+	}
+	if !strings.Contains(text, "settings_encryption_salt_configured=true") {
+		t.Fatal("safe attrs omitted the SETTINGS_ENCRYPTION_SALT configured marker")
+	}
+}
+
 func TestCLIProfileOverridesEnvironmentAndMustBeAllowed(t *testing.T) {
 	t.Parallel()
 

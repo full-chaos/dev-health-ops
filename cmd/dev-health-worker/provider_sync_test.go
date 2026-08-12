@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -23,6 +24,34 @@ import (
 )
 
 type providerSyncEntitlementFunc func(context.Context, string) error
+
+func TestWorkerCredentialCipherUsesConfiguredSettingsEncryptionSalt(t *testing.T) {
+	t.Parallel()
+	cipher, err := newWorkerCredentialCipher(config.Config{
+		SettingsEncryptionKey:  secrets.NewValue("test-master-key"),
+		SettingsEncryptionSalt: secrets.NewValue("deployment-specific-salt"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := cipher.Encrypt([]byte("pagerduty-oauth-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultCipher, err := providerfoundation.NewFernetDecryptor(
+		secrets.NewValue("test-master-key"), "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := defaultCipher.Decrypt(ciphertext); err == nil {
+		t.Fatal("custom-salt ciphertext decrypted with the default salt")
+	}
+	plaintext, err := cipher.Decrypt(ciphertext)
+	if err != nil || string(plaintext) != "pagerduty-oauth-token" {
+		t.Fatalf("custom-salt round trip: plaintext=%q err=%v", plaintext, err)
+	}
+}
 
 func (require providerSyncEntitlementFunc) Require(ctx context.Context, orgID string) error {
 	return require(ctx, orgID)

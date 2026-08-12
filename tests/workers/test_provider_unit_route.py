@@ -70,6 +70,64 @@ def test_local_all_routes_preset_preserves_explicit_switch_override() -> None:
 
 
 @pytest.mark.parametrize(
+    ("provider", "canonical", "aliases"),
+    (
+        ("github", "prs", ("pr-reviews", "pr-comments")),
+        ("github", "cicd", ("tests",)),
+        ("gitlab", "prs", ("pr-reviews", "pr-comments")),
+        ("gitlab", "cicd", ("tests",)),
+    ),
+)
+def test_local_all_routes_selected_complete_writer_accepts_equivalent_aliases(
+    provider: str, canonical: str, aliases: tuple[str, ...]
+) -> None:
+    """Local Go-only mode cannot leave complete-writer aliases on Celery."""
+
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"DEV_HEALTH_ENV": "local", "GO_PROVIDER_ROUTES": "all"}
+    )
+
+    assert switches.routes_to_river(provider, canonical)
+    for alias in aliases:
+        assert switches.routes_to_river(provider, alias)
+
+
+def test_explicit_nonlocal_complete_writer_switch_stays_identity_scoped() -> None:
+    """The local convenience preset must not widen an explicit deployment switch."""
+
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {"WORKER_GITHUB_PRS_ENABLED": "true"}
+    )
+
+    assert switches.routes_to_river("github", "prs")
+    assert not switches.routes_to_river("github", "pr-reviews")
+    assert not switches.routes_to_river("github", "pr-comments")
+
+
+@pytest.mark.parametrize(
+    ("provider", "dataset", "switch"),
+    [
+        ("github", "pr-reviews", "WORKER_GITHUB_PR_REVIEWS_ENABLED"),
+        ("github", "tests", "WORKER_GITHUB_TESTS_ENABLED"),
+        ("gitlab", "pr-comments", "WORKER_GITLAB_PR_COMMENTS_ENABLED"),
+        ("gitlab", "tests", "WORKER_GITLAB_TESTS_ENABLED"),
+    ],
+)
+def test_local_all_explicit_alias_wins_over_canonical_inheritance(
+    provider: str, dataset: str, switch: str
+) -> None:
+    switches = ProviderUnitRouteSwitches.from_environment(
+        {
+            "DEV_HEALTH_ENV": "local",
+            "GO_PROVIDER_ROUTES": "all",
+            switch: "true",
+        }
+    )
+
+    assert switches.routes_to_river(provider, dataset)
+
+
+@pytest.mark.parametrize(
     "environment",
     (
         {"GO_PROVIDER_ROUTES": "all"},

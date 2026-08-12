@@ -249,6 +249,36 @@ func TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes(t *testing
 	}
 }
 
+func TestLocalAllStartupReadinessProjectsEveryCompleteWriterAlias(t *testing.T) {
+	values := map[string]string{
+		"DEV_HEALTH_ENV":     "local",
+		"GO_PROVIDER_ROUTES": "all",
+		"DEV_HEALTH_PROFILE": "sync",
+	}
+	cfg, err := config.Load(config.Spec{
+		Service: "dev-health-worker", Profiles: []string{"sync"}, DefaultProfile: "sync",
+		LookupEnv: func(key string) (string, bool) {
+			value, ok := values[key]
+			return value, ok
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := map[string]bool{}
+	for _, route := range effectiveProviderRouteSwitches(cfg) {
+		effective[route.provider+"/"+route.dataset] = true
+	}
+	for _, identity := range []string{
+		"github/pr-reviews", "github/pr-comments", "github/tests",
+		"gitlab/pr-reviews", "gitlab/pr-comments", "gitlab/tests",
+	} {
+		if !effective[identity] {
+			t.Fatalf("startup readiness omitted inherited route %s", identity)
+		}
+	}
+}
+
 func TestGitHubWorkItemsRouteReadinessUsesTheProductionRuntimeConfig(t *testing.T) {
 	t.Setenv("STATUS_MAPPING_PATH", "")
 	valid := validGitHubWorkItemsRuntimeConfig(t)

@@ -50,12 +50,11 @@ WHAT THIS PAIR IS NOT. It is a PREDICATE-parity check, not a state-machine
 oracle. The Go side of the comparison is a hand-written mirror of this
 predicate (``budgetDeferralExhausted`` in
 internal/providersync/syncunit_budget_exhaustion_oracle_test.go), because Go
-owns no budget-admission decision to drive -- its only budget references in
-non-test source are the two SQL clears. (More precisely, no unit-DISPATCH
-admission: internal/scheduler/sync/materializer.go does validate max_sync_units
-at PLAN time, and providerfoundation/budget.go prepares an advisory-lock key
-that nothing outside tests calls. Neither reads a column this predicate
-reads.) Nothing here executes a Go producer
+owns no intrinsic planner-budget admission decision to drive. Go does own
+short-lived HTTP reservation contention, but records it under the distinct
+``provider_budget_contention`` category and clears the intrinsic episode pair;
+the ``go_stamp_*`` input binds that production stamp to this live predicate.
+Nothing here executes a Go producer
 or reaches a database. The Go stamps' effect on the columns this predicate
 reads is covered by the SQL-string guards and, against real PostgreSQL, by
 internal/providersync/budget_episode_integration_test.go and

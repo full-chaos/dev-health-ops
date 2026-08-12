@@ -48,6 +48,14 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			wantResult: ResultRetry, wantCategory: CategoryRetryable,
 		},
 		{
+			name: "budget contention snooze at attempt ceiling", attempt: 3,
+			claimState: ClaimProceed,
+			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
+				return BudgetContention(errors.New("provider budget contended"), 1500*time.Millisecond)
+			},
+			wantResult: ResultRetry, wantCategory: CategoryBudget,
+		},
+		{
 			name: "discard", attempt: 3, claimState: ClaimProceed,
 			handler: func(context.Context, *Execution[RetentionCleanupArgs]) error {
 				return Retryable(errors.New("credential=do-not-log"))
@@ -136,6 +144,14 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			var cancelErr *river.JobCancelError
 			if errors.As(err, &cancelErr) != test.wantCancelError {
 				t.Fatalf("cancel wrapper = %v, want %v (err=%v)", errors.As(err, &cancelErr), test.wantCancelError, err)
+			}
+			var snoozeErr *rivertype.JobSnoozeError
+			if test.name == "budget contention snooze at attempt ceiling" {
+				if !errors.As(err, &snoozeErr) || snoozeErr.Duration != 1500*time.Millisecond {
+					t.Fatalf("snooze error = %#v, want 1.5s River snooze", err)
+				}
+			} else if errors.As(err, &snoozeErr) {
+				t.Fatalf("unexpected River snooze: %v", err)
 			}
 			if observer.result != test.wantResult || observer.category != test.wantCategory {
 				t.Fatalf("observed %s/%s, want %s/%s", observer.result, observer.category, test.wantResult, test.wantCategory)

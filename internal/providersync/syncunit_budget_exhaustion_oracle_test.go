@@ -45,11 +45,11 @@ type budgetEpisodeSnapshot struct {
 //
 // It is NOT a production function driven under test, and calling it one would
 // be the inaccurate coverage claim. Go owns no budget-admission decision
-// today: the only budget references in this repository's non-test Go source
-// are the two SQL clears (repository_postgres.go's completeUnitSQL and
-// syncreconciler's markExpiredLeaseRetryingSQL), so there is no production Go
-// producer to drive here instead of this mirror. Adding one would be unwired
-// code pretending to be a second implementation.
+// today. Go now owns short-lived HTTP reservation contention, but that is a
+// distinct provider_budget_contention episode: it clears the intrinsic pair
+// and River snoozes the job. It still does not estimate a unit or decide
+// whether it fits the planner budget, so there is no production Go intrinsic-
+// budget producer to drive here instead of this mirror.
 //
 // "No admission" is too broad and is narrowed here deliberately: Go owns no
 // unit-DISPATCH admission. It does own PLAN-TIME validation of the same
@@ -231,6 +231,16 @@ func budgetExhaustionOracleCases(t *testing.T) []oracleCase {
 			),
 		})
 	}
+	// Request-reservation contention is a real Go budget-related stamp, but it
+	// starts a distinct episode and clears the intrinsic pair. Build the exact
+	// post-stamp field shape, with its category derived from production SQL, so
+	// live Python proves it can never call that state intrinsic unfitness.
+	cases = append(cases, oracleCase{
+		ID: "go_stamp_provider_budget_contention_is_not_intrinsic_exhaustion",
+		Input: snapshot(
+			0, nil, stampedErrorCategory(t, deferForBudgetContentionSQL),
+		),
+	})
 	return cases
 }
 
@@ -287,7 +297,8 @@ func TestBudgetExhaustionPredicateMatchesLivePython(t *testing.T) {
 // while the behaviour was wrong).
 func TestGoStampCategoriesAreNotBudgetDeferred(t *testing.T) {
 	stamps := map[string]string{
-		"releaseForRetrySQL": releaseForRetrySQL,
+		"releaseForRetrySQL":          releaseForRetrySQL,
+		"deferForBudgetContentionSQL": deferForBudgetContentionSQL,
 	}
 	for name, sql := range stamps {
 		if !strings.Contains(sql, "error_category") {

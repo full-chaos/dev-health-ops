@@ -493,6 +493,11 @@
       "case": "source_health_labels",
       "path": "vocabulary/source_health_labels.v1.json",
       "sha256": "f141c442d84b55d59d40e5b20deba5ad810ee8d5a7c91f59c68545006d66ef7e"
+    },
+    {
+      "case": "no_answer_vocabulary",
+      "path": "vocabulary/no_answer_vocabulary.v1.json",
+      "sha256": "0fe3195b46e924bce7bf98d8d1e9372fe4a0044fa34591b19eedb00ca3e9d9c1"
     }
   ]
 }

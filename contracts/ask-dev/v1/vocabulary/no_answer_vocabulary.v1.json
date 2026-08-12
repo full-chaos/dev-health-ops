@@ -1,0 +1,53 @@
+{
+  "outcomes": {
+    "denied": {
+      "code": "forbidden",
+      "remediation": [
+        "Ask an administrator for access to this area."
+      ],
+      "retryable": false,
+      "safe_message": "You do not have access to ask about this."
+    },
+    "failed": {
+      "code": "internal_error",
+      "remediation": [
+        "Try the question again."
+      ],
+      "retryable": false,
+      "safe_message": "Something went wrong while preparing this answer."
+    },
+    "not_found": {
+      "code": "scope_not_found",
+      "remediation": [
+        "Check the name and try again."
+      ],
+      "retryable": false,
+      "safe_message": "No matching subject was found for this question."
+    },
+    "refused": {
+      "code": "refused",
+      "remediation": [
+        "Ask a read-only question about your data instead."
+      ],
+      "retryable": false,
+      "safe_message": "Ask Dev can only read and summarize your data; it can't run commands or make changes."
+    },
+    "temporarily_unavailable": {
+      "code": "source_unavailable",
+      "remediation": [
+        "Try the question again in a few minutes."
+      ],
+      "retryable": true,
+      "safe_message": "This answer is temporarily unavailable. Please try again shortly."
+    },
+    "unsupported": {
+      "code": "feature_not_enabled",
+      "remediation": [
+        "Try a status, health, or metric question instead."
+      ],
+      "retryable": false,
+      "safe_message": "This question is not supported yet."
+    }
+  },
+  "schema_version": "ask_dev_no_answer_vocabulary.v1"
+}

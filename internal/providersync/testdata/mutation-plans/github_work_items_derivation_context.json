@@ -201,6 +201,16 @@
       "replace": "for _, candidate := range candidates {\n\t\tif candidate.IsPrimary == 0 {\n\t\t\tcontinue\n\t\t}\n\t\tresult.Source = append(result.Source, candidate.Source)",
       "rationale": "the differential oracle must compare every ordered provenance candidate, including lower-precedence rows persisted with is_primary zero",
       "proof": [["./ci/check_go.sh", "live-python-oracles"]]
+    },
+    {
+      "id": "D25-clickhouse-native-integer-widths",
+      "file": "internal/providersync/github_work_items_derivation_context.go",
+      "find": "&isPrimary, &specificity, &priority, &fact.UpdatedAt",
+      "replace": "&fact.IsPrimary, &fact.Specificity, &fact.Priority, &fact.UpdatedAt",
+      "expect_occurrences": 3,
+      "rationale": "ClickHouse exposes ownership fields as UInt8, UInt16, and Int32; scanning them into Go int fails at runtime before Linear or another work-item family can derive any effects",
+      "build": ["go", "test", "-tags", "integration", "-run", "^$", "./internal/providersync/"],
+      "proof": [["go", "test", "-tags", "integration", "-count=1", "-run", "^TestGitHubWorkItemDerivationContextScansClickHouseNativeIntegerWidths$", "./internal/providersync/"]]
     }
   ]
 }

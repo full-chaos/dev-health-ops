@@ -1797,6 +1797,50 @@ def test_work_item_family_collapses_to_single_composite_unit(db_session):
         assert flags.get(flag) is True, f"{flag} must be set on the composite unit"
 
 
+def test_enabled_linear_go_family_claims_all_aliases_for_selected_backfill(
+    db_session, monkeypatch
+):
+    """A selected backfill remains one bounded crawl but claims the full Go family.
+
+    The native Linear handler owns one indivisible sixteen-destination write.
+    Once that route is enabled, the planner must encode all five family flags
+    even when the request selected only ``work-items``; otherwise dispatch
+    rejects the persisted unit before either runtime can execute it.
+    """
+    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
+    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
+
+    integration = _create_integration(db_session, provider="linear")
+    _create_source(db_session, integration, external_id="linear", provider="linear")
+    _create_dataset(db_session, integration, "work-items")
+
+    since = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    before = datetime(2026, 8, 12, tzinfo=timezone.utc)
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="admin-api",
+            since=since,
+            before=before,
+            dataset_keys=("work-items",),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.since_at is not None and unit.since_at.date() == since.date()
+    assert unit.before_at is not None and unit.before_at.date() == before.date()
+    flags = unit.processor_flags or {}
+    assert {
+        key: flags.get("family_dataset_" + key.replace("-", "_"))
+        for key in _FAMILY_DATASETS
+    } == {key: True for key in _FAMILY_DATASETS}
+
+
 def test_work_item_family_collapse_uses_earliest_window_across_datasets(db_session):
     """The composite unit's since_at is the EARLIEST watermark across enabled
     family datasets, so the single crawl covers every dataset (over-fetch is

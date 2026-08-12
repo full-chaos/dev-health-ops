@@ -24,8 +24,13 @@ var (
 	ErrPreparedRouteSnapshotRunTerminal = errors.New(
 		"provider sync prepared route snapshot belongs to a run that already finished",
 	)
-	ErrEffectRecoveryAmbiguous     = errors.New("provider sync effect recovery requires exact reconciliation")
-	ErrEffectRecoveryUnsafe        = errors.New("provider sync effect recovery is outside the bounded contract")
+	ErrEffectRecoveryAmbiguous = errors.New("provider sync effect recovery requires exact reconciliation")
+	ErrEffectRecoveryUnsafe    = errors.New("provider sync effect recovery is outside the bounded contract")
+	// ErrProviderDatasetUnavailable means the provider account cannot expose a
+	// specific dataset even though the credential itself is valid. Retrying
+	// cannot add an account-level product ability, and treating the response as
+	// an empty snapshot would incorrectly tombstone previously collected rows.
+	ErrProviderDatasetUnavailable  = errors.New("provider sync dataset is unavailable for this account")
 	ErrShadowMismatch              = errors.New("provider sync native shadow differs from Python compatibility output")
 	ErrRepositoryIdentityAmbiguous = errors.New(
 		"provider sync repository identity cannot be proven identical to the Python derivation",

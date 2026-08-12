@@ -3,6 +3,8 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"strings"
@@ -135,6 +137,10 @@ func (handler PagerDutyTeamsRouteHandler) Collect(
 		},
 	)
 	if err != nil {
+		var providerErr *providerfoundation.ProviderError
+		if errors.As(err, &providerErr) && providerErr.StatusCode == http.StatusPaymentRequired {
+			return CompleteRouteBatch{}, fmt.Errorf("pagerduty teams: %w", ErrProviderDatasetUnavailable)
+		}
 		return CompleteRouteBatch{}, err
 	}
 	if len(pages.Items) > maxRows || pages.CapReached {

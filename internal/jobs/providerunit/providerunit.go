@@ -55,6 +55,11 @@ const GitHubFilesInventoryFailureCategory = "github_files_inventory_failed"
 // wedged effect hard to find.
 const EffectRecoveryAmbiguousCategory = "effect_recovery_ambiguous"
 
+// ProviderDatasetUnavailableCategory records an account-level provider
+// capability limitation. It is distinct from authentication and exhaustion:
+// retrying the same valid credential cannot make the dataset available.
+const ProviderDatasetUnavailableCategory = "provider_dataset_unavailable"
+
 // deterministicTerminalCategory maps executor failures that no retry can clear
 // onto their own durable category. Anything not listed keeps the ordinary
 // bounded-retry path.
@@ -65,6 +70,9 @@ const EffectRecoveryAmbiguousCategory = "effect_recovery_ambiguous"
 // thing wherever it comes from -- but it does change the recorded category and
 // the retry count for existing adapters that previously exhausted instead.
 func deterministicTerminalCategory(err error) (string, bool) {
+	if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {
+		return ProviderDatasetUnavailableCategory, true
+	}
 	if errors.Is(err, providersync.ErrRepositoryIdentityAmbiguous) {
 		return RepositoryIdentityCategory, true
 	}

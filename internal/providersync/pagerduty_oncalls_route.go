@@ -174,6 +174,7 @@ func (handler PagerDutyOnCallsRouteHandler) Collect(
 	}
 	return CompleteRouteBatch{
 		Effects: []EffectBatch{effect},
+		Result:  map[string]any{"on_calls_synced": len(rows)},
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
 			Pages: pages.Pages, Records: len(rows), CapReached: pages.CapReached,

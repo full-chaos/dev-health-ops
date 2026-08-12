@@ -65,12 +65,21 @@ func TestPagerDutyOnCallsRouteUsesOffsetPaginationAndCanonicalAssignment(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	comparison, err := (ProductionContractComparator{}).CompareCompleteRoute(
+		context.Background(), claim, batch,
+	)
+	if err != nil {
+		t.Fatalf("production comparator rejected collected batch: %v", err)
+	}
+	if !comparison.Match || comparison.NativeRecords != 2 || comparison.PythonRecords != 2 {
+		t.Fatalf("comparison=%+v", comparison)
+	}
 	if len(batch.Effects) != 1 || batch.Effects[0].Destination != "operational_on_call_assignments" ||
 		batch.Effects[0].Recovery != EffectReadbackRequired || len(batch.Effects[0].Rows) != 2 {
 		t.Fatalf("effects=%+v", batch.Effects)
 	}
 	if batch.Evidence.Requests != 2 || batch.Evidence.Pages != 2 || batch.Evidence.Records != 2 ||
-		batch.Evidence.CapReached || batch.Watermark != nil || batch.Result != nil {
+		batch.Evidence.CapReached || batch.Watermark != nil || batch.Result["on_calls_synced"] != 2 {
 		t.Fatalf("batch=%+v", batch)
 	}
 	if got := doer.requests[0].URL.RawQuery; got != "limit=100&offset=0" {

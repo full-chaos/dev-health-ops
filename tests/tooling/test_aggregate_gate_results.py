@@ -1013,15 +1013,41 @@ def test_paths_filter_covers_every_file_the_gated_jobs_install(
                 continue
             for match in re.finditer(r"pip install -r\s+(\S+)", run):
                 installed.add(match.group(1))
+            if re.search(r"\buv sync\b", run):
+                installed.update({"pyproject.toml", "uv.lock"})
 
     assert installed, (
-        f"no `pip install -r` found in {path.name} -- guard measured nothing"
+        f"no dependency manifest install found in {path.name} -- guard measured nothing"
     )
     uncovered = sorted(name for name in installed if not _is_covered(name, patterns))
     assert not uncovered, (
         f"{path.name}'s gated jobs install {uncovered}, but its `code` filter "
         f"does not select on them: a PR touching only those files skips the "
         f"jobs and the required '{gate}' check goes green. Patterns: {patterns}"
+    )
+
+
+def test_typecheck_uses_the_frozen_uv_environment() -> None:
+    steps = {
+        str(step.get("name", "")): str(step.get("run", ""))
+        for step in _steps_of(TYPECHECK_PATH, "typecheck-mypy")
+        if isinstance(step, dict)
+    }
+
+    install = _normalize(steps["Install dependencies"])
+    assert "python -m pip install uv" in install
+    assert "uv sync --frozen --all-extras --dev" in install
+    assert "pip install -r requirements.txt" not in install
+
+    mypy = _normalize(steps["Run mypy (type checking)"])
+    assert mypy == ".venv/bin/mypy .", (
+        "typecheck must run mypy from the frozen uv-managed environment "
+        "without installing unpinned stubs"
+    )
+
+    patterns = _patterns_of(TYPECHECK_PATH)
+    assert _is_covered("uv.lock", patterns), (
+        "a lock-only dependency change must select the typecheck job"
     )
 
 

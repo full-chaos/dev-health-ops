@@ -62,6 +62,7 @@ jobs:
               - 'migrations/**'
               - 'requirements.txt'
               - 'pyproject.toml'
+              - 'uv.lock'
               - 'scripts/**'
 
   typecheck-mypy:
@@ -92,11 +93,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install uv
+          uv sync --frozen --all-extras --dev
 
       - name: Run mypy (type checking)
         run: |
-          mypy --install-types --non-interactive .
+          .venv/bin/mypy .
 
   typecheck:
     name: typecheck

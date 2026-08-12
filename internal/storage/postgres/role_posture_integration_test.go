@@ -320,11 +320,10 @@ func TestCheckRolePostureAllowsATableRequiredByBothRoles(t *testing.T) {
 // RolePosture's own data — never a hand-maintained parallel list — so this
 // test cannot silently drift from whatever domainPosture()/coordinatorPosture()
 // actually declare. Table-wide privileges only ever include SELECT plus
-// whichever of INSERT/UPDATE/DELETE the posture allows, matching
-// TablePrivilege's own contract that every other table-level privilege must
-// stay absent.
+// whichever of INSERT/UPDATE/DELETE the posture allows, sequence privileges
+// are USAGE-only, and every other privilege must stay absent.
 func grantStatementsForPosture(role string, posture RolePosture) []string {
-	statements := make([]string, 0, len(posture.RequiredTables)+len(posture.ColumnScoped))
+	statements := make([]string, 0, len(posture.RequiredTables)+len(posture.ColumnScoped)+len(posture.RequiredSequences))
 	for _, table := range posture.RequiredTables {
 		privileges := []string{"SELECT"}
 		if table.AllowInsert {
@@ -343,6 +342,11 @@ func grantStatementsForPosture(role string, posture RolePosture) []string {
 	for _, column := range posture.ColumnScoped {
 		statements = append(statements, fmt.Sprintf(
 			"GRANT %s (%s) ON TABLE public.%s TO %s", column.Privilege, column.ColumnName, column.TableName, role,
+		))
+	}
+	for _, sequence := range posture.RequiredSequences {
+		statements = append(statements, fmt.Sprintf(
+			"GRANT USAGE ON SEQUENCE public.%s TO %s", sequence, role,
 		))
 	}
 	return statements
@@ -404,6 +408,7 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	// setup instead of exercising posture verification.
 	tableNames := map[string]struct{}{}
 	columnNames := map[string]map[string]struct{}{}
+	sequenceNames := map[string]struct{}{}
 	for _, table := range domain.RequiredTables {
 		tableNames[table.TableName] = struct{}{}
 	}
@@ -429,6 +434,12 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 			columnNames[column.TableName] = map[string]struct{}{}
 		}
 		columnNames[column.TableName][column.ColumnName] = struct{}{}
+	}
+	for _, sequence := range domain.RequiredSequences {
+		sequenceNames[sequence] = struct{}{}
+	}
+	for _, sequence := range coordinator.RequiredSequences {
+		sequenceNames[sequence] = struct{}{}
 	}
 
 	setup := []string{
@@ -458,6 +469,9 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 			definitions = append(definitions, definition)
 		}
 		setup = append(setup, "CREATE TABLE public."+name+" ("+strings.Join(definitions, ", ")+")")
+	}
+	for name := range sequenceNames {
+		setup = append(setup, "CREATE SEQUENCE public."+name)
 	}
 	setup = append(setup, grantStatementsForPosture(domainRole, domain)...)
 	setup = append(setup, grantStatementsForPosture(coordinatorRole, coordinator)...)

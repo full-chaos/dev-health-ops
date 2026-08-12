@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "Go provider aggregate wiring",
-  "$limitation": "This plan pins only the Go worker's aggregate construction and admission wiring: provider-family selection, concrete GitLab and PagerDuty route selection, descriptor readiness/default-off behavior, config-to-switch/readiness translation, PagerDuty's one incidents config flag projected onto four independent claim switches, and provider-worker construction. It does not retest provider fetch/normalize algorithms, effects or readback semantics, Python producer routing, packaging or deployment, matrix census counts, live services, Docker, or cutover activation; those remain owned by their dedicated plans and gates.",
+  "$limitation": "This plan pins only the Go worker's aggregate construction and admission wiring: provider-family selection, Linear account-unit global discovery, concrete GitLab and PagerDuty route selection, descriptor readiness/default-off behavior, config-to-switch/readiness translation, PagerDuty's one incidents config flag projected onto four independent claim switches, and provider-worker construction. It does not retest provider fetch/normalize algorithms, effects or readback semantics, Python producer routing, packaging or deployment, matrix census counts, live services, Docker, or cutover activation; those remain owned by their dedicated plans and gates.",
   "build": [
     "env",
     "GOTOOLCHAIN=go1.25.9",
@@ -271,6 +271,14 @@
       "replace": "\t\t{\"pagerduty\", \"incident-notes-disabled\", cfg.WorkerPagerDutyIncidentsEnabled},",
       "rationale": "readiness must validate the independent PagerDuty incident-notes claim whenever the shared incident-family config flag is enabled",
       "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "GW33-linear-account-units-discover-all-teams",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "\t\t\t\t\tDirect: providersync.LinearWorkItemsRouteHandler{\n\t\t\t\t\t\tGlobalDiscovery: true,\n\t\t\t\t\t},",
+      "replace": "\t\t\t\t\tDirect: providersync.LinearWorkItemsRouteHandler{\n\t\t\t\t\t\tGlobalDiscovery: false,\n\t\t\t\t\t},",
+      "rationale": "production Linear work-item units identify the provider account as their source, so they must discover every accessible Linear team instead of interpreting the account identity as a team key",
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOWORK=off", "GOCACHE=/tmp/go-worker-aggregate-wiring-mutation-cache", "go", "test", "-count=1", "-run", "^TestBuildProviderSyncHandlerConfiguresLinearAccountDiscovery$", "./cmd/dev-health-worker/"]]
     }
   ]
 }

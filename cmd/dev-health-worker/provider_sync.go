@@ -427,7 +427,9 @@ func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 					return providersync.CompleteRouteExecutor{}, err
 				}
 				routeHandler = providersync.LinearWorkItemFamilyRouteHandler{
-					Direct:  providersync.LinearWorkItemsRouteHandler{},
+					Direct: providersync.LinearWorkItemsRouteHandler{
+						GlobalDiscovery: true,
+					},
 					Derived: linearDeriver,
 				}
 				sink, readback = linearSink, linearSink

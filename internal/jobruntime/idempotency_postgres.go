@@ -47,7 +47,9 @@ func (store *PostgresIdempotency) Supports(policy string) bool {
 	case "unique_schedule_occurrence", "maintenance_run_checkpoint",
 		"billing_notification", "webhook_delivery", "daily_metrics_run",
 		"daily_metrics_partition", "daily_metrics_finalize",
-		"remaining_metrics_partition",
+		"remaining_metrics_partition", "work_graph_request",
+		"investment_request", "investment_dispatch", "investment_chunk",
+		"investment_finalize",
 		// report_run fences the River attempt. The report package separately
 		// owns the report_runs row transition and the notification lease; both
 		// fences are required because an artifact and its notification are two

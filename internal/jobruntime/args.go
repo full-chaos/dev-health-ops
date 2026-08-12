@@ -321,7 +321,11 @@ func (args ProviderUnitArgs) ContractEnvelope() jobcontract.Envelope {
 func (RetentionCleanupArgs) Kind() string { return jobcontract.KindRetentionCleanup }
 
 func (RetentionCleanupArgs) SupportedContractVersions() []int {
-	return []int{jobcontract.ContractVersionV1}
+	return []int{
+		jobcontract.ContractVersionV1,
+		jobcontract.ContractVersionV2,
+		jobcontract.ContractVersionV3,
+	}
 }
 
 func (args RetentionCleanupArgs) ContractEnvelope() jobcontract.Envelope {

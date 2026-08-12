@@ -104,8 +104,9 @@ func buildDailyWorker(
 		compatibility, compatibilityErr := daily.NewHTTPCompatibilityExecutor(
 			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 			daily.HTTPCompatibilityConfig{
-				Endpoint:    baseURL + "/internal/worker/daily-metrics/v1/execute",
-				BearerToken: cfg.OperationalBridgeToken.Reveal(),
+				Endpoint:              baseURL + "/internal/worker/daily-metrics/v1/execute",
+				BearerToken:           cfg.OperationalBridgeToken.Reveal(),
+				AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
 			},
 		)
 		if storeErr != nil || publisherErr != nil || compatibilityErr != nil {
@@ -158,8 +159,9 @@ func buildDailyWorker(
 		compatibility, compatibilityErr := remaining.NewHTTPCompatibilityExecutor(
 			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
 			remaining.HTTPCompatibilityConfig{
-				Endpoint:    baseURL + "/internal/worker/remaining-metrics/v1/execute",
-				BearerToken: cfg.OperationalBridgeToken.Reveal(),
+				Endpoint:              baseURL + "/internal/worker/remaining-metrics/v1/execute",
+				BearerToken:           cfg.OperationalBridgeToken.Reveal(),
+				AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
 			},
 		)
 		budget, budgetErr := remaining.NewBudget(inventory)

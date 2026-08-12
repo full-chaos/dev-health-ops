@@ -22,6 +22,22 @@ func TestPostgresIdempotencyOnlySupportsRegistryPolicies(t *testing.T) {
 	}
 }
 
+func TestPostgresIdempotencySupportsWorkgraphFamilyPolicies(t *testing.T) {
+	t.Parallel()
+	store := &PostgresIdempotency{}
+	for _, policy := range []string{
+		"work_graph_request",
+		"investment_request",
+		"investment_dispatch",
+		"investment_chunk",
+		"investment_finalize",
+	} {
+		if !store.Supports(policy) {
+			t.Fatalf("policy %q must be supported", policy)
+		}
+	}
+}
+
 func TestIdempotencyCompletionMapsOnlyExplicitRuntimeOutcomes(t *testing.T) {
 	t.Parallel()
 	tests := map[Result]string{

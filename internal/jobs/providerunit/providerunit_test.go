@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -136,6 +137,10 @@ func TestProviderUnitLifecycleLogsRetryAndFailureResults(t *testing.T) {
 			unit.Mode = "backfill"
 			repository := newMemoryUnitRepository(unit)
 			var output bytes.Buffer
+			errDetail := fmt.Errorf(
+				"github files traversal failed for octo/hello: %w",
+				errors.New("GET https://alice:secret@github.example.test/repos/octo/hello"),
+			)
 			handler := &Handler{
 				Repository: repository,
 				Switches: providersync.CompleteRouteSwitches{
@@ -145,7 +150,7 @@ func TestProviderUnitLifecycleLogsRetryAndFailureResults(t *testing.T) {
 				Heartbeat:     10 * time.Second,
 				Now:           func() time.Time { return now },
 				BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
-					return providersync.CompleteRouteExecutor{}, errors.New("transient")
+					return providersync.CompleteRouteExecutor{}, errDetail
 				},
 			}
 			execution := providerExecution(unit, now, test.attempt)
@@ -165,7 +170,62 @@ func TestProviderUnitLifecycleLogsRetryAndFailureResults(t *testing.T) {
 			if len(records) != 2 || records[1]["msg"] != "sync_provider_unit_finished" || records[1]["result"] != test.wantResult {
 				t.Fatalf("lifecycle records=%#v", records)
 			}
+			detail, ok := records[1]["error_detail"].(string)
+			if !ok {
+				t.Fatalf("missing error_detail in lifecycle records=%#v", records[1])
+			}
+			if !strings.Contains(detail, "github files traversal failed for octo/hello") {
+				t.Fatalf("error_detail=%q want traversal context", detail)
+			}
+			if !strings.Contains(detail, "[REDACTED]") {
+				t.Fatalf("error_detail=%q want redacted credential URL", detail)
+			}
+			if strings.Contains(detail, "alice:secret") {
+				t.Fatalf("error_detail=%q leaked credentials", detail)
+			}
 		})
+	}
+}
+
+func TestProviderUnitLifecycleLogsCaptureTraversalFailureDetail(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	repository := newMemoryUnitRepository(unit)
+	var output bytes.Buffer
+	wrappedErr := fmt.Errorf(
+		"github files traversal failed for acme/api: %w",
+		errors.New("GET https://alice:secret@github.example.test/repos/acme/api"),
+	)
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, wrappedErr
+		},
+	}
+	execution := providerExecution(unit, now, 1)
+	execution.JobID = 42
+	execution.Definition.Kind = jobcontract.KindSyncProviderUnit
+	execution.Definition.Queue = "sync_provider"
+	execution.Logger = slog.New(slog.NewJSONHandler(&output, nil))
+
+	if err := handler.Work(context.Background(), execution); err == nil {
+		t.Fatal("Work() error = nil, want retryable traversal failure")
+	}
+
+	records := providerUnitLifecycleRecords(t, output.Bytes())
+	if len(records) != 2 {
+		t.Fatalf("lifecycle logs=%d want start and terminal records: %s", len(records), output.String())
+	}
+	detail, ok := records[1]["error_detail"].(string)
+	if !ok || !strings.Contains(detail, "github files traversal failed for acme/api") {
+		t.Fatalf("lifecycle detail=%#v records=%#v", records[1]["error_detail"], records[1])
 	}
 }
 

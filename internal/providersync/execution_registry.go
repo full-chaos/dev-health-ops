@@ -173,6 +173,10 @@ func (descriptor CompleteRouteDescriptor) Shadow(write bool) (ShadowDescriptor, 
 // why adding github, gitlab, and pagerduty descriptors in CUT-08 cannot widen
 // the live route surface.
 type CompleteRouteSwitches struct {
+	// LocalAllRoutes is set only by the validated local GO_PROVIDER_ROUTES=all
+	// preset. Equivalent persisted aliases inherit its selected complete writer;
+	// explicit deployment switches remain identity-scoped.
+	LocalAllRoutes           bool
 	LinearWorkItems          bool
 	JiraWorkItems            bool
 	JiraIncidents            bool
@@ -365,7 +369,8 @@ func (switches CompleteRouteSwitches) Descriptor(
 			"test_suite_results", "test_case_results", "coverage_snapshots",
 		}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabTests
+		descriptor.RouteEnabled = switches.GitlabTests ||
+			(switches.LocalAllRoutes && switches.GitlabCICD)
 	case provider == "gitlab" && dataset == "incidents":
 		descriptor.Destinations = []string{
 			"operational_services", "operational_service_repository_mappings",
@@ -396,11 +401,13 @@ func (switches CompleteRouteSwitches) Descriptor(
 	case provider == "gitlab" && dataset == "pr-reviews":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabPRReviews
+		descriptor.RouteEnabled = switches.GitlabPRReviews ||
+			(switches.LocalAllRoutes && switches.GitlabPRs)
 	case provider == "gitlab" && dataset == "pr-comments":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GitlabPRComments
+		descriptor.RouteEnabled = switches.GitlabPRComments ||
+			(switches.LocalAllRoutes && switches.GitlabPRs)
 	case provider == "gitlab" && dataset == "security":
 		descriptor.Destinations = []string{"security_alerts"}
 		descriptor.RouteReady = true
@@ -463,11 +470,13 @@ func (switches CompleteRouteSwitches) Descriptor(
 	case provider == "github" && dataset == "pr-reviews":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubPRReviews
+		descriptor.RouteEnabled = switches.GithubPRReviews ||
+			(switches.LocalAllRoutes && switches.GithubPRs)
 	case provider == "github" && dataset == "pr-comments":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubPRComments
+		descriptor.RouteEnabled = switches.GithubPRComments ||
+			(switches.LocalAllRoutes && switches.GithubPRs)
 	case provider == "github" && dataset == "cicd":
 		// cicd and tests delegate to one complete-row unit. Startup rejects both
 		// switches enabled together, so ci_pipeline_runs has one active writer.
@@ -510,7 +519,8 @@ func (switches CompleteRouteSwitches) Descriptor(
 			"test_suite_results", "test_case_results", "coverage_snapshots",
 		}
 		descriptor.RouteReady = true
-		descriptor.RouteEnabled = switches.GithubTests
+		descriptor.RouteEnabled = switches.GithubTests ||
+			(switches.LocalAllRoutes && switches.GithubCICD)
 	}
 	return descriptor, true
 }

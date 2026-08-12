@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "name": "local all-route complete-writer alias recovery",
+  "$limitation": "Pins only the local-all inheritance seam that lets already-persisted PR-social and TestOps aliases recover to River. Explicit non-local switches remain identity-scoped and are covered by the same focused tests.",
+  "mutations": [
+    {
+      "id": "LAA01-python-local-all-marker",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": "            local_all_routes=(\n                source.get(_PROVIDER_ROUTES_PRESET_ENV, \"\").strip().lower() == \"all\"\n                and source.get(_DEV_HEALTH_ENV, \"\").strip().lower() == \"local\"\n            ),",
+      "replace": "            local_all_routes=False,",
+      "expect_occurrences": 1,
+      "rationale": "Alias inheritance must be reachable only through the validated local all-routes preset.",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/workers/provider_unit_route.py"],
+      "proof": [["pytest", "-q", "tests/workers/test_provider_unit_route.py::test_local_all_routes_selected_complete_writer_accepts_equivalent_aliases", "tests/workers/test_provider_unit_route.py::test_explicit_nonlocal_complete_writer_switch_stays_identity_scoped"]]
+    },
+    {
+      "id": "LAA02-python-alias-canonical-lookup",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": "            field_name = _LOCAL_ALL_ALIAS_CANONICAL.get(field_name, field_name)",
+      "replace": "            field_name = field_name",
+      "expect_occurrences": 1,
+      "rationale": "The local preset's disabled alias identities must inherit the one selected complete writer before producer transport selection.",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/workers/provider_unit_route.py"],
+      "proof": [["pytest", "-q", "tests/test_sync_units.py::test_local_all_routes_complete_writer_identity_set_only_to_river"]]
+    },
+    {
+      "id": "LAA03-python-explicit-alias-precedence",
+      "file": "src/dev_health_ops/workers/provider_unit_route.py",
+      "find": "        if bool(getattr(self, field_name, False)):\n            return True",
+      "replace": "        if False and bool(getattr(self, field_name, False)):\n            return True",
+      "expect_occurrences": 1,
+      "rationale": "An explicitly selected alias must retain its own true switch before local-all canonical fallback is considered.",
+      "build": ["python3", "-m", "py_compile", "src/dev_health_ops/workers/provider_unit_route.py"],
+      "proof": [["pytest", "-q", "tests/workers/test_provider_unit_route.py::test_local_all_explicit_alias_wins_over_canonical_inheritance"]]
+    },
+    {
+      "id": "LAA04-go-local-all-marker-wiring",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tLocalAllRoutes:              cfg.LocalAllProviderRoutes,",
+      "replace": "\t\tLocalAllRoutes:              false,",
+      "expect_occurrences": 1,
+      "rationale": "The executor descriptor must receive the same validated local-all marker as Python producer admission.",
+      "build": ["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
+      "proof": [["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-count=1", "-run", "^TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "LAA05-go-gitlab-tests-canonical-clause",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "(switches.LocalAllRoutes && switches.GitlabCICD)",
+      "replace": "(switches.LocalAllRoutes && false)",
+      "expect_occurrences": 1,
+      "rationale": "GitLab tests must inherit the selected complete CICD writer in local-all mode.",
+      "build": ["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-run", "^$", "./internal/providersync"],
+      "proof": [["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-count=1", "-run", "^TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "LAA06-go-gitlab-reviews-canonical-clause",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\t\t(switches.LocalAllRoutes && switches.GitlabPRs)",
+      "replace": "\t\t\t(switches.LocalAllRoutes && false)",
+      "expect_occurrences": 2,
+      "rationale": "Both GitLab PR-social sibling claims must inherit the selected complete PR writer in local-all mode.",
+      "build": ["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-run", "^$", "./internal/providersync"],
+      "proof": [["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-count=1", "-run", "^TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "LAA07-go-github-reviews-canonical-clause",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "\t\t\t(switches.LocalAllRoutes && switches.GithubPRs)",
+      "replace": "\t\t\t(switches.LocalAllRoutes && false)",
+      "expect_occurrences": 2,
+      "rationale": "Both GitHub PR-social sibling claims must inherit the selected complete PR writer in local-all mode.",
+      "build": ["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-run", "^$", "./internal/providersync"],
+      "proof": [["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-count=1", "-run", "^TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "LAA08-go-github-tests-canonical-clause",
+      "file": "internal/providersync/execution_registry.go",
+      "find": "(switches.LocalAllRoutes && switches.GithubCICD)",
+      "replace": "(switches.LocalAllRoutes && false)",
+      "expect_occurrences": 1,
+      "rationale": "GitHub tests must inherit the selected complete CICD writer in local-all mode.",
+      "build": ["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-run", "^$", "./internal/providersync"],
+      "proof": [["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-count=1", "-run", "^TestLocalAllProviderRoutesMakeCompleteWriterAliasesExecutable$", "./cmd/dev-health-worker"]]
+    },
+    {
+      "id": "LAA09-go-startup-effective-alias-projection",
+      "file": "cmd/dev-health-worker/dependencies.go",
+      "find": "\t\tif route.configured || (ok && descriptor.RouteEnabled) {",
+      "replace": "\t\tif route.configured || (ok && descriptor.RouteEnabled && false) {",
+      "expect_occurrences": 1,
+      "rationale": "Startup readiness must inspect inherited local-all aliases, not only the canonical switches that were directly true in Config.",
+      "build": ["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-run", "^$", "./cmd/dev-health-worker"],
+      "proof": [["env", "GOCACHE=/tmp/no-celery-alias-go-cache", "go", "test", "-count=1", "-run", "^TestLocalAllStartupReadinessProjectsEveryCompleteWriterAlias$", "./cmd/dev-health-worker"]]
+    }
+  ]
+}

@@ -61,6 +61,11 @@ _LOCAL_ALL_CANONICAL_ALTERNATIVES = {
     "gitlab_prs": ("gitlab_pr_reviews", "gitlab_pr_comments"),
     "gitlab_cicd": ("gitlab_tests",),
 }
+_LOCAL_ALL_ALIAS_CANONICAL = {
+    alternative: canonical
+    for canonical, alternatives in _LOCAL_ALL_CANONICAL_ALTERNATIVES.items()
+    for alternative in alternatives
+}
 
 # src/dev_health_ops/workers/provider_unit_route.py -> repo root is 3 parents up.
 _DEFAULT_MATRIX_CONTRACT_PATH = (
@@ -338,6 +343,11 @@ class ProviderUnitRouteSwitches:
     # route-ready for matrix/audit/watermark truth but never become partial
     # producer routes.
     github_work_items: bool = False
+    # Internal marker for the validated local-only preset. It is not a direct
+    # environment switch. It lets equivalent persisted alias identities use
+    # the preset's one selected complete writer without widening explicit
+    # deployment switches.
+    local_all_routes: bool = False
 
     @classmethod
     def from_environment(
@@ -392,6 +402,10 @@ class ProviderUnitRouteSwitches:
             github_blame=_flag(source, "WORKER_GITHUB_BLAME_ENABLED"),
             github_tests=_flag(source, "WORKER_GITHUB_TESTS_ENABLED"),
             github_work_items=_flag(source, "WORKER_GITHUB_WORK_ITEMS_ENABLED"),
+            local_all_routes=(
+                source.get(_PROVIDER_ROUTES_PRESET_ENV, "").strip().lower() == "all"
+                and source.get(_DEV_HEALTH_ENV, "").strip().lower() == "local"
+            ),
         )
         switches.require_complete_routes()
         return switches
@@ -430,7 +444,12 @@ class ProviderUnitRouteSwitches:
             # execute the composite Go handler, so keep it at reconciliation
             # before any River enqueue rather than widening a partial writer.
             return False
-        return bool(getattr(self, _switch_field_name(provider, dataset), False))
+        field_name = _switch_field_name(provider, dataset)
+        if bool(getattr(self, field_name, False)):
+            return True
+        if self.local_all_routes:
+            field_name = _LOCAL_ALL_ALIAS_CANONICAL.get(field_name, field_name)
+        return bool(getattr(self, field_name, False))
 
     @staticmethod
     def is_route_ready(provider: str, dataset: str) -> bool:

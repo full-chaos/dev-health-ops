@@ -3795,6 +3795,123 @@ def test_dispatch_sync_run_reclaims_stale_units_of_both_transports_and_redecides
     assert unit_publish_calls[0][0] == str(celery_unit.id)
 
 
+@pytest.mark.parametrize(
+    ("provider", "dataset_key"),
+    (
+        ("github", "pr-reviews"),
+        ("github", "pr-comments"),
+        ("github", "tests"),
+        ("gitlab", "pr-reviews"),
+        ("gitlab", "pr-comments"),
+        ("gitlab", "tests"),
+    ),
+)
+def test_local_all_reclaims_stale_complete_writer_alias_to_river_without_celery(
+    db_session, monkeypatch, provider: str, dataset_key: str
+) -> None:
+    """A local Go-only redispatch must durably recover every alias identity."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, unit = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key=dataset_key,
+        processor_flags={"sync_prs": True}
+        if dataset_key.startswith("pr-")
+        else {"sync_tests": True},
+    )
+    unit.status = SyncRunUnitStatus.DISPATCHING.value
+    unit.updated_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
+    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
+    monkeypatch.setenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "1")
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": 1,
+    }
+
+    db_session.refresh(unit)
+    assert unit.status == SyncRunUnitStatus.DISPATCHING.value
+    assert unit_publish_calls == []
+    outbox = db_session.query(WorkerJobOutbox).all()
+    assert len(outbox) == 1
+    assert outbox[0].dedupe_key == f"sync.provider_unit:{unit.id}"
+    assert outbox[0].args["payload"] == {"unit_id": str(unit.id)}
+
+
+@pytest.mark.parametrize("provider", ("github", "gitlab"))
+def test_local_all_routes_complete_writer_identity_set_only_to_river(
+    db_session, monkeypatch, provider: str
+) -> None:
+    """One Go-only pass must stage every persisted complete-writer identity."""
+
+    from dev_health_ops.workers import sync_units
+
+    run, first = _seed_run(
+        db_session,
+        provider=provider,
+        dataset_key="prs",
+        processor_flags={"sync_prs": True},
+    )
+    units = [first]
+    for dataset_key, processor_flags in (
+        ("pr-reviews", {"sync_prs": True}),
+        ("pr-comments", {"sync_prs": True}),
+        ("cicd", {"sync_cicd": True}),
+        ("tests", {"sync_tests": True}),
+    ):
+        units.append(
+            SyncRunUnit(
+                org_id=run.org_id,
+                sync_run_id=run.id,
+                integration_id=first.integration_id,
+                source_id=first.source_id,
+                provider=provider,
+                dataset_key=dataset_key,
+                cost_class="medium",
+                mode=SyncRunMode.INCREMENTAL.value,
+                status=SyncRunUnitStatus.DISPATCHING.value,
+                attempts=0,
+                processor_flags=processor_flags,
+            )
+        )
+    stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+    for unit in units:
+        unit.status = SyncRunUnitStatus.DISPATCHING.value
+        unit.updated_at = stale
+    run.total_units = len(units)
+    db_session.add_all(units[1:])
+    db_session.query(WorkerJobRoute).filter(
+        WorkerJobRoute.job_kind == "sync.provider_unit"
+    ).update({WorkerJobRoute.transport: "river_canary"})
+    db_session.commit()
+    _patch_db_session(monkeypatch, db_session)
+    _, _, unit_publish_calls = _patch_worker_enqueues(monkeypatch)
+    monkeypatch.setenv("DEV_HEALTH_ENV", "local")
+    monkeypatch.setenv("GO_PROVIDER_ROUTES", "all")
+    monkeypatch.setenv("SYNC_UNIT_DISPATCH_STALE_SECONDS", "1")
+    monkeypatch.setenv("SYNC_RUN_MAX_UNITS", "20")
+    monkeypatch.setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "20")
+
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "dispatched",
+        "queued_units": len(units),
+    }
+
+    assert unit_publish_calls == []
+    assert {row.dedupe_key for row in db_session.query(WorkerJobOutbox).all()} == {
+        f"sync.provider_unit:{unit.id}" for unit in units
+    }
+
+
 def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(
     db_session, monkeypatch
 ):

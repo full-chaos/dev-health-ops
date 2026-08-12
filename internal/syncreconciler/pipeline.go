@@ -63,10 +63,8 @@ func (config MutationPipelineConfig) valid() bool {
 // committed mutation stages so the existing lifecycle loop and parity metrics
 // describe the resulting database state.
 //
-// Construction and execution do not change transport routes. With the
-// checked-in Celery-only registry, Kernel performs no transport transaction.
-// A future River route still fails closed unless a concrete publisher is
-// supplied by command composition.
+// Construction and execution do not change transport routes. River routes
+// fail closed unless command composition supplies a concrete publisher.
 type MutationPipeline struct {
 	repair       LeaseRepairStepper
 	materializer MaterializerStepper

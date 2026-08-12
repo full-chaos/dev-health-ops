@@ -147,7 +147,7 @@ A running binary does not admit a job. The route, contract version, compiled han
 
 ## Route ownership
 
-Sync transport routes live under `contracts/sync-dispatch/v1/`; generic job migration state lives with the job contract. Current routes remain Celery-owned.
+Sync transport routes live under `contracts/sync-dispatch/v1/`; generic job migration state lives with the job contract. The checked-in sync routes target River and retain Celery as their rollback transport.
 
 A route migration must define:
 

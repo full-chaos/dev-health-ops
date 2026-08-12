@@ -20,14 +20,13 @@ type failureTransaction interface {
 type failureBegin func(context.Context) (failureTransaction, error)
 
 // PublishFailureRecorder persists a retry after a publisher fails outside the
-// transaction that committed its claim. The dormant Kernel invokes it after
-// rolling back the failed per-claim delivery transaction; command activation
-// remains a separate reviewed boundary.
+// transaction that committed its claim. The mutation Kernel invokes it after
+// rolling back the failed per-claim delivery transaction.
 type PublishFailureRecorder struct {
 	begin failureBegin
 }
 
-// NewPublishFailureRecorder constructs the dormant persistence seam.
+// NewPublishFailureRecorder constructs the bounded persistence seam.
 func NewPublishFailureRecorder(pool *pgxpool.Pool) (*PublishFailureRecorder, error) {
 	if pool == nil {
 		return nil, ErrInvalidConfiguration
@@ -113,8 +112,8 @@ func transportPublishBackoff(attempt int64) time.Duration {
 
 // recordTransportPublishFailureSQL is an exact CAS over the committed claim
 // and its live route. A stale lease, competing replica, pause, or route change
-// updates no rows and is reported as ErrLeaseLost. post_sync is never passed to
-// this at-least-once-only seam.
+// updates no rows and is reported as ErrLeaseLost. Every checked-in
+// sync-dispatch kind, including post_sync, uses this retry seam.
 const recordTransportPublishFailureSQL = `
 UPDATE public.sync_dispatch_outbox AS outbox
 SET status = 'pending',

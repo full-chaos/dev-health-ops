@@ -45,7 +45,6 @@ from dev_health_ops.sync.planner import (
     plan_sync_run,
 )
 from dev_health_ops.sync.trigger_routing import map_sync_mode
-from dev_health_ops.workers.sync_units import dispatch_sync_run
 
 from .common import get_session
 
@@ -466,9 +465,9 @@ async def trigger_integration_sync(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # Commit the planned run BEFORE enqueueing dispatch so the Celery worker
-    # (a separate DB session) can see it; otherwise a fast worker returns
-    # "missing" and the run is stranded as planned.
+    # The planner persists a reference-discovery outbox wakeup in the same
+    # transaction as the run. Once committed, the reconciler publishes it via
+    # the checked-in sync-dispatch route (River by default, Celery on rollback).
     await session.commit()
     if not plan.dispatch_required:
         return SyncTriggerResponse(
@@ -476,20 +475,6 @@ async def trigger_integration_sync(
             integration_id=integration_id,
             sync_run_id=plan.sync_run_id,
             total_units=plan.total_units,
-        )
-
-    try:
-        getattr(dispatch_sync_run, "apply_async")(
-            args=(plan.sync_run_id,),
-            queue="sync",
-        )
-    except Exception as exc:
-        logger.warning(
-            "integration_sync.dispatch_fastpath_failed",
-            extra={
-                "sync_run_id": plan.sync_run_id,
-                "error_type": type(exc).__name__,
-            },
         )
 
     return SyncTriggerResponse(
@@ -559,7 +544,9 @@ async def trigger_integration_backfill(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # Commit the planned backfill run before dispatch (see /sync rationale).
+    # Commit the planned backfill run and its durable reference-discovery
+    # wakeup. The reconciler owns publication; the API must not also enqueue a
+    # Celery dispatch that can strand when no Python async workers are running.
     await session.commit()
     if not plan.dispatch_required:
         return SyncTriggerResponse(
@@ -567,20 +554,6 @@ async def trigger_integration_backfill(
             integration_id=integration_id,
             sync_run_id=plan.sync_run_id,
             total_units=plan.total_units,
-        )
-
-    try:
-        getattr(dispatch_sync_run, "apply_async")(
-            args=(plan.sync_run_id,),
-            queue="sync",
-        )
-    except Exception as exc:
-        logger.warning(
-            "integration_backfill.dispatch_fastpath_failed",
-            extra={
-                "sync_run_id": plan.sync_run_id,
-                "error_type": type(exc).__name__,
-            },
         )
 
     return SyncTriggerResponse(

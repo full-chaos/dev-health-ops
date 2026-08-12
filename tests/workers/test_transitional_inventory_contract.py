@@ -63,7 +63,7 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # billing_edge.py, forwarding to that same handler cross-file), + 2
     # added for CHAOS-3404 (the new ask_dev_retention celery task and its
     # ask-dev-retention-sweep Beat entry).
-    assert inventory["row_count"] == 158
+    assert inventory["row_count"] == 150
 
 
 def test_discovered_keys_and_row_keys_are_identical_sets():

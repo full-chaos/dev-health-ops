@@ -449,6 +449,13 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 		err   error
 	)
 	switch args[0] {
+	case "apply":
+		if *transport != "" {
+			return writeError(stderr, "invalid_request")
+		}
+		state, err = runtime.service.ApplyCheckedInRoute(
+			ctx, runtime.principal, kind, *reason, *correlation,
+		)
 	case "pause":
 		if *transport != "" {
 			return writeError(stderr, "invalid_request")

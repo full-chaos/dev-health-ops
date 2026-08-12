@@ -725,8 +725,8 @@ async def test_trigger_sync_org_scoped(client, seeded_state):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(
@@ -779,8 +779,8 @@ async def test_integration_trigger_returns_terminal_plan_without_enqueue(
             return_value=terminal_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            dispatch.apply_async,
         ),
     ):
         response = await ac.post(
@@ -830,8 +830,8 @@ async def test_integration_triggers_translate_feature_denial_to_403(
             side_effect=denial,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         response = await ac.post(
@@ -845,7 +845,7 @@ async def test_integration_triggers_translate_feature_denial_to_403(
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_returns_202_when_enqueue_fails(
+async def test_trigger_sync_uses_durable_outbox_without_celery_publication(
     client,
     session_maker,
 ):
@@ -857,8 +857,8 @@ async def test_trigger_sync_returns_202_when_enqueue_fails(
     mock_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
 
     with patch(
-        "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-        mock_dispatch,
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(
             f"/api/v1/admin/integrations/{integration_id}/sync",
@@ -867,6 +867,7 @@ async def test_trigger_sync_returns_202_when_enqueue_fails(
 
     assert resp.status_code == 202
     assert resp.json()["status"] == "accepted"
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         result = await session.execute(
@@ -923,8 +924,8 @@ async def test_trigger_backfill_org_scoped(client, seeded_state):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(
@@ -976,8 +977,8 @@ async def test_trigger_backfill_selector_object_org_scoped(client, seeded_state)
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(
@@ -1031,7 +1032,7 @@ async def test_trigger_backfill_rejects_mixed_selector_shapes(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_backfill_returns_202_when_enqueue_fails(
+async def test_trigger_backfill_uses_durable_outbox_without_celery_publication(
     client,
     session_maker,
 ):
@@ -1043,8 +1044,8 @@ async def test_trigger_backfill_returns_202_when_enqueue_fails(
     mock_dispatch.apply_async = MagicMock(side_effect=RuntimeError("broker down"))
 
     with patch(
-        "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-        mock_dispatch,
+        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+        mock_dispatch.apply_async,
     ):
         resp = await ac.post(
             f"/api/v1/admin/integrations/{integration_id}/backfill",
@@ -1056,6 +1057,7 @@ async def test_trigger_backfill_returns_202_when_enqueue_fails(
 
     assert resp.status_code == 202
     assert resp.json()["status"] == "accepted"
+    mock_dispatch.apply_async.assert_not_called()
 
     async with session_maker() as session:
         result = await session.execute(
@@ -1542,8 +1544,8 @@ async def test_trigger_sync_empty_selection_is_zero_units_not_all(client):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(
@@ -1819,8 +1821,8 @@ async def test_trigger_sync_full_resync_flag_sets_mode(client):
             side_effect=_fake_plan,
         ),
         patch(
-            "dev_health_ops.api.admin.routers.integrations.dispatch_sync_run",
-            mock_dispatch,
+            "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
+            mock_dispatch.apply_async,
         ),
     ):
         resp = await ac.post(

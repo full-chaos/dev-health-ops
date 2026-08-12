@@ -34,13 +34,17 @@ const (
 type Action string
 
 const (
-	ActionInspect          Action = "jobs.inspect"
-	ActionCancel           Action = "jobs.cancel"
-	ActionRetry            Action = "jobs.retry"
-	ActionPauseQueue       Action = "queues.pause"
-	ActionResumeQueue      Action = "queues.resume"
-	ActionDrain            Action = "workers.drain"
-	ActionInspectRoute     Action = "routes.inspect"
+	ActionInspect      Action = "jobs.inspect"
+	ActionCancel       Action = "jobs.cancel"
+	ActionRetry        Action = "jobs.retry"
+	ActionPauseQueue   Action = "queues.pause"
+	ActionResumeQueue  Action = "queues.resume"
+	ActionDrain        Action = "workers.drain"
+	ActionInspectRoute Action = "routes.inspect"
+	// Sync-dispatch and provider job routes share the same bounded audited
+	// action. ResourceType distinguishes sync_route from worker_job_route while
+	// keeping the deployed database constraint backward-compatible.
+	ActionApplyRoute       Action = "job_routes.apply_checked_in"
 	ActionPauseRoute       Action = "routes.pause"
 	ActionDrainRoute       Action = "routes.drain"
 	ActionResumeRoute      Action = "routes.resume"
@@ -154,6 +158,7 @@ type Backend interface {
 
 type RouteController interface {
 	Inspect(context.Context, string) (syncroute.RouteState, error)
+	ApplyCheckedIn(context.Context, string) (syncroute.RouteState, error)
 	Pause(context.Context, string) (syncroute.RouteState, error)
 	Drain(context.Context, string) (syncroute.RouteState, error)
 	Resume(context.Context, string, string, time.Duration) (syncroute.RouteState, error)
@@ -328,6 +333,15 @@ func (service *Service) InspectRoute(ctx context.Context, principal Principal, k
 		return syncroute.RouteState{}, mapRouteError(err)
 	}
 	return state, nil
+}
+
+func (service *Service) ApplyCheckedInRoute(
+	ctx context.Context,
+	principal Principal,
+	kind, reasonCode, correlationID string,
+) (syncroute.RouteState, error) {
+	return service.routeMutation(ctx, principal, ActionApplyRoute, kind, reasonCode, correlationID,
+		func() (syncroute.RouteState, error) { return service.routes.ApplyCheckedIn(ctx, kind) })
 }
 
 func (service *Service) PauseRoute(

@@ -7,8 +7,8 @@ triggers route through the fan-out planner (``plan_sync_run`` +
 
 * cross-org service results are rejected (404);
 * a config not linked to a migrated integration is rejected (400, planner-only);
-* a dispatch-enqueue failure flips the committed-but-undispatched SyncRun to
-  FAILED via ``mark_sync_run_failed`` (best-effort fallback) and surfaces 503.
+* a Celery broker failure cannot affect a durable planner trigger because the
+  API commits the reference-discovery outbox and performs no broker publish.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -28,10 +29,11 @@ from dev_health_ops.models.integrations import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncDispatchOutbox,
     SyncRun,
-    SyncRunStatus,
 )
-from dev_health_ops.models.settings import SyncConfiguration
+from dev_health_ops.models.settings import JobRun, JobRunStatus, SyncConfiguration
+from dev_health_ops.workers import sync_units
 
 
 class _FakeAsyncSession:
@@ -174,10 +176,8 @@ async def test_trigger_config_without_integration_returns_400(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_trigger_dispatch_enqueue_failure_marks_sync_run_failed(monkeypatch):
-    """When the fan-out dispatch enqueue fails after the planner SyncRun is
-    committed, the manual trigger surfaces 503 and the best-effort
-    ``mark_sync_run_failed`` fallback flips the stranded PLANNED run to FAILED."""
+async def test_trigger_does_not_depend_on_celery_broker(monkeypatch):
+    """The API commits durable planner state without publishing to Celery."""
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -190,26 +190,31 @@ async def test_trigger_dispatch_enqueue_failure_marks_sync_run_failed(monkeypatc
                 sync_router, "SyncConfigurationService", _service_factory(config)
             )
 
-            class _FailingDispatch:
-                @staticmethod
-                def apply_async(*args, **kwargs):
-                    raise RuntimeError("broker down")
+            celery_publish = MagicMock(side_effect=RuntimeError("broker down"))
+            monkeypatch.setattr(
+                sync_units.dispatch_sync_run, "apply_async", celery_publish
+            )
 
-            monkeypatch.setattr(sync_router, "dispatch_sync_run", _FailingDispatch)
+            response = await sync_router.trigger_sync_config(
+                str(config.id),
+                session=cast(Any, _FakeAsyncSession(sync_session)),
+                org_id="org-a",
+            )
 
-            with pytest.raises(HTTPException) as exc_info:
-                await sync_router.trigger_sync_config(
-                    str(config.id),
-                    session=cast(Any, _FakeAsyncSession(sync_session)),
-                    org_id="org-a",
-                )
-
-            assert exc_info.value.status_code == 503
-            assert "broker down" in exc_info.value.detail
+            assert response["status"] == "triggered"
+            celery_publish.assert_not_called()
 
             runs = list(sync_session.execute(select(SyncRun)).scalars().all())
+            jobs = list(sync_session.execute(select(JobRun)).scalars().all())
+            outboxes = list(
+                sync_session.execute(select(SyncDispatchOutbox)).scalars().all()
+            )
             assert len(runs) == 1
-            assert runs[0].status == SyncRunStatus.FAILED.value
-            assert runs[0].error == "dispatch enqueue failed"
+            assert runs[0].status == "planned"
+            assert len(jobs) == 1
+            assert jobs[0].status == JobRunStatus.PENDING.value
+            assert len(outboxes) == 1
+            assert outboxes[0].kind == "reference_discovery"
+            assert outboxes[0].status == "pending"
     finally:
         engine.dispose()

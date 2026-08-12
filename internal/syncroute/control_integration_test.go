@@ -205,6 +205,94 @@ WHERE id = '00000000-0000-4000-8000-000000000401'`); err != nil {
 	}
 }
 
+func TestApplyCheckedInAtomicallyMovesAnUnpausedCeleryRouteToRiver(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRouteControlSchema(t, ctx, pool)
+
+	registry := integrationRegistry{
+		syncdispatchcontract.KindReferenceDiscovery: {
+			Kind: syncdispatchcontract.KindReferenceDiscovery, Delivery: syncdispatchcontract.DeliveryAtLeastOnce,
+			Route: syncdispatchcontract.RouteRiver, RollbackRoute: syncdispatchcontract.RouteCelery,
+		},
+	}
+	capabilities, err := NewCapabilities([]Capability{{
+		Kind: syncdispatchcontract.KindReferenceDiscovery, Transport: syncdispatchcontract.RouteRiver,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewController(pool, registry, capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_dispatch_outbox
+SET claim_token = 'live-apply-claim', claim_expires_at = NOW() + interval '1 minute',
+    claim_transport = 'celery', claim_route_generation = 1
+WHERE id = '00000000-0000-4000-8000-000000000402'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.ApplyCheckedIn(
+		ctx, syncdispatchcontract.KindReferenceDiscovery,
+	); !errors.Is(err, ErrLiveClaims) {
+		t.Fatalf("apply with live claim error=%v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_dispatch_outbox
+SET claim_expires_at = NOW() - interval '1 second'
+WHERE id = '00000000-0000-4000-8000-000000000402'`); err != nil {
+		t.Fatal(err)
+	}
+	state, err := controller.ApplyCheckedIn(ctx, syncdispatchcontract.KindReferenceDiscovery)
+	if err != nil || state.Transport != syncdispatchcontract.RouteRiver || state.Paused || state.Generation != 2 {
+		t.Fatalf("applied route state=%+v err=%v", state, err)
+	}
+	idempotent, err := controller.ApplyCheckedIn(ctx, syncdispatchcontract.KindReferenceDiscovery)
+	if err != nil || idempotent != state {
+		t.Fatalf("idempotent apply state=%+v want=%+v err=%v", idempotent, state, err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE public.sync_dispatch_transport_routes
+SET paused = TRUE, paused_at = NOW()
+WHERE kind = 'reference_discovery'`); err != nil {
+		t.Fatal(err)
+	}
+	unpaused, err := controller.ApplyCheckedIn(ctx, syncdispatchcontract.KindReferenceDiscovery)
+	if err != nil || unpaused.Transport != syncdispatchcontract.RouteRiver || unpaused.Paused || unpaused.Generation != 3 {
+		t.Fatalf("paused checked-in apply state=%+v err=%v", unpaused, err)
+	}
+	paused, err := controller.Pause(ctx, syncdispatchcontract.KindReferenceDiscovery)
+	if err != nil || !paused.Paused || paused.Transport != syncdispatchcontract.RouteRiver || paused.Generation != 4 {
+		t.Fatalf("rollback pause state=%+v err=%v", paused, err)
+	}
+	rolledBack, err := controller.Resume(
+		ctx, syncdispatchcontract.KindReferenceDiscovery,
+		syncdispatchcontract.RouteCelery, time.Second,
+	)
+	if err != nil || rolledBack.Transport != syncdispatchcontract.RouteCelery ||
+		rolledBack.Paused || rolledBack.Generation != 5 {
+		t.Fatalf("checked-in rollback state=%+v err=%v", rolledBack, err)
+	}
+}
+
 func waitForRouteRowLockWait(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

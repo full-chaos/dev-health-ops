@@ -32,29 +32,18 @@ import (
 // "changing from observation to mutation must retain concrete River delivery
 // capabilities in the same reviewed source change."
 //
-// These tests enforce the FIRST half of that sentence and not the second. They
-// make the flip visible and deliberate -- it cannot happen without editing a pin
-// in the same commit. They cannot verify that concrete delivery capability is
-// retained: set the flag and the pin together and everything here passes even if
-// a different runtime prerequisite is missing. A reviewer supplies that evidence.
-// Reviewed twice now
-// because the original wording claimed the whole sentence, and an overstated
-// comment is how a green test becomes read as permission to flip.
-//
-// CHAOS-3146 closed one concrete prerequisite by proving the restricted
-// coordinator can execute the Materializer's sync_dispatch_outbox INSERT. That
-// does not prove the whole mutation pipeline is ready to activate, so the pin
-// remains load-bearing until the complete delivery evidence is reviewed.
+// These tests make checked-in ownership visible and deliberate. They cannot by
+// themselves prove every runtime prerequisite, so activation is paired with the
+// real no-Python focused-backfill proof and mutation coverage in this change.
 //
 // What this file does NOT enforce, corrected after adversarial review pointed out
 // the original comment claimed otherwise: it cannot verify that flipping the seam
 // RETAINS concrete River delivery capability. Set the flag and the pin together
 // and both tests pass without exercising that capability. These tests prove the
-// seam is dormant and that changing it is deliberate; the complete capability
-// evidence remains a human's job at review time. Do not let a green test here be
-// read as permission to flip.
+// selected seam is active and that changing it is deliberate; complete delivery
+// evidence still comes from the runtime and mutation gates.
 var checkedInReconcilerActivationPin = map[string]bool{
-	"syncMutation": false,
+	"syncMutation": true,
 }
 
 // TestCheckedInReconcilerActivationMatchesItsPin fails on a flipped value, an
@@ -74,7 +63,7 @@ func TestCheckedInReconcilerActivationMatchesItsPin(t *testing.T) {
 	)
 }
 
-// TestProductionReconcilerSelectsTheShadowStepper asserts the state the process
+// TestProductionReconcilerSelectsTheMutationStepper asserts the state the process
 // reaches, not the value of a variable.
 //
 // This is the pin that matters, and the structural one above is secondary. It
@@ -103,7 +92,7 @@ func TestCheckedInReconcilerActivationMatchesItsPin(t *testing.T) {
 // here, because supplying a real one would make this an integration test. A
 // future rewrite that activates specifically on a CONFIGURED coordinator URI,
 // rather than on checkedInReconcilerActivation, would still pass undetected.
-func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
+func TestProductionReconcilerSelectsTheMutationStepper(t *testing.T) {
 	// The contract roots are repo-relative, so reach the stepper branch the same
 	// way the neighbouring dependency tests do. Without this the configuration
 	// bails out early and the test cannot see which stepper was chosen -- which it
@@ -169,21 +158,17 @@ func TestProductionReconcilerSelectsTheShadowStepper(t *testing.T) {
 		t.Fatalf("configuring the reconciler with fake sources failed: %v", err)
 	}
 
-	if mutationBuilt {
+	if !mutationBuilt {
 		t.Fatal(
-			"the PRODUCTION reconciler configuration built the sync MUTATION " +
-				"stepper. This process must observe, not mutate, until the seam is " +
-				"deliberately flipped. If activation is intended, that is a reviewed source " +
-				"change: update the pin, record the capability evidence, and expect " +
-				"this test to need rewriting.",
+			"the PRODUCTION reconciler configuration did not build the sync " +
+				"MUTATION stepper, so River-routed sync-dispatch wakeups cannot be " +
+				"published without a Python worker.",
 		)
 	}
-	if !shadowBuilt {
+	if shadowBuilt {
 		t.Fatal(
-			"the production reconciler configuration built NEITHER stepper, so this " +
-				"test can no longer tell observation from mutation. Fix the test " +
-				"before trusting it: a pin that cannot reach the branch it guards is " +
-				"worse than no pin, because it reports success.",
+			"the production reconciler configuration built the SHADOW stepper; " +
+				"checked-in River routes require the mutation pipeline.",
 		)
 	}
 }
@@ -261,25 +246,22 @@ func TestReconcilerSpecInvokesTheReviewedActivation(t *testing.T) {
 		t.Fatalf("configuring the reconciler through the spec field failed: %v", err)
 	}
 
-	if mutationBuilt {
+	if !mutationBuilt {
 		t.Fatal(
-			"calling reconcilerSpec.ConfigureDependenciesWithLogger built the sync " +
-				"MUTATION stepper. configureReconcilerDependenciesWithLogger's body " +
-				"must still delegate to checkedInReconcilerActivation through " +
-				"productionReconcilerDependencySources -- a hardcoded activation, or a " +
-				"delegate that bypasses that global, would reach here.",
+			"calling reconcilerSpec.ConfigureDependenciesWithLogger did not build " +
+				"the sync MUTATION stepper through checkedInReconcilerActivation.",
 		)
 	}
-	if !shadowBuilt {
+	if shadowBuilt {
 		t.Fatal(
-			"calling reconcilerSpec.ConfigureDependenciesWithLogger built NEITHER " +
-				"stepper, so this test can no longer tell observation from mutation.",
+			"calling reconcilerSpec.ConfigureDependenciesWithLogger built the " +
+				"SHADOW stepper even though checked-in routes are River-owned.",
 		)
 	}
 }
 
 // TestProductionSyncShadowBuilderReturnsTheShadowStepper closes the specific
-// gap named in TestProductionReconcilerSelectsTheShadowStepper's comment above:
+// rollback builder retained beside the active mutation pipeline:
 // that test's fakes replace
 // productionReconcilerDependencySources.buildSyncShadow entirely, so it cannot
 // see what that field's PRODUCTION value actually returns. Adversarial review
@@ -312,8 +294,8 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 	if _, ok := stepper.(*syncreconciler.Shadow); !ok {
 		t.Fatalf(
 			"productionReconcilerDependencySources.buildSyncShadow returned %T, not "+
-				"*syncreconciler.Shadow. This field is what the dormant path actually "+
-				"runs; if it now returns something else, the reviewed shadow-vs-mutation "+
+				"*syncreconciler.Shadow. This field is the explicit rollback observation "+
+				"path; if it now returns something else, the reviewed shadow-vs-mutation "+
 				"distinction this file pins no longer describes production.",
 			stepper,
 		)
@@ -347,7 +329,7 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 // silently left off the list the way it was after round 3.
 //
 // PINNED: given the checked-in activation, the sources-taking function selects the
-// SHADOW stepper and never the mutation stepper -- asserted by the behavioural test
+// MUTATION stepper and never the shadow stepper -- asserted by the behavioural test
 // below, which is the sole supplier of checkedInReconcilerActivation.
 //
 // PINNED: TestReconcilerSpecInvokesTheReviewedActivation, above, calls through
@@ -392,8 +374,8 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 //     flag and the pin together and everything here passes without exercising
 //     that capability. CHAOS-3146 proves the outbox INSERT grant only.
 //
-// A green run here therefore means "the seam is dormant and changing it is
-// deliberate", never "it is safe to flip".
+// A green run here therefore means "the mutation seam is selected deliberately",
+// not that the complete connected runtime succeeded; that proof is separate.
 func TestReconcilerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
 	if reconcilerSpec.ConfigureDependencies != nil {
 		t.Fatal(

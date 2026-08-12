@@ -1,10 +1,12 @@
 package providerunit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -59,6 +61,126 @@ func TestEnabledProviderUnitExecutesCompleteRouteAndTerminalizes(t *testing.T) {
 	if !ok || len(observations) != 1 || !observations[0].RESTFallbackUsed {
 		t.Fatalf("persisted worklog observations=%#v", repository.result["go_worklog_observations"])
 	}
+}
+
+// TestProviderUnitLifecycleLogsIdentifyTheClaimedScope proves the operator log
+// seam uses the authoritative claim, not River's ID-only arguments. A mixed
+// sync_provider queue otherwise exposes only the shared kind and queue, which
+// cannot tell an operator which provider/dataset is draining or retrying.
+func TestProviderUnitLifecycleLogsIdentifyTheClaimedScope(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	unit.Mode = "backfill"
+	repository := newMemoryUnitRepository(unit)
+	var output bytes.Buffer
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: successfulExecutor(t, now),
+	}
+	execution := providerExecution(unit, now, 1)
+	execution.JobID = 42
+	execution.Definition.Kind = jobcontract.KindSyncProviderUnit
+	execution.Definition.Queue = "sync_provider"
+	execution.Logger = slog.New(slog.NewJSONHandler(&output, nil))
+
+	if err := handler.Work(context.Background(), execution); err != nil {
+		t.Fatalf("Work() error = %v", err)
+	}
+
+	records := providerUnitLifecycleRecords(t, output.Bytes())
+	if len(records) != 2 {
+		t.Fatalf("lifecycle logs=%d want start and terminal records: %s", len(records), output.String())
+	}
+	for _, record := range records {
+		for key, want := range map[string]any{
+			"provider":     unit.Provider,
+			"dataset":      unit.Dataset,
+			"mode":         unit.Mode,
+			"kind":         jobcontract.KindSyncProviderUnit,
+			"queue":        "sync_provider",
+			"job_id":       float64(42),
+			"sync_run_id":  unit.SyncRunID,
+			"sync_unit_id": unit.ID,
+		} {
+			if record[key] != want {
+				t.Fatalf("record[%q]=%#v want %#v; record=%#v", key, record[key], want, record)
+			}
+		}
+	}
+	if records[0]["msg"] != "sync_provider_unit_started" || records[1]["msg"] != "sync_provider_unit_finished" || records[1]["result"] != "succeeded" {
+		t.Fatalf("lifecycle records=%#v", records)
+	}
+}
+
+func TestProviderUnitLifecycleLogsRetryAndFailureResults(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name, wantStatus, wantResult string
+		attempt, maxAttempts         int
+	}{
+		{name: "retryable attempt", attempt: 1, maxAttempts: 5, wantStatus: "dispatching", wantResult: "retrying"},
+		{name: "exhausted attempt", attempt: 5, maxAttempts: 5, wantStatus: "failed", wantResult: "failed"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			unit := providerUnit()
+			unit.Mode = "backfill"
+			repository := newMemoryUnitRepository(unit)
+			var output bytes.Buffer
+			handler := &Handler{
+				Repository: repository,
+				Switches: providersync.CompleteRouteSwitches{
+					LaunchDarklyFeatureFlags: true,
+				},
+				LeaseDuration: time.Minute,
+				Heartbeat:     10 * time.Second,
+				Now:           func() time.Time { return now },
+				BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+					return providersync.CompleteRouteExecutor{}, errors.New("transient")
+				},
+			}
+			execution := providerExecution(unit, now, test.attempt)
+			execution.JobID = 42
+			execution.Definition.Kind = jobcontract.KindSyncProviderUnit
+			execution.Definition.Queue = "sync_provider"
+			execution.Definition.MaxAttempts = test.maxAttempts
+			execution.Logger = slog.New(slog.NewJSONHandler(&output, nil))
+
+			if err := handler.Work(context.Background(), execution); err == nil {
+				t.Fatal("Work() error = nil, want retryable transport result")
+			}
+			if repository.status != test.wantStatus {
+				t.Fatalf("unit status=%q want %q", repository.status, test.wantStatus)
+			}
+			records := providerUnitLifecycleRecords(t, output.Bytes())
+			if len(records) != 2 || records[1]["msg"] != "sync_provider_unit_finished" || records[1]["result"] != test.wantResult {
+				t.Fatalf("lifecycle records=%#v", records)
+			}
+		})
+	}
+}
+
+func providerUnitLifecycleRecords(t *testing.T, output []byte) []map[string]any {
+	t.Helper()
+	lines := bytes.Split(bytes.TrimSpace(output), []byte{'\n'})
+	records := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatalf("decode lifecycle log %q: %v", line, err)
+		}
+		records = append(records, record)
+	}
+	return records
 }
 
 func TestProviderUnitPersistsCanonicalProviderUsageObservations(t *testing.T) {

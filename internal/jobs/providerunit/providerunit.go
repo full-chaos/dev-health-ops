@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -152,6 +153,42 @@ type Handler struct {
 	LeaseMetrics jobruntime.SyncLeaseObserver
 }
 
+// logLifecycle records the safe, authoritative identity of one provider-unit
+// attempt. River arguments deliberately carry only the unit ID, so provider,
+// dataset, mode, and run identity become available only after Claim. Keep this
+// record out of generic queue metrics: provider/dataset would make that scrape
+// surface unbounded as the configured provider matrix grows.
+func (handler *Handler) logLifecycle(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	event string,
+	result string,
+) {
+	if execution == nil {
+		return
+	}
+	logger := execution.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	attributes := []any{
+		"provider", claim.Provider,
+		"dataset", claim.Dataset,
+		"mode", claim.Mode,
+		"kind", execution.Definition.Kind,
+		"queue", execution.Definition.Queue,
+		"job_id", execution.JobID,
+		"attempt", execution.Attempt,
+		"sync_run_id", claim.SyncRunID,
+		"sync_unit_id", claim.ID,
+	}
+	if result != "" {
+		attributes = append(attributes, "result", result)
+	}
+	logger.InfoContext(ctx, event, attributes...)
+}
+
 func (handler *Handler) observeRouteFault(fault RouteFault) {
 	if handler == nil || handler.OnRouteFault == nil {
 		return
@@ -223,6 +260,7 @@ func (handler *Handler) reconcileRouteFault(
 			return jobruntime.Retryable(failErr)
 		}
 		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
+		handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "failed")
 		return jobruntime.Retryable(routeReconciliationError(configurationErr))
 	}
 	releaseErr := handler.Repository.ReleaseForRetry(
@@ -234,6 +272,7 @@ func (handler *Handler) reconcileRouteFault(
 		return jobruntime.Retryable(releaseErr)
 	}
 	handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
+	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying")
 	return jobruntime.Retryable(routeReconciliationError(configurationErr))
 }
 
@@ -301,6 +340,7 @@ func (handler *Handler) Work(
 		}
 		return jobruntime.Permanent(err)
 	}
+	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_started", "")
 	descriptor, descriptorPresent := handler.Switches.Descriptor(claim.Provider, claim.Dataset)
 	// This admission boundary is intentionally before LeaseSession and
 	// BuildExecutor. A stale River unit can otherwise fetch credentials and
@@ -338,6 +378,7 @@ func (handler *Handler) Work(
 			); completeErr != nil {
 				err = completeErr
 			} else {
+				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "succeeded")
 				return nil
 			}
 		}
@@ -358,6 +399,7 @@ func (handler *Handler) Work(
 			return jobruntime.Retryable(failErr)
 		}
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
+		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed")
 		return jobruntime.Permanent(err)
 	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
@@ -371,6 +413,7 @@ func (handler *Handler) Work(
 		)
 		if failErr == nil {
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
+			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed")
 		}
 		return jobruntime.Retryable(err)
 	}
@@ -380,6 +423,7 @@ func (handler *Handler) Work(
 		return jobruntime.Retryable(releaseErr)
 	}
 	handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+	handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "retrying")
 	return jobruntime.Retryable(err)
 }
 

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "name": "provider-unit lifecycle log identity",
+  "$limitation": "Pins only the safe claimed identity and per-attempt result in provider-unit lifecycle logs. River queue telemetry remains intentionally aggregate and low-cardinality; it cannot identify a mixed provider queue. The operator API remains payload-redacted and is not extended by this plan.",
+  "mutations": [
+    {
+      "id": "PULL01-provider-identity",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "\"provider\", claim.Provider,",
+      "replace": "\"provider\", \"\",",
+      "expect_occurrences": 1,
+      "rationale": "An operator must be able to distinguish a GitHub, GitLab, Linear, or PagerDuty unit on the shared provider queue after the authoritative claim resolves its provider.",
+      "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
+      "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsIdentifyTheClaimedScope$", "-count=1"]]
+    },
+    {
+      "id": "PULL02-dataset-identity",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "\"dataset\", claim.Dataset,",
+      "replace": "\"dataset\", \"\",",
+      "expect_occurrences": 1,
+      "rationale": "A provider alone is insufficient on a provider's mixed queue; the dataset identifies which route is draining or failing.",
+      "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
+      "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsIdentifyTheClaimedScope$", "-count=1"]]
+    },
+    {
+      "id": "PULL03-run-identity",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "\"sync_run_id\", claim.SyncRunID,",
+      "replace": "\"sync_run_id\", \"\",",
+      "expect_occurrences": 1,
+      "rationale": "A provider-unit record must identify the durable sync run that owns the claimed unit, not only an opaque River job row.",
+      "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
+      "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsIdentifyTheClaimedScope$", "-count=1"]]
+    },
+    {
+      "id": "PULL04-success-result",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "handler.logLifecycle(ctx, execution, session.Claim, \"sync_provider_unit_finished\", \"succeeded\")",
+      "replace": "handler.logLifecycle(ctx, execution, session.Claim, \"sync_provider_unit_finished\", \"retrying\")",
+      "expect_occurrences": 1,
+      "rationale": "A completed provider unit must not be logged as retrying, because that sends an operator to chase a queue that has already reached its terminal success state.",
+      "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
+      "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsIdentifyTheClaimedScope$", "-count=1"]]
+    },
+    {
+      "id": "PULL05-exhausted-result",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "handler.logLifecycle(ctx, execution, session.Claim, \"sync_provider_unit_finished\", \"failed\")",
+      "replace": "handler.logLifecycle(ctx, execution, session.Claim, \"sync_provider_unit_finished\", \"retrying\")",
+      "expect_occurrences": 2,
+      "rationale": "An exhausted provider unit must be logged as failed rather than retrying, so a terminal backfill failure is distinguishable from a live retry.",
+      "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
+      "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsRetryAndFailureResults/exhausted_attempt$", "-count=1"]]
+    }
+  ]
+}

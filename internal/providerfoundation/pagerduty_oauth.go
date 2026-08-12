@@ -40,7 +40,12 @@ type PagerDutyOAuthTokenRotation struct {
 
 type PagerDutyOAuthTokenRepository interface {
 	Load(context.Context, string, string) (PagerDutyOAuthTokenRecord, error)
-	Rotate(context.Context, string, string, PagerDutyOAuthTokenRotation) (bool, error)
+	WithRefreshLock(
+		context.Context,
+		string,
+		string,
+		func(PagerDutyOAuthTokenRecord) (*PagerDutyOAuthTokenRotation, error),
+	) error
 }
 
 // PagerDutyOAuthHydrator resolves a tokenless OAuth descriptor through the
@@ -102,7 +107,7 @@ func (h PagerDutyOAuthHydrator) Hydrate(
 			"access_token", secrets.NewValue(tokens.AccessToken),
 		)
 	}
-	return h.refresh(ctx, lease, scope.OrgID, credentialName, credential, record, tokens)
+	return h.refreshLocked(ctx, lease, scope.OrgID, credentialName, bindingID, credential)
 }
 
 func (h PagerDutyOAuthHydrator) decode(
@@ -131,21 +136,60 @@ func (h PagerDutyOAuthHydrator) decode(
 	return tokens, nil
 }
 
-func (h PagerDutyOAuthHydrator) refresh(
+func (h PagerDutyOAuthHydrator) refreshLocked(
 	ctx context.Context,
 	lease LeaseGuard,
 	orgID string,
 	credentialName string,
+	bindingID string,
+	credential Credential,
+) (Credential, error) {
+	var hydrated Credential
+	err := h.Repository.WithRefreshLock(
+		ctx,
+		orgID,
+		credentialName,
+		func(record PagerDutyOAuthTokenRecord) (*PagerDutyOAuthTokenRotation, error) {
+			current, err := h.decode(ctx, lease, record, bindingID)
+			if err != nil {
+				return nil, err
+			}
+			if !hasPagerDutyOperationalReadScopes(current.GrantedScopes) {
+				return nil, ErrCredentialInvalid
+			}
+			if current.ExpiresAt.After(h.now().Add(pagerDutyOAuthRenewalWindow)) {
+				hydrated, err = credential.WithEphemeralSecret(
+					"access_token", secrets.NewValue(current.AccessToken),
+				)
+				return nil, err
+			}
+			var rotation PagerDutyOAuthTokenRotation
+			hydrated, rotation, err = h.refreshTokens(ctx, lease, credential, record, current)
+			if err != nil {
+				return nil, err
+			}
+			return &rotation, nil
+		},
+	)
+	if err != nil {
+		return Credential{}, err
+	}
+	return hydrated, nil
+}
+
+func (h PagerDutyOAuthHydrator) refreshTokens(
+	ctx context.Context,
+	lease LeaseGuard,
 	credential Credential,
 	record PagerDutyOAuthTokenRecord,
 	current pagerDutyOAuthTokens,
-) (Credential, error) {
+) (Credential, PagerDutyOAuthTokenRotation, error) {
 	if h.Doer == nil || !h.AppClientID.Configured() || current.RefreshToken == nil ||
 		strings.TrimSpace(*current.RefreshToken) == "" {
-		return Credential{}, ErrCredentialInvalid
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
 	}
 	if err := lease.Assert(ctx); err != nil {
-		return Credential{}, err
+		return Credential{}, PagerDutyOAuthTokenRotation{}, err
 	}
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
@@ -157,16 +201,16 @@ func (h PagerDutyOAuthHydrator) refresh(
 		ctx, http.MethodPost, pagerDutyTokenURL, strings.NewReader(form.Encode()),
 	)
 	if err != nil {
-		return Credential{}, ErrCredentialInvalid
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := h.Doer.Do(request)
 	if err != nil {
-		return Credential{}, &ProviderError{Class: ErrorTransient}
+		return Credential{}, PagerDutyOAuthTokenRotation{}, &ProviderError{Class: ErrorTransient}
 	}
 	defer response.Body.Close()
 	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
-		return Credential{}, classification
+		return Credential{}, PagerDutyOAuthTokenRotation{}, classification
 	}
 	var payload struct {
 		AccessToken  string `json:"access_token"`
@@ -176,7 +220,7 @@ func (h PagerDutyOAuthHydrator) refresh(
 	}
 	if json.NewDecoder(io.LimitReader(response.Body, maxProviderErrorBody)).Decode(&payload) != nil ||
 		strings.TrimSpace(payload.AccessToken) == "" {
-		return Credential{}, ErrCredentialInvalid
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
 	}
 	expiresIn := pagerDutyExpiresIn(payload.ExpiresIn)
 	refreshed := pagerDutyOAuthTokens{
@@ -194,46 +238,31 @@ func (h PagerDutyOAuthHydrator) refresh(
 		refreshed.GrantedScopes = normalizedPagerDutyScopes(strings.Fields(payload.Scope))
 	}
 	if !hasPagerDutyOperationalReadScopes(refreshed.GrantedScopes) {
-		return Credential{}, ErrCredentialInvalid
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
 	}
 	encoded, err := json.Marshal(refreshed)
 	if err != nil {
-		return Credential{}, ErrCredentialInvalid
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
 	}
 	ciphertext, err := h.Cipher.Encrypt(encoded)
 	if err != nil {
-		return Credential{}, ErrCredentialInvalid
+		return Credential{}, PagerDutyOAuthTokenRotation{}, ErrCredentialInvalid
 	}
 	if err := lease.Assert(ctx); err != nil {
-		return Credential{}, err
+		return Credential{}, PagerDutyOAuthTokenRotation{}, err
 	}
-	rotated, err := h.Repository.Rotate(ctx, orgID, credentialName, PagerDutyOAuthTokenRotation{
+	rotation := PagerDutyOAuthTokenRotation{
 		ExpectedVersion: record.Version, ExpectedBindingID: record.BindingID,
 		Ciphertext: ciphertext, ExpiresAt: refreshed.ExpiresAt,
 		GrantedScopes: refreshed.GrantedScopes, HasRefreshToken: refreshed.RefreshToken != nil,
-	})
-	if err != nil {
-		return Credential{}, err
 	}
-	if rotated {
-		return credential.WithEphemeralSecret(
-			"access_token", secrets.NewValue(refreshed.AccessToken),
-		)
-	}
-	// A concurrent worker won the optimistic rotation. Use only its freshly
-	// persisted token and re-check the binding and scopes before proceeding.
-	latest, err := h.Repository.Load(ctx, orgID, credentialName)
-	if err != nil {
-		return Credential{}, err
-	}
-	latestTokens, err := h.decode(ctx, lease, latest, record.BindingID)
-	if err != nil || !hasPagerDutyOperationalReadScopes(latestTokens.GrantedScopes) ||
-		!latestTokens.ExpiresAt.After(h.now().Add(pagerDutyOAuthRenewalWindow)) {
-		return Credential{}, ErrCredentialInvalid
-	}
-	return credential.WithEphemeralSecret(
-		"access_token", secrets.NewValue(latestTokens.AccessToken),
+	hydrated, err := credential.WithEphemeralSecret(
+		"access_token", secrets.NewValue(refreshed.AccessToken),
 	)
+	if err != nil {
+		return Credential{}, PagerDutyOAuthTokenRotation{}, err
+	}
+	return hydrated, rotation, nil
 }
 
 func (h PagerDutyOAuthHydrator) now() time.Time {

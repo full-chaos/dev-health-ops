@@ -83,6 +83,7 @@ type Config struct {
 	ClickHouseURI          secrets.Value
 	ValkeyURI              secrets.Value
 	SettingsEncryptionKey  secrets.Value
+	SettingsEncryptionSalt secrets.Value
 	PagerDutyOAuthClientID secrets.Value
 	PagerDutyOAuthSecret   secrets.Value
 
@@ -507,6 +508,7 @@ func Load(spec Spec) (Config, error) {
 		{name: "CLICKHOUSE_URI", target: &cfg.ClickHouseURI},
 		{name: "VALKEY_URI", target: &cfg.ValkeyURI},
 		{name: "SETTINGS_ENCRYPTION_KEY", target: &cfg.SettingsEncryptionKey},
+		{name: "SETTINGS_ENCRYPTION_SALT", target: &cfg.SettingsEncryptionSalt},
 		{name: "PAGER_DUTY_CLIENT_ID", target: &cfg.PagerDutyOAuthClientID},
 		{name: "PAGER_DUTY_SECRET", target: &cfg.PagerDutyOAuthSecret},
 		{name: "WORKER_OPERATIONAL_BRIDGE_TOKEN", target: &cfg.OperationalBridgeToken},
@@ -839,6 +841,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),
+		slog.Bool("settings_encryption_salt_configured", c.SettingsEncryptionSalt.Configured()),
 		slog.Bool("pagerduty_oauth_client_id_configured", c.PagerDutyOAuthClientID.Configured()),
 		slog.Bool("pagerduty_oauth_secret_configured", c.PagerDutyOAuthSecret.Configured()),
 	}

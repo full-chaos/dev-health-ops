@@ -26,7 +26,8 @@ usage() {
   test   Run go test ./... in every Go module.
   race   Run go test -race ./... in every Go module.
   live-python-oracles
-         Run the provider-sync, scheduled-planner, and sync-coverage live-Python oracle packages
+         Run the provider-sync, providerfoundation encryption,
+         scheduled-planner, and sync-coverage live-Python oracle packages
          with `go test -count=1` unconditionally
          (cache lookup disabled by -count=1 itself, not by any assumption
          about cache state). Separate from `test` because that package
@@ -209,7 +210,7 @@ check_race() {
 }
 
 check_live_python_oracles() {
-  # internal/providersync and internal/scheduler/sync execute REAL production Python files
+  # internal/providersync, internal/providerfoundation, and internal/scheduler/sync execute REAL production Python files
   # (src/dev_health_ops/**.py, via testdata/python_oracle_loader.py)
   # directly at test time -- not test fixtures, the actual functions this
   # repo ships. `//go:embed` cannot reach outside its own package
@@ -268,6 +269,27 @@ check_live_python_oracles() {
   )
   if [ "${pair_count}" -eq 0 ]; then
     printf 'ERROR: no checked-in live Python oracle pairs were discovered\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/providerfoundation (live Python encryption compatibility)\n'
+  if ! (
+    cd "${ROOT}"
+    GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestFernetCipherMatchesLivePythonCustomSalt$' \
+        ./internal/providerfoundation/...
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/providerfoundation-credentials"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: providerfoundation live Python encryption measurement did not occur\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

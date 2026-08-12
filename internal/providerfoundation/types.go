@@ -133,11 +133,27 @@ type CredentialDecryptor interface {
 	Decrypt(secrets.Value) ([]byte, error)
 }
 
+// CredentialCipher is the authenticated encryption boundary required by
+// renewable OAuth credentials. Plaintext remains a secrets.Value only at the
+// concrete credential boundary and is never returned by repositories.
+type CredentialCipher interface {
+	CredentialDecryptor
+	Encrypt([]byte) (secrets.Value, error)
+}
+
+// CredentialHydrator attaches short-lived provider secrets referenced by a
+// tokenless persisted descriptor. It runs after descriptor decryption and
+// must preserve the claim's tenant and live lease boundaries.
+type CredentialHydrator interface {
+	Hydrate(context.Context, LeaseGuard, TenantScope, Credential) (Credential, error)
+}
+
 // CredentialResolver has no environment dependency. The encryption key is
 // supplied once by process construction using the existing secret loader.
 type CredentialResolver struct {
 	Repository CredentialRepository
 	Decryptor  CredentialDecryptor
+	Hydrator   CredentialHydrator
 }
 
 func (r CredentialResolver) Resolve(ctx context.Context, lease LeaseGuard, scope TenantScope) (Credential, error) {
@@ -175,6 +191,9 @@ func (r CredentialResolver) Resolve(ctx context.Context, lease LeaseGuard, scope
 	}
 	if err := lease.Assert(ctx); err != nil {
 		return Credential{}, err
+	}
+	if r.Hydrator != nil {
+		return r.Hydrator.Hydrate(ctx, lease, scope, credential)
 	}
 	return credential, nil
 }

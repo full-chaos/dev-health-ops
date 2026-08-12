@@ -136,6 +136,7 @@ func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
 		"integration_sources",
 		"integration_datasets",
 		"integration_credentials",
+		"provider_oauth_credentials",
 		"sync_runs",
 		"sync_dispatch_transport_routes",
 		"sync_run_units",
@@ -146,6 +147,23 @@ func TestDomainPostureInventoriesEachOriginalTableExactlyOnce(t *testing.T) {
 		if counts[table] != 1 {
 			t.Fatalf("domain posture must inventory %q exactly once, got %d", table, counts[table])
 		}
+	}
+}
+
+func TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges(t *testing.T) {
+	t.Parallel()
+	var matches []TablePrivilege
+	for _, table := range domainPosture().RequiredTables {
+		if table.TableName == "provider_oauth_credentials" {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("provider OAuth posture entries=%d, want 1", len(matches))
+	}
+	grant := matches[0]
+	if grant.AllowInsert || !grant.AllowUpdate || grant.AllowDelete {
+		t.Fatalf("provider OAuth posture=%+v, want SELECT+UPDATE only", grant)
 	}
 }
 

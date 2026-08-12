@@ -25,6 +25,36 @@
           "tests/test_go_live_oracle_ci.py::test_sync_coverage_oracle_import_does_not_bootstrap_worker_runtime"
         ]
       ]
+    },
+    {
+      "id": "SCII02-planner-oracle-family-flags",
+      "file": "internal/scheduler/sync/testdata/python_planner_oracle.py",
+      "find": "_load(\n    \"dev_health_ops.sync.family_flags\",\n    SOURCE / \"sync/family_flags.py\",\n)\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "The isolated scheduled-planner differential oracle must load the production family-flags dependency before the production family contract, or CI fails before parity is measured.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "internal/scheduler/sync/testdata/python_planner_oracle.py"
+      ],
+      "proof": [
+        [
+          "env",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLES=1",
+          "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=/tmp/dev-health-sync-coverage-oracle-mutation-proof",
+          "PYTHONPATH=src",
+          "GOCACHE=/tmp/dev-health-sync-coverage-oracle-mutation-cache",
+          "go",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "./internal/scheduler/sync",
+          "-run",
+          "^TestBuildScheduledPlanMatchesLivePythonPlanner$"
+        ]
+      ]
     }
   ]
 }

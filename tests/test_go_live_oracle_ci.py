@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -106,6 +107,7 @@ def test_sync_coverage_oracle_import_does_not_bootstrap_worker_runtime() -> None
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
         capture_output=True,
         check=False,
         text=True,

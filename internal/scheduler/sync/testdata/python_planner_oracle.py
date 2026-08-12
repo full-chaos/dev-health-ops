@@ -90,6 +90,10 @@ _module(
 )
 datasets = _load("dev_health_ops.sync.datasets", SOURCE / "sync/datasets.py")
 _load(
+    "dev_health_ops.sync.family_flags",
+    SOURCE / "sync/family_flags.py",
+)
+_load(
     "dev_health_ops.workers.provider_family_contract",
     SOURCE / "workers/provider_family_contract.py",
 )

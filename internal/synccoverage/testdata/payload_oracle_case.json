@@ -1,0 +1,111 @@
+{
+  "config": {
+    "id": "a0f7bf4b-43a0-4bd8-a55f-3f880458b3f8",
+    "org_id": "org-oracle",
+    "provider": "github",
+    "is_active": true,
+    "integration_id": "09668e7d-9c1a-449d-b4a2-43ee048a96f5",
+    "source_id": null
+  },
+  "scope": {
+    "sources": [
+      {
+        "id": "a48d0266-7961-4694-b894-1be8ea66d63f",
+        "name": "api",
+        "full_name": "acme/api"
+      },
+      {
+        "id": "4addf46f-c4d2-4226-b0b0-2e7c51cb91fe",
+        "name": "web",
+        "full_name": "acme/web"
+      }
+    ],
+    "dataset_keys": ["commits", "prs"]
+  },
+  "windows": [
+    {
+      "since": "2026-08-10T00:00:00+00:00",
+      "before": "2026-08-10T02:00:00+00:00",
+      "source_id": "a48d0266-7961-4694-b894-1be8ea66d63f",
+      "dataset_key": "commits",
+      "run_id": "",
+      "status": "planned",
+      "run_time": "0001-01-01T00:00:00+00:00"
+    },
+    {
+      "since": "2026-08-10T00:00:00+00:00",
+      "before": "2026-08-10T02:00:00+00:00",
+      "source_id": "a48d0266-7961-4694-b894-1be8ea66d63f",
+      "dataset_key": "commits",
+      "run_id": "",
+      "status": "success",
+      "run_time": "0001-01-01T00:00:00+00:00"
+    },
+    {
+      "since": "2026-08-11T00:00:00+00:00",
+      "before": "2026-08-11T04:00:00+00:00",
+      "source_id": "a48d0266-7961-4694-b894-1be8ea66d63f",
+      "dataset_key": "prs",
+      "run_id": "",
+      "status": "planned",
+      "run_time": "0001-01-01T00:00:00+00:00"
+    },
+    {
+      "since": "2026-08-11T00:00:00+00:00",
+      "before": "2026-08-11T02:00:00+00:00",
+      "source_id": "a48d0266-7961-4694-b894-1be8ea66d63f",
+      "dataset_key": "prs",
+      "run_id": "",
+      "status": "success",
+      "run_time": "0001-01-01T00:00:00+00:00"
+    },
+    {
+      "since": "2026-08-11T02:00:00+00:00",
+      "before": "2026-08-11T03:00:00+00:00",
+      "source_id": "a48d0266-7961-4694-b894-1be8ea66d63f",
+      "dataset_key": "prs",
+      "run_id": "",
+      "status": "failed",
+      "run_time": "2026-08-12T12:00:00.000001+00:00"
+    },
+    {
+      "since": "2026-08-12T10:00:00+00:00",
+      "before": "2026-08-12T11:30:00+00:00",
+      "source_id": "4addf46f-c4d2-4226-b0b0-2e7c51cb91fe",
+      "dataset_key": "commits",
+      "run_id": "",
+      "status": "planned",
+      "run_time": "0001-01-01T00:00:00+00:00"
+    },
+    {
+      "since": "2026-08-12T10:00:00+00:00",
+      "before": "2026-08-12T11:30:00+00:00",
+      "source_id": "4addf46f-c4d2-4226-b0b0-2e7c51cb91fe",
+      "dataset_key": "commits",
+      "run_id": "",
+      "status": "success",
+      "run_time": "0001-01-01T00:00:00+00:00"
+    }
+  ],
+  "backfill_requested": [
+    {
+      "since": "2026-08-09T00:00:00+00:00",
+      "before": "2026-08-10T00:00:00+00:00",
+      "source_ids": ["4addf46f-c4d2-4226-b0b0-2e7c51cb91fe"],
+      "run_ids": ["853906fe-2471-4af4-95c7-f63fed301dbe"],
+      "dataset_keys": ["prs"]
+    }
+  ],
+  "active_pairs": [
+    ["4addf46f-c4d2-4226-b0b0-2e7c51cb91fe", "commits"]
+  ],
+  "schedule": {
+    "schedule_cron": "0 * * * *",
+    "next_run_at": "2026-08-12T13:00:00+00:00"
+  },
+  "has_schedule_row": true,
+  "generated_at": "2026-08-12T12:00:00+00:00",
+  "lookback_days": 3650,
+  "latest_successful_run_at": "2026-08-12T11:31:00+00:00",
+  "is_truncated": true
+}

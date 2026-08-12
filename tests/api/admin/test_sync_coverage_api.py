@@ -741,12 +741,16 @@ async def test_sync_coverage_missing_projection_is_pending_without_building(
 
 
 @pytest.mark.asyncio
-async def test_sync_coverage_invalidated_projection_is_pending_until_rebuilt(
+async def test_sync_coverage_invalidated_projection_stays_visible_until_rebuilt(
     client, session_maker
 ):
     ac, seeded_state = client
     scope = await _seed_scope(session_maker, seeded_state["org_id"])
     await _warm_projection(session_maker, scope)
+    url = f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
+    current = await ac.get(url)
+    assert current.status_code == 200, current.text
+    assert current.json()["projection_refreshing"] is False
 
     async with session_maker() as session:
         await invalidate_sync_coverage_projection(
@@ -756,13 +760,17 @@ async def test_sync_coverage_invalidated_projection_is_pending_until_rebuilt(
         )
         await session.commit()
 
-    url = f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage"
-    pending = await ac.get(url)
-    assert pending.status_code == 503
+    refreshing = await ac.get(url)
+    assert refreshing.status_code == 200, refreshing.text
+    assert refreshing.json() == {
+        **current.json(),
+        "projection_refreshing": True,
+    }
 
     await _warm_projection(session_maker, scope)
     rebuilt = await ac.get(url)
     assert rebuilt.status_code == 200, rebuilt.text
+    assert rebuilt.json()["projection_refreshing"] is False
 
 
 @pytest.mark.asyncio
@@ -780,7 +788,8 @@ async def test_sync_config_update_invalidates_coverage_projection(
     assert updated.status_code == 200, updated.text
 
     coverage = await ac.get(f"/api/v1/admin/sync-configs/{scope['config_id']}/coverage")
-    assert coverage.status_code == 503
+    assert coverage.status_code == 200, coverage.text
+    assert coverage.json()["projection_refreshing"] is True
 
 
 def test_canonical_backfill_windows_merge_after_inclusive_date_conversion():

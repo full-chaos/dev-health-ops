@@ -2181,7 +2181,14 @@ async def build_sync_coverage_summary(
     lookback_days: int = HISTORY_LOOKBACK_DAYS,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return an O(1) read of the background-built durable projection."""
+    """Return the latest O(1) durable projection, including during refresh.
+
+    Invalidation marks the existing payload as needing replacement; it does not
+    erase the last completed coverage state. Serving that payload with an
+    explicit refresh marker keeps navigation and reloads truthful while the
+    background builder prepares its successor. A genuinely cold config still
+    raises ``SyncCoveragePendingError``.
+    """
 
     started_at = monotonic()
     log_context = {
@@ -2198,7 +2205,6 @@ async def build_sync_coverage_summary(
                 SyncCoverageProjection.history_lookback_days == lookback_days,
                 SyncCoverageProjection.projection_version
                 == SYNC_COVERAGE_PROJECTION_VERSION,
-                SyncCoverageProjection.invalidated_at.is_(None),
             )
         )
     ).scalar_one_or_none()
@@ -2206,6 +2212,7 @@ async def build_sync_coverage_summary(
         logger.info("sync_coverage_projection_pending", extra=log_context)
         raise SyncCoveragePendingError("Coverage is being prepared. Retry shortly.")
     payload = dict(projection.payload)
+    payload["projection_refreshing"] = projection.invalidated_at is not None
     logger.info(
         "sync_coverage_summary_completed",
         extra={
@@ -2214,6 +2221,7 @@ async def build_sync_coverage_summary(
             "gap_count": payload["overall"]["gap_count"],
             "failed_range_count": payload["overall"]["failed_range_count"],
             "projection_version": payload["projection_version"],
+            "projection_refreshing": payload["projection_refreshing"],
         },
     )
     return payload

@@ -119,6 +119,34 @@ func TestBuildProviderSyncHandlerConstructsAggregateWorkItemRoutes(t *testing.T)
 	}
 }
 
+func TestBuildProviderSyncHandlerConfiguresLinearAccountDiscovery(t *testing.T) {
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	runtimeConfig, err := githubWorkItemsRuntimeConfigFrom(validGitHubWorkItemsRuntimeConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
+		nil, providersync.CompleteRouteSwitches{}, nil,
+		&githubWorkItemsBuildExecutorConn{}, nil, nil, nil, nil,
+		slog.Default(), runtimeConfig,
+	)
+	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
+		Claim: providersync.Claim{Unit: providersync.Unit{
+			Provider: "linear", Dataset: "work-items",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linearHandler, ok := executor.Handler.(providersync.LinearWorkItemFamilyRouteHandler)
+	if !ok {
+		t.Fatalf("handler=%T want providersync.LinearWorkItemFamilyRouteHandler", executor.Handler)
+	}
+	if !linearHandler.Direct.GlobalDiscovery {
+		t.Fatal("production Linear account unit must discover every accessible team")
+	}
+}
+
 func TestBuildProviderSyncHandlerConstructsPagerDutyRoutesWithCredentialBoundEffects(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

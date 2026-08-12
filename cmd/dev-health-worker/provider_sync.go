@@ -243,6 +243,25 @@ func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 	logger *slog.Logger,
 	workItemsRuntime workItemsRuntimeConfig,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
+	return buildProviderSyncHandlerWithRuntimeDependencies(
+		repository, switches, decryptor, nil, clickhouseConnection, valkeyClient,
+		domainPool, jiraIncidentEntitlement, collector, logger, workItemsRuntime,
+	)
+}
+
+func buildProviderSyncHandlerWithRuntimeDependencies(
+	repository providerSyncRepository,
+	switches providersync.CompleteRouteSwitches,
+	decryptor providerfoundation.CredentialDecryptor,
+	credentialHydrator providerfoundation.CredentialHydrator,
+	clickhouseConnection driver.Conn,
+	valkeyClient valkeygo.Client,
+	domainPool *pgxpool.Pool,
+	jiraIncidentEntitlement providersync.JiraIncidentEntitlement,
+	collector *jobruntime.MetricsCollector,
+	logger *slog.Logger,
+	workItemsRuntime workItemsRuntimeConfig,
+) (*providerunit.Handler, *providerfoundation.Metrics) {
 	// providerMetrics is constructed exactly once per worker process and
 	// referenced by every claim's executor, so dev_health_provider_* actually
 	// accumulates across dispatches instead of being built and discarded per
@@ -642,6 +661,7 @@ func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 						Pool: domainPool,
 					},
 					Decryptor: decryptor,
+					Hydrator:  credentialHydrator,
 				},
 				Doer: &http.Client{
 					Timeout: 45 * time.Second,
@@ -778,9 +798,23 @@ func constructProviderSyncWorkerWithDependencies(
 	// types below are then safe no-ops) for any other Observer implementation,
 	// such as a test double.
 	collector, _ := observer.(*jobruntime.MetricsCollector)
-	handler, providerMetrics := buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
-		repository, workerRouteSwitches(cfg), decryptor, clickhouseConnection,
-		valkeyClient, postgresDatabase.pools.Domain,
+	handler, providerMetrics := buildProviderSyncHandlerWithRuntimeDependencies(
+		repository, workerRouteSwitches(cfg), decryptor,
+		providerfoundation.PagerDutyOAuthHydrator{
+			Repository: providerfoundation.PostgresPagerDutyOAuthTokenRepository{
+				Pool: postgresDatabase.pools.Domain,
+			},
+			Cipher: decryptor,
+			Doer: &http.Client{
+				Timeout: 45 * time.Second,
+				CheckRedirect: func(*http.Request, []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			},
+			AppClientID:     cfg.PagerDutyOAuthClientID,
+			AppClientSecret: cfg.PagerDutyOAuthSecret,
+		},
+		clickhouseConnection, valkeyClient, postgresDatabase.pools.Domain,
 		providersync.PostgresJiraIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
 		collector, logger, workItemsRuntime,
 	)

@@ -486,10 +486,12 @@ type RolePosture struct {
 // authority for role/privilege attribution — not this comment, and not any
 // earlier revision of it.
 //
-//   - worker_job_routes, scheduled_jobs, scheduled_sync_occurrences,
+//   - worker_job_routes, scheduled_sync_occurrences, and
 //     fixed_schedule_occurrences moved OUT of this posture entirely: the
-//     manifest attributes all four exclusively to the coordinator role (see
-//     coordinatorPosture below). None has a domain-side SQL site.
+//     manifest attributes all three exclusively to the coordinator role (see
+//     coordinatorPosture below). scheduled_jobs is deliberately dual-role and
+//     SELECT-only here because the native sync-coverage projector reads its
+//     schedule facts while the coordinator remains its only writer.
 //   - sync_configurations tightens from {SELECT, UPDATE} to {SELECT} only:
 //     the domain-side site (internal/syncdispatchruntime/native_post_sync.go:263)
 //     is a plain SELECT with no lock clause. The genuine row-locking write
@@ -579,6 +581,12 @@ func domainPosture() RolePosture {
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
 			{"sync_configurations", false, false, false},
+			// The native sync-coverage projector replaces the Python Beat task.
+			// It reads schedule/backfill facts and atomically inserts or replaces
+			// the compact projection; neither source table is mutated here.
+			{"scheduled_jobs", false, false, false},
+			{"backfill_jobs", false, false, false},
+			{"sync_coverage_projections", true, true, false},
 			{"organizations", false, false, false},
 			{"remaining_metric_runs", true, true, false},
 			{"remaining_metric_partitions", true, true, false},

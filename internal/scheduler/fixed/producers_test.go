@@ -125,6 +125,42 @@ func scheduleByID(t *testing.T, id string) Schedule {
 	return Schedule{}
 }
 
+func TestSyncCoverageRefreshProducerEmitsOneBoundedDeterministicSweep(t *testing.T) {
+	t.Parallel()
+	schedule := scheduleByID(t, "sync_coverage_refresh")
+	occurrence := NewOccurrence(
+		schedule,
+		mustTime(t, "2026-08-12T12:00:00Z"),
+		mustTime(t, "2026-08-12T12:00:03Z"),
+	)
+	producer := NewSyncCoverageRefreshProducer()
+	first, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	second, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("replay Produce() = %v", err)
+	}
+	if len(first.Requests) != 1 || len(second.Requests) != 1 {
+		t.Fatalf("requests = %d/%d, want one each", len(first.Requests), len(second.Requests))
+	}
+	request := first.Requests[0]
+	if request.Kind != jobcontract.KindSyncCoverageRefresh || request.Envelope != second.Requests[0].Envelope {
+		t.Fatalf("refresh request is not deterministic: first=%+v second=%+v", request, second.Requests[0])
+	}
+	payload, ok := request.Envelope.Payload.(jobcontract.SyncCoverageRefreshPayload)
+	if !ok {
+		t.Fatalf("payload = %T", request.Envelope.Payload)
+	}
+	if payload.Limit != 100 || payload.ScheduledFor != "2026-08-12T12:00:00Z" {
+		t.Fatalf("payload = %+v", payload)
+	}
+	if request.Envelope.OrganizationID != nil || request.Envelope.Domain.Type != "schedule_occurrence" {
+		t.Fatalf("global occurrence envelope = %+v", request.Envelope)
+	}
+}
+
 // The remaining-metrics store requires an immutable generation seed for exactly
 // the capacity family and rejects one for every other family. Without it every
 // Monday occurrence rolled back before creating a forecast.

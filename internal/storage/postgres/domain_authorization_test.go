@@ -167,6 +167,28 @@ func TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges(t *testing.T) 
 	}
 }
 
+func TestDomainPostureInventoriesNativeSyncCoveragePrivileges(t *testing.T) {
+	t.Parallel()
+	want := map[string]TablePrivilege{
+		"scheduled_jobs":            {TableName: "scheduled_jobs"},
+		"backfill_jobs":             {TableName: "backfill_jobs"},
+		"sync_coverage_projections": {TableName: "sync_coverage_projections", AllowInsert: true, AllowUpdate: true},
+	}
+	for _, table := range domainPosture().RequiredTables {
+		expected, ok := want[table.TableName]
+		if !ok {
+			continue
+		}
+		if table != expected {
+			t.Fatalf("%s posture = %+v, want %+v", table.TableName, table, expected)
+		}
+		delete(want, table.TableName)
+	}
+	if len(want) != 0 {
+		t.Fatalf("sync coverage posture is missing tables: %v", want)
+	}
+}
+
 func TestSyncDispatchOutboxPosturesKeepBothRolesLeastPrivilege(t *testing.T) {
 	t.Parallel()
 

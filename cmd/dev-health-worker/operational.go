@@ -12,8 +12,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
+	coveragejobs "github.com/full-chaos/dev-health-ops/internal/jobs/synccoverage"
 	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -62,6 +64,7 @@ func buildOperationalWorker(
 		jobcontract.KindWebhookDelivery,
 		jobcontract.KindHeartbeat,
 		jobcontract.KindRetentionCleanup,
+		jobcontract.KindSyncCoverageRefresh,
 	} {
 		descriptor, ok := registry.Descriptor(kind)
 		if ok && descriptor.Executable() {
@@ -183,9 +186,26 @@ func buildOperationalWorker(
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, adapter.Spec())
+		case jobcontract.KindSyncCoverageRefresh:
+			projector, projectorErr := synccoverage.NewProjector(postgresDatabase.pools.Domain)
+			if projectorErr != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			handler, handlerErr := coveragejobs.NewHandler(projector)
+			if handlerErr != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			adapter, adapterErr := jobruntime.NewAdapter[jobruntime.SyncCoverageRefreshArgs](
+				registry, spec, handler, dependencies,
+			)
+			if adapterErr != nil || river.AddWorkerSafely(workers, adapter) != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			registered = append(registered, adapter.Spec())
 		}
 	}
 	budgets := []jobruntime.QueueBudget{
+		{Queue: "coverage", MaxWorkers: 1},
 		{Queue: "heartbeat", MaxWorkers: 1},
 		{Queue: "retention", MaxWorkers: 1},
 		{Queue: "webhooks", MaxWorkers: 4},

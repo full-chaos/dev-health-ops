@@ -70,6 +70,42 @@ func (HeartbeatProducer) Produce(
 	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindHeartbeat, Envelope: envelope}}}, nil
 }
 
+// SyncCoverageRefreshProducer emits one bounded global sweep. The worker
+// resolves the selected configurations and all retained facts from the domain
+// database, so the scheduled envelope stays small and contains no tenant data.
+type SyncCoverageRefreshProducer struct{ limit int }
+
+// NewSyncCoverageRefreshProducer constructs the checked 100-row safety-net
+// sweep used by the former Celery task.
+func NewSyncCoverageRefreshProducer() Producer {
+	return SyncCoverageRefreshProducer{limit: 100}
+}
+
+func (SyncCoverageRefreshProducer) ID() string { return ProducerSyncCoverageRefresh }
+
+func (producer SyncCoverageRefreshProducer) Produce(
+	_ context.Context,
+	_ pgx.Tx,
+	schedule Schedule,
+	occurrence Occurrence,
+) (Outcome, error) {
+	scheduledFor := occurrence.ScheduledFor.UTC().Format(time.RFC3339)
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		CorrelationID:   "fixed-schedule:" + schedule.ID + ":" + scheduledFor,
+		IdempotencyKey:  "sync-coverage-refresh:" + scheduledFor,
+		Domain: jobcontract.DomainLink{
+			Type: "schedule_occurrence",
+			ID:   OccurrenceDomainID(occurrence),
+		},
+		Payload: jobcontract.SyncCoverageRefreshPayload{
+			ScheduledFor: scheduledFor,
+			Limit:        producer.limit,
+		},
+	}
+	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindSyncCoverageRefresh, Envelope: envelope}}}, nil
+}
+
 // RetentionSpec binds one schedule to one bounded deletion scope.
 type RetentionSpec struct {
 	// Policy is the checked-in retention policy value.

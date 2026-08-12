@@ -462,6 +462,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindInvestmentChunk:          {"chunk_id"},
 		KindInvestmentFinalize:       {"run_id"},
 		KindHeartbeat:                {"scheduled_for"},
+		KindSyncCoverageRefresh:      {"scheduled_for", "limit"},
 		KindRetentionCleanup:         {"batch_size", "delete_before", "retention_policy"},
 		KindSyncProviderUnit:         {"unit_id"},
 	}[kind]
@@ -470,6 +471,16 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindHeartbeat {
 		return validateTimestampProperty(properties["scheduled_for"])
+	}
+	if kind == KindSyncCoverageRefresh {
+		if err := validateTimestampProperty(properties["scheduled_for"]); err != nil {
+			return err
+		}
+		limit, ok := properties["limit"].(map[string]any)
+		if !ok || limit["type"] != "integer" || fmt.Sprint(limit["minimum"]) != "1" || fmt.Sprint(limit["maximum"]) != "1000" {
+			return errors.New("limit schema drifts from compiled bounds")
+		}
+		return nil
 	}
 	if kind == KindReportExecuteOnDemand || kind == KindReportExecuteScheduled {
 		return validateUUIDProperty(properties["report_id"])

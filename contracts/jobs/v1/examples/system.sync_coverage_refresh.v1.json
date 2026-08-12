@@ -1,0 +1,13 @@
+{
+  "contract_version": 1,
+  "correlation_id": "fixed-schedule:sync_coverage_refresh:2026-08-12T12:00:00Z",
+  "idempotency_key": "sync-coverage-refresh:2026-08-12T12:00:00Z",
+  "domain": {
+    "type": "schedule_occurrence",
+    "id": "c66c0182-f2d9-5a2d-bffe-6af1ba5fd135"
+  },
+  "payload": {
+    "scheduled_for": "2026-08-12T12:00:00Z",
+    "limit": 100
+  }
+}

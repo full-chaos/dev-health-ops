@@ -21,6 +21,7 @@ from dev_health_ops.workers.job_contracts import (
     KIND_REPORT_EXECUTE_ON_DEMAND,
     KIND_REPORT_EXECUTE_SCHEDULED,
     KIND_RETENTION_CLEANUP,
+    KIND_SYNC_COVERAGE_REFRESH,
     KIND_SYNC_PROVIDER_UNIT,
     MAX_ENVELOPE_BYTES,
     RETENTION_ASK_DEV_CONVERSATIONS,
@@ -42,6 +43,7 @@ from dev_health_ops.workers.job_contracts import (
     RemainingTeamMetricsPayload,
     RetentionCleanupPayload,
     ScheduledReportExecutionPayload,
+    SyncCoverageRefreshPayload,
     build_envelope,
     decode_envelope,
     default_contract_root,
@@ -58,6 +60,14 @@ from dev_health_ops.workers.job_contracts import registry as contract_registry
             KIND_HEARTBEAT,
             "system.heartbeat.v1.json",
             HeartbeatPayload(scheduled_for="2026-07-21T12:00:00Z"),
+        ),
+        (
+            KIND_SYNC_COVERAGE_REFRESH,
+            "system.sync_coverage_refresh.v1.json",
+            SyncCoverageRefreshPayload(
+                scheduled_for="2026-08-12T12:00:00Z",
+                limit=100,
+            ),
         ),
         (
             KIND_RETENTION_CLEANUP,

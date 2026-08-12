@@ -13,6 +13,7 @@ CONTRACT_VERSION_V1 = 1
 CONTRACT_VERSION_V2 = 2
 CONTRACT_VERSION_V3 = 3
 KIND_HEARTBEAT = "system.heartbeat"
+KIND_SYNC_COVERAGE_REFRESH = "system.sync_coverage_refresh"
 KIND_BILLING_NOTIFICATION = "operational.billing_notification"
 KIND_WEBHOOK_DELIVERY = "operational.webhook_delivery"
 KIND_RETENTION_CLEANUP = "system.retention_cleanup"
@@ -79,6 +80,18 @@ class HeartbeatPayload:
     DOMAIN_TYPE: ClassVar[str] = "schedule_occurrence"
 
     scheduled_for: str
+
+
+@dataclass(frozen=True, slots=True)
+class SyncCoverageRefreshPayload:
+    """Bounded global refresh of durable sync-coverage projections."""
+
+    KIND: ClassVar[str] = KIND_SYNC_COVERAGE_REFRESH
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "schedule_occurrence"
+
+    scheduled_for: str
+    limit: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +314,7 @@ JobPayload: TypeAlias = (
     BillingNotificationPayload
     | WebhookDeliveryPayload
     | HeartbeatPayload
+    | SyncCoverageRefreshPayload
     | RetentionCleanupPayload
     | OnDemandReportExecutionPayload
     | ScheduledReportExecutionPayload

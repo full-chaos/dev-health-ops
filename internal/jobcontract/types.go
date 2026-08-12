@@ -20,6 +20,7 @@ const (
 	KindBillingNotification      = "operational.billing_notification"
 	KindWebhookDelivery          = "operational.webhook_delivery"
 	KindHeartbeat                = "system.heartbeat"
+	KindSyncCoverageRefresh      = "system.sync_coverage_refresh"
 	KindRetentionCleanup         = "system.retention_cleanup"
 	KindReportExecuteOnDemand    = "report.execute_on_demand"
 	KindReportExecuteScheduled   = "report.execute_scheduled"
@@ -118,6 +119,14 @@ type Envelope struct {
 // HeartbeatPayload is the v1 payload for the unique periodic heartbeat pilot.
 type HeartbeatPayload struct {
 	ScheduledFor string `json:"scheduled_for"`
+}
+
+// SyncCoverageRefreshPayload is the bounded global projection sweep. The
+// worker reloads every configuration and retained fact from PostgreSQL; River
+// carries only the deterministic due time and the checked sweep limit.
+type SyncCoverageRefreshPayload struct {
+	ScheduledFor string `json:"scheduled_for"`
+	Limit        int    `json:"limit"`
 }
 
 // RetentionCleanupPayload is the v1 bounded-delete request. It carries policy
@@ -255,6 +264,13 @@ var definitions = map[string]contractDefinition{
 		DomainLink:        "schedule_occurrence",
 		OrganizationScope: "global",
 	},
+	KindSyncCoverageRefresh: {
+		Kind:              KindSyncCoverageRefresh,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "schedule_occurrence",
+		OrganizationScope: "global",
+	},
 	KindRetentionCleanup: {
 		Kind: KindRetentionCleanup,
 		// v2 widened retention_policy to carry the two prune policies the Go
@@ -381,6 +397,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 		payload = value
 	case KindHeartbeat:
 		var value HeartbeatPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindSyncCoverageRefresh:
+		var value SyncCoverageRefreshPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
 			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
 		}
@@ -542,6 +567,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindWebhookDelivery
 	case HeartbeatPayload:
 		kind = KindHeartbeat
+	case SyncCoverageRefreshPayload:
+		kind = KindSyncCoverageRefresh
 	case RetentionCleanupPayload:
 		kind = KindRetentionCleanup
 	case OnDemandReportExecutionPayload:
@@ -643,6 +670,16 @@ func validateSafeID(name, value string, maxLength int) error {
 
 func (payload HeartbeatPayload) validate() error {
 	return validateUTCTimestamp("scheduled_for", payload.ScheduledFor)
+}
+
+func (payload SyncCoverageRefreshPayload) validate() error {
+	if err := validateUTCTimestamp("scheduled_for", payload.ScheduledFor); err != nil {
+		return err
+	}
+	if payload.Limit < 1 || payload.Limit > 1000 {
+		return errors.New("limit must be between 1 and 1000")
+	}
+	return nil
 }
 
 func (payload RetentionCleanupPayload) validateVersion(version int) error {

@@ -9,23 +9,30 @@ import pathlib
 import sys
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from dev_health_ops.models.integrations import IntegrationSource
+    from dev_health_ops.models.settings import ScheduledJob, SyncConfiguration
 
 
 def _datetime(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-def _namespace_config(case: dict[str, Any]) -> SimpleNamespace:
+def _namespace_config(case: dict[str, Any]) -> SyncConfiguration:
     raw = case["config"]
-    return SimpleNamespace(
-        id=UUID(raw["id"]),
-        org_id=raw["org_id"],
-        provider=raw["provider"],
-        is_active=raw["is_active"],
-        integration_id=UUID(raw["integration_id"]),
-        source_id=UUID(raw["source_id"]) if raw["source_id"] else None,
+    return cast(
+        "SyncConfiguration",
+        SimpleNamespace(
+            id=UUID(raw["id"]),
+            org_id=raw["org_id"],
+            provider=raw["provider"],
+            is_active=raw["is_active"],
+            integration_id=UUID(raw["integration_id"]),
+            source_id=UUID(raw["source_id"]) if raw["source_id"] else None,
+        ),
     )
 
 
@@ -45,10 +52,13 @@ def main() -> int:
     scope = production.EffectiveScope(
         integration_id=UUID(case["config"]["integration_id"]),
         sources=tuple(
-            SimpleNamespace(
-                id=UUID(source["id"]),
-                name=source["name"],
-                full_name=source["full_name"],
+            cast(
+                "IntegrationSource",
+                SimpleNamespace(
+                    id=UUID(source["id"]),
+                    name=source["name"],
+                    full_name=source["full_name"],
+                ),
             )
             for source in case["scope"]["sources"]
         ),
@@ -76,9 +86,12 @@ def main() -> int:
         )
         for interval in case["backfill_requested"]
     )
-    schedule = SimpleNamespace(
-        schedule_cron=case["schedule"]["schedule_cron"],
-        next_run_at=_datetime(case["schedule"]["next_run_at"]),
+    schedule = cast(
+        "ScheduledJob",
+        SimpleNamespace(
+            schedule_cron=case["schedule"]["schedule_cron"],
+            next_run_at=_datetime(case["schedule"]["next_run_at"]),
+        ),
     )
     payload = production.build_coverage_summary_payload(
         config=config,

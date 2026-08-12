@@ -106,7 +106,6 @@ func coordinatorExclusiveDDL() []string {
 			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
 		)`,
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, sync_run_id uuid NOT NULL)",
-		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_sync_occurrences (id uuid PRIMARY KEY)",
 		// Production column shape (internal/scheduler/fixed/ledger.go), because
 		// fixed_engine_statement_privileges_integration_test.go executes the

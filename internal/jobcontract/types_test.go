@@ -17,6 +17,7 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 		payload any
 	}{
 		{KindHeartbeat, "examples/system.heartbeat.v1.json", HeartbeatPayload{ScheduledFor: "2026-07-21T12:00:00Z"}},
+		{KindSyncCoverageRefresh, "examples/system.sync_coverage_refresh.v1.json", SyncCoverageRefreshPayload{ScheduledFor: "2026-08-12T12:00:00Z", Limit: 100}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v1.json", RetentionCleanupPayload{BatchSize: 250, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: RetentionWorkerTerminal}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v3.json", RetentionCleanupPayload{BatchSize: 500, DeleteBefore: "2026-07-28T05:30:00Z", RetentionPolicy: RetentionAskDevConversations}},
 		{KindReportExecuteOnDemand, "examples/report.execute_on_demand.v1.json", OnDemandReportExecutionPayload{ReportID: "00000000-0000-4000-8000-000000000002"}},
@@ -73,6 +74,20 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 				t.Fatalf("canonical fixture drift\ngot:  %s\nwant: %s", canonical, data)
 			}
 		})
+	}
+}
+
+func TestSyncCoverageRefreshPayloadBounds(t *testing.T) {
+	t.Parallel()
+	fixture, err := os.ReadFile(filepath.Join(contractRoot(t), "examples/system.sync_coverage_refresh.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, replacement := range []string{`"limit": 0`, `"limit": 1001`} {
+		candidate := strings.Replace(string(fixture), `"limit": 100`, replacement, 1)
+		if _, err := Decode(KindSyncCoverageRefresh, []byte(candidate)); err == nil {
+			t.Fatalf("Decode() accepted %s", replacement)
+		}
 	}
 }
 

@@ -418,6 +418,35 @@
         "3": ["examples/system.retention_cleanup.v3.json"]
       }
     },
+    {
+      "kind": "system.sync_coverage_refresh",
+      "current_version": 1,
+      "supported_versions": [1],
+      "profile": "ops",
+      "queue": "coverage",
+      "handler_owner": "internal/jobs/synccoverage",
+      "execution_mode": "command",
+      "priority": 2,
+      "timeout_seconds": 900,
+      "max_attempts": 3,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative_checkpoint",
+      "delivery": "guarded_at_least_once",
+      "idempotency": "unique_schedule_occurrence",
+      "concurrency": {
+        "scope": "fleet",
+        "limit": 1
+      },
+      "sensitive_fields": [],
+      "domain_link": "schedule_occurrence",
+      "organization_scope": "global",
+      "schema_versions": {
+        "1": "schemas/system.sync_coverage_refresh.v1.schema.json"
+      },
+      "fixtures": {
+        "1": ["examples/system.sync_coverage_refresh.v1.json"]
+      }
+    },
     {"kind":"workgraph.build","current_version":1,"supported_versions":[1],"profile":"heavy","queue":"workgraph","handler_owner":"internal/jobs/workgraph","execution_mode":"command","priority":2,"timeout_seconds":3600,"max_attempts":4,"retry_policy":"bounded_exponential_jitter","cancellation":"authoritative_work_graph_request","delivery":"guarded_at_least_once","idempotency":"work_graph_request","concurrency":{"scope":"organization","limit":1},"sensitive_fields":[],"domain_link":"work_graph_request","organization_scope":"tenant","schema_versions":{"1":"schemas/workgraph.build.v1.schema.json"},"fixtures":{"1":["examples/workgraph.build.v1.json"]}}
   ]
 }

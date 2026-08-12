@@ -386,7 +386,7 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + domainRole + "; END IF; END $$",
-		// worker_job_routes, scheduled_jobs, scheduled_sync_occurrences, and
+		// worker_job_routes, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the
 		// Option B two-role split (role-partition manifest, removed in
 		// e23ede618; see git history at eda2d6b91) and deliberately have no
@@ -395,6 +395,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// MigrationOptions.CoordinatorRole is set, coordinatorGrantStatements
 		// below emits them from the injected posture in this same transaction,
 		// so local dev and CI are self-provisioning for all three roles.
+		// scheduled_jobs is now a read-only dual-role relation because the
+		// native sync-coverage projector reads schedule facts on the domain
+		// worker while the fixed scheduler remains its only writer.
 		// sync_configurations is SELECT-only for the domain role: its
 		// coordinator-side FOR UPDATE row-locking use does not make the
 		// domain role's own posture require UPDATE. sync_runs, by contrast,
@@ -413,6 +416,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_configurations') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_configurations TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT ON TABLE public.scheduled_jobs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO " + domainRole + "; END IF; END $$",

@@ -39,10 +39,12 @@ func riverRoutedRegistry(t *testing.T) *Registry {
 func opsStartup(registry *Registry) StartupSpec {
 	heartbeat, _ := registry.Descriptor(jobcontract.KindHeartbeat)
 	retention, _ := registry.Descriptor(jobcontract.KindRetentionCleanup)
+	coverage, _ := registry.Descriptor(jobcontract.KindSyncCoverageRefresh)
 	billing, _ := registry.Descriptor(jobcontract.KindBillingNotification)
 	webhook, _ := registry.Descriptor(jobcontract.KindWebhookDelivery)
 	queues := func() []QueueBudget {
 		return []QueueBudget{
+			{Queue: "coverage", MaxWorkers: 1},
 			{Queue: "heartbeat", MaxWorkers: 1},
 			{Queue: "retention", MaxWorkers: 1},
 			{Queue: "webhooks", MaxWorkers: 4},
@@ -52,7 +54,7 @@ func opsStartup(registry *Registry) StartupSpec {
 		Profile:             "ops",
 		Queues:              queues(),
 		ManifestQueues:      queues(),
-		Handlers:            []HandlerSpec{billing, webhook, heartbeat, retention},
+		Handlers:            []HandlerSpec{billing, webhook, heartbeat, retention, coverage},
 		Connections:         ConnectionBudget{QueueControl: 2, Domain: 4},
 		ManifestConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
 	}
@@ -229,7 +231,7 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 24 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
+	if len(descriptors) != 25 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
 		descriptors[1].Kind != jobcontract.KindInvestmentDispatch ||
 		descriptors[2].Kind != jobcontract.KindInvestmentFinalize ||
 		descriptors[3].Kind != jobcontract.KindInvestmentMaterialize ||
@@ -252,7 +254,8 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		descriptors[20].Kind != jobcontract.KindTeamAutoimport ||
 		descriptors[21].Kind != jobcontract.KindHeartbeat ||
 		descriptors[22].Kind != jobcontract.KindRetentionCleanup ||
-		descriptors[23].Kind != jobcontract.KindWorkGraphBuild {
+		descriptors[23].Kind != jobcontract.KindSyncCoverageRefresh ||
+		descriptors[24].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	// Every checked-in kind is executable, and no kind is Celery-routed any

@@ -17,6 +17,7 @@ const (
 	ProducerRemainingMetricsFanout   = "remaining_metrics_fanout"
 	ProducerScheduledReports         = "scheduled_reports"
 	ProducerHeartbeat                = "heartbeat"
+	ProducerSyncCoverageRefresh      = "sync_coverage_refresh"
 	ProducerRetentionCleanup         = "retention_cleanup"
 )
 
@@ -152,6 +153,21 @@ func checkedInSchedules() []Schedule {
 			AlertThreshold:   30 * time.Minute,
 			Rationale: "Replaces the 300s dispatch-scheduled-reports sweep. The producer " +
 				"materializes a ReportRun per due SavedReport before enqueueing.",
+		},
+		{
+			ID:               "sync_coverage_refresh",
+			Native:           true,
+			Cadence:          EveryInterval(300 * time.Second),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: time.Hour,
+			TargetKind:       jobcontract.KindSyncCoverageRefresh,
+			ProducerID:       ProducerSyncCoverageRefresh,
+			MaxAttempts:      3,
+			AlertThreshold:   30 * time.Minute,
+			Rationale: "Rebuilds cold, invalidated, and oldest sync coverage projections " +
+				"from retained PostgreSQL facts in bounded batches. Due work is re-read on the " +
+				"next tick, so replaying an older bucket adds no recovery value.",
 		},
 		{
 			ID:              "phone_home_heartbeat",
@@ -480,14 +496,6 @@ func LegacyBeatInventory() []LegacyEntry {
 			Cadence:  DailyAt(5, 30),
 			Owner:    OwnerFixedSchedule,
 			OwnerRef: "prune_ask_dev_conversations",
-		},
-		{
-			Name:     "refresh-sync-coverage-projections",
-			Cadence:  EveryInterval(300 * time.Second),
-			Owner:    OwnerRemoved,
-			OwnerRef: "coverage projection refresh",
-			Note: "Temporary safety net while exact summaries are rebuilt from retained facts. " +
-				"A native write-side projector makes this periodic Celery refresh unnecessary.",
 		},
 		{
 			Name:     "consume-pending-scheduled-sync-occurrences",

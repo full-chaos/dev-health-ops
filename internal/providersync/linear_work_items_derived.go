@@ -13,14 +13,11 @@ import (
 )
 
 // LinearWorkItemDerivedEffectRows is the provider-owned, typed projection for
-// the nine destinations that the real Linear work-item producer can emit from
-// its six normalized facts. AI attribution is an evaluated, explicit empty
-// destination for Linear: the Python work-item job has no Linear
-// AI-attribution producer. It is therefore not represented as an arbitrary
-// row/blob field here; BuildLinearWorkItemDerivedEffects always emits its
-// readback-required empty effect so recovery cannot mistake "not produced" for
-// "not evaluated".
+// the ten destinations that the real Linear work-item producer can emit from
+// its six normalized facts. AI attribution is derived only from explicit issue
+// labels; title and description text are not attribution inputs.
 type LinearWorkItemDerivedEffectRows struct {
+	AIAttributions                 []LinearAIAttributionRow
 	EstimateCoverageMetricsDaily   []LinearEstimateCoverageMetricsDailyRow
 	InvestmentClassificationsDaily []LinearInvestmentClassificationDailyRow
 	InvestmentMetricsDaily         []LinearInvestmentMetricsDailyRow
@@ -48,10 +45,12 @@ var linearWorkItemDerivedEffectDestinations = []string{
 func BuildLinearWorkItemDerivedEffects(
 	rows LinearWorkItemDerivedEffectRows,
 ) ([]EffectBatch, error) {
-	projections := map[string][]json.RawMessage{
-		"ai_attribution": {},
-	}
+	projections := map[string][]json.RawMessage{}
 	var err error
+	projections["ai_attribution"], err = effectRowsFromValues(rows.AIAttributions)
+	if err != nil {
+		return nil, err
+	}
 	projections["estimate_coverage_metrics_daily"], err = effectRowsFromValues(rows.EstimateCoverageMetricsDaily)
 	if err != nil {
 		return nil, err
@@ -119,6 +118,7 @@ func buildLinearWorkItemDerivedEffectsFromMap(
 // builders without copying a second schema that could drift from the real
 // Python dataclasses or ClickHouse migrations.
 type LinearEstimateCoverageMetricsDailyRow = githubEstimateCoverageMetricsDailyRow
+type LinearAIAttributionRow = githubAIAttributionRow
 type LinearInvestmentClassificationDailyRow = githubInvestmentClassificationDailyRow
 type LinearInvestmentMetricsDailyRow = githubInvestmentMetricsDailyRow
 type LinearIssueTypeMetricsDailyRow = githubIssueTypeMetricsDailyRow
@@ -259,9 +259,15 @@ func (deriver LinearWorkItemDeriver) Derive(
 	if err != nil {
 		return nil, err
 	}
-	derived := map[string][]json.RawMessage{
-		"ai_attribution": {},
+	aiAttributions, err := normalizeLinearWorkItemAIAttributions(claim, rows, normalizedAt)
+	if err != nil {
+		return nil, err
 	}
+	aiRows, err := effectRowsFromValues(aiAttributions)
+	if err != nil {
+		return nil, err
+	}
+	derived := map[string][]json.RawMessage{"ai_attribution": aiRows}
 	for _, destination := range githubWorkItemDerivedOwnedDestinations {
 		derived[destination] = []json.RawMessage{}
 	}
@@ -319,6 +325,57 @@ func (deriver LinearWorkItemDeriver) Derive(
 	return derived, nil
 }
 
+var linearAIAttributionLabelKinds = map[string]string{
+	"ai-assisted": "ai_assisted", "agent-created": "agent_created",
+	"ai-review": "ai_review", "copilot": "ai_assisted",
+	"claude-code": "ai_assisted", "codex": "ai_assisted",
+	"cursor": "ai_assisted", "windsurf": "ai_assisted",
+}
+
+func normalizeLinearWorkItemAIAttributions(
+	claim Claim,
+	rows linearWorkItemRows,
+	normalizedAt time.Time,
+) ([]githubAIAttributionRow, error) {
+	if claim.Validate() != nil || claim.Provider != "linear" ||
+		claim.Dataset != "work-items" || normalizedAt.IsZero() {
+		return nil, ErrInvalidConfiguration
+	}
+	tenant, err := uuid.Parse(claim.OrgID)
+	if err != nil {
+		return nil, providerfoundation.ErrInvalidScope
+	}
+	result := make([]githubAIAttributionRow, 0)
+	for _, item := range rows.WorkItems {
+		if item.Provider != "linear" || item.OrgID != claim.OrgID ||
+			item.WorkItemID == "" || item.CreatedAt.IsZero() || item.Labels == nil {
+			return nil, providerfoundation.ErrInvalidScope
+		}
+		for index, label := range item.Labels {
+			kind, matched := linearAIAttributionLabelKinds[strings.ToLower(strings.TrimSpace(label))]
+			if !matched {
+				continue
+			}
+			evidence := map[string]any{"label": label}
+			encodedEvidence, marshalErr := json.Marshal(evidence)
+			if marshalErr != nil {
+				return nil, providerfoundation.ErrNormalizationInvalid
+			}
+			identity := strings.Join([]string{
+				claim.OrgID, item.WorkItemID, "issue_label", fmt.Sprint(index), string(encodedEvidence),
+			}, "|")
+			result = append(result, githubAIAttributionRow{
+				RecordID: uuid.NewSHA1(uuid.NameSpaceURL, []byte(identity)),
+				OrgID:    tenant, Provider: "linear", SubjectType: "issue",
+				SubjectID: item.WorkItemID, RepoID: nil, Kind: kind,
+				Source: "issue_label", Confidence: 0.95, Evidence: evidence,
+				ObservedAt: item.CreatedAt.UTC(), IngestedAt: normalizedAt.UTC(),
+			})
+		}
+	}
+	return result, nil
+}
+
 // linearDerivedGitHubAdapter is a narrow provider adapter around the existing
 // ClickHouse implementations. The underlying adapters retain their exact SQL,
 // coercion, readback, and lease behavior; this wrapper supplies the Linear
@@ -343,10 +400,22 @@ func (adapter linearDerivedGitHubAdapter) validate(
 		return ErrInvalidConfiguration
 	}
 	if adapter.destination == "ai_attribution" {
-		// Linear has no Python AI attribution producer in this work-item job. A
-		// non-empty UUID-based row would not have a valid Linear tenant key.
-		if len(effect.Rows) != 0 {
+		if len(effect.Rows) == 0 {
+			return nil
+		}
+		tenant, parseErr := uuid.Parse(identity.OrgID)
+		if parseErr != nil {
 			return ErrInvalidConfiguration
+		}
+		for _, raw := range effect.Rows {
+			var row githubAIAttributionRow
+			if json.Unmarshal(raw, &row) != nil || row.RecordID == uuid.Nil ||
+				row.OrgID != tenant || row.Provider != "linear" ||
+				row.SubjectType != "issue" || row.SubjectID == "" || row.RepoID != nil ||
+				row.Kind == "" || row.Source != "issue_label" || row.Confidence != 0.95 ||
+				row.Evidence == nil || row.ObservedAt.IsZero() || row.IngestedAt.IsZero() {
+				return ErrInvalidConfiguration
+			}
 		}
 		return nil
 	}

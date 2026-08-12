@@ -16,7 +16,7 @@
       "file": "internal/providersync/linear_work_items_derived.go",
       "find": "var linearWorkItemDerivedEffectDestinations = []string{\n\t\"ai_attribution\",",
       "replace": "var linearWorkItemDerivedEffectDestinations = []string{\n\t\"ai_attribution_omitted\",",
-      "rationale": "The recovery manifest must enumerate all ten derived destinations, including the explicit empty AI result; a missing key makes a complete Linear computation appear partial.",
+      "rationale": "The recovery manifest must enumerate all ten derived destinations, including explicit Linear issue-label AI attribution; a missing key makes a complete Linear computation appear partial.",
       "proof": [
         [
           "go",
@@ -114,19 +114,67 @@
       ]
     },
     {
-      "id": "LD7-ai-empty-destination-rejects-rows",
+      "id": "LD7-ai-source-provenance-is-enforced",
       "file": "internal/providersync/linear_work_items_derived.go",
-      "find": "\t\tif len(effect.Rows) != 0 {",
-      "replace": "\t\tif false {",
-      "rationale": "Linear's real Python work-item producer emits no AI attribution rows; a non-empty AI effect must fail closed instead of writing an invented schema row.",
+      "find": "\t\t\t\trow.Kind == \"\" || row.Source != \"issue_label\" || row.Confidence != 0.95 ||",
+      "replace": "\t\t\t\trow.Kind == \"\" || false || row.Confidence != 0.95 ||",
+      "rationale": "A Linear issue-label effect must carry truthful issue_label provenance; accepting another source would authorize a semantically false attribution row under the Linear claim.",
       "proof": [
         [
           "go",
           "test",
           "-count=1",
           "-run",
-          "^TestLinearDerivedAdapterRejectsNonEmptyAIEffect$",
+          "^TestLinearDerivedAdapterRejectsCrossProviderAIEffect$|^TestLinearAIAttributionMatchesLivePythonProductionRow$",
           "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LD14-ai-producer-reaches-derived-effect",
+      "file": "internal/providersync/linear_work_items_derived.go",
+      "find": "\tderived := map[string][]json.RawMessage{\"ai_attribution\": aiRows}",
+      "replace": "\tderived := map[string][]json.RawMessage{\"ai_attribution\": aiRows[:0]}",
+      "rationale": "An explicit Linear AI issue label must reach the durable derived effect; evaluating the destination as empty would preserve the old false-complete behavior.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestLinearWorkItemDeriverUsesLinearRowsAndEvaluatesAllTenDestinations$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LD15-non-ai-labels-do-not-become-attribution",
+      "file": "internal/providersync/linear_work_items_derived.go",
+      "find": "\t\t\tif !matched {\n\t\t\t\tcontinue\n\t\t\t}",
+      "replace": "\t\t\tif !matched {\n\t\t\t\tkind = \"ai_assisted\"\n\t\t\t}",
+      "rationale": "Only labels in the fixed canonical AI registry may create attribution; ordinary issue labels and issue text must remain non-signals.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-count=1",
+          "-run",
+          "^TestLinearAIAttributionDoesNotInferFromIssueText$",
+          "./internal/providersync/"
+        ]
+      ]
+    },
+    {
+      "id": "LD16-issue-label-source-is-ranked-by-the-live-view",
+      "file": "src/dev_health_ops/migrations/clickhouse/076_ai_attribution_issue_label.sql",
+      "find": "            source = 'issue_label',     2,",
+      "replace": "            source = 'issue_label',     9,",
+      "rationale": "The authoritative resolved view must recognize issue_label with explicit-label precedence rather than falling through as an unknown source.",
+      "proof": [
+        [
+          "pytest",
+          "-q",
+          "tests/test_migration_076_ai_issue_label.py"
         ]
       ]
     },

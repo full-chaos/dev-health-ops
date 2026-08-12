@@ -6,7 +6,9 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
+from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -17,6 +19,7 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
     WorkItemType,
 )
+from dev_health_ops.providers._ai_detection import detect_from_issue_labels
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.normalize_helpers import get_nested as _get
@@ -243,6 +246,34 @@ def _type_from_labels(labels: list[str]) -> WorkItemType:
     if "chore" in label_lower or "maintenance" in label_lower:
         return "chore"
     return "task"
+
+
+def linear_work_item_ai_attributions(
+    *, work_item: WorkItem, org_id: UUID | str | None
+) -> list[AIAttributionRecord]:
+    """Promote explicit Linear issue labels to persisted AI attribution.
+
+    Labels are the only accepted signal. Title and description text are not
+    inspected, so a discussion of an AI tool cannot become attribution.
+    """
+    signals = detect_from_issue_labels(list(work_item.labels))
+    if not signals:
+        return []
+    if org_id is None:
+        raise ValueError("Linear AI attribution requires org_id")
+    tenant = org_id if isinstance(org_id, UUID) else UUID(org_id)
+    return [
+        AIAttributionRecord.from_signal(
+            signal,
+            org_id=tenant,
+            provider="linear",
+            subject_type="issue",
+            subject_id=work_item.work_item_id,
+            repo_id=None,
+            observed_at=work_item.created_at,
+        )
+        for signal in signals
+    ]
 
 
 def linear_issue_to_work_item(

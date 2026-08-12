@@ -20,6 +20,7 @@ import (
 func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	now := time.Date(2026, 8, 4, 12, 34, 56, 123456000, time.UTC)
 	effects := linearDerivedIntegrationEffects(t, claim, now)
 	lease := &linearDerivedCountingLease{}
@@ -36,8 +37,7 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 			t.Fatalf("write %s: %v", effect.Destination, err)
 		}
 		inspection, err := sink.InspectEffect(ctx, claim, effect)
-		if err != nil || (effect.Destination != "ai_attribution" && inspection != EffectExact) ||
-			(effect.Destination == "ai_attribution" && inspection != EffectAbsent) {
+		if err != nil || inspection != EffectExact {
 			t.Fatalf("readback %s: inspection=%s error=%v", effect.Destination, inspection, err)
 		}
 	}
@@ -87,46 +87,46 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 func TestLinearDerivedClickHouseEffectsRecoverAfterLeaseLoss(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	now := time.Date(2026, 8, 5, 12, 34, 56, 123456000, time.UTC)
 	effects := linearDerivedIntegrationEffects(t, claim, now)
-	var target EffectBatch
-	for _, effect := range effects {
-		if effect.Destination == "work_item_metrics_daily" {
-			target = effect
-			break
-		}
-	}
-	if target.Destination == "" {
-		t.Fatal("fixture omitted work_item_metrics_daily")
-	}
+	byDestination := effectsByDestination(effects)
+	for _, testCase := range []struct {
+		destination string
+		failAt      int
+	}{{"ai_attribution", 2}, {"work_item_metrics_daily", 4}} {
+		t.Run(testCase.destination, func(t *testing.T) {
+			target, ok := byDestination[testCase.destination]
+			if !ok {
+				t.Fatalf("fixture omitted %s", testCase.destination)
+			}
+			// The dispatcher checks before and after its adapter. Losing the lease
+			// on the post-write assertion leaves a durable row but returns an error.
+			lostLease := &linearDerivedCountingLease{failAt: testCase.failAt}
+			lostSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lostLease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := lostSink.WriteEffect(ctx, claim, target); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+				t.Fatalf("lease-loss write error=%v, want ErrLeaseLost", err)
+			}
 
-	// The dispatcher checks before and after its adapter. The adapter checks
-	// before preparing the batch and again before Send. Losing the lease at the
-	// fourth assertion leaves a durable row but returns an error, exactly the
-	// crash window the effect ledger must recover by readback.
-	lostLease := &linearDerivedCountingLease{failAt: 4}
-	lostSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lostLease)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := lostSink.WriteEffect(ctx, claim, target); !errors.Is(err, providerfoundation.ErrLeaseLost) {
-		t.Fatalf("lease-loss write error=%v, want ErrLeaseLost", err)
-	}
-
-	recoveredLease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	recoveredSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, recoveredLease)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inspection, err := recoveredSink.InspectEffect(ctx, claim, target)
-	if err != nil || inspection != EffectExact {
-		t.Fatalf("recovery readback: inspection=%s error=%v", inspection, err)
-	}
-	if err := recoveredSink.WriteEffect(ctx, claim, target); err != nil {
-		t.Fatalf("idempotent recovery replay: %v", err)
-	}
-	if inspection, err := recoveredSink.InspectEffect(ctx, claim, target); err != nil || inspection != EffectExact {
-		t.Fatalf("post-replay readback: inspection=%s error=%v", inspection, err)
+			recoveredLease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+			recoveredSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, recoveredLease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inspection, err := recoveredSink.InspectEffect(ctx, claim, target)
+			if err != nil || inspection != EffectExact {
+				t.Fatalf("recovery readback: inspection=%s error=%v", inspection, err)
+			}
+			if err := recoveredSink.WriteEffect(ctx, claim, target); err != nil {
+				t.Fatalf("idempotent recovery replay: %v", err)
+			}
+			if inspection, err := recoveredSink.InspectEffect(ctx, claim, target); err != nil || inspection != EffectExact {
+				t.Fatalf("post-replay readback: inspection=%s error=%v", inspection, err)
+			}
+		})
 	}
 }
 
@@ -180,6 +180,13 @@ func linearDerivedIntegrationEffects(t *testing.T, claim Claim, now time.Time) [
 	investment.ComputedAt, investment.InvestmentArea = now, &area
 
 	rows := LinearWorkItemDerivedEffectRows{}
+	rows.AIAttributions = []LinearAIAttributionRow{{
+		RecordID: uuid.MustParse("22222222-2222-4222-8222-222222222222"),
+		OrgID:    uuid.MustParse(claim.OrgID), Provider: "linear", SubjectType: "issue",
+		SubjectID: "linear:ENG-100", RepoID: nil, Kind: "ai_assisted",
+		Source: "issue_label", Confidence: 0.95, Evidence: map[string]any{"label": "codex"},
+		ObservedAt: now.Add(-time.Hour), IngestedAt: now,
+	}}
 	rows.EstimateCoverageMetricsDaily = []LinearEstimateCoverageMetricsDailyRow{estimate}
 	rows.WorkItemTeamAttributions = []LinearWorkItemTeamAttributionRow{teamAttribution}
 	rows.WorkItemStateDurationsDaily = []LinearWorkItemStateDurationDailyRow{stateDuration}

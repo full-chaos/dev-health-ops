@@ -112,6 +112,7 @@ _NORMALIZE_HELPERS_SOURCE = _source("dev_health_ops/providers/normalize_helpers.
 _DATETIME_SOURCE = _source("dev_health_ops/utils/datetime.py")
 _LINEAR_NORMALIZE_SOURCE = _source("dev_health_ops/providers/linear/normalize.py")
 _LINEAR_PROVIDER_SOURCE = _source("dev_health_ops/providers/linear/provider.py")
+_AI_DETECTION_SOURCE = _source("dev_health_ops/providers/_ai_detection.py")
 _TEAM_AUTOIMPORT_LINEAR_SOURCE = _source(
     "dev_health_ops/workers/team_autoimport_linear.py"
 )
@@ -908,6 +909,10 @@ def _target_linear_normalize() -> None:
     dependency with a hand-authored copy.
     """
     _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.ai_attribution", _AI_ATTRIBUTION_MODELS_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers._ai_detection", _AI_DETECTION_SOURCE)
     _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
     _load_source_module(
         "dev_health_ops.providers.normalize_helpers", _NORMALIZE_HELPERS_SOURCE

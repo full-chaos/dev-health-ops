@@ -52,6 +52,26 @@
       "rationale": "An exhausted provider unit must be logged as failed rather than retrying, so a terminal backfill failure is distinguishable from a live retry.",
       "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
       "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsRetryAndFailureResults/exhausted_attempt$", "-count=1"]]
+    },
+    {
+      "id": "PULL06-error-detail",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "attributes = append(attributes, \"error_detail\", lifecycleErrorDetail(err))",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "A provider-unit terminal or retrying lifecycle record must retain a safe root-cause detail for traversal failures, or operators lose the evidence needed to separate a real provider fault from a generic retry envelope.",
+      "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
+      "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsCaptureTraversalFailureDetail$", "-count=1"]]
+    },
+    {
+      "id": "PULL07-error-redaction",
+      "file": "internal/jobs/providerunit/providerunit.go",
+      "find": "detail := logging.RedactText(err.Error())",
+      "replace": "detail := err.Error()",
+      "expect_occurrences": 1,
+      "rationale": "The lifecycle error detail must redact credential-shaped text before logging, or a wrapped provider failure can leak a token-bearing URL into the operator stream.",
+      "build": ["go", "test", "./internal/jobs/providerunit", "-run", "^$"],
+      "proof": [["go", "test", "./internal/jobs/providerunit", "-run", "^TestProviderUnitLifecycleLogsRetryAndFailureResults$", "-count=1"]]
     }
   ]
 }

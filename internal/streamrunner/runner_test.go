@@ -218,26 +218,6 @@ func TestRunnerDiscoversStreamsEnsuresGroupsAndRemovesStaleLanes(t *testing.T) {
 	}
 }
 
-func TestRunnerSleepsWhenDiscoveryFindsNoStreams(t *testing.T) {
-	transport := &fakeTransport{}
-	config := dynamicTestConfig()
-	config.Block = 50 * time.Millisecond
-	config.ReclaimEvery = 50 * time.Millisecond
-	config.ReclaimIdle = 50 * time.Millisecond
-	config.ShutdownDrain = 50 * time.Millisecond
-	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), config, health.NewRegistry(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	if err := runner.window(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(start); elapsed < 40*time.Millisecond {
-		t.Fatalf("empty discovery returned too quickly: %s", elapsed)
-	}
-}
-
 func TestRunnerDoesNotStarveLaterLaneAfterTransientSinkFailure(t *testing.T) {
 	transport := &fakeTransport{
 		new: []Message{

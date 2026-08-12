@@ -1185,7 +1185,9 @@ verify_stage_manifest() {
 # opt-out; every other reason a CH stage might not run (docker missing, the
 # probe failing, the container confirmed absent, dev-hops missing) is a
 # ch_provision() hard failure against the FULL 8-id declaration, never a
-# reason to shrink it at runtime. Factored out of main() so the CHAOS-3571
+# reason to shrink it at runtime. The mutation-clean guard is always declared
+# first because no validation result is trustworthy while a mutation is
+# applied. Factored out of main() so the CHAOS-3571
 # `--stage-manifest-probe` test-only hook near the bottom of this file can
 # exercise this exact sequencing (with the expensive leaf stages stubbed) --
 # same precedent as `--lock-probe` exercising the real acquire_lock/
@@ -1383,6 +1385,7 @@ fi
 # tests/tooling/test_local_validate_stage_manifest.py.
 if [ "${1:-}" = "--stage-manifest-probe" ]; then
   shift
+  gate_no_active_mutation() { return 0; }
   gate_lint_format() { return 0; }
   gate_lint_check() { return 0; }
   gate_typecheck() { return 0; }

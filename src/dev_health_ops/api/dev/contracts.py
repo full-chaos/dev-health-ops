@@ -1202,27 +1202,6 @@ class DevActualCompletion(ContractModel):
             )
         return self
 
-    @model_validator(mode="after")
-    def validate_required_child_counts(self) -> Self:
-        if (self.required_child_total is None) != (
-            self.required_child_complete is None
-        ):
-            raise ValueError(
-                "required_child_total and required_child_complete must both be "
-                "known or both be withheld"
-            )
-        if self.required_child_total is None or self.required_child_complete is None:
-            return self
-        if self.required_child_complete > self.required_child_total:
-            raise ValueError(
-                "required_child_complete cannot exceed required_child_total"
-            )
-        if len(self.required_children) > self.required_child_total:
-            raise ValueError(
-                "displayed required_children cannot exceed required_child_total"
-            )
-        return self
-
 
 class DevSourceHealth(ContractModel):
     ref_id: OpaqueID

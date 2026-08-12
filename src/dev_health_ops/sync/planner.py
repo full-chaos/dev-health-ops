@@ -110,6 +110,7 @@ from dev_health_ops.sync.canonical_incident_gate import (
 )
 from dev_health_ops.sync.datasets import (
     CostClass,
+    DatasetKey,
     DatasetSpec,
     WatermarkBehavior,
     get_dataset_spec,

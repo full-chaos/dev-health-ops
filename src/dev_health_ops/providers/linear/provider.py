@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
+from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -116,6 +117,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
             merged.interactions.extend(batch.interactions)
             merged.sprints.extend(batch.sprints)
             merged.dependencies.extend(batch.dependencies)
+            merged.ai_attributions.extend(batch.ai_attributions)
         return merged
 
     def iter_ingest(self, ctx: IngestionContext) -> Iterable[ProviderBatch]:
@@ -131,6 +133,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
             linear_comment_to_interaction_event,
             linear_cycle_to_sprint,
             linear_issue_to_work_item,
+            linear_work_item_ai_attributions,
         )
 
         client = self._make_client()
@@ -308,6 +311,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                     page_reopen_events: list[WorkItemReopenEvent] = []
                     page_interactions: list[WorkItemInteractionEvent] = []
                     page_dependencies: list[WorkItemDependency] = []
+                    page_ai_attributions: list[AIAttributionRecord] = []
 
                     for issue in issues_page:
                         if ctx.limit is not None and fetched_count >= ctx.limit:
@@ -327,6 +331,11 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                         )
 
                         page_items.append(wi)
+                        page_ai_attributions.extend(
+                            linear_work_item_ai_attributions(
+                                work_item=wi, org_id=ctx.org_id
+                            )
+                        )
                         page_transitions.extend(wi_transitions)
                         page_dependencies.extend(
                             _issue_dependencies(issue, wi.work_item_id)
@@ -360,6 +369,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                         or page_reopen_events
                         or page_interactions
                         or page_dependencies
+                        or page_ai_attributions
                     ):
                         yield ProviderBatch(
                             work_items=page_items,
@@ -367,6 +377,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                             interactions=page_interactions,
                             reopen_events=page_reopen_events,
                             dependencies=page_dependencies,
+                            ai_attributions=page_ai_attributions,
                         )
                         yielded_batch = True
                         fetched_transitions += len(page_transitions)
@@ -390,6 +401,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                         page_reopen_events = []
                         page_interactions = []
                         page_dependencies = []
+                        page_ai_attributions = []
                         for issue in fallback_issues:
                             if ctx.limit is not None and fetched_count >= ctx.limit:
                                 break
@@ -408,6 +420,11 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                                 history=history,
                             )
                             page_items.append(wi)
+                            page_ai_attributions.extend(
+                                linear_work_item_ai_attributions(
+                                    work_item=wi, org_id=ctx.org_id
+                                )
+                            )
                             page_transitions.extend(wi_transitions)
                             page_dependencies.extend(
                                 _issue_dependencies(issue, wi.work_item_id)
@@ -439,6 +456,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                             or page_reopen_events
                             or page_interactions
                             or page_dependencies
+                            or page_ai_attributions
                         ):
                             yield ProviderBatch(
                                 work_items=page_items,
@@ -446,6 +464,7 @@ class LinearProvider(ProviderWithClient[LinearClient]):
                                 interactions=page_interactions,
                                 reopen_events=page_reopen_events,
                                 dependencies=page_dependencies,
+                                ai_attributions=page_ai_attributions,
                             )
                             yielded_batch = True
                             fetched_transitions += len(page_transitions)

@@ -61,6 +61,7 @@ func (linearFamilyEngine) Derive(
 
 func linearFamilyClaim() Claim {
 	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	claim.SourceExternalID = "ENG"
 	since := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	before := since.AddDate(0, 0, 1)

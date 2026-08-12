@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/google/uuid"
 )
 
 type linearDerivedEngineStub struct{}
@@ -30,6 +31,7 @@ func (linearDerivedEngineStub) Derive(
 
 func linearDerivedTestClaim() Claim {
 	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	day := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
 	before := day.AddDate(0, 0, 1)
 	claim.SinceAt = &day
@@ -61,7 +63,7 @@ func TestLinearWorkItemDeriverUsesLinearRowsAndEvaluatesAllTenDestinations(t *te
 	row := linearWorkItemRow{
 		WorkItemID: "LIN-1", Provider: "linear", Title: "Repair delivery path",
 		Type: "issue", Status: "todo", CreatedAt: day.Add(time.Hour),
-		UpdatedAt: day.Add(2 * time.Hour), OrgID: claim.OrgID,
+		UpdatedAt: day.Add(2 * time.Hour), Labels: []string{"codex"}, OrgID: claim.OrgID,
 	}
 	source := &fakeGitHubWorkItemDerivationContextSource{}
 	deriver := LinearWorkItemDeriver{
@@ -89,8 +91,17 @@ func TestLinearWorkItemDeriverUsesLinearRowsAndEvaluatesAllTenDestinations(t *te
 			t.Fatalf("destination %q was not evaluated", destination)
 		}
 	}
-	if len(derived["ai_attribution"]) != 0 {
-		t.Fatal("Linear AI attribution is not an implemented producer and must stay explicitly empty")
+	if len(derived["ai_attribution"]) != 1 {
+		t.Fatalf("Linear explicit issue label attribution rows=%d want 1", len(derived["ai_attribution"]))
+	}
+	var attribution LinearAIAttributionRow
+	if err := json.Unmarshal(derived["ai_attribution"][0], &attribution); err != nil {
+		t.Fatal(err)
+	}
+	if attribution.Provider != "linear" || attribution.SubjectType != "issue" ||
+		attribution.SubjectID != "LIN-1" || attribution.RepoID != nil ||
+		attribution.Source != "issue_label" || attribution.OrgID.String() != claim.OrgID {
+		t.Fatalf("Linear attribution lost semantic fence: %+v", attribution)
 	}
 	if len(derived["work_item_metrics_daily"]) == 0 ||
 		len(derived["estimate_coverage_metrics_daily"]) == 0 ||
@@ -243,23 +254,61 @@ func TestLinearDerivedAdapterRequiresProviderAndTenantColumns(t *testing.T) {
 	}
 }
 
-func TestLinearDerivedAdapterRejectsNonEmptyAIEffect(t *testing.T) {
+func TestLinearDerivedAdapterRejectsCrossProviderAIEffect(t *testing.T) {
 	claim := linearDerivedTestClaim()
-	effect, err := BuildEffectBatch(
-		"ai_attribution", EffectReadbackRequired, []json.RawMessage{json.RawMessage(`{"unexpected":true}`)},
-	)
+	base := githubAIAttributionRow{
+		RecordID: uuid.MustParse("11111111-1111-4111-8111-111111111111"),
+		OrgID:    uuid.MustParse(claim.OrgID), Provider: "linear", SubjectType: "issue",
+		SubjectID: "LIN-1", Kind: "ai_assisted", Source: "issue_label", Confidence: 0.95,
+		Evidence: map[string]any{"label": "codex"}, ObservedAt: *claim.SinceAt,
+		IngestedAt: claim.SinceAt.Add(time.Hour),
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*githubAIAttributionRow)
+	}{
+		{"provider", func(row *githubAIAttributionRow) { row.Provider = "github" }},
+		{"source", func(row *githubAIAttributionRow) { row.Source = "pr_label" }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			row := base
+			testCase.mutate(&row)
+			raw, err := effectRowsFromValues([]githubAIAttributionRow{row})
+			if err != nil {
+				t.Fatal(err)
+			}
+			effect, err := BuildEffectBatch("ai_attribution", EffectReadbackRequired, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := newLinearWorkItemDerivedEffectIdentity(claim, effect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter := linearDerivedGitHubAdapter{
+				destination: "ai_attribution", delegate: &linearDerivedRecordingAdapter{},
+			}
+			if err := adapter.WriteLinearWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("false-provenance AI error=%v want ErrInvalidConfiguration", err)
+			}
+		})
+	}
+}
+
+func TestLinearAIAttributionDoesNotInferFromIssueText(t *testing.T) {
+	claim := linearDerivedTestClaim()
+	rows, err := normalizeLinearWorkItemAIAttributions(claim, linearWorkItemRows{
+		WorkItems: []linearWorkItemRow{{
+			WorkItemID: "linear:ENG-2", Provider: "linear", Title: "Generated with Codex",
+			Description: stringPointer("AI-assisted issue text"), Labels: []string{"bug"},
+			CreatedAt: *claim.SinceAt, UpdatedAt: *claim.SinceAt, OrgID: claim.OrgID,
+		}},
+	}, *claim.BeforeAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := newLinearWorkItemDerivedEffectIdentity(claim, effect)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter := linearDerivedGitHubAdapter{
-		destination: "ai_attribution", delegate: &linearDerivedRecordingAdapter{},
-	}
-	if err := adapter.WriteLinearWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("non-empty AI error=%v want ErrInvalidConfiguration", err)
+	if len(rows) != 0 {
+		t.Fatalf("text-only attribution rows=%+v", rows)
 	}
 }
 

@@ -18,6 +18,8 @@ import (
 var errNotReady = errors.New("stream runner has not completed a successful stream window")
 var errTransientWrite = errors.New("transient stream durable-write failure")
 
+const initialIdleDelay = 10 * time.Millisecond
+
 // Runner owns a long-lived XREADGROUP loop. It has one in-flight message per
 // configured stream lane, so shutdown can either finish that message or leave
 // it pending; it never ACKs a message merely because the process is stopping.
@@ -45,6 +47,7 @@ type Runner struct {
 	lastStats   map[string]StreamStats
 	streams     []string
 	readCursor  int
+	waitIdle    func(context.Context, time.Duration) bool
 }
 
 func New(transport Transport, handler Handler, config Config, registry *health.Registry) (*Runner, error) {
@@ -57,6 +60,7 @@ func New(transport Transport, handler Handler, config Config, registry *health.R
 		config:    config,
 		registry:  registry,
 		lastStats: make(map[string]StreamStats, len(config.Streams)),
+		waitIdle:  waitForContext,
 	}
 	if err := registry.RegisterRequired(config.Name+"_loop", runner.readiness); err != nil {
 		return nil, fmt.Errorf("register stream readiness: %w", err)
@@ -96,43 +100,60 @@ func (r *Runner) Start(parent context.Context) error {
 func (r *Runner) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	nextMaintenance := time.Time{}
+	idleDelay := initialIdleDelay
+	maxIdleDelay := minDuration(r.config.Block, time.Second)
 	for {
 		maintain := nextMaintenance.IsZero() || !time.Now().Before(nextMaintenance)
 		if maintain {
 			nextMaintenance = time.Now().Add(r.config.ReclaimEvery)
 		}
-		if err := r.cycle(ctx, maintain); err != nil {
+		active, err := r.cycle(ctx, maintain)
+		if err != nil {
 			r.recordFailure()
+			idleDelay = initialIdleDelay
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(minDuration(r.config.ReclaimEvery, time.Second)):
 			}
+			continue
 		}
+		if active {
+			idleDelay = initialIdleDelay
+			continue
+		}
+		if !r.waitIdle(ctx, idleDelay) {
+			return
+		}
+		idleDelay = minDuration(idleDelay*2, maxIdleDelay)
 	}
 }
 
 func (r *Runner) window(ctx context.Context) error {
-	return r.cycle(ctx, true)
+	_, err := r.cycle(ctx, true)
+	return err
 }
 
-func (r *Runner) cycle(ctx context.Context, maintain bool) error {
+func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 	if maintain {
 		if err := r.refreshStreams(ctx); err != nil {
-			return err
+			return false, err
 		}
 	}
 	r.mu.Lock()
 	streams := append([]string(nil), r.streams...)
 	r.mu.Unlock()
 
+	active := false
 	var failures []error
 	for _, stream := range streams {
 		if maintain {
-			if err := r.reclaim(ctx, stream); err != nil {
+			reclaimed, err := r.reclaim(ctx, stream)
+			active = active || reclaimed
+			if err != nil {
 				failures = append(failures, err)
 			}
 		}
@@ -143,6 +164,7 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) error {
 		if err != nil {
 			failures = append(failures, fmt.Errorf("read streams: %w", err))
 		} else {
+			active = active || len(messages) > 0
 			for _, message := range messages {
 				if err := r.process(ctx, message); err != nil {
 					failures = append(failures, err)
@@ -167,13 +189,13 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) error {
 		r.mu.Lock()
 		r.up = false
 		r.mu.Unlock()
-		return err
+		return active, err
 	}
 	r.mu.Lock()
 	r.lastSuccess, r.up = time.Now().UTC(), true
 	r.mu.Unlock()
 	r.ready.Store(true)
-	return nil
+	return active, nil
 }
 
 // nextReadLanes keeps one XREADGROUP response bounded by BatchSize even when
@@ -243,10 +265,10 @@ func (r *Runner) refreshStreams(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) reclaim(ctx context.Context, stream string) error {
+func (r *Runner) reclaim(ctx context.Context, stream string) (bool, error) {
 	pending, err := r.transport.Pending(ctx, stream, r.config.ConsumerGroup, r.config.BatchSize, r.config.ReclaimIdle)
 	if err != nil {
-		return fmt.Errorf("inspect pending: %w", err)
+		return false, fmt.Errorf("inspect pending: %w", err)
 	}
 	claim := make([]string, 0, len(pending))
 	poison := make(map[string]struct{})
@@ -257,11 +279,11 @@ func (r *Runner) reclaim(ctx context.Context, stream string) error {
 		claim = append(claim, item.MessageID)
 	}
 	if len(claim) == 0 {
-		return nil
+		return false, nil
 	}
 	claimed, err := r.transport.Claim(ctx, stream, r.config.ConsumerGroup, r.config.ConsumerName, claim, r.config.ReclaimIdle)
 	if err != nil {
-		return fmt.Errorf("claim pending: %w", err)
+		return false, fmt.Errorf("claim pending: %w", err)
 	}
 	claimedByID := make(map[string]Message, len(claimed))
 	for _, message := range claimed {
@@ -292,7 +314,7 @@ func (r *Runner) reclaim(ctx context.Context, stream string) error {
 			failures = append(failures, err)
 		}
 	}
-	return errors.Join(failures...)
+	return len(claimed) > 0, errors.Join(failures...)
 }
 
 func sortedUnique(values []string) []string {
@@ -447,4 +469,15 @@ func minDuration(left, right time.Duration) time.Duration {
 		return left
 	}
 	return right
+}
+
+func waitForContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

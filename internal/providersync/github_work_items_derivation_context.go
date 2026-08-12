@@ -886,9 +886,15 @@ LIMIT ?`, orgID, asOf, asOf, githubWorkItemDerivationContextLimit+1)
 	result := []githubWorkItemDerivationProjectFact{}
 	for rows.Next() {
 		var fact githubWorkItemDerivationProjectFact
-		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectID, &fact.ProjectKey, &fact.IsPrimary, &fact.Specificity, &fact.Priority, &fact.UpdatedAt); err != nil {
+		var isPrimary uint8
+		var specificity uint16
+		var priority int32
+		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectID, &fact.ProjectKey, &isPrimary, &specificity, &priority, &fact.UpdatedAt); err != nil {
 			return nil, err
 		}
+		fact.IsPrimary = int(isPrimary)
+		fact.Specificity = int(specificity)
+		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > githubWorkItemDerivationContextLimit {
 			return nil, ErrEffectRecoveryUnsafe
@@ -928,9 +934,15 @@ LIMIT ?`, orgID, asOf, asOf, githubWorkItemDerivationContextLimit+1)
 	result := []githubWorkItemDerivationRepoFact{}
 	for rows.Next() {
 		var fact githubWorkItemDerivationRepoFact
-		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.RepoID, &fact.RepoFullName, &fact.IsPrimary, &fact.Specificity, &fact.Priority, &fact.UpdatedAt); err != nil {
+		var isPrimary uint8
+		var specificity uint16
+		var priority int32
+		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.RepoID, &fact.RepoFullName, &isPrimary, &specificity, &priority, &fact.UpdatedAt); err != nil {
 			return nil, err
 		}
+		fact.IsPrimary = int(isPrimary)
+		fact.Specificity = int(specificity)
+		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > githubWorkItemDerivationContextLimit {
 			return nil, ErrEffectRecoveryUnsafe
@@ -973,9 +985,15 @@ LIMIT ?`, orgID, asOf, asOf, githubWorkItemDerivationContextLimit+1)
 	result := []githubWorkItemDerivationMemberFact{}
 	for rows.Next() {
 		var fact githubWorkItemDerivationMemberFact
-		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.MemberID, &fact.RawProviderUserID, &fact.RawEmail, &fact.IdentityFacets, &fact.IsPrimary, &fact.Specificity, &fact.Priority, &fact.UpdatedAt); err != nil {
+		var isPrimary uint8
+		var specificity uint16
+		var priority int32
+		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.MemberID, &fact.RawProviderUserID, &fact.RawEmail, &fact.IdentityFacets, &isPrimary, &specificity, &priority, &fact.UpdatedAt); err != nil {
 			return nil, err
 		}
+		fact.IsPrimary = int(isPrimary)
+		fact.Specificity = int(specificity)
+		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > githubWorkItemDerivationContextLimit {
 			return nil, ErrEffectRecoveryUnsafe
@@ -1000,9 +1018,11 @@ LIMIT ?`, orgID, asOf, asOf, githubWorkItemDerivationContextLimit+1)
 	result := []githubWorkItemDerivationManualFallback{}
 	for rows.Next() {
 		var fact githubWorkItemDerivationManualFallback
-		if err := rows.Scan(&fact.Provider, &fact.ScopeType, &fact.ScopeID, &fact.TeamID, &fact.TeamName, &fact.Reason, &fact.Priority); err != nil {
+		var priority int32
+		if err := rows.Scan(&fact.Provider, &fact.ScopeType, &fact.ScopeID, &fact.TeamID, &fact.TeamName, &fact.Reason, &priority); err != nil {
 			return nil, err
 		}
+		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > githubWorkItemDerivationContextLimit {
 			return nil, ErrEffectRecoveryUnsafe

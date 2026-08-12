@@ -22,6 +22,11 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 		category string
 	}{
 		{
+			name:     "provider dataset unavailable",
+			err:      providersync.ErrProviderDatasetUnavailable,
+			category: ProviderDatasetUnavailableCategory,
+		},
+		{
 			name:     "repository identity ambiguous",
 			err:      providersync.ErrRepositoryIdentityAmbiguous,
 			category: RepositoryIdentityCategory,

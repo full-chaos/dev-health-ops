@@ -135,6 +135,29 @@ func TestPagerDutyTeamsRoutePreservesRetryAndPermanentErrorSemantics(t *testing.
 	}
 }
 
+func TestPagerDutyTeamsRouteClassifiesUnavailableAccountAbility(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("pagerduty", "teams")
+	credential := providerfoundation.Credential{
+		Provider: "pagerduty", Config: map[string]string{"subdomain": "acme"},
+	}
+	doer := &pagerDutyTeamsDoer{t: t, responses: []pagerDutyTeamsResponse{{
+		status: http.StatusPaymentRequired,
+		body:   `{"error":{"code":2014,"message":"Required abilities are unavailable"}}`,
+	}}}
+	client := pagerDutyTeamsTestClient(t, doer, providerfoundation.RetryPolicy{
+		MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+	})
+
+	_, err := (PagerDutyTeamsRouteHandler{}).Collect(
+		context.Background(), claim, credential, client,
+		time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC),
+	)
+	if !errors.Is(err, ErrProviderDatasetUnavailable) || len(doer.requests) != 1 {
+		t.Fatalf("error=%v requests=%d", err, len(doer.requests))
+	}
+}
+
 func TestPagerDutyTeamsRouteFailsClosedOnPaginationCapAndWrongDataset(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("pagerduty", "teams")

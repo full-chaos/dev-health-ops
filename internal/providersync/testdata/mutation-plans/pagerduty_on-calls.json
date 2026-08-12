@@ -93,6 +93,14 @@
       "expect_occurrences": 1,
       "rationale": "PagerDuty on-call escalation_level is normalized as int32 and included in the canonical operational ordering conflict key. Rejecting int32 at the shared encoder must make a concrete on-calls row with escalation_level fail normalization.",
       "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsRouteUsesOffsetPaginationAndCanonicalAssignment$", "./internal/providersync/"]]
+    },
+    {
+      "id": "OC12-route-result-is-comparator-valid",
+      "file": "internal/providersync/pagerduty_oncalls_route.go",
+      "find": "Result:  map[string]any{\"on_calls_synced\": len(rows)},",
+      "replace": "Result:  nil,",
+      "rationale": "The production comparator rejects a nil route result before effects reach the ledger or ClickHouse, so an otherwise valid on-calls page must retain a non-nil result",
+      "proof": [["go", "test", "-count=1", "-run", "^TestPagerDutyOnCallsRouteUsesOffsetPaginationAndCanonicalAssignment$", "./internal/providersync/"]]
     }
   ]
 }

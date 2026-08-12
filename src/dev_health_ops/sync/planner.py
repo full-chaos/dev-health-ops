@@ -127,6 +127,9 @@ from dev_health_ops.sync.watermarks import (
     _watermark_overlap_seconds,
     get_watermark_with_overlap,
 )
+from dev_health_ops.workers.provider_family_contract import (
+    atomic_provider_family_route_enabled,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -1101,11 +1104,15 @@ def _build_work_item_family_units(
     composite_windows = _merge_family_windows([windows for _, windows in contributing])
 
     processor_flags: dict[str, bool] = dict(canonical_spec.processor_flags)
-    if provider == "github":
+    if provider == "github" or atomic_provider_family_route_enabled(
+        provider, _FAMILY_CANONICAL_DATASET_KEY
+    ):
         # CHAOS-3606: GitHub's native route has one all-five-alias writer. A
         # caught-up sibling still has no independent Python owner while this
         # canonical unit runs, so its flag records atomic route ownership rather
         # than whether that sibling contributed a window to this tick's merge.
+        # The same ownership rule applies to the other work-item providers once
+        # their native family route is enabled.
         # The merged window above remains derived only from non-empty inputs.
         family_flag_datasets = _WORK_ITEM_FAMILY_DATASET_ORDER
     else:

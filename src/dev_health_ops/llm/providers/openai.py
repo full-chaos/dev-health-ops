@@ -31,7 +31,7 @@ from dev_health_ops.llm.errors import (
 from dev_health_ops.llm.json_utils import validate_json_or_empty
 from dev_health_ops.logging_config import pin_content_carrying_client_loggers
 
-from ._http import make_hardened_async_httpx_client, make_hardened_httpx_client
+from ._http import make_hardened_async_httpx2_client, make_hardened_httpx2_client
 from .base import (
     DEFAULT_MODEL_BY_PROVIDER,
     CompletionResult,
@@ -561,7 +561,7 @@ class _OpenAIProviderBase(LLMProviderBase):
             self._client = AsyncOpenAI(
                 api_key=self.cfg.api_key,
                 base_url=self.cfg.base_url,
-                http_client=make_hardened_async_httpx_client(),
+                http_client=make_hardened_async_httpx2_client(),
                 max_retries=0,
             )
         return self._client
@@ -576,7 +576,7 @@ class _OpenAIProviderBase(LLMProviderBase):
         client = OpenAI(
             api_key=self.cfg.api_key,
             base_url=self.cfg.base_url,
-            http_client=make_hardened_httpx_client(),
+            http_client=make_hardened_httpx2_client(),
             max_retries=0,
         )
         try:

@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import httpx2
 import pytest
 
 from dev_health_ops.api.admin.llm_settings import (
@@ -20,7 +22,9 @@ from dev_health_ops.api.admin.schemas import LLMSettingsUpsert
 from dev_health_ops.llm import credentials as creds
 from dev_health_ops.llm.credentials import validate_llm_base_url
 from dev_health_ops.llm.providers._http import (
+    make_hardened_async_httpx2_client,
     make_hardened_async_httpx_client,
+    make_hardened_httpx2_client,
     make_hardened_httpx_client,
 )
 from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
@@ -288,7 +292,7 @@ def test_openai_compatible_providers_use_hardened_http_client(
         sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI)
     )
     monkeypatch.setattr(
-        "dev_health_ops.llm.providers.local.make_hardened_async_httpx_client",
+        "dev_health_ops.llm.providers.local.make_hardened_async_httpx2_client",
         lambda: sentinel_http_client,
     )
 
@@ -300,17 +304,33 @@ def test_openai_compatible_providers_use_hardened_http_client(
     assert captured["max_retries"] == 0
 
 
-def test_hardened_http_client_factory_disables_redirects_and_env_proxies():
-    async_client = make_hardened_async_httpx_client()
-    sync_client = make_hardened_httpx_client()
+def test_hardened_http_client_factories_preserve_transport_controls():
+    async_clients = (
+        make_hardened_async_httpx_client(),
+        make_hardened_async_httpx2_client(),
+    )
+    sync_clients = (
+        make_hardened_httpx_client(),
+        make_hardened_httpx2_client(),
+    )
     try:
-        assert async_client.follow_redirects is False
-        assert async_client.trust_env is False
-        assert sync_client.follow_redirects is False
-        assert sync_client.trust_env is False
+        assert isinstance(async_clients[0], httpx.AsyncClient)
+        assert isinstance(async_clients[1], httpx2.AsyncClient)
+        assert isinstance(sync_clients[0], httpx.Client)
+        assert isinstance(sync_clients[1], httpx2.Client)
+
+        for client in (*async_clients, *sync_clients):
+            assert client.follow_redirects is False
+            assert client.trust_env is False
+            assert client.timeout.connect == 60.0
+            assert client.timeout.read == 60.0
+            assert client.timeout.write == 60.0
+            assert client.timeout.pool == 60.0
     finally:
-        asyncio.run(async_client.aclose())
-        sync_client.close()
+        for client in async_clients:
+            asyncio.run(client.aclose())
+        for client in sync_clients:
+            client.close()
 
 
 def test_upsert_rejects_unsafe_base_url():

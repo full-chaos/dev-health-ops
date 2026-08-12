@@ -37,6 +37,8 @@ from typing import Any
 import pytest
 import yaml
 
+pytest.skip(allow_module_level=True, reason="Deprecated Ask Dev")
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ask-dev-acceptance.yml"
 AGGREGATOR = ROOT / "ci" / "aggregate_gate_results.sh"

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -80,3 +83,31 @@ def test_go_quality_bootstraps_locked_live_oracle_dependencies() -> None:
             assert pins.get(package) == version, (
                 f"live Python oracles require locked {package}=={version}"
             )
+
+
+def test_sync_coverage_oracle_import_does_not_bootstrap_worker_runtime() -> None:
+    script = textwrap.dedent(
+        """
+        import builtins
+
+        real_import = builtins.__import__
+
+        def reject_worker_runtime(name, *args, **kwargs):
+            if name == "dev_health_ops.sync.planner" or name.startswith(
+                "dev_health_ops.workers"
+            ):
+                raise AssertionError(f"coverage import initialized worker runtime: {name}")
+            return real_import(name, *args, **kwargs)
+
+        builtins.__import__ = reject_worker_runtime
+        import dev_health_ops.api.services.sync_coverage  # noqa: F401
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

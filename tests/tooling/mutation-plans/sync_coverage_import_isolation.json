@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "sync coverage live-oracle import isolation",
+  "$limitation": "Pins the production coverage builder's dependency boundary so the Go-quality live oracle cannot silently regain planner and Celery runtime imports. It does not attempt to restate every dependency in the locked CI environment; that closure is separately derived from uv.lock.",
+  "mutations": [
+    {
+      "id": "SCII01-worker-runtime-import",
+      "file": "src/dev_health_ops/api/services/sync_coverage.py",
+      "find": "from dev_health_ops.sync.family_flags import (\n    family_dataset_keys_from_flags,\n)",
+      "replace": "from dev_health_ops.sync.planner import (\n    family_dataset_keys_from_flags,\n)",
+      "expect_occurrences": 1,
+      "rationale": "Importing the production coverage payload builder for the Python-to-Go oracle must not initialize the planner, provider clients, or Celery worker runtime.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/api/services/sync_coverage.py"
+      ],
+      "proof": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_go_live_oracle_ci.py::test_sync_coverage_oracle_import_does_not_bootstrap_worker_runtime"
+        ]
+      ]
+    }
+  ]
+}

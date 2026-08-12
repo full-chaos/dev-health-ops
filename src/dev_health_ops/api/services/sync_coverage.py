@@ -30,7 +30,9 @@ from dev_health_ops.models.integrations import (
 from dev_health_ops.models.settings import JobStatus, ScheduledJob, SyncConfiguration
 from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.sync.datasets import supported_datasets
-from dev_health_ops.sync.planner import family_dataset_keys_from_flags
+from dev_health_ops.sync.family_flags import (
+    family_dataset_keys_from_flags,
+)
 
 logger = logging.getLogger(__name__)
 

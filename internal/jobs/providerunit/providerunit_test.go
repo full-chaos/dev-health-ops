@@ -187,6 +187,94 @@ func TestProviderUnitLifecycleLogsRetryAndFailureResults(t *testing.T) {
 	}
 }
 
+func TestProviderBudgetContentionDefersWithoutConsumingTheRiverAttempt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	repository := newMemoryUnitRepository(unit)
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, providerfoundation.ErrBudgetContended
+		},
+	}
+	execution := providerExecution(unit, now, 5)
+	execution.Definition.MaxAttempts = 5
+
+	err := handler.Work(context.Background(), execution)
+	delay, snoozed := jobruntime.SnoozeDelay(err)
+	if !snoozed || delay < time.Second || delay >= 2*time.Second {
+		t.Fatalf("Work() = %v, delay=%v; want typed 1s <= snooze < 2s", err, delay)
+	}
+	if repository.status != "dispatching" || repository.failures != 0 {
+		t.Fatalf("contention status=%q failures=%d; must defer, not exhaust", repository.status, repository.failures)
+	}
+	if repository.releaseCalls != 0 || repository.contentionDeferrals != 1 {
+		t.Fatalf("ordinary releases=%d contention deferrals=%d; want 0/1",
+			repository.releaseCalls, repository.contentionDeferrals)
+	}
+	if !repository.availableAt.Equal(now.Add(delay)) {
+		t.Fatalf("durable available_at=%v want %v", repository.availableAt, now.Add(delay))
+	}
+}
+
+func TestProviderBudgetStoreUnavailableRemainsAnAttemptFailure(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	repository := newMemoryUnitRepository(unit)
+	handler := &Handler{
+		Repository: repository,
+		Switches: providersync.CompleteRouteSwitches{
+			LaunchDarklyFeatureFlags: true,
+		},
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, providerfoundation.ErrBudgetUnavailable
+		},
+	}
+	execution := providerExecution(unit, now, 5)
+	execution.Definition.MaxAttempts = 5
+
+	err := handler.Work(context.Background(), execution)
+	if _, snoozed := jobruntime.SnoozeDelay(err); snoozed {
+		t.Fatalf("budget-store outage was incorrectly treated as contention: %v", err)
+	}
+	if repository.status != "failed" || repository.lastFailCategory != "provider_unit_exhausted" {
+		t.Fatalf("store outage status=%q category=%q; want bounded failure",
+			repository.status, repository.lastFailCategory)
+	}
+	if repository.contentionDeferrals != 0 {
+		t.Fatalf("store outage wrote %d contention deferrals", repository.contentionDeferrals)
+	}
+}
+
+func TestProviderBudgetContentionDelayIsDeterministicAndBounded(t *testing.T) {
+	t.Parallel()
+	first := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111")
+	repeated := providerBudgetContentionDelay("11111111-1111-4111-8111-111111111111")
+	sibling := providerBudgetContentionDelay("22222222-2222-4222-8222-222222222222")
+	if first != repeated {
+		t.Fatalf("same unit jitter changed: %v != %v", first, repeated)
+	}
+	for name, delay := range map[string]time.Duration{"first": first, "sibling": sibling} {
+		if delay < time.Second || delay >= 2*time.Second {
+			t.Fatalf("%s delay=%v; want 1s <= delay < 2s", name, delay)
+		}
+	}
+	if first == sibling {
+		t.Fatalf("known sibling units collided at %v; the regression fixture no longer proves spreading", first)
+	}
+}
+
 func TestProviderUnitLifecycleLogsCaptureTraversalFailureDetail(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
@@ -585,16 +673,19 @@ func githubFilesTraversalExecutor(now time.Time) ExecutorFactory {
 }
 
 type memoryUnitRepository struct {
-	mu               sync.Mutex
-	unit             providersync.Unit
-	status           string
-	attempt          int
-	lastClaim        providersync.Claim
-	result           map[string]any
-	watermark        *time.Time
-	failures         int
-	lastFailCategory string
-	releaseErr       error
+	mu                  sync.Mutex
+	unit                providersync.Unit
+	status              string
+	attempt             int
+	lastClaim           providersync.Claim
+	result              map[string]any
+	watermark           *time.Time
+	failures            int
+	lastFailCategory    string
+	releaseErr          error
+	releaseCalls        int
+	contentionDeferrals int
+	availableAt         time.Time
 }
 
 func newMemoryUnitRepository(unit providersync.Unit) *memoryUnitRepository {
@@ -679,12 +770,30 @@ func (repository *memoryUnitRepository) ReleaseForRetry(
 ) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
+	repository.releaseCalls++
 	if repository.releaseErr != nil {
 		return repository.releaseErr
 	}
 	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
 		return providersync.ErrLeaseLost
 	}
+	repository.status = "dispatching"
+	return nil
+}
+
+func (repository *memoryUnitRepository) DeferForBudgetContention(
+	_ context.Context,
+	claim providersync.Claim,
+	availableAt time.Time,
+	_ time.Time,
+) error {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
+		return providersync.ErrLeaseLost
+	}
+	repository.contentionDeferrals++
+	repository.availableAt = availableAt
 	repository.status = "dispatching"
 	return nil
 }

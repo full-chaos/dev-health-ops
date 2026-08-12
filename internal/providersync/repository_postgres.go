@@ -260,6 +260,31 @@ func (repository *PostgresRepository) ReleaseForRetry(
 	return nil
 }
 
+// DeferForBudgetContention records a healthy request-reservation collision.
+// It is intentionally separate from the Python planner's intrinsic
+// budget_deferred episode: a sibling holding a short-lived HTTP slot says
+// nothing about whether this unit can fit the configured sync budget.
+func (repository *PostgresRepository) DeferForBudgetContention(
+	ctx context.Context,
+	claim Claim,
+	availableAt time.Time,
+	now time.Time,
+) error {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
+		availableAt.Sub(now) > 5*time.Minute {
+		return ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(
+		ctx, deferForBudgetContentionSQL,
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+	)
+	if err != nil || command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
 // Fail terminalizes an exhausted unit and arms run finalization.
 func (repository *PostgresRepository) Fail(
 	ctx context.Context,
@@ -347,7 +372,10 @@ WITH candidate AS (
     WHERE unit.id = $1::uuid
       AND run.status NOT IN ('success', 'partial_failed', 'failed')
       AND (
-        unit.status = 'dispatching'
+        (
+          unit.status = 'dispatching'
+          AND (unit.available_at IS NULL OR unit.available_at <= $3)
+        )
         OR (
           $5::boolean
           AND unit.status = 'running'
@@ -536,6 +564,53 @@ SET status = 'dispatching',
     last_heartbeat_at = $3,
     updated_at = $3
 WHERE unit.id = $1::uuid
+  AND unit.status = 'running'
+  AND unit.lease_owner = $2
+  AND unit.lease_expires_at IS NOT NULL
+  AND unit.lease_expires_at > $3`
+
+// deferForBudgetContentionSQL keeps the unit claimable by the SAME snoozed
+// River job after $4, while stale-dispatch repair remains a much later safety
+// net. The distinct result counter survives process restarts and does not
+// increment or clear either existing Python deferral episode. The claim's
+// domain attempt is restored under the same lease CAS because healthy sibling
+// contention is neutral in both River and sync_run_units. The aggregate
+// first_blocked_at clock remains set until SUCCESS.
+const deferForBudgetContentionSQL = `
+WITH contention AS (
+    SELECT unit.id,
+           COALESCE(
+             CASE
+               WHEN jsonb_typeof(unit.result::jsonb) = 'object'
+               THEN (unit.result::jsonb -> 'provider_budget_contention_deferrals')::integer
+               ELSE 0
+             END,
+             0
+           ) + 1 AS next_deferrals
+    FROM public.sync_run_units AS unit
+    WHERE unit.id = $1::uuid
+)
+UPDATE public.sync_run_units AS unit
+SET status = 'dispatching',
+    attempts = GREATEST(unit.attempts - 1, 0),
+    available_at = $4,
+    error = 'provider_budget_contention',
+    result = (
+      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      jsonb_build_object(
+        'error_category', 'provider_budget_contention',
+        'not_before', to_jsonb($4::timestamptz),
+        'provider_budget_contention_deferrals', contention.next_deferrals
+      )
+    ),
+    first_blocked_at = COALESCE(unit.first_blocked_at, $3),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = $3,
+    last_retry_reason = 'provider_budget_contention',
+    updated_at = $3
+FROM contention
+WHERE unit.id = contention.id
   AND unit.status = 'running'
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL

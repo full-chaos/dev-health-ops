@@ -18,11 +18,15 @@ import (
 )
 
 var (
-	ErrInvalidScope         = errors.New("invalid provider tenant scope")
-	ErrCredentialNotFound   = errors.New("provider credential not found")
-	ErrCredentialInactive   = errors.New("provider credential inactive")
-	ErrCredentialInvalid    = errors.New("provider credential is invalid")
-	ErrLeaseLost            = errors.New("provider lease is no longer valid")
+	ErrInvalidScope       = errors.New("invalid provider tenant scope")
+	ErrCredentialNotFound = errors.New("provider credential not found")
+	ErrCredentialInactive = errors.New("provider credential inactive")
+	ErrCredentialInvalid  = errors.New("provider credential is invalid")
+	ErrLeaseLost          = errors.New("provider lease is no longer valid")
+	// ErrBudgetContended means the shared request reservation store is healthy,
+	// but every slot in this provider/org/host/cost bucket is in use. Callers
+	// must defer without spending their failure-attempt budget.
+	ErrBudgetContended      = errors.New("provider budget contended")
 	ErrBudgetUnavailable    = errors.New("provider budget unavailable")
 	ErrSinkDuplicate        = errors.New("provider sink duplicate has different content")
 	ErrSinkGenerationUnsafe = errors.New("provider sink generation is not safely deduplicated")

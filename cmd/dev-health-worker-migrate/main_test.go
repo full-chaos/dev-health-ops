@@ -41,12 +41,17 @@ func TestCoordinatorGrantsTranslateThePostureWithoutDroppingAnything(t *testing.
 	t.Parallel()
 
 	posture := postgresstore.CoordinatorPosture()
-	tables, columns := coordinatorGrants()
-	if len(tables) != len(posture.RequiredTables) || len(columns) != len(posture.ColumnScoped) {
+	tables, columns, sequences := coordinatorGrants()
+	if len(tables) != len(posture.RequiredTables) || len(columns) != len(posture.ColumnScoped) || len(sequences) != len(posture.RequiredSequences) {
 		t.Fatalf(
-			"coordinatorGrants() = %d tables/%d columns, posture declares %d/%d",
-			len(tables), len(columns), len(posture.RequiredTables), len(posture.ColumnScoped),
+			"coordinatorGrants() = %d tables/%d columns/%d sequences, posture declares %d/%d/%d",
+			len(tables), len(columns), len(sequences), len(posture.RequiredTables), len(posture.ColumnScoped), len(posture.RequiredSequences),
 		)
+	}
+	for index, sequence := range posture.RequiredSequences {
+		if sequences[index] != sequence {
+			t.Fatalf("sequence grant %d = %q, want %q", index, sequences[index], sequence)
+		}
 	}
 	for index, table := range posture.RequiredTables {
 		want := riverstore.TableGrant{
@@ -78,6 +83,7 @@ func TestCoordinatorGrantsTranslateThePostureWithoutDroppingAnything(t *testing.
 		CoordinatorRole:         "coordinator_runtime",
 		CoordinatorGrants:       tables,
 		CoordinatorColumnGrants: columns,
+		CoordinatorSequences:    sequences,
 	}); err != nil {
 		t.Fatalf("the derived coordinator grant set is rejected by the migration itself: %v", err)
 	}

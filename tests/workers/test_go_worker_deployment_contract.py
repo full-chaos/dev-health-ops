@@ -500,6 +500,25 @@ def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
     )
 
 
+def test_operator_image_packages_every_runtime_contract_it_loads() -> None:
+    dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+
+    assert (
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/operator/app/contracts/jobs/v1;"
+        in dockerfile
+    )
+    assert (
+        "cp -R /src/contracts/sync-dispatch/v1 "
+        + "/runtime/operator/app/contracts/sync-dispatch/v1;"
+        in dockerfile
+    )
+    assert (
+        "cp /src/deploy/go-workers/profiles.json "
+        + "/runtime/operator/app/deploy/go-workers/profiles.json;"
+        in dockerfile
+    )
+
+
 def test_python_image_packages_and_validates_job_contracts() -> None:
     project = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
     data_files = project["tool"]["setuptools"]["data-files"]

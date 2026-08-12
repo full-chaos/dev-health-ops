@@ -98,10 +98,23 @@ func TestRolePostureQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T)
 		"'TEMPORARY'",
 		"UNNEST($3::TEXT[], $4::BOOLEAN[], $5::BOOLEAN[], $9::BOOLEAN[])",
 		"UNNEST($6::TEXT[], $7::TEXT[], $8::TEXT[])",
+		"UNNEST($10::TEXT[])",
 	} {
 		if !strings.Contains(upperQuery, required) {
 			t.Fatalf("role posture query omits %q", required)
 		}
+	}
+}
+
+func TestCoordinatorPostureRequiresOnlyItsAuditSequence(t *testing.T) {
+	t.Parallel()
+
+	sequences := coordinatorPosture().RequiredSequences
+	if len(sequences) != 1 || sequences[0] != "worker_operator_audits_id_seq" {
+		t.Fatalf("coordinator sequences = %v, want only worker_operator_audits_id_seq", sequences)
+	}
+	if len(domainPosture().RequiredSequences) != 0 {
+		t.Fatalf("domain sequences = %v, want none", domainPosture().RequiredSequences)
 	}
 }
 

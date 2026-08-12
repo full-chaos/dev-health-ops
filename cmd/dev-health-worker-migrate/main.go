@@ -95,7 +95,7 @@ func execute(
 	if value, present := lookup("RIVER_COORDINATOR_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {
 		coordinatorRole = value
 	}
-	coordinatorTableGrants, coordinatorColumnGrants := coordinatorGrants()
+	coordinatorTableGrants, coordinatorColumnGrants, coordinatorSequences := coordinatorGrants()
 	migrationOptions := riverstore.MigrationOptions{
 		Schema:                  schema,
 		DomainRole:              domainRole,
@@ -103,6 +103,7 @@ func execute(
 		CoordinatorRole:         coordinatorRole,
 		CoordinatorGrants:       coordinatorTableGrants,
 		CoordinatorColumnGrants: coordinatorColumnGrants,
+		CoordinatorSequences:    coordinatorSequences,
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
 		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {
@@ -195,7 +196,7 @@ func requiredSecret(
 // purpose and is replaced by the real translation: dropping a declared column
 // privilege here would leave readiness demanding a grant the migration never
 // emitted, which is precisely the drift this indirection exists to prevent.
-func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant) {
+func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant, []string) {
 	posture := postgresstore.CoordinatorPosture()
 	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
 	for _, table := range posture.RequiredTables {
@@ -214,5 +215,5 @@ func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant) {
 			Privilege:  column.Privilege,
 		})
 	}
-	return grants, columns
+	return grants, columns, append([]string(nil), posture.RequiredSequences...)
 }

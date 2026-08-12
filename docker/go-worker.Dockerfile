@@ -64,6 +64,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/stream-runner/usr/local/bin \
       /runtime/operator/usr/local/bin \
       /runtime/operator/app/contracts/jobs \
+      /runtime/operator/app/contracts/sync-dispatch \
       /runtime/operator/app/deploy/go-workers \
       /runtime/contractcheck/usr/local/bin \
       /runtime/contractcheck/app/contracts/jobs \
@@ -84,6 +85,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/worker/app/config/status_mapping.yaml; \
     cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/worker/app/config/investment_areas.yaml; \
     cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1; \
+    cp -R /src/contracts/sync-dispatch/v1 /runtime/operator/app/contracts/sync-dispatch/v1; \
     cp /src/deploy/go-workers/profiles.json /runtime/operator/app/deploy/go-workers/profiles.json; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/profiles.json /runtime/contractcheck/app/deploy/go-workers/profiles.json; \

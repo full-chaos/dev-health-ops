@@ -255,6 +255,13 @@ func (repository *Repository) releaseClaim(
 }
 
 // DeleteTerminalBefore performs bounded retention without exposing args.
+//
+// A dead row is not the same as a delivered row. Before deleting it, retention
+// preserves a minimal abandonment fact in worker_job_delivery_abandonments.
+// The insert and delete are one statement so no crash can erase the delivery
+// outcome between them. Full args and error detail still leave with the outbox
+// row; only the stable key, job kind, terminal time, attempt count, and bounded
+// error code remain.
 func (repository *Repository) DeleteTerminalBefore(
 	ctx context.Context,
 	before time.Time,
@@ -270,15 +277,38 @@ func (repository *Repository) DeleteTerminalBefore(
 	defer func() { _ = tx.Rollback(ctx) }()
 	command, err := tx.Exec(ctx, `
 		WITH expired AS (
-			SELECT id FROM public.worker_job_outbox
+			SELECT id, dedupe_key, job_kind, status, updated_at,
+				attempt_count, last_error_code
+			FROM public.worker_job_outbox
 			WHERE (status = 'delivered' AND delivered_at < $1)
 				OR (status = 'dead' AND updated_at < $1)
 			ORDER BY COALESCE(delivered_at, updated_at), id
 			FOR UPDATE SKIP LOCKED
 			LIMIT $2
+		), recorded_abandonments AS (
+			INSERT INTO public.worker_job_delivery_abandonments (
+				dedupe_key, job_kind, abandoned_at, attempt_count, last_error_code
+			)
+			SELECT dedupe_key, job_kind, updated_at, attempt_count, last_error_code
+			FROM expired
+			WHERE status = 'dead'
+			ON CONFLICT (dedupe_key) DO NOTHING
+			RETURNING dedupe_key
 		)
 		DELETE FROM public.worker_job_outbox AS outbox
-		USING expired WHERE outbox.id = expired.id`, before.UTC(), limit)
+		USING expired
+		WHERE outbox.id = expired.id
+		  AND (
+			expired.status <> 'dead'
+			OR EXISTS (
+				SELECT 1 FROM recorded_abandonments AS recorded
+				WHERE recorded.dedupe_key = expired.dedupe_key
+			)
+			OR EXISTS (
+				SELECT 1 FROM public.worker_job_delivery_abandonments AS recorded
+				WHERE recorded.dedupe_key = expired.dedupe_key
+			)
+		  )`, before.UTC(), limit)
 	if err != nil {
 		return 0, ErrUnavailable
 	}

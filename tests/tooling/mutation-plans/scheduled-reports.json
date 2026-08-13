@@ -56,7 +56,7 @@
       "file": "internal/scheduler/fixed/reports.go",
       "find": "\tcase handoffStatus == nil:\n\t\treturn *linkedRunID, true, nil",
       "replace": "\tcase handoffStatus == nil:\n\t\treturn \"\", false, nil",
-      "rationale": "Restores the original permanent-stall bug. joboutbox marks a row 'dead' on budget exhaustion and retention DELETES dead rows, so a pending run can have no handoff at all. Refusing to re-arm leaves it permanently undelivered while every sweep reports a bounded already-claimed skip behind a healthy-looking schedule.",
+      "rationale": "Restores the original crash-window stall. A pending run with neither an outbox row nor an abandonment fact was never published, so refusing to re-arm leaves it permanently undelivered behind a healthy-looking schedule. A retained abandonment is a different state and must never reach this arm.",
       "proof": [
         [
           "go",
@@ -67,7 +67,7 @@
           "-timeout",
           "10m",
           "-run",
-          "TestReplayRearmsAPendingRunWhoseHandoffWasPruned",
+          "TestReplayRearmsAPendingRunWhoseHandoffWasNeverPublished",
           "./internal/scheduler/fixed/"
         ]
       ]
@@ -75,8 +75,8 @@
     {
       "id": "M19",
       "file": "internal/scheduler/fixed/reports.go",
-      "find": "\tcase *handoffStatus == outboxDeadStatus:\n\t\treturn \"\", false, fmt.Errorf(",
-      "replace": "\tcase *handoffStatus == outboxDeadStatus && false:\n\t\treturn \"\", false, fmt.Errorf(",
+      "find": "handoffStatus != nil && *handoffStatus == outboxDeadStatus",
+      "replace": "handoffStatus != nil && *handoffStatus == outboxDeadStatus && false",
       "rationale": "A spent delivery budget must be reported, not re-armed. Re-publishing collapses on the outbox dedupe key, so it delivers nothing while reporting success \u2014 a false pass worse than the stall it tries to fix.",
       "proof": [
         [
@@ -138,9 +138,9 @@
     {
       "id": "M23",
       "file": "internal/scheduler/fixed/reports.go",
-      "find": "\tcase handoffStatus == nil:\n\t\treturn *linkedRunID, true, nil\n\tcase *handoffStatus == outboxDeadStatus:\n\t\treturn \"\", false, fmt.Errorf(",
-      "replace": "\tcase handoffStatus != nil && *handoffStatus == outboxDeadStatus:\n\t\treturn *linkedRunID, true, nil\n\tcase handoffStatus == nil:\n\t\treturn \"\", false, fmt.Errorf(",
-      "rationale": "Highest-value mutation on the replay path: it keeps both arms live and exchanges them, so a test that only checks 'something happened' survives it where M18 and M19 individually would still die. Pruned must re-arm and spent must be reported; swapping them inverts both.",
+      "find": "\tcase handoffAbandoned || (handoffStatus != nil && *handoffStatus == outboxDeadStatus):\n\t\treturn \"\", false, fmt.Errorf(\n\t\t\t\"%w: report run %s is pending but its handoff exhausted its delivery budget\",\n\t\t\tErrScheduledReportUndeliverable, *linkedRunID,\n\t\t)\n\tcase handoffStatus == nil:\n\t\treturn *linkedRunID, true, nil",
+      "replace": "\tcase handoffAbandoned || (handoffStatus != nil && *handoffStatus == outboxDeadStatus):\n\t\treturn *linkedRunID, true, nil\n\tcase handoffStatus == nil:\n\t\treturn \"\", false, fmt.Errorf(\n\t\t\t\"%w: report run %s is pending but its handoff exhausted its delivery budget\",\n\t\t\tErrScheduledReportUndeliverable, *linkedRunID,\n\t\t)",
+      "rationale": "Highest-value mutation on the replay path: it keeps both arms live and exchanges them. Never-published handoffs must re-arm, while both live dead rows and retained abandonments must stay degraded; swapping the arms inverts all three states.",
       "proof": [
         [
           "go",
@@ -151,7 +151,7 @@
           "-timeout",
           "10m",
           "-run",
-          "TestReplayRearmsAPendingRunWhoseHandoffWasPruned|TestSpentHandoffIsReportedAsDegradedNotSkippedSilently",
+          "TestReplayRearmsAPendingRunWhoseHandoffWasNeverPublished|TestSpentHandoffIsReportedAsDegradedNotSkippedSilently|TestDeadHandoffRemainsUndeliverableAfterTerminalRetention",
           "./internal/scheduler/fixed/"
         ]
       ]
@@ -173,6 +173,48 @@
           "10m",
           "-run",
           "TestOneTenantsStrandedRunDoesNotBlockAnotherTenant",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3160-M1",
+      "file": "internal/joboutbox/repository.go",
+      "find": "\t\t\tFROM expired\n\t\t\tWHERE status = 'dead'\n\t\t\tON CONFLICT (dedupe_key) DO NOTHING",
+      "replace": "\t\t\tFROM expired\n\t\t\tWHERE status = 'dead' AND false\n\t\t\tON CONFLICT (dedupe_key) DO NOTHING",
+      "rationale": "Dead-row retention must record the durable abandonment fact before deleting full delivery state. Disabling the insert must make retention preserve the dead row rather than erase the only evidence, so the exact lifecycle test fails at the retention boundary.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "10m",
+          "-run",
+          "^TestDeadHandoffRemainsUndeliverableAfterTerminalRetention$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3160-M2",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "\tcase handoffAbandoned || (handoffStatus != nil && *handoffStatus == outboxDeadStatus):",
+      "replace": "\tcase false || (handoffStatus != nil && *handoffStatus == outboxDeadStatus):",
+      "rationale": "Report replay must consult the retained abandonment fact after the full dead outbox row is gone. Disabling only that clause leaves the live-dead guard intact but incorrectly treats retained abandonment as never-published work and re-arms a fresh delivery budget.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "10m",
+          "-run",
+          "^TestDeadHandoffRemainsUndeliverableAfterTerminalRetention$",
           "./internal/scheduler/fixed/"
         ]
       ]

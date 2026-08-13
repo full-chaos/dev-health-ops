@@ -595,6 +595,88 @@ SELECT count(*) FROM public.worker_job_completion_fences`).Scan(&fences); err !=
 			t.Fatalf("retained completion fences=%d want=1", fences)
 		}
 	})
+
+	t.Run("dead retention keeps minimal abandonment evidence", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		seed := normalSeed(103, now)
+		seedOutbox(t, ctx, adminPool, seed)
+		claim := claimOne(t, ctx, repository, now, 30*time.Second)
+		if err := repository.recordFailure(
+			ctx, claim, now, failureContract, 4, now.Add(time.Minute),
+		); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+UPDATE public.worker_job_outbox SET updated_at=$2 WHERE id=$1::uuid`,
+			seed.ID, now.Add(-48*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+
+		deleted, err := repository.DeleteTerminalBefore(ctx, now.Add(-24*time.Hour), 10)
+		if err != nil || deleted != 1 {
+			t.Fatalf("DeleteTerminalBefore() = %d, %v", deleted, err)
+		}
+		assertCounts(t, ctx, adminPool, statusDead, 0, 0)
+
+		var kind string
+		var abandonedAt time.Time
+		var attempts int
+		var code *string
+		if err := adminPool.QueryRow(ctx, `
+SELECT job_kind, abandoned_at, attempt_count, last_error_code
+FROM public.worker_job_delivery_abandonments
+WHERE dedupe_key=$1`, seed.DedupeKey).Scan(
+			&kind, &abandonedAt, &attempts, &code,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if kind != seed.Kind || !abandonedAt.Equal(now.Add(-48*time.Hour)) || attempts != 1 ||
+			code == nil || *code != "contract_rejected" {
+			t.Fatalf(
+				"abandonment = kind %q at %s attempts %d code %v",
+				kind, abandonedAt, attempts, code,
+			)
+		}
+
+		// Retention is retry-safe if the full row reappears after the fact: the
+		// first terminal evidence stays authoritative and the duplicate row can
+		// still be retired without mutating that evidence.
+		seedOutbox(t, ctx, adminPool, seed)
+		claim = claimOne(t, ctx, repository, now, 30*time.Second)
+		if err := repository.recordFailure(
+			ctx, claim, now, failurePolicy, 4, now.Add(time.Minute),
+		); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+UPDATE public.worker_job_outbox SET updated_at=$2 WHERE id=$1::uuid`,
+			seed.ID, now.Add(-24*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		deleted, err = repository.DeleteTerminalBefore(ctx, now.Add(-time.Hour), 10)
+		if err != nil || deleted != 1 {
+			t.Fatalf("idempotent DeleteTerminalBefore() = %d, %v", deleted, err)
+		}
+		var evidenceCount int
+		var retainedAt time.Time
+		var retainedCode *string
+		if err := adminPool.QueryRow(ctx, `
+SELECT count(*), min(abandoned_at), min(last_error_code)
+FROM public.worker_job_delivery_abandonments
+WHERE dedupe_key=$1`, seed.DedupeKey).Scan(
+			&evidenceCount, &retainedAt, &retainedCode,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if evidenceCount != 1 || !retainedAt.Equal(now.Add(-48*time.Hour)) ||
+			retainedCode == nil || *retainedCode != "contract_rejected" {
+			t.Fatalf(
+				"retained abandonment changed: count %d at %s code %v",
+				evidenceCount, retainedAt, retainedCode,
+			)
+		}
+	})
 }
 
 type outboxSeed struct {
@@ -756,7 +838,7 @@ func injectedFault() error { return errors.New("simulated process crash") }
 
 func resetOutboxTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, "TRUNCATE public.worker_job_outbox, public.worker_job_completion_fences, river.river_job RESTART IDENTITY"); err != nil {
+	if _, err := pool.Exec(ctx, "TRUNCATE public.worker_job_outbox, public.worker_job_delivery_abandonments, public.worker_job_completion_fences, river.river_job RESTART IDENTITY"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -817,6 +899,13 @@ func createOutboxSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		CREATE TABLE public.worker_job_completion_fences (
 			completion_key text PRIMARY KEY,
 			completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
+		);
+		CREATE TABLE public.worker_job_delivery_abandonments (
+			dedupe_key varchar(256) PRIMARY KEY,
+			job_kind varchar(96) NOT NULL,
+			abandoned_at timestamptz NOT NULL,
+			attempt_count integer NOT NULL,
+			last_error_code varchar(64)
 		)`)
 	if err != nil {
 		t.Fatal(err)

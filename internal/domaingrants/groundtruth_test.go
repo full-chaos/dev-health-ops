@@ -131,17 +131,20 @@ func TestLoadGroundTruth_MatchesKnownShape(t *testing.T) {
 		}
 	}
 
-	if len(gt.RequiredTablePrivileges) != 40 {
-		t.Errorf("domain posture: got %d tables, want 40 (Option B two-role split) -- "+
+	if len(gt.RequiredTablePrivileges) != 39 {
+		t.Errorf("domain posture: got %d tables, want 39 (Option B two-role split) -- "+
 			"if this changed intentionally, the ground-truth reader is fine, just update this pin", len(gt.RequiredTablePrivileges))
 	}
-	if len(gt.Grants) != 40 {
-		t.Errorf("runtimeGrantStatements: got %d granted tables, want 40 -- see note above", len(gt.Grants))
+	if len(gt.Grants) != 39 {
+		t.Errorf("runtimeGrantStatements: got %d table-wide granted relations, want 39 -- see note above", len(gt.Grants))
 	}
 	// The two lists agreeing on their size is the property that matters most
 	// here: this checker exists because they disagreed once.
 	if len(gt.Grants) != len(gt.RequiredTablePrivileges) {
-		t.Errorf("grants cover %d tables but the posture declares %d -- the two hand-maintained lists have drifted apart",
+		t.Errorf("grants cover %d table-wide relations but the posture declares %d -- the two hand-maintained lists have drifted apart",
 			len(gt.Grants), len(gt.RequiredTablePrivileges))
+	}
+	if len(gt.ColumnScopedTables) != 2 {
+		t.Errorf("domain posture declares %d column-scoped tables, want scheduled_jobs plus worker_job_completion_fences", len(gt.ColumnScopedTables))
 	}
 }

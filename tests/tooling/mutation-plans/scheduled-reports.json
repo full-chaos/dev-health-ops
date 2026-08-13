@@ -220,6 +220,27 @@
       ]
     },
     {
+      "id": "CHAOS-3160-M3",
+      "file": "src/dev_health_ops/alembic/versions/0099_add_worker_job_delivery_abandonments.py",
+      "find": "            \"attempt_count >= 0\",",
+      "replace": "            \"attempt_count > 0\",",
+      "rationale": "Retention must be able to preserve every historical dead row accepted by the outbox domain, including a legacy or manually repaired row whose recorded attempt count is zero. Tightening the durable-evidence constraint would make the atomic insert-and-delete statement fail and strand the whole retention batch.",
+      "build": [
+        "python3",
+        "-m",
+        "py_compile",
+        "src/dev_health_ops/alembic/versions/0099_add_worker_job_delivery_abandonments.py"
+      ],
+      "proof": [
+        [
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/test_worker_job_delivery_abandonment_migration.py::test_0099_zero_attempt_history_is_valid_but_negative_counts_are_not"
+        ]
+      ]
+    },
+    {
       "id": "M27",
       "file": "internal/scheduler/fixed/reports.go",
       "find": "\tfor _, entry := range replays {",

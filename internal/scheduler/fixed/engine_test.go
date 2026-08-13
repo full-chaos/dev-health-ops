@@ -608,7 +608,7 @@ func TestAnchoredScheduleDoesNotRefireAnOwnedBoundary(t *testing.T) {
 func TestIntervalScheduleWaitsAFullPeriodAfterItsBaseline(t *testing.T) {
 	schedule := Schedule{
 		ID:               "interval_probe",
-		LegacyBeatEntry:  "dispatch-scheduled-metrics",
+		LegacyBeatEntry:  "interval-probe",
 		Cadence:          EveryInterval(300 * time.Second),
 		Timezone:         "UTC",
 		CatchUp:          CatchUpSkip,

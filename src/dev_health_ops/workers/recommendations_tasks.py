@@ -88,8 +88,8 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
 def _discover_active_org_ids(strict: bool = False) -> list[str]:
     """Return the IDs of all active organisations (Postgres source of truth).
 
-    Mirrors how ``dispatch_scheduled_metrics`` scopes work to live orgs. Falls
-    back to ``["default"]`` (single-tenant / community installs) when the
+    Uses the same active-organization source as the remaining scheduled
+    fan-out tasks. Falls back to ``["default"]`` (single-tenant / community installs) when the
     organizations table is empty or unavailable.
 
     When ``strict=True``, a Postgres enumeration failure RAISES instead of

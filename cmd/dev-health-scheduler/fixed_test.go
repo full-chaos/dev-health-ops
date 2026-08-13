@@ -25,7 +25,7 @@ const testContractRoot = "../../" + defaultContractRoot
 // It exists because ScheduleCoverage does not and cannot catch this. That test
 // proves every legacy Beat entry maps to an owner with a matching cadence, zone
 // and catch-up policy — an OWNERSHIP property. It never constructs a producer,
-// so a schedule whose producer fails every invocation passes it unchanged. Three
+// so a schedule whose producer fails every invocation passes it unchanged. Two
 // did, for long enough that their tickets were closed as done.
 //
 // Pinning the set here closes the loophole in both directions: adding a stub, or
@@ -36,8 +36,6 @@ const testContractRoot = "../../" + defaultContractRoot
 var checkedInUnbuiltSchedules = map[string]string{
 	"daily_metrics_fanout": "blocked: repository identity is ClickHouse-only and this process has no " +
 		"ClickHouse connection; discovery must move to internal/jobs/metrics/daily",
-	"scheduled_metrics_dispatch": "blocked on the same ClickHouse-only repository discovery; separately, no " +
-		"code path creates a job_type='metrics' ScheduledJob for it to sweep",
 }
 
 // unconnectedPool is a constructed but never-dialled pool. The stores

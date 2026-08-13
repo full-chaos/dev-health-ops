@@ -1,7 +1,4 @@
-from dev_health_ops.workers.metrics_daily import (
-    dispatch_scheduled_metrics,
-    run_daily_metrics,
-)
+from dev_health_ops.workers.metrics_daily import run_daily_metrics
 from dev_health_ops.workers.metrics_extra import (
     dispatch_complexity_job,
     dispatch_release_impact,
@@ -21,7 +18,6 @@ __all__ = [
     "dispatch_daily_metrics_for_all_orgs",
     "dispatch_daily_metrics_partitioned",
     "dispatch_release_impact",
-    "dispatch_scheduled_metrics",
     "run_complexity_job",
     "run_daily_metrics",
     "run_daily_metrics_batch",

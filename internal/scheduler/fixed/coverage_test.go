@@ -206,10 +206,11 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// The reviewed decision: it is owned by the already-ported Go schedule
 	// `prune_ask_dev_conversations` (CHAOS-3209), which stopped being Native
 	// in the same change because it now has a Python predecessor. The native
-	// sync coverage refresh then retired the Beat entry entirely, so the
-	// checked inventory now holds twenty unconditional rows.
-	if unconditional != 20 {
-		t.Fatalf("parsed %d unconditional beat entries, want 20", unconditional)
+	// sync coverage refresh and the obsolete scheduled-metrics dispatcher are
+	// both recorded in RetiredBeatInventory, so the live table has nineteen
+	// unconditional rows.
+	if unconditional != 19 {
+		t.Fatalf("parsed %d unconditional beat entries, want 19", unconditional)
 	}
 	if optional != 1 {
 		t.Fatalf("parsed %d optional beat entries, want 1", optional)
@@ -321,6 +322,26 @@ func TestLegacyInventoryReplacementsAreNotSilentlyDropped(t *testing.T) {
 	}
 }
 
+// Retiring a Beat row is distinct from merely omitting it from the current
+// inventory. The current inventory intentionally mirrors source that still
+// runs; this ledger records the reviewed absence and makes reintroducing the
+// stale beat key a test failure.
+func TestRetiredBeatEntriesStayAbsentAndExplained(t *testing.T) {
+	parsed := parseBeatSchedule(t)
+	present := make(map[string]struct{}, len(parsed))
+	for _, entry := range parsed {
+		present[entry.Name] = struct{}{}
+	}
+	for _, retired := range RetiredBeatInventory() {
+		if _, exists := present[retired.Name]; exists {
+			t.Errorf("retired beat entry %q was reintroduced into %s", retired.Name, beatConfigRelativePath)
+		}
+		if strings.TrimSpace(retired.Reason) == "" || strings.TrimSpace(retired.Evidence) == "" {
+			t.Errorf("retired beat entry %q lacks a reviewed reason or evidence", retired.Name)
+		}
+	}
+}
+
 // Sync coverage is durable product state, not runtime telemetry. Its Python
 // Beat entry and task are deleted only after the native schedule and producer
 // are constructed, so a Go-only stack can create cold projections and rebuild
@@ -403,7 +424,6 @@ func TestScheduleCoverageFingerprintsTheBeatTimezone(t *testing.T) {
 // catch up, has to be an explicit edit to this table.
 func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
 	want := map[string]CatchUpPolicy{
-		"scheduled_metrics_dispatch":       CatchUpSkip,
 		"scheduled_reports_dispatch":       CatchUpSkip,
 		"phone_home_heartbeat":             CatchUpSkip,
 		"prune_rate_limit_observations":    CatchUpSkip,

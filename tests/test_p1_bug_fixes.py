@@ -75,7 +75,7 @@ class TestActiveReposUnion:
 
 
 class TestBeatScheduleMetrics:
-    """gh-378: beat_schedule must include metrics dispatch and daily metrics tasks."""
+    """Daily metrics stays explicitly scheduled after the obsolete sweep retires."""
 
     def test_beat_schedule_contains_daily_metrics(self):
         from dev_health_ops.workers.config import beat_schedule
@@ -91,14 +91,14 @@ class TestBeatScheduleMetrics:
         )
         assert entry["options"]["queue"] == "default"
 
-    def test_beat_schedule_contains_metrics_dispatcher(self):
+    def test_obsolete_metrics_dispatcher_is_retired(self):
+        from dev_health_ops.workers import metrics_daily, metrics_tasks, tasks
         from dev_health_ops.workers.config import beat_schedule
 
-        assert "dispatch-scheduled-metrics" in beat_schedule
-        entry = beat_schedule["dispatch-scheduled-metrics"]
-        assert (
-            entry["task"] == "dev_health_ops.workers.tasks.dispatch_scheduled_metrics"
-        )
+        assert "dispatch-scheduled-metrics" not in beat_schedule
+        assert not hasattr(metrics_daily, "dispatch_scheduled_metrics")
+        assert "dispatch_scheduled_metrics" not in metrics_tasks.__all__
+        assert "dispatch_scheduled_metrics" not in tasks.__all__
 
     def test_beat_schedule_retains_sync_dispatcher(self):
         from dev_health_ops.workers.config import beat_schedule
@@ -112,14 +112,3 @@ class TestBeatScheduleMetrics:
 
         schedule = beat_schedule["run-daily-metrics"]["schedule"]
         assert isinstance(schedule, crontab)
-
-    def test_dispatch_scheduled_metrics_task_registered(self):
-        from dev_health_ops.workers.metrics_daily import dispatch_scheduled_metrics
-
-        assert callable(dispatch_scheduled_metrics)
-
-    def test_dispatch_scheduled_metrics_is_celery_task(self):
-        from dev_health_ops.workers.metrics_daily import dispatch_scheduled_metrics
-
-        assert hasattr(dispatch_scheduled_metrics, "apply_async")
-        assert hasattr(dispatch_scheduled_metrics, "delay")

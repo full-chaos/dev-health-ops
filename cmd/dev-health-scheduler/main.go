@@ -29,14 +29,10 @@ var schedulerSpec = shell.Spec{
 // uses, so this variable is the single source of truth for which ownership
 // policy the binary runs with, not a decorative check.
 //
-// Obtaining this policy does NOT make the binary write anything: it still
-// requires checkedInSchedulerActivation.goOwnsMarkers to be true before this
-// process opens a database pool at all (see below), and at minimum one
-// further precondition this change does not attempt to satisfy:
-//
-//   - provider-by-provider differential acceptance and deployment-owner
-//     approval remain outside this source change. The native occurrence
-//     materializer is composed below, but that is not an activation signal.
+// The checked-in activation below now makes this ownership effective. The
+// deployment contract must still provide the separate domain, queue, and
+// coordinator PostgreSQL connections, and must not run Celery Beat against the
+// same marker tables.
 //
 // CHAOS-3114 repointed every database call site in dependencies.go onto the
 // coordinator pool: first the sync-path repository and occurrence reconciler
@@ -48,16 +44,14 @@ var schedulerSpec = shell.Spec{
 // The materializer now uses both role-specific pools: coordinator policy and
 // ledger work stays on the coordinator pool while sync_runs, sync_run_units,
 // and FK-dependent provider inventory repair commit on the domain pool.
-// goOwnsMarkers remains false until the separate cutover acceptance and
-// deployment change.
 var schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
 
 var errSchedulerActivationUnavailable = errors.New("scheduler activation is unavailable")
 
 // schedulerActivation is a source-reviewed, package-private composition seam.
 // It deliberately cannot be influenced by process environment or deployment
-// profile. The production loop factory is retained but remains unreachable
-// until a future change sets goOwnsMarkers true.
+// profile. The production loop factory is reached only through the checked-in
+// ownership decision below.
 //
 // coordinatorPolicyParity was removed deliberately (program-owner decision,
 // CHAOS-3114) rather than left at false: it was a bare bool with a prose
@@ -71,16 +65,14 @@ var errSchedulerActivationUnavailable = errors.New("scheduler activation is unav
 // proves.
 //
 // CHAOS-3128 transferred marker-mutation ownership itself (schedulerOwnership
-// above) but deliberately leaves goOwnsMarkers false. CHAOS-3145 replaces the
-// missing materializer without changing that activation boundary: provider
-// differential acceptance and deployment-owner approval are still separate.
-// The binary therefore stays dormant and opens no database pool until the
-// checked-in activation changes in its own reviewed cutover.
+// above). The materializer and fixed-schedule producers now satisfy the source
+// precondition for activation; the deployment owner separately supplies the
+// required role-specific connections and removes the competing Beat process.
 type schedulerActivation struct {
 	goOwnsMarkers bool
 }
 
-var checkedInSchedulerActivation = schedulerActivation{}
+var checkedInSchedulerActivation = schedulerActivation{goOwnsMarkers: true}
 
 type schedulerDependencySources struct {
 	buildLoop func(context.Context, config.Config, *health.Registry) (lifecycle.Component, error)

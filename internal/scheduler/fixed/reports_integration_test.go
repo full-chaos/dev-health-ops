@@ -412,10 +412,28 @@ func TestNextCronInstantAfterCompletionProducesAgain(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	// The report handler is what advances last_run_at; simulate its completion.
+	// The report handler is what advances last_run_at; simulate a terminal
+	// transition that records the exact scheduled occurrence. Cancellation uses
+	// this shape, so the replay selector must treat equality as already advanced.
 	if _, err := pool.Exec(ctx, `
 UPDATE public.saved_reports SET last_run_at = $2, last_run_status = 'success' WHERE id = $1::uuid`,
-		testReportID, time.Date(2026, time.July, 25, 6, 1, 0, 0, time.UTC)); err != nil {
+		testReportID, time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	// Terminal transitions invalidate the paging projection; this forces the
+	// selector to distinguish the completed occurrence from genuinely owed work
+	// using last_run_at. Leaving tomorrow's projection in place would let an
+	// incorrect >= replay predicate pass by selecting the old occurrence and
+	// deriving tomorrow independently.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.scheduled_jobs SET next_run_at = NULL WHERE id = $1::uuid`, testJobID); err != nil {
+		t.Fatal(err)
+	}
+	// A terminal occurrence no longer owns a report run. If equality is wrongly
+	// classified as replay, replayExisting reaches the preserved occurrence and
+	// fails this missing-link state instead of moving to tomorrow's cron instant.
+	if _, err := pool.Exec(ctx, `
+UPDATE public.scheduled_report_occurrences SET report_run_id = NULL`); err != nil {
 		t.Fatal(err)
 	}
 	_, tomorrow := reportOccurrence(t, time.Date(2026, time.July, 26, 6, 5, 0, 0, time.UTC))

@@ -300,3 +300,24 @@ async def test_report_schedule_writes_the_exact_next_due_marker(
         job = await session.scalar(select(ScheduledJob))
         assert job is not None
         assert job.next_run_at == datetime(2026, 7, 25, 6, 0)
+        original_job_id = job.id
+        report = await session.get(SavedReport, uuid.UUID(seeded_reports["report1_id"]))
+        assert report is not None
+        report.last_run_at = datetime(2026, 7, 25, 6, 30, tzinfo=UTC)
+        await session.commit()
+
+    updated_again = await reports_mod.resolve_update_saved_report(
+        org_id=seeded_reports["org_id"],
+        report_id=seeded_reports["report1_id"],
+        input=reports_mod.UpdateSavedReportInput(
+            schedule_cron="30 7 * * *",
+            schedule_timezone="UTC",
+        ),
+    )
+    assert updated_again is not None
+
+    async with session_maker() as session:
+        jobs = (await session.scalars(select(ScheduledJob))).all()
+        assert len(jobs) == 1
+        assert jobs[0].id == original_job_id
+        assert jobs[0].next_run_at == datetime(2026, 7, 25, 7, 30)

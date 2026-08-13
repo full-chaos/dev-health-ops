@@ -19,10 +19,10 @@ func (schedulerTestComponent) Name() string                   { return "schedule
 func (schedulerTestComponent) Start(context.Context) error    { return nil }
 func (schedulerTestComponent) Shutdown(context.Context) error { return nil }
 
-func TestSchedulerSpecConfiguresFailClosedDependencies(t *testing.T) {
-	// CHAOS-3128: schedulerOwnership is the reviewed transfer, not the
-	// checked-in Celery default. That alone must not open a database pool or
-	// change readiness -- both gates below are still checked separately.
+func TestSchedulerSpecRejectsAnActivatedRuntimeWithoutDatabaseConfiguration(t *testing.T) {
+	// CHAOS-3128: schedulerOwnership is the reviewed transfer, and the
+	// checked-in activation now reaches the real factory. Missing required
+	// role-specific database configuration must therefore fail closed.
 	if schedulerOwnership != schedulersync.TransferScheduleMarkerOwnershipToGo() {
 		t.Fatalf("scheduler ownership = %#v", schedulerOwnership)
 	}
@@ -38,20 +38,8 @@ func TestSchedulerSpecConfiguresFailClosedDependencies(t *testing.T) {
 
 	registry := health.NewRegistry(100 * time.Millisecond)
 	components, err := configureSchedulerDependencies(context.Background(), config.Config{}, registry)
-	if err != nil {
-		t.Fatalf("configureSchedulerDependencies() error = %v", err)
-	}
-	if len(components) != 0 {
-		t.Fatalf("components = %d, want no scheduler runtime before reviewed activation", len(components))
-	}
-	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
-		t.Fatalf("open readiness gate: %v", err)
-	}
-
-	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "river_schema", "scheduler_loop"}
-	status := registry.Readiness(context.Background())
-	if status.Ready || !slices.Equal(status.Failed, want) {
-		t.Fatalf("readiness = %#v, want failed %v", status, want)
+	if !errors.Is(err, errSchedulerActivationUnavailable) || len(components) != 0 {
+		t.Fatalf("unconfigured activated scheduler components=%v err=%v", components, err)
 	}
 }
 

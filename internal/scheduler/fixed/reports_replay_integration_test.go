@@ -801,6 +801,65 @@ VALUES ($1::uuid, $2, 'victim', $3::uuid, TRUE, $4, $4, $4)`,
 	)
 }
 
+// A durable replay must not disappear behind a continuously full page of new
+// reports. The selector and the in-memory work budget are separate fairness
+// boundaries: selecting the replay is insufficient if pass one still spends all
+// 500 request slots on new claims before replayExisting runs.
+func TestDurableReplayProgressesWhenTheNewReportPageIsFull(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	schedule, _, replayedRunID := dueScheduledReport(t, pool)
+	createdAt := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+	nextRunAt := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+WITH new_jobs AS (
+    INSERT INTO public.scheduled_jobs
+        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+    SELECT gen_random_uuid(), $1, 'report:new-fill', 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $3, $3
+    FROM generate_series(1, $4)
+    RETURNING id
+)
+INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+SELECT gen_random_uuid(), $1, 'new-fill', new_jobs.id, TRUE, $3, $3
+FROM new_jobs`, testOrganizationID, nextRunAt, createdAt,
+		maximumScheduledReportCandidatesPerOccurrence); err != nil {
+		t.Fatal(err)
+	}
+
+	// This canonical tick is the replay-priority half of the alternating policy.
+	// The test fixes the timestamp independently so changing or removing that
+	// production policy cannot make the fixture silently follow the defect.
+	_, occurrence := reportOccurrence(t, time.Date(2026, time.July, 25, 6, 15, 0, 0, time.UTC))
+	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("saturated replay sweep: %v", err)
+	}
+	assertNoDuplicateHandoffs(t, outcome)
+
+	replayedKey := "report.run:" + replayedRunID
+	foundReplay := false
+	for _, request := range outcome.Requests {
+		if request.Envelope.IdempotencyKey == replayedKey {
+			foundReplay = true
+			break
+		}
+	}
+	if !foundReplay {
+		t.Fatalf("durable replay %s was starved behind %d new reports",
+			replayedKey, maximumScheduledReportCandidatesPerOccurrence)
+	}
+	if len(outcome.Requests) != maximumScheduledReportsPerOccurrence {
+		t.Fatalf("published %d requests, want the bounded work budget %d",
+			len(outcome.Requests), maximumScheduledReportsPerOccurrence)
+	}
+	if outcome.Degraded != DegradedScheduledReportsDeferred {
+		t.Fatalf("degraded = %q, want %q", outcome.Degraded, DegradedScheduledReportsDeferred)
+	}
+}
+
 // The sweep must lock exactly one bounded page plus one row that proves a due
 // remainder exists. The extra row is what raises the deferred signal; reading all
 // 621 rows would restore the transaction-footprint bug this page replaced.
@@ -835,7 +894,7 @@ FROM new_jobs`,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	candidates, err := reportsProducer(t).lockDueCandidates(
-		ctx, tx, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC),
+		ctx, tx, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC), false,
 	)
 	if err != nil {
 		t.Fatalf("lockDueCandidates(): %v", err)
@@ -879,7 +938,7 @@ SET last_run_at = $1, last_run_status = 'canceled'
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	candidates, err := reportsProducer(t).lockDueCandidates(
-		ctx, tx, time.Date(2026, time.July, 26, 6, 5, 0, 0, time.UTC),
+		ctx, tx, time.Date(2026, time.July, 26, 6, 5, 0, 0, time.UTC), false,
 	)
 	if err != nil {
 		t.Fatalf("lockDueCandidates(): %v", err)

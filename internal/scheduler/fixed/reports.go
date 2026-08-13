@@ -97,6 +97,14 @@ const (
 	// durable next-run marker, so truncating here preserves the same oldest-due
 	// delivery bound as the in-memory order below.
 	maximumScheduledReportCandidatesPerOccurrence = maximumScheduledReportsPerOccurrence + 1
+
+	// scheduledReportFairnessWindow matches the checked-in report sweep cadence.
+	// Alternating class priority by this durable slot gives both never-materialized
+	// reports and already-durable replays a bounded opportunity to consume the
+	// fixed page and work budgets. A process-local toggle would disagree across
+	// replicas and reset on restart; ScheduledFor is shared, immutable occurrence
+	// state.
+	scheduledReportFairnessWindow = 5 * time.Minute
 )
 
 // ErrScheduledReportConfiguration identifies a persisted report schedule that
@@ -268,6 +276,11 @@ func sortDueEntriesMostOverdueFirst(entries []dueEntry) {
 	})
 }
 
+func scheduledReportSweepPrioritizesReplays(scheduledFor time.Time) bool {
+	windowSeconds := int64(scheduledReportFairnessWindow / time.Second)
+	return scheduledFor.UTC().Unix()/windowSeconds%2 != 0
+}
+
 // Produce sweeps the durable report schedule set and materializes every due
 // occurrence.
 //
@@ -299,13 +312,13 @@ func (producer *ScheduledReportsProducer) Produce(
 		return Outcome{}, err
 	}
 	now := occurrence.ScheduledFor.UTC()
-	candidates, err := producer.lockDueCandidates(ctx, tx, now)
+	prioritizeReplays := scheduledReportSweepPrioritizesReplays(now)
+	candidates, err := producer.lockDueCandidates(ctx, tx, now, prioritizeReplays)
 	if err != nil {
 		return Outcome{}, err
 	}
 
-	// Due-ness is resolved once, then the sweep runs in TWO passes: new claims
-	// first, replays second.
+	// Due-ness is resolved once, then the sweep runs in two class-specific passes.
 	//
 	// The ordering is load-bearing, not tidiness. With a single pass, replayed
 	// occurrences competed for the same budget as new ones, so an installation with
@@ -313,8 +326,12 @@ func (producer *ScheduledReportsProducer) Produce(
 	// reports it had already materialized and never reach the remainder — on every
 	// tick, forever. "The deferred report stays due" is true but insufficient:
 	// staying due is not progress if the budget is refilled by replays each time.
-	// Claiming first guarantees that every tick makes forward progress on work that
-	// has never been materialized.
+	// Permanently claiming first, however, creates the inverse starvation failure:
+	// a continuously full new-work page can hide a durable replay forever. The SQL
+	// page and these passes therefore use the same deterministic alternating class
+	// priority. Every pair of five-minute occurrences gives both classes the first
+	// 500 request slots, while preserving a single bounded transaction and total
+	// oldest-first ordering within each class.
 	dueEntries := make([]dueEntry, 0, len(candidates))
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
@@ -339,58 +356,91 @@ func (producer *ScheduledReportsProducer) Produce(
 	due := len(dueEntries)
 	undeliverable := 0
 	deferred := 0
+	newEntries := make([]dueEntry, 0, len(dueEntries))
 	replays := make([]dueEntry, 0, len(dueEntries))
-
-	// Pass one: occurrences this tick is the first to see.
 	for _, entry := range dueEntries {
-		if err := ctx.Err(); err != nil {
-			return Outcome{}, err
-		}
-		if len(requests) >= maximumScheduledReportsPerOccurrence {
-			deferred++
-			continue
-		}
-		request, claimed, err := producer.claimNew(
-			ctx, tx, occurrence, entry.candidate, entry.scheduledFor,
-		)
-		if err != nil {
-			return Outcome{}, err
-		}
-		if !claimed {
+		if entry.candidate.AlreadyMaterialized {
 			replays = append(replays, entry)
-			continue
+		} else {
+			newEntries = append(newEntries, entry)
 		}
-		requests = append(requests, request)
 	}
 
-	// Pass two: already-durable occurrences, with whatever budget is left.
-	for _, entry := range replays {
-		if err := ctx.Err(); err != nil {
-			return Outcome{}, err
-		}
-		if len(requests) >= maximumScheduledReportsPerOccurrence {
-			deferred++
-			continue
-		}
-		request, rearm, err := producer.replayExisting(ctx, tx, entry.candidate, entry.scheduledFor)
-		if err != nil {
-			// A report whose durable handoff is spent is a per-row fault: it needs
-			// operator repair and it must NOT roll back the occurrence, because
-			// doing so would discard every other tenant's freshly materialized run
-			// and would do so on every subsequent tick, permanently. Nothing
-			// clears the dead row on its own, so this condition persists until
-			// someone acts on it — which is exactly why it must be visible rather
-			// than fatal. Every other error still fails the occurrence.
-			if errors.Is(err, ErrScheduledReportUndeliverable) {
-				undeliverable++
+	claimNewEntries := func(entries []dueEntry) error {
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if len(requests) >= maximumScheduledReportsPerOccurrence {
+				deferred++
 				continue
 			}
+			request, claimed, err := producer.claimNew(
+				ctx, tx, occurrence, entry.candidate, entry.scheduledFor,
+			)
+			if err != nil {
+				return err
+			}
+			if !claimed {
+				replays = append(replays, entry)
+				continue
+			}
+			requests = append(requests, request)
+		}
+		return nil
+	}
+	replayEntries := func(entries []dueEntry) error {
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if len(requests) >= maximumScheduledReportsPerOccurrence {
+				deferred++
+				continue
+			}
+			request, rearm, err := producer.replayExisting(ctx, tx, entry.candidate, entry.scheduledFor)
+			if err != nil {
+				// A report whose durable handoff is spent is a per-row fault: it needs
+				// operator repair and it must NOT roll back the occurrence, because
+				// doing so would discard every other tenant's freshly materialized run
+				// and would do so on every subsequent tick, permanently. Nothing
+				// clears the dead row on its own, so this condition persists until
+				// someone acts on it — which is exactly why it must be visible rather
+				// than fatal. Every other error still fails the occurrence.
+				if errors.Is(err, ErrScheduledReportUndeliverable) {
+					undeliverable++
+					continue
+				}
+				return err
+			}
+			if !rearm {
+				continue
+			}
+			requests = append(requests, request)
+		}
+		return nil
+	}
+
+	if prioritizeReplays {
+		initialReplayCount := len(replays)
+		if err := replayEntries(replays); err != nil {
 			return Outcome{}, err
 		}
-		if !rearm {
-			continue
+		if err := claimNewEntries(newEntries); err != nil {
+			return Outcome{}, err
 		}
-		requests = append(requests, request)
+		// A concurrent claimant can make a row selected as new lose its stable
+		// occurrence insert. Process that late replay with any remaining budget.
+		if err := replayEntries(replays[initialReplayCount:]); err != nil {
+			return Outcome{}, err
+		}
+	} else {
+		if err := claimNewEntries(newEntries); err != nil {
+			return Outcome{}, err
+		}
+		if err := replayEntries(replays); err != nil {
+			return Outcome{}, err
+		}
 	}
 
 	// Degraded is ordered most-actionable first: a stranded run needs a human,
@@ -806,6 +856,7 @@ func (producer *ScheduledReportsProducer) lockDueCandidates(
 	ctx context.Context,
 	tx pgx.Tx,
 	dueThrough time.Time,
+	prioritizeReplays bool,
 ) ([]dueReportCandidate, error) {
 	rows, err := tx.Query(
 		ctx,
@@ -813,6 +864,7 @@ func (producer *ScheduledReportsProducer) lockDueCandidates(
 		activeScheduledJobStatus,
 		dueThrough.UTC(),
 		maximumScheduledReportCandidatesPerOccurrence,
+		prioritizeReplays,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("read due scheduled reports: %w", err)
@@ -949,9 +1001,10 @@ func writePythonDigestField(hasher io.Writer, name, value string) {
 	_, _ = fmt.Fprintf(hasher, "%d:%s%d:%s\n", len(name), name, len(value), value)
 }
 
-// The sweep gives never-materialized work priority over replay, then orders each
-// set by its durable cron instant and report id. That is the SQL form of Produce's
-// two-pass fairness contract. A pending/running ReportRun remains visible through
+// The sweep alternates never-materialized and replay class priority on consecutive
+// canonical occurrences, then orders each set by its durable cron instant and
+// report id. That is the SQL form of Produce's two-pass fairness contract. A
+// pending/running ReportRun remains visible through
 // its occurrence even after next_run_at advances to the following projected fire.
 // NULL next_run_at is included for bounded rolling-upgrade repair. The organization
 // predicate is documented at lockDueCandidates.
@@ -1009,7 +1062,10 @@ WHERE job.job_type = '` + reportJobType + `'
           WHERE organization.id::text = lower(job.org_id)
       )
   )
-ORDER BY replay.occurrence_id IS NOT NULL,
+ORDER BY CASE WHEN $4::boolean
+              THEN replay.occurrence_id IS NULL
+              ELSE replay.occurrence_id IS NOT NULL
+         END,
          COALESCE(replay.scheduled_for, job.next_run_at, report.last_run_at, report.created_at),
          report.id
 LIMIT $3

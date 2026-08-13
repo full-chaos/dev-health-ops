@@ -243,8 +243,8 @@
     {
       "id": "M27",
       "file": "internal/scheduler/fixed/reports.go",
-      "find": "\tfor _, entry := range replays {",
-      "replace": "\tfor _, entry := range append([]dueEntry(nil), dueEntries...) {",
+      "find": "\t} else {\n\t\tif err := claimNewEntries(newEntries); err != nil {\n\t\t\treturn Outcome{}, err\n\t\t}\n\t\tif err := replayEntries(replays); err != nil {",
+      "replace": "\t} else {\n\t\tif err := claimNewEntries(newEntries); err != nil {\n\t\t\treturn Outcome{}, err\n\t\t}\n\t\tif err := replayEntries(dueEntries); err != nil {",
       "rationale": "Proves the two-pass ordering is load-bearing. Replaying every due entry rather than only the unclaimed ones lets replays compete with new claims for the budget AND re-arms occurrences pass one just claimed, publishing the same run id twice from one occurrence. The duplicate-handoff invariant is what detects it: no count or total-runs assertion can, because the durable graph is unchanged either way. Only a MIXED sweep with budget left over can detect it: when pass one fills the budget, every pass-two iteration short-circuits and the mutation changes nothing.",
       "proof": [
         [
@@ -661,11 +661,11 @@
       ]
     },
     {
-      "id": "CHAOS-3159-M3-new-before-replay",
+      "id": "CHAOS-3159-M3-alternating-selector-priority",
       "file": "internal/scheduler/fixed/reports.go",
-      "find": "ORDER BY replay.occurrence_id IS NOT NULL,",
-      "replace": "ORDER BY replay.occurrence_id IS NULL,",
-      "rationale": "Never-materialized work must sort ahead of durable replays. Reversing this boolean lets the same replay population refill every bounded page under continuous arrival, so a specific carried-over report can remain due forever.",
+      "find": "ORDER BY CASE WHEN $4::boolean\n              THEN replay.occurrence_id IS NULL\n              ELSE replay.occurrence_id IS NOT NULL\n         END,",
+      "replace": "ORDER BY replay.occurrence_id IS NOT NULL,",
+      "rationale": "The bounded SQL page must honor the canonical sweep's alternating class priority. Restoring permanent new-first ordering excludes every replay when 501 new reports remain due, so the in-memory replay pass never gets an opportunity to repair its durable handoff.",
       "proof": [
         [
           "go",
@@ -676,7 +676,49 @@
           "-timeout",
           "8m",
           "-run",
-          "^TestCarriedOverReportLandsUnderContinuousArrival$",
+          "^TestDurableReplayProgressesWhenTheNewReportPageIsFull$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M3b-alternating-work-budget",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "\tif prioritizeReplays {\n\t\tinitialReplayCount := len(replays)",
+      "replace": "\tif prioritizeReplays && false {\n\t\tinitialReplayCount := len(replays)",
+      "rationale": "Selecting a replay is insufficient if the producer still lets new claims spend all 500 request slots first. Disabling the replay-priority branch preserves the SQL row but starves its re-arm behind the selected new reports.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "8m",
+          "-run",
+          "^TestDurableReplayProgressesWhenTheNewReportPageIsFull$",
+          "./internal/scheduler/fixed/"
+        ]
+      ]
+    },
+    {
+      "id": "CHAOS-3159-M3c-durable-priority-slot",
+      "file": "internal/scheduler/fixed/reports.go",
+      "find": "\treturn scheduledFor.UTC().Unix()/windowSeconds%2 != 0",
+      "replace": "\treturn scheduledFor.UTC().Unix()/windowSeconds%2 == 0",
+      "rationale": "Class priority is derived from immutable canonical occurrence time so replicas and restarts agree. Flipping the slot parity makes the pinned replay-priority occurrence select and spend its budget as new-first, recreating starvation.",
+      "proof": [
+        [
+          "go",
+          "test",
+          "-tags",
+          "integration",
+          "-count=1",
+          "-timeout",
+          "8m",
+          "-run",
+          "^TestDurableReplayProgressesWhenTheNewReportPageIsFull$",
           "./internal/scheduler/fixed/"
         ]
       ]

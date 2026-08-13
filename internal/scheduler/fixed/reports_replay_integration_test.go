@@ -373,8 +373,9 @@ VALUES ($1::uuid, $2, 'sibling', $3::uuid, TRUE, $4, $4)`,
 }
 
 // A job and a report belonging to DIFFERENT organizations must never be paired.
-// The schema enforces only the schedule_id foreign key, so this is reachable data,
-// and Python's _require_schedule rejects it explicitly. Pairing them would file
+// The schedule foreign key and unique constraint do not enforce organization
+// agreement, so this is reachable data, and Python's _require_schedule rejects
+// it explicitly. Pairing them would file
 // the occurrence under the job's tenant while the global report worker executed
 // the other tenant's data.
 func TestCrossTenantJobAndReportAreNeverPaired(t *testing.T) {

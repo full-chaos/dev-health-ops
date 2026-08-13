@@ -25,8 +25,10 @@ import (
 //   - unique (report_id, scheduled_for) and unique report_run_id on the
 //     occurrence table, which are what make a second materialization of one due
 //     time impossible rather than merely unlikely;
-//   - saved_reports.schedule_id having NO unique constraint, because the
-//     ambiguous-schedule case the producer refuses is only reachable without it.
+//   - the deliberate omission of Alembic 0096's
+//     uq_saved_reports_schedule_id constraint. This simulates a partially
+//     migrated or manually drifted schema and keeps the producer's secondary
+//     ambiguity assertion executable.
 const scheduledReportDDL = `
 CREATE TABLE public.organizations (
     id UUID PRIMARY KEY,
@@ -734,8 +736,9 @@ func TestUnknownTimezoneFallsBackToUTCRatherThanFailing(t *testing.T) {
 	}
 }
 
-// A schedule owning two active reports is refused against real PostgreSQL, where
-// the missing unique constraint on saved_reports.schedule_id makes it reachable.
+// A schedule owning two active reports is refused against real PostgreSQL. The
+// fixture deliberately omits Alembic 0096's storage constraint to prove the
+// producer stays fail-closed under schema drift.
 func TestScheduleOwningTwoActiveReportsFailsTheOccurrence(t *testing.T) {
 	pool := startScheduledReportPostgres(t)
 	createdAt := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)

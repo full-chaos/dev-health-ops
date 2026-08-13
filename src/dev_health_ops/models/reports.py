@@ -119,6 +119,7 @@ class SavedReport(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("schedule_id", name="uq_saved_reports_schedule_id"),
         Index("ix_saved_reports_org_name", "org_id", "name"),
         Index("ix_saved_reports_org_template", "org_id", "is_template"),
     )

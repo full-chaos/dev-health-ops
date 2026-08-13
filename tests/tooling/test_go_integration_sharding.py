@@ -103,6 +103,21 @@ def test_provider_shard_discovery_does_not_compile_the_test_binary() -> None:
     body = match.group("body")
     assert "go list -mod=readonly -tags=integration" in body
     assert "go test -mod=readonly" not in body
+    assert 'done <<< "${files_output}"' not in body
+    assert "done < <(printf '%s\\n' \"${files_output}\")" in body
+
+
+def test_package_discovery_does_not_spawn_grep_for_every_tracked_test() -> None:
+    source = CHECK_GO.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^discover_integration_packages\(\) \{\n(?P<body>.*?)^\}",
+        source,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert 'git -C "${ROOT}/${module_dir}" grep -l -E' in body
+    assert "ls-files --cached --others" not in body
+    assert "ls-files --others --exclude-standard" in body
 
 
 def test_integration_shard_arity_guard_uses_an_explicit_conditional() -> None:
@@ -134,6 +149,7 @@ def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
     env["GOTOOLCHAIN"] = "go1.25.9"
     env["GOWORK"] = "off"
+    env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
         [
             "go",

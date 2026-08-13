@@ -93,6 +93,50 @@ type githubTestsReportRows struct {
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
 	Skipped  int
+	issues   []githubTestsReportIssue
+}
+
+// GitHubTestsIncomplete is the bounded, provider-specific evidence retained
+// when one report member cannot be parsed but other members remain valid. It
+// deliberately records a stable local cause and count, never the untrusted
+// archive member name or parser text.
+type GitHubTestsIncomplete struct {
+	Component string `json:"component"`
+	Cause     string `json:"cause"`
+	Count     int    `json:"count"`
+}
+
+type githubTestsReportIssue struct {
+	evidence GitHubTestsIncomplete
+	blocking bool
+}
+
+func (rows *githubTestsReportRows) recordSkipped(cause string, blocking bool) {
+	rows.Skipped++
+	for index := range rows.issues {
+		issue := &rows.issues[index]
+		if issue.evidence.Cause == cause && issue.blocking == blocking {
+			issue.evidence.Count++
+			return
+		}
+	}
+	rows.issues = append(rows.issues, githubTestsReportIssue{
+		evidence: GitHubTestsIncomplete{
+			Component: "report_member", Cause: cause, Count: 1,
+		},
+		blocking: blocking,
+	})
+}
+
+func (rows githubTestsReportRows) optionalIncomplete() ([]GitHubTestsIncomplete, bool) {
+	result := make([]GitHubTestsIncomplete, 0, len(rows.issues))
+	for _, issue := range rows.issues {
+		if issue.blocking {
+			return nil, false
+		}
+		result = append(result, issue.evidence)
+	}
+	return result, true
 }
 
 type lcovFileMetrics struct {
@@ -174,11 +218,11 @@ func parseGitHubTestsArtifact(
 			continue
 		}
 		if processed >= githubTestsMaxReportsPerRun {
-			result.Skipped++
+			result.recordSkipped("report_cap", true)
 			continue
 		}
 		if member.UncompressedSize64 > githubTestsMaxReportBytes || expanded+member.UncompressedSize64 > githubTestsMaxArchiveBytes {
-			result.Skipped++
+			result.recordSkipped("archive_bounds", true)
 			continue
 		}
 		compressed := member.CompressedSize64
@@ -190,7 +234,7 @@ func parseGitHubTestsArtifact(
 		}
 		body, err := readZipReport(member)
 		if err != nil {
-			result.Skipped++
+			result.recordSkipped("unreadable", false)
 			continue
 		}
 		expanded += uint64(len(body))
@@ -203,7 +247,7 @@ func parseGitHubTestsArtifact(
 		case "junit":
 			suites, cases, err := parseJUnitRows(body, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
 			if err != nil {
-				result.Skipped++
+				result.recordSkipped("malformed", false)
 				continue
 			}
 			result.Suites = append(result.Suites, suites...)
@@ -211,7 +255,7 @@ func parseGitHubTestsArtifact(
 		case "coverage":
 			coverage, err := parseGitHubCoverageRow(body, name, repoID, runID, orgID, normalizedAt)
 			if err != nil {
-				result.Skipped++
+				result.recordSkipped("malformed", false)
 				continue
 			}
 			result.Coverage = append(result.Coverage, coverage)

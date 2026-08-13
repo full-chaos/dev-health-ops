@@ -66,22 +66,41 @@ def build_rows(
 ]:
     started = datetime.fromisoformat(case["started_at"].replace("Z", "+00:00"))
     finished = datetime.fromisoformat(case["finished_at"].replace("Z", "+00:00"))
-    return asyncio.run(
-        ingest_report_members(
-            [
-                ("reports/junit.xml", JUNIT.encode()),
-                (
-                    case.get("coverage_name", "reports/lcov.info"),
-                    case.get("coverage", case.get("lcov", LCOV)).encode(),
-                ),
-            ],
-            repo_id=uuid.UUID(case["repo_id"]),
-            run_id=case["run_id"],
-            org_id=case["org_id"],
-            started_at=started.astimezone(timezone.utc),
-            finished_at=finished.astimezone(timezone.utc),
+    members = [("reports/junit.xml", JUNIT.encode())]
+    if case.get("malformed_report"):
+        members.append(
+            (
+                "reports/malformed.xml",
+                b'<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>',
+            )
+        )
+    members.append(
+        (
+            case.get("coverage_name", "reports/lcov.info"),
+            case.get("coverage", case.get("lcov", LCOV)).encode(),
         )
     )
+    # The generic oracle protocol owns stdout and stderr. The active producer
+    # logs each best-effort parse failure, so suppress only that output while
+    # still executing the production function and comparing its returned rows.
+    captured = io.StringIO()
+    logger = _ingest_module.logger
+    was_disabled = logger.disabled
+    logger.disabled = True
+    try:
+        with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
+            return asyncio.run(
+                ingest_report_members(
+                    members,
+                    repo_id=uuid.UUID(case["repo_id"]),
+                    run_id=case["run_id"],
+                    org_id=case["org_id"],
+                    started_at=started.astimezone(timezone.utc),
+                    finished_at=finished.astimezone(timezone.utc),
+                )
+            )
+    finally:
+        logger.disabled = was_disabled
 
 
 def build_pipeline_rows(case: dict[str, Any]):

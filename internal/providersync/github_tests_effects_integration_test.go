@@ -13,7 +13,84 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/google/uuid"
 )
+
+func TestGitHubTestsIncompleteBatchCommitsOnceAndRemainsTenantScoped(t *testing.T) {
+	ctx, sink := newGitHubTestsIntegrationSink(t)
+	now := time.Date(2026, 8, 12, 12, 30, 0, 0, time.UTC)
+	claimA := nativeTestClaim("github", "tests")
+	claimB := claimA
+	claimB.OrgID = "other-org"
+	claimB.ID = uuid.NewString()
+	claimB.SyncRunID = uuid.NewString()
+
+	archive := githubTestsZip(t, map[string]string{
+		"reports/good.xml":  githubTestsJUnitFixture,
+		"reports/good.info": githubTestsLCOVFixture,
+		"reports/bad.xml":   `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+	})
+	collect := func(claim Claim) CompleteRouteBatch {
+		t.Helper()
+		doer := &githubTestsRouteDoer{t: t, archive: archive}
+		batch, err := (GitHubTestsRouteHandler{}).Collect(
+			ctx, claim, providerfoundation.Credential{}, githubTestsClient(t, doer), now,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		comparison, err := (ProductionContractComparator{}).CompareCompleteRoute(ctx, claim, batch)
+		if err != nil || !comparison.Match || comparison.NativeRecords != 7 {
+			t.Fatalf("comparison=%+v error=%v", comparison, err)
+		}
+		if batch.Watermark != nil || batch.Result["reports_complete"] != false ||
+			batch.Result["reports_skipped"] != 1 {
+			t.Fatalf("incomplete batch was reported complete: %+v", batch)
+		}
+		return batch
+	}
+
+	batchA, batchB := collect(claimA), collect(claimB)
+	if err := sink.WriteEffect(ctx, claimB, batchA.Effects[0]); !errors.Is(err, providerfoundation.ErrInvalidScope) {
+		t.Fatalf("foreign tenant row error=%v", err)
+	}
+	for _, item := range []struct {
+		claim Claim
+		batch CompleteRouteBatch
+	}{
+		{claim: claimA, batch: batchA},
+		{claim: claimB, batch: batchB},
+	} {
+		ledger := &memoryEffectLedger{}
+		committer := EffectCommitter{
+			Ledger: ledger, Sink: sink, Readback: sink,
+			Now: func() time.Time { return now },
+		}
+		first, err := committer.Commit(ctx, item.claim, item.batch.Effects, now)
+		if err != nil || first.Written != 6 {
+			t.Fatalf("first commit=%+v error=%v", first, err)
+		}
+		second, err := committer.Commit(ctx, item.claim, item.batch.Effects, now)
+		if err != nil || second.Written != 0 || second.Skipped != 6 {
+			t.Fatalf("retry commit=%+v error=%v", second, err)
+		}
+		for _, effect := range item.batch.Effects {
+			inspection, inspectErr := sink.InspectEffect(ctx, item.claim, effect)
+			if inspectErr != nil || inspection != EffectExact {
+				t.Fatalf("%s inspection=%s error=%v", effect.Destination, inspection, inspectErr)
+			}
+			var count uint64
+			if err := sink.Conn.QueryRow(
+				ctx, "SELECT count() FROM "+effect.Destination+" WHERE org_id = ?", item.claim.OrgID,
+			).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != uint64(len(effect.Rows)) {
+				t.Fatalf("%s raw rows=%d want=%d", effect.Destination, count, len(effect.Rows))
+			}
+		}
+	}
+}
 
 func TestGitHubTestsMultiRowEffectsAreAtomicAndRejectDuplicateNaturalKeys(t *testing.T) {
 	ctx, sink := newGitHubTestsIntegrationSink(t)

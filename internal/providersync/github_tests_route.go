@@ -203,6 +203,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	suites := make([]testSuiteResultRow, 0)
 	cases := make([]testCaseResultRow, 0)
 	coverage := make([]coverageSnapshotRow, 0)
+	incomplete := make([]GitHubTestsIncomplete, 0)
 	requests, pages := 1+runsPage.Pages+artifactRunsPage.Pages, runsPage.Pages+artifactRunsPage.Pages
 	policyCache := map[string]githubTestsPolicy{}
 	for _, raw := range runsPage.Items {
@@ -302,8 +303,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 				continue
 			}
 			rows, parseErr := parseGitHubTestsArtifact(archive, repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
-			if parseErr != nil || rows.Skipped != 0 {
+			if parseErr != nil {
 				return CompleteRouteBatch{}, fmt.Errorf("%w: reports skipped=%d: %v", ErrGitHubTestsIncomplete, rows.Skipped, parseErr)
+			}
+			reportIncomplete, optional := rows.optionalIncomplete()
+			if !optional {
+				return CompleteRouteBatch{}, fmt.Errorf("%w: reports skipped=%d: unsafe archive bounds", ErrGitHubTestsIncomplete, rows.Skipped)
+			}
+			for _, observation := range reportIncomplete {
+				incomplete = mergeGitHubTestsIncomplete(incomplete, observation)
 			}
 			suites = append(suites, rows.Suites...)
 			cases = append(cases, rows.Cases...)
@@ -314,10 +322,38 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	return CompleteRouteBatch{Effects: effects, Watermark: claim.BeforeAt, Result: map[string]any{
+	watermark := claim.BeforeAt
+	if len(incomplete) > 0 {
+		watermark = nil
+	}
+	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,
+		"reports_complete": len(incomplete) == 0,
+		"reports_skipped":  githubTestsIncompleteCount(incomplete),
+		"incomplete":       incomplete,
 	}, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: pages, Records: len(pipelines) + len(jobs) + len(acceptance) + len(suites) + len(cases) + len(coverage)}}, nil
+}
+
+func mergeGitHubTestsIncomplete(
+	current []GitHubTestsIncomplete,
+	observation GitHubTestsIncomplete,
+) []GitHubTestsIncomplete {
+	for index := range current {
+		if current[index].Component == observation.Component && current[index].Cause == observation.Cause {
+			current[index].Count += observation.Count
+			return current
+		}
+	}
+	return append(current, observation)
+}
+
+func githubTestsIncompleteCount(incomplete []GitHubTestsIncomplete) int {
+	total := 0
+	for _, observation := range incomplete {
+		total += observation.Count
+	}
+	return total
 }
 
 func (row githubTestsPipelineRow) StartedAtPtr() *time.Time { value := row.StartedAt; return &value }

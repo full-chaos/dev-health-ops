@@ -3,6 +3,7 @@ package providersync
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -120,33 +121,80 @@ func githubTestsOracleTimes(t *testing.T, input map[string]any) (*time.Time, *ti
 	return parse("started_at"), parse("finished_at"), time.Date(2026, 7, 23, 12, 10, 0, 0, time.UTC)
 }
 
+func githubTestsOracleReportRows(t *testing.T, input map[string]any) githubTestsReportRows {
+	t.Helper()
+	members := map[string]string{"reports/junit.xml": githubTestsJUnitFixture}
+	body := githubTestsLCOVFixture
+	path := "reports/lcov.info"
+	if value, ok := input["lcov"].(string); ok {
+		body = value
+	}
+	if value, ok := input["coverage"].(string); ok {
+		body = value
+	}
+	if value, ok := input["coverage_name"].(string); ok {
+		path = value
+	}
+	members[path] = body
+	malformed, _ := input["malformed_report"].(bool)
+	if malformed {
+		members["reports/malformed.xml"] = `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`
+	}
+	started, finished, normalizedAt := githubTestsOracleTimes(t, input)
+	rows, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, members), input["repo_id"].(string),
+		input["run_id"].(string), input["org_id"].(string),
+		started, finished, normalizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSkipped := 0
+	wantIncomplete := []GitHubTestsIncomplete{}
+	if malformed {
+		wantSkipped = 1
+		wantIncomplete = []GitHubTestsIncomplete{{
+			Component: "report_member", Cause: "malformed", Count: 1,
+		}}
+	}
+	incomplete, optional := rows.optionalIncomplete()
+	if !optional || rows.Skipped != wantSkipped ||
+		!reflect.DeepEqual(incomplete, wantIncomplete) {
+		t.Fatalf("skipped=%d incomplete=%+v optional=%t", rows.Skipped, incomplete, optional)
+	}
+	return rows
+}
+
+func githubTestsMalformedReportOracleCase() oracleCase {
+	testCase := githubTestsOracleCase()
+	testCase.ID = "malformed_report_preserves_valid_members"
+	testCase.Input["malformed_report"] = true
+	return testCase
+}
+
 func TestGenericOracleMatchesLivePythonForGitHubTestsSuiteRow(t *testing.T) {
-	compareRowsAgainstPythonOracle(t, "github/tests/suite", []oracleCase{githubTestsOracleCase()},
+	compareRowsAgainstPythonOracle(t, "github/tests/suite", []oracleCase{
+		githubTestsOracleCase(), githubTestsMalformedReportOracleCase(),
+	},
 		func(t *testing.T, input map[string]any) testSuiteResultRow {
-			started, finished, normalizedAt := githubTestsOracleTimes(t, input)
-			suites, _, err := parseJUnitRows(
-				[]byte(githubTestsJUnitFixture), input["repo_id"].(string), input["run_id"].(string), input["org_id"].(string),
-				started, finished, normalizedAt,
-			)
-			if err != nil || len(suites) != 1 {
-				t.Fatalf("suites=%+v error=%v", suites, err)
+			rows := githubTestsOracleReportRows(t, input)
+			if len(rows.Suites) != 1 {
+				t.Fatalf("suites=%+v", rows.Suites)
 			}
-			return suites[0]
+			return rows.Suites[0]
 		}, githubTestsOracleGoOnlyFields)
 }
 
 func TestGenericOracleMatchesLivePythonForGitHubTestsCaseRow(t *testing.T) {
-	compareRowsAgainstPythonOracle(t, "github/tests/case", []oracleCase{githubTestsOracleCase()},
+	compareRowsAgainstPythonOracle(t, "github/tests/case", []oracleCase{
+		githubTestsOracleCase(), githubTestsMalformedReportOracleCase(),
+	},
 		func(t *testing.T, input map[string]any) testCaseResultRow {
-			started, finished, normalizedAt := githubTestsOracleTimes(t, input)
-			_, cases, err := parseJUnitRows(
-				[]byte(githubTestsJUnitFixture), input["repo_id"].(string), input["run_id"].(string), input["org_id"].(string),
-				started, finished, normalizedAt,
-			)
-			if err != nil || len(cases) != 2 {
-				t.Fatalf("cases=%+v error=%v", cases, err)
+			rows := githubTestsOracleReportRows(t, input)
+			if len(rows.Cases) != 2 {
+				t.Fatalf("cases=%+v", rows.Cases)
 			}
-			return cases[1]
+			return rows.Cases[1]
 		}, githubTestsOracleGoOnlyFields)
 }
 
@@ -164,27 +212,14 @@ func TestGenericOracleMatchesLivePythonForGitHubTestsCoverageRow(t *testing.T) {
 	cobertura.Input["coverage_name"] = "reports/coverage.xml"
 	cobertura.Input["coverage"] = `<coverage lines-valid="2" lines-covered="1" branches-valid="2" branches-covered="1"><packages><package><classes><class filename="services/api/main.go"><lines><line number="1" hits="1" branch="true" condition-coverage="50% (1/2)"/><line number="2" hits="0"/></lines></class></classes></package></packages></coverage>`
 	compareRowsAgainstPythonOracle(t, "github/tests/coverage", []oracleCase{
-		githubTestsOracleCase(), fallback, majority, cobertura,
+		githubTestsOracleCase(), githubTestsMalformedReportOracleCase(),
+		fallback, majority, cobertura,
 	},
 		func(t *testing.T, input map[string]any) coverageSnapshotRow {
-			_, _, normalizedAt := githubTestsOracleTimes(t, input)
-			body := githubTestsLCOVFixture
-			path := "reports/lcov.info"
-			if value, ok := input["lcov"].(string); ok {
-				body = value
+			rows := githubTestsOracleReportRows(t, input)
+			if len(rows.Coverage) != 1 {
+				t.Fatalf("coverage=%+v", rows.Coverage)
 			}
-			if value, ok := input["coverage"].(string); ok {
-				body = value
-			}
-			if value, ok := input["coverage_name"].(string); ok {
-				path = value
-			}
-			row, err := parseGitHubCoverageRow(
-				[]byte(body), path, input["repo_id"].(string), input["run_id"].(string), input["org_id"].(string), normalizedAt,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return row
+			return rows.Coverage[0]
 		}, githubTestsOracleGoOnlyFields)
 }

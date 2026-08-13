@@ -83,6 +83,55 @@ func TestGitHubTestsArtifactSkipsMalformedMemberWithoutDroppingValidReports(t *t
 	if rows.Skipped != 1 || len(rows.Coverage) != 1 || len(rows.Suites) != 0 {
 		t.Fatalf("rows=%+v", rows)
 	}
+	incomplete, optional := rows.optionalIncomplete()
+	if !optional || len(incomplete) != 1 || incomplete[0] != (GitHubTestsIncomplete{
+		Component: "report_member", Cause: "malformed", Count: 1,
+	}) {
+		t.Fatalf("incomplete=%+v optional=%t", incomplete, optional)
+	}
+}
+
+func TestGitHubTestsArtifactSkipsUnreadableMemberWithoutDroppingValidReports(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	for name, body := range map[string]string{
+		"reports/good.info": githubTestsLCOVFixture,
+		"reports/bad.xml":   `<testsuite name="corrupt"><testcase name="lost"/></testsuite>`,
+	} {
+		header := &zip.FileHeader{Name: name, Method: zip.Store}
+		member, err := writer.CreateHeader(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := member.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := buffer.Bytes()
+	marker := []byte(`<testsuite name="corrupt">`)
+	index := bytes.Index(archive, marker)
+	if index < 0 {
+		t.Fatal("corrupt member payload not found")
+	}
+	archive[index] ^= 0x01
+
+	rows, err := parseGitHubTestsArtifact(
+		archive, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", "org-a",
+		nil, nil, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	incomplete, optional := rows.optionalIncomplete()
+	if rows.Skipped != 1 || len(rows.Coverage) != 1 || len(rows.Suites) != 0 ||
+		!optional || len(incomplete) != 1 || incomplete[0] != (GitHubTestsIncomplete{
+		Component: "report_member", Cause: "unreadable", Count: 1,
+	}) {
+		t.Fatalf("rows=%+v incomplete=%+v optional=%t", rows, incomplete, optional)
+	}
 }
 
 func TestGitHubTestsArchiveMemberNameMatchesPythonSafetyContract(t *testing.T) {

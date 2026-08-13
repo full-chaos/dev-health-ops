@@ -319,3 +319,78 @@ func TestGitLabFeatureFlagsRouteClassifiesCaseInsensitiveQualified403(t *testing
 		t.Fatalf("error=%v want case-insensitive qualified rate limit", err)
 	}
 }
+
+func TestGitLabFeatureFlagsRouteClassifiesPlain403AsUnavailableDataset(t *testing.T) {
+	doer := &gitLabFeatureFlagsDoer{t: t, responses: []gitLabFeatureFlagsResponse{
+		{status: http.StatusForbidden, body: `{"message":"403 Forbidden"}`},
+	}}
+	claim := nativeTestClaim("gitlab", "feature-flags")
+	_, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+			MaxAttempts: 5, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	var providerErr *providerfoundation.ProviderError
+	if !errors.Is(err, ErrProviderDatasetUnavailable) ||
+		!errors.As(err, &providerErr) ||
+		providerErr.Class != providerfoundation.ErrorAuthentication ||
+		providerErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("error=%v want unavailable dataset retaining forbidden provider evidence", err)
+	}
+	if len(doer.requests) != 1 {
+		t.Fatalf("plain forbidden requests=%d want=1", len(doer.requests))
+	}
+}
+
+func TestGitLabFeatureFlagsRouteKeepsProjectLookup403AsAuthentication(t *testing.T) {
+	doer := &gitLabFeatureFlagsDoer{t: t, responses: []gitLabFeatureFlagsResponse{
+		{body: `[]`},
+		{status: http.StatusForbidden, body: `{"message":"403 Forbidden"}`},
+	}}
+	claim := nativeTestClaim("gitlab", "feature-flags")
+	claim.SourceExternalID = "group/project"
+	_, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	var providerErr *providerfoundation.ProviderError
+	if errors.Is(err, ErrProviderDatasetUnavailable) ||
+		!errors.As(err, &providerErr) ||
+		providerErr.Class != providerfoundation.ErrorAuthentication ||
+		providerErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("error=%v want unwrapped project lookup authentication error", err)
+	}
+	if len(doer.requests) != 2 {
+		t.Fatalf("project forbidden requests=%d want=2", len(doer.requests))
+	}
+}
+
+func TestGitLabFeatureFlagsRouteAcceptsEmptyInventory(t *testing.T) {
+	doer := &gitLabFeatureFlagsDoer{t: t, responses: []gitLabFeatureFlagsResponse{
+		{body: `[]`},
+		{body: `{"path_with_namespace":"acme/api"}`},
+	}}
+	claim := nativeTestClaim("gitlab", "feature-flags")
+	claim.SourceExternalID = "group/project"
+	batch, err := (GitLabFeatureFlagsRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{},
+		gitLabFeatureFlagsClient(t, doer, providerfoundation.RetryPolicy{
+			MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		}), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("empty inventory error=%v", err)
+	}
+	if batch.Result["flags_synced"] != 0 || batch.Result["events_synced"] != 0 ||
+		batch.Watermark == nil || len(doer.requests) != 2 {
+		t.Fatalf("empty inventory batch=%+v requests=%d", batch, len(doer.requests))
+	}
+	for _, effect := range batch.Effects {
+		if len(effect.Rows) != 0 {
+			t.Fatalf("empty inventory effect %q rows=%d", effect.Destination, len(effect.Rows))
+		}
+	}
+}

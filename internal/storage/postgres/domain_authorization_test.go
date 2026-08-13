@@ -170,9 +170,10 @@ func TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges(t *testing.T) 
 func TestDomainPostureInventoriesNativeSyncCoveragePrivileges(t *testing.T) {
 	t.Parallel()
 	want := map[string]TablePrivilege{
-		"scheduled_jobs":            {TableName: "scheduled_jobs"},
-		"backfill_jobs":             {TableName: "backfill_jobs"},
-		"sync_coverage_projections": {TableName: "sync_coverage_projections", AllowInsert: true, AllowUpdate: true},
+		"scheduled_jobs":               {TableName: "scheduled_jobs", AllowUpdate: true},
+		"scheduled_report_occurrences": {TableName: "scheduled_report_occurrences"},
+		"backfill_jobs":                {TableName: "backfill_jobs"},
+		"sync_coverage_projections":    {TableName: "sync_coverage_projections", AllowInsert: true, AllowUpdate: true},
 	}
 	for _, table := range domainPosture().RequiredTables {
 		expected, ok := want[table.TableName]

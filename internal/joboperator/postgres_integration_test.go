@@ -374,6 +374,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 		"CREATE TABLE public.sync_watermarks (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.scheduled_report_occurrences (occurrence_id text PRIMARY KEY)",
 		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",

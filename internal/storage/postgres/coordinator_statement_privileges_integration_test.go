@@ -128,6 +128,7 @@ func coordinatorExclusiveDDL() []string {
 			status text NOT NULL,
 			handoff_count integer NOT NULL,
 			skip_reason text,
+			degraded_reason text,
 			completed_at timestamptz,
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL,

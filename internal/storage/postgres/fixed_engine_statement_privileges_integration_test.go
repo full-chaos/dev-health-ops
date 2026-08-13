@@ -69,6 +69,18 @@ func fixedEngineStatements() []fixedEngineStatement {
 				LIMIT 1`,
 		},
 		{
+			name:      "engine reads the schedule's newest committed degraded verdict",
+			site:      "internal/scheduler/fixed/engine.go lastEvaluation -> ledger.go selectLastEvaluationSQL",
+			privilege: "fixed_schedule_occurrences SELECT",
+			sql: `SELECT COALESCE(degraded_reason, '')
+				FROM public.fixed_schedule_occurrences
+				WHERE schedule_id = 'heartbeat'
+				  AND status IN ('materialized', 'skipped')
+				  AND skip_reason IS DISTINCT FROM 'cold_start_baseline'
+				ORDER BY scheduled_for DESC
+				LIMIT 1`,
+		},
+		{
 			name:      "ledger claims the occurrence",
 			site:      "internal/scheduler/fixed/ledger.go Claim -> insertOccurrenceSQL",
 			privilege: "fixed_schedule_occurrences INSERT (+ SELECT for RETURNING)",
@@ -99,6 +111,7 @@ func fixedEngineStatements() []fixedEngineStatement {
 			privilege: "fixed_schedule_occurrences UPDATE",
 			sql: `UPDATE public.fixed_schedule_occurrences
 				SET status = 'materialized', handoff_count = 1, skip_reason = NULL,
+					degraded_reason = NULL,
 					completed_at = now(), updated_at = now()
 				WHERE occurrence_key = '` + occurrenceKey + `' AND status = 'claimed'`,
 		},

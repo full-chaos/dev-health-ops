@@ -94,12 +94,13 @@ type scheduleState struct {
 	failures   uint64
 	overdue    bool
 	missingFor time.Duration
-	// degraded names a bounded, named non-fatal condition reported by a producer,
+	// degraded caches the newest durable, named non-fatal condition reported by a producer,
 	// for example a report run whose durable handoff has exhausted its delivery
 	// budget. It may coexist with produced work, so it is NOT a "no work" marker —
 	// an ordinary SkipReason is deliberately never promoted here, because this value
 	// persists until the schedule next evaluates and a skip would latch for a full
-	// period. It holds the last EVALUATED verdict, not the current instant.
+	// period. The occurrence ledger is authoritative; this value is only the
+	// latest successfully read snapshot used by the synchronous metrics writer.
 	degraded string
 	// coldStarts counts baseline records, which are expected exactly once per
 	// schedule on a new deployment and never again.
@@ -315,12 +316,10 @@ func (loop *Loop) record(result WindowResult, now time.Time) {
 		state.handoffs += uint64(schedule.Handoffs)
 		state.skipped += uint64(schedule.Skipped)
 		state.missingFor = schedule.MissingFor
-		// Only a window that actually evaluated this schedule may change its
-		// degraded verdict. The loop polls far more often than any schedule is due,
-		// so overwriting unconditionally cleared a live reason on the very next
-		// poll: a permanent fault stayed visible for one poll interval and was
-		// missed by any realistic scrape.
-		if schedule.Evaluated {
+		// Every successful ledger read replaces this process's cache, including an
+		// empty verdict that clears a resolved condition. A failed read retains the
+		// last known value and closes the window instead of exporting a false clear.
+		if schedule.DegradedLoaded {
 			state.degraded = schedule.Degraded
 		}
 		if schedule.ColdStart {
@@ -501,8 +500,8 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	// across the many polls that do not evaluate this schedule, so it describes the
 	// most recent verdict rather than this instant — and for an infrequent schedule
 	// that verdict can be up to a full period old. An operator reading it as current
-	// would draw the wrong conclusion. It is also process-local, so replicas can
-	// disagree and a restart begins empty (CHAOS-3161).
+	// would draw the wrong conclusion. Every loop refreshes this snapshot from the
+	// shared occurrence ledger, so replicas and restarted processes converge.
 	text.WriteString("# HELP fixed_scheduler_schedule_degraded Whether a schedule reported a bounded, named non-fatal condition at its last evaluation; it may coexist with produced work.\n# TYPE fixed_scheduler_schedule_degraded gauge\n")
 	for _, identifier := range identifiers {
 		reason := snapshot[identifier].degraded

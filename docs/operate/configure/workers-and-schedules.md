@@ -152,6 +152,14 @@ GraphQL create and update writes evaluate the cron before persistence and keep
 `next_run_at` current; the producer independently re-evaluates it as a runtime
 backstop for legacy, corrupt, or direct-database rows.
 
+The fixed scheduler stores each producer's latest degraded verdict in the same
+PostgreSQL occurrence row as the committed evaluation. The
+`fixed_scheduler_schedule_degraded` gauge therefore reports shared durable
+state rather than one process's memory. Duplicate replicas and restarted
+schedulers read the same newest verdict. A later clean evaluation stores an
+empty verdict and clears the gauge. The value describes the schedule at its
+last evaluation; for an infrequent schedule, it can be one full period old.
+
 The Ask Dev expiry repair (`prune_ask_dev_conversations`) was built in Go
 first, with no Celery predecessor. CHAOS-3404 has since added the Beat entry
 `ask-dev-retention-sweep` for the same work at the same cadence, so it is now a

@@ -31,6 +31,7 @@ EXPECTED_PACKAGES = {
     "internal/externalrecompute",
     "internal/joboperator",
     "internal/joboutbox",
+    "internal/jobrescue",
     "internal/jobroute",
     "internal/jobruntime",
     "internal/jobs/metrics/daily",
@@ -167,8 +168,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     result = _run_check_go("integration-shard-plan", github_output=github_output)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "25 package(s) discovered, 0 denylisted, 25 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 25 package(s)" in result.stdout
+    assert "26 package(s) discovered, 0 denylisted, 26 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 26 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -194,7 +195,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 25
+    assert len(flattened) == len(set(flattened)) == 26
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -275,7 +276,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 24
+    assert len(selected_packages) == len(set(selected_packages)) == 25
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

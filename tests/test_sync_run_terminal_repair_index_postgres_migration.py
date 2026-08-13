@@ -1,4 +1,4 @@
-"""PostgreSQL proof for durable fixed-schedule degraded verdicts."""
+"""PostgreSQL proof for the active-sync-run terminal-repair index."""
 
 from __future__ import annotations
 
@@ -12,14 +12,12 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.engine.interfaces import ReflectedColumn
 
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
-_TABLE = "fixed_schedule_occurrences"
-_COLUMN = "degraded_reason"
+_TABLE = "sync_runs"
+_INDEX = "ix_sync_runs_status_id"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +32,7 @@ def _migration_config() -> Config:
 
 
 @pytest.fixture
-def migrated_to_0099(
+def migrated_to_0100(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[PostgresMigrationHarness]:
     configured_uri = os.environ.get(_POSTGRES_URI_ENV)
@@ -49,7 +47,7 @@ def migrated_to_0099(
     if configured_url.get_backend_name() != "postgresql":
         pytest.fail(f"{_POSTGRES_URI_ENV} must use PostgreSQL")
 
-    database_name = f"test_chaos_3161_{uuid.uuid4().hex}"
+    database_name = f"test_chaos_3792_{uuid.uuid4().hex}"
     admin_engine = sa.create_engine(
         configured_url.set(drivername="postgresql+psycopg2", database="postgres"),
         isolation_level="AUTOCOMMIT",
@@ -70,7 +68,7 @@ def migrated_to_0099(
         )
         monkeypatch.delenv("MIGRATION_DATABASE_URI", raising=False)
         monkeypatch.delenv("MIGRATION_DATABASE_URI_FILE", raising=False)
-        command.upgrade(_migration_config(), "0099")
+        command.upgrade(_migration_config(), "0100")
 
         engine = sa.create_engine(
             configured_url.set(
@@ -109,83 +107,33 @@ def _revisions(engine: Engine) -> set[str]:
         }
 
 
-def _columns(engine: Engine) -> dict[str, ReflectedColumn]:
+def _indexes(engine: Engine) -> dict[str, tuple[str, ...]]:
     return {
-        str(column["name"]): column for column in sa.inspect(engine).get_columns(_TABLE)
+        str(index["name"]): tuple(str(column) for column in index["column_names"])
+        for index in sa.inspect(engine).get_indexes(_TABLE)
     }
 
 
-def _seed_materialized_occurrence(engine: Engine) -> None:
-    with engine.begin() as connection:
-        connection.execute(
-            sa.text(
-                f"""
-                INSERT INTO {_TABLE} (
-                    occurrence_key, identity_version, schedule_id, target_kind,
-                    scheduled_for, observed_at, status, handoff_count,
-                    skip_reason, completed_at, created_at, updated_at
-                ) VALUES (
-                    'legacy-evaluation', 'fixed_schedule_occurrence_v1',
-                    'scheduled_reports_dispatch', 'report.execute_scheduled',
-                    now(), now(), 'materialized', 1, NULL, now(), now(), now()
-                )
-                """
-            )
-        )
-
-
-def test_0100_adds_nullable_bounded_degraded_reason_without_rewriting_history(
-    migrated_to_0099: PostgresMigrationHarness,
+def test_0101_adds_the_deployed_active_sync_run_access_path(
+    migrated_to_0100: PostgresMigrationHarness,
 ) -> None:
-    _seed_materialized_occurrence(migrated_to_0099.engine)
-    command.upgrade(_migration_config(), "0100")
+    assert _INDEX not in _indexes(migrated_to_0100.engine)
 
-    column = _columns(migrated_to_0099.engine)[_COLUMN]
-    assert isinstance(column["type"], postgresql.VARCHAR)
-    assert column["type"].length == 64
-    assert column["nullable"] is True
+    command.upgrade(_migration_config(), "0101")
 
-    with migrated_to_0099.engine.connect() as connection:
-        legacy_reason = connection.execute(
-            sa.text(
-                f"SELECT {_COLUMN} FROM {_TABLE} WHERE occurrence_key = 'legacy-evaluation'"
-            )
-        ).scalar_one()
-    assert legacy_reason is None
-    assert _revisions(migrated_to_0099.engine) == {"0100"}
+    assert _indexes(migrated_to_0100.engine)[_INDEX] == ("status", "id")
+    assert _revisions(migrated_to_0100.engine) == {"0101"}
 
 
-def test_0100_persists_a_degraded_verdict_alongside_materialized_work(
-    migrated_to_0099: PostgresMigrationHarness,
+def test_0101_downgrade_and_application_head_reupgrade_converge(
+    migrated_to_0100: PostgresMigrationHarness,
 ) -> None:
-    command.upgrade(_migration_config(), "0100")
-    _seed_materialized_occurrence(migrated_to_0099.engine)
+    command.upgrade(_migration_config(), "0101")
+    command.downgrade(_migration_config(), "0100")
 
-    with migrated_to_0099.engine.begin() as connection:
-        connection.execute(
-            sa.text(
-                f"UPDATE {_TABLE} SET {_COLUMN} = :reason WHERE occurrence_key = 'legacy-evaluation'"
-            ),
-            {"reason": "scheduled_reports_undeliverable"},
-        )
-    with migrated_to_0099.engine.connect() as connection:
-        reason = connection.execute(
-            sa.text(
-                f"SELECT {_COLUMN} FROM {_TABLE} WHERE occurrence_key = 'legacy-evaluation'"
-            )
-        ).scalar_one()
-    assert reason == "scheduled_reports_undeliverable"
-
-
-def test_0100_downgrade_and_reupgrade_converge(
-    migrated_to_0099: PostgresMigrationHarness,
-) -> None:
-    command.upgrade(_migration_config(), "0100")
-    command.downgrade(_migration_config(), "0099")
-
-    assert _COLUMN not in _columns(migrated_to_0099.engine)
-    assert _revisions(migrated_to_0099.engine) == {"0099"}
+    assert _INDEX not in _indexes(migrated_to_0100.engine)
+    assert _revisions(migrated_to_0100.engine) == {"0100"}
 
     command.upgrade(_migration_config(), "application_schema@head")
-    assert _COLUMN in _columns(migrated_to_0099.engine)
-    assert _revisions(migrated_to_0099.engine) == {"0101"}
+    assert _indexes(migrated_to_0100.engine)[_INDEX] == ("status", "id")
+    assert _revisions(migrated_to_0100.engine) == {"0101"}

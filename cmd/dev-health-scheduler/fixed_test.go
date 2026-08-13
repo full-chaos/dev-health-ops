@@ -210,18 +210,24 @@ func TestUnbuiltFixedSchedulesRefuseTheRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = refuseUnbuiltFixedSchedules(producers, schedules)
-	if err == nil {
-		t.Fatal("the runtime was accepted while schedules were unbuilt")
-	}
-	if !errors.Is(err, errFixedScheduleUnbuilt) {
-		t.Fatalf("error = %v, want an unbuilt-schedule refusal", err)
-	}
-	for id, reason := range checkedInUnbuiltSchedules {
-		if !strings.Contains(err.Error(), id) {
-			t.Errorf("refusal does not name unbuilt schedule %s: %v", id, err)
+	if len(checkedInUnbuiltSchedules) == 0 {
+		if err != nil {
+			t.Fatalf("the fully built production schedule set was refused: %v", err)
 		}
-		if !strings.Contains(err.Error(), reason) {
-			t.Errorf("refusal does not carry the reason for %s: %v", id, err)
+	} else {
+		if err == nil {
+			t.Fatal("the runtime was accepted while schedules were unbuilt")
+		}
+		if !errors.Is(err, errFixedScheduleUnbuilt) {
+			t.Fatalf("error = %v, want an unbuilt-schedule refusal", err)
+		}
+		for id, reason := range checkedInUnbuiltSchedules {
+			if !strings.Contains(err.Error(), id) {
+				t.Errorf("refusal does not name unbuilt schedule %s: %v", id, err)
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Errorf("refusal does not carry the reason for %s: %v", id, err)
+			}
 		}
 	}
 	// A fully built set must be accepted, or the gate would refuse the runtime

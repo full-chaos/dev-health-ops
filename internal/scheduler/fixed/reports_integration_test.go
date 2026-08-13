@@ -685,9 +685,10 @@ func TestNotYetDueScheduledReportIsABoundedSkip(t *testing.T) {
 }
 
 // A cron expression the evaluator cannot resolve fails the occurrence loudly and
-// names the offending schedule. The report write path validates the timezone and
-// not the cron, so this is reachable tenant data; silently skipping it would let
-// one tenant's reports stop while the schedule stayed green.
+// names the offending schedule. New GraphQL writes reject these expressions, but
+// the producer must still defend against legacy, corrupt, and direct database
+// rows; silently skipping one would leave that tenant's reports stopped while the
+// schedule stayed green.
 func TestUnevaluableCronFailsTheOccurrence(t *testing.T) {
 	for _, expression := range []string{"not-a-cron", "", "0 6 * * * *", "@daily", "99 * * * *"} {
 		t.Run(expression, func(t *testing.T) {

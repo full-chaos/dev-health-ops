@@ -593,10 +593,9 @@ func TestOccurrenceClaimIsAtomicUnderTrueContention(t *testing.T) {
 	occurrenceID := pythonOccurrenceID(t, testReportID, scheduledFor)
 	_, occurrence := reportOccurrence(t, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC))
 	candidate := dueReportCandidate{
-		JobID:               testJobID,
-		OrganizationID:      testOrganizationID,
-		ReportID:            testReportID,
-		OrganizationPresent: true,
+		JobID:          testJobID,
+		OrganizationID: testOrganizationID,
+		ReportID:       testReportID,
 	}
 	producer := reportsProducer(t)
 
@@ -733,15 +732,15 @@ func TestCarriedOverReportLandsUnderContinuousArrival(t *testing.T) {
 		if _, err := pool.Exec(ctx, `
 WITH new_jobs AS (
     INSERT INTO public.scheduled_jobs
-        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
-    SELECT gen_random_uuid(), $1, 'report:fill', 'report', $2, 'UTC', 0, FALSE, $3, $3
+        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+    SELECT gen_random_uuid(), $1, 'report:fill', 'report', $2, 'UTC', 0, FALSE, $5, $3, $3
     FROM generate_series(1, $4)
     RETURNING id
 )
 INSERT INTO public.saved_reports
     (id, org_id, name, schedule_id, is_active, last_run_at, created_at, updated_at)
 SELECT gen_random_uuid(), $1, 'fill', new_jobs.id, TRUE, $3, $3, $3
-FROM new_jobs`, testOrganizationID, cron, lastRun, count); err != nil {
+FROM new_jobs`, testOrganizationID, cron, lastRun, count, lastRun.Add(24*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -755,9 +754,9 @@ FROM new_jobs`, testOrganizationID, cron, lastRun, count); err != nil {
 	const victimJobID = "3c4d5e6f-7081-4c9d-8e0f-2a3b4c5d6e72"
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.scheduled_jobs
-    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
-VALUES ($1::uuid, $2, 'report:victim', 'report', $3, 'UTC', 0, FALSE, $4, $4)`,
-		victimJobID, testOrganizationID, cron, victimLastRun); err != nil {
+    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+VALUES ($1::uuid, $2, 'report:victim', 'report', $3, 'UTC', 0, FALSE, $5, $4, $4)`,
+		victimJobID, testOrganizationID, cron, victimLastRun, victimLastRun.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -819,15 +818,10 @@ VALUES ($1::uuid, $2, 'victim', $3::uuid, TRUE, $4, $4, $4)`,
 	)
 }
 
-// The sweep must READ well past the work bound.
-//
-// This replaces a test that compared the two bound constants against each other,
-// which was a tautology: it stayed green if the SQL used the work bound as its read
-// limit, and green if both drifted to any values in the same ratio. The property
-// that matters is not how the constants relate but that the QUERY returns entries
-// the occurrence will defer — if the read stopped at the work bound, deferral could
-// never observe a backlog and the fairness ordering would have nothing to order.
-func TestSweepReadsBeyondTheWorkBound(t *testing.T) {
+// The sweep must lock exactly one bounded page plus one row that proves a due
+// remainder exists. The extra row is what raises the deferred signal; reading all
+// 621 rows would restore the transaction-footprint bug this page replaced.
+func TestSweepReadsOneBoundedPageAndObservesTheRemainder(t *testing.T) {
 	pool := startScheduledReportPostgres(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -857,17 +851,96 @@ FROM new_jobs`,
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	candidates, err := reportsProducer(t).lockDueCandidates(ctx, tx)
+	candidates, err := reportsProducer(t).lockDueCandidates(
+		ctx, tx, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC),
+	)
 	if err != nil {
 		t.Fatalf("lockDueCandidates(): %v", err)
 	}
-	want := maximumScheduledReportsPerOccurrence + excess + 1
+	want := maximumScheduledReportCandidatesPerOccurrence
 	if len(candidates) != want {
 		t.Fatalf(
-			"the sweep read %d candidates, want all %d active schedules; a read limited "+
-				"to the work bound (%d) cannot observe the backlog it defers",
-			len(candidates), want, maximumScheduledReportsPerOccurrence,
+			"the sweep read %d candidates, want the bounded %d-row page for a %d-row population",
+			len(candidates), want, maximumScheduledReportsPerOccurrence+excess+1,
 		)
+	}
+}
+
+// One tenant's active schedule population must not abort the global sweep.
+//
+// The old allocation guard read every active report schedule in job-id order and
+// failed after 20,000 rows. That made volume itself a cross-tenant kill switch:
+// these attacker schedules are not due, but they still filled the read and kept
+// the due victim out of the transaction on every retry. The product property is
+// the victim's durable run, not whether an internal limit happened to trigger.
+func TestOneTenantsRowsBeyondTheFormerReadGuardDoNotBlockAnotherTenant(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	const (
+		formerMaximumScheduledReportRowsRead = 20000
+		attackerOrganizationID               = "11111111-1111-4111-8111-111111111111"
+		victimOrganizationID                 = "22222222-2222-4222-8222-222222222222"
+		victimJobID                          = "ffffffff-ffff-4fff-bfff-fffffffffff0"
+		victimReportID                       = "ffffffff-ffff-4fff-bfff-fffffffffff1"
+	)
+	createdAt := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+	attackerBase := time.Date(2026, time.July, 26, 6, 0, 0, 0, time.UTC)
+	attackerNextDue := time.Date(2026, time.July, 27, 6, 0, 0, 0, time.UTC)
+	victimNextDue := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.organizations (id, name, is_active)
+VALUES ($1::uuid, 'attacker', TRUE), ($2::uuid, 'victim', TRUE)`,
+		attackerOrganizationID, victimOrganizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+WITH attacker_jobs AS (
+    INSERT INTO public.scheduled_jobs
+        (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+    SELECT gen_random_uuid(), $1, 'report:attacker', 'report', '0 6 * * *', 'UTC', 0, FALSE, $4, $2, $2
+    FROM generate_series(1, $3)
+    RETURNING id
+)
+INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+SELECT gen_random_uuid(), $1, 'attacker', attacker_jobs.id, TRUE, $2, $2
+FROM attacker_jobs`, attackerOrganizationID, attackerBase, formerMaximumScheduledReportRowsRead+1, attackerNextDue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.scheduled_jobs
+    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+VALUES ($1::uuid, $2, 'report:victim', 'report', '0 6 * * *', 'UTC', 0, FALSE, $4, $3, $3)`,
+		victimJobID, victimOrganizationID, createdAt, victimNextDue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+VALUES ($4::uuid, $2, 'victim', $1::uuid, TRUE, $3, $3)`,
+		victimJobID, victimOrganizationID, createdAt, victimReportID); err != nil {
+		t.Fatal(err)
+	}
+
+	schedule, occurrence := reportOccurrence(
+		t, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC),
+	)
+	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce(): %v", err)
+	}
+	assertNoDuplicateHandoffs(t, outcome)
+
+	var victimRuns int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM public.report_runs WHERE report_id = $1::uuid`,
+		victimReportID).Scan(&victimRuns); err != nil {
+		t.Fatal(err)
+	}
+	if victimRuns != 1 {
+		t.Fatalf("victim report runs = %d, want 1", victimRuns)
 	}
 }
 

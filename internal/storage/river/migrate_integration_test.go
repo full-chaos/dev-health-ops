@@ -634,6 +634,12 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	if _, err := queuePool.Exec(ctx, "SELECT generation FROM public.sync_dispatch_transport_routes"); err != nil {
 		t.Fatalf("queue role cannot read sync-dispatch route state: %v", err)
 	}
+	if _, err := queuePool.Exec(ctx, "SELECT id FROM public.sync_runs"); err != nil {
+		t.Fatalf("queue role cannot read active sync-run state: %v", err)
+	}
+	if _, err := queuePool.Exec(ctx, "UPDATE public.sync_runs SET id=id"); err == nil {
+		t.Fatal("queue role unexpectedly updates sync-run state")
+	}
 	if _, err := queuePool.Exec(ctx, "UPDATE public.sync_dispatch_transport_routes SET generation = generation + 1"); err == nil {
 		t.Fatal("queue role unexpectedly updates sync-dispatch route state")
 	}

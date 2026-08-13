@@ -79,6 +79,9 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		}
 		registered = append(registered, spec)
 	}
+	if err := registerRescueCoverage(workers, registry, registered); err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
 	budgets := []jobruntime.QueueBudget{
 		{Queue: "workgraph", MaxWorkers: 1},
 		{Queue: "investment", MaxWorkers: 1},

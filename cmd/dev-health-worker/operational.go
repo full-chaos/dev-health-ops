@@ -204,6 +204,9 @@ func buildOperationalWorker(
 			registered = append(registered, adapter.Spec())
 		}
 	}
+	if err := registerRescueCoverage(workers, registry, registered); err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
 	budgets := []jobruntime.QueueBudget{
 		{Queue: "coverage", MaxWorkers: 1},
 		{Queue: "heartbeat", MaxWorkers: 1},

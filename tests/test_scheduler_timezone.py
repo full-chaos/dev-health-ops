@@ -190,40 +190,6 @@ class TestDispatchersForwardSelectedTimezone:
         assert result["dispatched"] == []
         assert seen["tz"] == LA
 
-    def test_metrics_dispatch_forwards_timezone(self, monkeypatch, db_session):
-        from dev_health_ops.workers import metrics_daily
-
-        now = datetime.now(timezone.utc)
-        job = ScheduledJob(
-            name="metrics-default",
-            job_type="metrics",
-            schedule_cron="0 0 * * *",
-            org_id="default",
-            job_config={"org_id": "default"},
-            tz=LA,
-        )
-        db_session.add(job)
-        db_session.flush()
-
-        seen: dict[str, str | None] = {}
-
-        def spy(cron_expr, base, tz_name=None):
-            seen["tz"] = tz_name
-            return now + timedelta(hours=99)
-
-        monkeypatch.setattr(metrics_daily, "cron_next_run", spy)
-        monkeypatch.setattr(
-            "dev_health_ops.db.get_postgres_session_sync",
-            lambda: _session_ctx(db_session),
-        )
-        monkeypatch.setattr(
-            metrics_daily, "organization_exists_sync", lambda _s, _o: True
-        )
-
-        result = self._call(metrics_daily.dispatch_scheduled_metrics)
-        assert result["dispatched"] == []
-        assert seen["tz"] == LA
-
     def test_report_dispatch_forwards_timezone(self, monkeypatch, db_session):
         from dev_health_ops.workers import report_scheduler
 

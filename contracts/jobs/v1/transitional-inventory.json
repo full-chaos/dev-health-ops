@@ -2,11 +2,19 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 149,
+  "row_count": 146,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
   },
+  "retired_beat_entries": [
+    {
+      "name": "dispatch-scheduled-metrics",
+      "cadence": "300s",
+      "reason": "No production ScheduledJob writer creates job_type='metrics'; the legacy dispatcher could only create arbitrary-config Celery work, which the durable Go daily-metrics contract cannot safely emulate.",
+      "evidence": "CHAOS-3128 retirement decision: source audit found zero production writers and a local feature-stack PostgreSQL read-only audit found zero scheduled_jobs rows with job_type='metrics'."
+    }
+  ],
   "rows": [
     {
       "id": "celery_task:src/dev_health_ops/workers/sync_scheduler.py:837",
@@ -57,36 +65,12 @@
       "notes": "gated by SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED, default off"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/metrics_daily.py:24",
-      "surface": "dispatch_scheduled_metrics",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/metrics_daily.py",
-        "line": 24
-      },
-      "queue_or_cadence": "default (implicit)",
-      "dispatches": "self (Beat)",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "Go scheduler"
-      },
-      "target_kind_id": "beat:dispatch-scheduled-metrics",
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Celery worker process consuming the Beat-scheduled dispatch.",
-      "deletion_evidence_requirement": "Deleted alongside Beat entry `dispatch-scheduled-metrics` once its native replacement is proven.",
-      "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": "Beat entry dispatch-scheduled-metrics, 300s"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/metrics_daily.py:98",
+      "id": "celery_task:src/dev_health_ops/workers/metrics_daily.py:19",
       "surface": "run_daily_metrics",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/metrics_daily.py",
-        "line": 98
+        "line": 19
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self",
@@ -1113,12 +1097,12 @@
       "notes": "transport-routes.json kind reference_discovery, route=river, rollback_route=celery; native Go coordinator is the active path"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:144",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:143",
       "surface": "dispatch-scheduled-syncs",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 144
+        "line": 143
       },
       "queue_or_cadence": "300s",
       "dispatches": "dispatch_scheduled_syncs",
@@ -1137,36 +1121,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:149",
-      "surface": "dispatch-scheduled-metrics",
-      "class": "beat_entry",
-      "source": {
-        "file": "src/dev_health_ops/workers/config.py",
-        "line": 149
-      },
-      "queue_or_cadence": "300s",
-      "dispatches": "dispatch_scheduled_metrics",
-      "dispatch_mechanism": "beat_schedule_entry",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "Go scheduler"
-      },
-      "target_kind_id": "beat:dispatch-scheduled-metrics",
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
-      "deletion_evidence_requirement": "Beat entry `dispatch-scheduled-metrics` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
-      "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": ""
-    },
-    {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:159",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:153",
       "surface": "run-daily-metrics",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 159
+        "line": 153
       },
       "queue_or_cadence": "crontab(hour=1,minute=0) UTC",
       "dispatches": "dispatch_daily_metrics_for_all_orgs",
@@ -1185,12 +1145,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:171",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:165",
       "surface": "run-complexity-daily",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 171
+        "line": 165
       },
       "queue_or_cadence": "crontab(hour=0,minute=45) UTC",
       "dispatches": "dispatch_complexity_job",
@@ -1209,12 +1169,12 @@
       "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:183",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:177",
       "surface": "run-recommendations",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 183
+        "line": 177
       },
       "queue_or_cadence": "crontab(hour=2,minute=0) UTC",
       "dispatches": "run_recommendations_job",
@@ -1233,12 +1193,12 @@
       "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:194",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:188",
       "surface": "run-release-impact-daily",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 194
+        "line": 188
       },
       "queue_or_cadence": "crontab(hour=1,minute=30) UTC",
       "dispatches": "dispatch_release_impact",
@@ -1257,12 +1217,12 @@
       "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:203",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:197",
       "surface": "reconcile-sync-dispatch",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 203
+        "line": 197
       },
       "queue_or_cadence": "60s",
       "dispatches": "reconcile_sync_dispatch",
@@ -1281,12 +1241,12 @@
       "notes": "checkedInReconcilerActivation.syncMutation=true activates the continuous Go reconcile loop; Celery Beat is not required for native sync-dispatch progress"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:208",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:202",
       "surface": "run-capacity-forecast",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 208
+        "line": 202
       },
       "queue_or_cadence": "crontab(hour=4,minute=0,day_of_week=monday) UTC",
       "dispatches": "dispatch_capacity_forecast",
@@ -1305,12 +1265,12 @@
       "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:213",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:207",
       "surface": "process-ingest-streams",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 213
+        "line": 207
       },
       "queue_or_cadence": "30s launcher",
       "dispatches": "run_ingest_consumer",
@@ -1329,12 +1289,12 @@
       "notes": "Go equivalent already live and consuming the same consumer group in tandem (CHAOS-3033 local Go/River tandem runtime); Python side remains the production path until Celery-off cutover (CUT-17/18/19)."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:219",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:213",
       "surface": "process-product-telemetry-streams",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 219
+        "line": 213
       },
       "queue_or_cadence": "30s launcher",
       "dispatches": "run_product_telemetry_consumer",
@@ -1353,12 +1313,12 @@
       "notes": "Go equivalent already live and consuming the same consumer group in tandem (CHAOS-3033 local Go/River tandem runtime); Python side remains the production path until Celery-off cutover (CUT-17/18/19)."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:225",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:219",
       "surface": "process-external-ingest-streams",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 225
+        "line": 219
       },
       "queue_or_cadence": "30s launcher",
       "dispatches": "run_external_ingest_consumer",
@@ -1377,12 +1337,12 @@
       "notes": "singleton | Go equivalent already live and consuming the same consumer group in tandem (CHAOS-3033 local Go/River tandem runtime); Python side remains the production path until Celery-off cutover (CUT-17/18/19)."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:237",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:231",
       "surface": "dispatch-go-external-ingest-recompute-bridge",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 237
+        "line": 231
       },
       "queue_or_cadence": "10s",
       "dispatches": "dispatch_external_ingest_recompute_bridge",
@@ -1401,12 +1361,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:243",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:237",
       "surface": "external-ingest-stream-health",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 243
+        "line": 237
       },
       "queue_or_cadence": "60s",
       "dispatches": "external_ingest_stream_health",
@@ -1425,12 +1385,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:251",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:245",
       "surface": "phone-home-heartbeat",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 251
+        "line": 245
       },
       "queue_or_cadence": "crontab(hour=0,minute=0) UTC",
       "dispatches": "phone_home_heartbeat",
@@ -1449,12 +1409,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:256",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:250",
       "surface": "dispatch-scheduled-reports",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 256
+        "line": 250
       },
       "queue_or_cadence": "300s",
       "dispatches": "dispatch_scheduled_reports",
@@ -1473,12 +1433,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:261",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:255",
       "surface": "monitor-queue-depths",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 261
+        "line": 255
       },
       "queue_or_cadence": "60s",
       "dispatches": "monitor_queue_depths",
@@ -1497,12 +1457,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:276",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:270",
       "surface": "run-membership-backfill-daily",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 276
+        "line": 270
       },
       "queue_or_cadence": "crontab(hour=3,minute=30) UTC",
       "dispatches": "dispatch_membership_backfill",
@@ -1521,12 +1481,12 @@
       "notes": "Reviewed divergence, see CUT-17 check: the Go fan-out producer's empty-organization-table behavior does not restore the legacy Python `_discover_active_org_ids` fallback to `[\"default\"]`; it records a durable skip (reason `no_active_organizations`) and exports `fixed_scheduler_schedule_degraded{schedule,reason}` instead, keeping readiness open. This is a deliberate, orchestrator-ruled divergence (not full parity) pending the CUT-17 baseline-capture evidence check for whether any live install actually depends on the sentinel fallback."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:286",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:280",
       "surface": "prune-rate-limit-observations",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 286
+        "line": 280
       },
       "queue_or_cadence": "crontab(hour=5,minute=0) UTC",
       "dispatches": "prune_rate_limit_observations",
@@ -1545,12 +1505,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:295",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:289",
       "surface": "prune-external-ingest-batches",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 295
+        "line": 289
       },
       "queue_or_cadence": "crontab(hour=5,minute=15) UTC",
       "dispatches": "prune_external_ingest_batches",
@@ -1569,12 +1529,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry_conditional:src/dev_health_ops/workers/config.py:320",
+      "id": "beat_entry_conditional:src/dev_health_ops/workers/config.py:314",
       "surface": "consume-pending-scheduled-sync-occurrences",
       "class": "beat_entry_conditional",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 320
+        "line": 314
       },
       "queue_or_cadence": "300s, default off (SYNC_SCHEDULED_OCCURRENCE_CONSUMER_ENABLED)",
       "dispatches": "consume_pending_scheduled_sync_occurrences",
@@ -1590,7 +1550,7 @@
       "compatibility_dependency": "Celery Beat scheduler process + Redis/Valkey broker.",
       "deletion_evidence_requirement": "Beat entry `consume-pending-scheduled-sync-occurrences` removed from src/dev_health_ops/workers/config.py; cadence contract comparison (this inventory vs. the checked schedule definition) shows the entry no longer present; the equivalent Go schedule/producer proven to preserve cadence and missed-run policy.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": "conditional entry, 19 unconditional + this = 20 total"
+      "notes": "conditional entry, 18 unconditional + this = 19 total"
     },
     {
       "id": "call_site_literal:src/dev_health_ops/api/billing/router.py:133",
@@ -1866,30 +1826,6 @@
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_release_impact_job",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "Go scheduler + heavy worker"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": ""
-    },
-    {
-      "id": "call_site_literal:src/dev_health_ops/workers/metrics_daily.py:70",
-      "surface": "run_daily_metrics.apply_async",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/workers/metrics_daily.py",
-        "line": 70
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "run_daily_metrics",
       "dispatch_mechanism": "literal_dispatch_call",
       "owner_role": "contributor",
       "target_owner": {
@@ -3567,12 +3503,12 @@
       "notes": "CHAOS-3404: production caller for DevPersistenceService.cleanup_expired (previously had none). Beat entry ask-dev-retention-sweep, crontab(5,30) UTC."
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:309",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:303",
       "surface": "ask-dev-retention-sweep",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 309
+        "line": 303
       },
       "queue_or_cadence": "crontab(hour=5,minute=30) UTC",
       "dispatches": "run_ask_dev_retention_cleanup",

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "scheduled metrics dispatcher retirement",
+  "$comment": "CHAOS-3128: the obsolete Beat sweep is intentionally retired, not replaced by an empty Go producer. These mutations prove that reintroducing the Beat key or a metrics ScheduledJob writer fails independently derived guards.",
+  "build": [
+    "python",
+    "-m",
+    "compileall",
+    "-q",
+    "ci/check_transitional_inventory.py",
+    "src/dev_health_ops/workers/config.py",
+    "src/dev_health_ops/workers/sync_scheduler.py"
+  ],
+  "mutations": [
+    {
+      "id": "SMDR01-retired-beat-key",
+      "file": "src/dev_health_ops/workers/config.py",
+      "find": "    \"dispatch-scheduled-syncs\": {",
+      "replace": "    \"dispatch-scheduled-metrics\": {",
+      "expect_occurrences": 1,
+      "rationale": "The retired Beat name must not silently return as an unowned or nominally-owned schedule.",
+      "proof": [
+        [
+          "python",
+          "ci/check_transitional_inventory.py"
+        ]
+      ]
+    },
+    {
+      "id": "SMDR02-metrics-scheduled-job-writer",
+      "file": "src/dev_health_ops/workers/sync_scheduler.py",
+      "find": "        job_type=\"sync\",\n        schedule_cron=cron_expr,",
+      "replace": "        job_type=\"metrics\",\n        schedule_cron=cron_expr,",
+      "expect_occurrences": 1,
+      "rationale": "A new metrics ScheduledJob writer invalidates the no-writer evidence that authorizes this retirement and requires a fresh scheduler design review.",
+      "proof": [
+        [
+          "python",
+          "-m",
+          "pytest",
+          "--noconftest",
+          "-q",
+          "tests/workers/test_scheduled_metrics_retirement.py::test_production_scheduled_job_writers_cannot_reintroduce_metrics_sweeps"
+        ]
+      ]
+    }
+  ]
+}

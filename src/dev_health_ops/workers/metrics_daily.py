@@ -2,97 +2,18 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime, timezone
-from typing import Any
+from datetime import date
 
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.task_utils import (
-    _as_datetime,
-    _as_dict,
-    _as_str,
     _get_db_url,
     _invalidate_metrics_cache,
-    cron_next_run,
 )
 
 logger = logging.getLogger(__name__)
-
-
-@celery_app.task(
-    bind=True, name="dev_health_ops.workers.tasks.dispatch_scheduled_metrics"
-)
-def dispatch_scheduled_metrics(self) -> dict:
-    """Check ScheduledJob entries with job_type='metrics' and dispatch any that are due."""
-
-    from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models.settings import (
-        JobStatus,
-        ScheduledJob,
-    )
-
-    now = datetime.now(timezone.utc)
-    dispatched: list[str] = []
-    skipped = 0
-
-    try:
-        with get_postgres_session_sync() as session:
-            jobs = (
-                session.query(ScheduledJob)
-                .filter(
-                    ScheduledJob.job_type == "metrics",
-                    ScheduledJob.status == JobStatus.ACTIVE.value,
-                )
-                .all()
-            )
-
-            for job in jobs:
-                if not organization_exists_sync(session, job.org_id):
-                    skipped += 1
-                    continue
-
-                if job.is_running:
-                    skipped += 1
-                    continue
-
-                cron_expr = _as_str(job.schedule_cron) or "0 1 * * *"
-                last_run = (
-                    job.last_run_at
-                    if isinstance(job.last_run_at, datetime)
-                    else _as_datetime(job.created_at)
-                )
-                next_run = cron_next_run(cron_expr, last_run, _as_str(job.timezone))
-
-                if next_run <= now:
-                    job_config: dict[str, Any] = _as_dict(job.job_config)
-                    run_daily_metrics.apply_async(
-                        kwargs={
-                            "db_url": job_config.get("db_url"),
-                            "day": job_config.get("day"),
-                            "backfill_days": job_config.get("backfill_days", 1),
-                            "repo_id": job_config.get("repo_id"),
-                            "repo_name": job_config.get("repo_name"),
-                            "sink": job_config.get("sink", "auto"),
-                            "provider": job_config.get("provider", "auto"),
-                            "org_id": job.org_id or job_config.get("org_id"),
-                        },
-                        queue="metrics",
-                    )
-                    dispatched.append(str(job.id))
-                else:
-                    skipped += 1
-
-    except Exception:
-        logger.exception("dispatch_scheduled_metrics failed")
-
-    logger.info(
-        "Scheduled metrics dispatch: dispatched=%d skipped=%d",
-        len(dispatched),
-        skipped,
-    )
-    return {"dispatched": dispatched, "skipped": skipped}
 
 
 @celery_app.task(

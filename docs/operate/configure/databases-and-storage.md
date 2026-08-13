@@ -111,6 +111,8 @@ River terminal execution rows have bounded retention independent of product hist
 - required secret-manager data;
 - deployment configuration needed to reconstruct queue and worker ownership.
 
+Full dead worker-outbox rows also have bounded retention, but their minimal delivery-abandonment facts do not. Include `worker_job_delivery_abandonments` in PostgreSQL backup and restore validation. It contains no job arguments or detailed error text; its dedupe key, job kind, terminal timestamp, attempt count, and bounded error code are the durable evidence that prevents a retained scheduled-report run from receiving a fresh delivery budget after outbox cleanup.
+
 Test restore in an isolated environment. Do not use ad hoc schema repair or data deletion from a generic documentation command; use the current migration or incident procedure and retain evidence.
 
 Ask Dev conversation state lives in PostgreSQL. Its only supported retention

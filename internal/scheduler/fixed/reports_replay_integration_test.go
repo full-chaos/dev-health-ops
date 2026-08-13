@@ -72,32 +72,14 @@ func dueScheduledReport(t *testing.T, pool *pgxpool.Pool) (Schedule, Occurrence,
 	return schedule, occurrence, readReportState(t, pool).RunID
 }
 
-// A pending run whose handoff is ABSENT is re-armed. Without this the report is
-// permanently undelivered while every sweep reports a bounded already-claimed skip —
-// a schedule that looks healthy forever and never runs the report again.
-//
-// Codex adversarial review found that. The earlier code returned an unclaimed skip
-// unconditionally on replay, and its comment argued the durable outbox made Python's
-// re-nudge unnecessary. The outbox removed the lost-message motivation for that
-// nudge, not the terminalized-delivery one.
-//
-// KNOWN AMBIGUITY — this test models dead-then-pruned, and that case is NOT a
-// settled contract. Outbox retention deletes a dead row, so afterwards "the delivery
-// budget was spent" and "the handoff never existed" are indistinguishable from here:
-// both present as a missing row. Re-arming therefore resets the attempt budget of a
-// job that may be permanently invalid, which can cycle fresh budgets indefinitely
-// while the degraded signal clears on every re-arm.
-//
-// Distinguishing them needs a durable "this run's delivery was abandoned" fact that
-// retention does not delete — the same missing primitive as the outbox requeue path,
-// and out of this lane. Until that exists, treat this behaviour as the least-bad
-// reading of an ambiguous state rather than as the intended design, and do not cite
-// this test as evidence that re-arming a pruned handoff is correct.
-func TestReplayRearmsAPendingRunWhoseHandoffWasPruned(t *testing.T) {
+// A pending run with no durable evidence that its handoff was published is
+// re-armed. The abandonment ledger makes this absence unambiguous: terminal
+// retention cannot produce the same state.
+func TestReplayRearmsAPendingRunWhoseHandoffWasNeverPublished(t *testing.T) {
 	pool := startScheduledReportPostgres(t)
 	schedule, occurrence, runID := dueScheduledReport(t, pool)
-	// The engine published the handoff and outbox retention later deleted it as
-	// dead. This test never created it, which is that same end state.
+	// Calling the producer directly leaves both delivery stores empty and models
+	// the pre-existing/coexistence state replay must repair.
 	if handoffCount(t, pool) != 0 {
 		t.Fatal("the producer wrote an outbox row itself; the engine owns that")
 	}
@@ -472,9 +454,9 @@ func TestPythonAuthoredOccurrenceIsRecognisedNotRejected(t *testing.T) {
 		wantRequest  bool
 		wantDegraded string
 	}{
-		// Pruned after terminalizing: re-arm, and the re-armed request must carry
-		// PYTHON's run id so the outbox dedupe key matches what Python enqueued.
-		{"handoff pruned", "", true, ""},
+		// No durable handoff evidence: re-arm, and the re-armed request must carry
+		// PYTHON's run id so the outbox dedupe key matches its run identity.
+		{"handoff absent", "", true, ""},
 		{"handoff live", "pending", false, ""},
 		// A spent handoff is a per-report degraded condition, NOT a failure: it must
 		// not roll back other tenants' work. It also must not be re-armed, since

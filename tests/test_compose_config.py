@@ -392,6 +392,7 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
         "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
         "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences",
     ):
         assert grant in init_script
@@ -441,6 +442,7 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
         "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public",
         "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox",
+        "GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments",
         "GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences",
     ):
         assert grant in upgrade_script

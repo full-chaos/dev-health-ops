@@ -131,6 +131,7 @@ from .work_items import (
     WorkItemReopenEvent,
     WorkItemStatusTransition,
 )
+from .worker_job_delivery_abandonment import WorkerJobDeliveryAbandonment
 from .worker_job_outbox import WorkerJobOutbox
 from .worker_job_route import WorkerJobRoute
 from .worker_job_run import WorkerJobRun
@@ -251,6 +252,7 @@ __all__ = [
     "WorkItemInteractionEvent",
     "WorkItemReopenEvent",
     "WorkItemStatusTransition",
+    "WorkerJobDeliveryAbandonment",
     "WorkerJobOutbox",
     "WorkerJobRoute",
     "WorkerJobRun",

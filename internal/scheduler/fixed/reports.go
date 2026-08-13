@@ -34,16 +34,16 @@ const SkipNoDueScheduledReportsClaimed = "scheduled_reports_already_claimed"
 // delivery budget. The occurrence still commits every other tenant's work; this
 // names the condition so it is visible without being fatal.
 //
-// It is a PERMANENT condition until an operator acts: nothing in the fixed
-// retention set emits worker_job_terminal, so no mechanism clears a dead outbox
-// row. The gauge therefore stays raised, which is the intended behaviour — it is
-// not a transient blip to be smoothed over. Locate the affected runs with:
+// It is a PERMANENT condition until an operator acts. Outbox retention replaces
+// the full dead row with a minimal delivery-abandonment fact, so the gauge stays
+// raised after retention instead of starting a fresh attempt budget. Locate the
+// affected runs with:
 //
 //	SELECT run.id, run.report_id
 //	FROM report_runs AS run
-//	JOIN worker_job_outbox AS handoff
-//	  ON handoff.dedupe_key = 'report.run:' || run.id::text
-//	WHERE run.status = 'pending' AND handoff.status = 'dead';
+//	JOIN worker_job_delivery_abandonments AS abandonment
+//	  ON abandonment.dedupe_key = 'report.run:' || run.id::text
+//	WHERE run.status = 'pending';
 const DegradedScheduledReportsUndeliverable = "scheduled_reports_undeliverable"
 
 // DegradedScheduledReportsDeferred marks a sweep that hit its per-occurrence
@@ -135,8 +135,8 @@ var ErrScheduledReportConflict = errors.New("scheduled report occurrence conflic
 var ErrScheduledReportUndeliverable = errors.New("scheduled report run has no live delivery path")
 
 // outboxDeadStatus is joboutbox's terminal failure state (internal/joboutbox's
-// statusDead). Outbox retention deletes rows in this state, which is why a
-// replayed occurrence has to distinguish "handoff gone" from "handoff spent".
+// statusDead). Outbox retention deletes full rows in this state only after it
+// records a durable abandonment fact.
 const outboxDeadStatus = "dead"
 
 // reportRunNamespace derives the durable ReportRun identity for one occurrence.
@@ -443,26 +443,15 @@ func (producer *ScheduledReportsProducer) nextRun(
 // the handoff the engine should publish. The boolean is false when the
 // occurrence was already durable, in which case nothing was written.
 //
-// Replaying a durable occurrence does NOT unconditionally publish nothing. An
-// earlier version of this code did, on the argument that the outbox row committed
-// with the run is the durable handoff and therefore makes Python's re-nudge
-// unnecessary. That argument was half right and the missing half was a permanent
-// stall, found in adversarial review:
+// Replaying a durable occurrence does NOT unconditionally publish nothing. It
+// verifies the linked run and both durable delivery stores so recovery and
+// exhaustion cannot collapse into the same missing-row state:
 //
-// The outbox does remove the LOST-MESSAGE motivation for Python's re-nudge. It
-// does not remove the TERMINALIZED-DELIVERY one. joboutbox marks a row 'dead' once
-// its attempt budget is exhausted (repository.go's relay update), and outbox
-// retention DELETES dead rows outright. So a run could sit at status 'pending'
-// with its handoff dead or already pruned, while every subsequent sweep found the
-// occurrence, reported an already-claimed skip, and left the report permanently
-// undelivered behind a schedule that looked healthy — precisely the false pass
-// this producer exists to avoid. Python recovers from this case, because its
-// apply_async bypasses the outbox entirely.
-//
-// Replay therefore verifies the linked run and its delivery path, and takes one of
-// three paths, distinguished so that neither recovery nor exhaustion is silent:
-// re-arm when the handoff is simply gone, stay quiet while delivery is live or the
-// run has moved on, and fail loudly when the budget was genuinely spent.
+//   - no outbox row and no abandonment fact means there is no durable evidence
+//     that publication completed, so replay re-arms the linked run;
+//   - a live outbox row stays with the relay;
+//   - a dead outbox row, or the abandonment fact retention leaves in its place,
+//     keeps the run degraded without minting a fresh attempt budget.
 func (producer *ScheduledReportsProducer) claimNew(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -580,13 +569,13 @@ func (producer *ScheduledReportsProducer) handoff(
 //   - A pending run with a live (non-dead) outbox row is delivery in flight. Stay
 //     quiet: the relay owns it.
 //
-//   - A pending run with NO outbox row has had its handoff pruned by outbox
-//     retention after being terminalized. Re-publishing is safe and is the only
-//     way the report ever runs, so it is re-armed.
+//   - A pending run with NO outbox row and NO abandonment fact has no durable
+//     evidence of a handoff. Re-publishing is safe and is the only way the report
+//     ever runs, so it is re-armed.
 //
-//   - A pending run with a DEAD outbox row has spent its attempt budget. Re-arming
-//     silently would loop forever against a budget something already gave up on,
-//     so it fails loudly instead and names the run for repair.
+//   - A pending run with either a DEAD outbox row or a durable abandonment fact
+//     has spent its attempt budget. Re-arming silently would cycle fresh budgets
+//     forever, so it fails loudly instead and names the run for repair.
 func (producer *ScheduledReportsProducer) replayNeedsRearming(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -595,8 +584,9 @@ func (producer *ScheduledReportsProducer) replayNeedsRearming(
 	var linkedRunID *string
 	var runStatus *string
 	var handoffStatus *string
+	var handoffAbandoned bool
 	if err := tx.QueryRow(ctx, replayedReportRunSQL, occurrenceID).Scan(
-		&linkedRunID, &runStatus, &handoffStatus,
+		&linkedRunID, &runStatus, &handoffStatus, &handoffAbandoned,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// claimOccurrence proved the row exists, so losing it here is a
@@ -615,13 +605,13 @@ func (producer *ScheduledReportsProducer) replayNeedsRearming(
 		return "", false, nil
 	}
 	switch {
-	case handoffStatus == nil:
-		return *linkedRunID, true, nil
-	case *handoffStatus == outboxDeadStatus:
+	case handoffAbandoned || (handoffStatus != nil && *handoffStatus == outboxDeadStatus):
 		return "", false, fmt.Errorf(
 			"%w: report run %s is pending but its handoff exhausted its delivery budget",
 			ErrScheduledReportUndeliverable, *linkedRunID,
 		)
+	case handoffStatus == nil:
+		return *linkedRunID, true, nil
 	default:
 		return "", false, nil
 	}
@@ -1063,8 +1053,8 @@ WHERE occurrence_id = $1
   AND report_run_id IS NULL
 `
 
-// The outbox join is LEFT so an absent handoff is distinguishable from a dead
-// one: retention deletes dead rows, and those two cases need opposite responses.
+// Both delivery joins are LEFT so all lifecycle states stay distinct: never
+// published, live, dead before retention, and abandoned after retention.
 //
 // The dedupe key is derived IN SQL from the linked run rather than passed in,
 // because the authoritative run is whatever the occurrence links — which for a
@@ -1072,12 +1062,15 @@ WHERE occurrence_id = $1
 // Passing a caller-computed key would look up the handoff of a run that may not
 // be the one being replayed.
 const replayedReportRunSQL = `
-SELECT occurrence.report_run_id::text, run.status, handoff.status
+SELECT occurrence.report_run_id::text, run.status, handoff.status,
+       abandonment.dedupe_key IS NOT NULL
 FROM public.scheduled_report_occurrences AS occurrence
 LEFT JOIN public.report_runs AS run
     ON run.id = occurrence.report_run_id
 LEFT JOIN public.worker_job_outbox AS handoff
     ON handoff.dedupe_key = 'report.run:' || occurrence.report_run_id::text
+LEFT JOIN public.worker_job_delivery_abandonments AS abandonment
+    ON abandonment.dedupe_key = 'report.run:' || occurrence.report_run_id::text
 WHERE occurrence.occurrence_id = $1
 `
 

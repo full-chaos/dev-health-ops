@@ -122,6 +122,12 @@ psql \
       WHERE to_regclass('public.worker_job_outbox') IS NOT NULL
     \gexec
     SELECT format(
+      'GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO %I',
+      :'queue_role'
+    )
+      WHERE to_regclass('public.worker_job_delivery_abandonments') IS NOT NULL
+    \gexec
+    SELECT format(
       'GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO %I',
       :'queue_role'
     )

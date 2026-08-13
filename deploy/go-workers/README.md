@@ -27,6 +27,10 @@ The contract gate validates that:
 - every River queue has one explicit `queue_workers` capacity, and the queue
   telemetry denominator must use that same value when a River client is
   composed;
+- every started River client registers type-only rescue workers for every
+  bounded job kind it does not execute. River elects one maintenance leader
+  per schema, not per queue, so a partial registry can otherwise discard
+  another queue's stuck job as unhandled;
 - `MIGRATION_DATABASE_URI` is available only to the one-shot migration job;
 - the one-shot operator has an exact token/DSN/config surface and is included
   in both direct and PgBouncer client connection budgets;
@@ -41,6 +45,24 @@ The budget is calculated from `max_replicas`, including profiles disabled by
 default, so enabling the complete declared topology cannot silently exceed the
 checked-in ceiling. Phase 1 keeps every `min_replicas` at zero until its
 readiness dependencies, ownership route, and canary evidence are approved.
+
+### River maintenance and premature terminal delivery recovery
+
+Queue separation controls execution only. River's maintenance election is
+schema-wide, so every started worker client carries type-only rescue coverage
+for the job kinds owned by the other queues. These workers cannot perform
+domain effects: an incorrectly queued job is cancelled fail-closed. Their
+purpose is to give JobRescuer the real kind, timeout, and retry shape even when
+the elected maintenance client consumes a different queue.
+
+The sync reconciler also repairs the historical failure produced by a partial
+maintenance registry. It re-arms a dispatched sync outbox row only when the
+linked River row is finalized as `discarded`, still has attempts remaining,
+and its latest error is exactly River's unhandled JobRescuer error. The current
+unpaused River route generation must still match. Ordinary provider failures,
+explicit cancellation, and exhausted jobs remain terminal. The replacement is
+published through the existing outbox attempt and route-generation fences; do
+not reset these rows manually or broaden the recovery predicate.
 
 ## CHAOS-3052 deployment runbook
 

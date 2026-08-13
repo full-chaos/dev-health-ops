@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "name": "River terminal dispatch recovery",
+  "$limitation": "Pins complete maintenance type coverage on every partial River client and the narrow queue-side recovery of River v0.40 unhandled JobRescuer discards. It does not authorize reopening ordinary, cancelled, or exhausted terminal jobs.",
+  "mutations": [
+    {
+      "id": "RTDR01-coordinator-kind-coverage",
+      "file": "internal/jobrescue/registry.go",
+      "find": "\t\tsyncdispatchcontract.KindDispatchSyncRun,\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "A maintenance leader on a partial client must recognize the dispatch coordinator kind.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-run", "^$", "./internal/jobrescue/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-count=1", "-run", "^TestRegisterMissingWorkersCoversEveryRuntimeKind$", "./internal/jobrescue/"]]
+    },
+    {
+      "id": "RTDR02-register-missing-types",
+      "file": "internal/jobrescue/registry.go",
+      "find": "\t\tif _, isOwned := owned[kind]; isOwned {\n",
+      "replace": "\t\tif true {\n",
+      "expect_occurrences": 1,
+      "rationale": "Kinds not executed by a client still need type-only rescue workers.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-run", "^$", "./cmd/dev-health-worker/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-count=1", "-run", "^TestRegisterRescueCoverageAddsCoordinatorKindsToPartialClient$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "RTDR03-checked-in-retry-policy",
+      "file": "internal/jobrescue/registry.go",
+      "find": "\treturn jobruntime.NextRetryAt(worker.descriptor, job.JobRow)\n",
+      "replace": "\treturn time.Time{}\n",
+      "expect_occurrences": 1,
+      "rationale": "A rescue-only worker must apply the same bounded retry policy as the executable adapter.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-run", "^$", "./internal/jobrescue/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-count=1", "-run", "^TestRescueOnlyWorkerUsesCheckedInRetryPolicy$", "./internal/jobrescue/"]]
+    },
+    {
+      "id": "RTDR04-exact-rescuer-error",
+      "file": "internal/syncreconciler/terminal_delivery_repair.go",
+      "find": "\t\tAND (job.errors[cardinality(job.errors)]->>'error') = $3\n",
+      "replace": "\t\tAND (job.errors[cardinality(job.errors)]->>'error') <> $3\n",
+      "expect_occurrences": 1,
+      "rationale": "Only River's exact premature unhandled-rescuer discard may re-arm a delivery.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestKernelMutationPostgresTransactionFence$/^unhandled_River_rescuer_discard_is_recovered_without_reopening_real_terminal_failures$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "RTDR05-remaining-attempt-fence",
+      "file": "internal/syncreconciler/terminal_delivery_repair.go",
+      "find": "\t\tAND job.attempt < job.max_attempts\n",
+      "replace": "\t\tAND job.attempt <= job.max_attempts\n",
+      "expect_occurrences": 1,
+      "rationale": "An exhausted job remains terminal even if its latest error came from JobRescuer.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestKernelMutationPostgresTransactionFence$/^unhandled_River_rescuer_discard_is_recovered_without_reopening_real_terminal_failures$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "RTDR06-pipeline-recovery-stage",
+      "file": "internal/syncreconciler/pipeline.go",
+      "find": "\tif _, err := pipeline.terminal.Step(ctx, now, limit); err != nil {\n\t\treturn Observation{}, err\n\t}\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "The active mutation loop must repair the terminal delivery before materialization and publication.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-count=1", "-run", "^TestMutationPipelineRunsCommittedStagesBeforeObservation$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "RTDR07-every-started-client-wired",
+      "file": "cmd/dev-health-worker/provider_sync.go",
+      "find": "\tif err := registerRescueCoverage(workers, registry, []jobruntime.HandlerSpec{adapter.Spec()}); err != nil {\n\t\tcloseDependencies()\n\t\treturn workerFamily{}, errWorkerDependencyUnavailable\n\t}\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "A provider-only client can become River's global maintenance leader and must carry rescue coverage.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-run", "^$", "./cmd/dev-health-worker/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-count=1", "-run", "^TestEveryStartedWorkerRiverClientRegistersGlobalRescueCoverage$", "./cmd/dev-health-worker/"]]
+    },
+    {
+      "id": "RTDR08-production-reconciler-wiring",
+      "file": "cmd/dev-health-reconciler/dependencies.go",
+      "find": "\tterminalRepair, err := syncreconciler.NewTerminalDeliveryRepair(queuePool, riverSchema)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n",
+      "replace": "\tterminalRepair := (*syncreconciler.TerminalDeliveryRepair)(nil)\n",
+      "expect_occurrences": 1,
+      "rationale": "Production composition must construct the queue-side repair rather than pass a typed nil into the active pipeline.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-run", "^$", "./cmd/dev-health-reconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-count=1", "-run", "^TestProductionMutationPipelineConstructsTerminalDeliveryRepair$", "./cmd/dev-health-reconciler/"]]
+    },
+    {
+      "id": "RTDR09-stale-operator-retry-fence",
+      "file": "internal/joboperator/postgres_backend.go",
+      "find": "\tif err := backend.lockCurrentSyncDispatchDelivery(ctx, tx, id); err != nil {\n\t\treturn JobSummary{}, err\n\t}\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "An operator cannot resurrect the old discarded job after recovery has detached it from the durable outbox.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestKernelMutationPostgresTransactionFence$/^unhandled_River_rescuer_discard_is_recovered_without_reopening_real_terminal_failures$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "RTDR10-bounded-active-run-plan",
+      "file": "internal/syncreconciler/terminal_delivery_repair.go",
+      "find": "\tJOIN public.sync_runs AS run\n\t\tON run.id = outbox.sync_run_id\n\t\tAND run.status IN ('planned', 'dispatching', 'running')\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "The one-second repair path must begin with indexed active runs instead of scanning retained terminal dispatch history.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestKernelMutationPostgresTransactionFence$/^terminal_delivery_repair_uses_active-run_indexes_against_retained_history$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "RTDR11-queue-active-run-read-grant",
+      "file": "internal/storage/river/migrate.go",
+      "find": "\t\t\"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_runs TO \" + queueRole + \"; END IF; END $$\",\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "The queue runtime must receive the narrow read-only active-run fence used by terminal repair.",
+      "build": ["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-run", "^$", "./internal/syncreconciler/"],
+      "proof": [["env", "GOTOOLCHAIN=go1.25.9", "GOCACHE=/tmp/go-river-terminal-recovery-mutation-cache", "go", "test", "-tags=integration", "-count=1", "-run", "^TestKernelMutationPostgresTransactionFence$/^terminal_delivery_repair_uses_active-run_indexes_against_retained_history$", "./internal/syncreconciler/"]]
+    },
+    {
+      "id": "RTDR12-deployed-role-provisioning",
+      "file": "scripts/worker/provision_river_roles.sql",
+      "find": "SELECT format(\n         'GRANT SELECT ON TABLE public.sync_runs TO %I',\n         :'queue_role'\n       )\n WHERE to_regclass('public.sync_runs') IS NOT NULL\n\\gexec\n",
+      "replace": "",
+      "expect_occurrences": 1,
+      "rationale": "Deployed role reprovisioning must reproduce the same read-only active-run fence as the pinned Go migrator.",
+      "proof": [[".venv/bin/pytest", "--noconftest", "-q", "tests/test_compose_config.py::test_local_postgres_bootstraps_distinct_go_runtime_roles"]]
+    }
+  ]
+}

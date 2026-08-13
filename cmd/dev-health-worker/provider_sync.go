@@ -833,6 +833,10 @@ func constructProviderSyncWorkerWithDependencies(
 		closeDependencies()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	if err := registerRescueCoverage(workers, registry, []jobruntime.HandlerSpec{adapter.Spec()}); err != nil {
+		closeDependencies()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
 		providerSyncRiverConfig(

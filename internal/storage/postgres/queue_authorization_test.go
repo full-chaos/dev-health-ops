@@ -62,6 +62,7 @@ func TestQueueAuthorizationQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *tes
 		"WORKER_JOB_COMPLETION_FENCES",
 		"SYNC_DISPATCH_OUTBOX",
 		"SYNC_DISPATCH_TRANSPORT_ROUTES",
+		"SYNC_RUNS",
 		"PUBLIC_FUNCTIONS",
 		"PUBLIC_SEQUENCES",
 		"RIVER_TABLES",

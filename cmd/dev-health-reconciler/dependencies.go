@@ -205,6 +205,10 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
+	terminalRepair, err := syncreconciler.NewTerminalDeliveryRepair(queuePool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
 	materializer, err := syncreconciler.NewMaterializer(coordinatorPool)
 	if err != nil {
 		return nil, err
@@ -243,6 +247,7 @@ func buildSyncMutationPipeline(
 	// post_sync fanout, before advertising River route readiness.
 	return syncreconciler.NewMutationPipeline(
 		repair,
+		terminalRepair,
 		materializer,
 		kernel,
 		observer,

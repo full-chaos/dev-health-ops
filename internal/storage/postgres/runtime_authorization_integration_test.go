@@ -115,6 +115,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + runtimeAuthorizationQueueRole,
+		"GRANT SELECT ON TABLE public.sync_runs TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA river TO " + runtimeAuthorizationQueueRole,

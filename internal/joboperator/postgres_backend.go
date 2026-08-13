@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -182,6 +183,9 @@ func (backend *PostgresBackend) Retry(ctx context.Context, id int64, mutation Mu
 		return JobSummary{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := backend.lockCurrentSyncDispatchDelivery(ctx, tx, id); err != nil {
+		return JobSummary{}, err
+	}
 	if err := backend.compareLockedState(ctx, tx, id, mutation.ExpectedState); err != nil {
 		return JobSummary{}, err
 	}
@@ -197,6 +201,52 @@ func (backend *PostgresBackend) Retry(ctx context.Context, id int64, mutation Mu
 		return JobSummary{}, err
 	}
 	return summary, nil
+}
+
+// lockCurrentSyncDispatchDelivery serializes an audited retry with terminal
+// delivery recovery. Coordinator jobs are only retryable while the durable
+// outbox still names that exact River row. Locking the outbox before the River
+// row matches the reconciler's lock order and prevents an old job plus a new
+// outbox attempt from becoming runnable together.
+func (backend *PostgresBackend) lockCurrentSyncDispatchDelivery(
+	ctx context.Context,
+	tx pgx.Tx,
+	id int64,
+) error {
+	var kind string
+	if err := tx.QueryRow(ctx, "SELECT kind FROM "+backend.jobTable+" WHERE id = $1", id).Scan(&kind); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if !isSyncDispatchKind(kind) {
+		return nil
+	}
+	var outboxID string
+	err := tx.QueryRow(ctx, `
+		SELECT id::text
+		FROM public.sync_dispatch_outbox
+		WHERE transport_job_id = ($1::bigint)::text
+			AND kind = $2
+			AND status = 'dispatched'
+		FOR UPDATE`, id, kind).Scan(&outboxID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrStateConflict
+	}
+	return err
+}
+
+func isSyncDispatchKind(kind string) bool {
+	switch kind {
+	case syncdispatchcontract.KindDispatchSyncRun,
+		syncdispatchcontract.KindFinalizeSyncRun,
+		syncdispatchcontract.KindPostSync,
+		syncdispatchcontract.KindReferenceDiscovery:
+		return true
+	default:
+		return false
+	}
 }
 
 func (backend *PostgresBackend) PauseQueue(ctx context.Context, queue string, _ Mutation) error {

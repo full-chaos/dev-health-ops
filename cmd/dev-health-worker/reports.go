@@ -127,6 +127,10 @@ func buildReportWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	if err := registerRescueCoverage(workers, registry, specs); err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
 	client, err := river.NewClient(
 		riverpgxv5.New(postgresDatabase.pools.QueueControl),
 		&river.Config{

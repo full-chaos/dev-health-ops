@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboperator"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -34,7 +37,16 @@ type kernelRiverArgs struct {
 	OutboxID string `json:"outbox_id"`
 }
 
-func (kernelRiverArgs) Kind() string { return "test.sync_dispatch" }
+func (kernelRiverArgs) Kind() string { return syncdispatchcontract.KindDispatchSyncRun }
+
+type kernelOperatorRegistry struct{}
+
+func (kernelOperatorRegistry) Descriptor(string) (jobruntime.Descriptor, bool) {
+	return jobruntime.Descriptor{}, false
+}
+func (kernelOperatorRegistry) Profile(string) []jobruntime.Descriptor { return nil }
+func (kernelOperatorRegistry) HasProfile(string) bool                 { return false }
+func (kernelOperatorRegistry) HasQueue(string) bool                   { return false }
 
 // This test intentionally creates the production column types instead of
 // importing Python metadata. It validates the dormant Go kernel's PostgreSQL
@@ -656,6 +668,202 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 			t.Fatalf("post_sync retry row status:%s claim:%v available:%s", status, claimToken, availableAt)
 		}
 	})
+
+	t.Run("unhandled River rescuer discard is recovered without reopening real terminal failures", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		now := time.Date(2026, time.July, 23, 12, 5, 0, 0, time.UTC)
+		seedKernelOutbox(t, ctx, adminPool, integrationDispatchID, now.Add(-time.Second))
+		first, err := kernel.Step(ctx, now, 1, time.Minute, publish, nil)
+		if err != nil || first.Dispatched != 1 {
+			t.Fatalf("initial Step() = %#v, %v", first, err)
+		}
+		var firstJobID string
+		if err := adminPool.QueryRow(ctx, `
+			SELECT transport_job_id FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationDispatchID,
+		).Scan(&firstJobID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE river.river_job
+			SET state = 'discarded', attempt = 1, max_attempts = 5,
+				attempted_at = $2::timestamptz - interval '61 minutes', finalized_at = $2::timestamptz,
+				errors = ARRAY[jsonb_build_object(
+					'at', $2, 'attempt', 1,
+					'error', 'Stuck job rescued by JobRescuer', 'trace', ''
+				)]
+			WHERE id::text = $1`, firstJobID, now); err != nil {
+			t.Fatal(err)
+		}
+
+		repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovered, err := repair.Step(ctx, now.Add(time.Second), 10)
+		if err != nil || recovered.Recovered != 1 {
+			t.Fatalf("repair Step() = %#v, %v", recovered, err)
+		}
+		operatorBackend, err := joboperator.NewDirectPostgresBackend(
+			queuePool,
+			"river",
+			kernelOperatorRegistry{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsedFirstJobID, err := strconv.ParseInt(firstJobID, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := operatorBackend.Retry(ctx, parsedFirstJobID, joboperator.Mutation{
+			ExpectedState: joboperator.StateDiscarded,
+		}); !errors.Is(err, joboperator.ErrStateConflict) {
+			t.Fatalf("stale operator retry error = %v, want state conflict", err)
+		}
+		second, err := kernel.Step(ctx, now.Add(2*time.Second), 1, time.Minute, publish, nil)
+		if err != nil || second.Dispatched != 1 {
+			t.Fatalf("replacement Step() = %#v, %v", second, err)
+		}
+		var (
+			status      string
+			attempts    int
+			secondJobID string
+		)
+		if err := adminPool.QueryRow(ctx, `
+			SELECT status, attempts, transport_job_id
+			FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationDispatchID,
+		).Scan(&status, &attempts, &secondJobID); err != nil {
+			t.Fatal(err)
+		}
+		if status != "dispatched" || attempts != 2 || secondJobID == firstJobID {
+			t.Fatalf("replacement = status:%s attempts:%d jobs:%s/%s", status, attempts, firstJobID, secondJobID)
+		}
+
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE river.river_job
+			SET state = 'discarded', attempt = 1, finalized_at = $2::timestamptz,
+				errors = ARRAY[jsonb_build_object(
+					'at', $2::timestamptz, 'attempt', 1,
+					'error', 'provider request permanently rejected', 'trace', ''
+				)]
+			WHERE id::text = $1`, secondJobID, now.Add(3*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		ordinaryFailure, err := repair.Step(ctx, now.Add(4*time.Second), 10)
+		if err != nil || ordinaryFailure.Recovered != 0 {
+			t.Fatalf("ordinary failure repair Step() = %#v, %v", ordinaryFailure, err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE river.river_job
+			SET attempt = max_attempts,
+				errors = ARRAY[jsonb_build_object(
+					'at', $2::timestamptz, 'attempt', max_attempts,
+					'error', 'Stuck job rescued by JobRescuer', 'trace', ''
+				)]
+			WHERE id::text = $1`, secondJobID, now.Add(5*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		exhausted, err := repair.Step(ctx, now.Add(6*time.Second), 10)
+		if err != nil || exhausted.Recovered != 0 {
+			t.Fatalf("exhausted rescue repair Step() = %#v, %v", exhausted, err)
+		}
+		if err := adminPool.QueryRow(ctx, `
+			SELECT status, transport_job_id FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationDispatchID,
+		).Scan(&status, &secondJobID); err != nil {
+			t.Fatal(err)
+		}
+		if status != "dispatched" {
+			t.Fatalf("real terminal failure reopened: status=%s job=%s", status, secondJobID)
+		}
+	})
+
+	t.Run("terminal delivery repair uses active-run indexes against retained history", func(t *testing.T) {
+		resetKernelIntegrationTables(t, ctx, adminPool)
+		now := time.Date(2026, time.July, 23, 13, 0, 0, 0, time.UTC)
+		if _, err := adminPool.Exec(ctx, `
+			INSERT INTO public.sync_runs (id, status)
+			SELECT (lpad(to_hex(series), 8, '0') || '-0000-4000-8000-' || lpad(to_hex(series), 12, '0'))::uuid,
+				'success'
+			FROM generate_series(1, 50000) AS series`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			INSERT INTO public.sync_dispatch_outbox (
+				id, org_id, sync_run_id, kind, status, available_at, attempts,
+				dispatched_at, dispatched_transport, dispatched_route_generation,
+				transport_job_id, created_at, updated_at
+			)
+			SELECT gen_random_uuid(), 'org-history', run.id, 'dispatch_sync_run',
+				'dispatched', $1, 1, $1, 'river', 7, '1', $1, $1
+			FROM public.sync_runs AS run WHERE run.status = 'success'`, now.Add(-24*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		for _, statement := range []string{
+			"ANALYZE public.sync_runs",
+			"ANALYZE public.sync_dispatch_outbox",
+		} {
+			if _, err := adminPool.Exec(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+		seedKernelOutbox(t, ctx, adminPool, integrationDispatchID, now.Add(-time.Second))
+		first, err := kernel.Step(ctx, now, 1, time.Minute, publish, nil)
+		if err != nil || first.Dispatched != 1 {
+			t.Fatalf("initial Step() = %#v, %v", first, err)
+		}
+		var jobID string
+		if err := adminPool.QueryRow(ctx, `
+			SELECT transport_job_id FROM public.sync_dispatch_outbox WHERE id = $1`,
+			integrationDispatchID,
+		).Scan(&jobID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminPool.Exec(ctx, `
+			UPDATE river.river_job
+			SET state = 'discarded', attempt = 1, max_attempts = 5, finalized_at = $2::timestamptz,
+				errors = ARRAY[jsonb_build_object('at', $2::timestamptz, 'attempt', 1,
+					'error', 'Stuck job rescued by JobRescuer', 'trace', '')]
+			WHERE id::text = $1`, jobID, now); err != nil {
+			t.Fatal(err)
+		}
+		repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := queuePool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		explainQuery := repair.query
+		explainQuery = strings.ReplaceAll(explainQuery, "$1", "'"+now.Add(time.Second).Format(time.RFC3339Nano)+"'::timestamptz")
+		explainQuery = strings.ReplaceAll(explainQuery, "$2", "10")
+		explainQuery = strings.ReplaceAll(explainQuery, "$3", "'Stuck job rescued by JobRescuer'::text")
+		explainQuery = strings.ReplaceAll(explainQuery, "$4", "'river_unhandled_rescue'::text")
+		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) "+explainQuery)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan string
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			plan += line + "\n"
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(plan, "ix_sync_runs_status_id") ||
+			!strings.Contains(plan, "uq_sync_dispatch_outbox_run_kind") {
+			t.Fatalf("repair plan did not use bounded active-run indexes:\n%s", plan)
+		}
+	})
 }
 
 func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
@@ -670,7 +878,8 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY, status text NOT NULL)",
+		"CREATE INDEX ix_sync_runs_status_id ON public.sync_runs (status, id)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
 		// (role-partition manifest, removed in e23ede618; see git history at
 		// eda2d6b91) — created but never granted to the domain role here.
@@ -746,6 +955,8 @@ func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) err
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL
 		)`,
+		`CREATE UNIQUE INDEX uq_sync_dispatch_outbox_run_kind
+		 ON public.sync_dispatch_outbox (sync_run_id, kind)`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			return err
@@ -764,6 +975,7 @@ func resetKernelIntegrationTables(
 		"TRUNCATE river.river_job",
 		"TRUNCATE public.sync_dispatch_outbox",
 		"TRUNCATE public.sync_dispatch_transport_routes",
+		"TRUNCATE public.sync_runs",
 		`INSERT INTO public.sync_dispatch_transport_routes (
 			kind, transport, generation, paused, paused_at, rollback_transport
 		) VALUES
@@ -806,9 +1018,17 @@ func seedKernelOutboxKind(
 	t.Helper()
 	if _, err := pool.Exec(
 		ctx,
+		`INSERT INTO public.sync_runs (id, status)
+		 VALUES ($1, 'dispatching') ON CONFLICT (id) DO NOTHING`,
+		id,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(
+		ctx,
 		`INSERT INTO public.sync_dispatch_outbox (
 			id, org_id, sync_run_id, kind, status, available_at, attempts, created_at, updated_at
-		) VALUES ($1, 'org-integration', '00000000-0000-4000-8000-000000003300',
+		) VALUES ($1, 'org-integration', $1,
 			$3, 'pending', $2, 0, $2, $2)`,
 		id,
 		availableAt,

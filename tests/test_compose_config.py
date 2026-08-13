@@ -1029,6 +1029,46 @@ def test_platform_compose_applies_sync_routes_before_readiness() -> None:
         )
 
 
+def test_platform_compose_runs_the_go_scheduler_without_a_profile() -> None:
+    """Local no-Celery startup must include the native periodic-work owner."""
+
+    compose_path = _platform_go_compose_path()
+    if compose_path is None:
+        pytest.skip("platform compose.yml is only present in the monorepo checkout")
+
+    services = _load_yaml(compose_path).get("services") or {}
+    scheduler = services.get("go-scheduler")
+    assert scheduler is not None, "platform Compose must run the Go scheduler"
+    assert not scheduler.get("profiles"), "local scheduler must not require a profile"
+    assert (scheduler.get("build") or {})["target"] == "scheduler"
+
+    environment = scheduler.get("environment") or {}
+    assert "DEV_HEALTH_PROFILE" not in environment
+    assert environment["DEV_HEALTH_HTTP_ADDR"] == ":8080"
+    assert environment["POSTGRES_URI"].startswith(
+        "postgresql://${RIVER_DOMAIN_DATABASE_ROLE"
+    )
+    assert environment["WORKER_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_QUEUE_DATABASE_ROLE"
+    )
+    assert environment["COORDINATOR_DATABASE_URI"].startswith(
+        "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE"
+    )
+    assert environment["PGBOUNCER_TRANSACTION_MODE"] == "true"
+
+    dependencies = scheduler.get("depends_on") or {}
+    assert dependencies["go-worker-migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert dependencies["pgbouncer"]["condition"] == "service_started"
+
+    ready = services["go-worker-ready"]
+    ready_dependencies = ready.get("depends_on") or {}
+    assert ready_dependencies["go-scheduler"]["condition"] == "service_started"
+    assert "http://go-scheduler:8080/readyz" in _command_string(ready)
+    assert "beat" not in services
+
+
 def test_compose_workers_override_runner_entrypoint() -> None:
     for path in (_LEGACY_COMPOSE, _PROD_COMPOSE, _SWARM_STACK):
         services = _load_yaml(path).get("services") or {}

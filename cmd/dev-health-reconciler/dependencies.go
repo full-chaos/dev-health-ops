@@ -315,7 +315,7 @@ func buildReconcilerRelay(
 	riverSchema string,
 	registry *jobruntime.Registry,
 ) (joboutbox.RelayStepper, error) {
-	_ = domainPool // the relay has no domain-role component today
+	_ = domainPool // provider-unit recovery reads domain state through the queue role
 	repository, err := joboutbox.NewRepository(queuePool)
 	if err != nil {
 		return nil, err
@@ -332,7 +332,13 @@ func buildReconcilerRelay(
 	if err != nil {
 		return nil, err
 	}
-	return joboutbox.NewRelayWithRoutes(repository, inserter, routes, joboutbox.DefaultRelayConfig())
+	repair, err := joboutbox.NewTerminalDeliveryRepair(queuePool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
+	return joboutbox.NewRelayWithRoutesAndRecovery(
+		repository, inserter, routes, repair, joboutbox.DefaultRelayConfig(),
+	)
 }
 
 type reconcilerDependencies struct {

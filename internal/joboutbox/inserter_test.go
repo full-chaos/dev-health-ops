@@ -3,6 +3,7 @@ package joboutbox
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +240,27 @@ func TestPrepareRowRelaysProviderUnitCanaryAsIDOnlyTenantEnvelope(t *testing.T) 
 	}
 	if canonicalHash(canonical) != row.PayloadHash {
 		t.Fatalf("provider-unit relay hash drifted: got=%s want=%s", canonicalHash(canonical), row.PayloadHash)
+	}
+}
+
+func TestProviderUnitUniquenessExcludesTerminalFailureStatesOnly(t *testing.T) {
+	providerStates := uniqueStatesForKind(jobcontract.KindSyncProviderUnit)
+	for _, excluded := range []rivertype.JobState{rivertype.JobStateDiscarded, rivertype.JobStateCancelled} {
+		if slices.Contains(providerStates, excluded) {
+			t.Fatalf("provider-unit uniqueness unexpectedly includes terminal state %q", excluded)
+		}
+	}
+	for _, required := range rivertype.UniqueOptsByStateDefault() {
+		if !slices.Contains(providerStates, required) {
+			t.Fatalf("provider-unit uniqueness missing active/completed state %q", required)
+		}
+	}
+
+	heartbeatStates := uniqueStatesForKind(jobcontract.KindHeartbeat)
+	for _, required := range rivertype.JobStates() {
+		if !slices.Contains(heartbeatStates, required) {
+			t.Fatalf("non-provider uniqueness lost state %q", required)
+		}
 	}
 }
 

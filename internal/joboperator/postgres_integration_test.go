@@ -162,6 +162,25 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	providerJobID := insertOperatorProviderUnitIntegrationJob(t, ctx, adminPool, registry, now)
+	if _, err := backend.Retry(ctx, providerJobID, Mutation{ExpectedState: StateDiscarded}); err != nil {
+		t.Fatalf("current provider-unit delivery retry: %v", err)
+	}
+	if _, err := adminPool.Exec(ctx, `
+		UPDATE river.river_job
+		SET state = 'discarded', finalized_at = $2
+		WHERE id = $1`, providerJobID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adminPool.Exec(ctx, `
+		UPDATE public.worker_job_outbox
+		SET status = 'pending', river_job_id = NULL
+		WHERE river_job_id = $1`, providerJobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Retry(ctx, providerJobID, Mutation{ExpectedState: StateDiscarded}); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("stale provider-unit delivery retry error=%v, want ErrStateConflict", err)
+	}
 	auditor, err := NewPostgresAuditor(adminPool)
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +358,8 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 			id uuid PRIMARY KEY,
 			state text NOT NULL,
 			job_kind text,
-			status text
+			status text,
+			river_job_id bigint UNIQUE
 		)`,
 		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_completion_fences (completion_key text PRIMARY KEY)",
@@ -484,6 +504,74 @@ func insertOperatorIntegrationJob(
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return jobID
+}
+
+func insertOperatorProviderUnitIntegrationJob(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	registry joboutbox.PolicyRegistry,
+	now time.Time,
+) int64 {
+	t.Helper()
+	organizationID := "00000000-0000-4000-8000-000000000310"
+	unitID := "00000000-0000-4000-8000-000000000311"
+	envelope := jobcontract.Envelope{
+		ContractVersion: 1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "sync-run:00000000-0000-4000-8000-000000000312",
+		IdempotencyKey:  "sync.provider_unit:" + unitID,
+		Domain: jobcontract.DomainLink{
+			Type: "sync_run_unit",
+			ID:   unitID,
+		},
+		Payload: jobcontract.ProviderUnitPayload{UnitID: unitID},
+	}
+	encoded, err := jobcontract.MarshalCanonical(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	inserter, err := joboutbox.NewRiverInserter(pool, "river", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	outboxID := "00000000-0000-4000-8000-000000000313"
+	jobID, err := inserter.Insert(ctx, tx, joboutbox.Row{
+		ID:              outboxID,
+		DedupeKey:       envelope.IdempotencyKey,
+		JobKind:         jobcontract.KindSyncProviderUnit,
+		ContractVersion: 1,
+		Args:            encoded,
+		PayloadHash:     "sha256:" + hex.EncodeToString(digest[:]),
+		Queue:           "sync_provider",
+		Priority:        2,
+		MaxAttempts:     5,
+		ScheduledAt:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.worker_job_outbox (id, state, job_kind, status, river_job_id)
+		VALUES ($1, 'current', $2, 'delivered', $3)`, outboxID, jobcontract.KindSyncProviderUnit, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE river.river_job
+		SET state = 'discarded', finalized_at = $2
+		WHERE id = $1`, jobID, now); err != nil {
 		t.Fatal(err)
 	}
 	return jobID

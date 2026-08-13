@@ -39,6 +39,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY)",
 		"CREATE SCHEMA river",
 		"CREATE TABLE river.river_job (id bigserial PRIMARY KEY)",
 		"CREATE FUNCTION river.queue_authorization_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
@@ -51,6 +52,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		"GRANT SELECT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT ON TABLE public.sync_runs TO " + queueAuthorizationFenceRole,
+		"GRANT SELECT ON TABLE public.sync_run_units TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA river TO " + queueAuthorizationFenceRole,
 		"GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA river TO " + queueAuthorizationFenceRole,
 		"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA river TO " + queueAuthorizationFenceRole,
@@ -116,6 +118,8 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		{name: "maintain", grant: "GRANT MAINTAIN ON TABLE public.worker_job_completion_fences TO " + queueAuthorizationFenceRole, revoke: "REVOKE MAINTAIN ON TABLE public.worker_job_completion_fences FROM " + queueAuthorizationFenceRole},
 		{name: "missing sync runs select", revoke: "REVOKE SELECT ON TABLE public.sync_runs FROM " + queueAuthorizationFenceRole, grant: "GRANT SELECT ON TABLE public.sync_runs TO " + queueAuthorizationFenceRole, missing: true},
 		{name: "sync runs update", grant: "GRANT UPDATE ON TABLE public.sync_runs TO " + queueAuthorizationFenceRole, revoke: "REVOKE UPDATE ON TABLE public.sync_runs FROM " + queueAuthorizationFenceRole},
+		{name: "missing sync run units select", revoke: "REVOKE SELECT ON TABLE public.sync_run_units FROM " + queueAuthorizationFenceRole, grant: "GRANT SELECT ON TABLE public.sync_run_units TO " + queueAuthorizationFenceRole, missing: true},
+		{name: "sync run units update", grant: "GRANT UPDATE ON TABLE public.sync_run_units TO " + queueAuthorizationFenceRole, revoke: "REVOKE UPDATE ON TABLE public.sync_run_units FROM " + queueAuthorizationFenceRole},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			statement := test.grant

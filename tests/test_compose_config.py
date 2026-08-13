@@ -457,8 +457,11 @@ def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
     )
     queue_section = upgrade_script.split("-- The queue role", maxsplit=1)[1]
     assert "GRANT SELECT ON TABLE public.sync_runs TO %I" in queue_section
+    assert "GRANT SELECT ON TABLE public.sync_run_units TO %I" in queue_section
     assert "GRANT SELECT, UPDATE ON TABLE public.sync_runs" not in queue_section
     assert "GRANT SELECT, INSERT ON TABLE public.sync_runs" not in queue_section
+    assert "GRANT SELECT, UPDATE ON TABLE public.sync_run_units" not in queue_section
+    assert "GRANT SELECT, INSERT ON TABLE public.sync_run_units" not in queue_section
     _assert_least_privilege_domain_grants(
         upgrade_script.split("-- The queue role", maxsplit=1)[0]
     )

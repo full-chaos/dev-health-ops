@@ -190,3 +190,9 @@ SELECT format(
        )
  WHERE to_regclass('public.sync_runs') IS NOT NULL
 \gexec
+SELECT format(
+         'GRANT SELECT ON TABLE public.sync_run_units TO %I',
+         :'queue_role'
+       )
+ WHERE to_regclass('public.sync_run_units') IS NOT NULL
+\gexec

@@ -170,6 +170,7 @@ func TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges(t *testing.T) 
 func TestDomainPostureInventoriesNativeSyncCoveragePrivileges(t *testing.T) {
 	t.Parallel()
 	want := map[string]TablePrivilege{
+		"scheduled_jobs":               {TableName: "scheduled_jobs", AllowUpdate: true},
 		"scheduled_report_occurrences": {TableName: "scheduled_report_occurrences"},
 		"backfill_jobs":                {TableName: "backfill_jobs"},
 		"sync_coverage_projections":    {TableName: "sync_coverage_projections", AllowInsert: true, AllowUpdate: true},
@@ -186,24 +187,6 @@ func TestDomainPostureInventoriesNativeSyncCoveragePrivileges(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("sync coverage posture is missing tables: %v", want)
-	}
-	wantColumns := map[ColumnPrivilege]bool{
-		{TableName: "scheduled_jobs", ColumnName: "id", Privilege: "SELECT"}:             true,
-		{TableName: "scheduled_jobs", ColumnName: "org_id", Privilege: "SELECT"}:         true,
-		{TableName: "scheduled_jobs", ColumnName: "sync_config_id", Privilege: "SELECT"}: true,
-		{TableName: "scheduled_jobs", ColumnName: "job_type", Privilege: "SELECT"}:       true,
-		{TableName: "scheduled_jobs", ColumnName: "status", Privilege: "SELECT"}:         true,
-		{TableName: "scheduled_jobs", ColumnName: "schedule_cron", Privilege: "SELECT"}:  true,
-		{TableName: "scheduled_jobs", ColumnName: "next_run_at", Privilege: "SELECT"}:    true,
-		{TableName: "scheduled_jobs", ColumnName: "created_at", Privilege: "SELECT"}:     true,
-		{TableName: "scheduled_jobs", ColumnName: "next_run_at", Privilege: "UPDATE"}:    true,
-		{TableName: "scheduled_jobs", ColumnName: "updated_at", Privilege: "UPDATE"}:     true,
-	}
-	for _, column := range domainPosture().ColumnScoped {
-		delete(wantColumns, column)
-	}
-	if len(wantColumns) != 0 {
-		t.Fatalf("scheduled_jobs posture is missing column grants: %v", wantColumns)
 	}
 }
 

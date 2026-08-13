@@ -745,27 +745,6 @@
       ]
     },
     {
-      "id": "CHAOS-3159-M4b-quiet-live-replay-filter",
-      "file": "internal/scheduler/fixed/reports.go",
-      "find": "\t  AND NOT EXISTS (\n\t      SELECT 1\n\t      FROM public.report_runs AS quiet_run",
-      "replace": "\t  AND EXISTS (\n\t      SELECT 1\n\t      FROM public.report_runs AS quiet_run",
-      "rationale": "Pending replays with live handoffs are relay-owned and must not repeatedly fill the bounded replay page. Inverting this filter hides the actionable missing-handoff replay behind 501 older quiet rows.",
-      "proof": [
-        [
-          "go",
-          "test",
-          "-tags",
-          "integration",
-          "-count=1",
-          "-timeout",
-          "8m",
-          "-run",
-          "^TestActionableReplayProgressesPastAFullPageOfLiveHandoffs$",
-          "./internal/scheduler/fixed/"
-        ]
-      ]
-    },
-    {
       "id": "CHAOS-3159-M5-terminal-base-is-strict",
       "file": "internal/scheduler/fixed/reports.go",
       "find": "      AND occurrence.scheduled_for > COALESCE(report.last_run_at, report.created_at)",

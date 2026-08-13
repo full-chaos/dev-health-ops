@@ -581,6 +581,10 @@ func domainPosture() RolePosture {
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
 			{"sync_configurations", false, false, false},
+			// The native sync-coverage projector reads schedule facts. The report
+			// worker also clears next_run_at after a terminal scheduled run so the
+			// fixed scheduler recomputes the next cron instant.
+			{"scheduled_jobs", false, true, false},
 			// Read only: terminal report handling follows the immutable occurrence
 			// link to the scheduled_jobs row it is allowed to invalidate.
 			{"scheduled_report_occurrences", false, false, false},
@@ -611,19 +615,6 @@ func domainPosture() RolePosture {
 			{"worker_job_runs", true, true, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
-			// Coverage reads the schedule projection, while report terminalization
-			// may clear only these two columns. Tenant, cron, type, and status stay
-			// unreachable to every domain worker.
-			{"scheduled_jobs", "id", "SELECT"},
-			{"scheduled_jobs", "org_id", "SELECT"},
-			{"scheduled_jobs", "sync_config_id", "SELECT"},
-			{"scheduled_jobs", "job_type", "SELECT"},
-			{"scheduled_jobs", "status", "SELECT"},
-			{"scheduled_jobs", "schedule_cron", "SELECT"},
-			{"scheduled_jobs", "next_run_at", "SELECT"},
-			{"scheduled_jobs", "created_at", "SELECT"},
-			{"scheduled_jobs", "next_run_at", "UPDATE"},
-			{"scheduled_jobs", "updated_at", "UPDATE"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},

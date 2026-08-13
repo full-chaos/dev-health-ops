@@ -35,12 +35,12 @@ const defaultContractRoot = "contracts/jobs/v1"
 // instead fails the window, which closes `fixed_scheduler_loop` readiness and
 // keeps the schedule out of any migration evidence until its blocker is cleared.
 //
-// Both remaining gaps are ONE blocker, and it is architectural rather than
-// unstarted work — the reason strings say so, because the previous wording
-// ("needs Go per-organization repository discovery") read as a to-do and let the
-// gap stay invisible while CUT-12 was marked done:
+// The remaining daily-metrics fan-out gap is architectural rather than
+// unstarted work. Its reason must stay specific: the previous wording ("needs
+// Go per-organization repository discovery") read as a to-do and let the gap
+// stay invisible while CUT-12 was marked done:
 //
-// Both schedules target metrics.daily_dispatch, which requires a
+// The daily fan-out schedule targets metrics.daily_dispatch, which requires a
 // daily_metrics_runs row whose partitions carry real repository IDs. The
 // partition compute iterates scope["repo_ids"] and reports success having done
 // nothing for an empty list (see _run_daily_direct in
@@ -54,12 +54,11 @@ const defaultContractRoot = "contracts/jobs/v1"
 // from internal/jobs/metrics/daily after the run is claimed, leaving the
 // scheduler to create only the run.
 //
-// scheduled_metrics_dispatch carries a second, independent problem worth
-// recording next to the first: no code path in the product creates a
-// ScheduledJob with job_type='metrics'. Every writer produces 'sync' or
-// 'report'. The legacy sweep this schedule replaces has therefore never
-// dispatched anything, so whether the schedule should exist at all is a product
-// question, not a porting one.
+// `dispatch-scheduled-metrics` is no longer in this set. CHAOS-3128 retired it
+// after its source audit found no production ScheduledJob writer for
+// job_type='metrics' and a read-only audit found no live rows. The retirement
+// ledger in internal/scheduler/fixed/inventory.go pins that decision and fails
+// if the stale Beat key returns without a reviewed owner.
 // The parameter is named for the pool it actually receives, not generically:
 // the coordinator grant deriver re-seeds taint by naming convention at
 // function-typed struct-field call sites, and a bare `pool` reads as unattributed
@@ -121,11 +120,6 @@ func buildFixedScheduleProducers(
 			schedulerfixed.ProducerDailyMetricsFanout,
 			"blocked: repository identity is ClickHouse-only and this process has no "+
 				"ClickHouse connection; discovery must move to internal/jobs/metrics/daily",
-		),
-		schedulerfixed.NewNotImplementedProducer(
-			schedulerfixed.ProducerScheduledMetricsDispatch,
-			"blocked on the same ClickHouse-only repository discovery; separately, no "+
-				"code path creates a job_type='metrics' ScheduledJob for it to sweep",
 		),
 	)
 }

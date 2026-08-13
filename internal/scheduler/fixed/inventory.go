@@ -12,13 +12,12 @@ import (
 // declaration table stays comparable against the legacy Beat inventory without
 // linking executable producer code.
 const (
-	ProducerScheduledMetricsDispatch = "scheduled_metrics_dispatch"
-	ProducerDailyMetricsFanout       = "daily_metrics_fanout"
-	ProducerRemainingMetricsFanout   = "remaining_metrics_fanout"
-	ProducerScheduledReports         = "scheduled_reports"
-	ProducerHeartbeat                = "heartbeat"
-	ProducerSyncCoverageRefresh      = "sync_coverage_refresh"
-	ProducerRetentionCleanup         = "retention_cleanup"
+	ProducerDailyMetricsFanout     = "daily_metrics_fanout"
+	ProducerRemainingMetricsFanout = "remaining_metrics_fanout"
+	ProducerScheduledReports       = "scheduled_reports"
+	ProducerHeartbeat              = "heartbeat"
+	ProducerSyncCoverageRefresh    = "sync_coverage_refresh"
+	ProducerRetentionCleanup       = "retention_cleanup"
 )
 
 // UTC is the only zone the checked-in inventory uses. Every legacy Beat
@@ -33,24 +32,6 @@ const inventoryTimezone = "UTC"
 // Celery Beat entries; ScheduleCoverage proves that against the Python source.
 func checkedInSchedules() []Schedule {
 	return []Schedule{
-		{
-			ID:              "scheduled_metrics_dispatch",
-			LegacyBeatEntry: "dispatch-scheduled-metrics",
-			Cadence:         EveryInterval(300 * time.Second),
-			Timezone:        inventoryTimezone,
-			// A 300 second sweep repairs itself on the next tick, and each tick
-			// re-reads the durable due set, so replaying an older bucket would
-			// only duplicate work the next tick already covers.
-			CatchUp:          CatchUpSkip,
-			UniquenessWindow: time.Hour,
-			TargetKind:       jobcontract.KindDailyMetricsDispatch,
-			ProducerID:       ProducerScheduledMetricsDispatch,
-			MaxAttempts:      3,
-			AlertThreshold:   30 * time.Minute,
-			Rationale: "Replaces the 300s dispatch-scheduled-metrics sweep over ScheduledJob " +
-				"rows with job_type='metrics'. Due-ness stays in the durable schedule row; " +
-				"the fixed cadence only decides when the sweep runs.",
-		},
 		{
 			ID:              "daily_metrics_fanout",
 			LegacyBeatEntry: "run-daily-metrics",
@@ -356,6 +337,34 @@ type LegacyEntry struct {
 	Note string
 }
 
+// RetiredLegacyEntry is a former Beat entry that is deliberately absent from
+// the current Python configuration. It is separate from LegacyEntry because
+// LegacyBeatInventory is a bidirectional mirror of live source: putting a
+// retired entry there would correctly fail the source-equality gate, but would
+// make the audited retirement invisible.
+type RetiredLegacyEntry struct {
+	Name     string
+	Cadence  Cadence
+	Reason   string
+	Evidence string
+}
+
+// RetiredBeatInventory records reviewed Beat removals. It is a ledger, not a
+// replacement map: each name must remain absent from the live Beat source.
+func RetiredBeatInventory() []RetiredLegacyEntry {
+	return []RetiredLegacyEntry{
+		{
+			Name:    "dispatch-scheduled-metrics",
+			Cadence: EveryInterval(300 * time.Second),
+			Reason: "No production writer creates ScheduledJob rows with job_type='metrics', " +
+				"and the Go daily-metrics durable contract cannot safely turn an arbitrary " +
+				"legacy configuration into a zero-repository run.",
+			Evidence: "CHAOS-3128 retirement decision: source audit found zero production " +
+				"writers; the local feature-stack PostgreSQL read-only audit found zero rows.",
+		},
+	}
+}
+
 // LegacyBeatInventory is the checked replacement map for every Celery Beat
 // entry. It is the single place a reviewer reads to answer "who owns this
 // now?", and the coverage test proves it stays equal to the Python source.
@@ -368,12 +377,6 @@ func LegacyBeatInventory() []LegacyEntry {
 			OwnerRef: "internal/scheduler/sync",
 			Note: "Database-backed product schedule with tenant cron expressions. Owned by " +
 				"the sync scheduler loop and its materializing coordinator, not by a fixed cadence.",
-		},
-		{
-			Name:     "dispatch-scheduled-metrics",
-			Cadence:  EveryInterval(300 * time.Second),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "scheduled_metrics_dispatch",
 		},
 		{
 			Name:     "run-daily-metrics",

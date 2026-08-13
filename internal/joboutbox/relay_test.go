@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
@@ -28,6 +29,12 @@ type enumerableRegistry struct {
 }
 
 type descriptorOnlyRegistry struct{}
+
+type fakeTerminalRepair struct{}
+
+func (fakeTerminalRepair) Step(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+	return TerminalDeliveryRepairResult{}, nil
+}
 
 func (descriptorOnlyRegistry) Descriptor(string) (jobruntime.Descriptor, bool) {
 	return jobruntime.Descriptor{}, false
@@ -122,11 +129,34 @@ func TestNewRelayWithRoutesRequiresDurableResolver(t *testing.T) {
 	}
 	relay, err := NewRelayWithRoutes(
 		&Repository{}, inserter,
-		fakeRouteResolver{deferred: []string{"job.alpha"}},
+		fakeRouteResolver{route: "river"},
 		DefaultRelayConfig(),
 	)
 	if err != nil || relay.routes == nil {
 		t.Fatalf("dynamic relay=%#v err=%v", relay, err)
+	}
+}
+
+func TestNewRelayWithRoutesAndRecoveryRequiresRepair(t *testing.T) {
+	descriptors := []jobruntime.Descriptor{{Kind: "job.alpha", Route: "river"}}
+	registry := enumerableRegistry{
+		descriptors: descriptors,
+		byKind: map[string]jobruntime.Descriptor{
+			"job.alpha": descriptors[0],
+		},
+	}
+	inserter := &RiverInserter{registry: registry}
+	resolver := fakeRouteResolver{route: "river"}
+	if _, err := NewRelayWithRoutesAndRecovery(
+		&Repository{}, inserter, resolver, nil, DefaultRelayConfig(),
+	); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("nil repair error=%v", err)
+	}
+	relay, err := NewRelayWithRoutesAndRecovery(
+		&Repository{}, inserter, resolver, fakeTerminalRepair{}, DefaultRelayConfig(),
+	)
+	if err != nil || relay.repair == nil {
+		t.Fatalf("recovery relay=%#v err=%v", relay, err)
 	}
 }
 

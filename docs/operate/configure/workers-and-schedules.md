@@ -72,6 +72,30 @@ Before changing a route:
 6. update the deployment profile and connection budget;
 7. verify operator, health, metrics, and audit behavior.
 
+### Recover a discarded provider delivery
+
+The Go reconciler automatically repairs a provider-unit delivery only when the
+exact River job was discarded by the unhandled-kind rescue path and the
+authoritative sync run and unit are still active, due, and unleased. This can
+happen during a rolling deployment when a temporary worker set does not yet
+register the provider handler. Pausing an integration prevents new planning;
+it does not cancel work already planned for an active run.
+
+Recovery rearms the same durable outbox row and creates one replacement River
+job. It does not reset provider evidence or domain attempts, and it excludes
+canceled or terminal runs and units, ordinary provider failures, and exhausted
+River jobs. Monitor:
+
+```text
+worker_outbox_reconciler_terminal_deliveries_recovered_total
+```
+
+An increase paired with a deployment is expected recovery. Repeated increases
+without a deployment indicate workers are still starting without the complete
+checked-in handler registry. Do not rewrite queue rows manually. Cancel the
+sync run only when the user intends to abandon the remaining work; cancellation
+is not a substitute for repairing a recoverable transport delivery.
+
 ## Schedules
 
 Celery Beat remains required for current production schedules. The Go scheduler foundation can evaluate bounded schedule timing for comparison, but it does not currently own organization entitlement, mutation, lease repair, or production publication.

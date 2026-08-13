@@ -36,6 +36,7 @@ func (config RelayConfig) validate() error {
 }
 
 type StepResult struct {
+	Recovered int
 	Claimed   int
 	Deferred  int
 	Delivered int
@@ -52,11 +53,16 @@ type Relay struct {
 	config        RelayConfig
 	deferredKinds []string
 	routes        RouteResolver
+	repair        TerminalDeliveryRepairStepper
 }
 
 type RouteResolver interface {
 	DeferredKinds(context.Context) ([]string, error)
 	Resolve(context.Context, string) (string, error)
+}
+
+type TerminalDeliveryRepairStepper interface {
+	Step(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error)
 }
 
 func NewRelay(repository *Repository, inserter *RiverInserter, config RelayConfig) (*Relay, error) {
@@ -93,6 +99,24 @@ func NewRelayWithRoutes(
 		return nil, err
 	}
 	relay.routes = routes
+	return relay, nil
+}
+
+func NewRelayWithRoutesAndRecovery(
+	repository *Repository,
+	inserter *RiverInserter,
+	routes RouteResolver,
+	repair TerminalDeliveryRepairStepper,
+	config RelayConfig,
+) (*Relay, error) {
+	if repair == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	relay, err := NewRelayWithRoutes(repository, inserter, routes, config)
+	if err != nil {
+		return nil, err
+	}
+	relay.repair = repair
 	return relay, nil
 }
 
@@ -134,15 +158,23 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 	if relay == nil || now.IsZero() {
 		return StepResult{}, ErrInvalidConfiguration
 	}
+	result := StepResult{}
+	if relay.repair != nil {
+		recovered, err := relay.repair.Step(ctx, now, limit)
+		if err != nil {
+			return result, err
+		}
+		result.Recovered = recovered.Recovered
+	}
 	deferred := relay.deferredKinds
 	if relay.routes != nil {
 		var err error
 		deferred, err = relay.routes.DeferredKinds(ctx)
 		if err != nil {
-			return StepResult{}, ErrUnavailable
+			return result, ErrUnavailable
 		}
 		if len(deferred) > maxRelayPolicyKinds {
-			return StepResult{}, ErrInvalidConfiguration
+			return result, ErrInvalidConfiguration
 		}
 		sort.Strings(deferred)
 	}
@@ -150,7 +182,7 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 	if err != nil {
 		return StepResult{}, err
 	}
-	result := StepResult{Claimed: len(claims)}
+	result.Claimed = len(claims)
 	for _, claim := range claims {
 		if relay.routes != nil {
 			transport, routeErr := relay.routes.Resolve(ctx, claim.JobKind)

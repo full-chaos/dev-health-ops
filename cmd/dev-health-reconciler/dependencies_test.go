@@ -39,6 +39,20 @@ func TestProductionMutationPipelineConstructsTerminalDeliveryRepair(t *testing.T
 	}
 }
 
+func TestProductionGenericRelayConstructsProviderUnitTerminalDeliveryRepair(t *testing.T) {
+	source, err := os.ReadFile("dependencies.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if strings.Count(text, "joboutbox.NewTerminalDeliveryRepair(queuePool, riverSchema)") != 1 {
+		t.Fatal("production generic relay does not construct provider-unit terminal delivery repair")
+	}
+	if strings.Count(text, "joboutbox.NewRelayWithRoutesAndRecovery(") != 1 {
+		t.Fatal("production generic relay does not run recovery before ordinary relay")
+	}
+}
+
 func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *testing.T) {
 	secret := "postgresql://queue:do-not-print@database.internal/app"
 	sources := productionReconcilerDependencySources

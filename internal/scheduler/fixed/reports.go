@@ -1042,6 +1042,26 @@ LEFT JOIN LATERAL (
       -- occurrence when last_run_at equals its scheduled_for, so the next cron
       -- instant can be materialized.
       AND occurrence.scheduled_for > COALESCE(report.last_run_at, report.created_at)
+	  -- A pending run with a live handoff is provably quiet: the relay owns it.
+	  -- Excluding only that state prevents 501 old live replays from monopolizing
+	  -- every bounded replay page. Missing/dead handoffs, retained abandonment
+	  -- facts, terminal runs, and corrupt links remain visible so replayExisting
+	  -- still owns every actionable or inconsistent decision. When a live outbox
+	  -- changes state, the row becomes eligible without a separate cursor.
+	  AND NOT EXISTS (
+	      SELECT 1
+	      FROM public.report_runs AS quiet_run
+	      JOIN public.worker_job_outbox AS quiet_handoff
+	        ON quiet_handoff.dedupe_key = 'report.run:' || quiet_run.id::text
+	       AND quiet_handoff.status <> '` + outboxDeadStatus + `'
+	      WHERE quiet_run.id = occurrence.report_run_id
+	        AND quiet_run.status = '` + pendingReportRunStatus + `'
+	        AND NOT EXISTS (
+	            SELECT 1
+	            FROM public.worker_job_delivery_abandonments AS abandonment
+	            WHERE abandonment.dedupe_key = quiet_handoff.dedupe_key
+	        )
+	  )
     ORDER BY occurrence.scheduled_for
     LIMIT 1
 ) AS replay ON TRUE

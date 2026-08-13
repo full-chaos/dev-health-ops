@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -860,6 +861,76 @@ FROM new_jobs`, testOrganizationID, nextRunAt, createdAt,
 	}
 }
 
+// Quiet pending replays with live handoffs must not monopolize every replay
+// page. They become actionable automatically when their outbox state changes;
+// until then, selecting them repeatedly only hides missing/dead handoffs behind
+// the 501-row lock bound.
+func TestActionableReplayProgressesPastAFullPageOfLiveHandoffs(t *testing.T) {
+	pool := startScheduledReportPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	schedule, _, actionableRunID := dueScheduledReport(t, pool)
+	createdAt := time.Date(2026, time.July, 23, 6, 0, 0, 0, time.UTC)
+	scheduledFor := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+
+	batch := &pgx.Batch{}
+	for range maximumScheduledReportCandidatesPerOccurrence {
+		jobID := uuid.NewString()
+		reportID := uuid.NewString()
+		runID := uuid.NewString()
+		occurrenceID := ScheduledReportOccurrenceID(reportID, scheduledFor)
+		batch.Queue(`
+INSERT INTO public.scheduled_jobs
+    (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
+VALUES ($1::uuid, $2, 'report:live-replay', 'report', '0 6 * * *', 'UTC', 0, FALSE, $3, $4, $4)`,
+			jobID, testOrganizationID, scheduledFor.Add(24*time.Hour), createdAt)
+		batch.Queue(`
+INSERT INTO public.saved_reports
+    (id, org_id, name, schedule_id, is_active, created_at, updated_at)
+VALUES ($1::uuid, $2, 'live-replay', $3::uuid, TRUE, $4, $4)`,
+			reportID, testOrganizationID, jobID, createdAt)
+		batch.Queue(`
+INSERT INTO public.scheduled_report_occurrences
+    (occurrence_id, identity_version, org_id, report_id, scheduled_job_id, scheduled_for)
+VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6)`, occurrenceID,
+			scheduledReportOccurrenceIdentityVersion, testOrganizationID, reportID, jobID, scheduledFor)
+		batch.Queue(`
+INSERT INTO public.report_runs
+    (id, report_id, scheduled_occurrence_id, status, triggered_by, created_at)
+VALUES ($1::uuid, $2::uuid, $3, 'pending', 'scheduler', $4)`,
+			runID, reportID, occurrenceID, createdAt)
+		batch.Queue(`
+UPDATE public.scheduled_report_occurrences SET report_run_id = $2::uuid
+WHERE occurrence_id = $1`, occurrenceID, runID)
+		batch.Queue(`
+INSERT INTO public.worker_job_outbox (id, dedupe_key, job_kind, status)
+VALUES (gen_random_uuid(), $1, 'report.execute_scheduled', 'pending')`, "report.run:"+runID)
+	}
+	results := pool.SendBatch(ctx, batch)
+	if err := results.Close(); err != nil {
+		t.Fatalf("seed live replay page: %v", err)
+	}
+
+	_, occurrence := reportOccurrence(t, time.Date(2026, time.July, 25, 6, 15, 0, 0, time.UTC))
+	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("actionable replay sweep: %v", err)
+	}
+	actionableKey := "report.run:" + actionableRunID
+	found := false
+	for _, request := range outcome.Requests {
+		if request.Envelope.IdempotencyKey == actionableKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("actionable replay %s was hidden by %d quiet live handoffs",
+			actionableKey, maximumScheduledReportCandidatesPerOccurrence)
+	}
+}
+
 // The sweep must lock exactly one bounded page plus one row that proves a due
 // remainder exists. The extra row is what raises the deferred signal; reading all
 // 621 rows would restore the transaction-footprint bug this page replaced.
@@ -1093,7 +1164,8 @@ func TestDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 	}
 
 	// The polls that follow: no occurrence is due, so the producer never runs. Each
-	// must report Evaluated false and must not assert a verdict of its own.
+	// must report Evaluated false while still returning the persisted authoritative
+	// degraded verdict from the occurrence ledger.
 	for poll := 1; poll <= 3; poll++ {
 		nonEvaluating, err := engine.Step(ctx, observedAt.Add(time.Duration(poll)*15*time.Second))
 		if err != nil {
@@ -1109,8 +1181,9 @@ func TestDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 		if quiet.Evaluated {
 			t.Fatalf("poll %d claimed to have evaluated the schedule without an occurrence", poll)
 		}
-		if quiet.Degraded != "" {
-			t.Fatalf("poll %d asserted degraded %q without running the producer", poll, quiet.Degraded)
+		if quiet.Degraded != DegradedScheduledReportsUndeliverable {
+			t.Fatalf("poll %d degraded = %q, want persisted %q",
+				poll, quiet.Degraded, DegradedScheduledReportsUndeliverable)
 		}
 	}
 }

@@ -334,6 +334,13 @@ func boolMapKeys[V any](m map[string]V) map[string]bool {
 // this tool cannot verify column-level correctness, see compare.go's
 // column-scoped handling above).
 func isFullyCovered(surface *TableSurface, gt *GroundTruth) bool {
+	// Column-scoped tables are intentionally validated by the production
+	// posture query plus exact grant-statement tests. This static analyzer
+	// cannot derive columns, so treating the absent table-wide row as an
+	// uncovered co-writer would contradict the advisory handling above.
+	if gt.ColumnScopedTables[surface.Table] {
+		return true
+	}
 	granted := gt.Grants[surface.Table]
 	required := gt.RequiredTablePrivileges[surface.Table]
 	for p := Privilege(0); p < numPrivileges; p++ {

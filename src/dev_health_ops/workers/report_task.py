@@ -237,13 +237,16 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
         # substrings before persisting (mirrors sync/dispatch_outbox.py and
         # workers/sync_units.py, CHAOS-2766).
         sanitized_error = sanitize_error_text(exc)
+        sanitized_traceback = sanitize_error_text(traceback.format_exc())
+        assert sanitized_error is not None
+        assert sanitized_traceback is not None
         with get_postgres_session_sync() as session:
             persisted_failure = fail_report_run(
                 session,
                 run_id,
                 claim.token,
                 sanitized_error,
-                sanitize_error_text(traceback.format_exc()),
+                sanitized_traceback,
             )
             session.commit()
 

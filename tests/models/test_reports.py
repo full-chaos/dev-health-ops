@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import Table, UniqueConstraint
+from sqlalchemy import DefaultClause, Table, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.models.git import Base
@@ -28,7 +28,7 @@ def test_saved_report_model_declares_one_report_per_schedule() -> None:
 def test_report_run_model_declares_the_execution_reclaim_index() -> None:
     table = cast(Table, ReportRun.__table__)
     indexes = {
-        index.name: tuple(column.name for column in index.columns)
+        str(index.name): tuple(column.name for column in index.columns)
         for index in table.indexes
     }
 
@@ -36,8 +36,9 @@ def test_report_run_model_declares_the_execution_reclaim_index() -> None:
         "status",
         "execution_lease_expires_at",
     )
-    assert table.c.execution_reclaim_count.server_default is not None
-    assert str(table.c.execution_reclaim_count.server_default.arg) == "0"
+    server_default = table.c.execution_reclaim_count.server_default
+    assert isinstance(server_default, DefaultClause)
+    assert str(server_default.arg) == "0"
 
 
 @pytest_asyncio.fixture

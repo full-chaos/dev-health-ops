@@ -98,19 +98,27 @@ def test_schedule_occurrence_reuses_one_run_and_one_durable_handoff(engine):
 
     with Session(engine) as session:
         with session.begin():
+            stored_report = session.get(SavedReport, report_id)
+            stored_job = session.get(ScheduledJob, job_id)
+            assert stored_report is not None
+            assert stored_job is not None
             first = create_scheduled_report_execution(
                 session,
-                session.get(SavedReport, report_id),
-                session.get(ScheduledJob, job_id),
+                stored_report,
+                stored_job,
                 "org-a",
                 scheduled_for=scheduled_for,
             )
     with Session(engine) as session:
         with session.begin():
+            stored_report = session.get(SavedReport, report_id)
+            stored_job = session.get(ScheduledJob, job_id)
+            assert stored_report is not None
+            assert stored_job is not None
             second = create_scheduled_report_execution(
                 session,
-                session.get(SavedReport, report_id),
-                session.get(ScheduledJob, job_id),
+                stored_report,
+                stored_job,
                 "org-a",
                 scheduled_for=scheduled_for,
             )
@@ -408,10 +416,14 @@ def test_python_scheduler_redispatches_only_after_running_lease_expires(engine):
 
     with Session(engine) as session:
         with session.begin():
+            stored_report = session.get(SavedReport, report_id)
+            stored_job = session.get(ScheduledJob, job_id)
+            assert stored_report is not None
+            assert stored_job is not None
             expired = create_scheduled_report_execution(
                 session,
-                session.get(SavedReport, report_id),
-                session.get(ScheduledJob, job_id),
+                stored_report,
+                stored_job,
                 "org-a",
                 scheduled_for=scheduled_for,
             )
@@ -545,9 +557,9 @@ def test_scheduled_terminal_run_invalidates_next_due_marker(engine, outcome):
                     start_report_run(session, trigger.run_id)
 
     with Session(engine) as session:
-        job = session.get(ScheduledJob, job_id)
-        assert job is not None
-        assert job.next_run_at is None
+        stored_job = session.get(ScheduledJob, job_id)
+        assert stored_job is not None
+        assert stored_job.next_run_at is None
 
 
 @pytest.mark.parametrize("outcome", ["success", "failed"])
@@ -576,10 +588,10 @@ def test_manual_terminal_run_preserves_next_due_marker(engine, outcome):
                 )
 
     with Session(engine) as session:
-        job = session.get(ScheduledJob, job_id)
-        assert job is not None
-        assert job.next_run_at is not None
-        assert job.next_run_at.replace(tzinfo=UTC) == marker
+        stored_job = session.get(ScheduledJob, job_id)
+        assert stored_job is not None
+        assert stored_job.next_run_at is not None
+        assert stored_job.next_run_at.replace(tzinfo=UTC) == marker
 
 
 def test_canceling_scheduled_run_advances_the_schedule_occurrence(engine):
@@ -599,11 +611,11 @@ def test_canceling_scheduled_run_advances_the_schedule_occurrence(engine):
             assert cancel_report_execution(session, trigger.run_id)
 
     with Session(engine) as session:
-        report = session.get(SavedReport, trigger.report_id)
-        job = session.get(ScheduledJob, job_id)
-        assert report is not None
-        assert job is not None
-        assert report.last_run_at is not None
-        assert report.last_run_at.replace(tzinfo=UTC) == scheduled_for
-        assert report.last_run_status == ReportRunStatus.CANCELED.value
-        assert job.next_run_at is None
+        stored_report = session.get(SavedReport, trigger.report_id)
+        stored_job = session.get(ScheduledJob, job_id)
+        assert stored_report is not None
+        assert stored_job is not None
+        assert stored_report.last_run_at is not None
+        assert stored_report.last_run_at.replace(tzinfo=UTC) == scheduled_for
+        assert stored_report.last_run_status == ReportRunStatus.CANCELED.value
+        assert stored_job.next_run_at is None

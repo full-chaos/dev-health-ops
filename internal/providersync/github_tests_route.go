@@ -18,7 +18,11 @@ import (
 )
 
 const (
-	githubTestsMaxRuns         = 200
+	// GitHub Actions returns at most nativePerPage workflow runs per page. The
+	// configured 2.5-month backfill window can exceed two pages, so the route
+	// permits the package-wide nativeMaxPages ceiling (10,000 runs) while still
+	// failing closed when GitHub advertises a page beyond that bound.
+	githubTestsMaxRuns         = nativeMaxPages * nativePerPage
 	githubTestsMaxArtifacts    = 25
 	githubTestsMaxDownloadSize = 100 << 20
 	githubTestsRuleVersion     = "ci-acceptance.v1"

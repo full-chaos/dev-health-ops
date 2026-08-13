@@ -469,34 +469,45 @@ PROVIDER_ORDINARY_TEST_WEIGHT=0
 # discover_integration_packages populates parallel module/package arrays with
 # every module-relative "./pkg/dir" entry that has at least one tracked or
 # untracked, non-vendor *_test.go file whose leading build-constraint comment
-# names the "integration" tag. This is a repo-wide scan for the literal constraint
-# every integration suite in this tree uses today
-# (`//go:build integration`), checked via git's own file listing so it
-# honours the same tracked/untracked/exclude-standard rules as the rest of
-# this script -- not `find`, and not a hand-maintained list.
+# names the "integration" tag. One indexed `git grep` handles tracked files;
+# only the normally tiny untracked set needs per-file inspection. The previous
+# grep-per-test-file scan launched thousands of processes and repeatedly hit the
+# full pytest-xdist gate's fixed 120-second subprocess guard.
 discover_integration_packages() {
-  local module_dir go_file dir
+  local module_dir go_file dir tracked_output grep_status
   declare -ga INTEGRATION_PACKAGE_MODULES=()
   declare -ga INTEGRATION_PACKAGES=()
 
   for module_dir in "${MODULE_DIRS[@]}"; do
     local -a found=()
+    grep_status=0
+    tracked_output="$(
+      git -C "${ROOT}/${module_dir}" grep -l -E \
+        '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
+        -- '*_test.go'
+    )" || grep_status=$?
+    [ "${grep_status}" -eq 0 ] || [ "${grep_status}" -eq 1 ] \
+      || die "git grep failed while discovering integration tests in ${module_dir}"
+    while IFS= read -r go_file; do
+      [ -n "${go_file}" ] || continue
+      case "${go_file}" in
+        vendor/*|*/vendor/*) continue ;;
+      esac
+      dir="$(dirname -- "${go_file}")"
+      found+=("./${dir}")
+    done < <(printf '%s\n' "${tracked_output}")
     while IFS= read -r -d '' go_file; do
       [ -f "${ROOT}/${module_dir}/${go_file}" ] || continue
       case "${go_file}" in
         vendor/*|*/vendor/*) continue ;;
       esac
-      # Matches `//go:build integration` and combined constraints such as
-      # `//go:build integration && !windows`; go:build lines are always a
-      # single line, so a plain grep for the tag token on that line is exact
-      # for this repository's usage and needs no build-constraint parser.
       if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' \
         "${ROOT}/${module_dir}/${go_file}"; then
         dir="$(dirname -- "${go_file}")"
         found+=("./${dir}")
       fi
     done < <(
-      git -C "${ROOT}/${module_dir}" ls-files --cached --others --exclude-standard -z -- '*_test.go'
+      git -C "${ROOT}/${module_dir}" ls-files --others --exclude-standard -z -- '*_test.go'
     )
     [ "${#found[@]}" -gt 0 ] || continue
     while IFS= read -r dir; do
@@ -834,7 +845,7 @@ discover_providersync_tests() {
       sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' \
         "${source_file}"
     )
-  done <<< "${files_output}"
+  done < <(printf '%s\n' "${files_output}")
 
   mapfile -t PROVIDER_TEST_NAMES < <(printf '%s\n' "${PROVIDER_TEST_NAMES[@]}" | LC_ALL=C sort)
   [ "${#PROVIDER_TEST_NAMES[@]}" -gt 0 ] \
